@@ -2,6 +2,33 @@
 
 use super::*;
 
+use crate::config::Config;
+
+/// A configuration that exposes every service epistle serves, so the
+/// records of a full deployment can be computed. The API section is there
+/// because the JMAP locator names the API that serves it.
+fn full_config() -> Config {
+	let mut text = String::from(
+		"hostname = 'mail.example.org'\ndata_dir = '/var/lib/mail'\ndomains = ['example.org']\n\
+		 [api]\n\
+		 token_hash = 'sha256:0000000000000000000000000000000000000000000000000000000000000000'\n",
+	);
+	for kind in [
+		"imap",
+		"imaps",
+		"submission",
+		"submissions",
+		"pop3s",
+		"manage-sieve",
+		"api",
+		"web-dav",
+		"autoconfig",
+	] {
+		text.push_str(&format!("\n[[listeners]]\nkind = '{kind}'\n"));
+	}
+	toml::from_str(&text).expect("config")
+}
+
 fn find<'a>(records: &'a [PublishRecord], name: &str, kind: RecordKind) -> &'a PublishRecord {
 	records
 		.iter()
@@ -18,7 +45,7 @@ fn builds_core_records_per_domain() {
 		&DomainDkim::new(),
 		None,
 		"v1",
-		ServiceRecords::all(),
+		ServiceRecords::from_config(&full_config()),
 		None,
 		None,
 		None,
@@ -67,7 +94,7 @@ fn omits_dkim_when_absent_and_tlsa_when_no_cert() {
 		&DomainDkim::new(),
 		None,
 		"v1",
-		ServiceRecords::all(),
+		ServiceRecords::from_config(&full_config()),
 		None,
 		None,
 		None,
@@ -85,7 +112,7 @@ fn tlsa_record_added_once_for_host() {
 		&DomainDkim::new(),
 		Some("3 0 1 abcd"),
 		"v1",
-		ServiceRecords::all(),
+		ServiceRecords::from_config(&full_config()),
 		None,
 		None,
 		None,
@@ -108,7 +135,7 @@ fn builds_srv_records_for_mail_jmap_and_sieve() {
 		&DomainDkim::new(),
 		None,
 		"v1",
-		ServiceRecords::all(),
+		ServiceRecords::from_config(&full_config()),
 		None,
 		None,
 		None,
@@ -130,7 +157,7 @@ fn builds_discovery_cnames_for_autoconfig_autodiscover_and_mta_sts() {
 		&DomainDkim::new(),
 		None,
 		"v1",
-		ServiceRecords::all(),
+		ServiceRecords::from_config(&full_config()),
 		None,
 		None,
 		None,
@@ -174,7 +201,7 @@ fn caldav_and_carddav_srv_are_optional() {
 		&DomainDkim::new(),
 		None,
 		"v1",
-		ServiceRecords::all(),
+		ServiceRecords::from_config(&full_config()),
 		None,
 		None,
 		None,
@@ -200,7 +227,7 @@ fn caa_emitted_for_known_lets_encrypt_directory() {
 		&DomainDkim::new(),
 		None,
 		"v1",
-		ServiceRecords::all(),
+		ServiceRecords::from_config(&full_config()),
 		Some("https://acme-v02.api.letsencrypt.org/directory"),
 		None,
 		None,
@@ -218,7 +245,7 @@ fn caa_emitted_for_known_zerossl_directory() {
 		&DomainDkim::new(),
 		None,
 		"v1",
-		ServiceRecords::all(),
+		ServiceRecords::from_config(&full_config()),
 		Some("https://acme.zerossl.com/v2/DV90"),
 		None,
 		None,
@@ -238,7 +265,7 @@ fn caa_omitted_for_unknown_acme_directory() {
 		&DomainDkim::new(),
 		None,
 		"v1",
-		ServiceRecords::all(),
+		ServiceRecords::from_config(&full_config()),
 		Some("https://acme.example.com/directory"),
 		None,
 		None,
@@ -255,7 +282,7 @@ fn caa_directory_with_trailing_slash_is_accepted() {
 		&DomainDkim::new(),
 		None,
 		"v1",
-		ServiceRecords::all(),
+		ServiceRecords::from_config(&full_config()),
 		Some("https://acme-v02.api.letsencrypt.org/directory/"),
 		None,
 		None,
@@ -273,7 +300,7 @@ fn caa_is_none_when_acme_is_not_configured() {
 		&DomainDkim::new(),
 		None,
 		"v1",
-		ServiceRecords::all(),
+		ServiceRecords::from_config(&full_config()),
 		None,
 		None,
 		None,
@@ -293,7 +320,7 @@ fn both_dkim_selectors_are_emitted() {
 		&DomainDkim::new(),
 		None,
 		"v1",
-		ServiceRecords::all(),
+		ServiceRecords::from_config(&full_config()),
 		None,
 		None,
 		None,

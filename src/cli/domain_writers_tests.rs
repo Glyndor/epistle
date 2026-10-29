@@ -3,10 +3,14 @@
 
 use super::*;
 
-/// A configuration with the given listeners and one hosted domain.
+/// A configuration with the given listeners and one hosted domain. The API
+/// section is there because the JMAP locator names the API that serves it,
+/// and a configuration without an API has no JMAP session to publish.
 fn config_with(listeners: &[&str]) -> Config {
 	let mut toml = String::from(
-		"hostname = 'mail.example.org'\ndata_dir = '/var/lib/mail'\ndomains = ['example.org']\n",
+		"hostname = 'mail.example.org'\ndata_dir = '/var/lib/mail'\ndomains = ['example.org']\n\
+		 [api]\n\
+		 token_hash = 'sha256:0000000000000000000000000000000000000000000000000000000000000000'\n",
 	);
 	for kind in listeners {
 		toml.push_str(&format!("\n[[listeners]]\nkind = '{kind}'\n"));

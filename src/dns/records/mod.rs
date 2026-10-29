@@ -113,7 +113,8 @@ pub type DomainDkim = std::collections::HashMap<String, Vec<(String, String)>>;
 /// `dkim_per_domain` by that domain's own list; `tlsa` is the `3 0 1` association for
 /// the mail host's certificate when one is available; `mta_sts_id`
 /// versions the MTA-STS record; `services` selects the SRV locators, one
-/// per locator the deployment advertises (see [`ServiceRecords::from_config`]);
+/// per locator the deployment advertises, and the names that reach the client
+/// setup documents (see [`ServiceRecords::from_config`]);
 /// `caa_directory` is the configured ACME directory URL; when it maps to a
 /// known CA via
 /// [`caa_ca_for_directory`], a single CAA `0 issue "<ca>"` is emitted for
@@ -244,9 +245,13 @@ pub fn build_records(
 		}
 		// Autoconfig / autodiscover (Thunderbird / Outlook auto-account
 		// setup). Both point at the mail hostname so the discovery URL the
-		// client gets back resolves to us.
-		records.push(cname(format!("autoconfig.{domain}")));
-		records.push(cname(format!("autodiscover.{domain}")));
+		// client gets back resolves to us. The names are published only
+		// when the deployment serves those documents: a client that
+		// follows a name nothing answers gets nothing.
+		if services.advertises_autodiscovery() {
+			records.push(cname(format!("autoconfig.{domain}")));
+			records.push(cname(format!("autodiscover.{domain}")));
+		}
 		// MTA-STS policy fetch (RFC 8461 §3.2): clients look up
 		// `mta-sts.<domain>` and fetch `https://mta-sts.<domain>/.well-known/mta-sts.txt`.
 		// The HTTPS endpoint must use a certificate covering this CNAME.

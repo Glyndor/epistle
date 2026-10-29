@@ -29,7 +29,10 @@ After publishing, verify with `epistle config-check` and an external checker.
 Plus the **SRV** records printed by `epistle srv-records`. `epistle
 dns-records` prints one SRV locator per service your listeners enable: a
 service you turned off gets no locator, so a client that follows a
-published record always reaches a port the server answers on.
+published record always reaches a port the server answers on. The
+`autoconfig` and `autodiscover` names follow the same rule: they are
+published only when a listener serves the client setup documents, and the
+JMAP locator only when the configuration carries the API that serves it.
 
 ## The essential four
 

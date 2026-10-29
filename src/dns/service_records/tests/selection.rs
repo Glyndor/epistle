@@ -18,11 +18,27 @@ const MAIL_KINDS: &[(&str, SrvService, u16)] = &[
 	("manage-sieve", SrvService::Sieve, 4190),
 ];
 
+/// The API section. The JMAP locator names the API that serves it, and a
+/// configuration without an API has no JMAP session to publish.
+const API: &str = "[api]\ntoken_hash = 'sha256:0000000000000000000000000000000000000000000000000000000000000000'\n";
+
 /// A configuration with the given listener blocks and one hosted domain.
 fn config_with(listeners: &[&str]) -> crate::config::Config {
+	build(listeners, "")
+}
+
+/// The same configuration with the API section in it.
+fn config_with_api(listeners: &[&str]) -> crate::config::Config {
+	build(listeners, API)
+}
+
+/// A configuration with the given listener blocks and one hosted domain,
+/// with the API section in it when the caller asks for one.
+fn build(listeners: &[&str], api: &str) -> crate::config::Config {
 	let mut toml = String::from(
 		"hostname = 'mail.example.org'\ndata_dir = '/var/lib/mail'\ndomains = ['example.org']\n",
 	);
+	toml.push_str(api);
 	for listener in listeners {
 		toml.push_str("\n[[listeners]]\n");
 		toml.push_str(listener);
@@ -103,7 +119,7 @@ fn the_webdav_listener_brings_both_dav_services() {
 
 #[test]
 fn the_api_listener_brings_jmap() {
-	let config = config_with(&["kind = 'api'"]);
+	let config = config_with_api(&["kind = 'api'"]);
 	assert_eq!(
 		published_srv(&config),
 		vec![(
@@ -111,6 +127,49 @@ fn the_api_listener_brings_jmap() {
 			"0 1 443 mail.example.org.".to_string(),
 		)],
 		"JMAP is reached over the public HTTPS endpoint, not over the API bind port"
+	);
+}
+
+#[test]
+fn the_api_listener_without_an_api_publishes_no_jmap() {
+	// The listener names the port the API router binds, but a
+	// configuration that carries no API has no JMAP session to point a
+	// client at, so no locator is published.
+	let config = config_with(&["kind = 'api'"]);
+	assert!(
+		published_srv(&config).is_empty(),
+		"a deployment with no API publishes no JMAP locator"
+	);
+}
+
+#[test]
+fn an_api_without_the_listener_publishes_no_jmap() {
+	// The API is configured but nothing serves it, so a client that
+	// followed the locator would reach nothing.
+	let config = config_with_api(&[]);
+	assert!(
+		published_srv(&config).is_empty(),
+		"an API nobody listens on publishes no JMAP locator"
+	);
+}
+
+#[test]
+fn the_autoconfig_listener_brings_the_client_setup_names() {
+	for kind in ["autoconfig", "autoconfigs"] {
+		let config = config_with(&[&format!("kind = '{kind}'")]);
+		assert!(
+			ServiceRecords::from_config(&config).advertises_autodiscovery(),
+			"the {kind} listener serves the client setup documents"
+		);
+	}
+}
+
+#[test]
+fn a_deployment_without_the_autoconfig_listener_advertises_no_client_setup_names() {
+	let config = config_with(&["kind = 'imap'"]);
+	assert!(
+		!ServiceRecords::from_config(&config).advertises_autodiscovery(),
+		"a deployment that serves no client setup document advertises no name"
 	);
 }
 
@@ -182,7 +241,7 @@ fn the_records_carry_one_locator_per_enabled_service() {
 
 #[test]
 fn the_records_of_a_full_deployment_carry_every_locator() {
-	let config = config_with(&[
+	let config = config_with_api(&[
 		"kind = 'imap'",
 		"kind = 'imaps'",
 		"kind = 'submission'",
