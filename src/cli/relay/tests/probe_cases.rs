@@ -3,7 +3,7 @@ use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 
-use super::probe::run_within;
+use super::super::probe::run_within;
 use super::*;
 use crate::cli::resource::test_config;
 

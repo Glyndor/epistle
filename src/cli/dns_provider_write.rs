@@ -35,7 +35,7 @@ pub(super) fn run(
 	let _held = if dry_run {
 		None
 	} else {
-		Some(super::super::service_lock::acquire(path)?)
+		Some(super::super::service::lock::acquire(path)?)
 	};
 	let mut document = ConfigDocument::open(path)?;
 	let current = document.config()?;

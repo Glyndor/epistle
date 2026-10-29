@@ -2,7 +2,7 @@
 //! service command reconciles: the configuration and the generated compose
 //! file it is paired with.
 
-use super::tests_command::fixture;
+use super::command::fixture;
 use super::*;
 
 /// The `ports:` array the generated file of a stack carries.
@@ -20,7 +20,7 @@ fn ports_of(path: &std::path::Path) -> serde_json::Value {
 fn a_listener_without_tls_is_enabled_on_loopback_and_keeps_a_port_move() {
 	let (_dir, file) = fixture();
 	let config = Config::load(file.path()).unwrap();
-	let compose = super::super::init::compose_file_path(&config.data_dir);
+	let compose = super::super::super::init::compose_file_path(&config.data_dir);
 	std::fs::create_dir_all(compose.parent().unwrap()).unwrap();
 	std::fs::write(&compose, r#"{"services":{"mail":{"ports":["25:25"]}}}"#).unwrap();
 	let mut out = Vec::new();
@@ -53,12 +53,12 @@ fn a_listener_without_tls_is_enabled_on_loopback_and_keeps_a_port_move() {
 		serde_json::json!(["25:25"]),
 		"the map must not publish an unencrypted transport on every host address"
 	);
-	let request = super::super::service_set::Request {
+	let request = super::super::super::service::set::Request {
 		name: ServiceName::Webdav,
 		bind: None,
 		port: Some(9000),
 	};
-	super::super::service_set::run(
+	super::super::super::service::set::run(
 		file.path(),
 		request,
 		false,
@@ -101,7 +101,7 @@ fn a_wide_publication_of_a_listener_without_tls_is_narrowed_out_loud() {
 	)
 	.unwrap();
 	let config = Config::load(file.path()).unwrap();
-	let compose = super::super::init::compose_file_path(&config.data_dir);
+	let compose = super::super::super::init::compose_file_path(&config.data_dir);
 	std::fs::create_dir_all(compose.parent().unwrap()).unwrap();
 	// What such an install carries: the port of a listener that has no TLS
 	// transport published on every address of the host.
@@ -161,7 +161,7 @@ fn a_generated_file_that_is_a_symlink_is_read_through_it_and_replaced_by_a_regul
 	text.push_str("[tls]\ncert_file = '/cert.pem'\nkey_file = '/key.pem'\n");
 	std::fs::write(file.path(), text).unwrap();
 	let config = Config::load(file.path()).unwrap();
-	let compose = super::super::init::compose_file_path(&config.data_dir);
+	let compose = super::super::super::init::compose_file_path(&config.data_dir);
 	std::fs::create_dir_all(compose.parent().unwrap()).unwrap();
 	let elsewhere = config.data_dir.join("generated");
 	std::fs::create_dir_all(&elsewhere).unwrap();
@@ -215,7 +215,7 @@ fn a_generated_file_that_is_a_symlink_is_read_through_it_and_replaced_by_a_regul
 fn a_generated_map_that_contradicts_the_config_is_reported_and_reconciled() {
 	let (_dir, file) = fixture();
 	let config = Config::load(file.path()).unwrap();
-	let compose = super::super::init::compose_file_path(&config.data_dir);
+	let compose = super::super::super::init::compose_file_path(&config.data_dir);
 	std::fs::create_dir_all(compose.parent().unwrap()).unwrap();
 	std::fs::write(
 		&compose,

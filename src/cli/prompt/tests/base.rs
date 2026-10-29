@@ -1,6 +1,6 @@
 //! The prompt logic driven through a [`Console`] built by the test: the
 //! answers come from a `Cursor` and stderr is captured. Reads that turn echo
-//! off on a real terminal are in `prompt_tests_tty.rs`.
+//! off on a real terminal are in `src/cli/prompt/tests/tty.rs`.
 
 use std::io::Cursor;
 use std::process::ExitCode;

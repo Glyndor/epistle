@@ -68,5 +68,4 @@ pub(crate) fn pick(what: &str, options: &[String]) -> Option<String> {
 }
 
 #[cfg(test)]
-#[path = "prompt_choose_tests.rs"]
 mod tests;

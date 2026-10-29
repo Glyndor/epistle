@@ -17,7 +17,7 @@ fn resource_edits_wait_for_the_common_lock_before_loading_config() {
 	std::fs::create_dir_all(compose.parent().unwrap()).unwrap();
 	let before = br#"{"services":{"mail":{"pids_limit":100}}}"#;
 	std::fs::write(&compose, before).unwrap();
-	let held = crate::cli::service_lock::acquire(&config).unwrap();
+	let held = crate::cli::service::lock::acquire(&config).unwrap();
 	std::thread::scope(|scope| {
 		let (tx, rx) = mpsc::channel();
 		let path = &config;

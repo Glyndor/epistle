@@ -18,7 +18,7 @@ use crate::storage::lock::FileLock;
 /// command already holds the common lock, so the wait is what is left of the
 /// budget that lock spent from, not a second full one.
 pub(super) fn acquire(path: &Path) -> Result<FileLock, String> {
-	acquire_within(path, super::service_lock::remaining())
+	acquire_within(path, super::service::lock::remaining())
 }
 
 /// [`acquire`] with the deadline passed in, so a test does not have to wait
@@ -59,7 +59,7 @@ fn wait_for(path: &Path, within: Duration) -> Result<FileLock, String> {
 				within.as_secs()
 			));
 		}
-		std::thread::sleep(super::service_lock::POLL);
+		std::thread::sleep(super::service::lock::POLL);
 	}
 }
 

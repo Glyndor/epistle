@@ -67,12 +67,15 @@ fn service_command_dry_run_then_change_and_no_op() {
 		|_, _| panic!("dry-run must not restart"),
 	);
 	assert_eq!(result.unwrap(), ExitCode::SUCCESS);
-	let expected =
-		super::super::service_edit::listener_document(file.path(), ListenerKind::WebDav, true)
-			.unwrap()
-			.0
-			.dry_run()
-			.unwrap();
+	let expected = super::super::super::service::edit::listener_document(
+		file.path(),
+		ListenerKind::WebDav,
+		true,
+	)
+	.unwrap()
+	.0
+	.dry_run()
+	.unwrap();
 	assert_eq!(
 		String::from_utf8(out.clone()).unwrap(),
 		expected,
@@ -143,7 +146,7 @@ fn service_command_updates_ports_and_recreates_mail() {
 	text.push_str("[tls]\ncert_file = '/cert.pem'\nkey_file = '/key.pem'\n");
 	std::fs::write(file.path(), text).unwrap();
 	let config = Config::load(file.path()).unwrap();
-	let compose = super::super::init::compose_file_path(&config.data_dir);
+	let compose = super::super::super::init::compose_file_path(&config.data_dir);
 	std::fs::create_dir_all(compose.parent().unwrap()).unwrap();
 	std::fs::write(
 		&compose,
@@ -162,7 +165,7 @@ fn service_command_updates_ports_and_recreates_mail() {
 		|config, action| {
 			assert_eq!(config.listeners.len(), 2);
 			assert!(
-				matches!(&action, super::super::stack::StackAction::Recreate { service } if service == "mail"),
+				matches!(&action, super::super::super::stack::StackAction::Recreate { service } if service == "mail"),
 				"a port change must recreate mail, not restart it: {action:?}"
 			);
 			ExitCode::from(7)
@@ -231,7 +234,7 @@ fn service_writers_wait_and_read_the_latest_config_under_the_common_lock() {
 				);
 				return;
 			}
-			let mut edit = super::super::config_edit::ConfigDocument::open(path).unwrap();
+			let mut edit = super::super::super::config_edit::ConfigDocument::open(path).unwrap();
 			edit.upsert_element("listeners", "kind", "smtp", &[("addr", "127.0.0.2".into())])
 				.unwrap();
 			edit.commit().unwrap();
@@ -273,7 +276,7 @@ fn enable_and_disable_leave_the_config_alone_when_the_generated_file_is_broken()
 		] {
 			let (_dir, file) = fixture();
 			let config = Config::load(file.path()).unwrap();
-			let compose = super::super::init::compose_file_path(&config.data_dir);
+			let compose = super::super::super::init::compose_file_path(&config.data_dir);
 			std::fs::create_dir_all(compose.parent().unwrap()).unwrap();
 			std::fs::write(&compose, bytes).unwrap();
 			let before = std::fs::read(file.path()).unwrap();
@@ -307,7 +310,7 @@ fn enable_and_disable_leave_the_config_alone_when_the_generated_file_is_broken()
 fn a_fifo_at_the_generated_compose_path_stops_the_listing() {
 	let (_dir, file) = fixture();
 	let config = Config::load(file.path()).unwrap();
-	let compose = super::super::init::compose_file_path(&config.data_dir);
+	let compose = super::super::super::init::compose_file_path(&config.data_dir);
 	std::fs::create_dir_all(compose.parent().unwrap()).unwrap();
 	fifo_at(&compose);
 	let (sender, receiver) = std::sync::mpsc::channel();

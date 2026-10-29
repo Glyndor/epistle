@@ -14,9 +14,7 @@ use super::style;
 use super::term::table::Table;
 use crate::storage::{DEFAULT_DELIVERY_LOG_DAYS, DeliveryLog, DeliveryRecord};
 
-#[path = "delivery_records.rs"]
 mod records;
-#[path = "delivery_select.rs"]
 mod select;
 
 /// `epistle delivery` arguments: the configuration file and the action.
@@ -291,5 +289,4 @@ fn print_table(records: &[DeliveryRecord], out: &mut impl Write) -> ExitCode {
 }
 
 #[cfg(test)]
-#[path = "delivery_tests.rs"]
 mod tests;

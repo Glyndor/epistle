@@ -23,16 +23,15 @@ use std::process::ExitCode;
 use crate::cli::style;
 
 #[cfg(unix)]
-#[path = "prompt_echo.rs"]
 mod echo;
 #[cfg(test)]
-#[path = "prompt_script.rs"]
 pub(crate) mod script;
+#[cfg(test)]
+mod tests;
 
 #[cfg(unix)]
 use echo::EchoOff;
 
-#[path = "prompt_choose.rs"]
 mod choose;
 pub(crate) use choose::pick;
 
@@ -346,15 +345,3 @@ pub(crate) fn stdin() -> std::io::StdinLock<'static> {
 pub(crate) use script::stdin;
 #[cfg(test)]
 use script::with_console;
-
-#[cfg(test)]
-#[path = "prompt_tests.rs"]
-mod tests;
-
-#[cfg(all(test, unix))]
-#[path = "prompt_tests_tty.rs"]
-mod tests_tty;
-
-#[cfg(all(test, unix))]
-#[path = "prompt_choose_tests_tty.rs"]
-mod tests_choose_tty;

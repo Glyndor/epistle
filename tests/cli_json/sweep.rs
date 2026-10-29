@@ -103,7 +103,7 @@ const SKIPPED: &[(&str, &str)] = &[
 	("init", "tests/cli_json/init.rs"),
 	(
 		"restore",
-		"reads an archive on stdin; src/cli/dispatch_restore_tests.rs",
+		"reads an archive on stdin; src/cli/dispatch/restore/tests/base.rs",
 	),
 	(
 		"import",

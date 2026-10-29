@@ -19,10 +19,10 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::path::Path;
 use std::process::ExitCode;
 
-use super::config_edit::{ConfigDocument, Outcome};
-use super::resource::ResourceError;
-use super::service::ServiceName;
-use super::{init, json_out, stack};
+use super::ServiceName;
+use crate::cli::config_edit::{ConfigDocument, Outcome};
+use crate::cli::resource::ResourceError;
+use crate::cli::{init, json_out, stack};
 use crate::config::{Config, Listener, ListenerKind};
 
 /// Any address of the IPv4 family, standing for "every address" when the
@@ -81,7 +81,7 @@ pub(super) fn run(
 	let _held = if dry_run {
 		None
 	} else {
-		Some(super::service_lock::acquire(path).map_err(text)?)
+		Some(super::lock::acquire(path).map_err(text)?)
 	};
 	let bind = match bind {
 		Some(requested) => Some(host_address(requested)?),
@@ -211,7 +211,8 @@ pub(super) fn run(
 	)
 	.map_err(text)?;
 	let narrowed = prepared.narrowed;
-	let outcome = super::config_edit::commit_pair(document, prepared.companion).map_err(text)?;
+	let outcome =
+		crate::cli::config_edit::commit_pair(document, prepared.companion).map_err(text)?;
 	if outcome == Outcome::Unchanged {
 		writeln!(
 			err,
@@ -233,7 +234,7 @@ pub(super) fn run(
 	init::announce_narrowed(&narrowed, err);
 	override_notice(stack, &config, port, current.socket_addr().port(), err)?;
 	let (code, reload) =
-		super::config_edit::after_ports_change_reporting(&config, outcome, err, restart)?;
+		crate::cli::config_edit::after_ports_change_reporting(&config, outcome, err, restart)?;
 	if json {
 		let object = json_out::change_object("set", true, fields, Some(reload));
 		writeln!(out, "{object}").map_err(text)?;
@@ -382,5 +383,4 @@ fn text(error: impl std::fmt::Display) -> ResourceError {
 }
 
 #[cfg(test)]
-#[path = "service_tests_set.rs"]
 mod tests;

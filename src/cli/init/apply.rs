@@ -467,7 +467,7 @@ pub fn apply(answers: &Answers) -> ApplyOutcome {
 			error: Some(error),
 		};
 	}
-	let _held = match crate::cli::service_lock::acquire(&answers.config_path) {
+	let _held = match crate::cli::service::lock::acquire(&answers.config_path) {
 		Ok(held) => held,
 		Err(error) => {
 			return ApplyOutcome {
