@@ -72,7 +72,7 @@ pub(super) fn run_with_writers(
 /// test can capture it through an in-memory writer without going through
 /// the process boundary.
 pub(super) fn emit_single_signature_warning(config: &Config, err: &mut impl std::io::Write) {
-	if let Some(warning) = super::serve_tasks::single_signature_dkim_warning(config) {
+	if let Some(warning) = super::serve::tasks::single_signature_dkim_warning(config) {
 		super::style::warn_to(err, warning);
 	}
 }

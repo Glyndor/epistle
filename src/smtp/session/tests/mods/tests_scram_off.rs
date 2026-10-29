@@ -205,7 +205,7 @@ fn password_change_drops_an_existing_verifier_when_scram_disabled() {
 	store.add(account_with_scram).expect("add");
 
 	// The live store is built with scram=false to simulate the operator's
-	// flag flip after the fact. The same code path is what serve.rs would
+	// flag flip after the fact. The same code path is what src/cli/serve/mod.rs would
 	// execute on the next start.
 	let store = store.with_scram_enabled(false);
 	let upgrader: std::sync::Arc<dyn crate::directory_store::ScramUpgrader> =

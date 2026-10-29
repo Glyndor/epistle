@@ -1,0 +1,101 @@
+//! What the IMAP, POP3, ManageSieve and plain-HTTP listeners are held to,
+//! from the configuration: absent (or zero) keys keep the built-in values.
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use crate::config::Config;
+use crate::net::conn_limit::{
+	DEFAULT_HTTP_CONNECTIONS, DEFAULT_HTTP_CONNECTIONS_PER_IP, DEFAULT_MAILBOX_CONNECTIONS_PER_IP,
+	DEFAULT_MANAGESIEVE_CONNECTIONS_PER_IP,
+};
+use crate::net::deadline::DEFAULT_PREAUTH_TIMEOUT;
+use crate::net::per_account_conn::{
+	DEFAULT_PER_ACCOUNT_PER_IP, DEFAULT_PER_ACCOUNT_TOTAL, PerAccountCounter,
+};
+
+/// The limits shared by the three mailbox-access listeners.
+pub(super) struct MailboxLimits {
+	/// How long a client gets, from the start of the connection, to sign in.
+	pub preauth_timeout: Duration,
+	/// Connections one client may hold on an IMAP or POP3 listener.
+	pub per_ip: usize,
+	/// The same on a ManageSieve listener, whose own listener cap is lower:
+	/// it defaults to less when the configuration does not say.
+	pub managesieve_per_ip: usize,
+	/// The shared per-account counter applied after authentication on
+	/// the IMAP and POP3 paths.
+	pub per_account_counter: Arc<PerAccountCounter>,
+}
+
+impl MailboxLimits {
+	pub(super) fn from_config(config: &Config) -> Self {
+		MailboxLimits {
+			preauth_timeout: config
+				.preauth_timeout
+				.map_or(DEFAULT_PREAUTH_TIMEOUT, Duration::from_secs),
+			per_ip: nonzero(
+				config.max_mailbox_connections_per_ip,
+				DEFAULT_MAILBOX_CONNECTIONS_PER_IP,
+			),
+			managesieve_per_ip: nonzero(
+				config.max_mailbox_connections_per_ip,
+				DEFAULT_MANAGESIEVE_CONNECTIONS_PER_IP,
+			),
+			per_account_counter: Arc::new(PerAccountCounter::new(
+				nonzero_usize(
+					config.max_connections_per_account_per_ip,
+					DEFAULT_PER_ACCOUNT_PER_IP,
+				),
+				nonzero_usize(
+					config.max_connections_per_account_total,
+					DEFAULT_PER_ACCOUNT_TOTAL,
+				),
+			)),
+		}
+	}
+}
+
+/// The limits of every plain-HTTP listener.
+pub(super) fn http_limits(config: &Config) -> crate::net::http_serve::Limits {
+	crate::net::http_serve::Limits {
+		connections: nonzero(config.max_http_connections, DEFAULT_HTTP_CONNECTIONS),
+		per_ip: nonzero(
+			config.max_http_connections_per_ip,
+			DEFAULT_HTTP_CONNECTIONS_PER_IP,
+		),
+	}
+}
+
+/// A configured cap, or `default` when it is absent or `0`.
+fn nonzero(configured: Option<usize>, default: usize) -> usize {
+	configured.filter(|value| *value != 0).unwrap_or(default)
+}
+
+fn nonzero_usize(configured: Option<u32>, default: usize) -> usize {
+	configured
+		.filter(|value| *value != 0)
+		.map(|value| value as usize)
+		.unwrap_or(default)
+}
+
+#[cfg(test)]
+mod tests;
+
+/// SHOULD warnings: a retry-schedule value below the RFC recommendation is
+/// accepted with a warning so the operator sees the deviation at start-up
+/// and in `epistle limits set`. Both surfaces print the lines of
+/// `Config::retry_schedule_warnings`, so they agree.
+pub(super) fn log_retry_schedule_warnings(config: &Config) {
+	for warning in config.retry_schedule_warnings() {
+		tracing::warn!("{warning}");
+	}
+}
+
+/// Values the file set below a MUST of an RFC and load raised: the lines
+/// `config-check` and `status` print too.
+pub(super) fn log_adjusted_values(config: &Config) {
+	for line in &config.adjusted {
+		tracing::warn!("{line}");
+	}
+}

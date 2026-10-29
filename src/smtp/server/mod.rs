@@ -83,7 +83,7 @@ pub struct Server {
 	/// On-disk directory where the account mailboxes live; needed to save a
 	/// copy of every authenticated submission into the account's `Sent`
 	/// folder. `None` disables the save for tests that do not stand up a
-	/// real filesystem layout; production wiring in `cli/serve.rs`
+	/// real filesystem layout; production wiring in `cli/serve/mod.rs`
 	/// always sets it from `config.data_dir`.
 	data_dir: Option<std::path::PathBuf>,
 	/// At-rest crypto for the mailboxes, used when storing the Sent copy.
@@ -160,7 +160,7 @@ pub struct Server {
 	tenant_limits: Option<Arc<crate::api::TenantLimits>>,
 	/// Shared disk-space guard for `data_dir`. `None` disables the check,
 	/// which is the right behaviour for tests but not for production: the
-	/// production wiring in `cli/serve.rs` always sets it.
+	/// production wiring in `cli/serve/mod.rs` always sets it.
 	disk_guard: Option<Arc<DiskGuard>>,
 	/// The graceful stop this listener follows; none in tests that do not
 	/// exercise it.

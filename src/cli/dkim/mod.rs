@@ -10,7 +10,7 @@ use std::process::ExitCode;
 
 use clap::Subcommand;
 
-use super::serve_tasks::{DkimRotationPlan, decide_dkim_rotation};
+use super::serve::tasks::{DkimRotationPlan, decide_dkim_rotation};
 use crate::config::Config;
 use crate::dkim::rotate::{self, rsa_selector_for, selector_for};
 

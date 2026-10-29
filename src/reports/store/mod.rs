@@ -15,7 +15,7 @@
 //! in an org name still produces a single-segment filename.
 //!
 //! [`prune`] drops day directories whose `YYYYMMDD` is older than
-//! `days`. The hourly storage-maintenance task in `serve_tasks.rs` calls
+//! `days`. The hourly storage-maintenance task in `src/cli/serve/tasks/mod.rs` calls
 //! it with the retention constant from `crate::reports::RETENTION_DAYS`.
 
 use std::io::Write;

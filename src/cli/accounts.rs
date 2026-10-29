@@ -198,7 +198,7 @@ fn open_bayes_store(
 	}
 	runtime.block_on(async {
 		let metrics = Arc::new(crate::metrics::Metrics::new());
-		let pool = match super::serve_tasks::connect_database(config, &metrics).await {
+		let pool = match super::serve::tasks::connect_database(config, &metrics).await {
 			Ok(Some(pool)) => pool,
 			Ok(None) => {
 				return Err(
@@ -209,7 +209,7 @@ fn open_bayes_store(
 			}
 			Err(error) => return Err(format!("opening database: {error}")),
 		};
-		match super::serve_tasks::open_bayes(
+		match super::serve::tasks::open_bayes(
 			config,
 			&Some(pool),
 			&MessageCrypto::disabled(),

@@ -59,7 +59,7 @@ pub(super) fn advice(config: &Config) -> Vec<String> {
 pub(super) async fn build_and_say(
 	config: &Config,
 ) -> std::io::Result<Option<std::sync::Arc<crate::oauth::OauthVerifier>>> {
-	let verifier = super::serve_tasks::build_oauth_verifier(config).await?;
+	let verifier = super::serve::tasks::build_oauth_verifier(config).await?;
 	if let Some(line) = notice(config) {
 		tracing::info!("{line}");
 	}
