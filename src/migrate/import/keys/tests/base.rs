@@ -1,4 +1,4 @@
-use super::super::super::test_keys;
+use crate::migrate::import::tests::test_keys;
 use super::*;
 
 #[test]

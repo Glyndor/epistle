@@ -191,7 +191,7 @@ fn recovery_accepts_seventy_thousand_messages_with_bounded_metadata() {
 
 #[test]
 fn a_recovery_scan_synchronizes_the_directories_once_not_once_per_message() {
-	use crate::migrate::imap::durability::tests;
+	use crate::migrate::imap::durability::tests::base as tests;
 	let dir = tempfile::tempdir().expect("tempdir");
 	let crypto = MessageCrypto::disabled();
 	for n in 0..40 {
@@ -260,6 +260,3 @@ fn a_scan_stops_at_the_total_deadline_instead_of_finishing_the_mailbox() {
 	)
 	.expect("a deadline in the future lets the scan finish");
 }
-
-#[allow(unused_imports)]
-use super::base as tests;

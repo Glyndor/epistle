@@ -4,7 +4,7 @@
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-use super::super::super::run_tests::{Quiet, target};
+use super::super::super::tests::run::{Quiet, target};
 use super::super::super::state::{FolderState, StateDir};
 use super::super::super::{
 	Filter, MigrateError, Settings, Source, Verify, durability, run_with_connection,
@@ -83,7 +83,7 @@ async fn the_total_deadline_stops_the_scan_of_the_local_mailbox() {
 		user: "alice".into(),
 		password: Zeroizing::new(crate::test_fixtures::password().into()),
 	};
-	let _guard = durability::tests::begin(None);
+	let _guard = durability::tests::base::begin(None);
 	let (_, error) = run_with_connection(
 		&source,
 		&mut target(dir.path()),
@@ -94,7 +94,7 @@ async fn the_total_deadline_stops_the_scan_of_the_local_mailbox() {
 	.await;
 	server.abort();
 	assert!(matches!(error, Some(MigrateError::Timeout)), "{error:?}");
-	let synchronized = durability::tests::events()
+	let synchronized = durability::tests::base::events()
 		.iter()
 		.filter(|event| **event == "message")
 		.count();

@@ -6,10 +6,10 @@ use std::io;
 /// Synchronize an open file or directory. Test hooks inject errors at the same barrier.
 pub(super) fn sync(file: &File, _kind: &'static str) -> io::Result<()> {
 	#[cfg(test)]
-	tests::before_sync(_kind)?;
+	tests::base::before_sync(_kind)?;
 	file.sync_all()?;
 	#[cfg(test)]
-	tests::record(_kind);
+	tests::base::record(_kind);
 	Ok(())
 }
 

@@ -7,9 +7,9 @@
 //! bypasses `Policy` is caught independently by the storage-layer tests.
 
 // These two `pub(super)` constants and the `Policy` symbol live in the
-// password module; this file is the test-only sibling, declared with
-// `#[path]` so the production type and the tests stay separately
-// under the line cap.
+// password module; this file is the leaf of the tests folder of that
+// module, so the production type and the tests stay separately under the
+// line cap.
 use crate::password::{MAX_LENGTH, MIN_LENGTH, Policy, Rejection};
 
 /// The same password in NFC form (`ñ` precomposed, U+00F1) and in NFD form

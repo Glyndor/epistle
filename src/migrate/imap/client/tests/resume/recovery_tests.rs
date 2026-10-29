@@ -31,11 +31,11 @@ async fn confirmed_recovery_messages_are_not_synchronized_again() {
 			},
 		)
 		.unwrap();
-	let _guard = super::super::super::super::durability::tests::begin(None);
+	let _guard = super::super::super::super::durability::tests::base::begin(None);
 	let (summary, error) = migrate_memory(dir.path(), false, None).await;
 	assert!(error.is_none(), "recovery failed: {error:?}");
 	assert_eq!(summary.folders[0].duplicates, 2);
-	let events = super::super::super::super::durability::tests::events();
+	let events = super::super::super::super::durability::tests::base::events();
 	assert_eq!(
 		events.iter().filter(|event| **event == "message").count(),
 		0,

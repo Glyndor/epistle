@@ -9,7 +9,7 @@ use super::state::StateDir;
 
 /// One INBOX with `messages`, and no other folder.
 pub(in super::super) fn inbox(messages: Vec<Message>) -> Vec<super::fake_server::Folder> {
-	let mut all = run_tests::folders();
+	let mut all = run::folders();
 	all[0].messages = messages;
 	all.truncate(1);
 	all
@@ -245,7 +245,7 @@ async fn a_cut_before_the_ledger_sync_leaves_the_batch_unconfirmed() {
 	)
 	.await;
 	let dir = tempfile::tempdir().expect("tempdir");
-	let guard = super::durability::tests::begin(Some("ledger-file"));
+	let guard = super::durability::tests::base::begin(Some("ledger-file"));
 	let (_, error) = migrate(&server, dir.path(), &settings()).await;
 	assert!(
 		matches!(error, Some(MigrateError::State(_))),

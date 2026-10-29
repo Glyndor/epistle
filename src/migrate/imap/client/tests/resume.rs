@@ -3,7 +3,7 @@
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-use super::super::super::run_tests::{Quiet, local, target};
+use super::super::super::tests::run::{Quiet, local, target};
 use super::*;
 
 async fn migration_peer(
@@ -413,10 +413,10 @@ async fn recovery_index_obeys_mailbox_and_total_metadata_limits() {
 #[tokio::test]
 async fn message_durability_precedes_each_confirmed_checkpoint() {
 	let dir = tempfile::tempdir().expect("dir");
-	let _guard = super::super::super::durability::tests::begin(None);
+	let _guard = super::super::super::durability::tests::base::begin(None);
 	let (_, error) = migrate_memory(dir.path(), false, None).await;
 	assert!(error.is_none(), "migration failed: {error:?}");
-	let events = super::super::super::durability::tests::events();
+	let events = super::super::super::durability::tests::base::events();
 	let first = events
 		.iter()
 		.position(|event| *event == "state-file")
@@ -466,7 +466,7 @@ async fn failed_message_sync_keeps_recovery_active_and_resumes_without_duplicati
 		"mailbox-parent",
 	] {
 		let dir = tempfile::tempdir().expect("dir");
-		let guard = super::super::super::durability::tests::begin(Some(barrier));
+		let guard = super::super::super::durability::tests::base::begin(Some(barrier));
 		let (_, error) = migrate_memory(dir.path(), false, None).await;
 		assert!(
 			matches!(error, Some(super::super::super::MigrateError::Storage(_))),
@@ -514,14 +514,14 @@ async fn recovery_sync_failure_precedes_any_checkpoint_write() {
 		saved.last_uid = 1;
 		saved.in_progress = true;
 		states.save(b"INBOX", &saved).expect("save");
-		let guard = super::super::super::durability::tests::begin(Some(barrier));
+		let guard = super::super::super::durability::tests::base::begin(Some(barrier));
 		let (_, error) = migrate_memory(dir.path(), false, None).await;
 		assert!(
 			matches!(error, Some(super::super::super::MigrateError::Storage(_))),
 			"recovery must synchronize {barrier}: {error:?}"
 		);
 		assert!(
-			!super::super::super::durability::tests::events().contains(&"state-file"),
+			!super::super::super::durability::tests::base::events().contains(&"state-file"),
 			"do not checkpoint before recovery copies are durable"
 		);
 		assert_eq!(states.load(b"INBOX").expect("load"), Some(saved));

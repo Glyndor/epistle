@@ -4,7 +4,7 @@
 
 use std::path::Path;
 
-use crate::migrate::import::test_keys;
+use crate::migrate::import::tests::test_keys;
 
 /// The configuration, with `@RSA@` standing for the inline RSA key.
 const CONFIG: &str = r#"
