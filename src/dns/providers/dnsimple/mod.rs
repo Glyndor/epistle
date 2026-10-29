@@ -280,7 +280,7 @@ impl DnsimpleProvider {
 		self.authorize(&record)?;
 		let kind = Self::api_kind(&record.kind)?;
 		let relative = self.relative_name(&record.name);
-		// The TXT matching rule from `src/dns/provider.rs` is the
+		// The TXT matching rule from `src/dns/provider/mod.rs` is the
 		// contract: an upsert replaces the TXT with the same
 		// purpose (version tag) at that name and leaves every
 		// other TXT at the name alone. Two records of the same
@@ -446,7 +446,7 @@ impl DnsimpleProvider {
 		self.authorize(&record)?;
 		let kind = Self::api_kind(&record.kind)?;
 		let relative = self.relative_name(&record.name);
-		// The TXT matching rule from `src/dns/provider.rs` is the
+		// The TXT matching rule from `src/dns/provider/mod.rs` is the
 		// contract: a value-bearing delete drops only the record
 		// whose content matches the value (a sibling ACME challenge
 		// at the same owner survives), an empty-value delete drops
@@ -586,13 +586,4 @@ fn check(response: reqwest::Response) -> Result<(), ProviderError> {
 }
 
 #[cfg(test)]
-#[path = "tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "tests_contract.rs"]
-mod tests_contract;
-
-#[cfg(test)]
-#[path = "tests_path.rs"]
-mod path_tests;

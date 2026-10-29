@@ -251,7 +251,7 @@ fn cloudflare_config(dir: &Path) -> Config {
 fn zone_with(
 	records: Vec<crate::dns::provider::DnsRecord>,
 ) -> std::sync::Arc<dyn crate::dns::provider::DnsProvider> {
-	std::sync::Arc::new(crate::dns::lockdown::tests_support::Zone::with(records))
+	std::sync::Arc::new(crate::dns::lockdown::tests::support::Zone::with(records))
 }
 
 #[tokio::test]

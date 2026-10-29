@@ -202,7 +202,7 @@ impl NamecheapProvider {
 		let label = host_label(&record.name, zone);
 		let kind_str = record.kind.as_str();
 		// Drop the record this one replaces. Under the contract in
-		// `src/dns/provider.rs` that is, for TXT, only the one of the
+		// `src/dns/provider/mod.rs` that is, for TXT, only the one of the
 		// same purpose (an ACME challenge or verification token at the
 		// name stays); every other kind owns its name and replaces the
 		// whole set.
@@ -221,7 +221,7 @@ impl NamecheapProvider {
 		let hosts = self.get_hosts(zone).await?;
 		let label = host_label(&record.name, zone);
 		let kind_str = record.kind.as_str();
-		// The TXT matching rule from `src/dns/provider.rs` is the
+		// The TXT matching rule from `src/dns/provider/mod.rs` is the
 		// contract: a value-bearing delete drops only the host whose
 		// address matches the value (a sibling ACME challenge at the
 		// same owner survives), an empty-value delete drops every host
@@ -311,33 +311,4 @@ mod render;
 mod xml;
 
 #[cfg(test)]
-#[path = "tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "tests_basic.rs"]
-mod tests_basic;
-
-#[cfg(test)]
-#[path = "tests_errors.rs"]
-mod tests_errors;
-
-#[cfg(test)]
-#[path = "tests_render.rs"]
-mod tests_render;
-
-#[cfg(test)]
-#[path = "tests_path.rs"]
-mod tests_path;
-
-#[cfg(test)]
-#[path = "tests_txt_forms.rs"]
-mod tests_txt_forms;
-
-#[cfg(test)]
-#[path = "tests_wire.rs"]
-mod tests_wire;
-
-#[cfg(test)]
-#[path = "tests_contract.rs"]
-mod tests_contract;

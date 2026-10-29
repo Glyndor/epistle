@@ -136,5 +136,4 @@ pub fn parse_memory_size(value: &str) -> Option<u64> {
 }
 
 #[cfg(test)]
-#[path = "mod_tests.rs"]
 mod tests;

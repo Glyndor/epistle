@@ -9,7 +9,7 @@ fn body_starts_after_the_first_blank_line() {
 
 #[test]
 fn the_field_count_is_never_below_the_headers_imap_takes() {
-	use crate::util::header_block::{cases, field_count};
+	use crate::util::header_block::{field_count, tests::cases};
 	for raw in cases::messages() {
 		let text = String::from_utf8_lossy(&raw);
 		let headers = &text[..text.len() - body_of(&text).len()];

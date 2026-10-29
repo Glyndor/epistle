@@ -357,7 +357,7 @@ impl OvhProvider {
 			"ttl": record.ttl,
 		})
 		.to_string();
-		// The TXT matching rule from `src/dns/provider.rs` is the
+		// The TXT matching rule from `src/dns/provider/mod.rs` is the
 		// contract: an upsert replaces the TXT with the same
 		// purpose (version tag) at that name and leaves every
 		// other TXT at the name alone. Two records of the same
@@ -402,7 +402,7 @@ impl OvhProvider {
 		self.authorize(&record)?;
 		let kind = Self::api_kind(&record.kind)?;
 		let sub = Self::sub_domain(zone, &record.name);
-		// The TXT matching rule from `src/dns/provider.rs` is the
+		// The TXT matching rule from `src/dns/provider/mod.rs` is the
 		// contract: a value-bearing delete drops only the record
 		// whose target matches the value (a sibling ACME challenge
 		// at the same owner survives), an empty-value delete drops
@@ -570,21 +570,4 @@ fn hex_lower(bytes: &[u8]) -> String {
 }
 
 #[cfg(test)]
-#[path = "tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "tests_b.rs"]
-mod tests_b;
-
-#[cfg(test)]
-#[path = "tests_contract.rs"]
-mod tests_contract;
-
-#[cfg(test)]
-#[path = "tests_path.rs"]
-mod path_tests;
-
-#[cfg(test)]
-#[path = "tests_txt_forms.rs"]
-mod tests_txt_forms;

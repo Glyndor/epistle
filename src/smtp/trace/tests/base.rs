@@ -445,7 +445,7 @@ fn fewer_copies_in_post_data_stamping_path_avoids_full_body_copies() {
 
 #[test]
 fn the_field_count_is_never_below_the_headers_the_trace_helpers_take() {
-	use crate::util::header_block::{cases, field_count};
+	use crate::util::header_block::{field_count, tests::cases};
 	for raw in cases::messages() {
 		let headers = &raw[..header_block_end(&raw)];
 		assert!(field_count(&raw) >= cases::fields_in(headers), "{raw:?}");

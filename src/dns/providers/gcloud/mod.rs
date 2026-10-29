@@ -376,7 +376,7 @@ impl GcloudProvider {
 			.find(|r| r.name == fqdn && r.kind == kind_str);
 		let mut rrdatas = self.rrdatas(&record);
 		// A change replaces the whole rrset. The upsert contract in
-		// `src/dns/provider.rs` replaces only the TXT of the same
+		// `src/dns/provider/mod.rs` replaces only the TXT of the same
 		// purpose, so the siblings the live rrset holds go back in.
 		if record.kind == RecordKind::Txt
 			&& let Some(old) = &existing
@@ -416,7 +416,7 @@ impl GcloudProvider {
 		else {
 			return Ok(());
 		};
-		// The TXT matching rule from `src/dns/provider.rs` is the
+		// The TXT matching rule from `src/dns/provider/mod.rs` is the
 		// contract: a value-bearing delete drops only the rdata
 		// whose value matches (a sibling ACME challenge at the same
 		// owner survives), an empty-value delete drops every rdata
@@ -599,19 +599,4 @@ fn pem_to_pkcs8(pem: &str) -> Option<Vec<u8>> {
 #[path = "test_support.rs"]
 pub(crate) mod test_support;
 #[cfg(test)]
-#[path = "tests.rs"]
 mod tests;
-#[cfg(test)]
-#[path = "tests_txt.rs"]
-mod tests_txt;
-
-#[cfg(test)]
-#[path = "tests_txt_forms.rs"]
-mod tests_txt_forms;
-
-#[cfg(test)]
-#[path = "tests_contract.rs"]
-mod tests_contract;
-#[cfg(test)]
-#[path = "tests_url.rs"]
-mod tests_url;

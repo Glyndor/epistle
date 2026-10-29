@@ -11,7 +11,7 @@ use clap::Parser;
 
 use super::lockdown_handler::{Deps, LockdownArgs, execute, render};
 use crate::cli::status::dns_fake::FakeDns;
-use crate::dns::lockdown::tests_support::{Zone, a, mx, rec, txt};
+use crate::dns::lockdown::tests::support::{Zone, a, mx, rec, txt};
 use crate::dns::lockdown::{Journal, Plan};
 use crate::dns::provider::{DnsProvider, DnsRecord, RecordKind};
 use crate::spf::DnsLookup;

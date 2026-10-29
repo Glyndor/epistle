@@ -400,7 +400,7 @@ impl DnsProvider for Route53Provider {
 	fn upsert(&self, _zone: &str, record: DnsRecord) -> Op<'_> {
 		Box::pin(crate::dns::providers::within(async move {
 			// An UPSERT replaces the whole rrset. The upsert contract in
-			// `src/dns/provider.rs` replaces only the TXT of the same
+			// `src/dns/provider/mod.rs` replaces only the TXT of the same
 			// purpose, so the siblings the live rrset holds go back in.
 			if record.kind == RecordKind::Txt
 				&& let Some(rrset) = self.fetch_txt_rrset(&record.name).await?
@@ -420,7 +420,7 @@ impl DnsProvider for Route53Provider {
 	}
 	fn delete(&self, _zone: &str, record: DnsRecord) -> Op<'_> {
 		Box::pin(crate::dns::providers::within(async move {
-			// The TXT matching rule from `src/dns/provider.rs` is
+			// The TXT matching rule from `src/dns/provider/mod.rs` is
 			// the contract: a value-bearing delete drops only the
 			// rdata whose value matches (a sibling ACME challenge
 			// at the same owner survives), an empty-value delete
@@ -574,25 +574,4 @@ fn xml_unescape(value: &str) -> String {
 }
 
 #[cfg(test)]
-#[path = "tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "tests_txt.rs"]
-mod tests_txt;
-
-#[cfg(test)]
-#[path = "tests_txt_forms.rs"]
-mod tests_txt_forms;
-
-#[cfg(test)]
-#[path = "tests_contract.rs"]
-mod tests_contract;
-
-#[cfg(test)]
-#[path = "tests_pagination.rs"]
-mod tests_pagination;
-
-#[cfg(test)]
-#[path = "tests_path.rs"]
-mod path_tests;

@@ -260,7 +260,7 @@ impl BunnyProvider {
 		let detail = self.zone_detail(zone_id).await?;
 		let name = self.subname(&record.name);
 		let body = self.record_body(&record, rtype)?;
-		// The upsert contract in `src/dns/provider.rs`: a TXT replaces
+		// The upsert contract in `src/dns/provider/mod.rs`: a TXT replaces
 		// the record of the same purpose and leaves every other TXT
 		// at the name alone (an ACME challenge, a verification token).
 		// Two records of the same purpose at the same name are a
@@ -295,7 +295,7 @@ impl BunnyProvider {
 		let zone_id = self.zone_id().await?;
 		let detail = self.zone_detail(zone_id).await?;
 		let name = self.subname(&record.name);
-		// The TXT matching rule from `src/dns/provider.rs` is the
+		// The TXT matching rule from `src/dns/provider/mod.rs` is the
 		// contract: a value-bearing delete drops only the record
 		// whose value matches the value (a sibling ACME challenge at
 		// the same owner survives), an empty-value delete drops
@@ -494,9 +494,4 @@ fn check(response: reqwest::Response) -> Result<(), ProviderError> {
 }
 
 #[cfg(test)]
-#[path = "tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "tests_path.rs"]
-mod path_tests;

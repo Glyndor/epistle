@@ -1,0 +1,151 @@
+//! Where the header block of a raw message ends and what its lines are, in
+//! one place: the Sieve interpreter reads the headers by it, and the check
+//! that refuses a message with thousands of header fields counts them by it,
+//! so the two cannot disagree about what a header is.
+
+/// A line without its terminator, which is `\n` or `\r\n`.
+fn unterminated(line: &[u8]) -> &[u8] {
+	let line = line.strip_suffix(b"\n").unwrap_or(line);
+	line.strip_suffix(b"\r").unwrap_or(line)
+}
+
+/// The header block of `raw` and the body after it. The block ends at the
+/// first `CRLF CRLF`, and without one the whole message is header and there
+/// is no body.
+///
+/// That is the longest block any reader of a message takes: the ones that
+/// also end it at a bare `LF LF`, at `LF CR`, or at a line of blanks (IMAP,
+/// POP3 `TOP`, the trace headers) take a prefix of it, and the ones that
+/// look only for `CRLF CRLF` take exactly this. A field count made over this
+/// block is therefore never smaller than what any of them sees, so no field
+/// can be hidden from the count by a terminator some reader honours and the
+/// count does not. The price is that a message with bare `LF` line ends is
+/// all header here, and one with more than the field limit of lines is
+/// refused as having too many fields; it is the safe side.
+pub fn split(raw: &[u8]) -> (&[u8], &[u8]) {
+	match raw.windows(4).position(|w| w == b"\r\n\r\n") {
+		Some(at) => (&raw[..at + 2], &raw[at + 4..]),
+		None => (raw, &[]),
+	}
+}
+
+/// The header block of `raw` and the body after it. The block ends at the
+/// first empty line, whichever way that line is ended, and without one the
+/// whole message is header and there is no body.
+///
+/// A message whose first line is empty has no header block at all: what
+/// follows is body text, so a field a reader finds there is not a field of
+/// the message. A reader that ends the block at `CRLF CRLF` alone takes a
+/// longer block for an LF-only message, which is why the header readers of
+/// the server use this one and not that one.
+pub(crate) fn split_at_blank_line(raw: &[u8]) -> (&[u8], &[u8]) {
+	let mut offset = 0;
+	while offset < raw.len() {
+		let end = raw[offset..]
+			.iter()
+			.position(|byte| *byte == b'\n')
+			.map_or(raw.len(), |index| offset + index + 1);
+		if unterminated(&raw[offset..end]).is_empty() {
+			return (&raw[..offset], &raw[end..]);
+		}
+		offset = end;
+	}
+	(raw, &[])
+}
+
+/// The line ending the message is written with: the one of its first line,
+/// and `CRLF` for a message with no line ending of its own.
+pub(crate) fn line_ending(raw: &[u8]) -> &'static [u8] {
+	match raw.iter().position(|byte| *byte == b'\n') {
+		Some(index) if index > 0 && raw[index - 1] == b'\r' => b"\r\n",
+		Some(_) => b"\n",
+		None => b"\r\n",
+	}
+}
+
+/// Whether `data` holds a byte no outbound message may carry: a NUL, or a
+/// carriage return that is not the first half of a `CRLF`. Both are line
+/// framing a remote server may read differently from this one.
+pub(crate) fn has_unframed_byte(data: &[u8]) -> bool {
+	data.iter()
+		.enumerate()
+		.any(|(index, byte)| *byte == 0 || (*byte == b'\r' && data.get(index + 1) != Some(&b'\n')))
+}
+
+/// I borrow an SMTP-ready message, or normalize its LF and final line ending
+/// before validation, signing and queueing so DATA cannot change those bytes.
+/// A NUL or a bare CR is not repaired here: [`has_unframed_byte`] finds them
+/// and the caller refuses the message.
+pub(crate) fn outbound_crlf(data: &[u8]) -> std::borrow::Cow<'_, [u8]> {
+	if data.ends_with(b"\r\n")
+		&& data
+			.iter()
+			.enumerate()
+			.all(|(index, byte)| *byte != b'\n' || (index > 0 && data[index - 1] == b'\r'))
+	{
+		return std::borrow::Cow::Borrowed(data);
+	}
+	let mut normalized = Vec::with_capacity(data.len() + 2);
+	let mut previous = None;
+	for byte in data.iter().copied() {
+		if byte == b'\n' && previous != Some(b'\r') {
+			normalized.push(b'\r');
+		}
+		normalized.push(byte);
+		previous = Some(byte);
+	}
+	if !normalized.ends_with(b"\r\n") {
+		normalized.extend_from_slice(b"\r\n");
+	}
+	std::borrow::Cow::Owned(normalized)
+}
+
+/// A message the server wrote itself, from parts that came from outside,
+/// made fit to queue: no NUL, every line ending a `CRLF` (a lone `CR` or
+/// `LF`, such as one a cut left at its end, becomes one) and a final one.
+/// Unlike a message a user submitted, which is refused when it holds such a
+/// byte, a generated one must not be lost over what it quotes.
+pub(crate) fn frame_generated(data: Vec<u8>) -> Vec<u8> {
+	if !has_unframed_byte(&data) {
+		return outbound_crlf(&data).into_owned();
+	}
+	let mut framed = Vec::with_capacity(data.len() + 2);
+	let mut bytes = data.into_iter().peekable();
+	while let Some(byte) = bytes.next() {
+		match byte {
+			0 => {}
+			b'\r' => {
+				framed.extend_from_slice(b"\r\n");
+				if bytes.peek() == Some(&b'\n') {
+					bytes.next();
+				}
+			}
+			b'\n' => framed.extend_from_slice(b"\r\n"),
+			other => framed.push(other),
+		}
+	}
+	outbound_crlf(&framed).into_owned()
+}
+
+/// The lines of a header block, each without its terminator.
+pub fn lines(block: &[u8]) -> impl Iterator<Item = &[u8]> {
+	block.split_inclusive(|b| *b == b'\n').map(unterminated)
+}
+
+/// Whether `line` begins a header field: it is not empty and does not
+/// continue the field before it (a folded line starts with a space or tab).
+pub fn begins_field(line: &[u8]) -> bool {
+	!line.is_empty() && !matches!(line.first(), Some(b' ' | b'\t'))
+}
+
+/// How many header fields `raw` has.
+pub fn field_count(raw: &[u8]) -> usize {
+	lines(split(raw).0)
+		.filter(|line| begins_field(line))
+		.count()
+}
+
+/// Messages whose header block ends in different ways, with fields after
+/// the first terminator, for the tests of every reader of a header block.
+#[cfg(test)]
+pub(crate) mod tests;

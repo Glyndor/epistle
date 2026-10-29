@@ -1,5 +1,5 @@
 use super::super::top_of;
-use crate::util::header_block::{cases, field_count};
+use crate::util::header_block::{field_count, tests::cases};
 
 #[test]
 fn the_field_count_is_never_below_the_headers_top_shows() {
