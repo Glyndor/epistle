@@ -1,9 +1,9 @@
-use super::tests::{RULES, no_restart, parse};
+use super::base::{RULES, no_restart, parse};
 use super::*;
 use crate::cli::resource::test_config;
 
 struct Run {
-	result: Result<ExitCode, super::super::resource::ResourceError>,
+	result: Result<ExitCode, super::super::super::resource::ResourceError>,
 	out: String,
 	status: String,
 	after: String,

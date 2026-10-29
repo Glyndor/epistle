@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 /// generated compose file spends what this wait left (see [`remaining`]), so a
 /// command is never kept out of the configuration directory longer than this
 /// in all.
-pub(super) const WAIT: Duration = Duration::from_secs(30);
+pub(in crate::cli) const WAIT: Duration = Duration::from_secs(30);
 
 thread_local! {
 	/// When the command on this thread started waiting for the common lock.
@@ -33,7 +33,7 @@ thread_local! {
 /// first wait did not use when it did. A command that queued 25 s for the
 /// common lock therefore waits at most 5 s more, so it is never kept out of
 /// the configuration directory longer than [`WAIT`] in all.
-pub(super) fn remaining() -> Duration {
+pub(in crate::cli) fn remaining() -> Duration {
 	BEGAN
 		.get()
 		.map_or(WAIT, |began| WAIT.saturating_sub(began.elapsed()))
@@ -42,16 +42,16 @@ pub(super) fn remaining() -> Duration {
 /// Start the clock [`remaining`] reads at `began`, so a test does not have to
 /// let the budget run down in real time.
 #[cfg(test)]
-pub(super) fn began_at(began: Instant) {
+pub(in crate::cli) fn began_at(began: Instant) {
 	BEGAN.set(Some(began));
 }
 
 /// Pause between attempts while a neighbour holds the lock.
-pub(super) const POLL: Duration = Duration::from_millis(100);
+pub(in crate::cli) const POLL: Duration = Duration::from_millis(100);
 
 /// Lock the configuration directory before reading either service file.
 /// The sibling stays in place when mail.toml is atomically replaced.
-pub(super) fn acquire(config: &Path) -> Result<File, String> {
+pub(in crate::cli) fn acquire(config: &Path) -> Result<File, String> {
 	acquire_within(config, WAIT)
 }
 
@@ -232,5 +232,4 @@ fn held_by(file: &File) -> Option<String> {
 }
 
 #[cfg(test)]
-#[path = "service_lock_tests.rs"]
 mod tests;

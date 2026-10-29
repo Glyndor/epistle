@@ -1,5 +1,9 @@
 //! Listener administration without regenerating the installation configuration.
 
+mod edit;
+pub(super) mod lock;
+mod set;
+
 use std::collections::BTreeMap;
 use std::io::Write;
 
@@ -313,14 +317,14 @@ fn execute_with(
 		ServiceCli::Enable { name } => (name, true),
 		ServiceCli::Disable { name } => (name, false),
 		ServiceCli::Set { name, bind, port } => {
-			let request = super::service_set::Request { name, bind, port };
-			return super::service_set::run(path, request, dry_run, json, out, err, restart);
+			let request = set::Request { name, bind, port };
+			return set::run(path, request, dry_run, json, out, err, restart);
 		}
 	};
 	let _held = if dry_run {
 		None
 	} else {
-		Some(super::service_lock::acquire(path)?)
+		Some(lock::acquire(path)?)
 	};
 	// A command killed between its two renames leaves the configuration and
 	// the generated map describing different stacks. This one reconciles
@@ -328,7 +332,7 @@ fn execute_with(
 	// comes from the verified read that opens the document, so a fifo where
 	// the configuration belongs is refused here instead of waited on with the
 	// lock in hand.
-	let (document, previous) = super::service_edit::listener_document(path, name.kind(), enabled)?;
+	let (document, previous) = edit::listener_document(path, name.kind(), enabled)?;
 	if !dry_run {
 		super::init::announce_mixed_state(&previous, err);
 	}
@@ -389,9 +393,4 @@ fn execute_with(
 }
 
 #[cfg(test)]
-#[path = "service_tests_command.rs"]
-mod tests_command;
-
-#[cfg(test)]
-#[path = "service_tests_http.rs"]
-mod tests_http;
+mod tests;

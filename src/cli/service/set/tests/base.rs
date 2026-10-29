@@ -229,5 +229,4 @@ fn a_mapping_can_not_take_a_port_a_loopback_listener_holds_inside_the_container(
 	);
 }
 
-#[path = "service_tests_set_stack.rs"]
 mod stack;

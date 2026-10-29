@@ -59,7 +59,7 @@ fn status_reads_the_configuration_leniently() {
 
 #[test]
 fn the_commands_that_act_on_the_data_read_it_strictly() {
-	let dispatch = source("cli/dispatch.rs");
+	let dispatch = source("cli/dispatch/mod.rs");
 	let backup = dispatch
 		.split("Command::Backup { config }")
 		.nth(1)
@@ -72,6 +72,6 @@ fn the_commands_that_act_on_the_data_read_it_strictly() {
 		.and_then(|rest| rest.lines().next())
 		.expect("the serve arm");
 	assert!(serve.contains("Config::load(&config)"), "{serve}");
-	assert!(source("cli/dispatch_restore.rs").contains("Config::load(&config)"));
+	assert!(source("cli/dispatch/restore/mod.rs").contains("Config::load(&config)"));
 	assert!(source("cli/stack/rollback/run.rs").contains("Config::load(config_path)"));
 }

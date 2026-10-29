@@ -3,7 +3,7 @@
 //! preserved exactly so scripts that parse `error: no relay is
 //! configured for X` keep working.
 //!
-//! Lives in a sibling so `relay_tests.rs` stays under the per-file
+//! Lives in a separate leaf so `src/cli/relay/tests/base.rs` stays under the per-file
 //! code-line budget.
 
 use std::process::ExitCode;

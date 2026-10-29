@@ -499,7 +499,7 @@ fn a_rerun_waits_for_service_edits_before_reading_the_config() {
 	answers.data_dir = dir.path().join("data");
 	answers.config_path = dir.path().join("mail.toml");
 	assert!(apply(&answers).error.is_none());
-	let held = crate::cli::service_lock::acquire(&answers.config_path).unwrap();
+	let held = crate::cli::service::lock::acquire(&answers.config_path).unwrap();
 	std::thread::scope(|scope| {
 		let (tx, rx) = mpsc::channel();
 		let answers = &answers;

@@ -11,23 +11,11 @@ use super::resource;
 use super::stack::StackAction;
 use crate::config::{Config, Transport, TransportKind};
 
-#[path = "relay_edit.rs"]
 mod edit;
-#[path = "relay_probe.rs"]
 mod probe;
 
 #[cfg(test)]
-#[path = "relay_tests.rs"]
 mod tests;
-#[cfg(test)]
-#[path = "relay_tests_edit.rs"]
-mod tests_edit;
-#[cfg(test)]
-#[path = "relay_tests_probe.rs"]
-mod tests_probe;
-#[cfg(test)]
-#[path = "relay_tests_unknown.rs"]
-mod tests_unknown;
 
 /// Which relay rule a command addresses. With neither flag it is the default
 /// route, the rule that carries mail no account or domain rule claims.

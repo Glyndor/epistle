@@ -252,7 +252,7 @@ fn the_token_migration_waits_for_the_common_lock_and_reads_the_latest_config() {
 		};
 		action
 	};
-	let held = crate::cli::service_lock::acquire(&path).unwrap();
+	let held = crate::cli::service::lock::acquire(&path).unwrap();
 	std::thread::scope(|scope| {
 		let (started, starting) = mpsc::channel();
 		let (done, result) = mpsc::channel();

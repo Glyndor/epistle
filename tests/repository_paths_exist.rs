@@ -19,7 +19,7 @@
 //!
 //! What it accepts:
 //!
-//! - `src/imap/snapshot.rs::store_flags` and `src/cli/dispatch.rs:132`: only
+//! - `src/imap/snapshot.rs::store_flags` and `src/cli/dispatch/mod.rs:132`: only
 //!   the path before the colon is checked, not the symbol or the line.
 //! - Globs (`src/imap/**`, `tests/database*.rs`, `src/{imap,pop3}/`): each
 //!   must match at least one file, so a glob whose files all moved fails the

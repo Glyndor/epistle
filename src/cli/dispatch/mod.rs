@@ -18,7 +18,6 @@ use super::{
 };
 use crate::config::Config;
 
-#[path = "dispatch_restore.rs"]
 mod restore;
 pub(in crate::cli) use restore::dispatch_restore;
 
@@ -506,9 +505,4 @@ impl Cli {
 }
 
 #[cfg(test)]
-#[path = "dispatch_tests_delegation.rs"]
-mod tests_delegation;
-
-#[cfg(test)]
-#[path = "dispatch_tests_limits.rs"]
-mod tests_limits;
+mod tests;

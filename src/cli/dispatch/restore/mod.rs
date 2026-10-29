@@ -1,5 +1,5 @@
 //! `epistle restore`: confirm, read the archive from stdin, replay it.
-//! Kept out of `dispatch.rs` so the dispatch table stays under the
+//! Kept out of `src/cli/dispatch/mod.rs` so the dispatch table stays under the
 //! per-file line budget.
 
 use std::path::PathBuf;
@@ -11,7 +11,7 @@ use crate::config::Config;
 /// Run the `restore` subcommand: read the archive from stdin, load the
 /// config, hand the bytes to [`backup::run_restore`]. Lives here rather
 /// than in the match arm so the dispatch table stays compact and the
-/// per-file line budget keeps `dispatch.rs` under 500 code lines.
+/// per-file line budget keeps `src/cli/dispatch/mod.rs` under 500 code lines.
 pub(in crate::cli) fn dispatch_restore(
 	config: PathBuf,
 	(force, dry_run, yes): (bool, bool, bool),
@@ -84,5 +84,4 @@ fn restore_json(summary: &backup::RestoreSummary, dry_run: bool) -> serde_json::
 }
 
 #[cfg(test)]
-#[path = "dispatch_restore_tests.rs"]
 mod tests;

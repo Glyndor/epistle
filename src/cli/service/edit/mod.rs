@@ -1,4 +1,4 @@
-use super::config_edit::ConfigDocument;
+use crate::cli::config_edit::ConfigDocument;
 use crate::config::{Config, ListenerKind};
 use std::path::Path;
 
@@ -25,7 +25,7 @@ pub(super) fn listener_document(
 		return Ok((document, current));
 	}
 	if enabled {
-		let addr = super::service::default_bind(&current, kind).to_string();
+		let addr = super::default_bind(&current, kind).to_string();
 		document.upsert_element("listeners", "kind", kind.as_str(), &[("addr", addr.into())])?;
 	} else {
 		document.remove_elements("listeners", "kind", kind.as_str())?;
@@ -38,10 +38,9 @@ fn set_listener_enabled(path: &Path, kind: ListenerKind, enabled: bool) -> Resul
 	listener_document(path, kind, enabled)
 		.map(|(document, _)| document)
 		.and_then(ConfigDocument::commit)
-		.map(|outcome| outcome == super::config_edit::Outcome::Changed)
+		.map(|outcome| outcome == crate::cli::config_edit::Outcome::Changed)
 		.map_err(|error| format!("the candidate config is invalid: {error}"))
 }
 
 #[cfg(test)]
-#[path = "service_tests_edit.rs"]
 mod tests;

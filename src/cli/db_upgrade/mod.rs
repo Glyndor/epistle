@@ -45,7 +45,7 @@ pub(super) fn run(config: &Config, path: &Path, action: DbCli, json: bool) -> Ex
 	match action {
 		DbCli::Status => super::db_status::run(config, json),
 		DbCli::Upgrade => {
-			let _held = match super::service_lock::acquire(path) {
+			let _held = match super::service::lock::acquire(path) {
 				Ok(held) => held,
 				Err(error) => {
 					super::style::error(format_args!("cannot upgrade the database: {error}"));

@@ -16,7 +16,7 @@ pub(in crate::cli) fn run_from_path(path: &Path, cli: StackCli, json: bool) -> E
 			}
 	);
 	let _held = if writes {
-		match crate::cli::service_lock::acquire(path) {
+		match crate::cli::service::lock::acquire(path) {
 			Ok(held) => Some(held),
 			Err(error) => {
 				crate::cli::style::error(error);

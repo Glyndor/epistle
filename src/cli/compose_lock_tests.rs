@@ -96,8 +96,8 @@ fn the_wait_is_what_the_common_lock_left_of_the_budget() {
 	// The budget is per thread, so the clock starts on the thread that waits.
 	std::thread::spawn(move || {
 		let began = std::time::Instant::now();
-		super::super::service_lock::began_at(
-			began - (super::super::service_lock::WAIT - Duration::from_millis(300)),
+		super::super::service::lock::began_at(
+			began - (super::super::service::lock::WAIT - Duration::from_millis(300)),
 		);
 		let outcome = acquire(&waiting);
 		done.send((outcome.is_err(), began.elapsed())).unwrap();
