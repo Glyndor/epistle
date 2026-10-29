@@ -9,7 +9,7 @@ use super::router;
 use super::state::ApiState;
 use super::tests::{TOKEN, request_with_body, test_state};
 use crate::antispam::clamd::ClamdHook;
-use crate::antispam::clamd::fake::{FakeClamd, eicar};
+use crate::antispam::clamd::tests::fake::{FakeClamd, eicar};
 use crate::antispam::submission_scan::ScanningSink;
 use crate::smtp::ratelimit::SendLimiter;
 use crate::smtp::submission_budget::RATE_LIMITED;

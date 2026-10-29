@@ -7,7 +7,7 @@ use super::router;
 use super::send_tests_virus::{api_send, draft, jmap_submit, queued};
 use super::tests::test_state;
 use crate::antispam::clamd::ClamdHook;
-use crate::antispam::clamd::fake::FakeClamd;
+use crate::antispam::clamd::tests::fake::FakeClamd;
 use crate::antispam::submission_scan::ScanningSink;
 use crate::config::ClamdOnError;
 use crate::storage::SplitDelivery;

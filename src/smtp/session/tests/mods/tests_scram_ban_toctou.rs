@@ -27,7 +27,7 @@ use super::tests_scram_bans::{
 	decode_server_first, scram_challenge_text, scram_directory_with_ban_store, valid_client_final,
 };
 use super::*;
-use crate::antispam::bans::tests::FakeBanStore;
+use crate::antispam::bans::tests::base::FakeBanStore;
 use crate::antispam::bans::{BanInfo, BanPolicy, BanStore};
 use crate::test_fixtures as fixtures;
 

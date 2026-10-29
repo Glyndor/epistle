@@ -55,7 +55,7 @@ pub(super) fn scram_directory_with_ban_store(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn smtp_scram_malformed_client_first_records_a_strike() {
 	use crate::antispam::bans::BanPolicy;
-	use crate::antispam::bans::tests::FakeBanStore;
+	use crate::antispam::bans::tests::base::FakeBanStore;
 
 	let ban_store = std::sync::Arc::new(FakeBanStore::new(BanPolicy::default()));
 	let directory = scram_directory_with_ban_store(ban_store.clone(), None);
@@ -106,7 +106,7 @@ async fn smtp_scram_malformed_client_first_records_a_strike() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn smtp_scram_lookup_counter_is_per_test() {
 	use crate::antispam::bans::BanPolicy;
-	use crate::antispam::bans::tests::FakeBanStore;
+	use crate::antispam::bans::tests::base::FakeBanStore;
 
 	let ban_store = std::sync::Arc::new(FakeBanStore::new(BanPolicy::default()));
 	let lookup_counter = crate::smtp::tests::directory_scram_test_counter::fresh();
@@ -149,7 +149,7 @@ async fn smtp_scram_lookup_counter_is_per_test() {
 /// ban).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn smtp_scram_client_final_rechecks_ban() {
-	use crate::antispam::bans::tests::FakeBanStore;
+	use crate::antispam::bans::tests::base::FakeBanStore;
 	use crate::antispam::bans::{BanInfo, BanPolicy};
 
 	let ban_store = std::sync::Arc::new(FakeBanStore::new(BanPolicy::default()));
@@ -280,7 +280,7 @@ pub(super) fn valid_client_final(client_first: &str, server_first: &str, passwor
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn smtp_scram_banned_ip_is_refused_before_credential_lookup() {
 	let nonce = fixtures::nonce();
-	use crate::antispam::bans::tests::FakeBanStore;
+	use crate::antispam::bans::tests::base::FakeBanStore;
 	use crate::antispam::bans::{BanInfo, BanPolicy};
 
 	let ban_store = std::sync::Arc::new(FakeBanStore::new(BanPolicy::default()));
@@ -366,7 +366,7 @@ async fn smtp_scram_banned_ip_is_refused_before_credential_lookup() {
 async fn smtp_scram_failure_adds_one_strike() {
 	let nonce = fixtures::nonce();
 	use crate::antispam::bans::BanPolicy;
-	use crate::antispam::bans::tests::FakeBanStore;
+	use crate::antispam::bans::tests::base::FakeBanStore;
 
 	let ban_store = std::sync::Arc::new(FakeBanStore::new(BanPolicy::default()));
 	let directory = scram_directory_with_ban_store(ban_store.clone(), None);
@@ -418,7 +418,7 @@ async fn smtp_scram_failure_adds_one_strike() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn smtp_scram_attempts_during_ban_do_not_extend_it() {
 	let nonce = fixtures::nonce();
-	use crate::antispam::bans::tests::FakeBanStore;
+	use crate::antispam::bans::tests::base::FakeBanStore;
 	use crate::antispam::bans::{BanInfo, BanPolicy, BanStore};
 
 	let ban_store = std::sync::Arc::new(FakeBanStore::new(BanPolicy::default()));
@@ -493,7 +493,7 @@ async fn smtp_scram_attempts_during_ban_do_not_extend_it() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn smtp_scram_banned_account_is_refused_before_credential_lookup() {
 	let nonce = fixtures::nonce();
-	use crate::antispam::bans::tests::FakeBanStore;
+	use crate::antispam::bans::tests::base::FakeBanStore;
 	use crate::antispam::bans::{BanInfo, BanPolicy, BanStore};
 
 	let ban_store = std::sync::Arc::new(FakeBanStore::new(BanPolicy::default()));
@@ -571,7 +571,7 @@ async fn smtp_scram_banned_account_is_refused_before_credential_lookup() {
 /// would catch.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn smtp_scram_success_clears_ban_store() {
-	use crate::antispam::bans::tests::FakeBanStore;
+	use crate::antispam::bans::tests::base::FakeBanStore;
 	use crate::antispam::bans::{BanInfo, BanPolicy, BanStore};
 
 	let ban_store = std::sync::Arc::new(FakeBanStore::new(BanPolicy::default()));

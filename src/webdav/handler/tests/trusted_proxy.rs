@@ -45,10 +45,10 @@ fn test_app_with_trusted_and_ban_store(
 	trusted_proxies: Vec<crate::cidr::Cidr>,
 ) -> (
 	Router,
-	std::sync::Arc<crate::antispam::bans::tests::FakeBanStore>,
+	std::sync::Arc<crate::antispam::bans::tests::base::FakeBanStore>,
 ) {
 	use crate::antispam::bans::BanPolicy;
-	use crate::antispam::bans::tests::FakeBanStore;
+	use crate::antispam::bans::tests::base::FakeBanStore;
 	let account = |name: &str, pw: &str| crate::config::Account {
 		display_name: None,
 		name: name.to_string(),

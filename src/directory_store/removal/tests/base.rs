@@ -461,7 +461,7 @@ fn add_account_with_primary_hash(
 /// in the removal path panics here instead of in production.
 #[tokio::test]
 async fn removing_an_account_clears_its_ban_rows_and_leaves_other_accounts_banned() {
-	use crate::antispam::bans::tests::FakeBanStore;
+	use crate::antispam::bans::tests::base::FakeBanStore;
 	use crate::antispam::bans::{BanInfo, BanPolicy, BanStore, subject_account};
 
 	let dir = tempfile::tempdir().expect("tempdir");

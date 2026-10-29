@@ -77,7 +77,7 @@ async fn queue_removal_notifies_webhook_with_extra() {
 				.insert("order".to_string(), "A-1042".to_string());
 		})
 		.expect("add extra");
-	let (url, captured) = crate::webhook_receiver_tests::webhook_receiver().await;
+	let (url, captured) = crate::webhook::tests::receiver::webhook_receiver().await;
 	let webhook = std::sync::Arc::new(crate::webhook::Webhook::new(&url, None).expect("webhook"));
 	let app = router(state.with_delivery_log_days(30).with_webhook(Some(webhook)));
 	let (status, _) = request(

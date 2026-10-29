@@ -22,7 +22,7 @@ use base64::engine::general_purpose::STANDARD as B64;
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn imap_scram_malformed_client_first_records_a_strike() {
 	use crate::antispam::bans::BanPolicy;
-	use crate::antispam::bans::tests::FakeBanStore;
+	use crate::antispam::bans::tests::base::FakeBanStore;
 
 	let tmp = tempfile::tempdir().expect("tempdir");
 	let ban_store = std::sync::Arc::new(FakeBanStore::new(BanPolicy::default()));
@@ -78,7 +78,7 @@ async fn imap_scram_malformed_client_first_records_a_strike() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn imap_login_records_the_peer_ip() {
 	use crate::antispam::bans::BanPolicy;
-	use crate::antispam::bans::tests::FakeBanStore;
+	use crate::antispam::bans::tests::base::FakeBanStore;
 
 	let tmp = tempfile::tempdir().expect("tempdir");
 	let ban_store = std::sync::Arc::new(FakeBanStore::new(BanPolicy::default()));
@@ -153,7 +153,7 @@ pub(super) fn scram_directory_with_ban_store(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn imap_scram_banned_ip_is_refused_before_credential_lookup() {
 	let nonce = fixtures::nonce();
-	use crate::antispam::bans::tests::FakeBanStore;
+	use crate::antispam::bans::tests::base::FakeBanStore;
 	use crate::antispam::bans::{BanInfo, BanPolicy};
 
 	let tmp = tempfile::tempdir().expect("tempdir");
@@ -239,7 +239,7 @@ async fn imap_scram_banned_ip_is_refused_before_credential_lookup() {
 async fn imap_scram_failure_adds_one_strike() {
 	let nonce = fixtures::nonce();
 	use crate::antispam::bans::BanPolicy;
-	use crate::antispam::bans::tests::FakeBanStore;
+	use crate::antispam::bans::tests::base::FakeBanStore;
 
 	let tmp = tempfile::tempdir().expect("tempdir");
 	let ban_store = std::sync::Arc::new(FakeBanStore::new(BanPolicy::default()));
@@ -292,7 +292,7 @@ async fn imap_scram_failure_adds_one_strike() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn imap_scram_attempts_during_ban_do_not_extend_it() {
 	let nonce = fixtures::nonce();
-	use crate::antispam::bans::tests::FakeBanStore;
+	use crate::antispam::bans::tests::base::FakeBanStore;
 	use crate::antispam::bans::{BanInfo, BanPolicy, BanStore};
 
 	let tmp = tempfile::tempdir().expect("tempdir");
@@ -364,7 +364,7 @@ async fn imap_scram_attempts_during_ban_do_not_extend_it() {
 /// ban).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn imap_scram_client_final_rechecks_ban() {
-	use crate::antispam::bans::tests::FakeBanStore;
+	use crate::antispam::bans::tests::base::FakeBanStore;
 	use crate::antispam::bans::{BanInfo, BanPolicy};
 
 	let tmp = tempfile::tempdir().expect("tempdir");
@@ -481,7 +481,7 @@ pub(super) fn valid_client_final(client_first: &str, server_first: &str, passwor
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn imap_scram_banned_account_is_refused_before_credential_lookup() {
 	let nonce = fixtures::nonce();
-	use crate::antispam::bans::tests::FakeBanStore;
+	use crate::antispam::bans::tests::base::FakeBanStore;
 	use crate::antispam::bans::{BanInfo, BanPolicy, BanStore};
 
 	let tmp = tempfile::tempdir().expect("tempdir");
@@ -559,7 +559,7 @@ async fn imap_scram_banned_account_is_refused_before_credential_lookup() {
 /// would catch.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn imap_scram_success_clears_ban_store() {
-	use crate::antispam::bans::tests::FakeBanStore;
+	use crate::antispam::bans::tests::base::FakeBanStore;
 	use crate::antispam::bans::{BanInfo, BanPolicy, BanStore};
 
 	let tmp = tempfile::tempdir().expect("tempdir");

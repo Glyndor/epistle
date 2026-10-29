@@ -16,7 +16,7 @@
 # account that the .deb creates from its postinst, with the filesystem locked
 # down. Because the service is already that user, the config's [privileges]
 # section is unnecessary here: the drop is a no-op when the process is already
-# exactly the requested user (src/privdrop.rs, drop_to). Install the package
+# exactly the requested user (src/privdrop/mod.rs, drop_to). Install the package
 # first, or create the account by hand, or systemd will refuse to start the
 # service with a user it cannot resolve.
 #

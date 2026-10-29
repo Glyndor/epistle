@@ -46,7 +46,7 @@ an open decision for the maintainer. Until it is taken, rule 3 is the rule.
 
 ## Tests
 
-`src/cidr.rs` and `src/cidr_tests.rs` are the shape of rule 3, and so are
+`src/cidr/mod.rs` and `src/cidr/tests/base.rs` are the shape of rule 3, and so are
 `src/metrics/mod.rs` and `src/metrics/tests/base.rs`. Tests that outgrow one
 file are split by topic as `<module>_tests_<topic>.rs`, each declared the
 same way.

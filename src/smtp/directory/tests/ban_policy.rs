@@ -7,7 +7,7 @@ use std::net::IpAddr;
 use super::Directory;
 use super::gate_fixture::*;
 use crate::antispam::bans::BanPolicy;
-use crate::antispam::bans::tests::FakeBanStore;
+use crate::antispam::bans::tests::base::FakeBanStore;
 use crate::config::Protocol;
 use crate::test_fixtures as fixtures;
 

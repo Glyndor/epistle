@@ -10,7 +10,7 @@ use std::sync::Arc;
 use super::Directory;
 use super::decoy_counters::DecoyCounters;
 use crate::antispam::bans::BanPolicy;
-use crate::antispam::bans::tests::FakeBanStore;
+use crate::antispam::bans::tests::base::FakeBanStore;
 use crate::config::Protocol;
 use crate::directory_store::AppPassword;
 use crate::test_fixtures as fixtures;

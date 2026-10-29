@@ -22,7 +22,7 @@ use tracing_subscriber::layer::{Context, SubscriberExt};
 use tracing_subscriber::{Layer, Registry};
 
 use super::*;
-use crate::antispam::bans::tests::FakeBanStore;
+use crate::antispam::bans::tests::base::FakeBanStore;
 use crate::antispam::bans::{BanInfo, BanPolicy};
 use crate::smtp::auth::tests::base::{fixture_password, wrong_password};
 
