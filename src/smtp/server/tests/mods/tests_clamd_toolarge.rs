@@ -5,7 +5,7 @@
 use super::tests_clamd_defer::{INBOUND, deliver, down};
 use super::*;
 use crate::antispam::clamd::ClamdHook;
-use crate::antispam::clamd::fake::FakeClamd;
+use crate::antispam::clamd::tests::fake::FakeClamd;
 use crate::config::ClamdOnError;
 
 const TOO_LARGE: &str = "552 5.3.4 message too large for the content scan\r\n";

@@ -7,7 +7,7 @@ use super::tests_virus::submit_to;
 use super::*;
 use crate::antispam::attachments::policy::Policy;
 use crate::antispam::clamd::ClamdHook;
-use crate::antispam::clamd::fake::{FakeClamd, eicar};
+use crate::antispam::clamd::tests::fake::{FakeClamd, eicar};
 use crate::antispam::submission_scan::ScanningSink;
 use crate::config::{AttachmentMode, Attachments, ClamdOnError};
 use crate::imap::mailbox;

@@ -300,7 +300,7 @@ fn greeting_is_positive() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn pop3_failures_now_reach_the_directory() {
 	use crate::antispam::bans::BanPolicy;
-	use crate::antispam::bans::tests::FakeBanStore;
+	use crate::antispam::bans::tests::base::FakeBanStore;
 	use crate::directory_store::DirectoryHandle;
 	use crate::pop3::backend::MailboxBackend;
 	use crate::smtp::auth::tests::base::{fixture_password, wrong_password};

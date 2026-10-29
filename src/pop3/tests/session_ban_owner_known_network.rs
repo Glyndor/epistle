@@ -7,7 +7,7 @@
 //! the per-file code-line budget.
 
 use crate::antispam::bans::BanPolicy;
-use crate::antispam::bans::tests::FakeBanStore;
+use crate::antispam::bans::tests::base::FakeBanStore;
 use crate::directory_store::DirectoryHandle;
 use crate::pop3::backend::MailboxBackend;
 use crate::pop3::command::Command;

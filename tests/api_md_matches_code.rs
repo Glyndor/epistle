@@ -192,7 +192,7 @@ fn every_number_in_the_guide_is_the_one_in_the_code() {
 
 #[test]
 fn the_webhook_timeout_is_the_one_in_the_guide() {
-	assert!(source("src/webhook.rs").contains("timeout(Duration::from_secs(15))"));
+	assert!(source("src/webhook/mod.rs").contains("timeout(Duration::from_secs(15))"));
 	assert!(guide().contains("with a 15 second timeout and no retry"));
 }
 
@@ -238,7 +238,7 @@ fn snake_case(name: &str) -> String {
 
 /// The `event` names of `WebhookEvent`, honouring `#[serde(rename = "...")]`.
 fn webhook_events() -> BTreeSet<String> {
-	let text = source("src/webhook.rs");
+	let text = source("src/webhook/mod.rs");
 	let body = text
 		.split("pub enum WebhookEvent {")
 		.nth(1)

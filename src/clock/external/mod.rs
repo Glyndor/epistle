@@ -150,9 +150,4 @@ async fn probe_one(source: Source, deadline: Duration, policy: endpoint::Policy)
 }
 
 #[cfg(test)]
-#[path = "tests/mod_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "tests/udp_stub.rs"]
-mod udp_stub;

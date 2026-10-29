@@ -129,13 +129,4 @@ impl From<LearnOutcome> for Lesson {
 }
 
 #[cfg(test)]
-#[path = "learning_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "learning_tests_unread.rs"]
-mod tests_unread;
-
-#[cfg(test)]
-#[path = "learning_tests_busy.rs"]
-mod tests_busy;

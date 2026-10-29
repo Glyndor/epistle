@@ -29,7 +29,7 @@ use crate::test_fixtures as fixtures;
 /// asserts the ban expiry has not moved and no new failure landed.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn smtp_scram_malformed_client_first_while_banned_does_not_extend_ban() {
-	use crate::antispam::bans::tests::FakeBanStore;
+	use crate::antispam::bans::tests::base::FakeBanStore;
 	use crate::antispam::bans::{BanInfo, BanPolicy, BanStore};
 
 	let ban_store = std::sync::Arc::new(FakeBanStore::new(BanPolicy::default()));
@@ -96,7 +96,7 @@ async fn smtp_scram_malformed_client_first_while_banned_does_not_extend_ban() {
 /// proof fail and re-record a strike, re-banning the subject.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn smtp_scram_ban_refusal_stays_refused_after_ban_expires() {
-	use crate::antispam::bans::tests::FakeBanStore;
+	use crate::antispam::bans::tests::base::FakeBanStore;
 	use crate::antispam::bans::{BanInfo, BanPolicy};
 
 	let ban_store = std::sync::Arc::new(FakeBanStore::new(BanPolicy::default()));

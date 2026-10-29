@@ -384,7 +384,7 @@ fn remove_with_log_disabled_does_not_write_records() {
 
 /// Start a webhook receiver; returns its URL and a shared body list.
 pub(super) async fn webhook_receiver() -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
-	crate::webhook_receiver_tests::webhook_receiver().await
+	crate::webhook::tests::receiver::webhook_receiver().await
 }
 
 #[tokio::test]

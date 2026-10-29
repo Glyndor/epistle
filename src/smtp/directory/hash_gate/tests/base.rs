@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use super::*;
 use crate::antispam::bans::BanPolicy;
-use crate::antispam::bans::tests::FakeBanStore;
+use crate::antispam::bans::tests::base::FakeBanStore;
 use crate::config::Protocol;
 use crate::smtp::directory::Directory;
 use crate::smtp::directory::gate_fixture::*;

@@ -25,7 +25,7 @@ use crate::test_fixtures as fixtures;
 /// tests around SCRAM ban refusals stay untouched.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn smtp_scram_banned_account_from_known_network_is_admitted() {
-	use crate::antispam::bans::tests::FakeBanStore;
+	use crate::antispam::bans::tests::base::FakeBanStore;
 	use crate::antispam::bans::{BanInfo, BanPolicy};
 
 	let ban_store = std::sync::Arc::new(FakeBanStore::new(BanPolicy::default()));
@@ -100,7 +100,7 @@ async fn smtp_scram_banned_account_from_known_network_is_admitted() {
 /// password.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn smtp_scram_banned_account_from_unknown_network_is_refused_with_wrong_password_shape() {
-	use crate::antispam::bans::tests::FakeBanStore;
+	use crate::antispam::bans::tests::base::FakeBanStore;
 	use crate::antispam::bans::{BanInfo, BanPolicy};
 
 	let ban_store = std::sync::Arc::new(FakeBanStore::new(BanPolicy::default()));
@@ -177,7 +177,7 @@ async fn smtp_scram_banned_account_from_unknown_network_is_refused_with_wrong_pa
 /// skips, but the unknown-network path has no proof to time.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn smtp_scram_banned_account_known_network_wrong_proof_still_records_a_strike() {
-	use crate::antispam::bans::tests::FakeBanStore;
+	use crate::antispam::bans::tests::base::FakeBanStore;
 	use crate::antispam::bans::{BanInfo, BanPolicy};
 
 	let ban_store = std::sync::Arc::new(FakeBanStore::new(BanPolicy::default()));
@@ -236,7 +236,7 @@ async fn smtp_scram_banned_account_known_network_wrong_proof_still_records_a_str
 /// irrelevant: the bypass key uses the lower 64 bits zeroed.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn smtp_scram_banned_account_known_ipv6_slash_64_is_admitted_from_any_host() {
-	use crate::antispam::bans::tests::FakeBanStore;
+	use crate::antispam::bans::tests::base::FakeBanStore;
 	use crate::antispam::bans::{BanInfo, BanPolicy};
 
 	let ban_store = std::sync::Arc::new(FakeBanStore::new(BanPolicy::default()));
@@ -284,7 +284,7 @@ async fn smtp_scram_banned_account_known_ipv6_slash_64_is_admitted_from_any_host
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn smtp_scram_pair_ban_is_not_bypassed_from_a_known_network() {
 	use crate::antispam::bans::subject_pair;
-	use crate::antispam::bans::tests::FakeBanStore;
+	use crate::antispam::bans::tests::base::FakeBanStore;
 	use crate::antispam::bans::{BanInfo, BanPolicy};
 
 	let ban_store = std::sync::Arc::new(FakeBanStore::new(BanPolicy::default()));
@@ -338,7 +338,7 @@ async fn smtp_scram_pair_ban_is_not_bypassed_from_a_known_network() {
 /// reply is `235`, and asserts `clear_success` was never called.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn smtp_scram_bypass_success_does_not_clear_any_ban_row() {
-	use crate::antispam::bans::tests::FakeBanStore;
+	use crate::antispam::bans::tests::base::FakeBanStore;
 	use crate::antispam::bans::{BanInfo, BanPolicy};
 
 	let ban_store = std::sync::Arc::new(FakeBanStore::new(BanPolicy::default()));

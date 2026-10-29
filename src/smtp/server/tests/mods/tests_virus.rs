@@ -9,7 +9,7 @@ use tokio::io::AsyncWriteExt;
 use super::tests_auth::{connector, directory_with_password, reply};
 use super::*;
 use crate::antispam::clamd::ClamdHook;
-use crate::antispam::clamd::fake::{FakeClamd, SIGNATURE, eicar};
+use crate::antispam::clamd::tests::fake::{FakeClamd, SIGNATURE, eicar};
 use crate::antispam::submission_scan::ScanningSink;
 use crate::smtp::sink::MemorySink;
 

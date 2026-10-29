@@ -25,7 +25,7 @@ use base64::engine::general_purpose::STANDARD as B64;
 /// is followed by `a OK`, which is the oracle-free outcome.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn imap_scram_banned_account_from_known_network_is_admitted() {
-	use crate::antispam::bans::tests::FakeBanStore;
+	use crate::antispam::bans::tests::base::FakeBanStore;
 	use crate::antispam::bans::{BanInfo, BanPolicy};
 
 	let tmp = tempfile::tempdir().expect("tempdir");
@@ -75,7 +75,7 @@ async fn imap_scram_banned_account_from_known_network_is_admitted() {
 /// never moves the strike count).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn imap_scram_banned_account_from_unknown_network_is_refused() {
-	use crate::antispam::bans::tests::FakeBanStore;
+	use crate::antispam::bans::tests::base::FakeBanStore;
 	use crate::antispam::bans::{BanInfo, BanPolicy};
 
 	let tmp = tempfile::tempdir().expect("tempdir");
@@ -145,7 +145,7 @@ async fn imap_scram_banned_account_from_unknown_network_is_refused() {
 /// holds across the `/64` boundary.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn imap_scram_banned_account_known_ipv6_slash_64_is_admitted() {
-	use crate::antispam::bans::tests::FakeBanStore;
+	use crate::antispam::bans::tests::base::FakeBanStore;
 	use crate::antispam::bans::{BanInfo, BanPolicy};
 
 	let tmp = tempfile::tempdir().expect("tempdir");

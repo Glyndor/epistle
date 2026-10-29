@@ -12,8 +12,8 @@
 //! the `regex` crate as a dev-dependency can grow this into a true
 //! match/no-match check that asserts, for example, that the regex matches
 //! `src/api/jmap_tests_b.rs`, `src/cli/init/apply_tests_b.rs`,
-//! `src/cli/local/test_support.rs` and `src/cidr_tests.rs`, and does NOT
-//! match `src/smtp/server/run.rs`, `src/antispam/subjectpass.rs` or
+//! `src/cli/local/test_support.rs` and `src/cidr/tests/base.rs`, and does NOT
+//! match `src/smtp/server/run.rs`, `src/antispam/subjectpass/mod.rs` or
 //! `src/cli/config_check.rs`. Until then the substring assertion is the
 //! strongest one available without pulling in a new dependency.
 //!

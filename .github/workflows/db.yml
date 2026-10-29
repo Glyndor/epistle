@@ -115,7 +115,7 @@ jobs:
         # nothing about anything; the four files below are what this job
         # exists to cover, so they are what it asserts.
         #
-        # src/antispam/hook.rs is deliberately NOT in this list even though
+        # src/antispam/hook/mod.rs is deliberately NOT in this list even though
         # ci.yml excludes it. Measured here it is 0.00%: the scanner hook talks
         # HTTP to ClamAV/Rspamd, needs no database, and the database test
         # targets never imports it. Gating it here would be a floor over a
@@ -139,8 +139,8 @@ jobs:
           # file below 100%):
           #   src/db/mod.rs                  88.79%
           #   src/directory_store/sql/mod.rs 96.88%
-          #   src/antispam/corpus.rs         73.15%
-          #   src/antispam/reputation.rs     79.75%
+          #   src/antispam/corpus/mod.rs         73.15%
+          #   src/antispam/reputation/mod.rs     79.75%
           # The floor is today's worst file rounded down to the ten, not 90. A
           # threshold above what the tree actually has would make this gate red
           # on its first run, and a gate that is born red is a gate somebody
@@ -149,8 +149,8 @@ jobs:
           COVERAGE_THRESHOLD: "70"
           COVERAGE_FILES: |
             src/db/mod.rs
-            src/antispam/reputation.rs
-            src/antispam/corpus.rs
+            src/antispam/reputation/mod.rs
+            src/antispam/corpus/mod.rs
             src/directory_store/sql/mod.rs
         run: |
           # `--tests` instruments every test target (lib tests plus every

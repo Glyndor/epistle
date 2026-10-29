@@ -10,7 +10,7 @@ use super::send_tests_outbound::alice_messages;
 use super::state::ApiState;
 use super::tests::{TOKEN, request_with_body, test_state};
 use crate::antispam::clamd::ClamdHook;
-use crate::antispam::clamd::fake::{FakeClamd, SIGNATURE, eicar};
+use crate::antispam::clamd::tests::fake::{FakeClamd, SIGNATURE, eicar};
 use crate::antispam::submission_scan::ScanningSink;
 use crate::storage::{FsSpool, SplitDelivery};
 use axum::http::StatusCode;

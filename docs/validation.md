@@ -79,4 +79,4 @@ enforces, and an example, but not the value, because the client already holds it
   labels (`labels.rs`), host names (`hostname.rs`) and data directories
   (`data_dir.rs`).
 - Each definition has unit tests beside it (`util/label_rule/tests/base.rs`,
-  `util/account_rule/tests/base.rs`, `cidr_tests.rs`, `util/validation/tests/base.rs`).
+  `util/account_rule/tests/base.rs`, `cidr/tests/base.rs`, `util/validation/tests/base.rs`).

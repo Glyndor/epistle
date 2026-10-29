@@ -262,7 +262,7 @@ fn logout_is_final() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn managesieve_failures_now_reach_the_directory() {
 	use crate::antispam::bans::BanPolicy;
-	use crate::antispam::bans::tests::FakeBanStore;
+	use crate::antispam::bans::tests::base::FakeBanStore;
 	use crate::smtp::auth::tests::base::{fixture_password, wrong_password};
 	use std::collections::HashMap;
 

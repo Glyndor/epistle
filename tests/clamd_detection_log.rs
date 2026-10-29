@@ -1,7 +1,7 @@
 //! Integration test for the WARN event emitted by `ClamdHook::scan` on a
 //! clamd FOUND reply.
 //!
-//! The same check lived in `src/antispam/clamd_tests.rs` as a unit test. The
+//! The same check lived in `src/antispam/clamd/tests/base.rs` as a unit test. The
 //! `tracing` per-thread dispatcher is shared with every other test in the
 //! lib binary, and parallel runs installed and dropped their own layers while
 //! this test was polling: roughly one run in six captured zero WARNs against

@@ -64,7 +64,7 @@ fn an_unknown_login_ends_as_a_wrong_proof() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_unknown_login_costs_the_peer_one_strike_when_the_exchange_ends() {
 	use crate::antispam::bans::BanPolicy;
-	use crate::antispam::bans::tests::FakeBanStore;
+	use crate::antispam::bans::tests::base::FakeBanStore;
 	let dir = tempfile::tempdir().expect("tempdir");
 	let ban_store = std::sync::Arc::new(FakeBanStore::new(BanPolicy::default()));
 	let directory = directory_with_production_verifier().with_ban_store(ban_store.clone());

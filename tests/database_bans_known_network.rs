@@ -1,5 +1,5 @@
 //! Live-database tests for the known-network bypass list. The in-memory
-//! fake in `src/antispam/bans_tests.rs` covers the trait contract; the
+//! fake in `src/antispam/bans/tests/base.rs` covers the trait contract; the
 //! PostgreSQL case here covers the SQL projection, the upsert throttle,
 //! the cap eviction and the sweep horizon.
 //!
