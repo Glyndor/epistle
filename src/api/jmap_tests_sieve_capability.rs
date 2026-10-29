@@ -56,7 +56,7 @@ async fn the_extensions_are_the_ones_managesieve_advertises() {
 			.collect();
 	// Written out, not read back from the constant the answer is built from:
 	// adding or removing an extension is a change to what scripts may use,
-	// and has to be made here on purpose (extensions_tests.rs runs a script
+	// and has to be made here on purpose (src/sieve/tests/extensions.rs runs a script
 	// for each).
 	let expected = [
 		"fileinto",

@@ -254,5 +254,4 @@ fn read_account(doc: &Doc, raw_name: &str, plan: &mut Plan) {
 }
 
 #[cfg(test)]
-#[path = "mod_tests.rs"]
 mod tests;

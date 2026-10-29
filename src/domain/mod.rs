@@ -107,5 +107,4 @@ fn check_dns_shape(ascii: &str) -> Result<(), DomainError> {
 }
 
 #[cfg(test)]
-#[path = "mod_tests.rs"]
 mod tests;

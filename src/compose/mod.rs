@@ -243,5 +243,4 @@ fn write_leaf(out: &mut Vec<u8>, leaf: &Leaf) -> Result<(), ComposeError> {
 }
 
 #[cfg(test)]
-#[path = "compose_tests.rs"]
 mod tests;

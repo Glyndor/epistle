@@ -72,11 +72,22 @@ fn declared_paths(files: &[PathBuf], sources: &[String]) -> HashSet<PathBuf> {
 			{
 				paths.insert(normalised(dir.join(&rest[start + 1..start + 1 + end])));
 			}
-			let line = line
-				.strip_prefix("pub(crate) ")
-				.or_else(|| line.strip_prefix("pub(super) "))
-				.or_else(|| line.strip_prefix("pub "))
-				.unwrap_or(line);
+			// A module may be declared with a visibility that names a
+			// path (`pub(in super::super) mod base;`), when the leaf
+			// has to be reached from a sibling of the module that
+			// owns it. The visibility does not change which file the
+			// name points at.
+			let line = match line.strip_prefix("pub(in ") {
+				Some(rest) => match rest.split_once(')') {
+					Some((_, after)) => after.trim_start(),
+					None => line,
+				},
+				None => line
+					.strip_prefix("pub(crate) ")
+					.or_else(|| line.strip_prefix("pub(super) "))
+					.or_else(|| line.strip_prefix("pub "))
+					.unwrap_or(line),
+			};
 			if let Some(name) = line.strip_prefix("mod ").and_then(|r| r.strip_suffix(';')) {
 				let name = name.trim();
 				// A topic that is a Rust keyword is declared as a raw

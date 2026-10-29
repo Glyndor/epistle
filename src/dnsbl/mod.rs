@@ -284,5 +284,4 @@ fn reverse_ip(ip: IpAddr) -> String {
 }
 
 #[cfg(test)]
-#[path = "dnsbl_tests.rs"]
 mod tests;
