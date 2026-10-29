@@ -48,7 +48,7 @@ fn expires_at_takes_a_date_and_expires_in_a_duration() {
 	let soon = parsed(&["--expires-in", "90d"])
 		.expect("duration")
 		.expect("set");
-	let want = super::super::api_keys_expiry::now_secs() + 90 * 86_400;
+	let want = crate::cli::api_keys::expiry::now_secs() + 90 * 86_400;
 	assert!(soon.abs_diff(want) < 60, "{soon} vs {want}");
 }
 

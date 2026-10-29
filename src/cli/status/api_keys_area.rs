@@ -5,7 +5,7 @@
 use super::Ctx;
 use super::report::{AreaReport, Item, Level};
 use crate::api::api_keys::{ApiKey, ApiKeyStore};
-use crate::cli::api_keys_expiry::status_warning;
+use crate::cli::api_keys::expiry::status_warning;
 
 /// Read the same key file as `epistle api-key list`, without a server.
 pub(super) async fn check(ctx: &Ctx) -> AreaReport {

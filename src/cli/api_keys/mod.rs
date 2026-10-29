@@ -1,5 +1,7 @@
 //! `epistle api-key`: list, create, revoke and rotate management API keys.
 
+pub(super) mod expiry;
+
 use std::process::ExitCode;
 
 use crate::api::api_keys::Scope;
@@ -246,7 +248,7 @@ pub enum ApiKeyCli {
 		#[arg(
 			long,
 			value_name = "WHEN",
-			value_parser = super::api_keys_expiry::parse_expires_at,
+			value_parser = expiry::parse_expires_at,
 		)]
 		expires_at: Option<u64>,
 		/// Optional expiry as a duration from now: a number and a unit
@@ -256,7 +258,7 @@ pub enum ApiKeyCli {
 			long,
 			value_name = "DURATION",
 			conflicts_with = "expires_at",
-			value_parser = super::api_keys_expiry::parse_expires_in,
+			value_parser = expiry::parse_expires_in,
 		)]
 		expires_in: Option<u64>,
 		/// Optional single-CIDR client-IP allowlist.
@@ -396,11 +398,11 @@ pub(super) fn list(
 			.collect();
 		return super::json_out::print(out, &serde_json::Value::Array(rows));
 	}
-	let now = super::api_keys_expiry::now_secs();
+	let now = expiry::now_secs();
 	for row in store.list() {
 		let expiry = row.expires_at.map_or_else(
 			|| "never".to_string(),
-			|expires| super::api_keys_expiry::describe(expires, now),
+			|expires| expiry::describe(expires, now),
 		);
 		let cidr = row.ip_cidr.unwrap_or_else(|| "any".to_string());
 		// An empty scope list is a legacy key; show the warning verbatim so
@@ -482,17 +484,4 @@ pub(super) fn revoke(
 }
 
 #[cfg(test)]
-#[path = "api_keys_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "api_keys_tests_rotate.rs"]
-mod tests_rotate;
-
-#[cfg(test)]
-#[path = "api_keys_tests_cidr.rs"]
-mod tests_cidr;
-
-#[cfg(test)]
-#[path = "api_keys_tests_expiry.rs"]
-mod tests_expiry;

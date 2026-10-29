@@ -193,11 +193,7 @@ fn a_label_the_rule_refuses_creates_no_key() {
 			&mut Vec::new(),
 			&mut Vec::new(),
 		);
-		assert_eq!(
-			code,
-			ExitCode::from(super::super::exit::REFUSED),
-			"{label:?}"
-		);
+		assert_eq!(code, ExitCode::from(crate::cli::exit::REFUSED), "{label:?}");
 	}
 	assert!(
 		ApiKeyStore::open(dir.path())

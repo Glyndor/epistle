@@ -162,7 +162,7 @@ async fn malformed_store_warns_without_echoing_stored_values() {
 }
 
 fn now() -> u64 {
-	crate::cli::api_keys_expiry::now_secs()
+	crate::cli::api_keys::expiry::now_secs()
 }
 
 fn warnings(body: &str) -> Vec<String> {

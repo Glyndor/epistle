@@ -126,23 +126,8 @@ fn print_json(
 	writeln!(out, "{line}").map_err(|error| ResourceError::Failure(error.to_string()))
 }
 
-#[path = "attachments_check.rs"]
 mod check;
-#[path = "attachments_policy.rs"]
 mod policy;
 
 #[cfg(test)]
-#[path = "attachments_tests_check.rs"]
-mod tests_check;
-#[cfg(test)]
-#[path = "attachments_tests_check_read.rs"]
-mod tests_check_read;
-#[cfg(test)]
-#[path = "attachments_tests_check_strict.rs"]
-mod tests_check_strict;
-#[cfg(test)]
-#[path = "attachments_tests_check_submission.rs"]
-mod tests_check_submission;
-#[cfg(test)]
-#[path = "attachments_tests_policy.rs"]
-mod tests_policy;
+mod tests;

@@ -3,7 +3,7 @@
 use std::io::Write;
 use std::path::Path;
 
-use super::alias_writers::commit_and_restart;
+use super::writers::commit_and_restart;
 use super::*;
 use crate::config::Config;
 
@@ -111,7 +111,7 @@ fn find_alias_matches_case_insensitively() {
 fn add_writes_a_new_alias_with_optional_fields() {
 	let (_dir, file) = fixture("");
 	let config = load(file.path());
-	let mut document = super::super::config_edit::ConfigDocument::open(file.path()).unwrap();
+	let mut document = crate::cli::config_edit::ConfigDocument::open(file.path()).unwrap();
 	let args = AddArgs {
 		address: "team@example.org".to_string(),
 		members: vec![
@@ -149,7 +149,7 @@ fn add_writes_a_new_alias_with_optional_fields() {
 #[test]
 fn add_accepts_a_dotted_alias_address() {
 	let (_dir, file) = fixture("");
-	let mut document = super::super::config_edit::ConfigDocument::open(file.path()).unwrap();
+	let mut document = crate::cli::config_edit::ConfigDocument::open(file.path()).unwrap();
 	let args = AddArgs {
 		address: "Name.Surname@example.org".to_string(),
 		members: vec!["alice.jones@example.org".to_string()],
@@ -176,7 +176,7 @@ fn add_refuses_a_duplicate_alias() {
 	let (_dir, file) =
 		fixture("[[alias]]\naddress = \"team@example.org\"\nmembers = [\"alice@example.org\"]\n");
 	let config = load(file.path());
-	let mut document = super::super::config_edit::ConfigDocument::open(file.path()).unwrap();
+	let mut document = crate::cli::config_edit::ConfigDocument::open(file.path()).unwrap();
 	let args = AddArgs {
 		address: "team@example.org".to_string(),
 		members: vec!["bob@example.org".to_string()],
@@ -192,7 +192,7 @@ fn add_refuses_a_duplicate_alias() {
 fn add_refuses_an_alias_address_outside_configured_domains() {
 	let (_dir, file) = fixture("");
 	let config = load(file.path());
-	let mut document = super::super::config_edit::ConfigDocument::open(file.path()).unwrap();
+	let mut document = crate::cli::config_edit::ConfigDocument::open(file.path()).unwrap();
 	let args = AddArgs {
 		address: "team@other.org".to_string(),
 		members: vec!["alice@example.org".to_string()],
@@ -215,7 +215,7 @@ fn add_refuses_an_address_used_by_a_static_account() {
 		"[[accounts]]\nname = \"alice\"\naddresses = [\"alice@example.org\"]\npassword_hash = \"$argon2id$v=19$m=65536,t=2,p=1$YWFhYWFhYWFhYWFhYWFhYQ$0000000000000000000000000000000000000000000\"\n",
 	);
 	let config = load(file.path());
-	let mut document = super::super::config_edit::ConfigDocument::open(file.path()).unwrap();
+	let mut document = crate::cli::config_edit::ConfigDocument::open(file.path()).unwrap();
 	let args = AddArgs {
 		address: "alice@example.org".to_string(),
 		members: vec!["bob@example.org".to_string()],
@@ -235,7 +235,7 @@ fn add_refuses_an_address_used_by_another_alias() {
 	let (_dir, file) =
 		fixture("[[alias]]\naddress = \"team@example.org\"\nmembers = [\"alice@example.org\"]\n");
 	let config = load(file.path());
-	let mut document = super::super::config_edit::ConfigDocument::open(file.path()).unwrap();
+	let mut document = crate::cli::config_edit::ConfigDocument::open(file.path()).unwrap();
 	let args = AddArgs {
 		address: "team@example.org".to_string(),
 		members: vec!["bob@example.org".to_string()],
@@ -253,7 +253,7 @@ fn remove_drops_an_existing_alias() {
 		"[[alias]]\naddress = \"team@example.org\"\nmembers = [\"alice@example.org\"]\n\n[[alias]]\naddress = \"ops@example.org\"\nmembers = [\"alice@example.org\"]\n",
 	);
 	let config = load(file.path());
-	let mut document = super::super::config_edit::ConfigDocument::open(file.path()).unwrap();
+	let mut document = crate::cli::config_edit::ConfigDocument::open(file.path()).unwrap();
 	remove_alias(&config, &mut document, "team@example.org").expect("remove must succeed");
 	commit_and_restart(
 		document,
@@ -273,7 +273,7 @@ fn remove_drops_an_existing_alias() {
 fn remove_refuses_an_unknown_alias() {
 	let (_dir, file) = fixture("");
 	let config = load(file.path());
-	let mut document = super::super::config_edit::ConfigDocument::open(file.path()).unwrap();
+	let mut document = crate::cli::config_edit::ConfigDocument::open(file.path()).unwrap();
 	let err = remove_alias(&config, &mut document, "team@example.org").unwrap_err();
 	assert!(err.contains("not found"), "unexpected message: {err}");
 }
@@ -283,7 +283,7 @@ fn member_add_appends_to_the_alias_members_list() {
 	let (_dir, file) =
 		fixture("[[alias]]\naddress = \"team@example.org\"\nmembers = [\"alice@example.org\"]\n");
 	let config = load(file.path());
-	let mut document = super::super::config_edit::ConfigDocument::open(file.path()).unwrap();
+	let mut document = crate::cli::config_edit::ConfigDocument::open(file.path()).unwrap();
 	let args = MemberArgs {
 		action: MemberSubcommand::Add {
 			address: "team@example.org".to_string(),
@@ -317,7 +317,7 @@ fn member_remove_drops_the_member_and_keeps_one() {
 		"[[alias]]\naddress = \"team@example.org\"\nmembers = [\"alice@example.org\", \"bob@example.org\"]\n",
 	);
 	let config = load(file.path());
-	let mut document = super::super::config_edit::ConfigDocument::open(file.path()).unwrap();
+	let mut document = crate::cli::config_edit::ConfigDocument::open(file.path()).unwrap();
 	let args = MemberArgs {
 		action: MemberSubcommand::Remove {
 			address: "team@example.org".to_string(),
@@ -344,7 +344,7 @@ fn member_remove_refuses_to_leave_an_alias_empty() {
 	let (_dir, file) =
 		fixture("[[alias]]\naddress = \"team@example.org\"\nmembers = [\"alice@example.org\"]\n");
 	let config = load(file.path());
-	let mut document = super::super::config_edit::ConfigDocument::open(file.path()).unwrap();
+	let mut document = crate::cli::config_edit::ConfigDocument::open(file.path()).unwrap();
 	let args = MemberArgs {
 		action: MemberSubcommand::Remove {
 			address: "team@example.org".to_string(),
@@ -360,7 +360,7 @@ fn sender_add_and_remove_round_trip() {
 	let (_dir, file) =
 		fixture("[[alias]]\naddress = \"team@example.org\"\nmembers = [\"alice@example.org\"]\n");
 	let config = load(file.path());
-	let mut document = super::super::config_edit::ConfigDocument::open(file.path()).unwrap();
+	let mut document = crate::cli::config_edit::ConfigDocument::open(file.path()).unwrap();
 	let args = SenderArgs {
 		action: SenderSubcommand::Add {
 			address: "team@example.org".to_string(),
@@ -380,7 +380,7 @@ fn sender_add_and_remove_round_trip() {
 	let config = load(file.path());
 	assert_eq!(config.alias[0].senders, vec!["ceo@example.org".to_string()]);
 
-	let mut document = super::super::config_edit::ConfigDocument::open(file.path()).unwrap();
+	let mut document = crate::cli::config_edit::ConfigDocument::open(file.path()).unwrap();
 	let args = SenderArgs {
 		action: SenderSubcommand::Remove {
 			address: "team@example.org".to_string(),
@@ -432,7 +432,7 @@ fn invalid_member_or_sender_address_is_refused() {
 fn dry_run_prints_a_diff_and_does_not_write() {
 	let (_dir, file) = fixture("");
 	let config = load(file.path());
-	let mut document = super::super::config_edit::ConfigDocument::open(file.path()).unwrap();
+	let mut document = crate::cli::config_edit::ConfigDocument::open(file.path()).unwrap();
 	let before = std::fs::read_to_string(file.path()).unwrap();
 	let mut out: Vec<u8> = Vec::new();
 	let status: Vec<u8> = Vec::new();

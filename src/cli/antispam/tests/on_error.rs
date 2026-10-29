@@ -38,7 +38,7 @@ fn set_unset_and_show_clamd_on_error() {
 	let config = Config::load(&path).unwrap();
 	assert_eq!(shown(&config), "clamd-on-error\taccept\tset");
 	assert_eq!(
-		antispam_show::show_json(&config)["clamd-on-error"],
+		show::show_json(&config)["clamd-on-error"],
 		serde_json::json!({ "value": "accept", "source": "set" })
 	);
 	let mut document = ConfigDocument::open(&path).unwrap();

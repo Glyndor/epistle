@@ -46,5 +46,4 @@ pub(super) fn run(
 }
 
 #[cfg(test)]
-#[path = "autodiscover_tests.rs"]
 mod tests;

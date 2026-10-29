@@ -148,7 +148,7 @@ pub enum Legacy {
 		#[arg(
 			long,
 			value_name = "WHEN",
-			value_parser = crate::cli::api_keys_expiry::parse_expires_at,
+			value_parser = crate::cli::api_keys::expiry::parse_expires_at,
 		)]
 		expires_at: Option<u64>,
 		/// Optional single-CIDR client-IP allowlist (e.g. 203.0.113.0/24).

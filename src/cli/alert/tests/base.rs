@@ -114,11 +114,11 @@ fn list_prints_every_rule() {
 		"bounce-storm\tbounced >= 50\twindow=300s\tcooldown=900s\twebhook=yes\temail=-\n"
 	);
 	assert_eq!(
-		super::tests::run(ALERTS, &["list", "--json"]).out,
+		super::base::run(ALERTS, &["list", "--json"]).out,
 		"[{\"name\":\"bounce-storm\",\"metric\":\"bounced\",\"op\":\">=\",\"threshold\":50,\"window_secs\":300,\"cooldown_secs\":900,\"webhook\":true,\"email\":[],\"enabled\":true}]\n"
 	);
-	assert_eq!(super::tests::run("", &["list"]).out, "");
-	assert_eq!(super::tests::run("", &["list", "--json"]).out, "[]\n");
+	assert_eq!(super::base::run("", &["list"]).out, "");
+	assert_eq!(super::base::run("", &["list", "--json"]).out, "[]\n");
 }
 
 #[test]

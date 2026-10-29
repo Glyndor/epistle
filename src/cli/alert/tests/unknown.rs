@@ -3,7 +3,7 @@
 //! preserved exactly so scripts that parse `error: no alert named "X"`
 //! keep working.
 //!
-//! Lives in a sibling so `alert_tests.rs` stays under the per-file
+//! Lives in a sibling so `src/cli/alert/tests/base.rs` stays under the per-file
 //! code-line budget.
 
 use std::process::ExitCode;

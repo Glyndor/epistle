@@ -168,10 +168,7 @@ fn execute(
 			let config = Config::load(path)
 				.map_err(|e| super::resource::ResourceError::Failure(e.to_string()))?;
 			if leaf || json {
-				return Ok(super::json_out::print(
-					&mut out,
-					&antispam_show::show_json(&config),
-				));
+				return Ok(super::json_out::print(&mut out, &show::show_json(&config)));
 			}
 			show_keys(&config, &mut out)
 				.map_err(|e| super::resource::ResourceError::Failure(e.to_string()))?;
@@ -534,28 +531,11 @@ pub(crate) fn llm_is_set(config: &Config) -> bool {
 	config.antispam_llm.is_some()
 }
 
-#[path = "antispam_show.rs"]
-pub mod antispam_show;
-pub(super) use antispam_show::show as show_keys;
-use antispam_show::{
+pub mod show;
+pub(super) use show::show as show_keys;
+use show::{
 	parse_duration_seconds, parse_on_off, parse_size_bytes, parse_u64, parse_unit_interval,
 };
 
 #[cfg(test)]
-#[path = "antispam_tests.rs"]
 mod tests;
-#[cfg(test)]
-#[path = "antispam_tests_dry_run.rs"]
-mod tests_dry_run;
-#[cfg(test)]
-#[path = "antispam_tests_lists.rs"]
-mod tests_lists;
-#[cfg(test)]
-#[path = "antispam_tests_on_error.rs"]
-mod tests_on_error;
-#[cfg(test)]
-#[path = "antispam_tests_secrets.rs"]
-mod tests_secrets;
-#[cfg(test)]
-#[path = "antispam_tests_validation.rs"]
-mod tests_validation;

@@ -17,16 +17,13 @@ use super::config_edit::ConfigDocument;
 use super::style;
 
 use crate::util::address::normalize;
-use alias_helpers::{disabled_set, document_address, find_alias, normalized};
-use alias_helpers::{validate_alias_address, validate_member_or_sender};
-use alias_writers::{upsert_alias_members, upsert_alias_senders};
+use helpers::{disabled_set, document_address, find_alias, normalized};
+use helpers::{validate_alias_address, validate_member_or_sender};
+use writers::{upsert_alias_members, upsert_alias_senders};
 
-#[path = "alias_helpers.rs"]
-mod alias_helpers;
-#[path = "alias_writers.rs"]
-mod alias_writers;
-#[path = "alias_dispatch.rs"]
 mod dispatch;
+mod helpers;
+mod writers;
 use dispatch::{Outcome, execute};
 
 /// Multi-target alias administration.
@@ -436,11 +433,4 @@ fn sender_edit(
 }
 
 #[cfg(test)]
-#[path = "alias_tests.rs"]
 mod tests;
-#[cfg(test)]
-#[path = "alias_tests_enable.rs"]
-mod tests_enable;
-#[cfg(test)]
-#[path = "alias_tests_unknown.rs"]
-mod tests_unknown;

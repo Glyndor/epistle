@@ -13,16 +13,6 @@ use super::resource;
 use super::stack::StackAction;
 use crate::config::{Alert, AlertOp, Config};
 
-#[cfg(test)]
-#[path = "alert_tests.rs"]
-mod tests;
-#[cfg(test)]
-#[path = "alert_tests_add.rs"]
-mod tests_add;
-#[cfg(test)]
-#[path = "alert_tests_unknown.rs"]
-mod tests_unknown;
-
 /// Longest window or cooldown accepted: one year.
 const MAX_SECONDS: u64 = 365 * 86_400;
 
@@ -398,3 +388,6 @@ fn execute_with(
 	};
 	resource::apply_edit(path, dry_run, edit, out, status, restart, change)
 }
+
+#[cfg(test)]
+mod tests;
