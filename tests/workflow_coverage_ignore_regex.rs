@@ -41,11 +41,11 @@ const TEST_FILE_FRAGMENTS: &[&str] = &[
 	// Covers cli/local/test_support.rs, dns/providers/gcloud/test_support.rs
 	// and smtp/directory/test_support.rs.
 	r"test_support",
-	// Covers dns/providers/namecheap/tests_basic.rs, tests_path.rs and the
+	// Covers dns/providers/namecheap/tests/basic.rs, tests_path.rs and the
 	// other tests_<word>.rs files beside a module.
 	r"tests_[a-z0-9_]+",
 	// Covers a module directory's own tests.rs, such as
-	// dns/providers/cloudflare/tests.rs.
+	// dns/providers/cloudflare/tests/base.rs.
 	r"/tests",
 ];
 

@@ -355,7 +355,7 @@ impl CloudflareProvider {
 		kind: &str,
 		value: Option<&str>,
 	) -> Result<Option<RecordRef>, ProviderError> {
-		// The TXT matching rule from `src/dns/provider.rs` is the
+		// The TXT matching rule from `src/dns/provider/mod.rs` is the
 		// contract: a value-bearing delete drops only the record
 		// whose content matches the value. `same_txt_purpose` carries
 		// it: two tagged values match when their tag is the same
@@ -392,7 +392,7 @@ impl CloudflareProvider {
 		let kind = Self::api_kind(&record.kind)?;
 		let zone_id = self.zone_id(zone).await?;
 		let body = Self::record_value(kind, &record)?;
-		// The upsert contract in `src/dns/provider.rs`: a TXT replaces
+		// The upsert contract in `src/dns/provider/mod.rs`: a TXT replaces
 		// the record of the same purpose and leaves every other TXT
 		// at the name alone (an ACME challenge, a verification
 		// token). Two records of the same purpose at the same name
@@ -504,7 +504,7 @@ impl CloudflareProvider {
 		self.authorize(&record)?;
 		let kind = Self::api_kind(&record.kind)?;
 		let zone_id = self.zone_id(zone).await?;
-		// The TXT matching rule from `src/dns/provider.rs` is the
+		// The TXT matching rule from `src/dns/provider/mod.rs` is the
 		// contract: a value-bearing delete drops only the record
 		// whose content matches the value (a sibling ACME challenge
 		// at the same owner survives), an empty-value delete drops
@@ -609,13 +609,4 @@ async fn decode_ok(response: reqwest::Response) -> Result<(), ProviderError> {
 }
 
 #[cfg(test)]
-#[path = "tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "tests_path.rs"]
-mod path_tests;
-
-#[cfg(test)]
-#[path = "tests_proxied.rs"]
-mod proxied_tests;

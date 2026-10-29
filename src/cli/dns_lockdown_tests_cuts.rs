@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use super::lockdown_tests::{CLOUDFLARE, journal_path, run, run_with, setup, zone_records};
 use crate::cli::status::dns_fake::FakeDns;
-use crate::dns::lockdown::tests_support::{Zone, a, rec};
+use crate::dns::lockdown::tests::support::{Zone, a, rec};
 use crate::dns::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind};
 
 #[test]

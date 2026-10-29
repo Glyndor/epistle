@@ -225,7 +225,7 @@ impl SpaceshipProvider {
 
 	/// `DELETE /dns/records/{zone}`, remove the matching item(s). The body
 	/// is an array of `{type, name, [value]}` records. The contract from
-	/// `src/dns/provider.rs` says a TXT delete with a value drops only
+	/// `src/dns/provider/mod.rs` says a TXT delete with a value drops only
 	/// the record whose value matches, and an empty-value delete drops
 	/// every record at the owner (the DKIM rotator's retire path).
 	/// Spaceship's API matches by `value` when the field is present,
@@ -399,7 +399,7 @@ impl SpaceshipProvider {
 		if record.kind == RecordKind::Txt {
 			// A TXT delete matches the exact stored value, so the record
 			// to remove is the OLD one of the same purpose (the contract
-			// in `src/dns/provider.rs`), read from the zone; removing by
+			// in `src/dns/provider/mod.rs`), read from the zone; removing by
 			// the new value would leave a rotated DKIM key behind. A
 			// sibling of another purpose is never named.
 			for old in self.txt_values_at(&rel).await? {
@@ -542,21 +542,4 @@ fn check(response: reqwest::Response) -> Result<(), ProviderError> {
 }
 
 #[cfg(test)]
-#[path = "tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "tests_b.rs"]
-mod tests_b;
-
-#[cfg(test)]
-#[path = "tests_path.rs"]
-mod path_tests;
-
-#[cfg(test)]
-#[path = "tests_txt_forms.rs"]
-mod tests_txt_forms;
-
-#[cfg(test)]
-#[path = "tests_contract.rs"]
-mod tests_contract;

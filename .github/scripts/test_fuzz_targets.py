@@ -35,7 +35,7 @@ class SelectTests(unittest.TestCase):
 
     def test_anything_unmapped_runs_everything(self):
         for path in (
-            "src/util/header.rs",
+            "src/util/header/mod.rs",
             "src/lib.rs",
             "src/fuzzing.rs",
             "Cargo.lock",

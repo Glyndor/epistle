@@ -1,0 +1,518 @@
+//! Find the report part inside an inbound message and base64-decode it.
+//!
+//! The DMARC and TLS-RPT receivers ship their reports as one attachment
+//! inside a multipart message. The shape is fixed:
+//!
+//! - DMARC: `multipart/mixed` (or `multipart/related`) at the top level,
+//!   with the report inside as `application/gzip` / `application/zip` /
+//!   `application/x-gzip` / `application/x-zip-compressed`, or with a
+//!   filename ending `.xml.gz` / `.zip`.
+//! - TLS-RPT: `multipart/report` or `multipart/mixed` with a part of
+//!   `application/tlsrpt+gzip` (or `application/tlsrpt+json` for
+//!   uncompressed).
+//!
+//! We do not pull a MIME-walker dependency: RFC 2046 boundaries are
+//! simple enough to split by hand, and a real MIME library would do more
+//! than we need without being any easier to bound. We support exactly
+//! the top level and one level of nesting (a report inside a forwarded
+//! message), and we refuse anything that exceeds [`MAX_PARTS`],
+//! [`MAX_NESTING_DEPTH`] or [`MAX_COMPRESSED`] on the base64 input:
+//! each of those is the bomb gate for the MIME walker.
+
+use base64::Engine;
+use thiserror::Error;
+
+use super::decompress::{Encoding, MAX_COMPRESSED};
+
+/// Hard cap on total parts we walk. A real inbound report has two (text
+/// part + attachment); a forwarded message might double that. Anything
+/// past 64 is a structure we have no business decoding.
+const MAX_PARTS: usize = 64;
+
+/// Hard cap on the multipart nesting depth the walker recurses into.
+/// Real-world messages are flat or one level deep (a report inside a
+/// forwarded message); more than [`MAX_NESTING_DEPTH`] is hostile and
+/// we refuse to walk further.
+const MAX_NESTING_DEPTH: u8 = 2;
+
+/// RFC 2046 §5.1 caps a Content-Type boundary parameter at 70 octets.
+/// Boundaries longer than that are invalid and would force the
+/// delimiter search to walk a long common prefix on every candidate
+/// position; refuse them up front.
+const MAX_BOUNDARY_LEN: usize = 70;
+
+// Test-only step counter incremented once per byte comparison the
+// delimiter search performs. Lets a regression test assert the
+// per-call work stays bounded when the body holds a long run of
+// characters that share a prefix with the boundary. The counter is
+// per-thread so parallel tests do not observe each other's
+// increments.
+#[cfg(test)]
+thread_local! {
+	static SCAN_STEPS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn reset_scan_steps() -> u64 {
+	SCAN_STEPS.with(|c| c.replace(0))
+}
+
+/// What we found after walking the message.
+#[derive(Debug)]
+pub struct FoundPart {
+	/// Encoding the bytes inside the part are compressed with.
+	pub encoding: Encoding,
+	/// The base64-decoded bytes of the attachment.
+	pub bytes: Vec<u8>,
+}
+
+/// Why the walker refused the message.
+#[derive(Debug, Error)]
+pub enum WalkError {
+	/// The message declares no part that looks like a report.
+	#[error("no report part in the message")]
+	NoReportPart,
+	/// A multipart section was malformed.
+	#[error("malformed multipart: {0}")]
+	Malformed(&'static str),
+	/// The base64 decode of the attachment failed.
+	#[error("invalid base64 in attachment")]
+	InvalidBase64,
+	/// The decoded payload exceeds [`MAX_COMPRESSED`].
+	#[error("decoded attachment too large")]
+	TooLarge,
+}
+
+/// Find the report attachment inside `raw` for the given `kind`. Returns
+/// `None` (not an error) when the message is a regular non-report
+/// message; the deliverer calls this for every postmaster@/tlsrpt@
+/// recipient, and a clean "no report here" is the right answer for the
+/// operator's own outbound mail.
+pub fn find_report_part(raw: &[u8], kind: Kind) -> Result<FoundPart, WalkError> {
+	let parts = split_top_level(raw)?;
+	match walk_parts(&parts, kind, 1)? {
+		FoundPartWalk::Found(found) => Ok(found),
+		FoundPartWalk::Continue => Err(WalkError::NoReportPart),
+	}
+}
+
+fn walk_parts(parts: &[ParsedPart], kind: Kind, depth: u8) -> Result<FoundPartWalk, WalkError> {
+	for part in parts {
+		if let Some(ct) = part.content_type.as_deref()
+			&& let Some(encoding) = encoding_for(ct)
+			&& let Some(payload) = part.body_decoded()?
+		{
+			return Ok(FoundPartWalk::Found(FoundPart {
+				encoding,
+				bytes: payload,
+			}));
+		}
+		// Some senders label the type as `application/octet-stream` and
+		// rely on the filename. Look one level deeper.
+		if part
+			.content_type
+			.as_deref()
+			.is_some_and(|ct| ct.to_ascii_lowercase().starts_with("multipart/"))
+			&& let Some(inner_boundary) = part.boundary.as_deref()
+			&& depth < MAX_NESTING_DEPTH
+		{
+			let inner = split_with_boundary(&part.body, inner_boundary)?;
+			if let FoundPartWalk::Found(found) = walk_parts(&inner, kind, depth + 1)? {
+				return Ok(FoundPartWalk::Found(found));
+			}
+		}
+	}
+	// Filename match as a last resort: a part whose `Content-Type` is
+	// `application/octet-stream` but whose `Content-Disposition` says
+	// `report.xml.gz` still counts.
+	for part in parts {
+		if let Some(found) = part_match(part, kind)? {
+			return Ok(FoundPartWalk::Found(found));
+		}
+	}
+	Ok(FoundPartWalk::Continue)
+}
+
+/// Recursive return: a part we matched, or the signal to keep walking.
+/// `Result<FoundPart, WalkError>` is already used by callers and does
+/// not encode "not found at this depth, try next", which is what
+/// `Continue` carries.
+enum FoundPartWalk {
+	Found(FoundPart),
+	Continue,
+}
+
+fn part_match(part: &ParsedPart, kind: Kind) -> Result<Option<FoundPart>, WalkError> {
+	// Filename match: any part ending in `.xml.gz` / `.zip` is DMARC; any
+	// part ending in `.json.gz` / `.json` is TLS-RPT. The actual encoding
+	// is what the filename implies.
+	if let Some(filename) = part.filename.as_deref() {
+		let lower = filename.to_ascii_lowercase();
+		if kind == Kind::Dmarc && (lower.ends_with(".xml.gz") || lower.ends_with(".zip")) {
+			let encoding = if lower.ends_with(".zip") {
+				Encoding::Zip
+			} else {
+				Encoding::Gzip
+			};
+			if let Some(payload) = part.body_decoded()? {
+				return Ok(Some(FoundPart {
+					encoding,
+					bytes: payload,
+				}));
+			}
+		}
+		if kind == Kind::TlsRpt && (lower.ends_with(".json.gz") || lower.ends_with(".json")) {
+			let encoding = if lower.ends_with(".gz") {
+				Encoding::Gzip
+			} else {
+				Encoding::Uncompressed
+			};
+			if let Some(payload) = part.body_decoded()? {
+				return Ok(Some(FoundPart {
+					encoding,
+					bytes: payload,
+				}));
+			}
+		}
+	}
+	Ok(None)
+}
+
+fn encoding_for(content_type: &str) -> Option<Encoding> {
+	let lower = content_type.to_ascii_lowercase();
+	// Trim parameters (`; charset=utf-8` etc.) before matching.
+	let base = lower.split(';').next().unwrap_or("").trim();
+	match base {
+		"application/gzip" | "application/x-gzip" => Some(Encoding::Gzip),
+		"application/zip" | "application/x-zip-compressed" => Some(Encoding::Zip),
+		"application/tlsrpt+gzip" => Some(Encoding::Gzip),
+		"application/tlsrpt+json" => Some(Encoding::Uncompressed),
+		_ => None,
+	}
+}
+
+/// One parsed MIME part with the headers we care about.
+#[derive(Debug, Default)]
+struct ParsedPart {
+	content_type: Option<String>,
+	filename: Option<String>,
+	/// Multipart boundary when the part itself is a multipart container.
+	boundary: Option<String>,
+	transfer_encoding: Option<String>,
+	body: Vec<u8>,
+}
+
+impl ParsedPart {
+	/// Decode the part body. Returns `None` when the part has no body or
+	/// when the `Content-Transfer-Encoding` is something other than the
+	/// ones we accept (we only see `7bit`, `8bit`, `base64`).
+	fn body_decoded(&self) -> Result<Option<Vec<u8>>, WalkError> {
+		let encoding = self
+			.transfer_encoding
+			.as_deref()
+			.unwrap_or("7bit")
+			.to_ascii_lowercase();
+		match encoding.as_str() {
+			"7bit" | "8bit" | "binary" => {
+				if self.body.len() > MAX_COMPRESSED {
+					return Err(WalkError::TooLarge);
+				}
+				Ok(Some(self.body.clone()))
+			}
+			"base64" => {
+				let cleaned: Vec<u8> = self
+					.body
+					.iter()
+					.copied()
+					.filter(|b| !b.is_ascii_whitespace())
+					.collect();
+				// Measure the largest possible decoded length first and
+				// refuse anything that cannot possibly fit inside the
+				// bomb gate. Every four base64 characters decode to at
+				// most three bytes; padding shortens the result but the
+				// upper bound is correct for the refusal check.
+				let upper = cleaned.len().saturating_mul(3) / 4;
+				if upper > MAX_COMPRESSED {
+					return Err(WalkError::TooLarge);
+				}
+				let bytes = base64::engine::general_purpose::STANDARD
+					.decode(&cleaned)
+					.map_err(|_| WalkError::InvalidBase64)?;
+				Ok(Some(bytes))
+			}
+			_ => Ok(None),
+		}
+	}
+}
+
+/// Split `raw` into top-level parts using the boundary from its
+/// `Content-Type` header. A non-multipart message returns one synthetic
+/// part (the whole body), so the caller can use the same code path for a
+/// single-part message as for a multipart one.
+fn split_top_level(raw: &[u8]) -> Result<Vec<ParsedPart>, WalkError> {
+	let (headers_end, separator_len) =
+		find_headers_end(raw).ok_or(WalkError::Malformed("no header end"))?;
+	let headers = &raw[..headers_end];
+	let body = &raw[headers_end + separator_len..];
+	let ct = header_value(headers, "content-type")
+		.ok_or(WalkError::Malformed("missing content-type"))?;
+	let base = ct
+		.split(';')
+		.next()
+		.unwrap_or("")
+		.trim()
+		.to_ascii_lowercase();
+	if !base.starts_with("multipart/") {
+		// Single-part: the body is one part with whatever content-type
+		// and transfer-encoding the message declares.
+		return Ok(vec![ParsedPart {
+			content_type: Some(base),
+			filename: content_disposition_filename(headers),
+			boundary: None,
+			transfer_encoding: header_value(headers, "content-transfer-encoding"),
+			body: body.to_vec(),
+		}]);
+	}
+	let boundary =
+		parse_boundary_param(&ct).ok_or(WalkError::Malformed("multipart missing boundary"))?;
+	let parts = split_with_boundary(body, &boundary)?;
+	Ok(parts)
+}
+
+fn split_with_boundary(body: &[u8], boundary: &str) -> Result<Vec<ParsedPart>, WalkError> {
+	if boundary.len() > MAX_BOUNDARY_LEN {
+		// RFC 2046 §5.1: the boundary parameter is at most 70 octets.
+		// Longer values are invalid and would force the search to walk
+		// a long common prefix on every candidate position before
+		// realising the line is not a boundary. Refuse them outright.
+		return Err(WalkError::Malformed("boundary too long"));
+	}
+	let needle = format!("--{boundary}");
+	let needle_bytes = needle.as_bytes();
+	let mut parts = Vec::new();
+	let mut cursor = 0usize;
+	loop {
+		// Walk the body one line at a time and check each line for the
+		// boundary prefix. The line scan is O(N) in the body length and
+		// the per-line comparison is O(needle.len()), which the cap
+		// above keeps at 70 octets, so the total work is linear in the
+		// body size.
+		let Some(abs) = find_next_boundary_line(body, cursor, needle_bytes) else {
+			// Buffer ended without ever seeing the closing boundary.
+			// Real senders always include it; missing means the
+			// message was truncated or crafted. Either way we refuse.
+			return Err(WalkError::Malformed("missing closing boundary"));
+		};
+		let mut after = abs + needle_bytes.len();
+		if body.get(after..after + 2) == Some(b"--") {
+			break; // closing boundary
+		}
+		// RFC 2046 permits transport padding after a delimiter.
+		while matches!(body.get(after), Some(b' ' | b'\t')) {
+			after += 1;
+		}
+		// Skip the CRLF (or LF) right after the boundary marker.
+		let body_start = if body.get(after..after + 2) == Some(b"\r\n") {
+			after + 2
+		} else if body.get(after..after + 1) == Some(b"\n") {
+			after + 1
+		} else {
+			return Err(WalkError::Malformed("boundary not followed by line break"));
+		};
+		// Find the next boundary line; the part body sits between the
+		// two.
+		let next_abs = find_next_boundary_line(body, body_start, needle_bytes)
+			.ok_or(WalkError::Malformed("missing closing boundary"))?;
+		let mut body_end = next_abs;
+		// Trim the CRLF before the next boundary.
+		if body_end - body_start >= 2 && &body[body_end - 2..body_end] == b"\r\n" {
+			body_end -= 2;
+		} else if body_end > body_start && &body[body_end - 1..body_end] == b"\n" {
+			body_end -= 1;
+		}
+		let part_bytes = &body[body_start..body_end];
+		parts.push(parse_part(part_bytes)?);
+		if parts.len() > MAX_PARTS {
+			return Err(WalkError::Malformed("too many parts"));
+		}
+		cursor = next_abs;
+	}
+	Ok(parts)
+}
+
+/// Walk `body` from `start` and return the byte offset of the next line
+/// whose contents form a complete delimiter for `needle`. The scan advances
+/// one line at a time and the per-line comparison counts byte compares through
+/// `line_starts_with`, so the total work is `O(body.len() *
+/// needle.len())` with `needle.len() <= MAX_BOUNDARY_LEN`.
+fn find_next_boundary_line(body: &[u8], start: usize, needle: &[u8]) -> Option<usize> {
+	let mut line_start = start;
+	while line_start <= body.len() {
+		// Find the end of the current line (the LF, or the body end).
+		let mut line_end = line_start;
+		while line_end < body.len() && body[line_end] != b'\n' {
+			line_end += 1;
+		}
+		let line = &body[line_start..line_end];
+		if line_starts_with(line, needle) && boundary_suffix(line, needle.len()) {
+			return Some(line_start);
+		}
+		if line_end >= body.len() {
+			return None;
+		}
+		// Step past the LF and start the next line.
+		line_start = line_end + 1;
+	}
+	None
+}
+
+fn boundary_suffix(line: &[u8], prefix_len: usize) -> bool {
+	let suffix = &line[prefix_len..];
+	let suffix = suffix.strip_prefix(b"--").unwrap_or(suffix);
+	let suffix = suffix.strip_suffix(b"\r").unwrap_or(suffix);
+	suffix.iter().all(|byte| matches!(byte, b' ' | b'\t'))
+}
+
+/// Byte-by-byte prefix comparison that counts the comparisons through
+/// the test-only step counter. The historical `find_subslice` walked
+/// the whole body and compared `needle.len()` bytes at every position,
+/// which turned the search quadratic when the body shared a long
+/// prefix with the boundary.
+fn line_starts_with(line: &[u8], needle: &[u8]) -> bool {
+	if needle.is_empty() {
+		return true;
+	}
+	if line.len() < needle.len() {
+		#[cfg(test)]
+		SCAN_STEPS.with(|c| c.set(c.get() + line.len() as u64));
+		return false;
+	}
+	for i in 0..needle.len() {
+		#[cfg(test)]
+		SCAN_STEPS.with(|c| c.set(c.get() + 1));
+		if line[i] != needle[i] {
+			#[cfg(test)]
+			SCAN_STEPS.with(|c| c.set(c.get() + (needle.len() - 1 - i) as u64));
+			return false;
+		}
+	}
+	true
+}
+
+fn parse_part(part_bytes: &[u8]) -> Result<ParsedPart, WalkError> {
+	let (headers_end, separator_len) =
+		find_headers_end(part_bytes).ok_or(WalkError::Malformed("part has no headers"))?;
+	let headers = &part_bytes[..headers_end];
+	let body = part_bytes[headers_end + separator_len..].to_vec();
+	let content_type = header_value(headers, "content-type");
+	let boundary = content_type.as_deref().and_then(parse_boundary_param);
+	let filename = content_disposition_filename(headers);
+	let transfer_encoding = header_value(headers, "content-transfer-encoding");
+	Ok(ParsedPart {
+		content_type,
+		filename,
+		boundary,
+		transfer_encoding,
+		body,
+	})
+}
+
+fn content_disposition_filename(headers: &[u8]) -> Option<String> {
+	let raw = header_value(headers, "content-disposition")?;
+	for segment in raw.split(';') {
+		let Some((name, rest)) = segment.trim().split_once('=') else {
+			continue;
+		};
+		if name.trim().eq_ignore_ascii_case("filename") {
+			let value = rest.trim().trim_matches('"');
+			if !value.is_empty() {
+				return Some(value.to_string());
+			}
+		}
+		// RFC 5987 form: filename*=UTF-8''<percent-encoded>. Many
+		// receivers ship it that way; we use the simple ASCII `filename`
+		// when both are present.
+	}
+	None
+}
+
+/// Parse the `boundary="..."` parameter out of a `Content-Type` header.
+/// Returns the bare boundary token.
+fn parse_boundary_param(content_type: &str) -> Option<String> {
+	for segment in content_type.split(';').skip(1) {
+		let Some((name, rest)) = segment.trim().split_once('=') else {
+			continue;
+		};
+		if name.trim().eq_ignore_ascii_case("boundary") {
+			let value = rest.trim().trim_matches('"');
+			if !value.is_empty() {
+				return Some(value.to_string());
+			}
+		}
+	}
+	None
+}
+
+fn find_headers_end(raw: &[u8]) -> Option<(usize, usize)> {
+	[b"\r\n\r\n".as_slice(), b"\n\n"]
+		.into_iter()
+		.filter_map(|separator| find_subslice(raw, separator).map(|pos| (pos, separator.len())))
+		.min_by_key(|&(pos, _)| pos)
+}
+
+fn header_value(headers: &[u8], name: &str) -> Option<String> {
+	let text = std::str::from_utf8(headers).ok()?;
+	for line in unfold_headers(text).lines() {
+		let (key, value) = line.split_once(':')?;
+		if key.trim().eq_ignore_ascii_case(name) {
+			return Some(value.trim().to_string());
+		}
+	}
+	None
+}
+
+/// RFC 5322 §2.2.3: a header continuation line starts with whitespace.
+/// Joining these back into the parent line keeps the header walker from
+/// seeing an orphan `boundary="..."` line.
+fn unfold_headers(raw: &str) -> String {
+	let mut out = String::with_capacity(raw.len());
+	for line in raw.lines() {
+		if (line.starts_with(' ') || line.starts_with('\t')) && !out.is_empty() {
+			out.push(' ');
+			out.push_str(line.trim_start());
+		} else {
+			if !out.is_empty() {
+				out.push_str("\r\n");
+			}
+			out.push_str(line);
+		}
+	}
+	out.push_str("\r\n");
+	out
+}
+
+fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+	if needle.is_empty() || needle.len() > haystack.len() {
+		return None;
+	}
+	for i in 0..=(haystack.len() - needle.len()) {
+		#[cfg(test)]
+		{
+			// Count the byte comparisons the historical delimiter search
+			// performs. The linear scan above touches each line at most
+			// once; this helper walks every position, so the counter
+			// blows up when the body shares a long prefix with the
+			// boundary.
+			SCAN_STEPS.with(|c| c.set(c.get() + needle.len() as u64));
+		}
+		if &haystack[i..i + needle.len()] == needle {
+			return Some(i);
+		}
+	}
+	None
+}
+
+use super::Kind;
+
+#[cfg(test)]
+mod tests;

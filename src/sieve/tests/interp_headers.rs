@@ -291,7 +291,7 @@ fn a_message_with_bare_lf_is_read_as_headers_to_its_end_and_a_long_one_says_it_w
 
 #[test]
 fn the_field_count_is_never_below_the_headers_the_interpreter_reads() {
-	use crate::util::header_block::{cases, field_count};
+	use crate::util::header_block::{field_count, tests::cases};
 	for raw in cases::messages() {
 		assert!(
 			field_count(&raw) >= Message::parse(&raw).header_total(),

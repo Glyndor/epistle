@@ -23,8 +23,8 @@ const SCANNED_DIRS: &[&str] = &[
 /// the address and header rules, and the mailbox name rules.
 const SCANNED_FILES: &[&str] = &[
 	"util/validation/mod.rs",
-	"util/mailbox_path.rs",
-	"util/header.rs",
+	"util/mailbox_path/mod.rs",
+	"util/header/mod.rs",
 	"webdav/caldav_busy/mod.rs",
 	"webdav/quota/mod.rs",
 	"webdav/bounds/mod.rs",

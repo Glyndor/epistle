@@ -1553,7 +1553,7 @@ Addresses, domains and account names are stored in lowercase whatever you type: 
 
 An account name and a mail address are checked by different rules, and they stay different.
 
-- **The account name** is also the folder name under `<data_dir>/accounts/`: lowercase ASCII letters, digits and hyphens, not starting with a hyphen, at most 64 characters. A dot is refused, and so is `_`, a space or any non-ASCII character. One rule (`src/util/account_rule.rs`) serves every command and endpoint that creates an account.
+- **The account name** is also the folder name under `<data_dir>/accounts/`: lowercase ASCII letters, digits and hyphens, not starting with a hyphen, at most 64 characters. A dot is refused, and so is `_`, a space or any non-ASCII character. One rule (`src/util/account_rule/mod.rs`) serves every command and endpoint that creates an account.
 - **The address** follows RFC 5322 and 5321: a dot inside the local part is fine (`torre.control@example.org`), not at its start or end, not twice in a row. Stored in lowercase.
 
 Only `epistle init` turns one into the other: it derives the name from the address, with dots becoming hyphens (`torre.control@example.org` gives the account `torre-control` and keeps the address as typed). Nothing else derives a name. `account add torre.control --address torre.control@example.org` is refused, naming the `'.'`, before the password is asked; `account add torre-control --address torre.control@example.org` works and the account sends and receives as `torre.control@example.org`.

@@ -161,9 +161,4 @@ pub fn prune(data_dir: &Path) {
 pub use crate::metrics::Metrics;
 
 #[cfg(test)]
-#[path = "ingest_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "ingest_tests_auth.rs"]
-mod tests_auth;

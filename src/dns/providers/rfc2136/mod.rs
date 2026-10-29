@@ -615,17 +615,4 @@ fn rand_id() -> u16 {
 }
 
 #[cfg(test)]
-#[path = "tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "tests_b.rs"]
-mod tests_b;
-
-#[cfg(test)]
-#[path = "tests_contract.rs"]
-mod tests_contract;
-
-#[cfg(test)]
-#[path = "tests_txt_forms.rs"]
-mod tests_txt_forms;

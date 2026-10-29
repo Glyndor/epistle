@@ -78,5 +78,5 @@ enforces, and an example, but not the value, because the client already holds it
   names, passwords, display names, CIDR, mailbox names, memory sizes, credential
   labels (`labels.rs`), host names (`hostname.rs`) and data directories
   (`data_dir.rs`).
-- Each definition has unit tests beside it (`util/label_rule_tests.rs`,
-  `util/account_rule_tests.rs`, `cidr_tests.rs`, `util/validation/mod_tests.rs`).
+- Each definition has unit tests beside it (`util/label_rule/tests/base.rs`,
+  `util/account_rule/tests/base.rs`, `cidr_tests.rs`, `util/validation/tests/base.rs`).
