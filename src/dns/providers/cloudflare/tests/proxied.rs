@@ -20,7 +20,7 @@ struct ProxiedState {
 type ProxiedShared = Arc<Mutex<ProxiedState>>;
 
 async fn list_zones(State(_state): State<ProxiedShared>) -> axum::Json<serde_json::Value> {
-	axum::Json(serde_json::json!({ "result": [{ "id": "zone123" }] }))
+	axum::Json(serde_json::json!({ "result": [{ "id": "zone123" }], "success": true }))
 }
 
 async fn records_collection(
@@ -218,7 +218,7 @@ async fn upsert_sends_the_null_mx_with_the_root_target() {
 #[tokio::test]
 async fn list_reads_every_page_and_keeps_the_mx_priority() {
 	let (base, seen) = crate::dns::tests::uri_probe::probe(&[
-		r#"{"result":[{"id":"zone1"}]}"#,
+		r#"{"result":[{"id":"zone1"}],"success":true}"#,
 		r#"{"result":[{"id":"r1","name":"www.example.org","type":"A","content":"192.0.2.1","ttl":300}],"result_info":{"page":1,"total_pages":2}}"#,
 		r#"{"result":[{"id":"r2","name":"www.example.org","type":"MX","content":".","priority":0,"ttl":300}],"result_info":{"page":2,"total_pages":2}}"#,
 	])

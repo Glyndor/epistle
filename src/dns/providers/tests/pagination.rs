@@ -124,7 +124,10 @@ fn cf_page(from: usize, n: usize, pages: u32, count: usize) -> String {
 async fn cloudflare(pages: Vec<String>) -> Result<usize, ProviderError> {
 	let (base, _hits) = serve_by(move |_, path, _| {
 		if path.starts_with("/zones?") || path == "/zones" {
-			return ("{\"result\":[{\"id\":\"zone123\"}]}".to_string(), None);
+			return (
+				"{\"result\":[{\"id\":\"zone123\"}],\"success\":true}".to_string(),
+				None,
+			);
 		}
 		(
 			pages[(page_of(path) - 1).min(pages.len() - 1)].clone(),

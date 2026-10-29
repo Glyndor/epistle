@@ -209,10 +209,17 @@ impl DigitaloceanProvider {
 				return Err(ProviderError::Auth);
 			}
 			if status == reqwest::StatusCode::NOT_FOUND {
-				// The records of a domain DigitalOcean does not hold: the
-				// domain is not there, which is not a failure of the
-				// provider, and the search goes on to the parent.
-				return Err(ProviderError::ZoneNotFound(zone.to_string()));
+				if pages == 0 {
+					// The records of a domain DigitalOcean does not
+					// hold: the domain is not there, which is not a
+					// failure of the provider, and the search goes on
+					// to the parent.
+					return Err(ProviderError::ZoneNotFound(zone.to_string()));
+				}
+				// A page after a valid one: the first page proved the
+				// domain is there, so this is a failure of the
+				// provider and not an absent domain.
+				return Err(ProviderError::Remote(format!("HTTP {status}")));
 			}
 			let page: ListResponse = decode(response).await?;
 			out.extend(page.domain_records);
