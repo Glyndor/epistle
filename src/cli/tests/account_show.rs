@@ -1,8 +1,8 @@
 //! `epistle account show`: the public view of a static and a dynamic
-//! account, never a secret. A sibling of `cli_account_subcommand_tests`,
+//! account, never a secret. A sibling of `account_subcommand`,
 //! whose harness it reuses, so that suite stays under the line budget.
 
-use super::cli_account_subcommand_tests::{DYNAMIC_NAME, STATIC_NAME, build, reload_store};
+use super::account_subcommand::{DYNAMIC_NAME, STATIC_NAME, build, reload_store};
 use super::*;
 
 #[test]

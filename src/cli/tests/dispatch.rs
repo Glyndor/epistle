@@ -3,7 +3,7 @@
 use super::*;
 use std::io::Write;
 
-pub(super) fn config_at(data_dir: &std::path::Path) -> tempfile::NamedTempFile {
+pub(in crate::cli) fn config_at(data_dir: &std::path::Path) -> tempfile::NamedTempFile {
 	let mut file = tempfile::NamedTempFile::new().expect("temp file");
 	write!(
 		file,

@@ -5,7 +5,7 @@
 use std::io::Cursor;
 use std::process::ExitCode;
 
-use super::{NAME, error, fixture, gate, load, store, with_alice};
+use super::confirmation_flow::{NAME, error, fixture, gate, load, store, with_alice};
 use crate::cli::alias::{self, AliasCli};
 use crate::cli::domain::{self, DomainAliasArgs, DomainAliasSubcommand, DomainCli};
 use crate::cli::masked::{self, MaskedCli};

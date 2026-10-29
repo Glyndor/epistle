@@ -42,7 +42,7 @@ fn only_status_reads_the_configuration_leniently() {
 		.filter(|name| {
 			!name.starts_with("config/")
 				&& !name.starts_with("cli/status/")
-				&& name != "cli/load_wiring_tests.rs"
+				&& name != "cli/tests/load_wiring.rs"
 		})
 		.collect();
 	users.sort();

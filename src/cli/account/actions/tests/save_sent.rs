@@ -1,12 +1,12 @@
 //! Tests for `epistle account save-sent` and the `on`/`off` switch
 //! it shares with `app-password create --save-sent`. Kept in a
-//! sibling file so the umbrella `cli_account_subcommand_tests`
+//! sibling file so the umbrella `account_subcommand`
 //! stays under the per-file line budget.
 
 use std::process::ExitCode;
 
 use crate::cli::account;
-use crate::cli::cli_account_subcommand_tests::{DYNAMIC_NAME, STATIC_NAME, build, reload_store};
+use crate::cli::tests::account_subcommand::{DYNAMIC_NAME, STATIC_NAME, build, reload_store};
 
 #[test]
 fn parse_on_off_accepts_on_and_off_in_either_case() {

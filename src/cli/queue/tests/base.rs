@@ -278,7 +278,7 @@ fn all_actions_on_an_empty_queue_report_zero() {
 #[test]
 fn dispatch_reaches_the_spool_named_by_the_config_file() {
 	let (dir, spool, ids) = spool_with(1);
-	let config = crate::cli::tests_b::config_at(dir.path());
+	let config = crate::cli::tests::dispatch::config_at(dir.path());
 	let path = config.path().to_str().expect("utf8");
 	let hold = Cli::try_parse_from([
 		"epistle",

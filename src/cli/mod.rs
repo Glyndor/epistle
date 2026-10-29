@@ -31,8 +31,6 @@ mod json_out;
 mod learning;
 mod legacy;
 mod limits;
-#[cfg(test)]
-mod load_wiring_tests;
 mod local;
 mod masked;
 mod migrate;
@@ -97,122 +95,6 @@ mod delegation;
 mod dispatch;
 mod rootless;
 
-#[cfg(test)]
-#[path = "cli_tests.rs"]
-mod tests;
-
-#[cfg(test)]
-#[path = "cli_tests_b.rs"]
-mod tests_b;
-
-#[cfg(test)]
-#[path = "cli_tests_c.rs"]
-mod tests_c;
-
-#[cfg(test)]
-#[path = "cli_tests_d.rs"]
-mod tests_d;
-
-#[cfg(test)]
-#[path = "cli_tests_e.rs"]
-mod tests_e;
-
-#[cfg(test)]
-#[path = "cli_tests_decorated.rs"]
-mod cli_tests_decorated;
-
-#[cfg(test)]
-#[path = "cli_tests_config_defaults.rs"]
-mod tests_config_defaults;
-
-#[cfg(test)]
-#[path = "cli_account_subcommand_tests.rs"]
-mod cli_account_subcommand_tests;
-
-#[cfg(test)]
-#[path = "cli_account_subcommand_tests_b.rs"]
-mod cli_account_subcommand_tests_b;
-
-#[cfg(test)]
-#[path = "cli_account_show_tests.rs"]
-mod cli_account_show_tests;
-
-#[cfg(test)]
-#[path = "cli_confirmation_flow_tests.rs"]
-mod cli_confirmation_flow_tests;
-
-#[cfg(test)]
-#[path = "cli_account_scram_tests.rs"]
-mod cli_account_scram_tests;
-
-#[cfg(test)]
-#[path = "cli_account_resource_tests.rs"]
-mod cli_account_resource_tests;
-
-#[cfg(test)]
-#[path = "cli_account_forward_catch_all_tests.rs"]
-mod cli_account_forward_catch_all_tests;
-
-#[cfg(test)]
-#[path = "cli_account_catch_all_rules_tests.rs"]
-mod cli_account_catch_all_rules_tests;
-
-#[cfg(test)]
-#[path = "cli_account_forward_rules_tests.rs"]
-mod cli_account_forward_rules_tests;
-
-#[cfg(test)]
-#[path = "cli_account_two_factor_tests.rs"]
-mod cli_account_two_factor_tests;
-
-#[cfg(test)]
-#[path = "cli_account_2fa_cli_tests.rs"]
-mod cli_account_2fa_cli_tests;
-
-#[cfg(test)]
-#[path = "cli_app_password_resource_tests.rs"]
-mod cli_app_password_resource_tests;
-
-#[cfg(test)]
-#[path = "cli_app_password_list_tests.rs"]
-mod cli_app_password_list_tests;
-
-#[cfg(test)]
-#[path = "cli_api_key_account_tests.rs"]
-mod cli_api_key_account_tests;
-
-#[cfg(test)]
-#[path = "cli_api_key_resource_tests.rs"]
-mod cli_api_key_resource_tests;
-
-#[cfg(test)]
-#[path = "cli_consistency_tests.rs"]
-mod cli_consistency_tests;
-
-#[cfg(test)]
-#[path = "cli_json_shape_tests.rs"]
-mod cli_json_shape_tests;
-
-#[cfg(test)]
-#[path = "cli_json_everywhere_tests.rs"]
-mod cli_json_everywhere_tests;
-
-#[cfg(test)]
-#[path = "cli_suppression_resource_tests.rs"]
-mod cli_suppression_resource_tests;
-
-#[cfg(test)]
-#[path = "cli_account_log_id_tests.rs"]
-mod cli_account_log_id_tests;
-
-#[cfg(test)]
-#[path = "cli_confirmation_tests.rs"]
-mod cli_confirmation_tests;
-
-#[cfg(test)]
-#[path = "cli_tests_service.rs"]
-mod tests_service;
-
 mod app;
 
 mod client;
@@ -240,3 +122,6 @@ mod tls;
 mod webhook;
 
 mod dns_lockdown;
+
+#[cfg(test)]
+mod tests;

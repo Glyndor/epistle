@@ -1,7 +1,7 @@
 //! CLI tests for the `[database]` unreachable-database abort and
 //! the stdout/stderr split.
 //!
-//! Split into a sibling file so `cli_tests_c.rs` keeps below the
+//! Split into a sibling file so `removal.rs` keeps below the
 //! per-file line budget. The tests here drive the public
 //! `accounts::remove` (the dispatch path is covered elsewhere); the
 //! distinguishing concern is the `[database]` section the operator
@@ -145,7 +145,7 @@ url = "postgres://127.0.0.1:{port}/none?sslmode=require"
 #[test]
 fn cli_remove_error_lines_do_not_pollute_stdout() {
 	use crate::antispam::corpus::BayesStore;
-	use crate::cli::tests_b::config_at;
+	use crate::cli::tests::dispatch::config_at;
 	use std::sync::Arc;
 
 	let dir = tempfile::tempdir().expect("tempdir");

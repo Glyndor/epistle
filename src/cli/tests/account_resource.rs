@@ -1,11 +1,11 @@
 //! Tests for the `epistle account` resource form: list, add, remove.
 //!
-//! Lives in a sibling so `cli_account_subcommand_tests.rs` stays under
+//! Lives in a sibling so `account_subcommand.rs` stays under
 //! the per-file code-line budget. Every test parses the new resource form
 //! and asserts the dispatch reaches the same `accounts::list`/`add`/
 //! `remove` handler the legacy flat command (`accounts`, `account-add`,
 //! `account-remove`) calls. The handlers themselves are exercised in
-//! `cli_tests.rs::accounts_list_prints_configured_accounts` and
+//! `base.rs::accounts_list_prints_configured_accounts` and
 //! `account_add_creates_and_validates`; this module only covers the
 //! shape of the parser and the dispatch arm.
 
