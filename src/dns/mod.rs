@@ -9,6 +9,7 @@ pub mod names;
 pub mod provider;
 pub mod providers;
 pub mod proxied_check;
+pub mod publish;
 pub mod records;
 pub mod rrset;
 pub mod service_records;

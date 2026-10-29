@@ -36,9 +36,28 @@
 //! presentation form); [`same_txt_purpose`] decides whether two values
 //! match under the contract above. How a TXT value is quoted, split and
 //! escaped for each provider API lives in [`crate::dns::txt`].
+//!
+//! ## Guarded contract
+//!
+//! The upsert and delete contract above says nothing about what the
+//! provider found before it wrote, so a write planned against an older
+//! listing may destroy the records of somebody else. Three methods carry
+//! the guarded contract, and their types live in
+//! [`crate::dns::publish::provider`]: [`DnsProvider::publish_snapshot`]
+//! lists the zone and says whether the provider applies a guarded change,
+//! [`DnsProvider::apply_guarded`] applies a change under a precondition,
+//! and [`DnsProvider::lookup_operation`] resolves an operation whose answer
+//! was lost. The three default to refusing, so a provider that does not
+//! implement them publishes nothing: the default of
+//! [`DnsProvider::apply_guarded`] never falls back to `upsert`.
 
 use std::path::Path;
 use std::pin::Pin;
+
+use crate::dns::publish::provider::{
+	Change, Guard, ObservedRecord, OperationOp, OperationOutcome, Receipt, ReceiptOp, Snapshot,
+	SnapshotOp,
+};
 
 /// Free-text description that epistle attaches to every record it creates or
 /// updates, for providers whose record API has a per-record description field
@@ -332,8 +351,9 @@ pub fn same_txt_purpose(a: &str, b: &str) -> bool {
 	}
 }
 
-type Op<'a> = Pin<Box<dyn Future<Output = Result<(), ProviderError>> + Send + 'a>>;
-type ListOp<'a> = Pin<Box<dyn Future<Output = Result<Vec<DnsRecord>, ProviderError>> + Send + 'a>>;
+pub(crate) type Op<'a> = Pin<Box<dyn Future<Output = Result<(), ProviderError>> + Send + 'a>>;
+pub(crate) type ListOp<'a> =
+	Pin<Box<dyn Future<Output = Result<Vec<DnsRecord>, ProviderError>> + Send + 'a>>;
 
 /// The answer of a provider's zone lookup: whether it holds the zone.
 pub type ZoneOp<'a> = Pin<Box<dyn Future<Output = Result<bool, ProviderError>> + Send + 'a>>;
@@ -430,6 +450,50 @@ pub trait DnsProvider: Send + Sync {
 			}
 		})
 	}
+	/// Take a snapshot of `zone`: every record it holds, the identities the
+	/// provider gives them, its revision, and whether it applies a guarded
+	/// change.
+	///
+	/// The default answers with the listing alone and declares the provider
+	/// unchecked: a provider that says nothing about a precondition has
+	/// none, and a plan built on such a snapshot is not applicable.
+	fn publish_snapshot<'a>(&'a self, zone: &'a str) -> SnapshotOp<'a> {
+		Box::pin(async move {
+			let records = self.list(zone).await?;
+			Ok(Snapshot {
+				zone: zone.to_string(),
+				records: records
+					.into_iter()
+					.map(|record| ObservedRecord {
+						record,
+						identity: None,
+					})
+					.collect(),
+				revision: None,
+				guard: Guard::Unchecked,
+			})
+		})
+	}
+	/// Apply `change` to `zone` when its precondition still holds.
+	///
+	/// The default refuses and writes nothing. It never falls back to
+	/// `upsert`: a write that cannot be conditioned may destroy the records
+	/// of somebody else, so a provider that does not implement this cannot
+	/// publish. The answer to a change whose precondition did not hold is
+	/// [`Receipt::PreconditionFailed`], and a change whose answer was lost
+	/// is [`Receipt::Unknown`], which the caller resolves with
+	/// [`DnsProvider::lookup_operation`] before it writes anything else.
+	fn apply_guarded<'a>(&'a self, _zone: &'a str, _change: Change) -> ReceiptOp<'a> {
+		Box::pin(async { Receipt::Unsupported })
+	}
+	/// Ask the provider what became of the operation `operation_id`.
+	///
+	/// The default answers [`OperationOutcome::Unsupported`]: a provider
+	/// that keeps no record of its operations cannot resolve a lost answer,
+	/// and that is not a success.
+	fn lookup_operation<'a>(&'a self, _operation_id: &'a str) -> OperationOp<'a> {
+		Box::pin(async { Ok(OperationOutcome::Unsupported) })
+	}
 }
 
 /// Manual mode: no API access. Writes fail with [`ProviderError::Unsupported`]
@@ -453,6 +517,12 @@ impl DnsProvider for ManualProvider {
 	}
 	fn list(&self, _zone: &str) -> ListOp<'_> {
 		Box::pin(async { Ok(Vec::new()) })
+	}
+	/// Manual mode has no zone to snapshot. Its listing is empty because
+	/// there is no API behind it, not because the zone holds nothing, so
+	/// the snapshot refuses instead of handing out an empty zone.
+	fn publish_snapshot<'a>(&'a self, _zone: &'a str) -> SnapshotOp<'a> {
+		Box::pin(async { Err(ProviderError::Unsupported) })
 	}
 }
 
