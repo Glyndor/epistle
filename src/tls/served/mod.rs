@@ -11,6 +11,8 @@ use std::path::PathBuf;
 
 use crate::config::{Config, Tls};
 
+use super::usable_pair;
+
 /// Where the presented certificate comes from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CertSource {
@@ -100,15 +102,6 @@ pub fn served_tls(config: &Config) -> Option<ServedTls> {
 		tls,
 		source: CertSource::Static,
 	})
-}
-
-/// Whether both files load and rustls accepts the key for the certificate.
-fn usable_pair(cert_file: &std::path::Path, key_file: &std::path::Path) -> bool {
-	super::ensure_crypto_provider();
-	let (Ok(certs), Ok(key)) = (super::load_certs(cert_file), super::load_key(key_file)) else {
-		return false;
-	};
-	super::server_config(certs, key, None).is_ok()
 }
 
 #[cfg(test)]
