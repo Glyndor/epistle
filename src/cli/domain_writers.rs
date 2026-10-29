@@ -56,7 +56,7 @@ pub fn print_domain_records(
 		&dns_records::mta_sts_id(config),
 		// The SRV locators follow the configuration: a service the
 		// operator turned off gets no locator.
-		dns_records::Services::from_config(config),
+		dns_records::ServiceRecords::from_config(config),
 		config.acme.as_ref().map(|a| a.directory_url.as_str()),
 		config.public_ipv4,
 		config.public_ipv6,

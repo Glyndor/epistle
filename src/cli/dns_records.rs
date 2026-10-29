@@ -66,7 +66,7 @@ pub(super) fn run(config: &Config, json: bool, out: &mut impl std::io::Write) ->
 		// The SRV locators follow the configuration: a service the
 		// operator turned off gets no locator, so a client that follows
 		// one of the published records reaches a listener.
-		records::Services::from_config(config),
+		records::ServiceRecords::from_config(config),
 		config.acme.as_ref().map(|a| a.directory_url.as_str()),
 		config.public_ipv4,
 		config.public_ipv6,

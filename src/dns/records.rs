@@ -10,7 +10,8 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 
 use super::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind};
-pub use super::records_services::{Services, SrvService};
+use super::service_records::service_records;
+pub use super::service_records::{ServiceRecords, SrvService};
 
 /// Map an ACME directory URL to the CA we expect to issue certs for this
 /// domain. Returns `None` for unknown directories — emitting a wrong CAA
@@ -39,7 +40,7 @@ pub struct PublishRecord {
 	pub record: DnsRecord,
 }
 
-const TTL: u32 = 3600;
+pub(super) const TTL: u32 = 3600;
 
 /// Derive the DNS policy identifier using the public policy writer's renderer.
 pub fn mta_sts_id(config: &crate::config::Config) -> String {
@@ -112,7 +113,7 @@ pub type DomainDkim = std::collections::HashMap<String, Vec<(String, String)>>;
 /// `dkim_per_domain` by that domain's own list; `tlsa` is the `3 0 1` association for
 /// the mail host's certificate when one is available; `mta_sts_id`
 /// versions the MTA-STS record; `services` selects the SRV locators, one
-/// per service the deployment exposes (see [`Services::from_config`]);
+/// per locator the deployment advertises (see [`ServiceRecords::from_config`]);
 /// `caa_directory` is the configured ACME directory URL; when it maps to a
 /// known CA via
 /// [`caa_ca_for_directory`], a single CAA `0 issue "<ca>"` is emitted for
@@ -132,7 +133,7 @@ pub fn build_records(
 	dkim_per_domain: &DomainDkim,
 	tlsa: Option<&str>,
 	mta_sts_id: &str,
-	services: Services,
+	services: ServiceRecords,
 	caa_directory: Option<&str>,
 	public_ipv4: Option<Ipv4Addr>,
 	public_ipv6: Option<Ipv6Addr>,
@@ -174,16 +175,6 @@ pub fn build_records(
 				name,
 				kind: RecordKind::Txt,
 				value,
-				ttl: TTL,
-				proxied: None,
-			},
-		};
-		let srv = |name: String, port: u16| PublishRecord {
-			zone: domain.clone(),
-			record: DnsRecord {
-				name,
-				kind: RecordKind::Srv,
-				value: format!("0 1 {port} {hostname}."),
 				ttl: TTL,
 				proxied: None,
 			},
@@ -275,19 +266,11 @@ pub fn build_records(
 				},
 			});
 		}
-		// Service locators (RFC 6186, 8314, 8621, 5804) — one per service
-		// the deployment exposes. A locator names a port, so a client that
+		// Service locators (RFC 6186, 8314, 8621, 5804), one per locator
+		// the deployment advertises. A locator names a port, so a client that
 		// follows one of a service nobody listens on reaches nothing; the
 		// set therefore follows the configuration.
-		for service in SrvService::ALL {
-			if !services.contains(service) {
-				continue;
-			}
-			records.push(srv(
-				format!("{}._tcp.{domain}", service.label()),
-				service.port(),
-			));
-		}
+		records.extend(service_records(&services, domain, hostname));
 	}
 
 	// One TLSA record for the mail host (shared across all domains), in
