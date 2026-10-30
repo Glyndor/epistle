@@ -11,6 +11,9 @@
 
 pub(crate) mod bounds;
 mod decompress;
+
+/// The attachment unpacking, for the fuzz target in `crate::fuzzing`.
+pub(crate) use decompress::{Encoding, inflate_attachment};
 pub mod dmarc;
 pub(crate) mod mime;
 pub(crate) mod store;

@@ -132,3 +132,31 @@ path = "fuzz_targets/jwt_decode.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "smtp_reply"
+path = "fuzz_targets/smtp_reply.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "dns_security_records"
+path = "fuzz_targets/dns_security_records.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "report_payload"
+path = "fuzz_targets/report_payload.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "rules_match"
+path = "fuzz_targets/rules_match.rs"
+test = false
+doc = false
+bench = false

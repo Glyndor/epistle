@@ -35,6 +35,10 @@ class SelectTests(unittest.TestCase):
             ("src/webdav/rrule/mod.rs", "webdav_filter_rrule"),
             ("src/arc/signature.rs", "arc_headers"),
             ("src/jwt/mod.rs", "jwt_decode"),
+            ("src/queue/client/conn/mod.rs", "smtp_reply"),
+            ("src/mtasts/policy/mod.rs", "dns_security_records"),
+            ("src/reports/dmarc/mod.rs", "report_payload"),
+            ("src/rules/mod.rs", "rules_match"),
         ):
             self.assertEqual(ft.select("pull_request", [path]), [target])
 
