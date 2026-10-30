@@ -90,8 +90,8 @@ jobs:
           # macros against a live Postgres, and `stable` here would mean the
           # queries compiled for the SBOM are not the ones the database
           # tests ran against the same schema.
-          rustup toolchain install 1.98 --profile minimal
-          rustup default 1.98
+          rustup toolchain install 1.99 --profile minimal
+          rustup default 1.99
 
       - name: Install cargo-llvm-cov
         env:

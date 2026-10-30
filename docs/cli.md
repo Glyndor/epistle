@@ -994,7 +994,7 @@ removing an override so the autostart unit records the current file list.
 
 The default compose file runs the host's `/usr/bin/epistle`
 (provided by the `.deb`, a statically linked musl binary) bind-mounted
-read-only into the digest-pinned `gcr.io/distroless/static-debian12:nonroot`
+read-only into the digest-pinned `gcr.io/distroless/static-debian13:nonroot`
 base. An explicit `image` in the init answers lets the operator select a
 custom mail image instead (the host binary is then not mounted). The
 generated base records which mode the file is in via `x-epistle-managed-image`:

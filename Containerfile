@@ -1,4 +1,4 @@
-# Two stages: a Rust 1.98 musl build, and a distroless-static runtime
+# Two stages: a Rust 1.99 musl build, and a distroless-static runtime
 # that carries only the resulting binary, a /etc/epistle/ mount point
 # and the `65532:65532` (nonroot) user. The build environment matches
 # what release.yml's `build-deb` job does: the same digest-pinned rust
@@ -13,8 +13,8 @@
 # it. The two values are 1:1; a request for any other arch fails in
 # the case statement.
 
-FROM docker.io/library/rust@sha256:fb4b2f1dc68c06f46618948b09d0ade147e6d2b11a6581e599b0c808d5b8a167 AS builder
-# 1.98-slim-trixie. Same pin as release.yml.
+FROM docker.io/library/rust@sha256:b8e062b1c3a80183df83d9ba187cadd2b5ab84bc78d453dbfeb2fccd5f982247 AS builder
+# 1.99-slim-trixie. Same pin as release.yml.
 
 ARG TARGETARCH
 
@@ -65,13 +65,13 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
 # The nonroot distroless base ships no shell and no /etc/epistle.
 # /etc/epistle is the conventional mount point for the operator's
 # mail.toml, so create it here. The user comes from the `nonroot`
-# tag: uid:gid 65532:65532. Resolved 2026-10-05 00:45:23 UTC on this
-# host with:
-#   podman pull gcr.io/distroless/static-debian12:nonroot
-#   podman image inspect --format '{{.Digest}}' gcr.io/distroless/static-debian12:nonroot
+# tag: uid:gid 65532:65532. The owner supplied the Debian 13 digest.
+# To inspect the current tag:
+#   podman pull gcr.io/distroless/static-debian13:nonroot
+#   podman image inspect --format '{{.Digest}}' gcr.io/distroless/static-debian13:nonroot
 # Bump the digest deliberately, the way db.yml documents the postgres
 # digests.
-FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
+FROM gcr.io/distroless/static-debian13:nonroot@sha256:18f4cc26c9ffa7f20a359298be7deadac5c607c8e03a02b8119f1a5fc2f82c99
 
 # OCI labels. `--label=...` on the `podman build` command line
 # overrides them at build time, so a release job can stamp the

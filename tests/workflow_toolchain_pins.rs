@@ -24,9 +24,9 @@
 //! false positive that podup#1487 was, and the count floor keeps the test
 //! honest if a workflow is renamed or the YAML shape changes.
 //!
-//! Pin values are compared after stripping a trailing `.0` so `1.98` and
-//! `1.98.0` agree: they are the same compiler written two ways. `1.98`
-//! and `1.98.1` do not agree, same major.minor but a different patch.
+//! Pin values are compared after stripping a trailing `.0` so `1.99` and
+//! `1.99.0` agree: they are the same compiler written two ways. `1.99`
+//! and `1.99.1` do not agree, same major.minor but a different patch.
 //! `nightly` is exempt by value (not by file name): fuzzing requires it
 //! and pinning it to a date would defeat the point, but exempting it by
 //! value rather than by file keeps the rule visible if some other site
@@ -42,8 +42,8 @@ use std::path::{Path, PathBuf};
 
 /// Minimum number of pins the test expects to find. Twelve sites exist
 /// today (the three reusables' `toolchain` input defaults, `ci.yml`'s
-/// `with.toolchain` override, two `rustup toolchain install 1.98.0` lines
-/// in `release.yml`, and six `rustup toolchain install 1.98` lines
+/// `with.toolchain` override, two `rustup toolchain install 1.99.0` lines
+/// in `release.yml`, and six `rustup toolchain install 1.99` lines
 /// across the bench, db, e2e, interop and mutants workflows); the floor
 /// is the smallest count that guarantees the test is actually walking
 /// the directory and finding both pin shapes.
@@ -146,16 +146,16 @@ fn workflow_toolchain_pins_agree() {
 		}
 		msg.push_str(
 			"Bump or align them so every site declares the same value. Pin values are \
-			 compared after stripping a trailing `.0`, so `1.98` and `1.98.0` already agree.",
+			 compared after stripping a trailing `.0`, so `1.99` and `1.99.0` already agree.",
 		);
 		panic!("{msg}");
 	}
 }
 
 /// Normalize a pin value for comparison. Strips a single trailing `.0` so
-/// the bare-major-minor form (`1.98`) and the explicit-patch form
-/// (`1.98.0`) match: the same rustc release written differently. Does not
-/// touch `1.98.1` (different patch, not the same compiler) or anything
+/// the bare-major-minor form (`1.99`) and the explicit-patch form
+/// (`1.99.0`) match: the same rustc release written differently. Does not
+/// touch `1.99.1` (different patch, not the same compiler) or anything
 /// else (`stable`, `nightly`, `beta`).
 fn normalize(value: &str) -> String {
 	match value.strip_suffix(".0") {
@@ -169,7 +169,7 @@ fn normalize(value: &str) -> String {
 /// - An input default — the `toolchain:` key starts a block whose children
 ///   include a `default: <value>` line at one indent level deeper.
 /// - A caller override — the `toolchain:` key carries its value inline
-///   (`toolchain: "1.98"` inside a `with:` mapping).
+///   (`toolchain: "1.99"` inside a `with:` mapping).
 ///
 /// `rust-toolchain:` and any other compound key are intentionally ignored;
 /// `rust-toolchain` has different semantics and is declared in

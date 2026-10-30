@@ -4,23 +4,23 @@ The supported production shape for `epistle` is a rootless Podman or Docker
 container driven by `podup`. The compose file `init` writes runs the host's
 `/usr/bin/epistle` (the statically linked musl binary the `.deb` ships)
 bind-mounted read-only into the digest-pinned
-`gcr.io/distroless/static-debian12:nonroot` base. A `ghcr.io/glyndor/epistle`
+`gcr.io/distroless/static-debian13:nonroot` base. A `ghcr.io/glyndor/epistle`
 image is still built and published on every release (see "Tags" below); it
 matches the `.deb` byte-for-byte and stays as the choice of an operator who
 sets `image` in the answers or pulls it directly.
 
 ## What the image contains
 
-The base is `gcr.io/distroless/static-debian12:nonroot`, pinned by digest
+The base is `gcr.io/distroless/static-debian13:nonroot`, pinned by digest
 in the `Containerfile` and in `deploy/images/Dockerfile`, which also pins
 the PostgreSQL and ClamAV images of the generated stack. The binary reads
 that file at build time, so a release that moves a digest there moves it in
 the compose file `epistle stack update` renders on every install; Dependabot
 watches both files. The image carries the musl-statically linked
 release binary, the runtime data the binary needs, and nothing else.
-The inventory below was produced by `podman create` of `epistle:test`
-followed by `podman export | tar -t`, on this host with
-`podman 5.7.0`, on 2026-10-04.
+The list below describes the intended runtime contents. The previous Debian 12
+inventory was inspected on 2026-10-04 with `podman 5.7.0`; the Debian 13
+image has not yet been inspected or measured.
 
 - `/usr/bin/epistle`, the binary. Built with the same
   `cargo build --release --locked --target <musl>` invocation the .deb
@@ -28,15 +28,13 @@ followed by `podman export | tar -t`, on this host with
 - A `/etc/epistle` directory owned by `uid:gid 65532:65532`, created at
   build time. The operator's `mail.toml` is bind-mounted over it; no
   file inside the image ever needs to be writable.
-- `/etc/ssl/certs/ca-certificates.crt` (224 449 bytes), the merged CA
+- `/etc/ssl/certs/ca-certificates.crt`, the merged CA
   bundle. The binary uses rustls with the system trust store, so the
   bundle is what verifies outbound TLS for SMTP submission, IMAP
   retrieval, ACME, and any other connection that pins a public CA.
-- `/etc/passwd` and `/etc/group` with three entries: `root`,
-  `nobody`, and `nonroot` (uid 65532, gid 65532, home `/home/nonroot`,
-  shell `/sbin/nologin`). The image sets `USER 65532:65532`, so the
-  binary runs as `nonroot`. The other two entries are not used; they
-  are in the base.
+- `/etc/passwd` and `/etc/group` supplied by the base. The image sets
+  `USER 65532:65532`, so the binary runs as `nonroot`. The exact account
+  inventory of the Debian 13 base still needs inspection.
 - `/usr/share/zoneinfo/` and the tzdata package metadata under
   `/usr/share/doc/tzdata/`. The binary is single-timezone (the host's
   `TZ`), so tzdata is not exercised at runtime; it is in the base.
@@ -49,7 +47,7 @@ followed by `podman export | tar -t`, on this host with
   and `io.containers.autoupdate=registry` so `podman-auto-update(1)`
   can track the `<version>` tag.
 
-The image is 28 MiB on `linux/amd64`. `USER 65532:65532`; `ENTRYPOINT
+The Debian 13 image size has not yet been measured. `USER 65532:65532`; `ENTRYPOINT
 ["/usr/bin/epistle"]`; `CMD ["serve", "--config", "/etc/epistle/mail.toml"]`.
 
 ## What is meant to run inside the image
