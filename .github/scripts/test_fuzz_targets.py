@@ -29,6 +29,15 @@ class SelectTests(unittest.TestCase):
             ["smtp_command", "smtp_line", "smtp_address", "smtp_data"],
         )
 
+    def test_the_parsers_of_one_folder_run_their_own_target(self):
+        for path, target in (
+            ("src/antispam/attachments/sniff/mod.rs", "attachment_inspect"),
+            ("src/webdav/rrule/mod.rs", "webdav_filter_rrule"),
+            ("src/arc/signature.rs", "arc_headers"),
+            ("src/jwt/mod.rs", "jwt_decode"),
+        ):
+            self.assertEqual(ft.select("pull_request", [path]), [target])
+
     def test_two_protocols_run_both(self):
         got = ft.select("pull_request", ["src/pop3/a.rs", "src/dkim/b.rs"])
         self.assertEqual(got, ["pop3_command", "dkim_signature", "mime"])

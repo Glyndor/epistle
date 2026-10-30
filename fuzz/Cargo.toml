@@ -104,3 +104,31 @@ bench = false
 
 # Detach from the parent crate's workspace.
 [workspace]
+
+[[bin]]
+name = "attachment_inspect"
+path = "fuzz_targets/attachment_inspect.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "webdav_filter_rrule"
+path = "fuzz_targets/webdav_filter_rrule.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "arc_headers"
+path = "fuzz_targets/arc_headers.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "jwt_decode"
+path = "fuzz_targets/jwt_decode.rs"
+test = false
+doc = false
+bench = false

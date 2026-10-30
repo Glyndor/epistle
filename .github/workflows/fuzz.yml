@@ -32,6 +32,10 @@ on:
       - "src/dmarc/**"
       - "src/reports/**"
       - "src/api/jmap/**"
+      - "src/antispam/attachments/**"
+      - "src/webdav/**"
+      - "src/arc/**"
+      - "src/jwt/**"
       - "src/fuzzing.rs"
       - "fuzz/**"
 
