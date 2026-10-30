@@ -55,6 +55,8 @@ jobs:
     # `protocol interop`.
     name: LDAP directory
     runs-on: ubuntu-latest
+    # Measured 2026-10-30: the slowest of four green runs took 3 min.
+    timeout-minutes: 10
     env:
       INTEROP_LDAP_URL: ldap://localhost:3890
       INTEROP_LDAP_BIND_DN: cn=admin,dc=epistle,dc=interop,dc=test

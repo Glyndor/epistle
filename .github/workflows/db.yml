@@ -55,6 +55,8 @@ jobs:
     # name to carry the major is safe.
     name: database integration (PostgreSQL ${{ matrix.postgres }})
     runs-on: ubuntu-latest
+    # Measured 2026-10-30: the slowest of four green runs took 36 min.
+    timeout-minutes: 75
     strategy:
       # One leg: the floor (`MIN_SERVER_VERSION = 18` in `src/db/mod.rs`),
       # which is also the major the stack runs. When a newer major ships,

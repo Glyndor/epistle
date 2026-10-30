@@ -74,6 +74,8 @@ jobs:
   lint:
     name: Format & lint
     runs-on: ubuntu-latest
+    # Measured 2026-10-30: the slowest of four green runs took 3 min.
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: ${{ inputs.working-directory }}
@@ -117,6 +119,8 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
+    # Measured 2026-10-30: the slowest of four green runs took 34 min.
+    timeout-minutes: 70
     defaults:
       run:
         working-directory: ${{ inputs.working-directory }}
@@ -167,6 +171,8 @@ jobs:
     name: Test (${{ matrix.os }})
     if: inputs.extra-test-os != '[]'
     runs-on: ${{ matrix.os }}
+    # Measured 2026-10-30: the slowest of four green runs took 34 min.
+    timeout-minutes: 70
     strategy:
       fail-fast: false
       matrix:
@@ -219,6 +225,8 @@ jobs:
     # it a gate rather than a decoration.
     if: always()
     runs-on: ubuntu-latest
+    # Measured 2026-10-30: the slowest of four green runs took 1 min.
+    timeout-minutes: 5
     steps:
       - name: Reflect the extra-platform test result
         env:
@@ -236,6 +244,8 @@ jobs:
     name: Coverage
     if: inputs.coverage-threshold > 0
     runs-on: ubuntu-latest
+    # Measured 2026-10-30: the slowest of four green runs took 36 min.
+    timeout-minutes: 75
     defaults:
       run:
         working-directory: ${{ inputs.working-directory }}
@@ -317,6 +327,8 @@ jobs:
     name: MSRV (${{ inputs.msrv }})
     if: inputs.msrv != ''
     runs-on: ubuntu-latest
+    # Measured 2026-10-30: the slowest of four green runs took 3 min.
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: ${{ inputs.working-directory }}
@@ -354,6 +366,8 @@ jobs:
     needs: msrv
     if: always()
     runs-on: ubuntu-latest
+    # Measured 2026-10-30: the slowest of four green runs took 1 min.
+    timeout-minutes: 5
     steps:
       - name: Reflect the MSRV result
         env:
@@ -370,6 +384,8 @@ jobs:
     name: Package check
     if: inputs.package-check
     runs-on: ubuntu-latest
+    # Not measured (the job is skipped in this repository); a bound well above its work.
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: ${{ inputs.working-directory }}
@@ -392,6 +408,8 @@ jobs:
     name: Semver checks
     if: inputs.semver-check
     runs-on: ubuntu-latest
+    # Not measured (the job is skipped in this repository); a bound well above its work.
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: ${{ inputs.working-directory }}
@@ -419,6 +437,8 @@ jobs:
     name: Doc warnings
     if: inputs.doc-warnings
     runs-on: ubuntu-latest
+    # Measured 2026-10-30: the slowest of four green runs took 1 min.
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: ${{ inputs.working-directory }}
