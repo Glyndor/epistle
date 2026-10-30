@@ -18,6 +18,8 @@ on:
       # it, so a broken edit merges without ever having been executed.
       - ".github/workflows/fuzz.yml"
       - ".github/scripts/fuzz_targets.py"
+      - "Cargo.toml"
+      - "Cargo.lock"
       - "src/smtp/**"
       - "src/imap/**"
       - "src/sieve/**"
@@ -48,6 +50,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           fetch-depth: 0
 
       # A pull request runs the targets of the protocols it touches; a
@@ -71,6 +74,8 @@ jobs:
         target: ${{ fromJSON(needs.plan.outputs.targets) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install nightly toolchain
         run: |
@@ -90,4 +95,6 @@ jobs:
         run: command -v cargo-fuzz >/dev/null || cargo install cargo-fuzz --locked --version "^0.13"
 
       - name: Fuzz ${{ matrix.target }}
-        run: cargo fuzz run ${{ matrix.target }} -- -max_total_time=60 -timeout=10
+        env:
+          FUZZ_TARGET: ${{ matrix.target }}
+        run: cargo fuzz run "$FUZZ_TARGET" -- -max_total_time=60 -timeout=10
