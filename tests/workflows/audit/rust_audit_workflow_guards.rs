@@ -15,7 +15,7 @@ const REPORT_KEY: &str = "report:";
 const CLOSE_KEY: &str = "close:";
 
 /// Return the body of a job block whose `name:` line carries `key`.
-/// Mirrors the helper in `tests/rust_audit_workflow.rs` so they
+/// Mirrors the helper in `tests/workflows/audit/rust_audit_workflow.rs` so they
 /// stay in sync. The block ends at the next job (`^  [a-z][a-z0-9_]*:$`
 /// at the same indent) or at any shallower indent.
 fn extract_job_block(text: &str, key: &str) -> Option<String> {
