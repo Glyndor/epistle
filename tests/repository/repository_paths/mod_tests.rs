@@ -54,13 +54,13 @@ fn a_glob_must_match_at_least_one_file() {
 	let tree = [
 		"src/b.rs".to_string(),
 		"src/imap/mod.rs".into(),
-		"tests/database_x.rs".into(),
+		"tests/db/core/database_x.rs".into(),
 	];
 	for pattern in [
 		"src/imap/**",
 		"src/**/*.rs",
 		"src/*.rs",
-		"tests/database*.rs",
+		"tests/db/core/database*.rs",
 		"src/{pop3,imap}/mod.rs",
 		"src/{pop3,imap}/",
 	] {

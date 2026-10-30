@@ -6,7 +6,7 @@ name: Upgrade
 # `submissions` + `imaps` setup `e2e.yml` uses, creates the account, submits
 # a message, sets a flag and creates an app password, then stops it. It
 # builds this commit's binary, starts it on the same data and config, and
-# runs `tests/upgrade.rs` against it: the password still logs in, the
+# runs `tests/system/upgrade.rs` against it: the password still logs in, the
 # message and its flag are still there, the app password still
 # authenticates, and the new server's startup log has no `ERROR` line.
 #
@@ -30,7 +30,7 @@ on:
     paths:
       - "src/**"
       - "migrations/**"
-      - "tests/upgrade.rs"
+      - "tests/system/upgrade.rs"
       - ".github/workflows/upgrade.yml"
       - "Cargo.toml"
       - "Cargo.lock"

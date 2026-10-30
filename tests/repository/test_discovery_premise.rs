@@ -6,7 +6,7 @@
 //! test file exists and no workflow invokes it. It exists because a test once lived in `apt/tests/`,
 //! passed by hand, and nothing in CI called it. epistle does not carry that
 //! guard, and the reason is narrow: every test here is a Rust test, cargo
-//! discovers `tests/*.rs` and `#[cfg(test)]` modules on its own, and
+//! discovers the roots of the integration tests and `#[cfg(test)]` modules on its own, and
 //! `cargo test --locked` runs all of them. Nothing can be added to a Rust test
 //! target and stay unrun.
 //!

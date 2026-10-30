@@ -284,7 +284,7 @@ fn score_uses_the_account_scope_at_the_threshold() {
 }
 
 /// `forget_scope` removes every row under the scope and reports the
-/// token-row count. The live-DB test in `tests/database.rs` exercises
+/// token-row count. The live-DB test in `tests/db/core/database.rs` exercises
 /// the real `BayesStore`; this unit test pins the public contract
 /// (the method exists and is callable) without needing a database.
 #[test]

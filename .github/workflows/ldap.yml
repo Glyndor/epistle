@@ -1,6 +1,6 @@
 name: LDAP
 
-# LDAP authentication is a security path that tests/ldap.rs exercises
+# LDAP authentication is a security path that tests/system/ldap.rs exercises
 # against a real OpenLDAP. CI has shipped that file with four
 # tests that silently pass when INTEROP_LDAP_URL is unset, and no
 # workflow defined those variables, so the LDAP code path had zero
@@ -30,7 +30,7 @@ on:
   pull_request:
     paths:
       - "src/directory_store/**"
-      - "tests/ldap.rs"
+      - "tests/system/ldap.rs"
       - "tests/fixtures/ldap/**"
       - ".github/workflows/ldap.yml"
       - "Cargo.toml"
@@ -125,7 +125,7 @@ jobs:
 
       - name: Run LDAP integration tests
         # If this command prints "skipping", the env block above is
-        # broken: tests/ldap.rs skips the entire suite when
+        # broken: tests/system/ldap.rs skips the entire suite when
         # INTEROP_LDAP_URL is unset, which is the failure mode this
         # workflow exists to prevent.
         run: cargo test --locked --test ldap

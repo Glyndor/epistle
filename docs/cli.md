@@ -94,7 +94,7 @@ Every `epistle` subcommand splits its output into two streams by purpose:
 - **stdout** carries command data or listings. The four data commands below
   never carry an ANSI escape sequence there, no matter the terminal, no matter
   `NO_COLOR`, no matter `CLICOLOR_FORCE`; the property is pinned by
-  `tests/cli_stdout_clean.rs`. `clap`'s `--help` and `--version` also write to
+  `tests/cli/cli_stdout_clean.rs`. `clap`'s `--help` and `--version` also write to
   stdout and follow the same precedence, so `--help` may colourise its text
   under `CLICOLOR_FORCE=1` or a real terminal.
 - **stderr** carries status, warnings, errors and progress, including the
@@ -115,7 +115,7 @@ exit code 2. `CLICOLOR_FORCE` never turns any of this on in a pipe.
 
 Four commands produce binary or quoted data on stdout and would silently break if
 an escape sequence or spinner frame were ever written there, so they are pinned by
-`tests/cli_stdout_clean.rs`:
+`tests/cli/cli_stdout_clean.rs`:
 
 | Command | stdout payload |
 |---|---|

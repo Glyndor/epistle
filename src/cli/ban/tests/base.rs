@@ -1,5 +1,5 @@
 //! Parsing and the no-database path of `epistle ban`. The actions against
-//! PostgreSQL are covered by `tests/database_bans_admin.rs`.
+//! PostgreSQL are covered by `tests/db/core/database_bans_admin.rs`.
 
 use super::*;
 use crate::cli::{Cli, Command};

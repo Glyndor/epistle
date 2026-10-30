@@ -473,7 +473,7 @@ fn skip(why: &str) {
 /// pair under a different name (e.g. `epistle-bin`, `epistle.digest`) would
 /// still find a directory listing that matches the script and let the
 /// contract drift without any test going red. The integration test in
-/// `tests/debian_isolated_user.rs` reads the script and asserts the
+/// `tests/packaging/debian_isolated_user.rs` reads the script and asserts the
 /// corresponding strings there. This stays as the pin that runs everywhere:
 /// the sandboxed read runs only where a root namespace is available.
 #[test]

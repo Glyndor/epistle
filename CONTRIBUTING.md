@@ -96,7 +96,7 @@ migration numbered above 0003 must not drop, rename or retype because
 `podman auto-update` cannot roll a migration back, so the discipline is
 add and dual-write in one release, read the new shape in the next, and
 drop the old shape in the one after that; the test in
-`tests/migrations_expand_contract.rs` enforces it.
+`tests/db/core/migrations_expand_contract.rs` enforces it.
 
 ## Building from source
 

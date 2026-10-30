@@ -341,7 +341,7 @@ pub(super) fn adjustable_default(entry: &Adjustable) -> Option<u64> {
 
 /// One row of the catalog exposed for the integration test that keeps
 /// `docs/limits.md` in lockstep with the in-process catalog. The struct
-/// lives in `pub` so a closed-over copy in `tests/limits_docs.rs` can
+/// lives in `pub` so a closed-over copy in `tests/contracts/limits_docs.rs` can
 /// read it without depending on the catalog's internal types; every
 /// other consumer goes through `show` / `show_json`, which carry the
 /// same data through the CLI surface the operator already uses.
