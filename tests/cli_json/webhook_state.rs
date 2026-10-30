@@ -28,7 +28,7 @@ fn show_says_whether_the_webhook_is_on() {
 		run(&env, &["show"]),
 		(
 			0,
-			json!({"url": "https://hooks.example.net/in", "secret": "set", "enabled": true})
+			json!({"url": "https://hooks.example.net/in", "secret": "set", "enabled": true, "allow_private_webhooks": false})
 		)
 	);
 	let output = epistle(&["webhook", "--config", &env.config, "show"], b"");
@@ -36,7 +36,7 @@ fn show_says_whether_the_webhook_is_on() {
 	assert!(!stdout.contains("s3cr3t"), "the secret reached stdout");
 	assert_eq!(
 		stdout,
-		"url\thttps://hooks.example.net/in\nsecret\tset\nenabled\tyes\n"
+		"url\thttps://hooks.example.net/in\nsecret\tset\nenabled\tyes\nallow_private_webhooks\tno\n"
 	);
 	assert!(!stdout.contains("s3cr3t"), "the secret reached stdout");
 }
