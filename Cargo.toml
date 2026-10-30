@@ -9,7 +9,7 @@ edition = "2024"
 #
 # The packaging path has none: debian/control carries no rustc on `Build-Depends`
 # because the .deb is built for musl with a rustup toolchain, and
-# `release.yml` pins that toolchain at 1.99.0. tests/msrv_agrees_with_ci.rs ties
+# `release.yml` pins that toolchain at 1.99.0. tests/workflows/msrv_agrees_with_ci.rs ties
 # this to ci.yml's `msrv` input, and cargo itself refuses to build on anything
 # older.
 #
@@ -184,3 +184,19 @@ path = "tests/workflows/audit/rust_audit_workflow_report_checkout.rs"
 [[test]]
 name = "rust_audit_workflow_upload"
 path = "tests/workflows/audit/rust_audit_workflow_upload.rs"
+
+[[test]]
+name = "workflow_coverage_ignore_regex"
+path = "tests/workflows/workflow_coverage_ignore_regex.rs"
+
+[[test]]
+name = "workflow_release_tag_identity"
+path = "tests/workflows/workflow_release_tag_identity.rs"
+
+[[test]]
+name = "workflow_toolchain_pins"
+path = "tests/workflows/workflow_toolchain_pins.rs"
+
+[[test]]
+name = "msrv_agrees_with_ci"
+path = "tests/workflows/msrv_agrees_with_ci.rs"
