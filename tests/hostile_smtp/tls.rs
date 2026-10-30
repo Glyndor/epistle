@@ -136,7 +136,7 @@ async fn auth_bruteforce_third_failure_gets_535_and_connection_closes() {
 		return;
 	}
 	let tls = Tls::new();
-	let password = "HostileFixture37!Valid";
+	let password: &str = &PASSWORD;
 	let directory = directory().with_password_hashes(HashMap::from([(
 		"tester".to_string(),
 		epistle::smtp::auth::hash_password(password).expect("fixture password hash"),
@@ -144,7 +144,7 @@ async fn auth_bruteforce_third_failure_gets_535_and_connection_closes() {
 	let server = Harness::with_directory(directory, |s| tls.server(s)).await;
 	let mut client = tls.connect(&server).await;
 	let credentials =
-		base64::engine::general_purpose::STANDARD.encode("\0tester\0HostileFixture37!Wrong");
+		base64::engine::general_purpose::STANDARD.encode(format!("\0tester\0{PASSWORD}-wrong"));
 	let command = format!("AUTH PLAIN {credentials}\r\n");
 	for _ in 0..3 {
 		send(&mut client, command.as_bytes()).await;

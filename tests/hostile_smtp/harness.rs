@@ -175,3 +175,30 @@ pub async fn quit<S: AsyncRead + AsyncWrite + Unpin>(stream: &mut S) {
 }
 
 pub const SHORT_SESSION: Duration = Duration::from_secs(2);
+
+/// A password minted when the test starts, so no credential sits in the source.
+pub struct Password;
+
+pub static PASSWORD: Password = Password;
+
+impl Password {
+	fn minted() -> &'static str {
+		static VALUE: std::sync::LazyLock<String> =
+			std::sync::LazyLock::new(|| format!("Fx1!{}", uuid::Uuid::new_v4().simple()));
+		VALUE.as_str()
+	}
+}
+
+impl std::ops::Deref for Password {
+	type Target = str;
+
+	fn deref(&self) -> &str {
+		Self::minted()
+	}
+}
+
+impl std::fmt::Display for Password {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.write_str(Self::minted())
+	}
+}

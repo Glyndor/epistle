@@ -17,7 +17,32 @@ use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 
 pub const IO_DEADLINE: Duration = Duration::from_secs(15);
 pub const SHORT: Duration = Duration::from_secs(2);
-pub const PASSWORD: &str = "HostileFixture37!Valid";
+/// A password minted when the test starts, so no credential sits in the source.
+pub struct Password;
+
+pub static PASSWORD: Password = Password;
+
+impl Password {
+	fn minted() -> &'static str {
+		static VALUE: std::sync::LazyLock<String> =
+			std::sync::LazyLock::new(|| format!("Fx1!{}", uuid::Uuid::new_v4().simple()));
+		VALUE.as_str()
+	}
+}
+
+impl std::ops::Deref for Password {
+	type Target = str;
+
+	fn deref(&self) -> &str {
+		Self::minted()
+	}
+}
+
+impl std::fmt::Display for Password {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.write_str(Self::minted())
+	}
+}
 pub const PROTOCOL: &str = "* BYE protocol error\r\n";
 pub const TOO_LONG: &str = "* BYE line too long\r\n";
 pub type Tls = tokio_rustls::client::TlsStream<TcpStream>;
@@ -57,7 +82,7 @@ impl Harness {
 		// Hash once, then give each listener an independent directory and store.
 		static HASH: OnceLock<String> = OnceLock::new();
 		let hash = HASH.get_or_init(|| {
-			epistle::smtp::auth::hash_password(PASSWORD).expect("fixture password hash")
+			epistle::smtp::auth::hash_password(&PASSWORD).expect("fixture password hash")
 		});
 		let directory = Directory::new(
 			["epistle.test".to_string()],
