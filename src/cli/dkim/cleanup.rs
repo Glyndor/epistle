@@ -8,7 +8,7 @@
 
 use std::process::ExitCode;
 
-use crate::cli::serve_tasks::{DkimRotationPlan, decide_dkim_rotation};
+use crate::cli::serve::tasks::{DkimRotationPlan, decide_dkim_rotation};
 use crate::cli::{prompt, style};
 use crate::config::Config;
 use crate::dkim::rotate::{find_orphans, request_cleanup};

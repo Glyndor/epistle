@@ -57,22 +57,6 @@ mod reports;
 mod resource;
 mod role_addresses;
 mod serve;
-mod serve_connection_limits;
-mod serve_dkim;
-mod serve_evidence;
-mod serve_listeners;
-mod serve_metrics;
-mod serve_queue;
-mod serve_ratelimit;
-mod serve_smtp_state;
-mod serve_store;
-mod serve_tasks;
-mod serve_tasks_delivery;
-#[cfg(test)]
-#[path = "serve_tests_oauth.rs"]
-mod serve_tests_oauth;
-mod serve_tls;
-mod serve_webdav;
 mod service;
 mod srv;
 mod stack;

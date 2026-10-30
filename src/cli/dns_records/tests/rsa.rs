@@ -86,7 +86,7 @@ fn serve_starts_signing_with_the_rotated_rsa_key() {
 		Ok(config) => config,
 		Err(reason) => return skipped(&reason),
 	};
-	let companions = crate::cli::serve_dkim::build_split_with_companions(
+	let companions = crate::cli::serve::dkim::build_split_with_companions(
 		&config,
 		&Arc::new(crate::metrics::Metrics::default()),
 		crate::directory_store::DirectoryHandle::new(crate::smtp::directory::Directory::default()),

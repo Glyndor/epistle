@@ -35,8 +35,8 @@ const ROUTERS: [(&str, &str, &str); 7] = [
 		"",
 	),
 	(
-		"src/cli/serve_metrics.rs",
-		include_str!("../../../cli/serve_metrics.rs"),
+		"src/cli/serve/metrics.rs",
+		include_str!("../../../cli/serve/metrics.rs"),
 		"",
 	),
 ];

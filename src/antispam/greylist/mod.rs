@@ -55,7 +55,7 @@ pub type StoreFuture<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output =
 
 /// Records when each triplet was first seen, and remembers the retry. The
 /// trait is object-safe and object-dispatched: SMTP holds `Arc<dyn
-/// GreylistStore>` and the production wiring in `cli/serve_tasks.rs` chooses
+/// GreylistStore>` and the production wiring in `cli/serve/tasks/mod.rs` chooses
 /// the backing store. Both methods are async because the production
 /// PostgreSQL store is; the in-memory implementation just returns an
 /// already-ready future.

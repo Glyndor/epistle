@@ -241,7 +241,7 @@ pub struct LlmHook {
 impl LlmHook {
 	/// Build the hook from the `[antispam.llm]` section, or `None` when the
 	/// section is absent. Lives here rather than in `serve` so the wiring is next
-	/// to the type it wires and `serve.rs` stays under the line limit.
+	/// to the type it wires and `src/cli/serve/mod.rs` stays under the line limit.
 	pub fn from_config(cfg: Option<&crate::config::Llm>) -> std::io::Result<Option<Self>> {
 		let Some(cfg) = cfg else {
 			return Ok(None);

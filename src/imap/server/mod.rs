@@ -94,7 +94,7 @@ pub struct Server {
 	/// Days to keep expunged messages in `<account>/.archive/` before the
 	/// hourly sweeper removes them. `0` keeps the legacy behaviour:
 	/// expunge deletes the on-disk files immediately. The sweep itself runs
-	/// in [`crate::cli::serve_tasks::spawn_archive_sweep`].
+	/// in [`crate::cli::serve::tasks::spawn_archive_sweep`].
 	retention_days: u64,
 	/// The authentication protocol this listener serves (`Imap` or
 	/// `Imaps`); tagged on every password attempt through this server so a

@@ -17,7 +17,7 @@
 //! produced, so no caller input ever reaches the path.
 //!
 //! The sweep runs alongside the other periodic sweeps (the archive
-//! retention sweep in `serve_tasks`) and removes files whose name is
+//! retention sweep in `crate::cli::serve::tasks`) and removes files whose name is
 //! older than `[storage] delivery_log_days` (30 by default). `0` disables
 //! the log entirely: no directory is created and no records are written.
 

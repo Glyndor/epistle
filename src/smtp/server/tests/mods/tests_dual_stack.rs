@@ -8,7 +8,7 @@
 //! the operator's legitimate senders are rejected with `550 5.7.23`.
 //!
 //! The test binds the SMTP listener on `[::]:0` with the same socket2
-//! `only_v6(false)` switch the production `serve_bind::bind_listener`
+//! `only_v6(false)` switch the production `crate::cli::serve::tasks::bind::bind_listener`
 //! uses, runs a real `Server::serve` on it, opens a TCP connection from
 //! `127.0.0.1`, walks an EHLO + MAIL FROM + RCPT TO + DATA + QUIT
 //! script, and asserts the `Received-SPF` header the SMTP server
@@ -81,7 +81,7 @@ impl crate::spf::DnsLookup for Ipv4SpfDns {
 }
 
 /// Build the same dual-stack `::` listener the production
-/// `serve_bind::bind_listener` builds: socket2 `set_only_v6(false)` so
+/// `crate::cli::serve::tasks::bind::bind_listener` builds: socket2 `set_only_v6(false)` so
 /// IPv4 packets reach the same port regardless of the
 /// `net.ipv6.bindv6only` sysctl. The helper exists so the test mirrors
 /// the production path byte-for-byte without going through the private

@@ -44,7 +44,7 @@ pub(super) fn run(
 fn warnings(config: &Config) -> Vec<String> {
 	let mut warnings = Vec::new();
 	// The single-signature DKIM advisory.
-	if let Some(warning) = super::serve_tasks::single_signature_dkim_warning(config) {
+	if let Some(warning) = super::serve::tasks::single_signature_dkim_warning(config) {
 		warnings.push(warning.to_string());
 	}
 	warnings.extend(super::oauth_advice::advice(config));
