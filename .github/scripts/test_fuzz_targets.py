@@ -22,7 +22,7 @@ class SelectTests(unittest.TestCase):
 
     def test_one_protocol_runs_only_its_targets(self):
         self.assertEqual(
-            ft.select("pull_request", ["src/imap/session/mod.rs"]), ["imap_command"]
+            ft.select("pull_request", ["src/imap/session/mod.rs"]), ["imap_command", "mime"]
         )
         self.assertEqual(
             ft.select("pull_request", ["src/smtp/a.rs", "src/smtp/b/c.rs"]),
@@ -31,7 +31,7 @@ class SelectTests(unittest.TestCase):
 
     def test_two_protocols_run_both(self):
         got = ft.select("pull_request", ["src/pop3/a.rs", "src/dkim/b.rs"])
-        self.assertEqual(got, ["pop3_command", "dkim_signature"])
+        self.assertEqual(got, ["pop3_command", "dkim_signature", "mime"])
 
     def test_anything_unmapped_runs_everything(self):
         for path in (

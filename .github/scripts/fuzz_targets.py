@@ -33,11 +33,11 @@ ALL = [
 # Folder of the source -> the targets that exercise it and nothing else.
 FOLDERS = {
     "src/smtp/": ["smtp_command", "smtp_line", "smtp_address", "smtp_data"],
-    "src/imap/": ["imap_command"],
+    "src/imap/": ["imap_command", "mime"],
     "src/sieve/": ["sieve_message", "sieve_script", "sieve_run", "sieve_validate"],
     "src/pop3/": ["pop3_command"],
     "src/managesieve/": ["managesieve_command"],
-    "src/dkim/": ["dkim_signature"],
+    "src/dkim/": ["dkim_signature", "mime"],
 }
 
 # Files under src that the fuzz entry points go through directly.
