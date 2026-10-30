@@ -17,6 +17,16 @@ name: Container
 on:
   push:
     branches: [develop]
+    paths:
+      - ".github/workflows/container.yml"
+      - "Containerfile"
+      - ".containerignore"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "src/**"
+      - ".sqlx/**"
+      - "migrations/**"
+      - "benches/**"
   pull_request:
     paths:
       - ".github/workflows/container.yml"
