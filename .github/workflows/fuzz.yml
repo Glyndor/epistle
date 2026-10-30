@@ -18,7 +18,10 @@ on:
       # it, so a broken edit merges without ever having been executed.
       - ".github/workflows/fuzz.yml"
       - ".github/scripts/fuzz_targets.py"
-      - "Cargo.toml"
+      # The lockfile, not the manifest: a pull request that only declares a
+      # test target or bumps the crate version edits Cargo.toml and changes
+      # nothing a fuzz target parses, while a dependency change always moves
+      # Cargo.lock.
       - "Cargo.lock"
       - "src/smtp/**"
       - "src/imap/**"
