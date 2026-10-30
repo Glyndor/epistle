@@ -1,5 +1,5 @@
 //! `epistle learning ... --json` against a real PostgreSQL. Runs only when
-//! `DATABASE_URL` is set, like `tests/cli_json/ban.rs`, and says so when it
+//! `DATABASE_URL` is set, like `tests/cli/json/cli_json/accounts/ban.rs`, and says so when it
 //! does not. The refusals that need no database run always.
 
 use serde_json::json;

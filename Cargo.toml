@@ -308,3 +308,67 @@ path = "tests/dkim/hostile_dkim.rs"
 [[test]]
 name = "dkim_keygen_without_openssl"
 path = "tests/dkim/dkim_keygen_without_openssl.rs"
+
+[[test]]
+name = "init_end_to_end_b"
+path = "tests/cli/init/init_end_to_end_b.rs"
+
+[[test]]
+name = "init_end_to_end_c"
+path = "tests/cli/init/init_end_to_end_c.rs"
+
+[[test]]
+name = "init_end_to_end_d"
+path = "tests/cli/init/init_end_to_end_d.rs"
+
+[[test]]
+name = "init_end_to_end_e"
+path = "tests/cli/init/init_end_to_end_e.rs"
+
+[[test]]
+name = "init_end_to_end_f"
+path = "tests/cli/init/init_end_to_end_f.rs"
+
+[[test]]
+name = "init_end_to_end_ptr"
+path = "tests/cli/init/init_end_to_end_ptr.rs"
+
+[[test]]
+name = "init_end_to_end_warnings"
+path = "tests/cli/init/init_end_to_end_warnings.rs"
+
+[[test]]
+name = "init_guided"
+path = "tests/cli/init/init_guided.rs"
+
+[[test]]
+name = "init_print_answers"
+path = "tests/cli/init/init_print_answers.rs"
+
+[[test]]
+name = "init_end_to_end"
+path = "tests/cli/init/end_to_end/main.rs"
+
+[[test]]
+name = "cli_json"
+path = "tests/cli/json/cli_json.rs"
+
+[[test]]
+name = "cli_addresses"
+path = "tests/cli/cli_addresses.rs"
+
+[[test]]
+name = "cli_display_name"
+path = "tests/cli/cli_display_name.rs"
+
+[[test]]
+name = "cli_prompts"
+path = "tests/cli/cli_prompts.rs"
+
+[[test]]
+name = "cli_stdout_clean"
+path = "tests/cli/cli_stdout_clean.rs"
+
+[[test]]
+name = "cli_terminal"
+path = "tests/cli/cli_terminal.rs"

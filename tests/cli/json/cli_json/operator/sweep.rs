@@ -49,30 +49,45 @@ const EXEMPT: &[&str] = &[
 /// Leaves not run here, each with the test that covers it or the reason it
 /// cannot run on a bare temporary setup.
 const SKIPPED: &[(&str, &str)] = &[
-	("ban list", "needs PostgreSQL; tests/cli_json/ban.rs"),
-	("ban add", "needs PostgreSQL; tests/cli_json/ban.rs"),
-	("ban remove", "needs PostgreSQL; tests/cli_json/ban.rs"),
-	("ban allow list", "needs PostgreSQL; tests/cli_json/ban.rs"),
-	("ban allow add", "needs PostgreSQL; tests/cli_json/ban.rs"),
+	(
+		"ban list",
+		"needs PostgreSQL; tests/cli/json/cli_json/accounts/ban.rs",
+	),
+	(
+		"ban add",
+		"needs PostgreSQL; tests/cli/json/cli_json/accounts/ban.rs",
+	),
+	(
+		"ban remove",
+		"needs PostgreSQL; tests/cli/json/cli_json/accounts/ban.rs",
+	),
+	(
+		"ban allow list",
+		"needs PostgreSQL; tests/cli/json/cli_json/accounts/ban.rs",
+	),
+	(
+		"ban allow add",
+		"needs PostgreSQL; tests/cli/json/cli_json/accounts/ban.rs",
+	),
 	(
 		"ban allow remove",
-		"needs PostgreSQL; tests/cli_json/ban.rs",
+		"needs PostgreSQL; tests/cli/json/cli_json/accounts/ban.rs",
 	),
 	(
 		"learning status",
-		"needs PostgreSQL; tests/cli_json/learning.rs",
+		"needs PostgreSQL; tests/cli/json/cli_json/delivery/learning.rs",
 	),
 	(
 		"learning enable",
-		"needs PostgreSQL; tests/cli_json/learning.rs",
+		"needs PostgreSQL; tests/cli/json/cli_json/delivery/learning.rs",
 	),
 	(
 		"learning disable",
-		"needs PostgreSQL; tests/cli_json/learning.rs",
+		"needs PostgreSQL; tests/cli/json/cli_json/delivery/learning.rs",
 	),
 	(
 		"learning reset",
-		"needs PostgreSQL; tests/cli_json/learning.rs",
+		"needs PostgreSQL; tests/cli/json/cli_json/delivery/learning.rs",
 	),
 	(
 		"evidence key rotate",
@@ -88,26 +103,32 @@ const SKIPPED: &[(&str, &str)] = &[
 	("dns-records", "builds records from live DKIM and DNS state"),
 	("dns lockdown", "reads the zone through the DNS provider"),
 	("dkim show", "checks the published records through DNS"),
-	("dkim rotate", "tests/cli_json/dkim.rs"),
+	("dkim rotate", "tests/cli/json/cli_json/delivery/dkim.rs"),
 	("dkim cleanup", "src/cli/dkim/cleanup/tests/base.rs"),
 	("tls renew", "src/cli/tls/cli/tests/base.rs"),
 	("db upgrade", "needs the stack and the database"),
-	("stack update", "needs the stack; tests/cli_json/stack.rs"),
-	("stack up", "tests/cli_json/stack.rs"),
-	("stack down", "tests/cli_json/stack.rs"),
-	("stack ps", "needs podup output; tests/cli_json/stack.rs"),
-	("stack restart", "tests/cli_json/stack.rs"),
-	("stack stop", "tests/cli_json/stack.rs"),
-	("stack start", "tests/cli_json/stack.rs"),
+	(
+		"stack update",
+		"needs the stack; tests/cli/json/cli_json/operator/stack.rs",
+	),
+	("stack up", "tests/cli/json/cli_json/operator/stack.rs"),
+	("stack down", "tests/cli/json/cli_json/operator/stack.rs"),
+	(
+		"stack ps",
+		"needs podup output; tests/cli/json/cli_json/operator/stack.rs",
+	),
+	("stack restart", "tests/cli/json/cli_json/operator/stack.rs"),
+	("stack stop", "tests/cli/json/cli_json/operator/stack.rs"),
+	("stack start", "tests/cli/json/cli_json/operator/stack.rs"),
 	("stack rollback", "replaces the installed binary, as root"),
-	("init", "tests/cli_json/init.rs"),
+	("init", "tests/cli/json/cli_json/operator/init.rs"),
 	(
 		"restore",
 		"reads an archive on stdin; src/cli/dispatch/restore/tests/base.rs",
 	),
 	(
 		"import",
-		"reads a mailbox stream; tests/cli_json/top_level.rs",
+		"reads a mailbox stream; tests/cli/json/cli_json/operator/top_level.rs",
 	),
 	("migrate imap", "needs a remote IMAP server"),
 	("migrate mox", "needs a Mox installation"),

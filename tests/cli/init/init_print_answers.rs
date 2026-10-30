@@ -1,7 +1,7 @@
 //! Integration test for `epistle init --print-answers`: the printable
 //! output must be byte-clean (no escape codes, no decoration) and must
 //! deserialise back into the production `Answers` once `hostname` and
-//! `domains` are filled in. Modeled on `tests/cli_stdout_clean.rs`.
+//! `domains` are filled in. Modeled on `tests/cli/cli_stdout_clean.rs`.
 
 use std::path::Path;
 use std::process::{Command, Stdio};
