@@ -37,7 +37,7 @@
 //! - A Markdown block fenced with an info string that holds the word
 //!   `example` (```` ```text example ````). It shows a layout the tree has
 //!   not reached yet, and the prose around it has to say so.
-//! - `tests/repository_paths/mod_tests.rs`, whose fixtures cite missing
+//! - `tests/repository/repository_paths/mod_tests.rs`, whose fixtures cite missing
 //!   paths on purpose to prove the scanner reports them.
 
 mod repository_paths;
@@ -48,7 +48,7 @@ use std::path::Path;
 use repository_paths::{cited_paths, markdown, problem, rust_source};
 
 /// The scanner's own fixtures, the one file under `tests/` this test skips.
-const FIXTURES: &str = "tests/repository_paths/mod_tests.rs";
+const FIXTURES: &str = "tests/repository/repository_paths/mod_tests.rs";
 
 #[test]
 fn every_cited_path_exists() {

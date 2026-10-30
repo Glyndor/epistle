@@ -11,7 +11,7 @@
 //!
 //! Declared from `tests/validation_matrix.rs` rather than discovered on its
 //! own: a file under `tests/` that is not a test target of its own runs only if
-//! something names it, which is the orphan `tests/test_discovery_premise.rs`
+//! something names it, which is the orphan `tests/repository/test_discovery_premise.rs`
 //! watches for.
 
 use super::common::fixture_password;
