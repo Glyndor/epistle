@@ -2,7 +2,7 @@
 """Pick the cargo-fuzz targets a pull request has to run.
 
 A pull request that only touches the source of one protocol needs that
-protocol's targets, not all thirteen: every target is a separate job that
+protocol's targets, not all seventeen: every target is a separate job that
 installs a nightly toolchain and builds the crate. Anything this script does
 not know how to narrow runs every target: a change outside the mapped folders
 (shared code, the manifest, the fuzz crate, this workflow) can reach any of
@@ -28,6 +28,10 @@ ALL = [
     "smtp_data",
     "dkim_signature",
     "mime",
+    "attachment_inspect",
+    "webdav_filter_rrule",
+    "arc_headers",
+    "jwt_decode",
 ]
 
 # Folder of the source -> the targets that exercise it and nothing else.
@@ -38,6 +42,10 @@ FOLDERS = {
     "src/pop3/": ["pop3_command"],
     "src/managesieve/": ["managesieve_command"],
     "src/dkim/": ["dkim_signature", "mime"],
+    "src/antispam/attachments/": ["attachment_inspect"],
+    "src/webdav/": ["webdav_filter_rrule"],
+    "src/arc/": ["arc_headers"],
+    "src/jwt/": ["jwt_decode"],
 }
 
 # Files under src that the fuzz entry points go through directly.
