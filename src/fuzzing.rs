@@ -109,6 +109,61 @@ pub fn jwt_decode(token: &str) {
 	}
 }
 
+/// The reply of a remote SMTP server as the outbound client frames it: where
+/// the first complete reply ends, for any bytes a hostile server sends.
+pub fn smtp_reply(raw: &[u8]) {
+	let raw = &raw[..raw.len().min(INPUT_CAP)];
+	std::hint::black_box(crate::queue::client::complete_reply_for_fuzzing(raw));
+}
+
+/// The records a sending domain publishes and the server reads before it
+/// delivers: the MTA-STS policy file, the TLS-RPT record and a TLSA record in
+/// its presentation form.
+pub fn dns_security_records(text: &str) {
+	let text = &text[..floor_char_boundary(text, INPUT_CAP)];
+	let _ = crate::mtasts::parse_policy(text);
+	std::hint::black_box(crate::tlsrpt::parse(text));
+	std::hint::black_box(crate::dane::tlsa::TlsaRecord::parse_presentation(text));
+}
+
+/// A DMARC or TLS-RPT report as a remote reporter sends it: the XML and the
+/// JSON parsers and the three ways an attachment is unpacked.
+pub fn report_payload(raw: &[u8]) {
+	let raw = &raw[..raw.len().min(INPUT_CAP)];
+	let _ = crate::reports::dmarc::parse(raw);
+	let _ = crate::reports::tlsrpt::parse(raw);
+	for encoding in [
+		crate::reports::Encoding::Gzip,
+		crate::reports::Encoding::Zip,
+		crate::reports::Encoding::Uncompressed,
+	] {
+		let _ = crate::reports::inflate_attachment(raw, encoding);
+	}
+}
+
+/// Delivery rules matched against a message: the header block is read,
+/// unfolded and searched for any bytes a sender puts in it.
+pub fn rules_match(raw: &[u8]) {
+	let raw = &raw[..raw.len().min(INPUT_CAP)];
+	let rules = [
+		crate::rules::Rule {
+			sender_domain: None,
+			header: Some("Subject".into()),
+			header_contains: Some("a".into()),
+			junk: true,
+			mailbox: None,
+		},
+		crate::rules::Rule {
+			sender_domain: Some("example.org".into()),
+			header: Some("List-Id".into()),
+			header_contains: Some("list".into()),
+			junk: false,
+			mailbox: Some("Lists".into()),
+		},
+	];
+	std::hint::black_box(crate::rules::evaluate(&rules, raw, Some("example.org")));
+}
+
 /// The largest index at most `max` that is a character boundary of `text`.
 fn floor_char_boundary(text: &str, max: usize) -> usize {
 	let mut end = max.min(text.len());

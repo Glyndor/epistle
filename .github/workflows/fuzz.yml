@@ -36,6 +36,11 @@ on:
       - "src/webdav/**"
       - "src/arc/**"
       - "src/jwt/**"
+      - "src/queue/client/**"
+      - "src/mtasts/**"
+      - "src/tlsrpt/**"
+      - "src/dane/**"
+      - "src/rules/**"
       - "src/fuzzing.rs"
       - "fuzz/**"
 
