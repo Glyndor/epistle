@@ -14,7 +14,7 @@ use std::fs;
 use std::path::Path;
 
 /// Pull the body of a YAML block whose key line is the only occurrence
-/// at indent `n`. Mirrors the helper in `tests/rust_audit_workflow.rs`
+/// at indent `n`. Mirrors the helper in `tests/workflows/audit/rust_audit_workflow.rs`
 /// so the two stay in sync.
 fn extract_block(text: &str, key: &str) -> Option<String> {
 	let mut in_block = false;

@@ -144,3 +144,43 @@ path = "tests/repository/repository_paths_exist.rs"
 [[test]]
 name = "utc_purity"
 path = "tests/repository/utc_purity.rs"
+
+[[test]]
+name = "rust_audit_workflow"
+path = "tests/workflows/audit/rust_audit_workflow.rs"
+
+[[test]]
+name = "rust_audit_workflow_body_file"
+path = "tests/workflows/audit/rust_audit_workflow_body_file.rs"
+
+[[test]]
+name = "rust_audit_workflow_extra_lockfiles"
+path = "tests/workflows/audit/rust_audit_workflow_extra_lockfiles.rs"
+
+[[test]]
+name = "rust_audit_workflow_failure_issue"
+path = "tests/workflows/audit/rust_audit_workflow_failure_issue.rs"
+
+[[test]]
+name = "rust_audit_workflow_guards"
+path = "tests/workflows/audit/rust_audit_workflow_guards.rs"
+
+[[test]]
+name = "rust_audit_workflow_label_query"
+path = "tests/workflows/audit/rust_audit_workflow_label_query.rs"
+
+[[test]]
+name = "rust_audit_workflow_matrix"
+path = "tests/workflows/audit/rust_audit_workflow_matrix.rs"
+
+[[test]]
+name = "rust_audit_workflow_newline"
+path = "tests/workflows/audit/rust_audit_workflow_newline.rs"
+
+[[test]]
+name = "rust_audit_workflow_report_checkout"
+path = "tests/workflows/audit/rust_audit_workflow_report_checkout.rs"
+
+[[test]]
+name = "rust_audit_workflow_upload"
+path = "tests/workflows/audit/rust_audit_workflow_upload.rs"
