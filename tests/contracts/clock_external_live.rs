@@ -43,8 +43,10 @@ async fn live_plain_ntp_against_time_google_com() {
 		return;
 	}
 	let source = epistle::clock::external::Source::ntp("time.google.com");
-	let result = epistle::clock::external::adapter::plain_ntp(&source, DEADLINE).await;
-	println!("Google plain NTP result: {result:?}");
+	let sample = epistle::clock::external::adapter::plain_ntp(&source, DEADLINE)
+		.await
+		.expect("the live probe must answer");
+	println!("Google plain NTP result: {sample:?}");
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -55,8 +57,10 @@ async fn live_plain_ntp_against_time_cloudflare_com() {
 		return;
 	}
 	let source = epistle::clock::external::Source::ntp("time.cloudflare.com");
-	let result = epistle::clock::external::adapter::plain_ntp(&source, DEADLINE).await;
-	println!("Cloudflare plain NTP result: {result:?}");
+	let sample = epistle::clock::external::adapter::plain_ntp(&source, DEADLINE)
+		.await
+		.expect("the live probe must answer");
+	println!("Cloudflare plain NTP result: {sample:?}");
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -67,8 +71,10 @@ async fn live_nts_ke_against_time_cloudflare_com() {
 		return;
 	}
 	let source = epistle::clock::external::Source::nts("time.cloudflare.com");
-	let result = epistle::clock::external::adapter::ke_then_ntp(&source, DEADLINE).await;
-	println!("Cloudflare NTS-KE result: {result:?}");
+	let sample = epistle::clock::external::adapter::ke_then_ntp(&source, DEADLINE)
+		.await
+		.expect("the live probe must answer");
+	println!("Cloudflare NTS-KE result: {sample:?}");
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -79,6 +85,8 @@ async fn live_nts_ke_against_nts_netnod_se() {
 		return;
 	}
 	let source = epistle::clock::external::Source::nts("nts.netnod.se");
-	let result = epistle::clock::external::adapter::ke_then_ntp(&source, DEADLINE).await;
-	println!("Netnod NTS-KE result: {result:?}");
+	let sample = epistle::clock::external::adapter::ke_then_ntp(&source, DEADLINE)
+		.await
+		.expect("the live probe must answer");
+	println!("Netnod NTS-KE result: {sample:?}");
 }

@@ -289,17 +289,11 @@ fn logs_passes_the_verb_and_a_service_named_down() {
 	);
 }
 
-/// Sabotage landing place for the `down` test: a regression
-/// comment plus a positive control that the flag is absent.
-/// A reviewer reading the diff follows the comment to the
-/// `run_inherited` call site in `src/cli/stack/mod.rs` and
-/// temporarily re-introduces `&["down", "--volumes"]` (or
-/// `-v`) to confirm the
-/// `down_passes_only_down_to_podup_never_volumes` test turns
-/// red. Then they undo the edit and the suite is green again.
+/// A normal control for the `down` test above: whatever else is passed, no
+/// `-v` and no `--volumes` token reaches podup.
 #[cfg(unix)]
 #[test]
-fn down_sabotage_documents_where_a_volume_flag_would_turn_red() {
+fn down_never_passes_a_volume_flag_to_podup() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let shim_dir = dir.path().join("bin");
 	let argv_log = dir.path().join("argv.log");
@@ -315,7 +309,7 @@ fn down_sabotage_documents_where_a_volume_flag_would_turn_red() {
 		!argv
 			.iter()
 			.any(|token| token == "-v" || token.starts_with("--volumes")),
-		"sabotage control: with the flag absent, no -v or --volumes token lands in the argv"
+		"no -v or --volumes token lands in the argv of down"
 	);
 }
 
