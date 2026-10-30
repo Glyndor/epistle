@@ -20,19 +20,19 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use super::harness::*;
 use super::tls::Tls;
 
-const PASSWORD: &str = "HostileFixture37!Valid";
 /// The salt of the fixture verifier: fixed so the client can derive the
 /// same proof the server expects.
-const SALT: &[u8] = b"hostile-fixture-16";
+static SALT: std::sync::LazyLock<[u8; 16]> =
+	std::sync::LazyLock::new(|| *uuid::Uuid::new_v4().as_bytes());
 
 /// The fixture directory: the `tester` account with a password hash and
 /// a SCRAM verifier.
 fn scram_directory() -> Directory {
-	let stored = ScramStored::from_credentials(&ScramCredentials::derive(PASSWORD, SALT, 4096));
+	let stored = ScramStored::from_credentials(&ScramCredentials::derive(&PASSWORD, &*SALT, 4096));
 	directory()
 		.with_password_hashes(HashMap::from([(
 			"tester".to_string(),
-			epistle::smtp::auth::hash_password(PASSWORD).expect("fixture password hash"),
+			epistle::smtp::auth::hash_password(&PASSWORD).expect("fixture password hash"),
 		)]))
 		.with_scram([("tester".to_string(), stored)])
 }

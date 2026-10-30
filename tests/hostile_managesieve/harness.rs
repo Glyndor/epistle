@@ -72,7 +72,7 @@ impl Harness {
 
 	pub async fn login(&self, account: &str) -> Tls {
 		let mut client = self.encrypted().await;
-		send(&mut client, authentication(account, PASSWORD).as_bytes()).await;
+		send(&mut client, authentication(account, &PASSWORD).as_bytes()).await;
 		expect(&mut client, "OK \"Authenticated.\"\r\n").await;
 		client
 	}

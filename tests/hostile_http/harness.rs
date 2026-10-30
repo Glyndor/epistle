@@ -21,13 +21,38 @@ use tower::ServiceExt;
 
 pub const ADMIN: &str = "hostile-http-admin-fixture";
 pub const ALICE: &str = "hostile-http-alice-fixture";
-pub const PASSWORD: &str = "Hostile-http-fixture-42!";
+/// A password minted when the test starts, so no credential sits in the source.
+pub struct Password;
+
+pub static PASSWORD: Password = Password;
+
+impl Password {
+	fn minted() -> &'static str {
+		static VALUE: std::sync::LazyLock<String> =
+			std::sync::LazyLock::new(|| format!("Fx1!{}", uuid::Uuid::new_v4().simple()));
+		VALUE.as_str()
+	}
+}
+
+impl std::ops::Deref for Password {
+	type Target = str;
+
+	fn deref(&self) -> &str {
+		Self::minted()
+	}
+}
+
+impl std::fmt::Display for Password {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.write_str(Self::minted())
+	}
+}
 pub const UPLOAD_LIMIT: usize = 64 * 1024;
 pub const DEADLINE: Duration = Duration::from_secs(15);
 const RESPONSE_LIMIT: usize = 12 * 1024 * 1024;
 
 static PASSWORD_HASH: LazyLock<String> =
-	LazyLock::new(|| epistle::smtp::auth::hash_password(PASSWORD).expect("fixture password hash"));
+	LazyLock::new(|| epistle::smtp::auth::hash_password(&PASSWORD).expect("fixture password hash"));
 
 pub struct Harness {
 	pub api: Router,

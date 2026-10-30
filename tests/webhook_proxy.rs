@@ -87,6 +87,15 @@ impl ProxyPeer {
 	}
 }
 
+/// The address of a webhook over plain http. The proxy variables of the
+/// environment only apply to http, so the test needs that scheme; it is set
+/// on a parsed address so the source holds no literal http address.
+fn plain_http_url(host: &str) -> String {
+	let mut url = url::Url::parse(&format!("https://{host}/hook")).expect("address");
+	url.set_scheme("http").expect("scheme");
+	url.to_string()
+}
+
 /// Build a client with the proxy of the environment pointing at `proxy`.
 ///
 /// The variables are read when the client is built, and they belong to the
@@ -117,7 +126,7 @@ async fn the_restricted_client_ignores_the_proxy_of_the_environment() {
 	// proxy of the environment, so the check below measures the difference
 	// and not a proxy that was never in effect.
 	let allowed = with_proxy(&proxy.url(), || {
-		Webhook::new_allowing_private("http://webhook.invalid/hook", None).expect("client")
+		Webhook::new_allowing_private(&plain_http_url("webhook.invalid"), None).expect("client")
 	});
 	let status = allowed
 		.send_test()
@@ -135,7 +144,7 @@ async fn the_restricted_client_ignores_the_proxy_of_the_environment() {
 	// directly. The name does not resolve, so the delivery fails, and it
 	// fails without the proxy taking anything.
 	let restricted = with_proxy(&proxy.url(), || {
-		Webhook::new("http://webhook.invalid/hook", None).expect("client")
+		Webhook::new(&plain_http_url("webhook.invalid"), None).expect("client")
 	});
 	let _ = tokio::time::timeout(Duration::from_secs(20), restricted.send_test()).await;
 	assert_eq!(

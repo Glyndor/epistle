@@ -246,7 +246,7 @@ async fn ban_with_failures(store: &PgBanStore, subject: &str, times: usize) {
 	for _ in 0..times {
 		store.record_failure(subject, "imap", now()).await;
 	}
-	assert!(store.is_banned(subject, now()).await.is_some(), "{subject}");
+	assert!(store.is_banned(subject, now()).await.is_some());
 }
 
 #[tokio::test]

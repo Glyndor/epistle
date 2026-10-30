@@ -6,7 +6,7 @@ use super::harness::*;
 async fn valid_plain_credentials_are_refused_without_tls() {
 	let server = Harness::start(|s| s).await;
 	let mut client = server.connect().await;
-	send(&mut client, authentication("tester", PASSWORD).as_bytes()).await;
+	send(&mut client, authentication("tester", &PASSWORD).as_bytes()).await;
 	expect(
 		&mut client,
 		"NO (ENCRYPT-NEEDED) \"TLS is required first.\"\r\n",
@@ -69,7 +69,7 @@ async fn third_failed_authentication_closes_despite_interleaved_noops() {
 	for attempt in 1..=3 {
 		send(
 			&mut client,
-			authentication("tester", "WrongFixture37!").as_bytes(),
+			authentication("tester", &format!("{PASSWORD}-wrong")).as_bytes(),
 		)
 		.await;
 		if attempt == 3 {
@@ -94,7 +94,7 @@ async fn starttls_discards_pipelined_plaintext_authentication() {
 	let mut client = server.connect().await;
 	let injected = format!(
 		"STARTTLS\r\n{}SETACTIVE \"private\"\r\n",
-		authentication("tester", PASSWORD)
+		authentication("tester", &PASSWORD)
 	);
 	send(&mut client, injected.as_bytes()).await;
 	expect(&mut client, "OK \"Begin TLS negotiation now.\"\r\n").await;
