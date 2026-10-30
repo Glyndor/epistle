@@ -186,7 +186,7 @@ pub(super) fn ensure_compose_file(
 	// newline, two-space indentation, and the field order of the
 	// struct definition above.
 	let bytes = render_document(&composed)?;
-	let existing = crate::cli::regular_read::read(&path).ok();
+	let existing = crate::cli::regular::read::read(&path).ok();
 	if existing.as_deref() == Some(bytes.as_bytes()) {
 		report.steps.push(ReportStep::ConfigIdentical(path.clone()));
 	} else {
@@ -270,7 +270,7 @@ fn write_readme(dir: &Path, report: &mut Report) -> Result<(), ApplyError> {
 	// account would quietly deny access. The mode is operator
 	// documentation, not a secret, so the same default applies
 	// every time.
-	match crate::cli::regular_read::read(&path) {
+	match crate::cli::regular::read::read(&path) {
 		Ok(existing) if existing == COMPOSE_README.as_bytes() => {
 			// Bytes unchanged: the file is reused, but the
 			// mode is still re-pinned so an earlier
@@ -287,7 +287,7 @@ fn write_readme(dir: &Path, report: &mut Report) -> Result<(), ApplyError> {
 		}
 		// Opening a fifo to write waits for a reader just as reading it waits
 		// for a writer, so what is not a file is refused before either.
-		Err(error) if crate::cli::regular_read::is_not_regular(&error) => {
+		Err(error) if crate::cli::regular::read::is_not_regular(&error) => {
 			Err(ApplyError::KeyWrite(path, error))
 		}
 		_ => {

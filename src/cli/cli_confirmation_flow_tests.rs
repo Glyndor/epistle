@@ -11,7 +11,7 @@ use std::process::ExitCode;
 use crate::cli::prompt::script::scripted;
 use crate::cli::prompt::{cancelled_message, refused_message};
 use crate::cli::queue::QueueCli;
-use crate::cli::{accounts, api_keys, app_passwords, archive, queue};
+use crate::cli::{accounts, api_keys, app::passwords as app_passwords, archive, queue};
 use crate::config::Config;
 use crate::directory_store::removal::QueuePolicy;
 use crate::directory_store::{AccountStore, AppPasswordStore, DynamicAccount};

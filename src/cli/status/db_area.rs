@@ -19,7 +19,7 @@ pub(super) async fn check(ctx: &Ctx) -> AreaReport {
 	// With the container stack the socket lives inside it: ask the mail
 	// container, the only place the server itself connects from. The other
 	// areas stay on the host, where the published ports are what matters.
-	match crate::cli::container_db::exec_spec(
+	match crate::cli::container::db::exec_spec(
 		config,
 		&["check".into(), "db".into(), "--json".into()],
 	) {

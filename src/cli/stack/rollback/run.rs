@@ -148,7 +148,7 @@ fn restore(config: &Config, compose: &Path, podup: &str) -> Result<String, Strin
 	if crate::cli::stack::run_sequence(podup, compose, &[&["stop", "mail"]]) != ExitCode::SUCCESS {
 		return Err("cannot stop mail".into());
 	}
-	let has_db = crate::cli::regular_read::read(compose)
+	let has_db = crate::cli::regular::read::read(compose)
 		.ok()
 		.and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
 		.is_some_and(|value| value["services"].get("db").is_some());

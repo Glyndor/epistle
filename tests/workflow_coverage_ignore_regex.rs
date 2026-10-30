@@ -14,7 +14,7 @@
 //! `src/api/tests/jmap_b.rs`, `src/cli/init/apply_tests_b.rs`,
 //! `src/cli/local/test_support.rs` and `src/cidr/tests/base.rs`, and does NOT
 //! match `src/smtp/server/run.rs`, `src/antispam/subjectpass/mod.rs` or
-//! `src/cli/config_check.rs`. Until then the substring assertion is the
+//! `src/cli/config/check/mod.rs`. Until then the substring assertion is the
 //! strongest one available without pulling in a new dependency.
 //!
 //! Two extra families of split test files exist beyond the simple

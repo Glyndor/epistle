@@ -72,7 +72,7 @@ fn verify_dns_looks_up_the_rotated_rsa_selector() {
 		Err(reason) => return skipped(&reason),
 	};
 	assert_eq!(
-		crate::cli::verify_dns::dkim_default_selectors(&config)
+		crate::cli::verify::dns::dkim_default_selectors(&config)
 			.unwrap_or_else(|_| panic!("the selectors resolve")),
 		vec!["ed7".to_string(), "rsa7".to_string()]
 	);

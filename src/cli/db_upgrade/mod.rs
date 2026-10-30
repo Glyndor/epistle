@@ -43,7 +43,7 @@ pub enum DbCli {
 /// made in between would be lost.
 pub(super) fn run(config: &Config, path: &Path, action: DbCli, json: bool) -> ExitCode {
 	match action {
-		DbCli::Status => super::db_status::run(config, json),
+		DbCli::Status => crate::cli::db::status::run(config, json),
 		DbCli::Upgrade => {
 			let _held = match super::service::lock::acquire(path) {
 				Ok(held) => held,

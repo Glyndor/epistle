@@ -104,8 +104,11 @@ pub(super) fn create(
 	}
 	// Read before the move into the key: the advisory names the network it
 	// was pinned to.
-	let pinned =
-		super::client_address::cidr_advisory(&config.data_dir, ip_cidr.as_deref(), "this key");
+	let pinned = crate::cli::client::address::cidr_advisory(
+		&config.data_dir,
+		ip_cidr.as_deref(),
+		"this key",
+	);
 	let key = ApiKey {
 		label: label.to_string(),
 		hash,
@@ -372,7 +375,7 @@ pub(super) fn list(
 	if !json {
 		for row in store.list() {
 			let subject = format!("key \"{}\"", row.label);
-			if let Some(warning) = super::client_address::cidr_advisory(
+			if let Some(warning) = crate::cli::client::address::cidr_advisory(
 				&config.data_dir,
 				row.ip_cidr.as_deref(),
 				&subject,

@@ -43,7 +43,7 @@ async fn evaluate(config: &Config, dns: &dyn DnsLookup) -> AreaReport {
 	// reported; the DNS records are still checked with whatever selectors
 	// can be named, and with none if the rotation state itself is broken.
 	let default_selectors: Vec<String> = if signing_key_failed {
-		crate::cli::verify_dns::dkim_default_selectors(config).unwrap_or_default()
+		crate::cli::verify::dns::dkim_default_selectors(config).unwrap_or_default()
 	} else {
 		keys.iter()
 			.filter(|k| k.domain.is_none())
@@ -61,7 +61,7 @@ async fn evaluate(config: &Config, dns: &dyn DnsLookup) -> AreaReport {
 	for domain in &config.domains {
 		// Each domain is checked against its own selectors: a per-domain
 		// override replaces the default, otherwise the default applies.
-		let selectors = crate::cli::verify_dns::dkim_selectors_for(config, domain)
+		let selectors = crate::cli::verify::dns::dkim_selectors_for(config, domain)
 			.unwrap_or_else(|_| default_selectors.clone());
 		records.extend(dns::check_domain(domain, &config.hostname, &selectors, dns).await);
 	}

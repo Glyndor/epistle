@@ -1,5 +1,5 @@
 use super::*;
-use crate::cli::command_cases::CASES;
+use crate::cli::command::tests::cases::CASES;
 use clap::Parser;
 
 /// Top-level commands that re-execute as the service account, from the

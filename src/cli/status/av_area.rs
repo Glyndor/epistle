@@ -27,7 +27,7 @@ pub(super) async fn check(ctx: &Ctx) -> AreaReport {
 	};
 	// With the container stack clamd's socket lives on a volume mounted in
 	// the mail container only: ask the mail container, as the db area does.
-	match crate::cli::container_db::clamd_exec_spec(
+	match crate::cli::container::db::clamd_exec_spec(
 		config,
 		&["check".into(), "antivirus".into(), "--json".into()],
 	) {

@@ -20,7 +20,7 @@ pub(super) async fn run(
 	area: &'static str,
 	what: &'static str,
 ) -> AreaReport {
-	if let Err(error) = crate::cli::container_db::ensure_mail_running(config) {
+	if let Err(error) = crate::cli::container::db::ensure_mail_running(config) {
 		return AreaReport::fail(error);
 	}
 	let run = tokio::task::spawn_blocking(move || run_bounded(command, IN_CONTAINER_TIMEOUT, what));
