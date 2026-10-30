@@ -206,16 +206,70 @@ async fn a_body_after_a_leading_blank_line_is_not_a_header_block() {
 }
 
 #[tokio::test]
-async fn reader_disagreement_and_invalid_encoding_are_refused_before_the_author_check() {
+async fn ambiguous_identity_headers_and_invalid_encoding_are_refused_before_the_author_check() {
+	// 1.0 bounds date parsing to the field, so use an actual ambiguous
+	// identity name here and cover the old date vector separately below.
 	for (stored, expected) in [
-		(b"From: alice@example.org\r\nDate: Mon, 1 Jan 2020 00:00:00 -0500x\r\n\r\nFrom: victim@example.net\r\n".as_slice(), "I cannot accept headers whose From or Sender field counts disagree between readers"),
-		(b"From: alice@example.org\r\nSubject: caf\xe9\r\n\r\nx".as_slice(), "I cannot accept submission headers that are not UTF-8"),
+		(
+			b"From: alice@example.org\r\nFr om: victim@example.net\r\n\r\nbody\r\n".as_slice(),
+			"submission header field names must use printable ASCII without embedded whitespace",
+		),
+		(
+			b"From: alice@example.org\r\nSen der: victim@example.net\r\n\r\nbody\r\n".as_slice(),
+			"submission header field names must use printable ASCII without embedded whitespace",
+		),
+		(
+			b"From: alice@example.org\r\nSubject: caf\xe9\r\n\r\nx".as_slice(),
+			"I cannot accept submission headers that are not UTF-8",
+		),
 	] {
 		let (response, dir) = submit(stored).await;
-		assert_eq!(response["notCreated"]["s1"]["type"], "forbiddenToSend", "{response}");
-		assert_eq!(response["notCreated"]["s1"]["description"], expected, "{response}");
+		assert_eq!(
+			response["notCreated"]["s1"]["type"], "forbiddenToSend",
+			"{response}"
+		);
+		assert_eq!(
+			response["notCreated"]["s1"]["description"], expected,
+			"{response}"
+		);
 		assert!(spool_is_empty(dir.path()));
 		assert_eq!(stored_message(dir.path()), stored);
+	}
+}
+
+#[tokio::test]
+async fn a_date_cannot_promote_a_body_identity_or_bypass_the_author_check() {
+	for ending in ["\r\n", "\n"] {
+		for author in ["alice@example.org", "victim@example.net"] {
+			let body_author = if author == "alice@example.org" {
+				"victim@example.net"
+			} else {
+				"alice@example.org"
+			};
+			let body = format!("From: {body_author}\r\nSender: victim@example.net\r\n");
+			let stored = format!(
+				"From: {author}{ending}Date: Mon, 1 Jan 2020 00:00:00 -0500x{ending}{ending}From: {body_author}{ending}Sender: victim@example.net{ending}"
+			);
+			let (response, dir) = submit(stored.as_bytes()).await;
+			if author == "alice@example.org" {
+				assert!(response["created"]["s1"]["id"].is_string(), "{response}");
+				let sent = queued(dir.path());
+				assert_eq!(
+					crate::dmarc::author::from_fields(&sent)
+						.expect("UTF-8")
+						.len(),
+					1
+				);
+				assert!(sent.ends_with(format!("\r\n\r\n{body}").as_bytes()));
+			} else {
+				assert_eq!(
+					response["notCreated"]["s1"]["type"], "forbiddenFrom",
+					"{response}"
+				);
+				assert!(spool_is_empty(dir.path()));
+			}
+			assert_eq!(stored_message(dir.path()), stored.as_bytes());
+		}
 	}
 }
 

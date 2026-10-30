@@ -1,7 +1,7 @@
 //! The reserved namespace read the way the readers read it. A third review
 //! (2026-10-15) found that the submission strip, the deduplication and the
 //! lookup each read a field name narrower than at least one of the three
-//! readers we support: mail-parser folds a leading `:` away, and DKIM and
+//! readers we support: mail-parser 0.11 folded a leading `:` away, and DKIM and
 //! ARC-AMS fold trailing whitespace of any code point `char::is_whitespace`
 //! knows. A client could therefore deliver a claim of ours, or a second copy
 //! of a field, under a name one of those readers calls ours.
@@ -33,15 +33,12 @@ fn mail_parser_names(data: &[u8]) -> Vec<String> {
 }
 
 #[test]
-fn a_leading_colon_and_a_trailing_nbsp_are_the_names_the_readers_call_ours() {
-	// mail-parser 0.11.9 (`parse_header_name`) folds the leading `:` while
-	// the name has not started, so it reads the field under the name every
-	// other reader would read after the fold too.
+fn a_leading_colon_stays_distinct_and_dkim_still_folds_a_trailing_nbsp() {
+	// 1.0 keeps the leading colon as part of an unknown name.
 	let raw = b":X-Epistle-Attachment-Warning: forged\r\n\r\n".to_vec();
 	assert_eq!(
 		mail_parser_names(&raw),
-		vec!["X-Epistle-Attachment-Warning".to_string()],
-		"mail-parser must fold the leading colon"
+		vec![":X-Epistle-Attachment-Warning".to_string()]
 	);
 	// DKIM and ARC-AMS apply `name.trim_end()` to each header, so a name
 	// ending in NBSP is the marker itself to both of them. mail-parser keeps

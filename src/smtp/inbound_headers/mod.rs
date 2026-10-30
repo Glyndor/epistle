@@ -163,6 +163,7 @@ fn remove(field: &[u8], hostname: &str, skip_leader: bool) -> bool {
 		&b"Delivered-To"[..],
 		&b"Return-Path"[..],
 		&b"Epistle-Class"[..],
+		&b"X-Epistle"[..],
 	]
 	.iter()
 	.any(|wanted| name_matches(name, wanted))
@@ -357,7 +358,7 @@ pub(crate) fn reserved_remaining(data: &[u8], hostname: &str) -> Option<&'static
 	for header in message.headers() {
 		let name = header.name();
 		let value = header.value().as_text().map(|cow| cow.as_bytes());
-		if let Some(canonical) = check_reserved_name(name, hostname, value) {
+		if let Some(canonical) = check_reserved_name(name.as_str(), hostname, value) {
 			return Some(canonical);
 		}
 	}
@@ -371,7 +372,9 @@ fn check_reserved_name(name: &str, hostname: &str, value: Option<&[u8]>) -> Opti
 	// the trailing non-ASCII whitespace that DKIM/ARC fold, which is how
 	// a forged `Authentication-Results\u{00A0}` would survive strip and
 	// be presented to the downstream readers as canonical.
-	let lower = name.trim_end().to_ascii_lowercase();
+	let lower = crate::util::mail_parser::trust_header_name(name)
+		.trim_end()
+		.to_ascii_lowercase();
 	match lower.as_str() {
 		"authentication-results" => {
 			// A value that is not text cannot be shown to name a foreign
@@ -390,6 +393,7 @@ fn check_reserved_name(name: &str, hostname: &str, value: Option<&[u8]>) -> Opti
 		"delivered-to" => Some("Delivered-To"),
 		"return-path" => Some("Return-Path"),
 		"epistle-class" => Some("Epistle-Class"),
+		"x-epistle" => Some("X-Epistle"),
 		other if other.starts_with("x-spam-") => Some("X-Spam-Status"),
 		other if other.starts_with("x-epistle-") => Some("X-Epistle-Attachment-Warning"),
 		_ => None,

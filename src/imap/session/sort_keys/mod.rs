@@ -3,7 +3,7 @@
 
 use super::helpers::header_value_raw;
 use super::mailbox::MessageRef;
-use mail_parser::{Addr, Address, HeaderValue, parsers::MessageStream};
+use mail_parser::{Address, HeaderForm, HeaderValue, Mailbox};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// INTERNALDATE as seconds since the Unix epoch (negative before it).
@@ -22,7 +22,8 @@ pub(super) fn sent_seconds(text: &str, message: &MessageRef) -> i64 {
 fn date_header_seconds(message: &str) -> Option<i64> {
 	let mut value = header_value_raw(message, "date")?;
 	value.push_str("\r\n");
-	match MessageStream::new(value.as_bytes()).parse_date() {
+	let parsed = HeaderForm::Date.parse(value.as_bytes());
+	match parsed.value() {
 		HeaderValue::DateTime(date) if date.is_valid() => Some(date.to_timestamp()),
 		_ => None,
 	}
@@ -38,22 +39,23 @@ pub(super) fn address_key(message: &str, field: &str) -> String {
 		return String::new();
 	};
 	value.push_str("\r\n");
-	let mailbox = match MessageStream::new(value.as_bytes()).parse_address() {
-		HeaderValue::Address(Address::List(items)) => items.first().map(local_part),
-		HeaderValue::Address(Address::Group(groups)) => {
-			groups.first().and_then(|group| match &group.name {
-				Some(name) => Some(name.to_string()),
-				None => group.addresses.first().map(local_part),
-			})
-		}
+	let parsed = HeaderForm::Addresses.parse(value.as_bytes());
+	let mailbox = match parsed.value() {
+		HeaderValue::Address(list) => list.iter().next().and_then(|item| match item {
+			Address::Mailbox(addr) => Some(local_part(addr)),
+			Address::Group(group) => group
+				.name()
+				.map(str::to_string)
+				.or_else(|| group.mailboxes().next().map(local_part)),
+		}),
 		_ => None,
 	};
 	mailbox.unwrap_or_default().to_ascii_uppercase()
 }
 
 /// The local part of an address, without a source route.
-fn local_part(addr: &Addr<'_>) -> String {
-	let address = addr.address.as_deref().unwrap_or_default();
+fn local_part(addr: Mailbox<'_>) -> String {
+	let address = addr.address().unwrap_or_default();
 	let address = match address.split_once(':') {
 		Some((route, rest)) if route.starts_with('@') => rest,
 		_ => address,

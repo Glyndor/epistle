@@ -281,14 +281,23 @@ pub fn reject_ambiguous_headers(data: &[u8]) -> Result<(), MarketingRefusal> {
 		for header in message.headers() {
 			reader.2 += 1;
 			match header.name() {
-				"From" => reader.0 += 1,
-				"Sender" => reader.1 += 1,
+				mail_parser::HeaderName::From => reader.0 += 1,
+				mail_parser::HeaderName::Sender => reader.1 += 1,
 				_ => {}
 			}
 		}
 	}
-	if reader != (from.len(), fields.1, fields.0) {
-		return Err(if (reader.0, reader.1) != (from.len(), fields.1) {
+	compare_header_readers(reader, (from.len(), fields.1, fields.0))
+}
+
+/// Compare (From, Sender, total) counts without depending on a particular
+/// parser bug to exercise the refusal paths.
+fn compare_header_readers(
+	reader: (usize, usize, usize),
+	author: (usize, usize, usize),
+) -> Result<(), MarketingRefusal> {
+	if reader != author {
+		return Err(if (reader.0, reader.1) != (author.0, author.1) {
 			MarketingRefusal::HeaderReaderMismatch
 		} else {
 			MarketingRefusal::HeaderReaderFramingMismatch

@@ -78,6 +78,27 @@ fn mime_structure_attached_message_is_a_leaf() {
 }
 
 #[test]
+fn mime_structure_sibling_ids_do_not_count_encapsulated_parts() {
+	let nested = "Subject: nested\r\n\r\nInside";
+	let raw = format!(
+		"Content-Type: multipart/mixed; boundary=b\r\n\r\n--b\r\nContent-Type: message/rfc822\r\n\r\n{nested}\r\n--b\r\nContent-Type: text/plain\r\n\r\nAfter\r\n--b--\r\n"
+	);
+	let parsed = email(raw.as_bytes());
+	assert_eq!(
+		parsed["bodyStructure"]["subParts"],
+		json!([
+			leaf("1", nested.len(), "message/rfc822", Value::Null),
+			leaf("2", 5, "text/plain", json!("us-ascii")),
+		])
+	);
+	assert_eq!(
+		super::mime::part_blob(raw.as_bytes(), "2"),
+		Some(("text/plain".to_string(), b"After".to_vec()))
+	);
+	assert_eq!(super::mime::part_blob(raw.as_bytes(), "3"), None);
+}
+
+#[test]
 fn mime_structure_charset_size_counts_original_octets() {
 	assert_eq!(
 		email(b"Content-Type: text/plain; charset=iso-8859-1\r\n\r\ncaf\xe9")["bodyStructure"],

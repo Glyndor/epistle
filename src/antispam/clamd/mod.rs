@@ -182,12 +182,9 @@ impl ClamdHook {
 		}
 		// Supply monotonic elapsed time so clock jumps cannot bypass the limit.
 		let now_nanos = u64::try_from(now.as_nanos()).unwrap_or(u64::MAX - 1);
-		// Rust 1.99 renames `fetch_update` to `try_update`, which the minimum
-		// supported version (1.94) does not have yet.
-		#[allow(deprecated)]
 		let due = self
 			.last_warning
-			.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |last| {
+			.try_update(Ordering::Relaxed, Ordering::Relaxed, |last| {
 				(last == u64::MAX || now_nanos.saturating_sub(last) >= 60_000_000_000)
 					.then_some(now_nanos)
 			})

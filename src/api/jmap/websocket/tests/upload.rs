@@ -2,7 +2,7 @@
 //! WebSocket: the frame's uploads are read before it is dispatched, as on
 //! `POST /jmap/api`.
 
-use mail_parser::{MessageParser, MimeHeaders};
+use mail_parser::MessageParser;
 use serde_json::{Value, json};
 
 use super::{PushState, handle_frame};
@@ -56,10 +56,10 @@ async fn an_email_with_an_uploaded_attachment_is_sent_over_the_websocket() {
 	let spool = FsSpool::open(dir.path()).expect("spool");
 	let entry = spool.load(spool.list().expect("list")[0]).expect("queued");
 	let message = MessageParser::default().parse(&entry.data).expect("parse");
-	let attachment = message.attachment(0).expect("attachment");
+	let attachment = message.attachments().next().expect("attachment");
 	assert_eq!(attachment.attachment_name(), Some("a.bin"));
 	assert_eq!(
-		attachment.contents(),
+		attachment.decoded().as_ref(),
 		data.as_slice(),
 		"the uploaded bytes went out"
 	);

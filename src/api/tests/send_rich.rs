@@ -7,7 +7,7 @@ use super::router;
 use crate::storage::FsSpool;
 use axum::http::StatusCode;
 use base64::Engine;
-use mail_parser::{MessageParser, MimeHeaders};
+use mail_parser::MessageParser;
 use serde_json::{Value, json};
 
 /// Send `extra` merged into a minimal request; the status and the body.
@@ -40,8 +40,8 @@ pub(in super::super) fn queued(dir: &std::path::Path) -> (Vec<String>, Vec<u8>) 
 fn shape(raw: &[u8]) -> Vec<String> {
 	let message = MessageParser::default().parse(raw).expect("parse");
 	message
-		.parts
-		.iter()
+		.root()
+		.parts()
 		.map(|part| {
 			let ct = part.content_type().expect("content type");
 			format!("{}/{}", ct.ctype(), ct.subtype().unwrap_or(""))
@@ -124,12 +124,12 @@ async fn attachments_and_inline_parts_round_trip_byte_for_byte() {
 		"the empty content type is detected from the bytes"
 	);
 	let message = MessageParser::default().parse(&raw).expect("parse");
-	let inline = &message.parts[5];
+	let inline = message.part(5).expect("part");
 	assert_eq!(inline.content_id(), Some("logo@example.org"));
-	assert_eq!(inline.contents(), png.as_slice());
-	let attachment = &message.parts[6];
+	assert_eq!(inline.decoded().as_ref(), png.as_slice());
+	let attachment = message.part(6).expect("part");
 	assert_eq!(attachment.attachment_name(), Some(name));
-	assert_eq!(attachment.contents(), pdf.as_slice());
+	assert_eq!(attachment.decoded().as_ref(), pdf.as_slice());
 }
 
 #[tokio::test]

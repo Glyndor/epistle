@@ -73,7 +73,8 @@ async fn obfuscated_trust_fields_are_removed_on_data_and_bdat_with_or_without_ch
 		parser
 			.parse(input.as_bytes())
 			.expect("original")
-			.header("Authentication-Results")
+			.headers()
+			.value("Authentication-Results")
 			.is_some()
 	);
 	for bdat in [false, true] {
@@ -105,7 +106,7 @@ async fn obfuscated_trust_fields_are_removed_on_data_and_bdat_with_or_without_ch
 				"X-Epistle-Future",
 			] {
 				if name != "Received-SPF" || !checks {
-					assert!(parsed.header(name).is_none(), "{name}");
+					assert!(parsed.headers().value(name).is_none(), "{name}");
 				}
 			}
 			let results = header_values(data, "Authentication-Results");
@@ -379,8 +380,8 @@ async fn send_and_capture(server: Server, data: &str, bdat: bool) -> String {
 /// before the header name, so `:Authentication-Results: x` reads as
 /// the canonical name. The stripper now mirrors that fold and removes
 /// the line on DATA and on BDAT, both with and without SPF/DKIM checks.
-/// Each test asserts that mail-parser sees the canonical name BEFORE
-/// strip is exercised, so a no-op strip cannot make the assertion pass.
+/// mail-parser 1.0 keeps the aliases distinct. The input still carries
+/// every forged value, and delivery must remove them all byte for byte.
 #[tokio::test]
 async fn leading_colon_trust_fields_are_removed_on_data_and_bdat() {
 	let names = [
@@ -412,9 +413,15 @@ async fn leading_colon_trust_fields_are_removed_on_data_and_bdat() {
 		.parse(payload.as_bytes())
 		.expect("parses");
 	for name in names {
+		let count = pre.headers().all(name).count();
+		assert_eq!(
+			count,
+			usize::from(name == "Authentication-Results"),
+			"only the ordinary foreign field may have the canonical name: {name}"
+		);
 		assert!(
-			pre.header(name).is_some(),
-			"mail-parser must see it before strip: {name}"
+			payload.contains(&format!(":{name}:")),
+			"the forged alias must be present"
 		);
 	}
 	for bdat in [false, true] {
@@ -446,7 +453,7 @@ async fn leading_colon_trust_fields_are_removed_on_data_and_bdat() {
 					continue;
 				}
 				assert!(
-					parsed.header(name).is_none(),
+					parsed.headers().value(name).is_none(),
 					"BDAT={bdat}, checks={checks}, {name}"
 				);
 			}
@@ -492,6 +499,7 @@ async fn safety_net_trusts_a_hypothetical_hole_in_strip() {
 		"Delivered-To",
 		"Return-Path",
 		"Epistle-Class",
+		"X-Epistle",
 		"X-Spam-Status",
 		"X-Spam-Score",
 		"X-Epistle-Attachment-Warning",

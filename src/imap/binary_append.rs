@@ -6,7 +6,7 @@
 //! so; BINARY[] decodes them back to the octets the client sent.
 
 use base64::Engine;
-use mail_parser::{HeaderName, Message, PartType};
+use mail_parser::{HeaderName, MessageRef, PartKind};
 
 /// Base64 output line length (RFC 2045 §6.8 allows at most 76).
 const LINE: usize = 76;
@@ -16,7 +16,7 @@ const LINE: usize = 76;
 pub(super) fn encode_binary_parts(raw: &[u8]) -> Option<Vec<u8>> {
 	let message = super::fetch::parse(raw);
 	let mut edits = Vec::new();
-	collect(&message, raw, 0, &mut edits);
+	collect(message.root(), raw, 0, &mut edits);
 	if edits.is_empty() {
 		return None;
 	}
@@ -42,28 +42,28 @@ type Edit = (usize, usize, Vec<u8>);
 /// offsets, at most as deep as FETCH looks. A message the parser decoded
 /// into a buffer of its own (an encoded message/rfc822 part) is left alone:
 /// its offsets are not `raw`'s.
-fn collect(message: &Message<'_>, raw: &[u8], depth: usize, edits: &mut Vec<Edit>) {
-	if depth > super::fetch::MAX_DEPTH || message.raw_message.as_ptr() != raw.as_ptr() {
+fn collect(message: MessageRef<'_>, raw: &[u8], depth: usize, edits: &mut Vec<Edit>) {
+	if depth > super::fetch::MAX_DEPTH || message.source_bytes().as_ptr() != raw.as_ptr() {
 		return;
 	}
-	for part in &message.parts {
-		match &part.body {
-			PartType::Multipart(_) => {}
-			PartType::Message(nested) => collect(nested, raw, depth + 1, edits),
+	for part in message.parts() {
+		match part.kind() {
+			PartKind::Multipart => {}
+			PartKind::Message(nested) => collect(nested, raw, depth + 1, edits),
 			_ => {
 				let Some(header) = part
-					.headers
+					.headers()
 					.iter()
-					.find(|h| h.name == HeaderName::ContentTransferEncoding)
+					.find(|h| h.name() == HeaderName::ContentTransferEncoding)
 				else {
 					continue;
 				};
-				let (start, end) = (header.offset_start as usize, header.offset_end as usize);
+				let (start, end) = (header.offset_start() as usize, header.offset_end() as usize);
 				let value = raw.get(start..end).unwrap_or_default().trim_ascii();
 				if !value.eq_ignore_ascii_case(b"binary") {
 					continue;
 				}
-				let body = (part.offset_body as usize, part.offset_end as usize);
+				let body = (part.offset_body() as usize, part.offset_end() as usize);
 				let Some(content) = raw.get(body.0..body.1) else {
 					continue;
 				};

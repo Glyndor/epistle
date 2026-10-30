@@ -8,8 +8,7 @@
 //! strictly here than there would let a second, unnoticed From field ride
 //! along under a signature or a DMARC pass.
 
-use mail_parser::HeaderValue;
-use mail_parser::parsers::MessageStream;
+use mail_parser::{HeaderForm, HeaderValue};
 
 /// What the From field of a message says about its author.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -116,9 +115,10 @@ pub fn author_domain(raw: &[u8]) -> AuthorDomain {
 fn addresses(value: &str) -> Vec<String> {
 	let mut input = value.trim().to_string();
 	input.push_str("\r\n");
-	match MessageStream::new(input.as_bytes()).parse_address() {
+	let parsed = HeaderForm::Addresses.parse(input.as_bytes());
+	match parsed.value() {
 		HeaderValue::Address(parsed) => parsed
-			.iter()
+			.mailboxes()
 			.filter_map(|addr| addr.address())
 			.map(|address| address.trim().to_string())
 			.filter(|address| !address.is_empty())

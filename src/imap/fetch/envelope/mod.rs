@@ -1,13 +1,17 @@
 //! RFC 9051 envelope fields retain their original header representation.
 
-use super::{list, raw_header, string};
-use mail_parser::{Addr, Address, HeaderName, HeaderValue, Message, parsers::MessageStream};
+use super::{ParsedMessage, list, raw_header, string};
+use mail_parser::{HeaderForm, HeaderName, HeaderValue, Mailbox, MessagePart};
 
-pub(in crate::imap) fn render(message: &Message<'_>, part_id: usize) -> Vec<u8> {
-	let Some(part) = message.parts.get(part_id) else {
+pub(in crate::imap) fn render(message: &ParsedMessage<'_>, part_id: usize) -> Vec<u8> {
+	let Some(part) = u32::try_from(part_id).ok().and_then(|id| message.part(id)) else {
 		return list((0..10).map(|_| b"NIL".to_vec()));
 	};
-	let raw = |name| raw_header(message, part, name);
+	render_part(part)
+}
+
+pub(super) fn render_part(part: MessagePart<'_>) -> Vec<u8> {
+	let raw = |name| raw_header(&part, name);
 	let from = addresses(raw(HeaderName::From));
 	// Sender and Reply-To take the From value when absent or empty.
 	let or_from = |value: Vec<u8>| if value == b"NIL" { from.clone() } else { value };
@@ -31,39 +35,36 @@ fn addresses(raw: Option<&[u8]>) -> Vec<u8> {
 	};
 	let mut protected = protect(raw);
 	protected.push_str("\r\n");
-	let parsed = MessageStream::new(protected.as_bytes()).parse_address();
+	let parsed = HeaderForm::Addresses.parse(protected.as_bytes());
+	let HeaderValue::Address(list) = parsed.value() else {
+		return b"NIL".to_vec();
+	};
 	let mut out = vec![b'('];
-	match parsed {
-		HeaderValue::Address(Address::List(items)) => {
-			for addr in items {
-				out.extend(address(&addr));
-			}
+	for (name, members) in list.groups() {
+		if let Some(name) = name {
+			out.extend(list_group_start(name));
 		}
-		HeaderValue::Address(Address::Group(groups)) => {
-			for group in groups {
-				if let Some(name) = &group.name {
-					out.extend(list([
-						b"NIL".to_vec(),
-						b"NIL".to_vec(),
-						restored(Some(name)),
-						b"NIL".to_vec(),
-					]));
-				}
-				for addr in group.addresses {
-					out.extend(address(&addr));
-				}
-				if group.name.is_some() {
-					out.extend_from_slice(b"(NIL NIL NIL NIL)");
-				}
-			}
+		for addr in members {
+			out.extend(address(addr));
 		}
-		_ => return b"NIL".to_vec(),
+		if name.is_some() {
+			out.extend_from_slice(b"(NIL NIL NIL NIL)");
+		}
 	}
 	if out.len() == 1 {
 		return b"NIL".to_vec();
 	}
 	out.push(b')');
 	out
+}
+
+fn list_group_start(name: &str) -> Vec<u8> {
+	list([
+		b"NIL".to_vec(),
+		b"NIL".to_vec(),
+		restored(Some(name)),
+		b"NIL".to_vec(),
+	])
 }
 
 fn protect(raw: &[u8]) -> String {
@@ -105,10 +106,10 @@ fn restored(value: Option<&str>) -> Vec<u8> {
 	string(Some(&raw))
 }
 
-fn address(addr: &Addr<'_>) -> Vec<u8> {
+fn address(addr: Mailbox<'_>) -> Vec<u8> {
 	// A display name or comment without an address (`group: (foo) ;`) is
 	// not a mailbox; `(name NIL NIL NIL)` would read as a group end.
-	let Some(address) = addr.address.as_deref() else {
+	let Some(address) = addr.address() else {
 		return Vec::new();
 	};
 	let address = Some(address);
@@ -125,7 +126,7 @@ fn address(addr: &Addr<'_>) -> Vec<u8> {
 		})
 		.unwrap_or((None, None));
 	list([
-		restored(addr.name.as_deref()),
+		restored(addr.name()),
 		restored(route),
 		restored(mailbox),
 		restored(host),
