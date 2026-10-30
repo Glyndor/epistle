@@ -52,6 +52,8 @@ jobs:
   plan:
     name: choose targets
     runs-on: ubuntu-latest
+    # Measured 2026-10-30: the slowest of four green runs took 1 min.
+    timeout-minutes: 5
     outputs:
       targets: ${{ steps.pick.outputs.targets }}
     steps:
@@ -75,6 +77,8 @@ jobs:
     needs: plan
     if: needs.plan.outputs.targets != '[]'
     runs-on: ubuntu-latest
+    # Measured 2026-10-30: the slowest of four green runs took 16 min.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:

@@ -51,6 +51,8 @@ jobs:
   sbom-and-licenses:
     name: SBOM and license attribution
     runs-on: ubuntu-latest
+    # Measured 2026-10-30: the slowest of four green runs took 4 min.
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: ${{ inputs.working-directory }}

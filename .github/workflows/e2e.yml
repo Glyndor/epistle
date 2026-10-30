@@ -46,6 +46,8 @@ jobs:
   e2e:
     name: full-server e2e (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    # Measured 2026-10-30: the slowest of four green runs took 8 min.
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:

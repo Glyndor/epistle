@@ -44,6 +44,8 @@ jobs:
   interop-tests:
     name: protocol interop
     runs-on: ubuntu-latest
+    # Measured 2026-10-30: the slowest of four green runs took 3 min.
+    timeout-minutes: 10
     services:
       # Postfix as the reference outbound peer. boky/postfix is a maintained
       # image that boots an SMTP server (smtpd on 25) for the given domains with

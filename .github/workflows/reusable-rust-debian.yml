@@ -83,6 +83,8 @@ jobs:
   build:
     name: dpkg-buildpackage
     runs-on: ${{ inputs.runner }}
+    # Measured 2026-10-30: the slowest of four green runs took 40 min.
+    timeout-minutes: 80
     container:
       image: ${{ inputs.debian-image }}
     defaults:
@@ -211,6 +213,8 @@ jobs:
     name: build (vendored / offline)
     if: ${{ inputs.check-vendored }}
     runs-on: ${{ inputs.runner }}
+    # Measured 2026-10-30: the slowest of four green runs took 40 min.
+    timeout-minutes: 80
     container:
       image: ${{ inputs.debian-image }}
     defaults:
