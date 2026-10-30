@@ -215,7 +215,7 @@ fn job(reusable: &str, name: &str) -> String {
 		.join("\n")
 }
 
-/// R2-03: the packaging tests in `tests/debian/` run the maintainer scripts
+/// R2-03: the packaging tests in `tests/packaging/debian/` run the maintainer scripts
 /// under `fakeroot`, because the scripts read root ownership off every path
 /// they touch and an unprivileged run cannot exercise that without it. The
 /// dependency was undeclared: the runner image happened to carry the tool, so
@@ -232,7 +232,7 @@ fn the_ci_workflow_installs_fakeroot_for_the_packaging_tests() {
 	assert!(
 		caller.contains("apt-packages: \"fakeroot\""),
 		"ci.yml must pass apt-packages: \"fakeroot\" to the reusable jobs: the \
-		 packaging tests in tests/debian/ run the maintainer scripts under it, \
+		 packaging tests in tests/packaging/debian/ run the maintainer scripts under it, \
 		 and without it the suite breaks for a reason unrelated to the code under \
 		 test. See reusable-rust-ci.yml's apt-packages input."
 	);

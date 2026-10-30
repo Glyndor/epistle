@@ -72,7 +72,7 @@ enforces, and an example, but not the value, because the client already holds it
 
 ## Tests
 
-- `tests/contracts/validation_matrix.rs` and `tests/validation_matrix/` drive each rule
+- `tests/contracts/validation_matrix.rs` and `tests/contracts/validation_matrix/` drive each rule
   through every entry point from a table of boundary cases and fail when two
   entry points disagree: accounts, addresses, domains, single labels, Sieve
   names, passwords, display names, CIDR, mailbox names, memory sizes, credential
