@@ -1,6 +1,6 @@
 //! Finding the paths a text cites, and deciding whether each one resolves.
 //! What counts as a citation, and what is skipped, is written at the top of
-//! `tests/repository_paths_exist.rs`.
+//! `tests/repository/repository_paths_exist.rs`.
 
 pub mod markdown;
 pub mod rust_source;

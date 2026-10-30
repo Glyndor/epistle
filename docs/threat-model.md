@@ -126,7 +126,7 @@ PEM in `[tls]`).
 | A toolchain nobody agreed on | CI, the `.deb` image and the release job pin the Rust 1.99 series (`ci.yml:28`, `release.yml:103`, `:184`, `:302`); the MSRV floor in `Cargo.toml` is compared with CI | test: `workflow_toolchain_pins_agree` (`tests/workflow_toolchain_pins.rs:72`), `ci_msrv_matches_the_declared_rust_version` (`tests/msrv_agrees_with_ci.rs:28`) |
 | Releasing unpromoted or unaudited code | the tag must match `Cargo.toml` and `debian/changelog`, be reachable from `main`, pass `cargo audit`, and not already be published (`release.yml:43-96`) | gate: the `verify` job, which every later job needs |
 | Unsigned or unattested artifacts | every artifact, each `.deb` and `SHA256SUMS` get a detached Ed25519 signature from a hash-pinned venv (`release.yml:270-283`); build provenance is attested for the `.deb` and the binary (`:186-189`, `:285-288`); the `.deb` builds in a digest-pinned image (`:184`) | gate: the job fails closed when the key is absent (`:266-269`); test: `.github/scripts/test_sign.py` in `scripts.yml` |
-| A test that nothing runs | every test is a Rust test that `cargo test` discovers, and a guard fails when a file that runs only by name appears | test: `tests/test_discovery_premise.rs` |
+| A test that nothing runs | every test is a Rust test that `cargo test` discovers, and a guard fails when a file that runs only by name appears | test: `tests/repository/test_discovery_premise.rs` |
 
 ## Not implemented
 

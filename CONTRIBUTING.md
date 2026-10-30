@@ -132,7 +132,7 @@ follow rules 1, 2 and 4 yet. Write new code in this shape, and leave a module
 you only edit where it is: its batch moves it. Moving the product code to
 `internal/` is a later, separate step, and whether each module's tests move
 into a folder of their own is still an open decision. A path cited in a doc
-or a comment has to exist, and `tests/repository_paths_exist.rs` fails on
+or a comment has to exist, and `tests/repository/repository_paths_exist.rs` fails on
 any that does not.
 
 ## Tests

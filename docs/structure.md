@@ -62,7 +62,7 @@ asking to become the folder `<stem>/`.
 
 ## What is checked
 
-`tests/repository_paths_exist.rs` reads every path cited in `README.md`,
+`tests/repository/repository_paths_exist.rs` reads every path cited in `README.md`,
 `CONTRIBUTING.md`, `docs/`, the comments under `src/` and the sources under
 `tests/`, and fails on any that does not exist, so a move cannot leave a page
 or a comment pointing at nothing. A path that only illustrates a shape is

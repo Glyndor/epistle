@@ -128,3 +128,19 @@ harness = false
 [[bench]]
 name = "queue"
 harness = false
+
+[[test]]
+name = "test_files_are_declared"
+path = "tests/repository/test_files_are_declared.rs"
+
+[[test]]
+name = "test_discovery_premise"
+path = "tests/repository/test_discovery_premise.rs"
+
+[[test]]
+name = "repository_paths_exist"
+path = "tests/repository/repository_paths_exist.rs"
+
+[[test]]
+name = "utc_purity"
+path = "tests/repository/utc_purity.rs"
