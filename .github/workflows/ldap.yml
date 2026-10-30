@@ -20,6 +20,13 @@ name: LDAP
 on:
   push:
     branches: [develop, main]
+    paths:
+      - "src/directory_store/**"
+      - "tests/ldap.rs"
+      - "tests/fixtures/ldap/**"
+      - ".github/workflows/ldap.yml"
+      - "Cargo.toml"
+      - "Cargo.lock"
   pull_request:
     paths:
       - "src/directory_store/**"

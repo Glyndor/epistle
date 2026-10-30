@@ -8,6 +8,12 @@ name: Benchmarks
 on:
   push:
     branches: [develop, main]
+    paths:
+      - ".github/workflows/bench.yml"
+      - "benches/**"
+      - "src/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
   pull_request:
     paths:
       - ".github/workflows/bench.yml"
