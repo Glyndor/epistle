@@ -1,15 +1,15 @@
 //! CLI tests for the `epistle account-remove` command.
 //!
-//! Lives in a sibling test module so the parent `cli_tests_b.rs` file
+//! Lives in a sibling test module so the parent `dispatch.rs` file
 //! stays under the per-file line budget. The whole suite here goes
 //! through `Cli::try_parse_from` and `accounts::remove` (the CLI
 //! entry point itself, not through `Cli::run`); the dispatch path is
-//! covered by `cli_tests_b::account_create_delete_and_password_flow`
-//! and `cli_tests_b::accounts_dispatch_succeeds`.
+//! covered by `dispatch::account_create_delete_and_password_flow`
+//! and `dispatch::accounts_dispatch_succeeds`.
 
 use super::*;
 use crate::cli::Command;
-use crate::cli::tests_b::config_at;
+use crate::cli::tests::dispatch::config_at;
 use crate::directory_store::removal::QueuePolicy;
 
 /// A 32-byte Bayes key, minted at run time from two UUIDs. The

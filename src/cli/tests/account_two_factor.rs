@@ -1,7 +1,7 @@
 //! Tests for `epistle account 2fa show|disable` and the supporting
 //! store mutator.
 //!
-//! Sibling module so `cli_account_subcommand_tests.rs` stays under the
+//! Sibling module so `account_subcommand.rs` stays under the
 //! per-file code-line budget. Drives `set_totp` directly (the path
 //! the CLI uses for both enrol-style `set` flows and the new disable)
 //! and exercises the parser shape end-to-end.

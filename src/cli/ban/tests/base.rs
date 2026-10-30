@@ -135,7 +135,7 @@ fn every_form_parses_and_a_bad_argument_does_not() {
 #[test]
 fn without_a_database_every_action_says_bans_are_not_manageable() {
 	let dir = tempfile::tempdir().expect("tempdir");
-	let config = crate::cli::tests_b::config_at(dir.path());
+	let config = crate::cli::tests::dispatch::config_at(dir.path());
 	let config = Config::load(config.path()).expect("config");
 	assert!(config.database.is_none());
 	for args in [

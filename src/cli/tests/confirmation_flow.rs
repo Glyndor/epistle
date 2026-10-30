@@ -474,6 +474,3 @@ fn restore_yes_or_a_y_answer_never_stands_in_for_force() {
 		"nothing was laid down"
 	);
 }
-
-#[path = "cli_confirmation_flow_tests_b.rs"]
-mod b;

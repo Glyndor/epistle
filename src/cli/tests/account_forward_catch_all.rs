@@ -1,7 +1,7 @@
 //! End-to-end tests for the `account forward` and `account catch-all`
 //! resource subcommands and their backing store mutators.
 //!
-//! Sibling test module so `cli_account_subcommand_tests.rs` and the
+//! Sibling test module so `account_subcommand.rs` and the
 //! other test files stay under the per-file code-line budget. Tests
 //! here drive the store mutators directly (the path the CLI handlers
 //! take) plus the full `Cli::run` for parser-shape validation.

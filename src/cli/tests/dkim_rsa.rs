@@ -1,7 +1,7 @@
 //! CLI tests for the `epistle dkim-keygen --rsa` path: the `--bits`
 //! allow-list and the resulting key being loadable by ring's RSA
 //! loader (the same loader the outbound signer uses). Sibling to
-//! `cli_tests.rs`, `cli_tests_b.rs`, `cli_tests_c.rs`.
+//! `base.rs`, `dispatch.rs`, `removal.rs`.
 
 use super::*;
 use base64::Engine;

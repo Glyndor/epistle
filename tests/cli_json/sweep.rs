@@ -31,7 +31,7 @@ enum Expect {
 use Expect::{Done, Refused};
 
 /// Leaves whose stdout is the product, or that never return. They take no
-/// `--json`; `src/cli/cli_json_everywhere_tests.rs` holds the reasons.
+/// `--json`; `src/cli/tests/json_everywhere.rs` holds the reasons.
 const EXEMPT: &[&str] = &[
 	"serve",
 	"local",

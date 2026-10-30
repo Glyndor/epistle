@@ -46,7 +46,7 @@ fn account_list_shows_each_account_enabled_with_its_source() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let config = config(dir.path(), "");
 	let lines = on_terminal(120, |out| {
-		assert_eq!(super::accounts::list(&config, out), ExitCode::SUCCESS);
+		assert_eq!(crate::cli::accounts::list(&config, out), ExitCode::SUCCESS);
 	});
 	assert!(lines[0].starts_with("\x1b[1mNAME"), "{lines:#?}");
 	assert_eq!(
@@ -56,7 +56,7 @@ fn account_list_shows_each_account_enabled_with_its_source() {
 	assert!(lines[1].contains("\x1b[32m✔ enabled"), "{lines:#?}");
 	assert_eq!(lines.last().map(String::as_str), Some("1 accounts"));
 	let narrow = on_terminal(40, |out| {
-		super::accounts::list(&config, out);
+		crate::cli::accounts::list(&config, out);
 	});
 	assert_fits(&narrow, 40);
 }
@@ -66,7 +66,7 @@ fn alias_list_keeps_the_state_column_aligned_when_the_terminal_is_narrow() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let config = config(dir.path(), ALIASES);
 	let lines = on_terminal(40, |out| {
-		super::alias::list(&config, false, out).expect("list");
+		crate::cli::alias::list(&config, false, out).expect("list");
 	});
 	assert_eq!(lines.len(), 3, "{lines:#?}");
 	assert_fits(&lines, 40);
@@ -84,7 +84,7 @@ fn service_list_marks_enabled_and_disabled_services() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let config = config(dir.path(), "");
 	let lines = on_terminal(120, |out| {
-		super::service::list(&config, false, out).expect("list");
+		crate::cli::service::list(&config, false, out).expect("list");
 	});
 	let smtp = lines
 		.iter()
@@ -103,7 +103,7 @@ fn domain_list_is_aligned_under_a_bold_header() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let config = config(dir.path(), "");
 	let lines = on_terminal(120, |out| {
-		super::domain::list(&config, false, out).expect("list");
+		crate::cli::domain::list(&config, false, out).expect("list");
 	});
 	assert_eq!(
 		lines.iter().map(|line| visible(line)).collect::<Vec<_>>(),
@@ -121,9 +121,9 @@ fn json_is_never_decorated() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let config = config(dir.path(), ALIASES);
 	let lines = on_terminal(120, |out| {
-		super::alias::list(&config, true, out).expect("list");
-		super::domain::list(&config, true, out).expect("list");
-		super::service::list(&config, true, out).expect("list");
+		crate::cli::alias::list(&config, true, out).expect("list");
+		crate::cli::domain::list(&config, true, out).expect("list");
+		crate::cli::service::list(&config, true, out).expect("list");
 	});
 	for line in &lines {
 		assert!(!line.contains('\x1b') && !line.contains('✔'), "{line:?}");
@@ -156,7 +156,10 @@ fn queue_list_marks_a_held_message() {
 		.update_envelope(id, |envelope| envelope.hold(1_700_000_000))
 		.expect("hold");
 	let lines = on_terminal(120, |out| {
-		assert_eq!(super::queue::list(dir.path(), None, out), ExitCode::SUCCESS);
+		assert_eq!(
+			crate::cli::queue::list(dir.path(), None, out),
+			ExitCode::SUCCESS
+		);
 	});
 	assert!(lines[0].starts_with("\x1b[1mID"), "{lines:#?}");
 	assert!(lines[1].contains("\x1b[33m⚠ held"), "{lines:#?}");
@@ -169,11 +172,11 @@ fn queue_list_marks_a_held_message() {
 
 #[test]
 fn masked_list_marks_enabled_addresses() {
-	use super::masked::MaskedCli;
+	use crate::cli::masked::MaskedCli;
 	let dir = tempfile::tempdir().expect("tempdir");
 	let config = config(dir.path(), "");
 	let (mut out, mut err) = (Vec::new(), Vec::new());
-	let added = super::masked::run(
+	let added = crate::cli::masked::run(
 		&config,
 		MaskedCli::Add {
 			account: "alice".into(),
@@ -193,7 +196,7 @@ fn masked_list_marks_enabled_addresses() {
 	);
 	let lines = on_terminal(120, |out| {
 		let mut err = Vec::new();
-		let listed = super::masked::run(
+		let listed = crate::cli::masked::run(
 			&config,
 			MaskedCli::List {
 				account: "alice".into(),
@@ -213,7 +216,7 @@ fn masked_list_marks_enabled_addresses() {
 
 #[test]
 fn probe_marks_each_listener_and_keeps_the_plain_lines_off_a_terminal() {
-	use super::probe::{ProbeLine, render};
+	use crate::cli::probe::{ProbeLine, render};
 	let lines = [
 		ProbeLine {
 			kind: "smtp",
@@ -252,14 +255,14 @@ fn probe_marks_each_listener_and_keeps_the_plain_lines_off_a_terminal() {
 
 #[test]
 fn probe_draws_an_uncheckable_listener_as_a_warning() {
-	let lines = [super::probe::ProbeLine {
+	let lines = [crate::cli::probe::ProbeLine {
 		kind: "api",
 		addr: "0.0.0.0:8025".into(),
 		ok: false,
 		error: None,
 		warning: Some("not checkable from here".into()),
 	}];
-	let drawn = on_terminal(120, |out| super::probe::render(&lines, false, out));
+	let drawn = on_terminal(120, |out| crate::cli::probe::render(&lines, false, out));
 	assert!(visible(&drawn[1]).contains("warn"), "{drawn:?}");
 	assert!(visible(&drawn[1]).contains("not checkable from here"));
 	assert!(!visible(&drawn[1]).contains("fail"));
