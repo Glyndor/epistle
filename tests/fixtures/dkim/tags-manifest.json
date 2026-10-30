@@ -1,0 +1,174 @@
+{
+  "cases": [
+    {
+      "name": "tags-rsa",
+      "baseline": "tags-rsa",
+      "changed": "none",
+      "expected": "Pass"
+    },
+    {
+      "name": "tags-ed",
+      "baseline": "tags-ed",
+      "changed": "none",
+      "expected": "Pass"
+    },
+    {
+      "name": "tags-subdomain",
+      "baseline": "tags-subdomain",
+      "changed": "none",
+      "expected": "Pass"
+    },
+    {
+      "name": "tags-p-valid-empty",
+      "baseline": "tags-rsa",
+      "changed": "dns",
+      "expected": "PermError"
+    },
+    {
+      "name": "tags-p-empty-valid",
+      "baseline": "tags-rsa",
+      "changed": "dns",
+      "expected": "PermError"
+    },
+    {
+      "name": "tags-t-s-y",
+      "baseline": "tags-subdomain",
+      "changed": "dns",
+      "expected": "PermError"
+    },
+    {
+      "name": "tags-t-y-s",
+      "baseline": "tags-subdomain",
+      "changed": "dns",
+      "expected": "PermError"
+    },
+    {
+      "name": "tags-k-rsa-ed",
+      "baseline": "tags-rsa",
+      "changed": "dns",
+      "expected": "PermError"
+    },
+    {
+      "name": "tags-i-duplicate",
+      "baseline": "tags-rsa",
+      "changed": "signature",
+      "expected": "PermError"
+    },
+    {
+      "name": "tags-unknown-dns-duplicate",
+      "baseline": "tags-rsa",
+      "changed": "dns",
+      "expected": "PermError"
+    },
+    {
+      "name": "tags-unknown-signature-duplicate",
+      "baseline": "tags-rsa",
+      "changed": "signature",
+      "expected": "PermError"
+    },
+    {
+      "name": "tags-version2",
+      "baseline": "tags-rsa",
+      "changed": "dns",
+      "expected": "PermError"
+    },
+    {
+      "name": "tags-hash-sha1",
+      "baseline": "tags-rsa",
+      "changed": "dns",
+      "expected": "PermError"
+    },
+    {
+      "name": "tags-service-other",
+      "baseline": "tags-rsa",
+      "changed": "dns",
+      "expected": "PermError"
+    },
+    {
+      "name": "tags-service-email",
+      "baseline": "tags-rsa",
+      "changed": "dns",
+      "expected": "Pass"
+    },
+    {
+      "name": "tags-service-all",
+      "baseline": "tags-rsa",
+      "changed": "dns",
+      "expected": "Pass"
+    },
+    {
+      "name": "tags-ed-rsa-material",
+      "baseline": "tags-ed",
+      "changed": "dns",
+      "expected": "PermError"
+    },
+    {
+      "name": "tags-rsa-ed-material",
+      "baseline": "tags-rsa",
+      "changed": "dns",
+      "expected": "PermError"
+    },
+    {
+      "name": "tags-unknown-dns-single",
+      "baseline": "tags-rsa",
+      "changed": "dns",
+      "expected": "Pass"
+    },
+    {
+      "name": "tags-unknown-signature-single",
+      "baseline": "tags-rsa",
+      "changed": "signature",
+      "expected": "Pass"
+    },
+    {
+      "name": "tags-hash-sha256",
+      "baseline": "tags-rsa",
+      "changed": "dns",
+      "expected": "Pass"
+    }
+  ],
+  "sha256": {
+    "tags-ed-rsa-material.dns": "c06011d6d786aca1e56a6b7816487d4d9cd59d5ab09eea59faea66ee5d85efb7",
+    "tags-ed-rsa-material.eml": "b31e1818f5f2ea427f7464e657531e06237264b9bba668a7e4e5b2f63f992fcf",
+    "tags-ed.dns": "1aad44db854e078428b5bf2cf08d9134cd18aced51c12b4ddaedc27cf9da2e3a",
+    "tags-ed.eml": "b31e1818f5f2ea427f7464e657531e06237264b9bba668a7e4e5b2f63f992fcf",
+    "tags-hash-sha1.dns": "1538ab51142fb43a3144b978e203041f73c5dff063fa85a85ebe005ff3c9059e",
+    "tags-hash-sha1.eml": "6db831ba96a8f37f32ebd7bcf74e5eb11309dd4cd3f222fd971a52f22ec2eb2c",
+    "tags-hash-sha256.dns": "3760b801e62d36b3ab0745b15c337300ed3bc35dd825248eba24f6d70d59dc83",
+    "tags-hash-sha256.eml": "6db831ba96a8f37f32ebd7bcf74e5eb11309dd4cd3f222fd971a52f22ec2eb2c",
+    "tags-i-duplicate.dns": "63bb5ba1e29baf1b211548f3b6ba9c18cd62e9b974b87a1600f1352c539501ab",
+    "tags-i-duplicate.eml": "f3327a3689a9dbaeddaf81c509fddc282263995cfccec2ee1beb9a364bf070d9",
+    "tags-k-rsa-ed.dns": "c1ba74f2d30b0a45ed8ed941e1e3fc066ca20774f4cc5d704d0d438e59fa70de",
+    "tags-k-rsa-ed.eml": "6db831ba96a8f37f32ebd7bcf74e5eb11309dd4cd3f222fd971a52f22ec2eb2c",
+    "tags-p-empty-valid.dns": "c45971aaa9bb5e40619be56982f1d11676bfb5110f89979d07052f1d338d06f7",
+    "tags-p-empty-valid.eml": "6db831ba96a8f37f32ebd7bcf74e5eb11309dd4cd3f222fd971a52f22ec2eb2c",
+    "tags-p-valid-empty.dns": "393666cc66633a1819cc47f307f9a9bc607e896388a412d7fd3acea5b17e4d78",
+    "tags-p-valid-empty.eml": "6db831ba96a8f37f32ebd7bcf74e5eb11309dd4cd3f222fd971a52f22ec2eb2c",
+    "tags-rsa-ed-material.dns": "d8b66a1ed4c1622ea1832af3ee9a44af7ed732940400706b4a318d3014941e5b",
+    "tags-rsa-ed-material.eml": "6db831ba96a8f37f32ebd7bcf74e5eb11309dd4cd3f222fd971a52f22ec2eb2c",
+    "tags-rsa.dns": "63bb5ba1e29baf1b211548f3b6ba9c18cd62e9b974b87a1600f1352c539501ab",
+    "tags-rsa.eml": "6db831ba96a8f37f32ebd7bcf74e5eb11309dd4cd3f222fd971a52f22ec2eb2c",
+    "tags-service-all.dns": "470583164860762bd264bbe4ab8c0417511ecf12f347a5415c359b177b84709a",
+    "tags-service-all.eml": "6db831ba96a8f37f32ebd7bcf74e5eb11309dd4cd3f222fd971a52f22ec2eb2c",
+    "tags-service-email.dns": "f53974e589306b423ccd6503a5ff5164f2c18729b6338e921d4d6f727fa5bf7c",
+    "tags-service-email.eml": "6db831ba96a8f37f32ebd7bcf74e5eb11309dd4cd3f222fd971a52f22ec2eb2c",
+    "tags-service-other.dns": "173de6520a9553d4d6a27e96e3fa3383758a9b09f3acaa9d405712e9dfe3e271",
+    "tags-service-other.eml": "6db831ba96a8f37f32ebd7bcf74e5eb11309dd4cd3f222fd971a52f22ec2eb2c",
+    "tags-subdomain.dns": "63bb5ba1e29baf1b211548f3b6ba9c18cd62e9b974b87a1600f1352c539501ab",
+    "tags-subdomain.eml": "6575defbc143499be402f8846c4947d0b9a874ffd4cbb45974070ea5e0cfadcf",
+    "tags-t-s-y.dns": "b4026aea08590710b660c42e04dfc830a7b697c084bff3aa27f4ab94fd6e215c",
+    "tags-t-s-y.eml": "6575defbc143499be402f8846c4947d0b9a874ffd4cbb45974070ea5e0cfadcf",
+    "tags-t-y-s.dns": "ce24a44833db9c96c8b82586735422bba0d76066f75a9a35cec5f298cf5ddd36",
+    "tags-t-y-s.eml": "6575defbc143499be402f8846c4947d0b9a874ffd4cbb45974070ea5e0cfadcf",
+    "tags-unknown-dns-duplicate.dns": "b196f10db2162bd410f95c83ee95db344e245186f8db6090e61e31cacb03ad7e",
+    "tags-unknown-dns-duplicate.eml": "6db831ba96a8f37f32ebd7bcf74e5eb11309dd4cd3f222fd971a52f22ec2eb2c",
+    "tags-unknown-dns-single.dns": "1f84b249b4158ed0d6781b096560680f0897b716f761b894211cbd7dd9892364",
+    "tags-unknown-dns-single.eml": "6db831ba96a8f37f32ebd7bcf74e5eb11309dd4cd3f222fd971a52f22ec2eb2c",
+    "tags-unknown-signature-duplicate.dns": "63bb5ba1e29baf1b211548f3b6ba9c18cd62e9b974b87a1600f1352c539501ab",
+    "tags-unknown-signature-duplicate.eml": "379e6176bac462f2de0fb927016a6f9fadedfd34f9c414c164e7a0e5d214e2c4",
+    "tags-unknown-signature-single.dns": "63bb5ba1e29baf1b211548f3b6ba9c18cd62e9b974b87a1600f1352c539501ab",
+    "tags-unknown-signature-single.eml": "02b400a1735ac45dbf95a7afe6e9b7aaa3e0b5b5da2cf6d832a6436d669ce162",
+    "tags-version2.dns": "5a7379fd588eec8eda4e602498dad9bf4d61a2d96764a2e27ddcfc701ec57ea6",
+    "tags-version2.eml": "6db831ba96a8f37f32ebd7bcf74e5eb11309dd4cd3f222fd971a52f22ec2eb2c"
+  }
+}

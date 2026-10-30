@@ -49,7 +49,7 @@ pub(super) enum PendingAuth {
 }
 
 impl Session {
-	/// Inject a fixed SCRAM server nonce (tests/determinism).
+	/// Inject a fixed SCRAM server nonce, so tests are deterministic.
 	pub fn with_scram_nonce(mut self, nonce: &str) -> Self {
 		self.scram_nonce = Some(nonce.to_string());
 		self

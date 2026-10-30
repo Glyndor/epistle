@@ -1,21 +1,21 @@
 [package]
 name = "epistle"
-version = "0.12.3"
+version = "0.12.4"
 edition = "2024"
 # The floor CI builds on, and the one `epistle` claims to support. It now comes
-# from sqlx 0.9's own `rust-version` (1.94), so it is a derived floor rather
+# from mail-parser 1.0's own `rust-version` (1.98), so it is a derived floor rather
 # than a measured one; standards/testing forbids that derivation for packaging
 # floors, but this one is not a packaging floor.
 #
 # The packaging path has none: debian/control carries no rustc on `Build-Depends`
 # because the .deb is built for musl with a rustup toolchain, and
-# `release.yml` pins that toolchain at 1.98.0. tests/msrv_agrees_with_ci.rs ties
+# `release.yml` pins that toolchain at 1.99.0. tests/msrv_agrees_with_ci.rs ties
 # this to ci.yml's `msrv` input, and cargo itself refuses to build on anything
 # older.
 #
 # 1.88 was the previous floor; it came from a build that failed (`rcgen`, `time`
 # and `icu_properties` each wanted more than `edition = "2024"` implies).
-rust-version = "1.94"
+rust-version = "1.98"
 license = "MIT"
 description = "Self-hosted, headless mail server: SMTP, IMAP and modern email security through an API and CLI."
 repository = "https://github.com/Glyndor/epistle"
@@ -29,6 +29,17 @@ axum = { version = "0.8.9", features = ["ws"] }
 flate2 = "1.1.9"
 futures-core = "0.3.34"
 base64 = "0.23.1"
+# `aws-lc-rs` is the TLS provider `rustls` already installs, so it was in
+# the tree and in the binary before this line existed. It is named here
+# for one reason: the RSA DKIM key is generated in process, so a server
+# whose image ships no `openssl` can rotate its keys
+# (Glyndor/epistle#1376). `ring` cannot generate an RSA key and `rcgen`
+# only makes certificates, so this is the crate that can.
+#
+# The features are the ones `rustls` already turns on, so the build does
+# not grow a second crypto provider: `aws-lc-sys` is the C library both
+# use, and `prebuilt-nasm` comes with it through `rustls`.
+aws-lc-rs = { version = "1.18.0", default-features = false, features = ["aws-lc-sys"] }
 clap = { version = "4.6.1", features = ["derive"] }
 clap_complete = "4.6.11"
 clap_mangen = "0.3.3"
@@ -88,7 +99,7 @@ uuid = { version = "1.23.2", features = ["v7", "serde"] }
 webpki-roots = "1.0.7"
 x509-parser = "0.18.1"
 zeroize = "=1.9.1"
-mail-parser = { version = "0.11.9", default-features = false }
+mail-parser = { version = "1.0.0", default-features = false }
 toml_edit = "0.25"
 unicode-normalization = "0.1.25"
 
@@ -117,3 +128,19 @@ harness = false
 [[bench]]
 name = "queue"
 harness = false
+
+[[test]]
+name = "test_files_are_declared"
+path = "tests/repository/test_files_are_declared.rs"
+
+[[test]]
+name = "test_discovery_premise"
+path = "tests/repository/test_discovery_premise.rs"
+
+[[test]]
+name = "repository_paths_exist"
+path = "tests/repository/repository_paths_exist.rs"
+
+[[test]]
+name = "utc_purity"
+path = "tests/repository/utc_purity.rs"

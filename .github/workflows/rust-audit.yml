@@ -40,6 +40,12 @@ on:
       - ".github/scripts/test_rust_audit_lookup.py"
       - ".cargo/audit.toml"
 
+# A newer push to a pull request supersedes the run in flight. Queue and
+# branch runs are never cancelled: only a pull_request event is.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
@@ -95,7 +101,7 @@ jobs:
           persist-credentials: false
 
       - name: Download every cargo audit JSON
-        uses: actions/download-artifact@9000827ccba6bdab643e8b65d33ac0654aef8333 # v8.0.2
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           # The reusable names each artifact `audit-json-<ref>`, so without
           # `merge-multiple` the pattern downloads each one into its own

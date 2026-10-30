@@ -522,5 +522,4 @@ impl Metrics {
 mod render;
 
 #[cfg(test)]
-#[path = "mod_tests.rs"]
 mod tests;

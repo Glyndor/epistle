@@ -103,6 +103,7 @@ pub(crate) fn failure_cause(error: &ProviderError) -> &'static str {
 	match error {
 		ProviderError::Auth => "provider refused authentication or authorization",
 		ProviderError::Unsupported => "provider does not expose this operation",
+		ProviderError::ZoneNotFound(_) => "provider holds no zone with that name",
 		ProviderError::Remote(_) => {
 			"provider request failed, timed out or returned an invalid response"
 		}

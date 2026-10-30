@@ -1,0 +1,241 @@
+//! Tests for the app-password store and per-credential admission.
+
+use super::*;
+use crate::password::Policy;
+use crate::test_fixtures as fixtures;
+
+/// Every fixture-level call goes through the ASCII-only policy: app
+/// passwords are random base64 secrets, the prepare is a no-op here even
+/// under unicode passwords, and tests stay on the historical path.
+const ASCII: Policy = Policy::ASCII_ONLY;
+
+fn ip(text: &str) -> IpAddr {
+	text.parse().expect("ip")
+}
+
+fn app_password(label: &str, secret: &str) -> AppPassword {
+	AppPassword {
+		label: label.to_string(),
+		hash: crate::smtp::auth::tests::base::hash(secret),
+		expires_at: None,
+		ip_cidr: None,
+		save_sent: None,
+	}
+}
+
+#[test]
+fn valid_secret_admitted() {
+	let pw = app_password("phone", fixtures::password());
+	assert!(pw.admits(fixtures::password(), &ASCII, None, 1000));
+}
+
+#[test]
+fn wrong_secret_rejected() {
+	let pw = app_password("phone", fixtures::password());
+	assert!(!pw.admits(fixtures::second_password(), &ASCII, None, 1000));
+}
+
+#[test]
+fn expired_rejected_unexpired_accepted() {
+	let mut pw = app_password("phone", fixtures::password());
+	pw.expires_at = Some(2000);
+	assert!(pw.admits(fixtures::password(), &ASCII, None, 1999));
+	assert!(!pw.admits(fixtures::password(), &ASCII, None, 2000));
+	assert!(!pw.admits(fixtures::password(), &ASCII, None, 2001));
+}
+
+#[test]
+fn ip_inside_cidr_accepted_outside_rejected() {
+	let mut pw = app_password("phone", fixtures::password());
+	pw.ip_cidr = Some("203.0.113.0/24".to_string());
+	assert!(pw.admits(fixtures::password(), &ASCII, Some(ip("203.0.113.5")), 1000));
+	assert!(!pw.admits(fixtures::password(), &ASCII, Some(ip("203.0.114.5")), 1000));
+}
+
+#[test]
+fn cidr_with_unknown_ip_rejected() {
+	let mut pw = app_password("phone", fixtures::password());
+	pw.ip_cidr = Some("203.0.113.0/24".to_string());
+	// A configured allowlist cannot be satisfied without a client IP.
+	assert!(!pw.admits(fixtures::password(), &ASCII, None, 1000));
+}
+
+#[test]
+fn malformed_cidr_rejected() {
+	let mut pw = app_password("phone", fixtures::password());
+	pw.ip_cidr = Some("not-a-cidr".to_string());
+	assert!(!pw.admits(fixtures::password(), &ASCII, Some(ip("203.0.113.5")), 1000));
+}
+
+#[test]
+fn store_add_list_remove_roundtrip() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut store = AppPasswordStore::open(dir.path()).expect("open");
+	store
+		.add("alice", app_password("phone", fixtures::password()))
+		.expect("add");
+	store
+		.add("alice", app_password("laptop", fixtures::second_password()))
+		.expect("add");
+
+	let rows = store.list();
+	assert_eq!(rows.len(), 2);
+	assert!(
+		rows.iter()
+			.any(|(a, l, _, _, _)| a == "alice" && l == "phone")
+	);
+
+	// Reopen to confirm persistence.
+	let reopened = AppPasswordStore::open(dir.path()).expect("reopen");
+	assert_eq!(reopened.for_account("alice").len(), 2);
+
+	store.remove("alice", "phone").expect("remove");
+	assert_eq!(store.for_account("alice").len(), 1);
+	assert!(matches!(
+		store.remove("alice", "phone"),
+		Err(StoreError::NotFound(_))
+	));
+}
+
+#[test]
+fn add_rejects_duplicate_label_and_bad_cidr() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut store = AppPasswordStore::open(dir.path()).expect("open");
+	store
+		.add("alice", app_password("phone", fixtures::password()))
+		.expect("add");
+	assert!(matches!(
+		store.add("alice", app_password("phone", &fixtures::fresh_secret())),
+		Err(StoreError::Duplicate(_))
+	));
+	let mut bad = app_password("bad", fixtures::password());
+	bad.ip_cidr = Some("999.0.0.0/8".to_string());
+	assert!(matches!(
+		store.add("alice", bad),
+		Err(StoreError::Invalid(_))
+	));
+}
+
+#[test]
+fn account_lookup_is_case_insensitive() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut store = AppPasswordStore::open(dir.path()).expect("open");
+	store
+		.add("Alice", app_password("phone", fixtures::password()))
+		.expect("add");
+	assert_eq!(store.for_account("alice").len(), 1);
+	assert_eq!(store.for_account("ALICE").len(), 1);
+}
+
+/// Bulk removal must drop every app password for `account` and leave
+/// the bucket for a different account intact; a missing account returns
+/// `Ok(0)` without rewriting the file.
+#[test]
+fn remove_account_drops_only_the_targets() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut store = AppPasswordStore::open(dir.path()).expect("open");
+	let phone_secret = fixtures::fresh_secret();
+	let laptop_secret = fixtures::fresh_secret();
+	let server_secret = fixtures::fresh_secret();
+	store
+		.add("alice", app_password("phone", &phone_secret))
+		.expect("add");
+	store
+		.add("alice", app_password("laptop", &laptop_secret))
+		.expect("add");
+	store
+		.add("bob", app_password("server", &server_secret))
+		.expect("add");
+
+	let removed = store.remove_account("alice").expect("bulk remove");
+	assert_eq!(removed, 2);
+	assert_eq!(store.for_account("alice").len(), 0);
+	assert_eq!(store.for_account("bob").len(), 1);
+
+	// Persistence after bulk remove.
+	let reopened = AppPasswordStore::open(dir.path()).expect("reopen");
+	assert_eq!(reopened.for_account("alice").len(), 0);
+	assert_eq!(reopened.for_account("bob").len(), 1);
+
+	// Idempotent: a missing account returns zero without rewriting the file.
+	assert_eq!(store.remove_account("ghost").expect("ghost"), 0);
+}
+
+fn two_labels(dir: &std::path::Path) -> AppPasswordStore {
+	let mut store = AppPasswordStore::open(dir).expect("open");
+	store
+		.add("alice", app_password("phone", fixtures::password()))
+		.expect("add phone");
+	store
+		.add("alice", app_password("tablet", fixtures::second_password()))
+		.expect("add tablet");
+	store
+}
+
+#[test]
+fn rename_refuses_a_label_the_account_already_has() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut store = two_labels(dir.path());
+	let error = store.rename("alice", "phone", "tablet").unwrap_err();
+	assert!(
+		matches!(error, StoreError::Duplicate(ref label) if label == "tablet"),
+		"{error}"
+	);
+	let labels: Vec<&str> = store
+		.for_account("alice")
+		.iter()
+		.map(|app| app.label.as_str())
+		.collect();
+	assert_eq!(
+		labels,
+		["phone", "tablet"],
+		"a refused rename changed a label"
+	);
+	let on_disk = AppPasswordStore::open(dir.path()).expect("reopen");
+	assert_eq!(on_disk.for_account("alice").len(), 2);
+}
+
+#[test]
+fn rename_takes_a_label_another_account_has() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut store = two_labels(dir.path());
+	store
+		.add("bob", app_password("laptop", fixtures::password()))
+		.expect("add");
+	store
+		.rename("alice", "phone", "laptop")
+		.expect("another account's label is free");
+	assert_eq!(store.for_account("bob")[0].label, "laptop");
+}
+
+#[test]
+fn rename_and_rotate_of_a_label_that_is_not_there_are_not_found() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut store = two_labels(dir.path());
+	assert!(matches!(
+		store.rename("alice", "watch", "x"),
+		Err(StoreError::NotFound(_))
+	));
+	assert!(matches!(
+		store.rename("carol", "phone", "x"),
+		Err(StoreError::NotFound(_))
+	));
+	assert!(matches!(
+		store.rotate("alice", "watch", "h".into()),
+		Err(StoreError::NotFound(_))
+	));
+}
+
+#[test]
+fn rotate_replaces_only_the_hash_of_that_label() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut store = two_labels(dir.path());
+	let before = store.for_account("alice")[1].hash.clone();
+	let new_hash = crate::smtp::auth::tests::base::hash(fixtures::wrong_password());
+	store
+		.rotate("alice", "phone", new_hash.clone())
+		.expect("rotate");
+	let apps = store.for_account("alice");
+	assert_eq!(apps[0].hash, new_hash);
+	assert_eq!(apps[1].hash, before, "the other credential changed");
+}

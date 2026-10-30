@@ -5,8 +5,9 @@
 //!
 //! - [`evaluate`] is a pure function — no clocks, no I/O — that takes the
 //!   per-window delta, the current time, the rule, and a mutable [`State`],
-//!   and returns whether the rule should fire this tick. The sibling
-//!   `engine_tests.rs` exercises every branch of this function directly.
+//!   and returns whether the rule should fire this tick. The tests in
+//!   `src/alerts/tests/engine.rs` exercise every branch of this function
+//!   directly.
 //! - [`runner::run`] is the Tokio task spawned from `serve`: it owns the
 //!   snapshot/window/cooldown bookkeeping, calls [`evaluate`] every tick,
 //!   and on a fire posts a `WebhookEvent::MetricAlert` and/or queues an
@@ -221,9 +222,4 @@ fn unix_now() -> u64 {
 // Re-export the metrics/spool/webhook types the runner uses so callers of the
 // engine do not need to depend on them directly.
 #[cfg(test)]
-#[path = "engine_tests.rs"]
-mod engine_tests;
-
-#[cfg(test)]
-#[path = "integration_tests.rs"]
-mod integration_tests;
+mod tests;

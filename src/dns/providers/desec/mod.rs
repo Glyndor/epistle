@@ -209,7 +209,7 @@ impl DnsProvider for DesecProvider {
 		Box::pin(crate::dns::providers::within(async move {
 			let mut content = Self::record_content(&record.kind, &record.value);
 			// The bulk PUT replaces the whole rrset. The upsert contract
-			// in `src/dns/provider.rs` replaces only the TXT of the same
+			// in `src/dns/provider/mod.rs` replaces only the TXT of the same
 			// purpose, so the siblings the live rrset holds go back in.
 			if record.kind == RecordKind::Txt {
 				self.authorize(&record)?;
@@ -230,7 +230,7 @@ impl DnsProvider for DesecProvider {
 		Box::pin(crate::dns::providers::within(async move {
 			self.authorize(&record)?;
 			let kind = Self::rrset_kind(&record.kind)?;
-			// The TXT matching rule from `src/dns/provider.rs` is
+			// The TXT matching rule from `src/dns/provider/mod.rs` is
 			// the contract: a value-bearing delete drops only the
 			// record whose content matches the value (a sibling ACME
 			// challenge at the same owner survives), an empty-value
@@ -397,9 +397,4 @@ fn check(response: reqwest::Response) -> Result<(), ProviderError> {
 }
 
 #[cfg(test)]
-#[path = "tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "tests_path.rs"]
-mod path_tests;

@@ -204,7 +204,7 @@ impl PorkbunProvider {
 
 	/// The ids of every record an upsert of `record` replaces: same
 	/// fully-qualified name and type, and for TXT the same purpose (the
-	/// contract in `src/dns/provider.rs`), so a sibling TXT at the name is
+	/// contract in `src/dns/provider/mod.rs`), so a sibling TXT at the name is
 	/// left alone. More than one means the zone already holds duplicates,
 	/// which the upsert collapses rather than adds to.
 	async fn matching_ids(
@@ -336,7 +336,7 @@ impl PorkbunProvider {
 		let kind = Self::api_kind(&record.kind)?;
 		// Porkbun addresses every record by numeric id, so a delete is
 		// a read-then-delete loop. The TXT matching rule from
-		// `src/dns/provider.rs` is the contract: a value-bearing delete
+		// `src/dns/provider/mod.rs` is the contract: a value-bearing delete
 		// drops only the row whose content matches the value (sibling
 		// ACME challenges at the same owner survive), an empty-value
 		// delete drops every row at the owner (the DKIM rotator's
@@ -446,9 +446,4 @@ async fn decode(response: reqwest::Response) -> Result<Reply, ProviderError> {
 }
 
 #[cfg(test)]
-#[path = "tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "tests_path.rs"]
-mod path_tests;

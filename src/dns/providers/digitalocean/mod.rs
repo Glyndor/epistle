@@ -171,14 +171,14 @@ impl DigitaloceanProvider {
 			.with_query("per_page", "200")
 			.with_query("type", kind)
 			.with_query("name", name);
-		self.fetch_pages(url).await
+		self.fetch_pages(url, zone).await
 	}
 
 	/// `GET /v2/domains/{zone}/records?per_page=200` — every record (for
 	/// [`DnsProvider::list`]).
 	async fn list_all(&self, zone: &str) -> Result<Vec<DomainRecord>, ProviderError> {
 		let url = self.records_url(zone, None)?.with_query("per_page", "200");
-		self.fetch_pages(url).await
+		self.fetch_pages(url, zone).await
 	}
 
 	/// GET `first` and every page DigitalOcean links to through
@@ -186,7 +186,11 @@ impl DigitaloceanProvider {
 	/// is not silently truncated. The link comes from the response body, so it
 	/// is resolved against the configured base and refused when it points at a
 	/// different origin: the bearer token must not follow it anywhere else.
-	async fn fetch_pages(&self, first: HttpsUrl) -> Result<Vec<DomainRecord>, ProviderError> {
+	async fn fetch_pages(
+		&self,
+		first: HttpsUrl,
+		zone: &str,
+	) -> Result<Vec<DomainRecord>, ProviderError> {
 		let mut url = first;
 		let mut out = Vec::new();
 		let mut pages = 0;
@@ -203,6 +207,19 @@ impl DigitaloceanProvider {
 				|| status == reqwest::StatusCode::FORBIDDEN
 			{
 				return Err(ProviderError::Auth);
+			}
+			if status == reqwest::StatusCode::NOT_FOUND {
+				if pages == 0 {
+					// The records of a domain DigitalOcean does not
+					// hold: the domain is not there, which is not a
+					// failure of the provider, and the search goes on
+					// to the parent.
+					return Err(ProviderError::ZoneNotFound(zone.to_string()));
+				}
+				// A page after a valid one: the first page proved the
+				// domain is there, so this is a failure of the
+				// provider and not an absent domain.
+				return Err(ProviderError::Remote(format!("HTTP {status}")));
 			}
 			let page: ListResponse = decode(response).await?;
 			out.extend(page.domain_records);
@@ -389,7 +406,7 @@ impl DigitaloceanProvider {
 		let rel = self.relative_name(&record.name);
 		let existing = self.find_records(zone, kind, &rel).await?;
 		let body = Self::record_body(kind, &rel, &record)?;
-		// The TXT matching rule from `src/dns/provider.rs` is the
+		// The TXT matching rule from `src/dns/provider/mod.rs` is the
 		// contract: an upsert replaces the TXT with the same
 		// purpose (version tag) at that name and leaves every
 		// other TXT at the name alone. Two records of the same
@@ -439,7 +456,7 @@ impl DigitaloceanProvider {
 		let kind = Self::api_kind(&record.kind)?;
 		let rel = self.relative_name(&record.name);
 		let existing = self.find_records(zone, kind, &rel).await?;
-		// The TXT matching rule from `src/dns/provider.rs` is the
+		// The TXT matching rule from `src/dns/provider/mod.rs` is the
 		// contract: a value-bearing delete drops only the record
 		// whose data matches the value (a sibling ACME challenge at
 		// the same owner survives), an empty-value delete drops
@@ -545,17 +562,4 @@ async fn decode<T: serde::de::DeserializeOwned>(
 }
 
 #[cfg(test)]
-#[path = "tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "tests_b.rs"]
-mod tests_b;
-
-#[cfg(test)]
-#[path = "tests_contract.rs"]
-mod tests_contract;
-
-#[cfg(test)]
-#[path = "tests_path.rs"]
-mod path_tests;

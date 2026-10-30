@@ -16,18 +16,18 @@ untouched (see [What was left alone](#what-was-left-alone)).
   command parsing (`src/imap/command`). Every connection runs these once per
   line.
 - **Per-message response building** — IMAP FETCH/STORE response rendering
-  (`src/imap/session/fetchstore.rs`, `src/imap/mailbox.rs`). Runs once per
+  (`src/imap/session/fetchstore.rs`, `src/imap/mailbox/flag.rs`). Runs once per
   message in a result set.
 - **Flag persistence** — IMAP STORE writing the `.flags` sidecar
-  (`src/imap/mailbox.rs`).
+  (`src/imap/snapshot.rs`, `src/imap/flags.rs`).
 - **Outbound queue + spool** — SRS rewriting, DSN construction, the filesystem
-  spool, suppression lookup (`src/queue`, `src/storage/spool.rs`).
+  spool, suppression lookup (`src/queue`, `src/storage/spool/mod.rs`).
 
 ## Allocation reductions
 
 ### `render_flags` — one allocation per call removed
 
-`src/imap/mailbox.rs`. The flag list of a message is rendered on every
+`src/imap/mailbox/flag.rs`. The flag list of a message is rendered on every
 `FETCH FLAGS` and every non-silent `STORE` response. The previous
 implementation collected the flag tokens into a `Vec<&str>` and then `join`ed
 them into a `String` — two heap allocations per call. It now writes directly
@@ -45,7 +45,7 @@ durability.
 
 ### No-op STORE skips the sidecar write and the mod-sequence bump
 
-`Snapshot::store_flags` in `src/imap/mailbox.rs`. A STORE that sets a message's
+`Snapshot::store_flags` in `src/imap/snapshot.rs`. A STORE that sets a message's
 flags to the set it already has is common — clients re-mark `\Seen`, re-apply a
 `+FLAGS` that is already present, or issue a `FLAGS` that matches. The previous
 code unconditionally:
@@ -206,7 +206,7 @@ with mailbox size: a cheap `read_dir` followed, **per message**, by opening the
 directly with a per-mailbox metadata index — a rebuildable read-acceleration
 cache that keeps the filesystem-first store fast at scale **without an external
 database** and **without adding write amplification**. It lives in
-`src/imap/index.rs` and is wired into `Snapshot::open`.
+`src/imap/index/mod.rs` and is wired into `Snapshot::open`.
 
 ### What it is
 

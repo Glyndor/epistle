@@ -14,11 +14,8 @@ pub mod delivery_log;
 pub(crate) mod lock;
 pub(crate) mod locked;
 mod routing;
-mod routing_forward;
 pub(crate) mod save_sent;
 mod spool;
-mod spool_permissions;
-mod spool_recipients;
 pub(crate) mod vacation_markers;
 pub mod vacation_store;
 
@@ -38,8 +35,7 @@ pub use delivery::LocalDelivery;
 pub use delivery_log::{DEFAULT_DELIVERY_LOG_DAYS, DeliveryLog, DeliveryOutcome, DeliveryRecord};
 
 #[cfg(test)]
-#[path = "crypto_e2e_tests.rs"]
-mod crypto_e2e_tests;
+mod tests;
 pub use routing::SplitDelivery;
 pub use save_sent::{
 	Guard as SentGuard, SaveError as SentSaveError, SaveOutcome, SkipReason, first_message_id,
@@ -135,38 +131,3 @@ pub(crate) fn load_or_create_key_file(
 	write_secret(&path, &key)?;
 	Ok(key)
 }
-
-#[cfg(all(test, unix))]
-mod secret_write_tests {
-	use std::os::unix::fs::PermissionsExt;
-
-	#[test]
-	fn write_secret_is_owner_only() {
-		let dir = tempfile::tempdir().expect("tempdir");
-		let path = dir.path().join("creds.toml");
-		super::write_secret(&path, b"totp_secret = \"JBSWY3DPEHPK3PXP\"").expect("write");
-		let mode = std::fs::metadata(&path).expect("stat").permissions().mode();
-		assert_eq!(
-			mode & 0o777,
-			0o600,
-			"secret file must be 0600, got {:o}",
-			mode & 0o777
-		);
-		assert_eq!(
-			std::fs::read(&path).expect("read"),
-			b"totp_secret = \"JBSWY3DPEHPK3PXP\""
-		);
-	}
-}
-
-#[cfg(test)]
-#[path = "lock_tests.rs"]
-mod lock_tests;
-
-#[cfg(test)]
-#[path = "locked_tests.rs"]
-mod locked_tests;
-
-#[cfg(test)]
-#[path = "secret_write_concurrency_tests.rs"]
-mod secret_write_concurrency_tests;

@@ -35,6 +35,12 @@ on:
       # release if the Containerfile stops compiling them.
       - "benches/**"
 
+# A newer push to a pull request supersedes the run in flight. Queue and
+# branch runs are never cancelled: only a pull_request event is.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 

@@ -111,6 +111,30 @@ to `127.0.0.1` unless `addr` says otherwise, and the config file must be
 owner-only (`chmod 600`). [Configuration](docs/configuration.md) has a full
 example and every key.
 
+## Repository layout
+
+[Repository structure](docs/structure.md) has the map. Four rules decide
+where code goes:
+
+1. One folder, one module. A folder that mixes two responsibilities is split
+   by responsibility, never by size.
+2. A module with more than one file becomes a folder with `mod.rs`, and its
+   siblings are declared with a plain `mod <sibling>;`.
+3. The unit tests of a module live in a sibling file, not in an inline
+   block: `foo.rs` declares `#[cfg(test)] #[path = "foo_tests.rs"] mod tests;`
+   and a `mod.rs` uses `mod_tests.rs`.
+4. `#[path]` declares that sibling test module or reads a data file next to
+   the module. A `#[path]` that splits production code means a folder is
+   missing.
+
+The tree is moving to this shape in batches (#1211), so many modules do not
+follow rules 1, 2 and 4 yet. Write new code in this shape, and leave a module
+you only edit where it is: its batch moves it. Moving the product code to
+`internal/` is a later, separate step, and whether each module's tests move
+into a folder of their own is still an open decision. A path cited in a doc
+or a comment has to exist, and `tests/repository/repository_paths_exist.rs` fails on
+any that does not.
+
 ## Tests
 
 The suite that runs in CI is:
@@ -177,8 +201,8 @@ server under `systemd-run` on `ubuntu-22.04` and `ubuntu-24.04`.
 The coverage gate is 90% with a fixed ignore regex for files that need a
 live service or are thin connection-accept glue (see `ci.yml`). The MSRV
 build exercises the `rustc` floor `rust-version` declares, currently
-1.94 (set by sqlx 0.9's own `rust-version`), and is pinned to 1.98 to
-match `ci.yml`'s default toolchain.
+1.94 (set by sqlx 0.9's own `rust-version`). The main CI toolchain is
+pinned to 1.99, independently of that minimum.
 
 Two rules matter more than coverage:
 

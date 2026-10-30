@@ -31,7 +31,7 @@ enum Expect {
 use Expect::{Done, Refused};
 
 /// Leaves whose stdout is the product, or that never return. They take no
-/// `--json`; `src/cli/cli_json_everywhere_tests.rs` holds the reasons.
+/// `--json`; `src/cli/tests/json_everywhere.rs` holds the reasons.
 const EXEMPT: &[&str] = &[
 	"serve",
 	"local",
@@ -76,7 +76,7 @@ const SKIPPED: &[(&str, &str)] = &[
 	),
 	(
 		"evidence key rotate",
-		"refused in the first half hour of a UTC day, so the result depends on the hour; src/cli/evidence_tests_key.rs",
+		"refused in the first half hour of a UTC day, so the result depends on the hour; src/cli/evidence/tests/key.rs",
 	),
 	("dns provider test", "calls the DNS provider"),
 	("webhook test", "posts to the endpoint"),
@@ -89,8 +89,8 @@ const SKIPPED: &[(&str, &str)] = &[
 	("dns lockdown", "reads the zone through the DNS provider"),
 	("dkim show", "checks the published records through DNS"),
 	("dkim rotate", "tests/cli_json/dkim.rs"),
-	("dkim cleanup", "src/cli/dkim_cli_cleanup_tests.rs"),
-	("tls renew", "src/cli/tls_cli_tests.rs"),
+	("dkim cleanup", "src/cli/dkim/cleanup/tests/base.rs"),
+	("tls renew", "src/cli/tls/cli/tests/base.rs"),
 	("db upgrade", "needs the stack and the database"),
 	("stack update", "needs the stack; tests/cli_json/stack.rs"),
 	("stack up", "tests/cli_json/stack.rs"),
@@ -103,7 +103,7 @@ const SKIPPED: &[(&str, &str)] = &[
 	("init", "tests/cli_json/init.rs"),
 	(
 		"restore",
-		"reads an archive on stdin; src/cli/dispatch_restore_tests.rs",
+		"reads an archive on stdin; src/cli/dispatch/restore/tests/base.rs",
 	),
 	(
 		"import",

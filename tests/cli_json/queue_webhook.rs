@@ -79,7 +79,9 @@ fn remove(env: &Env, id: uuid::Uuid) {
 #[test]
 fn an_enabled_webhook_hears_about_a_removed_message() {
 	let (url, seen) = receiver();
-	let env = env(&format!("[webhook]\nurl = \"{url}\"\n"));
+	let env = env(&format!(
+		"[webhook]\nurl = \"{url}\"\nallow_private_webhooks = true\n"
+	));
 	let id = queued(&env);
 	remove(&env, id);
 	let body = seen

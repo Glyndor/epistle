@@ -29,6 +29,12 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
 
+# A newer push to a pull request supersedes the run in flight. Queue and
+# branch runs are never cancelled: only a pull_request event is.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
@@ -107,8 +113,8 @@ jobs:
           # Pinned to match ci.yml. Same compiler that the gate tests
           # run on, so a clippy lint widening on 1.99 does not break
           # LDAP auth coverage here while the gate stays green.
-          rustup toolchain install 1.98 --profile minimal
-          rustup default 1.98
+          rustup toolchain install 1.99 --profile minimal
+          rustup default 1.99
 
       - name: Run LDAP integration tests
         # If this command prints "skipping", the env block above is

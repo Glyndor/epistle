@@ -1,9 +1,9 @@
 //! The PostgreSQL implementation of [`crate::antispam::greylist::GreylistStore`].
 //!
-//! Kept apart from the pure decision logic in `greylist.rs` so the SQL-bound
+//! Kept apart from the pure decision logic in `src/antispam/greylist/mod.rs` so the SQL-bound
 //! half can be measured by the live database integration test alone. Every
 //! `GreylistStore` method is async because the SQL queries are; the
-//! in-memory store in `greylist.rs` returns already-ready futures so it can
+//! in-memory store in `src/antispam/greylist/mod.rs` returns already-ready futures so it can
 //! share the same trait surface.
 
 use sqlx::PgPool;

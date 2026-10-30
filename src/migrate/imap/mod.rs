@@ -361,25 +361,4 @@ async fn copy_all(
 }
 
 #[cfg(test)]
-#[path = "fake_server.rs"]
-mod fake_server;
-
-#[cfg(test)]
-#[path = "run_tests.rs"]
-mod run_tests;
-
-#[cfg(test)]
-#[path = "run_tests_security.rs"]
-mod run_tests_security;
-
-#[cfg(test)]
-#[path = "run_tests_memory.rs"]
-mod run_tests_memory;
-
-#[cfg(test)]
-#[path = "ledger_resume_tests.rs"]
-mod ledger_resume_tests;
-
-#[cfg(test)]
-#[path = "ledger_rerun_tests.rs"]
-mod ledger_rerun_tests;
+mod tests;

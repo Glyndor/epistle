@@ -18,12 +18,18 @@ on:
     paths:
       - "src/imap/**"
       - "src/storage/**"
-      - "src/smtp/line.rs"
+      - "src/smtp/line/mod.rs"
       - "tests/fixtures/imaptest.mbox"
       - ".github/scripts/imaptest.sh"
       - ".github/workflows/imaptest.yml"
       - "Cargo.toml"
       - "Cargo.lock"
+
+# A newer push to a pull request supersedes the run in flight. Queue and
+# branch runs are never cancelled: only a pull_request event is.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -52,8 +58,8 @@ jobs:
 
       - name: Install toolchain
         run: |
-          rustup toolchain install 1.98 --profile minimal
-          rustup default 1.98
+          rustup toolchain install 1.99 --profile minimal
+          rustup default 1.99
 
       - name: Build
         run: cargo build --locked

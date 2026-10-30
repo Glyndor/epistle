@@ -4,7 +4,7 @@
 
 use std::path::Path;
 
-use crate::migrate::import::test_keys;
+use crate::migrate::import::tests::test_keys;
 
 /// `mox.conf`, trimmed to what a quickstart writes at the top.
 pub(crate) const MOX_CONF: &str = "\

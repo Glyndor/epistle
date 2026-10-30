@@ -5,13 +5,18 @@
 pub mod check_host;
 pub mod detect;
 pub mod lockdown;
+pub mod names;
 pub mod provider;
 pub mod providers;
 pub mod proxied_check;
+pub mod publish;
 pub mod records;
-pub mod txt;
+pub mod rrset;
+pub mod service_records;
 #[cfg(test)]
-mod uri_probe;
+mod tests;
+pub mod txt;
+pub mod zone;
 
 use crate::dns::provider::txt_purpose;
 use crate::spf::DnsLookup;
@@ -167,13 +172,6 @@ async fn txt_check(kind: &str, name: &str, prefix: &str, dns: &dyn DnsLookup) ->
 		Err(_) => Check::error(kind, name),
 	}
 }
-
-#[cfg(test)]
-#[path = "drift_tests.rs"]
-mod tests;
-#[cfg(test)]
-#[path = "drift_tests_duplicates.rs"]
-mod tests_duplicates;
 
 pub use check_host::check_host;
 pub use detect::{LocalGlobals, PtrReport, detect, local_global_addresses, ptr_report};

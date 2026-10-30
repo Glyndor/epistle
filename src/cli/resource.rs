@@ -4,7 +4,7 @@ use std::io::{BufRead, Write};
 use std::path::Path;
 use std::process::ExitCode;
 
-use super::config_edit::{ConfigDocument, Outcome, after_change_reporting};
+use super::config_edit::{Companion, ConfigDocument, Outcome, after_change_reporting};
 use super::stack::StackAction;
 use crate::config::Config;
 
@@ -124,17 +124,10 @@ pub(super) fn finish(
 	status: &mut impl Write,
 	restart: impl FnOnce(&Config, StackAction) -> ExitCode,
 ) -> Result<ExitCode, ResourceError> {
-	let failure = |error: std::io::Error| ResourceError::Failure(error.to_string());
 	if dry_run {
-		let diff = document.dry_run()?;
-		if edit.json {
-			let object = super::json_out::dry_run_object(edit.action, edit.fields, diff);
-			writeln!(out, "{object}").map_err(failure)?;
-		} else {
-			write!(out, "{diff}").map_err(failure)?;
-		}
-		return Ok(ExitCode::SUCCESS);
+		return preview(&document, None, &edit, out);
 	}
+	let failure = |error: std::io::Error| ResourceError::Failure(error.to_string());
 	let config = document.config()?;
 	let outcome = document.commit()?;
 	let changed = outcome == Outcome::Changed;
@@ -147,6 +140,47 @@ pub(super) fn finish(
 		writeln!(out, "{object}").map_err(failure)?;
 	}
 	Ok(code)
+}
+
+/// A change to a file beside the configuration: the file the transaction
+/// would write, and the lines that say what changes in it.
+pub(super) struct CompanionChange<'a> {
+	/// The file that would be written.
+	pub(super) companion: &'a Companion,
+	/// The lines that say what changes in it.
+	pub(super) lines: &'a [String],
+}
+
+/// Print the dry-run diff of the configuration and of the file that carries
+/// the change into the container. The companion is a file a command stages
+/// beside the configuration; a preview that leaves it out hides the change
+/// the command is about to make.
+pub(super) fn preview(
+	document: &ConfigDocument,
+	companion: Option<CompanionChange<'_>>,
+	edit: &Edit,
+	out: &mut impl Write,
+) -> Result<ExitCode, ResourceError> {
+	let failure = |error: std::io::Error| ResourceError::Failure(error.to_string());
+	let diff = document.dry_run()?;
+	if edit.json {
+		let mut object = super::json_out::dry_run_object(edit.action, edit.fields.clone(), diff);
+		if let Some(change) = companion {
+			object["compose"] = serde_json::json!({
+				"file": change.companion.path,
+				"changes": change.lines,
+			});
+		}
+		writeln!(out, "{object}").map_err(failure)?;
+	} else {
+		write!(out, "{diff}").map_err(failure)?;
+		if let Some(change) = companion {
+			for line in change.lines {
+				writeln!(out, "{line}").map_err(failure)?;
+			}
+		}
+	}
+	Ok(ExitCode::SUCCESS)
 }
 
 /// A configuration edit chosen by a command, applied once the file is open.

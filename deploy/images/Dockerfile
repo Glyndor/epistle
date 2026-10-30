@@ -1,7 +1,7 @@
 # The container images the generated stack runs, pinned by tag and digest.
 #
 # Nothing builds this file. epistle reads it at build time
-# (src/cli/init/images.rs), so the compose files `epistle init` and
+# (src/cli/init/images/mod.rs), so the compose files `epistle init` and
 # `epistle stack update` render use exactly these references, and a
 # Dependabot pull request that moves a digest here is what moves it on every
 # install at the next release. Keep the name: Dependabot's docker ecosystem
@@ -17,4 +17,4 @@
 
 FROM docker.io/library/postgres:18@sha256:74935e72241653ca55e0414067e6d8763aceb8a810eb51b452253ec3dcfc4336 AS postgres
 FROM docker.io/clamav/clamav:1.5@sha256:e19130cdebaeacc71fa46eab3ed6f69941f2f22aa5e08d55e9197f8edf43ce5e AS clamav
-FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab AS mail
+FROM gcr.io/distroless/static-debian13:nonroot@sha256:18f4cc26c9ffa7f20a359298be7deadac5c607c8e03a02b8119f1a5fc2f82c99 AS mail

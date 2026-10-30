@@ -9,7 +9,19 @@ on:
   push:
     branches: [develop, main]
   pull_request:
+    paths:
+      - ".github/workflows/bench.yml"
+      - "benches/**"
+      - "src/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
   workflow_dispatch:
+
+# A newer push to a pull request supersedes the run in flight. Queue and
+# branch runs are never cancelled: only a pull_request event is.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -23,12 +35,12 @@ jobs:
 
       - name: Install toolchain
         run: |
-          # Pinned to 1.98, the same version ci.yml and the three reusables
+          # Pinned to 1.99, the same version ci.yml and the three reusables
           # declare. Without this the criterion build would float to whatever
           # `stable` is that day and the supply-chain SBOM would name a
           # compiler nothing tested.
-          rustup toolchain install 1.98 --profile minimal
-          rustup default 1.98
+          rustup toolchain install 1.99 --profile minimal
+          rustup default 1.99
 
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -54,8 +66,8 @@ jobs:
           # run uploads the criterion report as an artifact for manual
           # regression tracking, and the report's hash reflects the
           # compiler that produced it.
-          rustup toolchain install 1.98 --profile minimal
-          rustup default 1.98
+          rustup toolchain install 1.99 --profile minimal
+          rustup default 1.99
 
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:

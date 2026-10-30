@@ -27,10 +27,14 @@ pub(super) enum PendingScram {
 		/// valid proof nor extend it with a bad one.
 		refusal: Option<ScramRefusal>,
 	},
+	/// The proof was verified and the server-final went out as a `334`
+	/// challenge; awaiting the client's acknowledgement (the empty line)
+	/// before the session is authenticated.
+	ServerFinal { account: String },
 }
 
 impl Session {
-	/// Inject a fixed SCRAM server nonce (tests/determinism).
+	/// Inject a fixed SCRAM server nonce, so tests are deterministic.
 	pub fn with_scram_nonce(mut self, nonce: &str) -> Self {
 		self.scram_nonce = Some(nonce.to_string());
 		self
@@ -181,11 +185,17 @@ impl Session {
 				// does. A bypass lift keeps the ban row in force: only
 				// the bypass list gets refreshed.
 				self.record_scram_outcome(account, Some(account), true, bypassed);
-				self.authenticated = Some(account.to_string());
-				Action::Continue(Reply::single(
-					235,
-					&format!("2.7.0 {}", BASE64.encode(server_final)),
-				))
+				// The server-final travels as a challenge. SMTP has no room
+				// for the SASL "additional data with a successful outcome"
+				// (RFC 4954 §4), so the `235` cannot carry it; the client
+				// gets it in a `334`, verifies its own signature against it
+				// and acknowledges with the empty line. The session is
+				// authenticated only then, so a client that proves itself
+				// and walks away does not get in.
+				self.pending_scram = Some(PendingScram::ServerFinal {
+					account: account.to_string(),
+				});
+				Action::CollectAuthResponse(Reply::single(334, &BASE64.encode(server_final)))
 			}
 			Err(_) => {
 				self.record_scram_outcome(account, Some(account), false, false);
@@ -194,14 +204,44 @@ impl Session {
 		}
 	}
 
+	/// The last round: the client acknowledges the server-final with the
+	/// empty line and the session is authenticated. Any other line is a
+	/// protocol error (RFC 4954 §4) and leaves the session
+	/// unauthenticated. The outcome of the exchange was already recorded
+	/// when the proof was verified, so this round moves no strike and
+	/// clears no ban.
+	pub(super) fn scram_server_final(&mut self, line: &str, account: String) -> Action {
+		if !line.is_empty() {
+			return Action::Continue(Reply::single(501, "5.5.2 invalid authentication response"));
+		}
+		// The exchange succeeded. The line that says so at the default
+		// level: the password path writes the audit channel instead, and
+		// this mechanism never reached it.
+		crate::smtp::session_log::authentication(
+			&crate::log_id::account(&account),
+			self.auth_protocol.as_str(),
+			"SCRAM",
+			crate::smtp::session_log::SUCCEEDED,
+			self.auth_failures,
+		);
+		self.authenticated = Some(account);
+		Action::Continue(Reply::single(235, "2.7.0 authentication successful"))
+	}
+
 	/// A failed SCRAM step: clear state, count the failure, and reply 535
 	/// (closing after repeated failures), with no user/password oracle.
 	fn scram_failure(&mut self) -> Action {
 		self.pending_scram = None;
 		self.auth_failures += 1;
-		tracing::warn!(
-			failures = self.auth_failures,
-			"SMTP SCRAM authentication failed"
+		// The attempt is recorded at the default level. The account is
+		// not named: a refused attempt never says which account it
+		// tried to be, the same way the wire answer does not.
+		crate::smtp::session_log::authentication(
+			crate::smtp::session_log::UNKNOWN,
+			self.auth_protocol.as_str(),
+			"SCRAM",
+			crate::smtp::session_log::FAILED,
+			self.auth_failures,
 		);
 		let reply = Reply::single(535, "5.7.8 authentication credentials invalid");
 		if self.auth_failures >= 3 {

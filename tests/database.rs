@@ -15,7 +15,7 @@ use std::sync::LazyLock;
 /// `[0u8; 32]` base is overwritten by the copies, so no literal
 /// survives to the `with_key` call; the same idiom the SCRAM salt
 /// and TOTP secret tests settled for, extended to 32 bytes the way
-/// `src/smtp/server/server_tests_subjectpass.rs` does.
+/// `src/smtp/server/tests/mods/tests_subjectpass.rs` does.
 fn fixture_key() -> [u8; 32] {
 	let mut key = [0u8; 32];
 	key[..16].copy_from_slice(uuid::Uuid::now_v7().as_bytes());
@@ -34,7 +34,7 @@ fn database_url() -> Option<String> {
 /// so the equivalent lives here, with the same shape and same goal: keep
 /// a string literal out of every parameter named `password` so the
 /// `rust/hard-coded-cryptographic-value` query has nothing to flag. The
-/// companion helpers in `src/smtp/auth.rs` explain the rationale.
+/// companion helpers in `src/smtp/auth/mod.rs` explain the rationale.
 fn fixture_password() -> &'static str {
 	static PASSWORD: LazyLock<String> = LazyLock::new(|| uuid::Uuid::now_v7().simple().to_string());
 	PASSWORD.as_str()

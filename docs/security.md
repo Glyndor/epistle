@@ -62,6 +62,18 @@ control, its test and the residual risks, see the [threat model](threat-model.md
   downgrade rejection (RFC 5802 §6). `-PLUS` is offered when a static `[tls]`
   certificate is configured; under ACME (where the certificate is renewed at
   runtime) it is omitted and clients use SCRAM-SHA-256.
+- **The SCRAM exchange over SMTP ends with an acknowledgement.** The server
+  sends the server-final (the `v=...` signature the client checks) as a `334`
+  challenge, and the client acknowledges it with the empty line; only then does
+  the server answer `235 2.7.0 authentication successful`. The server-final
+  cannot ride on the `235`, because SMTP has no room for the SASL "additional
+  data with a successful outcome" (RFC 4954 §4), so it travels as a challenge
+  instead. A client that answers that challenge with anything other than the
+  empty line (or `*`, which cancels the exchange) gets a `501` and stays
+  unauthenticated: a correct proof alone does not open the session. IMAP has no
+  such last round — there the server-final travels in the response code of the
+  `OK` that closes the `AUTHENTICATE` — so an IMAP client sees one message
+  fewer than an SMTP one.
 - **SCRAM verifiers** stored next to the argon2id hash are derived with
   600000 PBKDF2-HMAC-SHA256 iterations (the OWASP 2023 figure), so the
   verifier is not a cheaper target than the hash for someone who reads
@@ -169,7 +181,7 @@ control, its test and the residual risks, see the [threat model](threat-model.md
   `553` at `MAIL FROM`, `550 5.7.1` at the `From` header, `forbiddenFrom` in
   JMAP and `forbidden_from` in the API, as is any address of another account
   or of another domain. Loosening any of them is a decision about spoofing,
-  not a fix. The table of cases lives in `src/smtp/directory_send_as_fixture.rs`.
+  not a fix. The table of cases lives in `src/smtp/directory/send_as_fixture.rs`.
 - Every recipient is resolved against the directory before any network work; an
   empty directory rejects everything (fail-closed).
 - JMAP and `POST /api/v1/send` act for the **principal** the bearer carries,
@@ -185,7 +197,7 @@ control, its test and the residual risks, see the [threat model](threat-model.md
   Every route with per-tenant data applies the key's domains, not only the
   accounts routes (see "Domain-confined API keys" in the configuration
   reference for the list). A route is added together with its rule in
-  `src/api/route_rules_tests.rs`, or that test fails.
+  `src/api/tests/route_rules.rs`, or that test fails.
   A credential that matches no key reaches nothing. Every JMAP method, upload,
   download and the WebSocket check the account against the principal; a
   refused account gets the same `accountNotFound` (HTTP 404 on upload and
@@ -260,6 +272,13 @@ needs a proxy or a port mapping in front of it.
 Inbound mail is checked with **SPF**, **DKIM**, **DMARC** (with aggregate
 reports), and **ARC**; outbound is **DKIM-signed**, with **MTA-STS**, **DANE**
 and **TLS-RPT** for transport authentication. See the [DNS guide](dns.md).
+
+An inbound ARC chain is verified with the algorithm each of its headers
+declares: `a=ed25519-sha256` with Ed25519 over the SHA-256 digest of the
+signed data, `a=rsa-sha256` with RSA over a key whose modulus is at least
+1024 bits. The key type the DNS record declares has to be the one the
+algorithm needs, and a record that publishes another kind of key is refused
+instead of being read as whichever primitive the verifier happened to use.
 
 ## Anti-abuse
 
@@ -584,6 +603,26 @@ maps in either direction with `epistle account show` and
 `epistle account find-log-id` (see [the CLI reference](cli.md#accounts)).
 Test diagnostics follow the same rule: an assertion message names the field,
 never the credential or account data it checked.
+
+Two lines an SMTP session writes at the default level (`info`) carry those
+pseudonyms and nothing else:
+
+- **`message accepted`** — one per accepted inbound message. `log_id` is the
+  recipient account's pseudonym (`unknown` when the recipient is not served
+  here), `size` the octets delivered, `protocol` the protocol that carried
+  it (`smtp`), `recipients` how many recipients the envelope named, and
+  `result` the outcome. No address, no sender, no subject and no body reach
+  the line. An accepted message used to leave no line at all, so the log
+  could not say whether mail had arrived.
+- **`authentication attempt`** — one per attempt on the mechanisms that do not
+  go through the password check: SCRAM, OAuth and SASL EXTERNAL. `log_id` is
+  the account's pseudonym, or `unknown` when the attempt was refused: a
+  refused attempt never says which account it tried to be, the same way the
+  wire answer does not. `protocol`, `mechanism`, `result` and `failures` say
+  the rest. A refused attempt on those mechanisms used to leave a warning
+  without the protocol, and a successful one left nothing at all. The
+  password mechanisms (SASL PLAIN, AUTH LOGIN) write the audit channel
+  `epistle::auth` instead, which carries the same facts.
 
 ## Reporting a vulnerability
 

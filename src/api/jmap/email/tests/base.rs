@@ -1,0 +1,353 @@
+//! Tests for `apply_email_update`: the JMAP `Email/set` keyword and
+//! mailbox-move transition. Split out of `email.rs` so the module
+//! stays under the per-file line cap.
+
+use std::sync::Arc;
+
+use serde_json::json;
+
+use super::*;
+use crate::antispam::trainer::RecordingTrainer;
+use crate::antispam::training_queue::LessonBudget;
+use crate::imap::mailbox;
+use crate::smtp::auth::tests::base::fixture_password;
+use crate::storage::MessageCrypto;
+
+/// Build an [`ApiState`] whose `training()` returns a queue backed by
+/// a [`RecordingTrainer`]. Two state-builders already exist
+/// (`api::tests::test_state`) but neither wires a training queue, so
+/// the JMAP-side tests roll their own here rather than overload the
+/// generic one. The test never authenticates against this state, so
+/// the password hash and the SMTP credential are both derived from
+/// [`fixture_password`] (minted at run time) so no literal ever
+/// reaches a credential-shaped parameter.
+fn state_with_recording_training(dir: &std::path::Path) -> (ApiState, Arc<RecordingTrainer>) {
+	let trainer = Arc::new(RecordingTrainer::new());
+	let metrics = Arc::new(crate::metrics::Metrics::new());
+	let queue = crate::antispam::training_queue::TrainingQueue::start(
+		Arc::clone(&trainer) as Arc<dyn crate::antispam::trainer::BayesTrainer>,
+		MessageCrypto::disabled(),
+		Arc::clone(&metrics),
+	);
+	(state_with_queue(dir, queue), trainer)
+}
+
+/// An [`ApiState`] whose training queue is `queue`.
+fn state_with_queue(
+	dir: &std::path::Path,
+	queue: crate::antispam::training_queue::TrainingQueue,
+) -> ApiState {
+	let spool = crate::storage::FsSpool::open(dir).expect("spool");
+	let accounts = vec![crate::config::Account {
+		display_name: None,
+		name: "alice".to_string(),
+		addresses: vec!["alice@example.org".to_string()],
+		password_hash: Some(crate::smtp::auth::tests::base::hash(fixture_password())),
+		catch_all: Vec::new(),
+		quota_bytes: None,
+		forward: Vec::new(),
+		forward_keep_local: true,
+		allowed_protocols: None,
+	}];
+	let store = Arc::new(
+		crate::directory_store::AccountStore::open(
+			dir,
+			vec!["example.org".to_string()],
+			std::collections::HashMap::new(),
+			accounts,
+		)
+		.expect("open store"),
+	);
+	ApiState::new(
+		&crate::smtp::auth::tests::base::hash(fixture_password()),
+		dir.to_path_buf(),
+		vec!["example.org".to_string()],
+		store,
+		spool,
+	)
+	.with_training(queue)
+}
+
+/// Seed one message in INBOX so `apply_email_update` can find it.
+fn seed_inbox(dir: &std::path::Path, body: &[u8]) -> uuid::Uuid {
+	mailbox::append(
+		dir,
+		"alice",
+		"INBOX",
+		&[crate::imap::mailbox::Flag::parse("$seen").expect("parse seen")],
+		body,
+		&MessageCrypto::disabled(),
+	)
+	.expect("append")
+}
+
+/// A combined "mark as junk and move to Junk" JMAP `Email/set` update
+/// queues a spam-training job against the destination message. The
+/// pre-fix code returned from the move branch without ever touching
+/// the queue, so a re-mark was a no-op and the spam the user
+/// intended to teach stayed in their corpus as `0`. The
+/// `RecordingTrainer` only sees a `train` call when the worker
+/// drains a job with a readable file, so an empty recording means
+/// the worker hit the deleted source path and bailed out.
+#[tokio::test]
+async fn a_move_with_junk_keyword_queues_a_training_job_on_the_destination() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let body = b"Subject: hi\r\n\r\nbody\r\n";
+	let id = seed_inbox(dir.path(), body);
+	let (state, trainer) = state_with_recording_training(dir.path());
+
+	let patch = json!({
+		"mailboxIds": { "Junk": true },
+		"keywords": { "$junk": true },
+	});
+	apply_email_update(
+		&state,
+		"alice",
+		&id.to_string(),
+		&patch,
+		&mut LessonBudget::new(),
+	)
+	.expect("update applies");
+
+	// The message must now live under Junk, not INBOX. A fresh copy
+	// was appended during the move, so the new entry carries a
+	// different UUID from the source: what matters is the count
+	// and the flag set, not that the id survived.
+	let inbox_msgs: Vec<_> =
+		mailbox::Snapshot::open(dir.path(), "alice", "INBOX", &MessageCrypto::disabled())
+			.expect("open INBOX")
+			.messages()
+			.map(|m| m.id().to_string())
+			.collect();
+	assert!(
+		inbox_msgs.is_empty(),
+		"the message should have moved out of INBOX; got: {inbox_msgs:?}"
+	);
+	let junk_snap =
+		mailbox::Snapshot::open(dir.path(), "alice", "Junk", &MessageCrypto::disabled())
+			.expect("open Junk");
+	let junk_msgs: Vec<_> = junk_snap
+		.messages()
+		.map(|m| (m.id().to_string(), m.flags.len()))
+		.collect();
+	assert_eq!(
+		junk_msgs.len(),
+		1,
+		"the message should now live under Junk, got: {junk_msgs:?}"
+	);
+	let junk_message = junk_snap
+		.messages()
+		.next()
+		.expect("at least one junk message");
+	assert!(
+		junk_message.flags.iter().any(|f| matches!(
+			f,
+			crate::imap::mailbox::Flag::Keyword(k) if k.is_junk()
+		)),
+		"the moved message should carry the $Junk keyword"
+	);
+
+	// The training worker records the calls it sees; one spam
+	// training call against the destination message is the fixed
+	// behaviour. The recorded length pins the path: the worker only
+	// hands the bytes to the trainer when it can read the file, so
+	// the source path (already removed) would have surfaced as zero
+	// recorded calls.
+	let received = tokio::time::timeout(
+		std::time::Duration::from_millis(500),
+		trainer.await_one_call(),
+	)
+	.await;
+	assert!(
+		received.is_ok(),
+		"the combined move+junk update must enqueue a spam training call: pre-fix returned without queueing"
+	);
+	let calls = trainer.calls();
+	assert_eq!(
+		calls.len(),
+		1,
+		"the combined move+junk update must queue exactly one spam training call: {calls:?}"
+	);
+	let (account, length, spam) = &calls[0];
+	assert_eq!(account, "alice");
+	assert_eq!(*length, body.len(), "worker loaded the destination body");
+	assert!(spam, "spam side for added $Junk");
+}
+
+/// A queue whose receiver the test holds, with the state that feeds it.
+fn state_with_held_queue(
+	dir: &std::path::Path,
+) -> (
+	ApiState,
+	tokio::sync::mpsc::Receiver<crate::antispam::training_queue::TrainingJob>,
+) {
+	let metrics = Arc::new(crate::metrics::Metrics::new());
+	let (queue, receiver) = crate::antispam::training_queue::TrainingQueue::bounded(16, metrics);
+	(state_with_queue(dir, queue), receiver)
+}
+
+fn seed(dir: &std::path::Path, mailbox_name: &str, body: &[u8]) -> uuid::Uuid {
+	mailbox::append(
+		dir,
+		"alice",
+		mailbox_name,
+		&[],
+		body,
+		&MessageCrypto::disabled(),
+	)
+	.expect("append")
+}
+
+fn jobs(
+	receiver: &mut tokio::sync::mpsc::Receiver<crate::antispam::training_queue::TrainingJob>,
+) -> Vec<crate::antispam::training_queue::TrainingJob> {
+	let mut out = Vec::new();
+	while let Ok(job) = receiver.try_recv() {
+		out.push(job);
+	}
+	out
+}
+
+#[test]
+fn a_mailbox_move_into_junk_alone_teaches_spam_from_the_stored_copy() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let id = seed_inbox(dir.path(), b"Subject: offer\r\n\r\nbuy\r\n");
+	let (state, mut receiver) = state_with_held_queue(dir.path());
+	let patch = json!({ "mailboxIds": { "Junk": true } });
+	apply_email_update(
+		&state,
+		"alice",
+		&id.to_string(),
+		&patch,
+		&mut LessonBudget::new(),
+	)
+	.expect("update applies");
+	let queued = jobs(&mut receiver);
+	assert_eq!(queued.len(), 1, "one lesson");
+	assert!(queued[0].spam, "moved into Junk is spam");
+	assert!(queued[0].path.is_file(), "the lesson names the stored copy");
+}
+
+#[test]
+fn a_mailbox_move_out_of_junk_teaches_ham_and_a_move_to_trash_teaches_nothing() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let kept = seed(dir.path(), "Junk", b"Subject: lunch\r\n\r\nnoon\r\n");
+	let thrown = seed(dir.path(), "Junk", b"Subject: offer\r\n\r\nbuy\r\n");
+	let (state, mut receiver) = state_with_held_queue(dir.path());
+	let to_inbox = json!({ "mailboxIds": { "INBOX": true } });
+	apply_email_update(
+		&state,
+		"alice",
+		&kept.to_string(),
+		&to_inbox,
+		&mut LessonBudget::new(),
+	)
+	.expect("to INBOX");
+	let queued = jobs(&mut receiver);
+	assert_eq!(queued.len(), 1);
+	assert!(!queued[0].spam, "moved out of Junk is ham");
+	let to_trash = json!({ "mailboxIds": { "Trash": true } });
+	apply_email_update(
+		&state,
+		"alice",
+		&thrown.to_string(),
+		&to_trash,
+		&mut LessonBudget::new(),
+	)
+	.expect("to Trash");
+	assert!(
+		jobs(&mut receiver).is_empty(),
+		"Junk to Trash teaches nothing"
+	);
+}
+
+#[test]
+fn a_move_into_junk_wins_over_a_not_junk_keyword_in_the_same_update() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let id = seed_inbox(dir.path(), b"Subject: offer\r\n\r\nbuy\r\n");
+	let (state, mut receiver) = state_with_held_queue(dir.path());
+	let patch = json!({ "mailboxIds": { "Junk": true }, "keywords": { "$notjunk": true } });
+	apply_email_update(
+		&state,
+		"alice",
+		&id.to_string(),
+		&patch,
+		&mut LessonBudget::new(),
+	)
+	.expect("update applies");
+	let queued = jobs(&mut receiver);
+	assert_eq!(queued.len(), 1, "one message teaches one verdict");
+	assert!(queued[0].spam, "the move is the last word");
+}
+
+#[test]
+fn updates_of_one_email_set_share_one_budget() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let ids: Vec<uuid::Uuid> = (0..6)
+		.map(|n| {
+			seed(
+				dir.path(),
+				"INBOX",
+				format!("Subject: {n}\r\n\r\nbody\r\n").as_bytes(),
+			)
+		})
+		.collect();
+	let metrics = Arc::new(crate::metrics::Metrics::new());
+	let (queue, mut receiver) =
+		crate::antispam::training_queue::TrainingQueue::bounded(16, Arc::clone(&metrics));
+	let queue = queue.with_command_lessons(2);
+	let state = state_with_queue(dir.path(), queue);
+	let mut budget = state.training().expect("queue").command_budget();
+	let patch = json!({ "mailboxIds": { "Junk": true } });
+	for id in &ids {
+		apply_email_update(&state, "alice", &id.to_string(), &patch, &mut budget)
+			.expect("update applies");
+	}
+	assert_eq!(jobs(&mut receiver).len(), 2, "the budget of the call");
+	assert_eq!(
+		metrics.snapshot().get("bayes_training_dropped").copied(),
+		Some(4)
+	);
+}
+
+/// The handler gives one `Email/set` one budget, whatever the number of
+/// updates in it.
+#[test]
+fn one_email_set_call_teaches_at_most_its_commands_budget() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let ids: Vec<uuid::Uuid> = (0..6)
+		.map(|n| {
+			seed(
+				dir.path(),
+				"INBOX",
+				format!("Subject: {n}\r\n\r\nbody\r\n").as_bytes(),
+			)
+		})
+		.collect();
+	let metrics = Arc::new(crate::metrics::Metrics::new());
+	let (queue, mut receiver) =
+		crate::antispam::training_queue::TrainingQueue::bounded(16, Arc::clone(&metrics));
+	let state = state_with_queue(dir.path(), queue.with_command_lessons(2));
+	let update: serde_json::Map<String, Value> = ids
+		.iter()
+		.map(|id| (id.to_string(), json!({ "mailboxIds": { "Junk": true } })))
+		.collect();
+	let args = json!({ "accountId": "alice", "update": update });
+	let reply = email_set(
+		&state,
+		&crate::api::Principal::unrestricted(),
+		&args,
+		"c0",
+		&crate::api::jmap::Uploads::default(),
+	);
+	assert_eq!(reply[0], "Email/set", "{reply}");
+	assert_eq!(
+		jobs(&mut receiver).len(),
+		2,
+		"two lessons for the whole call"
+	);
+	assert_eq!(
+		metrics.snapshot().get("bayes_training_dropped").copied(),
+		Some(4)
+	);
+}

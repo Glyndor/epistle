@@ -21,23 +21,23 @@ jobs:
     with:
       # Pin the toolchain so CI no longer floats to whatever `stable` is that
       # day — an unpinned toolchain turned every open PR red when Rust 1.97
-      # widened a clippy lint. Now on 1.98 (the org default), with that lint
+      # widened a clippy lint. Now on 1.99 (the org default), with that lint
       # fixed; bump deliberately through this input, never by tracking stable.
       # Kept equal to the rust-supply-chain.yml default — a repo whose SBOM is
       # produced by a compiler its test suite never ran is podup#1487.
-      toolchain: "1.98"
+      toolchain: "1.99"
       # The floor CI builds on. It no longer comes from `debian/control`: the .deb
-      # is built for musl with a rustup toolchain (`release.yml` pins 1.98.0), so
-      # there is no packaging floor to promise. 1.94 is now derived from sqlx
-      # 0.9's own `rust-version`, which makes it a measured floor on the build
-      # graph rather than on the operating system, and tied to `rust-version` in
+      # is built for musl with a rustup toolchain (`release.yml` pins 1.99.0), so
+      # there is no packaging floor to promise. 1.98 is now derived from
+      # mail-parser 1.0's own `rust-version`, which makes it a measured floor on
+      # the build graph rather than on the operating system, and tied to `rust-version` in
       # Cargo.toml by tests/msrv_agrees_with_ci.rs.
       #
       # 1.88 was the previous floor; it came from a build that failed (`rcgen`,
       # `time` and `icu_properties` each wanted more than `edition = "2024"`
       # implied), and was the one this input promised until sqlx 0.9 widened the
       # dep graph.
-      msrv: "1.94"
+      msrv: "1.98"
       # fakeroot is what lets the packaging tests run the maintainer scripts.
       # Those scripts stat the owner and mode of every path they touch, and the
       # tests assert that a root-owned store is accepted and a writable one is
@@ -63,12 +63,17 @@ jobs:
       #     PostgreSQL; the Database workflow exercises them (without measuring).
       #   directory_store/ldap — needs an LDAP server (tests/ldap.rs, gated on
       #     INTEROP_LDAP_URL).
+      #     The two directory_store modules are folders now (sql/mod.rs and
+      #     ldap/mod.rs), so the entry names both.
       #   acme/renew — the certificate-renewal path needs a live ACME directory.
+      #     The module is a folder now (renew/mod.rs), so the entry names both.
       #   pop3/server, managesieve/server — connection-accept glue, exercised
-      #     end-to-end rather than by unit tests.
+      #     end-to-end rather than by unit tests. Both are folders now
+      #     (server/mod.rs), so the entry names both.
       # acme/transport and pop3/backend are well covered and deliberately NOT
       # excluded (they count toward the gate).
-      # Test files (the *_tests(_<word>)?.rs splits and test_support.rs) are
+      # Test files (the *_tests(_<word>)?.rs splits, the leaves of a tests/
+      # folder and test_support.rs) are
       # left out for a different reason: cargo llvm-cov does not separate them
       # from production code by name, and a test file split to stay under the
       # line limit raises the coverage number, which is the opposite of what
@@ -76,7 +81,14 @@ jobs:
       # gate stopped counting test code as covered production code; this is
       # the gate becoming honest, not a relaxed gate. Ratcheted up from here
       # (issue #921).
-      coverage-ignore-regex: "(db/mod|antispam/(reputation|corpus|hook|bans_sql)|acme/renew|pop3/server|managesieve/server|directory_store/(sql|ldap)|_tests(_[a-z0-9_]+)?|test_support|tests_[a-z0-9_]+|/tests)\\.rs"
+      # The test modules of storage/delivery and of imap/session/list_status
+      # are named after their module, so they are listed one by one: the
+      # folder holds the module itself (mod.rs) and its coverage must count.
+      # A leaf of a tests/ folder may carry helpers of its own, which live in
+      # a folder named after it (src/smtp/identification/tests/base/client.rs),
+      # so the last alternative covers the leaves of a tests/ folder under
+      # src/ whatever their depth.
+      coverage-ignore-regex: "(db/mod|antispam/((reputation|corpus|hook)(/mod)?|bans/sql/mod)|acme/renew(/mod)?|pop3/server(/mod)?|managesieve/server(/mod)?|directory_store/(sql|ldap)(/mod)?|storage/delivery/(containment|default_mailboxes|sieve_limits|sieve_names|sieve_warnings)|imap/session/list_status/(hierarchy|root_hierarchy|special_use_selection)|_tests(_[a-z0-9_]+)?|test_support|tests_[a-z0-9_]+|/tests)\\.rs|/tests/[^/]+\\.rs|src/[^/]*(/[^/]+)*/tests(/[^/]+)*\\.rs"
   dependabot-freshness:
     # Not a required check and it reads repository state, not the queued
     # commit, so it would only spend a runner inside the queue.

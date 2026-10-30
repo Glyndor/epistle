@@ -1,0 +1,6 @@
+DKIM-Signature: v=1; a=rsa-sha256; c=simple/simple; d=example.org; s=tags; h=from:to:subject; zfuture=one; zfuture=two; bh=VN486rUbHeJrPGJbDu14w4pnttmiNPVpoHfwtV9tU/U=; b=gXUfULXenMPgcYJx3B82iizeYVWjIwB8XoS37QVxuMuMzl8KLtkqnnGWrYTmlDALQTM7QhbfKXspzrNLmGmWwQ7JFEs7g9YchrPTMT9dQIA2EzEpNILDWxPWTpsf/kI47ruF3AGr8TZkERA20cbiiXtqwFNqvdx9yzI3YT9OCaB8vuzuTI9eB9efeWCTlr4RW4fALoPoxxDtQhC4tynnBxg2Z6aJsjN8ofRHIFS5EM5XfsGRXRlxKFj6dhQpFdMg6zzwFlylhVWLABzRP3VqwfG3gheZaftZ50itHCe/IvSRZgJJqSy3WQLuQdYekSpHRPu00Bnd/sXt2CQDZV7t8A==
+From: Alice <alice@example.org>
+To: Bob <bob@example.net>
+Subject: DKIM tags
+
+DKIM tag validation fixture.

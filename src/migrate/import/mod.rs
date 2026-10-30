@@ -8,7 +8,7 @@
 pub(crate) mod apply;
 pub(crate) mod keys;
 #[cfg(test)]
-pub(crate) mod test_keys;
+pub(crate) mod tests;
 
 use serde::Serialize;
 use zeroize::Zeroizing;
@@ -131,7 +131,3 @@ pub(crate) fn address(raw: &str) -> Option<String> {
 	}
 	Some(format!("{}@{}", local.to_lowercase(), domain(host)?))
 }
-
-#[cfg(test)]
-#[path = "mod_tests.rs"]
-mod tests;

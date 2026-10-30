@@ -1,5 +1,5 @@
 //! Live-database tests for the known-network bypass list. The in-memory
-//! fake in `src/antispam/bans_tests.rs` covers the trait contract; the
+//! fake in `src/antispam/bans/tests/base.rs` covers the trait contract; the
 //! PostgreSQL case here covers the SQL projection, the upsert throttle,
 //! the cap eviction and the sweep horizon.
 //!
@@ -344,7 +344,7 @@ async fn arming_an_account_ban_does_not_drop_the_known_network_row() {
 
 /// Smoke checks the fallback: without a ban store attached, the
 /// directory-level decision is `Clear` for every login. This is
-/// the same shape the `directory_known_network_tests.rs` covers,
+/// the same shape the `src/smtp/directory/tests/known_network.rs` covers,
 /// but at the integration level: a fresh `PgBanStore` against a
 /// real PostgreSQL behaves the same as the in-memory fake.
 #[tokio::test]

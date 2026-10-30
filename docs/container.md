@@ -4,23 +4,23 @@ The supported production shape for `epistle` is a rootless Podman or Docker
 container driven by `podup`. The compose file `init` writes runs the host's
 `/usr/bin/epistle` (the statically linked musl binary the `.deb` ships)
 bind-mounted read-only into the digest-pinned
-`gcr.io/distroless/static-debian12:nonroot` base. A `ghcr.io/glyndor/epistle`
+`gcr.io/distroless/static-debian13:nonroot` base. A `ghcr.io/glyndor/epistle`
 image is still built and published on every release (see "Tags" below); it
 matches the `.deb` byte-for-byte and stays as the choice of an operator who
 sets `image` in the answers or pulls it directly.
 
 ## What the image contains
 
-The base is `gcr.io/distroless/static-debian12:nonroot`, pinned by digest
+The base is `gcr.io/distroless/static-debian13:nonroot`, pinned by digest
 in the `Containerfile` and in `deploy/images/Dockerfile`, which also pins
 the PostgreSQL and ClamAV images of the generated stack. The binary reads
 that file at build time, so a release that moves a digest there moves it in
 the compose file `epistle stack update` renders on every install; Dependabot
 watches both files. The image carries the musl-statically linked
 release binary, the runtime data the binary needs, and nothing else.
-The inventory below was produced by `podman create` of `epistle:test`
-followed by `podman export | tar -t`, on this host with
-`podman 5.7.0`, on 2026-10-04.
+The list below describes the intended runtime contents. The previous Debian 12
+inventory was inspected on 2026-10-04 with `podman 5.7.0`; the Debian 13
+image has not yet been inspected or measured.
 
 - `/usr/bin/epistle`, the binary. Built with the same
   `cargo build --release --locked --target <musl>` invocation the .deb
@@ -28,29 +28,26 @@ followed by `podman export | tar -t`, on this host with
 - A `/etc/epistle` directory owned by `uid:gid 65532:65532`, created at
   build time. The operator's `mail.toml` is bind-mounted over it; no
   file inside the image ever needs to be writable.
-- `/etc/ssl/certs/ca-certificates.crt` (224 449 bytes), the merged CA
+- `/etc/ssl/certs/ca-certificates.crt`, the merged CA
   bundle. The binary uses rustls with the system trust store, so the
   bundle is what verifies outbound TLS for SMTP submission, IMAP
   retrieval, ACME, and any other connection that pins a public CA.
-- `/etc/passwd` and `/etc/group` with three entries: `root`,
-  `nobody`, and `nonroot` (uid 65532, gid 65532, home `/home/nonroot`,
-  shell `/sbin/nologin`). The image sets `USER 65532:65532`, so the
-  binary runs as `nonroot`. The other two entries are not used; they
-  are in the base.
+- `/etc/passwd` and `/etc/group` supplied by the base. The image sets
+  `USER 65532:65532`, so the binary runs as `nonroot`. The exact account
+  inventory of the Debian 13 base still needs inspection.
 - `/usr/share/zoneinfo/` and the tzdata package metadata under
   `/usr/share/doc/tzdata/`. The binary is single-timezone (the host's
   `TZ`), so tzdata is not exercised at runtime; it is in the base.
 - No shell, no package manager, no `openssl`, no `libc` (musl is
   statically linked into the binary), no `ca-certificates` source
-  tools, no editor. Anything that would have called `sh -c` is
-  not in the image; that is also why `epistle dkim-keygen --rsa`
-  has to be run on the host.
+  tools, no editor. Nothing in the server calls `sh -c`: the keys it
+  makes, the RSA DKIM key included, are made in process.
 - OCI labels: `org.opencontainers.image.source`,
   `org.opencontainers.image.version`, `org.opencontainers.image.revision`,
   and `io.containers.autoupdate=registry` so `podman-auto-update(1)`
   can track the `<version>` tag.
 
-The image is 28 MiB on `linux/amd64`. `USER 65532:65532`; `ENTRYPOINT
+The Debian 13 image size has not yet been measured. `USER 65532:65532`; `ENTRYPOINT
 ["/usr/bin/epistle"]`; `CMD ["serve", "--config", "/etc/epistle/mail.toml"]`.
 
 ## What is meant to run inside the image
@@ -59,11 +56,11 @@ The image is 28 MiB on `linux/amd64`. `USER 65532:65532`; `ENTRYPOINT
 one-shot operator action or a developer tool and is documented as running on
 the host, not in the container. Two deserve calling out:
 
-- `epistle dkim-keygen --rsa` shells out to `openssl genpkey`. The distroless
-  base ships no `openssl`, so the RSA DKIM key is generated on the host and
-  bind-mounted into the data directory as the configured `rsa_key_file`. The
-  Ed25519 selector (`epistle dkim-keygen`, no flag) is fine in either place
-  because it does not shell out.
+- `epistle dkim-keygen --rsa` makes the RSA key in process, so it does not
+  need the `openssl` the distroless base does not ship. The key still belongs
+  on the host: the server reads it from the data directory as the configured
+  `rsa_key_file`, and the key it rotates on its own is made in process inside
+  the container.
 - `epistle init` is an interactive setup wizard meant to be run on the host
   once, then re-run only for structural changes (a second account, a new
   domain). It writes `/etc/epistle/mail.toml`, which is then bind-mounted
@@ -107,7 +104,7 @@ podman run --rm \
   -p 8080:8080 \
   -v /etc/glyndor/epistle:/etc/epistle:ro \
   -v /var/lib/glyndor/epistle/data:/var/lib/glyndor/epistle/data \
-  ghcr.io/glyndor/epistle:0.12.3
+  ghcr.io/glyndor/epistle:0.12.4
 ```
 
 The `/etc/glyndor/epistle` mount carries `mail.toml`; the
@@ -136,7 +133,7 @@ The compose form is the same flag under the `userns_mode:` key:
 ```yaml
 services:
   epistle:
-    image: ghcr.io/glyndor/epistle:0.12.3
+    image: ghcr.io/glyndor/epistle:0.12.4
     userns_mode: "keep-id:uid=65532,gid=65532"
     volumes:
       - /etc/glyndor/epistle:/etc/epistle:ro
@@ -474,6 +471,14 @@ Compose file to mount it read-only only in `mail`, and recreates that service.
 Supply any other settings required by your provider. For `init`, point
 `dns.token_file` in the answers at this file. See [DNS token storage](dns.md#dns-provider-token-storage).
 
+A token you already keep elsewhere is named with `--token-file /absolute/path`:
+the command leaves the file where it is and mounts that path read-only into
+`mail`, which is the only way the container reads a file of the host. A
+credential the Compose file does not mount is a credential the container does
+not have, and the provider never builds. When the source of the token changes,
+the mount of the file the configuration no longer names is removed too, so the
+container keeps no credential you took away.
+
 An environment token is passed to the container and can be exposed through
 `podman inspect` in `Config.Env`. A token stored inline in `mail.toml` remains
 in the mounted configuration file. A token file mount exposes its path in
@@ -545,15 +550,15 @@ is absent (a bare host deployment without the container stack).
 The release job pushes per-arch images plus a multi-arch manifest list with
 three floating tags:
 
-- `ghcr.io/glyndor/epistle:0.12.3-amd64`, `…:0.12.3-arm64` per-arch, built
+- `ghcr.io/glyndor/epistle:0.12.4-amd64`, `…:0.12.4-arm64` per-arch, built
   natively on the matching runner.
-- `ghcr.io/glyndor/epistle:0.12.3` the full release.
+- `ghcr.io/glyndor/epistle:0.12.4` the full release.
 - `ghcr.io/glyndor/epistle:0.8` the latest patch release in the `0.8` line.
 - `ghcr.io/glyndor/epistle:0` the latest minor release in the `0.x` line.
 
 `podman pull ghcr.io/glyndor/epistle:0.8` keeps getting patches;
 `…:0` keeps getting minors. A consumer that wants to pin a specific build
-uses `gh attestation verify oci://ghcr.io/glyndor/epistle:0.12.3 …` (below);
+uses `gh attestation verify oci://ghcr.io/glyndor/epistle:0.12.4 …` (below);
 that command resolves the tag itself, so a separate digest lookup is
 not needed. `podman pull --quiet` only prints the local image id and is
 not a digest, so it has no place in the verification path.
@@ -565,7 +570,7 @@ Sigstore. The signed envelope is published as a GitHub attestation, so a
 consumer does not need a separate signer key:
 
 ```sh
-gh attestation verify oci://ghcr.io/glyndor/epistle:0.12.3 \
+gh attestation verify oci://ghcr.io/glyndor/epistle:0.12.4 \
   --repo Glyndor/epistle \
   --signer-workflow Glyndor/epistle/.github/workflows/release.yml \
   --deny-self-hosted-runners
@@ -575,7 +580,7 @@ A green `Verification succeeded` line proves four things and only four
 things:
 
 1. An attestation exists in `Glyndor/epistle` for the manifest list
-   that resolves from `oci://ghcr.io/glyndor/epistle:0.12.3`.
+   that resolves from `oci://ghcr.io/glyndor/epistle:0.12.4`.
 2. The signer workflow is `Glyndor/epistle/.github/workflows/release.yml`,
    identified by the `SubjectAlternativeName` of the Sigstore-issued
    certificate. Not just any workflow in this repository -- specifically

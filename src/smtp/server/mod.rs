@@ -24,6 +24,7 @@ mod data_rate;
 mod dnsbl_check;
 mod run;
 pub(crate) use run::MAX_ERROR_STREAK;
+mod run_accept_log;
 mod run_attachments;
 mod run_auth;
 mod run_band;
@@ -82,7 +83,7 @@ pub struct Server {
 	/// On-disk directory where the account mailboxes live; needed to save a
 	/// copy of every authenticated submission into the account's `Sent`
 	/// folder. `None` disables the save for tests that do not stand up a
-	/// real filesystem layout; production wiring in `cli/serve.rs`
+	/// real filesystem layout; production wiring in `cli/serve/mod.rs`
 	/// always sets it from `config.data_dir`.
 	data_dir: Option<std::path::PathBuf>,
 	/// At-rest crypto for the mailboxes, used when storing the Sent copy.
@@ -159,7 +160,7 @@ pub struct Server {
 	tenant_limits: Option<Arc<crate::api::TenantLimits>>,
 	/// Shared disk-space guard for `data_dir`. `None` disables the check,
 	/// which is the right behaviour for tests but not for production: the
-	/// production wiring in `cli/serve.rs` always sets it.
+	/// production wiring in `cli/serve/mod.rs` always sets it.
 	disk_guard: Option<Arc<DiskGuard>>,
 	/// The graceful stop this listener follows; none in tests that do not
 	/// exercise it.
@@ -332,6 +333,15 @@ impl Server {
 			};
 			for account in accounts {
 				if store.knows(&account, &sender) {
+					// The line lives here, next to the lookup that
+					// found the correspondent: the caller skips the
+					// greylist and the first-time delay because of
+					// this answer.
+					tracing::debug!(
+						account = %crate::log_id::account(&account),
+						sender = %sender,
+						"trusted reply: skipping greylist and first-time delay"
+					);
 					return Some((account, sender));
 				}
 			}
@@ -708,9 +718,4 @@ async fn end_cut(
 }
 
 #[cfg(test)]
-#[path = "tests_mods.rs"]
-mod tests_mods;
-
-#[cfg(test)]
-#[path = "train_corpus_tests.rs"]
-mod train_corpus_tests;
+mod tests;

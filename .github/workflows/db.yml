@@ -21,6 +21,12 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
 
+# A newer push to a pull request supersedes the run in flight. Queue and
+# branch runs are never cancelled: only a pull_request event is.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
@@ -84,8 +90,8 @@ jobs:
           # macros against a live Postgres, and `stable` here would mean the
           # queries compiled for the SBOM are not the ones the database
           # tests ran against the same schema.
-          rustup toolchain install 1.98 --profile minimal
-          rustup default 1.98
+          rustup toolchain install 1.99 --profile minimal
+          rustup default 1.99
 
       - name: Install cargo-llvm-cov
         env:
@@ -109,7 +115,7 @@ jobs:
         # nothing about anything; the four files below are what this job
         # exists to cover, so they are what it asserts.
         #
-        # src/antispam/hook.rs is deliberately NOT in this list even though
+        # src/antispam/hook/mod.rs is deliberately NOT in this list even though
         # ci.yml excludes it. Measured here it is 0.00%: the scanner hook talks
         # HTTP to ClamAV/Rspamd, needs no database, and the database test
         # targets never imports it. Gating it here would be a floor over a
@@ -132,9 +138,9 @@ jobs:
           # with two unreachable-in-practice error mappings that pull the
           # file below 100%):
           #   src/db/mod.rs                  88.79%
-          #   src/directory_store/sql.rs     96.88%
-          #   src/antispam/corpus.rs         73.15%
-          #   src/antispam/reputation.rs     79.75%
+          #   src/directory_store/sql/mod.rs 96.88%
+          #   src/antispam/corpus/mod.rs         73.15%
+          #   src/antispam/reputation/mod.rs     79.75%
           # The floor is today's worst file rounded down to the ten, not 90. A
           # threshold above what the tree actually has would make this gate red
           # on its first run, and a gate that is born red is a gate somebody
@@ -143,9 +149,9 @@ jobs:
           COVERAGE_THRESHOLD: "70"
           COVERAGE_FILES: |
             src/db/mod.rs
-            src/antispam/reputation.rs
-            src/antispam/corpus.rs
-            src/directory_store/sql.rs
+            src/antispam/reputation/mod.rs
+            src/antispam/corpus/mod.rs
+            src/directory_store/sql/mod.rs
         run: |
           # `--tests` instruments every test target (lib tests plus every
           # integration test) so a new `tests/database_*.rs` is run

@@ -5,6 +5,7 @@
 
 use std::sync::{Arc, Mutex, OnceLock};
 
+use super::*;
 use axum::Router;
 use axum::extract::State;
 use axum::routing::{get, post};
@@ -12,12 +13,9 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64URL;
 use ring::signature::UnparsedPublicKey;
 use serde_json::Value;
-use tempfile::NamedTempFile;
 
-use super::*;
-
-/// One RSA-2048 keypair, generated on demand by `openssl genpkey`. Cached
-/// across tests so the `openssl` invocation runs at most once per process.
+/// One RSA-2048 keypair, generated on demand in process. Cached across
+/// tests so the generation runs at most once per process.
 pub(super) struct TestKey {
 	pub(super) pem: String,
 	/// PKCS#1 RSAPublicKey (DER) — what `ring` wants for verification.
@@ -33,33 +31,22 @@ pub(super) fn test_key() -> &'static TestKey {
 }
 
 pub(super) fn generate_key() -> TestKey {
-	let pem_file = NamedTempFile::new().expect("temp pem");
-	let der_file = NamedTempFile::new().expect("temp der");
-	let pem_path = pem_file.path();
-	let der_path = der_file.path();
-	let status = std::process::Command::new("openssl")
-		.args([
-			"genpkey",
-			"-algorithm",
-			"RSA",
-			"-pkeyopt",
-			"rsa_keygen_bits:2048",
-			"-out",
-		])
-		.arg(pem_path)
-		.status()
-		.expect("openssl genpkey");
-	assert!(status.success(), "openssl genpkey failed");
-	let status = std::process::Command::new("openssl")
-		.args(["rsa", "-in"])
-		.arg(pem_path)
-		.args(["-RSAPublicKey_out", "-outform", "DER", "-out"])
-		.arg(der_path)
-		.status()
-		.expect("openssl rsa -RSAPublicKey_out");
-	assert!(status.success(), "openssl rsa failed");
-	let pem = std::fs::read_to_string(pem_path).expect("read pem");
-	let pub_der = std::fs::read(der_path).expect("read der");
+	use base64::Engine;
+	use ring::signature::{KeyPair, RsaKeyPair};
+
+	// The key is made in process, the same way the server makes the one
+	// it rotates: nothing has to be on `PATH`.
+	let (pem, _) = crate::dkim::generate_rsa_key(2048).expect("RSA key");
+	let body: String = pem
+		.lines()
+		.filter(|line| !line.starts_with("-----"))
+		.collect::<Vec<_>>()
+		.join("");
+	let der = base64::engine::general_purpose::STANDARD
+		.decode(body.as_bytes())
+		.expect("the PEM body is base64");
+	let pair = RsaKeyPair::from_pkcs8(&der).expect("ring loads the key");
+	let pub_der = pair.public_key().as_ref().to_vec();
 	let pem = pem.trim_end().to_string();
 	TestKey { pem, pub_der }
 }
@@ -82,6 +69,9 @@ pub(super) struct MockState {
 	/// When set, the rrsets listing answers this many rrsets per page and
 	/// hands out a `nextPageToken` for the rest, as the API may.
 	pub(super) page_size: Option<usize>,
+	/// The `dnsName` the managed-zone listing denies with a 403, as a
+	/// provider that refuses to answer about that zone does.
+	pub(super) zone_denied: Option<String>,
 }
 
 pub(super) type Shared = Arc<Mutex<MockState>>;
@@ -208,6 +198,7 @@ pub(super) async fn token(
 /// GET /dns/v1/projects/{p}/managedZones[?dnsName=…] — list matching zones.
 pub(super) async fn list_zones(
 	State(state): State<Shared>,
+	axum::extract::Query(query): axum::extract::Query<std::collections::HashMap<String, String>>,
 	headers: axum::http::HeaderMap,
 ) -> Result<axum::Json<Value>, axum::http::StatusCode> {
 	let auth = headers
@@ -219,6 +210,13 @@ pub(super) async fn list_zones(
 	}
 	let mut s = state.lock().unwrap();
 	s.bearers.push(auth.to_string());
+	// A zone the mock refuses to answer about: the listing denies it, the
+	// way a provider that cannot answer about that zone does.
+	if let Some(denied) = s.zone_denied.as_deref()
+		&& query.get("dnsName").map(String::as_str) == Some(denied)
+	{
+		return Err(axum::http::StatusCode::FORBIDDEN);
+	}
 	Ok(axum::Json(serde_json::json!({
 		"managedZones": [
 			{ "name": "example-org", "dnsName": "example.org." }

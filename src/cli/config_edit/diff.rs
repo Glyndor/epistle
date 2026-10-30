@@ -1,6 +1,16 @@
+//! The unified diff of a configuration change, with the credentials hidden.
+//!
+//! The hiding walks the tree of the document, not its lines: a value
+//! written as a multiline string continues on the next lines, and those
+//! lines are part of the credential. A diff that hides the first line of
+//! the value and prints the rest prints the secret.
+
 use std::borrow::Cow;
 use std::fmt::Write;
+use std::ops::Range;
 use std::path::Path;
+
+use toml_edit::{Document, Item, Table, Value};
 
 /// Names of fields whose value is a credential and so must never reach a
 /// dry-run diff in plaintext. The list is named after the TOML keys the
@@ -25,12 +35,17 @@ const SECRET_KEYS: &[&str] = &[
 	"public_key",
 ];
 
+/// What replaces the value of a credential.
+const REDACTED: &str = "<redacted>";
+
 pub(super) fn unified(path: &Path, old: &str, new: &str) -> String {
 	if old == new {
 		return String::new();
 	}
 	let old_lines: Vec<_> = old.split_inclusive('\n').collect();
 	let new_lines: Vec<_> = new.split_inclusive('\n').collect();
+	let old_patches = patches(old, &old_lines);
+	let new_patches = patches(new, &new_lines);
 	let prefix = old_lines
 		.iter()
 		.zip(&new_lines)
@@ -54,23 +69,37 @@ pub(super) fn unified(path: &Path, old: &str, new: &str) -> String {
 		if new_end == start { start } else { start + 1 },
 		new_end - start
 	);
-	for line in &old_lines[start..prefix] {
-		emit(&mut output, ' ', line);
+	for (index, line) in old_lines[start..prefix].iter().enumerate() {
+		emit(&mut output, ' ', line, &old_patches[start + index]);
 	}
-	for line in &old_lines[prefix..old_lines.len() - suffix] {
-		emit(&mut output, '-', line);
+	for (index, line) in old_lines[prefix..old_lines.len() - suffix]
+		.iter()
+		.enumerate()
+	{
+		emit(&mut output, '-', line, &old_patches[prefix + index]);
 	}
-	for line in &new_lines[prefix..new_lines.len() - suffix] {
-		emit(&mut output, '+', line);
+	for (index, line) in new_lines[prefix..new_lines.len() - suffix]
+		.iter()
+		.enumerate()
+	{
+		emit(&mut output, '+', line, &new_patches[prefix + index]);
 	}
-	for line in &old_lines[old_lines.len() - suffix..old_end] {
-		emit(&mut output, ' ', line);
+	for (index, line) in old_lines[old_lines.len() - suffix..old_end]
+		.iter()
+		.enumerate()
+	{
+		emit(
+			&mut output,
+			' ',
+			line,
+			&old_patches[old_lines.len() - suffix + index],
+		);
 	}
 	output
 }
 
-fn emit(output: &mut String, marker: char, line: &str) {
-	let line_owned: Cow<str> = redact(line);
+fn emit(output: &mut String, marker: char, line: &str, patches: &[Patch]) {
+	let line_owned = apply(line, patches);
 	output.push(marker);
 	output.push_str(line_owned.as_ref());
 	if !line.ends_with('\n') {
@@ -78,133 +107,230 @@ fn emit(output: &mut String, marker: char, line: &str) {
 	}
 }
 
-/// Return `line` unchanged, or with the value redacted when `line`
-/// assigns to a known secret key. A line that matches `<key> = <value>`
-/// with a redacted key has its value replaced with `<redacted>` while
-/// the marker, key, surrounding whitespace and trailing comment stay
-/// intact, so the diff still shows the line moved.
+/// A range of bytes inside a line, and what replaces it.
+struct Patch {
+	/// The byte offset inside the line where the range starts.
+	start: usize,
+	/// The byte offset inside the line where the range ends.
+	end: usize,
+	/// What replaces the range.
+	text: String,
+}
+
+/// The redactions of one document: one entry per line of it, in order.
+type Patches = Vec<Vec<Patch>>;
+
+/// The redactions of `text`, one entry per line of `lines`.
 ///
-/// `url` is treated specially: a `postgres://user:pass@host/db` value
-/// has only the password portion of the userinfo replaced, leaving the
-/// user name and host visible; other url shapes fall back to the plain
-/// redaction.
-fn redact(line: &str) -> Cow<'_, str> {
-	let Some(assignment) = find_assignment(line) else {
-		return Cow::Borrowed(line);
+/// The tree of the document says where each credential is: the value of a
+/// secret key, with the bytes it occupies, so a value that spans several
+/// lines is hidden whole.
+fn patches(text: &str, lines: &[&str]) -> Patches {
+	let Ok(document) = Document::parse(text) else {
+		// A document that does not parse cannot be walked, and a line that
+		// cannot be read may be a credential: every line goes.
+		return lines
+			.iter()
+			.map(|line| {
+				vec![Patch {
+					start: 0,
+					end: content_end(line),
+					text: REDACTED.to_string(),
+				}]
+			})
+			.collect();
 	};
-	let key: &str = &line[assignment.key_start..assignment.key_end];
-	let mut value_end = assignment.value_end;
-	let bytes = line.as_bytes();
-	// Preserve trailing whitespace before the trailing comment, so a
-	// `key = "value" # comment` line ends up `key = <redacted> # comment`,
-	// not `key = <redacted># comment`. A bare `key = "value"` line is
-	// unaffected (no whitespace before the line break).
-	while value_end > assignment.value_start
-		&& (bytes[value_end - 1] == b' ' || bytes[value_end - 1] == b'\t')
-	{
-		value_end -= 1;
+	let mut starts = Vec::with_capacity(lines.len());
+	let mut offset = 0;
+	for line in lines {
+		starts.push(offset);
+		offset += line.len();
 	}
-	let value = &line[assignment.value_start..value_end];
-	let replacement = if is_secret_key(key) {
-		Some("<redacted>".to_string())
-	} else if key == "url" {
-		redact_url(value)
-	} else {
-		None
-	};
-	let Some(replacement) = replacement else {
+	let mut found: Vec<(usize, Patch)> = Vec::new();
+	for (key, span) in credentials(document.as_table()) {
+		let Some(replacement) = replacement_for(&key, &text[span.clone()]) else {
+			continue;
+		};
+		if span.start >= span.end {
+			continue;
+		}
+		let first = line_of(&starts, span.start);
+		let last = line_of(&starts, span.end - 1);
+		if first == last {
+			found.push((
+				first,
+				Patch {
+					start: span.start - starts[first],
+					end: (span.end - starts[first]).min(content_end(lines[first])),
+					text: replacement,
+				},
+			));
+			continue;
+		}
+		// The value continues on the next lines: the first line keeps the
+		// key, the lines in between are the value, and the last line ends
+		// with it.
+		let first_end = starts[first] + content_end(lines[first]);
+		found.push((
+			first,
+			Patch {
+				start: span.start - starts[first],
+				end: first_end - starts[first],
+				text: replacement,
+			},
+		));
+		for (line, text) in lines.iter().enumerate().take(last).skip(first + 1) {
+			found.push((
+				line,
+				Patch {
+					start: 0,
+					end: content_end(text),
+					text: REDACTED.to_string(),
+				},
+			));
+		}
+		found.push((
+			last,
+			Patch {
+				start: 0,
+				end: (span.end - starts[last]).min(content_end(lines[last])),
+				text: REDACTED.to_string(),
+			},
+		));
+	}
+	found.sort_by_key(|(line, patch)| (*line, patch.start));
+	let mut patches: Patches = (0..lines.len()).map(|_| Vec::new()).collect();
+	for (line, patch) in found {
+		patches[line].push(patch);
+	}
+	patches
+}
+
+/// The line of the document that holds `offset`.
+fn line_of(starts: &[usize], offset: usize) -> usize {
+	starts
+		.partition_point(|start| *start <= offset)
+		.saturating_sub(1)
+}
+
+/// The length of `line` without its terminator.
+fn content_end(line: &str) -> usize {
+	let bytes = line.as_bytes();
+	let mut end = bytes.len();
+	if end > 0 && bytes[end - 1] == b'\n' {
+		end -= 1;
+	}
+	if end > 0 && bytes[end - 1] == b'\r' {
+		end -= 1;
+	}
+	end
+}
+
+/// The line with the regions of its patches replaced.
+fn apply<'a>(line: &'a str, patches: &[Patch]) -> Cow<'a, str> {
+	if patches.is_empty() {
 		return Cow::Borrowed(line);
-	};
+	}
 	let mut out = String::with_capacity(line.len());
-	out.push_str(&line[..assignment.value_start]);
-	out.push_str(&replacement);
-	out.push_str(&line[value_end..]);
+	let mut cursor = 0;
+	for patch in patches {
+		out.push_str(&line[cursor..patch.start]);
+		out.push_str(&patch.text);
+		cursor = patch.end;
+	}
+	out.push_str(&line[cursor..]);
 	Cow::Owned(out)
 }
 
-/// Find the start and end of `<key> = <value>` in `line`. Returns the
-/// byte indices of the key, the value, and the trailing comment, so
-/// the caller can keep the prefix and suffix byte-for-byte and only
-/// rewrite the value. `value_start` is the first non-whitespace byte
-/// after `=`, `value_end` is the byte just before any trailing comment
-/// or line ending. Indices use the same convention as
-/// `String::chars`/`str` slicing.
-struct Assignment {
-	key_start: usize,
-	key_end: usize,
-	value_start: usize,
-	value_end: usize,
+/// The values of the document that carry a credential, with the bytes they
+/// occupy in it.
+fn credentials(table: &Table) -> Vec<(String, Range<usize>)> {
+	let mut found = Vec::new();
+	collect(table, &mut found);
+	found
 }
 
-fn find_assignment(line: &str) -> Option<Assignment> {
-	let bytes = line.as_bytes();
-	let mut idx = 0;
-	// Skip any leading non-blank diff marker the editor would have added.
-	if let Some(&b) = bytes.first()
-		&& !b.is_ascii_whitespace()
-		&& (b == b'+' || b == b'-' || b == b' ')
-	{
-		idx = 1;
+fn collect(table: &Table, found: &mut Vec<(String, Range<usize>)>) {
+	for (key, item) in table.iter() {
+		collect_item(key, item, found);
 	}
-	while idx < bytes.len() && bytes[idx] == b' ' {
-		idx += 1;
+}
+
+fn collect_item(key: &str, item: &Item, found: &mut Vec<(String, Range<usize>)>) {
+	match item {
+		Item::Value(value) => collect_value(key, value, found),
+		Item::Table(table) => collect(table, found),
+		Item::ArrayOfTables(tables) => {
+			for table in tables.iter() {
+				collect(table, found);
+			}
+		}
+		Item::None => {}
 	}
-	let key_start = idx;
-	while idx < bytes.len()
-		&& bytes[idx] != b'='
-		&& bytes[idx] != b'\n'
-		&& bytes[idx] != b'#'
-		&& bytes[idx] != b' '
-		&& bytes[idx] != b'\t'
-	{
-		idx += 1;
+}
+
+fn collect_value(key: &str, value: &Value, found: &mut Vec<(String, Range<usize>)>) {
+	if is_secret_key(key) {
+		// The whole value is the credential: what it holds is part of it.
+		if let Some(span) = value.span() {
+			found.push((key.to_string(), span));
+		}
+		return;
 	}
-	let key_end = idx;
-	let key = &line[key_start..key_end];
-	if key.is_empty() {
-		return None;
+	if key == "url" {
+		// A url is not a credential by itself: only its password is, and
+		// only a string can carry one. A url that is not a string is
+		// walked like any other key.
+		if let Value::String(_) = value {
+			if let Some(span) = value.span() {
+				found.push((key.to_string(), span));
+			}
+			return;
+		}
 	}
-	if !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-		return None;
+	match value {
+		Value::InlineTable(table) => {
+			for (key, value) in table.iter() {
+				collect_value(key, value, found);
+			}
+		}
+		Value::Array(array) => {
+			for element in array.iter() {
+				collect_value(key, element, found);
+			}
+		}
+		_ => {}
 	}
-	// Skip whitespace between the key and the `=`.
-	while idx < bytes.len() && (bytes[idx] == b' ' || bytes[idx] == b'\t') {
-		idx += 1;
+}
+
+/// What replaces the value of `key`: the whole value for a credential, and
+/// the value without its password for a url.
+fn replacement_for(key: &str, value: &str) -> Option<String> {
+	if is_secret_key(key) {
+		return Some(REDACTED.to_string());
 	}
-	if idx >= bytes.len() || bytes[idx] != b'=' {
-		return None;
+	match redact_url(value) {
+		Some(url) => Some(url),
+		// A url that cannot be parsed and spans several lines cannot be
+		// repaired: it goes whole rather than leak its password.
+		None if value.contains('\n') => Some(REDACTED.to_string()),
+		None => None,
 	}
-	idx += 1;
-	while idx < bytes.len() && bytes[idx] == b' ' {
-		idx += 1;
-	}
-	let value_start = idx;
-	while idx < bytes.len() && bytes[idx] != b'\n' && bytes[idx] != b'#' {
-		idx += 1;
-	}
-	let value_end = idx;
-	Some(Assignment {
-		key_start,
-		key_end,
-		value_start,
-		value_end,
-	})
 }
 
 fn is_secret_key(key: &str) -> bool {
 	SECRET_KEYS.contains(&key)
 }
 
-/// Parse `value` (the RHS of a `key = ...` line, with surrounding quotes
-/// and whitespace preserved by the caller) as a libpq URL and return the
-/// same URL with the password portion of the userinfo stripped. The
-/// shape the loader accepts is `postgres://user:password@host/...`; the
-/// `?password=...` query parameter is the other path. Returns `None`
-/// when the value is not a URL with credentials, so the caller can keep
-/// it unchanged.
+/// Parse `value` (the source text of a TOML string, with its quotes) as a
+/// libpq URL and return the same URL with the password portion of the
+/// userinfo stripped. The shape the loader accepts is
+/// `postgres://user:password@host/...`; the `?password=...` query
+/// parameter is the other path. Returns `None` when the value is not a
+/// URL with credentials, so the caller can keep it unchanged.
 fn redact_url(value: &str) -> Option<String> {
 	let trimmed = value.trim();
-	if !trimmed.starts_with('"') || !trimmed.ends_with('"') {
+	if trimmed.len() < 2 || !trimmed.starts_with('"') || !trimmed.ends_with('"') {
 		return None;
 	}
 	let inner = &trimmed[1..trimmed.len() - 1];
@@ -236,87 +362,4 @@ fn redact_url(value: &str) -> Option<String> {
 	}
 	let redacted = url.to_string();
 	Some(format!("\"{redacted}\""))
-}
-
-#[cfg(test)]
-mod tests {
-	use super::*;
-
-	#[test]
-	fn secret_lines_have_their_value_replaced() {
-		assert_eq!(
-			redact("-password = \"hunter2\"\n").as_ref(),
-			"-password = <redacted>\n"
-		);
-		assert_eq!(
-			redact("+secret = \"top\"\n").as_ref(),
-			"+secret = <redacted>\n"
-		);
-		assert_eq!(
-			redact("+srs_secret = \"xyz\"\n").as_ref(),
-			"+srs_secret = <redacted>\n"
-		);
-		assert_eq!(
-			redact("+signing_key = \"abc\"\n").as_ref(),
-			"+signing_key = <redacted>\n"
-		);
-		assert_eq!(
-			redact("+bind_password = \"pw\"\n").as_ref(),
-			"+bind_password = <redacted>\n"
-		);
-		assert_eq!(
-			redact(" token = \"abc\"\n").as_ref(),
-			" token = <redacted>\n"
-		);
-	}
-
-	#[test]
-	fn non_secret_lines_remain_unchanged() {
-		let line = "-hostname = 'mail.example.org' # ${{PATH}}\n";
-		assert_eq!(redact(line).as_ref(), line);
-		let line = "+quota_bytes = 456 # cap\n";
-		assert_eq!(redact(line).as_ref(), line);
-	}
-
-	#[test]
-	fn url_with_userinfo_has_password_only_redacted() {
-		let line = "+url = \"postgres://user:secret@host/db\"\n";
-		let redacted = redact(line);
-		assert!(!redacted.contains("secret"), "redacted URL: {redacted}");
-		assert!(
-			redacted.contains("user:"),
-			"user name must survive redaction: {redacted}"
-		);
-		assert!(
-			redacted.contains("@host/db"),
-			"host must survive redaction: {redacted}"
-		);
-	}
-
-	#[test]
-	fn url_without_credentials_passes_through() {
-		let line = "+url = \"postgres://user@host/db\"\n";
-		assert_eq!(redact(line).as_ref(), line);
-	}
-
-	#[test]
-	fn secret_value_with_trailing_comment_still_redacts() {
-		let line = "-password = \"abc\" # old\n";
-		assert_eq!(redact(line).as_ref(), "-password = <redacted> # old\n");
-	}
-
-	#[test]
-	fn unchanged_secret_lines_still_show_the_change() {
-		let output = unified(
-			Path::new("mail.toml"),
-			"secret = \"old\"\nsecret2 = \"k2\"\n",
-			"secret = \"new\"\nsecret2 = \"k2\"\n",
-		);
-		assert!(output.contains("-secret = <redacted>"), "{output}");
-		assert!(output.contains("+secret = <redacted>"), "{output}");
-		assert!(
-			output.contains("secret2 = \"k2\""),
-			"non-secret context lines keep their value: {output}"
-		);
-	}
 }

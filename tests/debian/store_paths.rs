@@ -6,9 +6,9 @@
 //! The tests read `debian/epistle.preinst` as text and assert the two literal
 //! names the Rust store expects: the binary at `epistle-<version>/epistle` and
 //! its digest at `epistle-<version>/epistle.sha256`. The Rust side keeps the
-//! inverse assertion in `stack_rollback_store_tests::the_store_opens_the_two_
-//! names_the_preinst_writes`. If either side moves, that file's test fails
-//! here too.
+//! inverse assertion in `src/cli/stack/rollback/store/tests/base.rs`
+//! (`the_store_source_keeps_the_published_names`). If either side moves,
+//! that file's test fails here too.
 
 use std::fs;
 use std::path::{Path, PathBuf};

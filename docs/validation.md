@@ -33,7 +33,7 @@ A rule is one of three kinds:
 | Network range | `cidr::Cidr::parse` (an address or a block; a zero prefix is refused where it would trust or ban everyone) | Standard (RFC 4632, RFC 4291) | API key and app password `--ip-cidr`, `trusted_proxies`, `epistle ban`, the per-IP limits |
 | Memory size | `util::validation::is_memory_size_shape` and `parse_memory_size` (a whole number of `k`, `m` or `g`) | Habit (the compose file spelling) | `epistle stack resources`, `[resources]` in the init answers, the SMTP memory budget |
 | Data directory | `Config::validate_data_dir` (absolute) for `mail.toml`; `epistle init` adds a refusal of `$`, control and invisible characters and a `..` above the root | Safety (compose interpolates `$`; terminals print the path) | `data_dir` in `mail.toml`, `epistle init` |
-| Sizes of messages, attachments, scripts and queues | `docs/limits.md` and the catalog in `cli::limits_catalog` | Standard where an RFC sets the floor, Habit otherwise | SMTP, IMAP, JMAP, API, ManageSieve |
+| Sizes of messages, attachments, scripts and queues | `docs/limits.md` and the catalog in `cli::limits::catalog` | Standard where an RFC sets the floor, Habit otherwise | SMTP, IMAP, JMAP, API, ManageSieve |
 
 ## Differences kept on purpose
 
@@ -78,5 +78,5 @@ enforces, and an example, but not the value, because the client already holds it
   names, passwords, display names, CIDR, mailbox names, memory sizes, credential
   labels (`labels.rs`), host names (`hostname.rs`) and data directories
   (`data_dir.rs`).
-- Each definition has unit tests beside it (`util/label_rule_tests.rs`,
-  `util/account_rule_tests.rs`, `cidr_tests.rs`, `util/validation/mod_tests.rs`).
+- Each definition has unit tests beside it (`util/label_rule/tests/base.rs`,
+  `util/account_rule/tests/base.rs`, `cidr/tests/base.rs`, `util/validation/tests/base.rs`).

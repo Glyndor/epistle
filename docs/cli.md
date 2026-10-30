@@ -68,6 +68,7 @@ Every change is validated before it is written, keeps the comments in
 | [Is it working?](#health-epistle-status-epistle-check) | `epistle status`, `epistle check <area>` |
 | [Turn IMAP, POP3, 587… on or off](#service-listeners) | `epistle service list\|enable\|disable` |
 | [Accounts: add, password, disable, quota, addresses](#accounts) | `epistle account …` |
+| [Connect Roundcube webmail](roundcube.md) | IMAP/SMTP configuration and checks |
 | [Aliases and mailing lists](#aliases-epistle-alias) | `epistle alias …` |
 | [Domains and domain aliases](#domains-epistle-domain) | `epistle domain …` |
 | [Masked addresses](#masked-addresses) | `epistle masked …` |
@@ -304,7 +305,7 @@ after 5 s. `--config` defaults to `/etc/epistle/mail.toml`.
 | Area | `ok` | `warn` | `fail` |
 |---|---|---|---|
 | `config` | file loads | restart pending: `mail.toml` is newer than the `mail` container's start (needs the compose stack; skipped with a note otherwise) | does not load |
-| `ports` | the same check as `epistle probe`: every enabled listener answers on loopback with its greeting (SMTP `220`, IMAP `* OK`, POP3 `+OK`, ManageSieve `OK`, HTTP status line), and TLS listeners present the configured certificate | no listeners | a listener refuses, is silent, greets wrongly or presents another certificate |
+| `ports` | the same check as `epistle probe`: every enabled listener answers on loopback with its greeting (SMTP `220`, IMAP `* OK`, POP3 `+OK`, ManageSieve `OK`, HTTP status line), and TLS listeners present the configured certificate | no listeners | a listener refuses, is silent, greets wrongly or presents another certificate, or `podup ps` does not list a running `mail` container (during a restart, for example) |
 | `tls` | 21 days or more left, hostname in the certificate, the TLSA record (when DNSSEC publishes one) matches it | under 21 days, under 14 days with nothing renewing it (no `[acme]`), the TLSA lookup failed | under 7 days, expired, or hostname not in the certificate; unreadable file; a TLSA record that does not match the certificate in use |
 | `dns` | published records match | a lookup was inconclusive, or `dkim-rotation.json` is unreadable and the server signs with the last good state in `dkim-rotation.json.bak` | a record is missing, or the published DKIM `p=` is not the public key of the key actually signing (the rotation state in `<data_dir>/dkim-rotation.json` when present, else `[dkim] key_file`) |
 | `db` | `[database]` connects and answers `SELECT 1` (or is not configured) | | cannot connect within 5 s |
@@ -609,6 +610,15 @@ the value. `test` lists the zone's records through the provider (a read only cal
 10 second limit) and reports the count. Every mutation accepts `--dry-run` and
 `--config FILE`.
 
+On a generated stack, `set` also writes the Compose file, so the credential
+reaches the container: a `--token-file` is mounted read-only into `mail` at the
+same path, a `--token-env` is forwarded as `${NAME}`, and the mount and the
+environment entry the previous setting left behind are removed. `mail` is
+recreated so the new mount is in the container. `--dry-run` previews the
+configuration change and the Compose change, and writes neither. The preview
+hides the credentials of the configuration over the TOML tree, so a value that
+spans several lines is hidden whole.
+
 ## DNS lockdown (`epistle dns lockdown`)
 
 ```sh
@@ -659,13 +669,16 @@ address (`127.0.0.1`, `::1`, `localhost`), and cannot carry credentials. The sig
 secret arrives on stdin as one line and is stored inline in the 0600 configuration
 file; `show` prints only `set` or `unset`. `set` without `--secret-stdin` keeps a
 secret that is already configured. `unset` is refused while an alert still posts
-to the webhook.
+to the webhook. A URL that names a private destination (a loopback address, a
+private or link-local network) is refused by the server unless the section says
+`allow_private_webhooks = true`; `set` writes that key when the URL needs it, and
+`show` says whether it is on.
 
 `disable` writes `enabled = false` into the section and keeps the URL and the
 secret: after the restart no event is posted, alerts with `--webhook` included, and the warning on stderr lists which ones (`message_received`, `delivery_failed`, `metric_alert`, `dkim_rotation_failed`, `outbound_virus`, the warm-up reports) and the alerts that go quiet. While an alert posts to the webhook, `disable` asks first and off a terminal needs `--yes` (exit 2 without it), like `webhook unset` refusing. `config-check` warns about an alert whose webhook is off.
 `enable` takes the key out again. Both say `unchanged` when the webhook is
 already that way and refuse with exit 3 when no webhook is configured (a setting the command needs is missing; so is `unset` while an alert posts to the webhook, exit 3). `set`
-keeps a disabled webhook disabled. `show` prints `enabled`.
+keeps a disabled webhook disabled. `show` prints `enabled` and `allow_private_webhooks`.
 
 `test` posts one `test` event (see [configuration](configuration.md)), signed like
 any other, and reports the HTTP status. It fails on a non-2xx answer, a connection
@@ -984,7 +997,7 @@ removing an override so the autostart unit records the current file list.
 
 The default compose file runs the host's `/usr/bin/epistle`
 (provided by the `.deb`, a statically linked musl binary) bind-mounted
-read-only into the digest-pinned `gcr.io/distroless/static-debian12:nonroot`
+read-only into the digest-pinned `gcr.io/distroless/static-debian13:nonroot`
 base. An explicit `image` in the init answers lets the operator select a
 custom mail image instead (the host binary is then not mounted). The
 generated base records which mode the file is in via `x-epistle-managed-image`:
@@ -1388,8 +1401,8 @@ could not be parsed, a required key pair was incomplete, and so on).
 What this build does:
 
 - lays the answers down under `<data_dir>/keys/` (`0700`) with mode `0600` on
-  every key file: DKIM Ed25519 (`s1.pem`), DKIM RSA (`s2.pem`) via `openssl`
-  when it is on `PATH`, and the OAuth public key; the at-rest storage key, the
+  every key file: DKIM Ed25519 (`s1.pem`), DKIM RSA (`s2.pem`), and the OAuth
+  public key; the at-rest storage key, the
   OAuth signing key and, with the database, the PostgreSQL admin password go to
   `secrets/` beside data_dir instead (see [the container
   stack](container.md#what-each-container-may-do)); a key that already exists
@@ -1458,6 +1471,15 @@ the operator replaces it with an ACME-issued or hand-rolled PEM when
 they wire up `[acme]` or update `tls.cert_file` / `tls.key_file` to
 point elsewhere.
 
+With `[acme]` on, that pair is what the server presents until the
+authority answers. The certificate the authority issues is written to
+`<data_dir>/acme/cert.pem` (its key to `<data_dir>/acme/key.pem`), the
+running server reloads it in memory, and the next start presents it in
+place of the `[tls]` pair. `init` leaves the ACME path empty on purpose:
+a self-signed certificate written there reads as valid until the year
+4096, so the renewal loop would see nothing due and never ask the
+authority for the real one.
+
 Re-running with the same answers is a no-op for every file that already
 matches: the keys are reused, the config is reported `identical, not touched`,
 and the file mtime does not change. A run that changes every answer the
@@ -1493,7 +1515,7 @@ scope here):
 | Command | What it does |
 |---|---|
 | `epistle dkim-keygen --out F` | Generate an Ed25519 DKIM key and print the DNS record value. |
-| `epistle dkim-keygen --rsa [--bits 2048\|4096] --out F` | Generate an RSA DKIM key (delegates to `openssl genpkey`) and print the `k=rsa` record. The RSA `p=` value is large enough to need 255-octet TXT splitting; the printed record is already in the form a zone file accepts. |
+| `epistle dkim-keygen --rsa [--bits 2048\|4096] --out F` | Generate an RSA DKIM key (in process, no external program) and print the `k=rsa` record. The RSA `p=` value is large enough to need 255-octet TXT splitting; the printed record is already in the form a zone file accepts. |
 | `epistle storage-keygen` | Print a fresh base64 32-byte key for at-rest message encryption (`[storage]`). |
 | `epistle token-hash` | Read a bearer token on stdin, print the `sha256:<hex>` for `[api] token_hash`. |
 
@@ -1503,11 +1525,11 @@ The API keys made with `epistle api-key` open the HTTP API, described in the [HT
 
 | Command | What it does |
 |---|---|
-| `epistle dkim show [--json]` | The DKIM key in service (selector, key file, rotation time, next scheduled rotation, previous selector and when it retires, the RSA selector in service, from `state` or `config`, with the RSA selector a rotation retires or moves to) and whether the published TXT of each signing domain matches it. A domain with a `[[dkim.domain]]` key is listed under `overrides` and checked against that key. Reads the same rotation state as `serve`, `dns-records` and `verify-dns`; an unreadable state file is an error, never a silent fallback to the configured key. A rotation the server began and has not finished is listed with its selector (`in_progress` in JSON), or with the reason it is being withdrawn. |
+| `epistle dkim show [--json]` | The DKIM key in service (selector, key file, rotation time, next scheduled rotation, previous selector and when it retires, the RSA selector in service, from `state` or `config`, with the RSA selector a rotation retires or moves to) and whether the published TXT of each signing domain matches it. A domain with a `[[dkim.domain]]` key is listed under `overrides` and checked against that key. Reads the same rotation state as `serve`, `dns-records` and `verify-dns`; an unreadable state file is an error, never a silent fallback to the configured key. A rotation the server began and has not finished is listed with its selector (`in_progress` in JSON), or with the reason it is being withdrawn. Every time it prints (when the key rotated, when the next rotation is due, when the previous selector retires, when the rotation began, when it was requested) is an RFC 3339 UTC instant such as `2026-12-31T23:59:59Z`; `--json` keeps the epoch seconds. |
 | `epistle dkim rotate [--dry-run]` | Rotate the Ed25519 key now, and with dual signing the RSA key in the same step (new selector `rsa<day>`). Refuses what the server refuses: no `[dkim]` or `[dns]`, a signing domain outside the `[dns]` zone, a provider that cannot be built, a second rotation on the same UTC day. Domains with a `[[dkim.domain]]` key are not signing domains of the default key. `--dry-run` prints the selectors and the TXT names and changes nothing. `--domain D` is always refused: a `[[dkim.domain]]` key does not rotate, and the refusal says how to replace it (or that `D` signs with the default). |
 | `epistle dkim cleanup [--dry-run] [--yes]` | List the `dkim-ed<day>.key` and `dkim-rsa<day>.key` files and `ed<day>._domainkey` and `rsa<day>._domainkey` TXT records of the signing domains that neither the active, the previous, a pending nor a configured selector (`[dkim]` or `[[dkim.domain]]`) uses (left by crashes in older releases), ask for confirmation and queue their removal. `--dry-run` only lists; `--yes` skips the question. Refused when the rotation state cannot be read, and nothing is queued when the server does not rotate keys for this configuration. |
-| `epistle tls show [--json]` | The certificate the server presents (the ACME pair when `[acme]` is set and `<data_dir>/acme/{cert,key}.pem` is usable, otherwise `[tls]`): subject, names, issuer, expiry as an RFC 3339 UTC date (for example `2026-12-31T23:59:59Z`), days left, and `acme` or `static` as the source. JSON adds `not_after_utc` and keeps the epoch-second `not_after` field. `serve`, `probe` and this command resolve it the same way. |
-| `epistle tls renew [--force]` | Ask the server to renew the ACME certificate. Without `--force` nothing is queued while the certificate is outside its `renew_before_days` window. |
+| `epistle tls show [--json]` | The certificate the server presents (the ACME pair when `[acme]` is set and `<data_dir>/acme/{cert,key}.pem` is usable, otherwise the pair the `[tls]` section names, otherwise the bootstrap pair `init` wrote in `<data_dir>/keys/`): subject, names, issuer, expiry as an RFC 3339 UTC date (for example `2026-12-31T23:59:59Z`), days left, and `acme` or `static` as the source. JSON adds `not_after_utc` and keeps the epoch-second `not_after` field. The time a renewal was requested for is an RFC 3339 UTC instant as well. `serve`, `probe` and this command resolve it the same way. |
+| `epistle tls renew [--force]` | Ask the server to renew the ACME certificate. Without `--force` nothing is queued while the ACME pair is usable, its certificate is issued by an authority, and it is outside its `renew_before_days` window. An unusable pair or a self-issued certificate is due regardless of that window. |
 | `epistle api-key rotate LABEL` | Replace the secret of an API key and print the new one once. Scopes, domains, expiry and CIDR stay; the old secret stops working in the same write, when the running server's file watcher reloads `api_keys.toml`. |
 
 `dkim rotate`, `dkim cleanup` and `tls renew` do not rotate, remove or issue
@@ -1534,7 +1556,7 @@ Addresses, domains and account names are stored in lowercase whatever you type: 
 
 An account name and a mail address are checked by different rules, and they stay different.
 
-- **The account name** is also the folder name under `<data_dir>/accounts/`: lowercase ASCII letters, digits and hyphens, not starting with a hyphen, at most 64 characters. A dot is refused, and so is `_`, a space or any non-ASCII character. One rule (`src/util/account_rule.rs`) serves every command and endpoint that creates an account.
+- **The account name** is also the folder name under `<data_dir>/accounts/`: lowercase ASCII letters, digits and hyphens, not starting with a hyphen, at most 64 characters. A dot is refused, and so is `_`, a space or any non-ASCII character. One rule (`src/util/account_rule/mod.rs`) serves every command and endpoint that creates an account.
 - **The address** follows RFC 5322 and 5321: a dot inside the local part is fine (`torre.control@example.org`), not at its start or end, not twice in a row. Stored in lowercase.
 
 Only `epistle init` turns one into the other: it derives the name from the address, with dots becoming hyphens (`torre.control@example.org` gives the account `torre-control` and keeps the address as typed). Nothing else derives a name. `account add torre.control --address torre.control@example.org` is refused, naming the `'.'`, before the password is asked; `account add torre-control --address torre.control@example.org` works and the account sends and receives as `torre.control@example.org`.
@@ -1567,7 +1589,7 @@ Only `epistle init` turns one into the other: it derives the name from the addre
 | `epistle account catch-all list\|add\|remove N [DOMAIN]` | Deliver mail for unknown users of `DOMAIN` to the account. `DOMAIN` must be a configured domain (not an alias) that no other account catches. |
 | `epistle account 2fa show N [--json]` | Whether a TOTP secret is enrolled (never the secret). |
 | `epistle account 2fa disable N [--yes\|-y]` | Remove the TOTP secret; the password alone signs in again. Asks first. |
-| `epistle app-password list [--account N] [--json]` | App passwords (label, expiry, IP restriction), never the secret. |
+| `epistle app-password list [--account N] [--json]` | App passwords (label, expiry as an RFC 3339 UTC instant, IP restriction), never the secret. `--json` keeps the epoch second. |
 | `epistle app-password create N LABEL [--expires-at EPOCH] [--ip-cidr CIDR] [--save-sent on\|off]` | Create an IMAP/SMTP app password; prints it once. The label is 1 to 64 characters without control characters. `--save-sent` overrides the account-wide setting for this credential (`on` opts the credential in even if the account is off; `off` opts it out even if the account is on). Dynamic accounts only. |
 | `epistle app-password rotate N LABEL [--yes\|-y] [--dry-run]` | Replace the secret and print the new one once. The label, expiry, address range and `save-sent` setting stay; the old secret stops working in the same write, and the running server picks the change up from the file within a few seconds (`reload` says `loaded`, `no-server` or `timed-out`). Asks first, because every client using the old secret stops working. `--dry-run` checks that the credential exists and prints no secret. |
 | `epistle app-password rename N LABEL NEW_LABEL [--dry-run]` | Give the credential a new label; the secret and the settings stay, so clients keep working. Refuses a label that is taken (exit 2). `previous_label` in the JSON result holds the old one. |
@@ -1586,8 +1608,8 @@ Only `epistle init` turns one into the other: it derives the name from the addre
 | `epistle migrate imap --account N --host H --user U` | Copy a remote IMAP account, resumably. See [migration](migration.md). |
 | `epistle migrate mox --from DIR` / `migrate stalwart --from FILE` | Import domains, accounts, aliases and DKIM keys. |
 | `epistle queue` | List the outbound delivery queue (same as `queue list`). See [Outbound queue](#outbound-queue). |
-| `epistle delivery list [--recipient ADDR] [--account NAME] [--since WHEN] [--until WHEN] [--status S] [--limit N] [--json]` | Read the per-recipient delivery log: one record per delivered, failed, suppressed or canceled recipient, and one per deferred recipient for each distinct reply, at most eight per recipient (a retry deferred for the same reason adds none), newest day first, at most `N` records (default 100, at most 100000; a larger value is a usage error). The log is read a line at a time, so memory does not grow with the size of a day's file, and days outside `--since`/`--until` are not opened. `--since` and `--until` take an RFC 3339 time or a duration such as `24h` or `7d` counted back from now; `--since` after `--until` is refused, and so is a filter given empty (`--account ""`): it is a usage error (exit 2), never "no filter". `--status` (also `--outcome`) is `delivered`, `deferred`, `failed`, `suppressed` or `canceled`. Metadata only, never a subject or body. `epistle delivery` alone is `delivery list`. Needs `[storage] delivery_log_days` above 0. |
-| `epistle delivery show ID [--json]` | Every record of one message, oldest first. `ID` is the spool id of the `SPOOL` column of `delivery list`. The remote host and its reply are escaped for the terminal. Exits 2 for an id that is not a UUID or that has no record. |
+| `epistle delivery list [--recipient ADDR] [--account NAME] [--since WHEN] [--until WHEN] [--status S] [--limit N] [--json]` | Read the per-recipient delivery log: one record per delivered, failed, suppressed or canceled recipient, and one per deferred recipient for each distinct reply, at most eight per recipient (a retry deferred for the same reason adds none), newest day first, at most `N` records (default 100, at most 100000; a larger value is a usage error). The log is read a line at a time, so memory does not grow with the size of a day's file, and days outside `--since`/`--until` are not opened. `--since` and `--until` take an RFC 3339 time or a duration such as `24h` or `7d` counted back from now; `--since` after `--until` is refused, and so is a filter given empty (`--account ""`): it is a usage error (exit 2), never "no filter". `--status` (also `--outcome`) is `delivered`, `deferred`, `failed`, `suppressed` or `canceled`. Metadata only, never a subject or body. The time of each record is an RFC 3339 UTC instant; `--json` keeps the epoch second. `epistle delivery` alone is `delivery list`. Needs `[storage] delivery_log_days` above 0. |
+| `epistle delivery show ID [--json]` | Every record of one message, oldest first. `ID` is the spool id of the `SPOOL` column of `delivery list`. The time of each record is an RFC 3339 UTC instant; `--json` keeps the epoch second. The remote host and its reply are escaped for the terminal. Exits 2 for an id that is not a UUID or that has no record. |
 | `epistle delivery export [filters] [--limit N] [--json]` | The records that pass the same filters as `list` as CSV: `time,outcome,spool_id,account,from,recipient,remote,reply,attempt`, time as RFC 3339 UTC, newest day first, at most `N` records (default 10000, at most 100000). A field a spreadsheet would run as a formula (the reply of a remote server can begin with `=`) is written with a leading apostrophe. With `--json` the records are the objects `list --json` prints, `extra` included. |
 | `epistle suppression list [--account SENDER] [--json]` | List suppressed (hard-bounced) recipients. A recipient suppressed by a bounce also shows, tab separated, when and the remote reply that proved the address bad. |
 | `epistle suppression add ADDR [--account SENDER] [--reason TEXT]` | Suppress a recipient by hand. Mail queued for it is dropped without a bounce on the next delivery pass. With `--account` it applies to that sender only. `--reason` is kept with the entry and shown by `list`, `show` and `export` (at most 512 characters, no control characters; the default says it was added by hand). Exits 1, printing nothing, when the entry could not be written. |
@@ -1667,11 +1689,11 @@ decides whether to attempt it.
 | Command | What it does |
 |---|---|
 | `epistle queue list [--json]` | One line per message (id, attempts, sender, recipients, `held`), or a JSON array with the envelope and last error. |
-| `epistle queue show <id>` | Envelope, attempts, next attempt, held state and the last delivery error. Never prints the message body. |
+| `epistle queue show <id>` | Envelope, attempts, next attempt, held state and the last delivery error. The next attempt and the time the entry has been held for are RFC 3339 UTC instants. Never prints the message body. |
 | `epistle queue retry <id>\|--all` | Make the next attempt happen now, skipping the backoff. The attempt count is kept, and a held entry stays held. |
 | `epistle queue hold <id>\|--all` | Never attempt the entry until it is released. |
 | `epistle queue release <id>\|--all` | Let a held entry be attempted again. |
-| `epistle queue destinations [--json]` | The recipient domains and exchanger hosts on hold because they asked to slow down, as the spool shows them: until when, after how many deferrals in a row, and the reply. `epistle queue list` names them too. |
+| `epistle queue destinations [--json]` | The recipient domains and exchanger hosts on hold because they asked to slow down, as the spool shows them: until when (an RFC 3339 UTC instant), after how many deferrals in a row, and the reply. `epistle queue list` names them too. |
 | `epistle queue release-destination <domain>\|<host>\|--all` | Make every recipient waiting for that hold due at once, its run of deferrals forgotten; the running worker picks it up at its next scan. |
 | `epistle queue remove <id> [--yes\|-y]` | Delete an entry without delivering or bouncing it (same as `DELETE /api/v1/queue/{id}`). Asks first; `--yes` skips the question. |
 
@@ -1712,9 +1734,10 @@ memory by the running server and are not manageable from the CLI, and exits 1.
 
 | Command | What it does |
 |---|---|
-| `epistle ban list [--json]` | Active bans: subject (`ip:<addr>`, where an IPv6 client appears as its /64, `cidr:<net>/<prefix>`, `pair:<login>|<client>` or `account:<login>`), reason, and the epoch second each one ends. |
+| `epistle ban list [--json]` | Active bans: subject (`ip:<addr>`, where an IPv6 client appears as its /64, `cidr:<net>/<prefix>`, `pair:<login>|<client>` or `account:<login>`), reason, and when each one ends, as an RFC 3339 UTC instant. `--json` keeps the epoch second. |
 | `epistle ban add <ip\|cidr> [--for 24h]` | Ban an address or network by hand. `--for` takes a number and a unit (`s`, `m`, `h`, `d`, `w`); the default is 24h. Refused for an address on the allow list. |
-| `epistle ban remove <ip\|cidr>` | Lift the ban now and clear the address's failure counter (for IPv6, the /64's), so the next failure starts from zero. Exits 1 if there was neither a ban nor a failure record. |
+| `epistle ban remove <ip\|cidr\|subject>` | Lift the ban now and clear its failure counter, so the next failure starts from zero. Takes an address or network (for an IPv6 address, the /64's counter goes too) or any subject exactly as `ban list` prints it. Quote a `pair:` subject, because the shell reads `\|` as a pipe. Lifting a pair or an account clears that subject only. Exits 1 if there was neither a ban nor a failure record. |
+| `epistle ban remove --account <login> --ip <addr>` | The same for a pair ban, named by its parts. An IPv6 address names its /64. |
 | `epistle ban allow list [--json]` | Addresses and networks that are never banned. |
 | `epistle ban allow add <ip\|cidr>` | Never ban this address or network. |
 | `epistle ban allow remove <ip\|cidr>` | Take it off the allow list. |
@@ -1762,7 +1785,7 @@ configured window.
 
 | Command | What it does |
 |---|---|
-| `epistle archive list <ACCOUNT>` | List every archived message for an account (id, mailbox, unix time). |
+| `epistle archive list <ACCOUNT>` | List every archived message for an account (id, mailbox, RFC 3339 time). |
 | `epistle archive restore <ACCOUNT> <ID>` | Re-append an archived message to its original mailbox (or INBOX when that mailbox is gone), then remove it from the archive. |
 | `epistle archive purge <ACCOUNT> [--older-than-days N] [--yes\|-y]` | Delete archived entries. Without `--older-than-days`, every entry for the account is purged; with it, only entries older than the threshold. The sweep uses the same threshold. Asks first, saying "all" when there is no threshold; `--yes` skips the question. |
 

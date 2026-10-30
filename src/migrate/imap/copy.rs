@@ -129,6 +129,11 @@ pub(super) async fn folder(
 					mailbox::create(&target.data_dir, &target.account, local)
 						.map_err(MigrateError::Storage)?;
 				}
+				// The folder is subscribed, so a client that lists only the
+				// subscribed mailboxes shows it: a folder nobody can see is
+				// a folder nobody reads.
+				mailbox::subscribe(&target.data_dir, &target.account, local)
+					.map_err(MigrateError::Storage)?;
 				if dedupe {
 					index = Some(Index::scan(
 						&target.data_dir,

@@ -3,7 +3,7 @@
 //! workflow provides one); otherwise they skip so the default test run
 //! needs no database.
 //!
-//! The unit tests in `src/antispam/bans_tests.rs` cover the same
+//! The unit tests in `src/antispam/bans/tests/base.rs` cover the same
 //! behaviour through an in-memory `FakeBanStore`. These cases are the
 //! PostgreSQL counterpart: the SQL projection, the upsert that drives
 //! the backoff, the sweep horizon, and the fail-open contract under

@@ -68,7 +68,7 @@ impl Session {
 	pub(super) fn verify_external(&mut self, encoded: &str) -> Action {
 		let Some(identity) = self.client_identity.clone() else {
 			// EXTERNAL without a verified client certificate: never succeeds.
-			return self.auth_fail();
+			return self.auth_fail_external();
 		};
 		let trimmed = encoded.trim();
 		let authzid = if trimmed.is_empty() || trimmed == "=" {
@@ -76,11 +76,11 @@ impl Session {
 		} else {
 			match base64::engine::general_purpose::STANDARD.decode(trimmed) {
 				Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
-				Err(_) => return self.auth_fail(),
+				Err(_) => return self.auth_fail_external(),
 			}
 		};
 		if !authzid.is_empty() && authzid != identity {
-			return self.auth_fail();
+			return self.auth_fail_external();
 		}
 		// Resolve the certificate's email identity to a local account, then
 		// apply the account rules (disabled, protocol allowlist) for this
@@ -91,17 +91,42 @@ impl Session {
 		let account = match crate::smtp::address::Address::parse(&identity) {
 			Ok(address) => match self.directory.resolve_exact(&address) {
 				Some(account) => account,
-				None => return self.auth_fail(),
+				None => return self.auth_fail_external(),
 			},
-			Err(_) => return self.auth_fail(),
+			Err(_) => return self.auth_fail_external(),
 		};
 		if !self
 			.directory
 			.admit_login(&account, self.auth_protocol, Proof::Federated)
 		{
-			return self.auth_fail();
+			return self.auth_fail_external();
 		}
+		// The exchange succeeded. The line that says so at the default
+		// level: the password path writes the audit channel instead, and
+		// this mechanism never reached it.
+		crate::smtp::session_log::authentication(
+			&crate::log_id::account(&account),
+			self.auth_protocol.as_str(),
+			"EXTERNAL",
+			crate::smtp::session_log::SUCCEEDED,
+			self.auth_failures,
+		);
 		self.auth_success(account, None)
+	}
+
+	/// A refused SASL EXTERNAL exchange. The attempt is recorded at the
+	/// default level, and the account is not named: the wire answer
+	/// does not say which account the client tried to be either.
+	fn auth_fail_external(&mut self) -> Action {
+		self.auth_failures += 1;
+		crate::smtp::session_log::authentication(
+			crate::smtp::session_log::UNKNOWN,
+			self.auth_protocol.as_str(),
+			"EXTERNAL",
+			crate::smtp::session_log::FAILED,
+			self.auth_failures,
+		);
+		self.auth_fail_counted()
 	}
 
 	fn auth_success(&mut self, account: String, label: Option<String>) -> Action {

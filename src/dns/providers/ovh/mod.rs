@@ -194,7 +194,8 @@ impl OvhProvider {
 			.send()
 			.await
 			.map_err(transport)?;
-		check_status(&response)?;
+		let zone = zone_of(&self.base, url);
+		check_status(&response, zone.as_deref())?;
 		crate::dns::providers::read_body(response).await
 	}
 
@@ -222,7 +223,8 @@ impl OvhProvider {
 			.send()
 			.await
 			.map_err(transport)?;
-		check_status(&response)?;
+		let zone = zone_of(&self.base, url);
+		check_status(&response, zone.as_deref())?;
 		Ok(())
 	}
 
@@ -357,7 +359,7 @@ impl OvhProvider {
 			"ttl": record.ttl,
 		})
 		.to_string();
-		// The TXT matching rule from `src/dns/provider.rs` is the
+		// The TXT matching rule from `src/dns/provider/mod.rs` is the
 		// contract: an upsert replaces the TXT with the same
 		// purpose (version tag) at that name and leaves every
 		// other TXT at the name alone. Two records of the same
@@ -402,7 +404,7 @@ impl OvhProvider {
 		self.authorize(&record)?;
 		let kind = Self::api_kind(&record.kind)?;
 		let sub = Self::sub_domain(zone, &record.name);
-		// The TXT matching rule from `src/dns/provider.rs` is the
+		// The TXT matching rule from `src/dns/provider/mod.rs` is the
 		// contract: a value-bearing delete drops only the record
 		// whose target matches the value (a sibling ACME challenge
 		// at the same owner survives), an empty-value delete drops
@@ -526,15 +528,68 @@ pub fn resolve_base(endpoint: Option<&str>) -> Result<HttpsUrl, HttpsUrlError> {
 
 /// Map a response status to success / typed error. Returns `Ok(())` when the
 /// caller is going to ignore the body.
-fn check_status(response: &reqwest::Response) -> Result<(), ProviderError> {
+fn check_status(response: &reqwest::Response, zone: Option<&str>) -> Result<(), ProviderError> {
 	let status = response.status();
 	if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
 		return Err(ProviderError::Auth);
+	}
+	if status == reqwest::StatusCode::NOT_FOUND
+		&& let Some(zone) = zone
+	{
+		// OVH answers 404 for a zone it does not hold: the zone is not
+		// there, which is not a failure of the provider, and the search
+		// goes on to the parent.
+		return Err(ProviderError::ZoneNotFound(zone.to_string()));
 	}
 	if !status.is_success() {
 		return Err(ProviderError::Remote(format!("HTTP {status}")));
 	}
 	Ok(())
+}
+
+/// The zone an OVH URL is about, when the URL addresses the zone's records:
+/// `/domain/zone/{zone}/record`. Every call that names the zone does it
+/// that way, and a 404 there says the zone is not there. A URL about one
+/// record (`/domain/zone/{zone}/record/{id}`) says nothing about the zone:
+/// a 404 there is about that record.
+///
+/// The path is read relative to the base the provider was pointed at, because
+/// the real endpoints carry a version prefix (`/1.0`) that the paths of the
+/// API start after. A URL outside that base, or one whose path does not
+/// address the records of a zone, says nothing about any zone.
+fn zone_of(base: &HttpsUrl, url: &HttpsUrl) -> Option<String> {
+	let rest = relative_path(base, url)?;
+	let rest = rest.strip_prefix("/domain/zone/")?;
+	let (zone, tail) = rest.split_once('/')?;
+	if tail != "record" {
+		return None;
+	}
+	// The zone travelled through the URL percent-encoded. The error names
+	// the zone the operation asked for, not the encoded form of it.
+	let zone = percent_encoding::percent_decode_str(zone)
+		.decode_utf8()
+		.ok()?;
+	(!zone.is_empty()).then(|| zone.into_owned())
+}
+
+/// The path of `url` relative to the base it was built from. The base of
+/// OVH ends in `/1.0`, so the path of a request reads
+/// `/1.0/domain/zone/{zone}/record` and the version prefix has to come off
+/// before the rest of the path can be read. A URL that does not start with
+/// the path of the base is not one of ours and has no relative path.
+fn relative_path<'a>(base: &HttpsUrl, url: &'a HttpsUrl) -> Option<&'a str> {
+	let prefix = base.as_url().path().trim_end_matches('/');
+	let path = url.as_url().path();
+	if prefix.is_empty() {
+		return Some(path);
+	}
+	let rest = path.strip_prefix(prefix)?;
+	// `/1.0` must not match the start of `/1.0something`.
+	if rest.is_empty() || rest.starts_with('/') {
+		Some(rest)
+	} else {
+		None
+	}
 }
 
 /// Lowercase hex bytes (matches `hashlib.sha1(...).hexdigest()`).
@@ -548,21 +603,4 @@ fn hex_lower(bytes: &[u8]) -> String {
 }
 
 #[cfg(test)]
-#[path = "tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "tests_b.rs"]
-mod tests_b;
-
-#[cfg(test)]
-#[path = "tests_contract.rs"]
-mod tests_contract;
-
-#[cfg(test)]
-#[path = "tests_path.rs"]
-mod path_tests;
-
-#[cfg(test)]
-#[path = "tests_txt_forms.rs"]
-mod tests_txt_forms;

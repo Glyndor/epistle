@@ -1,7 +1,7 @@
 //! The package must create, and purge, the isolated `glyndor-epistle` account.
 //!
 //! `docs/configuration.md:813` and the README tell the operator to run under
-//! `[privileges] user = "glyndor-epistle"`, and `src/privdrop.rs` resolves that
+//! `[privileges] user = "glyndor-epistle"`, and `src/privdrop/mod.rs` resolves that
 //! name with `getpwnam_r` and fails closed when it does not exist. Nothing used
 //! to create it: `debian/` carried no maintainer scripts, which is the gap
 //! `docs/threat-model.md` recorded. `debian/epistle.postinst` now creates the

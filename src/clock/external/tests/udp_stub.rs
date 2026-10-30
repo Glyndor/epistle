@@ -24,7 +24,7 @@ const READ_TIMEOUT: Duration = Duration::from_millis(50);
 
 /// What the stub answers with.
 #[derive(Copy, Clone)]
-pub(super) enum NtpPlan {
+pub(in super::super) enum NtpPlan {
 	/// A valid server reply whose timestamps carry `offset` seconds.
 	Offset(f64),
 	/// A valid server reply that arrives late.
@@ -54,7 +54,7 @@ impl NtpPlan {
 }
 
 /// The stub, bound to a port on the loopback address.
-pub(super) struct NtpStub {
+pub(in super::super) struct NtpStub {
 	port: u16,
 	stop: Arc<AtomicBool>,
 	join: Option<JoinHandle<()>>,
@@ -62,7 +62,7 @@ pub(super) struct NtpStub {
 
 impl NtpStub {
 	/// Bind the stub and start the thread that answers it.
-	pub(super) fn spawn(plan: NtpPlan) -> Self {
+	pub(in super::super) fn spawn(plan: NtpPlan) -> Self {
 		let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind the udp stub");
 		socket
 			.set_read_timeout(Some(READ_TIMEOUT))
@@ -82,7 +82,7 @@ impl NtpStub {
 	}
 
 	/// The port the stub answers on.
-	pub(super) fn port(&self) -> u16 {
+	pub(in super::super) fn port(&self) -> u16 {
 		self.port
 	}
 }
@@ -98,7 +98,7 @@ impl Drop for NtpStub {
 
 /// The policy a local stub needs: the loopback address is a private one and
 /// the stub answers on a port of its own, so the test asks for both.
-pub(super) fn local_policy(port: u16) -> Policy {
+pub(in super::super) fn local_policy(port: u16) -> Policy {
 	Policy {
 		allow_private: true,
 		allowed_ports: vec![port],
@@ -106,7 +106,7 @@ pub(super) fn local_policy(port: u16) -> Policy {
 }
 
 /// A source that points at the local stub.
-pub(super) fn source_for_port(port: u16) -> Source {
+pub(in super::super) fn source_for_port(port: u16) -> Source {
 	let mut source = Source::ntp("127.0.0.1");
 	source.port = Some(port);
 	source

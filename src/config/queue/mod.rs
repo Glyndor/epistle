@@ -1,0 +1,200 @@
+//! Outbound queue configuration: the `[queue]` section.
+//!
+//! `outbound_tls` selects how the STARTTLS certificate of a recipient MX is
+//! authenticated; its default is the most restrictive option (strict PKIX
+//! verification), so an absent `[queue]` section leaves existing deployments
+//! unchanged (fail closed). `tlsrpt_reports` turns the outbound TLS-RPT
+//! reports off.
+
+use serde::Deserialize;
+
+/// How outbound STARTTLS authenticates the recipient MX certificate when TLS is
+/// neither mandated (MTA-STS enforce / REQUIRETLS) nor authenticated by DANE.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OutboundTls {
+	/// Strict PKIX: the certificate must chain to a webpki trust anchor and
+	/// match the MX hostname, exactly like a browser (the default). A remote
+	/// with a self-signed or expired certificate and no DANE/MTA-STS is
+	/// deferred rather than sent in the clear.
+	#[default]
+	Strict,
+	/// Opportunistic: complete the handshake with any certificate (encryption
+	/// without authentication). This is the historical SMTP norm — it stops
+	/// passive eavesdropping but not an active man-in-the-middle — and is opt
+	/// in. MTA-STS enforce, REQUIRETLS and DANE still authenticate regardless.
+	Opportunistic,
+}
+
+/// The `[queue]` configuration section.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Queue {
+	/// Outbound STARTTLS authentication mode for unmandated, non-DANE delivery.
+	/// Defaults to [`OutboundTls::Strict`].
+	#[serde(default)]
+	pub outbound_tls: OutboundTls,
+	/// Record the TLS outcome of each delivery and send the daily TLS-RPT
+	/// report (RFC 8460) to every recipient domain that asks for one.
+	/// Defaults to `true`.
+	#[serde(default = "default_tlsrpt_reports")]
+	pub tlsrpt_reports: bool,
+	/// Outbound conversations running at once, all destinations together.
+	/// Defaults to [`crate::queue::limits::DEFAULT_CONCURRENCY`].
+	#[serde(default = "default_concurrency")]
+	pub concurrency: usize,
+	/// Outbound conversations running at once with any one recipient domain.
+	/// Defaults to [`crate::queue::limits::DEFAULT_PER_DOMAIN_CONCURRENCY`].
+	#[serde(default = "default_per_domain_concurrency")]
+	pub per_domain_concurrency: usize,
+	/// How long a destination that asks to slow down is held off, in
+	/// seconds, one step per deferral in a row, the last repeating.
+	/// Defaults to [`crate::queue::backoff::DEFAULT_STEPS`].
+	#[serde(default = "default_backoff_steps")]
+	pub backoff_steps: Vec<u64>,
+}
+
+fn default_backoff_steps() -> Vec<u64> {
+	crate::queue::backoff::DEFAULT_STEPS.to_vec()
+}
+
+const fn default_concurrency() -> usize {
+	crate::queue::limits::DEFAULT_CONCURRENCY
+}
+
+const fn default_per_domain_concurrency() -> usize {
+	crate::queue::limits::DEFAULT_PER_DOMAIN_CONCURRENCY
+}
+
+const fn default_tlsrpt_reports() -> bool {
+	true
+}
+
+impl Default for Queue {
+	fn default() -> Self {
+		Queue {
+			outbound_tls: OutboundTls::default(),
+			tlsrpt_reports: default_tlsrpt_reports(),
+			concurrency: default_concurrency(),
+			per_domain_concurrency: default_per_domain_concurrency(),
+			backoff_steps: default_backoff_steps(),
+		}
+	}
+}
+
+impl super::Config {
+	/// The conversation caps must allow at least one conversation, stay
+	/// within what one process should open, and not give one domain more
+	/// than the total.
+	pub(super) fn validate_queue_limits(&self) -> Result<(), super::ConfigError> {
+		use crate::queue::limits::MAX_CONCURRENCY;
+		let queue = &self.queue;
+		let invalid = |message: String| Err(super::ConfigError::Invalid(message));
+		if !(1..=MAX_CONCURRENCY).contains(&queue.concurrency) {
+			return invalid(format!(
+				"[queue] concurrency must be between 1 and {MAX_CONCURRENCY} (got {})",
+				queue.concurrency
+			));
+		}
+		if !(1..=queue.concurrency).contains(&queue.per_domain_concurrency) {
+			return invalid(format!(
+				"[queue] per_domain_concurrency must be between 1 and concurrency ({}) (got {})",
+				queue.concurrency, queue.per_domain_concurrency
+			));
+		}
+		self.validate_backoff_steps()
+	}
+
+	/// The backoff needs at least one step and at most
+	/// [`crate::queue::backoff::MAX_STEPS`], each between a second and a day.
+	fn validate_backoff_steps(&self) -> Result<(), super::ConfigError> {
+		use crate::queue::backoff::{MAX_STEP_SECS, MAX_STEPS};
+		let steps = &self.queue.backoff_steps;
+		if steps.is_empty() || steps.len() > MAX_STEPS {
+			return Err(super::ConfigError::Invalid(format!(
+				"[queue] backoff_steps must have between 1 and {MAX_STEPS} steps (got {})",
+				steps.len()
+			)));
+		}
+		if let Some(step) = steps
+			.iter()
+			.find(|step| !(1..=MAX_STEP_SECS).contains(*step))
+		{
+			return Err(super::ConfigError::Invalid(format!(
+				"[queue] backoff_steps must be between 1 and {MAX_STEP_SECS} seconds each (got {step})"
+			)));
+		}
+		Ok(())
+	}
+
+	/// The outbound retry schedule must make sense: a first wait of at least
+	/// a minute, a cap not below it, and a delay warning that comes before
+	/// the give-up window closes. The conversation caps and the backoff of
+	/// the `[queue]` section are checked with it.
+	pub(super) fn validate_retry_schedule(&self) -> Result<(), super::ConfigError> {
+		use crate::queue::schedule::{MIN_BASE_SECS, RetrySchedule};
+		let invalid = |message: String| Err(super::ConfigError::Invalid(message));
+		let schedule = RetrySchedule::from_config(
+			self.queue_retry_base_secs,
+			self.queue_retry_cap_secs,
+			self.queue_delay_warning_secs,
+		);
+		let give_up = self
+			.queue_give_up_secs
+			.filter(|secs| *secs != 0)
+			.unwrap_or(5 * 86_400);
+		if schedule.base < MIN_BASE_SECS {
+			return invalid(format!(
+				"queue_retry_base_secs must be at least {MIN_BASE_SECS} (got {})",
+				schedule.base
+			));
+		}
+		if schedule.cap < schedule.base {
+			return invalid(format!(
+				"queue_retry_cap_secs ({}) must not be below queue_retry_base_secs ({})",
+				schedule.cap, schedule.base
+			));
+		}
+		if schedule.delay_warning >= give_up {
+			return invalid(format!(
+				"queue_delay_warning_secs ({}) must be below the give-up window \
+				 queue_give_up_secs ({give_up})",
+				schedule.delay_warning
+			));
+		}
+		self.validate_queue_limits()
+	}
+
+	/// SHOULD warnings: a value the RFC recommends but does not require.
+	/// The validation above refuses values that break the protocol
+	/// invariants; the warnings here flag values that still work but
+	/// deviate from the recommendation. `epistle limits set` and the
+	/// start-up banner print the same lines.
+	pub fn retry_schedule_warnings(&self) -> Vec<&'static str> {
+		use crate::queue::schedule::{
+			DEFAULT_BASE_SECS, DEFAULT_GIVE_UP_SECS, SHOULD_GIVE_UP_SECS, SHOULD_RETRY_BASE_SECS,
+		};
+		let give_up = self
+			.queue_give_up_secs
+			.filter(|secs| *secs != 0)
+			.unwrap_or(DEFAULT_GIVE_UP_SECS);
+		let base = self.queue_retry_base_secs.unwrap_or(DEFAULT_BASE_SECS);
+		let mut warnings = Vec::new();
+		if give_up < SHOULD_GIVE_UP_SECS {
+			warnings.push(
+				"queue_give_up_secs is below the 4 days RFC 5321 §4.5.4.1 recommends; \
+				 recipients will bounce sooner than the standard expects",
+			);
+		}
+		if base < SHOULD_RETRY_BASE_SECS {
+			warnings.push(
+				"queue_retry_base_secs is below the 30 minutes the RFC recommends; \
+				 the first retry is sooner than receivers expect",
+			);
+		}
+		warnings
+	}
+}
+
+#[cfg(test)]
+mod tests;

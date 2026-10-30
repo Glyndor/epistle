@@ -26,7 +26,13 @@ After publishing, verify with `epistle config-check` and an external checker.
 | Client autoconfig | `autoconfig.example.org` | A/CNAME | the host |
 | Client autodiscover | `autodiscover.example.org` | A/CNAME | the host |
 
-Plus the **SRV** records printed by `epistle srv-records`.
+Plus the **SRV** records printed by `epistle srv-records`. `epistle
+dns-records` prints one SRV locator per service your listeners enable: a
+service you turned off gets no locator, so a client that follows a
+published record always reaches a port the server answers on. The
+`autoconfig` and `autodiscover` names follow the same rule: they are
+published only when a listener serves the client setup documents, and the
+JMAP locator only when the configuration carries the API that serves it.
 
 ## The essential four
 
@@ -86,9 +92,8 @@ string). For receivers without Ed25519 support, add an RSA selector:
 epistle dkim-keygen --rsa --out /etc/glyndor/epistle/dkim/rsa1.pem
 ```
 
-`--rsa` delegates to `openssl genpkey` and the binary must be on `PATH`
-(the Debian package installs it). `--bits` defaults to 2048 and accepts
-2048 or 4096 only.
+`--rsa` makes the key in process, so nothing has to be on `PATH`.
+`--bits` defaults to 2048 and accepts 2048 or 4096 only.
 
 Publish the printed TXT at `<selector>._domainkey.example.org`, and
 configure `[dkim] selector` / `key_file`. Add `rsa_selector` /
@@ -260,6 +265,20 @@ operator).
 RFC 2136 talks UPDATE directly to BIND/Knot/NSD over TCP, authenticating
 with TSIG — useful when the zone is hosted on the same host as epistle
 and a full DNS-as-a-service API is overkill.
+
+A record is published in the zone that holds its name. A provider that
+names its zones looks a zone up by its exact name, so epistle asks it
+which zone holds the name — the longest zone below it — and writes the
+record there. A mail hostname under the zone apex (`mail.example.org`
+inside `example.org`) is published in `example.org`, and the dns-01
+challenge of an ACME order for such a hostname is published in the same
+zone and withdrawn from it.
+
+A zone the provider does not hold is not a zone it could not answer
+about: the search goes on to the parent only in the first case. When the
+provider fails — a timeout, a refused token, a reply that does not parse
+— the search stops and the record is not written anywhere: publishing it
+in the parent zone would put it in a zone the operator did not ask for.
 
 ### Checking provider credentials
 
@@ -495,14 +514,27 @@ Use your provider and zone, and repeat its other required settings, such as
 printing it, writes `<data_dir>/../secrets/dns_provider_token` with mode `0600`,
 and replaces `dns.token` and `dns.token_env` with `dns.token_file`. With
 `--token-env NAME` or `--token-file /absolute/path`, it imports that source
-instead. A different existing destination is refused. `--dry-run` previews the
-redacted configuration change without writing the token or Compose file.
+instead. A different existing destination is refused.
 
-For a generated stack, the command removes the old token environment entry,
-adds a read-only file mount only to `mail`, and recreates `mail`. Without a
-stack, restart the server yourself. Remove the old environment variable from
-your shell, service configuration, answers file and Compose overrides too.
-Keep the secret separately from data backups.
+For a generated stack, the command removes the old token environment entry and
+the read-only mount of a token file the configuration no longer names, adds the
+mount of the new source only to `mail`, and recreates `mail`. A container that
+keeps the mount of a credential you took away still has that credential, so the
+mount leaves with the setting that named it. Without a stack, restart the server
+yourself. Remove the old environment variable from your shell, service
+configuration, answers file and Compose overrides too. Keep the secret
+separately from data backups.
+
+`--token-file /absolute/path` names a file you already keep: the command does
+not move it, and the generated stack mounts that path read-only into `mail`, so
+the container reads the same file the host does. A path the stack does not
+mount is a path the container does not have, and the provider never builds.
+
+`--dry-run` previews the redacted configuration change and the change to the
+generated Compose file, and writes neither the token nor the Compose file. The
+redaction walks the TOML tree, so a credential is hidden whole: a token written
+as a multiline string does not reach the terminal, a log or the JSON output
+with the lines it continues on.
 
 Existing inline and environment sources keep working. `epistle status` reports
 a warning with migration instructions, without displaying the token. A file

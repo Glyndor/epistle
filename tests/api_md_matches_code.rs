@@ -103,22 +103,22 @@ const NUMBERS: &[(&str, &[&str], &str)] = &[
 	),
 	(SEND, &["MAX_EXTRA_VALUE_LEN"], "values of at most {} bytes"),
 	(
-		"src/api/state_bearer.rs",
+		"src/api/state/bearer.rs",
 		&["MAX_BEARER_LEN"],
 		"longer than {} bytes is not looked at",
 	),
 	(
-		"src/api/state_limiter.rs",
+		"src/api/state/limiter.rs",
 		&["AUTH_MAX_FAILURES"],
 		"made {} requests with credentials",
 	),
 	(
-		"src/api/state_limiter.rs",
+		"src/api/state/limiter.rs",
 		&["AUTH_WINDOW"],
 		"in the last {} seconds",
 	),
 	(
-		"src/api/state.rs",
+		"src/api/state/mod.rs",
 		&["MAX_CONCURRENT_ARGON2", "MAX_ARGON2_QUEUE"],
 		"argon2 check: {} run at a time, {} may wait",
 	),
@@ -151,12 +151,12 @@ const NUMBERS: &[(&str, &[&str], &str)] = &[
 	),
 	("src/api/v1/queue.rs", &["MAX_LIMIT"], "(`limit` 1 to {}"),
 	(
-		"src/api/v1/deliveries.rs",
+		"src/api/v1/deliveries/mod.rs",
 		&["DEFAULT_LIMIT"],
 		"default {}. There is no cursor",
 	),
 	(
-		"src/storage/delivery_log.rs",
+		"src/storage/delivery_log/mod.rs",
 		&["DEFAULT_DELIVERY_LOG_DAYS"],
 		"({} by default)",
 	),
@@ -166,12 +166,12 @@ const NUMBERS: &[(&str, &[&str], &str)] = &[
 		"{} to {} printable ASCII",
 	),
 	(
-		"src/directory_store/display_name.rs",
+		"src/directory_store/display_name/mod.rs",
 		&["MAX_CHARS"],
 		"At most {} characters",
 	),
 	(
-		"src/net/http_serve.rs",
+		"src/net/http_serve/mod.rs",
 		&["HEADER_READ_TIMEOUT"],
 		"{} seconds to send it",
 	),
@@ -192,13 +192,13 @@ fn every_number_in_the_guide_is_the_one_in_the_code() {
 
 #[test]
 fn the_webhook_timeout_is_the_one_in_the_guide() {
-	assert!(source("src/webhook.rs").contains("timeout(Duration::from_secs(15))"));
+	assert!(source("src/webhook/mod.rs").contains("timeout(Duration::from_secs(15))"));
 	assert!(guide().contains("with a 15 second timeout and no retry"));
 }
 
 /// The `code: "..."` strings of `ApiError`.
 fn error_codes() -> BTreeSet<String> {
-	let text = source("src/api/error.rs");
+	let text = source("src/api/error/mod.rs");
 	let production = text.split("#[cfg(test)]").next().expect("source");
 	production
 		.lines()
@@ -238,7 +238,7 @@ fn snake_case(name: &str) -> String {
 
 /// The `event` names of `WebhookEvent`, honouring `#[serde(rename = "...")]`.
 fn webhook_events() -> BTreeSet<String> {
-	let text = source("src/webhook.rs");
+	let text = source("src/webhook/mod.rs");
 	let body = text
 		.split("pub enum WebhookEvent {")
 		.nth(1)

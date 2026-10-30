@@ -28,6 +28,12 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
 
+# A newer push to a pull request supersedes the run in flight. Queue and
+# branch runs are never cancelled: only a pull_request event is.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
@@ -51,14 +57,14 @@ jobs:
 
       - name: Install toolchain
         run: |
-          # Pinned to 1.98, the same compiler the build and release
+          # Pinned to 1.99, the same compiler the build and release
           # workflows use. A toolchain drift between the binary we
-          # download (built by 1.98.0) and the one we compile here
-          # (also 1.98) is the difference between an upgrade smoke
+          # download (built by 1.99.0) and the one we compile here
+          # (also 1.99) is the difference between an upgrade smoke
           # test that proves something and one that proves the
           # toolchain happens to agree.
-          rustup toolchain install 1.98 --profile minimal
-          rustup default 1.98
+          rustup toolchain install 1.99 --profile minimal
+          rustup default 1.99
 
       - name: Resolve the latest published release tag
         id: latest

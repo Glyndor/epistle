@@ -182,6 +182,20 @@ impl DnsimpleProvider {
 				.send()
 				.await
 				.map_err(transport)?;
+			let status = response.status();
+			if status == reqwest::StatusCode::NOT_FOUND {
+				if page == 1 {
+					// DNSimple answers 404 for a zone it does not hold:
+					// the zone is not there, which is not a failure of
+					// the provider, and the search goes on to the
+					// parent.
+					return Err(ProviderError::ZoneNotFound(zone.to_string()));
+				}
+				// A page after a valid one: the first page proved the
+				// zone is there, so this is a failure of the provider
+				// and not an absent zone.
+				return Err(ProviderError::Remote(format!("HTTP {status}")));
+			}
 			let mut batch: ListResponse = decode(response).await?;
 			let count = batch.data.len();
 			all.append(&mut batch.data);
@@ -274,7 +288,7 @@ impl DnsimpleProvider {
 		self.authorize(&record)?;
 		let kind = Self::api_kind(&record.kind)?;
 		let relative = self.relative_name(&record.name);
-		// The TXT matching rule from `src/dns/provider.rs` is the
+		// The TXT matching rule from `src/dns/provider/mod.rs` is the
 		// contract: an upsert replaces the TXT with the same
 		// purpose (version tag) at that name and leaves every
 		// other TXT at the name alone. Two records of the same
@@ -440,7 +454,7 @@ impl DnsimpleProvider {
 		self.authorize(&record)?;
 		let kind = Self::api_kind(&record.kind)?;
 		let relative = self.relative_name(&record.name);
-		// The TXT matching rule from `src/dns/provider.rs` is the
+		// The TXT matching rule from `src/dns/provider/mod.rs` is the
 		// contract: a value-bearing delete drops only the record
 		// whose content matches the value (a sibling ACME challenge
 		// at the same owner survives), an empty-value delete drops
@@ -580,13 +594,4 @@ fn check(response: reqwest::Response) -> Result<(), ProviderError> {
 }
 
 #[cfg(test)]
-#[path = "tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "tests_contract.rs"]
-mod tests_contract;
-
-#[cfg(test)]
-#[path = "tests_path.rs"]
-mod path_tests;

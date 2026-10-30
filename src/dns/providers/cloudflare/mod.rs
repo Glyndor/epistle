@@ -15,8 +15,8 @@ mod check;
 mod list;
 mod tags;
 use crate::dns::provider::{
-	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, parse_srv, record_description,
-	same_txt_purpose,
+	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, ZoneOp, parse_srv,
+	record_description, same_txt_purpose,
 };
 use crate::dns::providers::transport;
 use crate::dns::txt::{TxtForm, txt_encode};
@@ -46,6 +46,10 @@ pub struct CloudflareProvider {
 
 #[derive(Deserialize)]
 struct ListZones {
+	/// Whether the reply is an answer at all. Cloudflare says it failed
+	/// in the same envelope a successful answer uses, with an empty
+	/// result, so the flag is what tells the two apart.
+	success: bool,
 	result: Vec<ZoneRef>,
 }
 
@@ -333,15 +337,26 @@ impl CloudflareProvider {
 		Ok(self.base.with_segments(segments)?)
 	}
 
-	async fn zone_id(&self, zone: &str) -> Result<String, ProviderError> {
+	/// The id of the zone named `zone`, or `None` when the account holds
+	/// no zone with that name. The lookup is an exact match, so a name
+	/// below a zone (`mail.example.org`) is not a zone of its own.
+	async fn find_zone_id(&self, zone: &str) -> Result<Option<String>, ProviderError> {
 		let url = self.base.with_segments(["zones"])?.with_query("name", zone);
 		let zones: ListZones = self.get_json(url).await?;
-		zones
-			.result
-			.into_iter()
-			.next()
-			.map(|z| z.id)
-			.ok_or(ProviderError::Remote(format!("zone not found: {zone}")))
+		if !zones.success {
+			// The reply says it failed: the empty result it carries
+			// says nothing about the zone, and the zone is not absent.
+			return Err(ProviderError::Remote(
+				"Cloudflare answered that the zone lookup failed".into(),
+			));
+		}
+		Ok(zones.result.into_iter().next().map(|z| z.id))
+	}
+
+	async fn zone_id(&self, zone: &str) -> Result<String, ProviderError> {
+		self.find_zone_id(zone)
+			.await?
+			.ok_or_else(|| ProviderError::ZoneNotFound(zone.to_string()))
 	}
 
 	async fn find_record(
@@ -351,7 +366,7 @@ impl CloudflareProvider {
 		kind: &str,
 		value: Option<&str>,
 	) -> Result<Option<RecordRef>, ProviderError> {
-		// The TXT matching rule from `src/dns/provider.rs` is the
+		// The TXT matching rule from `src/dns/provider/mod.rs` is the
 		// contract: a value-bearing delete drops only the record
 		// whose content matches the value. `same_txt_purpose` carries
 		// it: two tagged values match when their tag is the same
@@ -388,7 +403,7 @@ impl CloudflareProvider {
 		let kind = Self::api_kind(&record.kind)?;
 		let zone_id = self.zone_id(zone).await?;
 		let body = Self::record_value(kind, &record)?;
-		// The upsert contract in `src/dns/provider.rs`: a TXT replaces
+		// The upsert contract in `src/dns/provider/mod.rs`: a TXT replaces
 		// the record of the same purpose and leaves every other TXT
 		// at the name alone (an ACME challenge, a verification
 		// token). Two records of the same purpose at the same name
@@ -500,7 +515,7 @@ impl CloudflareProvider {
 		self.authorize(&record)?;
 		let kind = Self::api_kind(&record.kind)?;
 		let zone_id = self.zone_id(zone).await?;
-		// The TXT matching rule from `src/dns/provider.rs` is the
+		// The TXT matching rule from `src/dns/provider/mod.rs` is the
 		// contract: a value-bearing delete drops only the record
 		// whose content matches the value (a sibling ACME challenge
 		// at the same owner survives), an empty-value delete drops
@@ -562,6 +577,14 @@ impl DnsProvider for CloudflareProvider {
 			self.list_inner(&zone).await
 		}))
 	}
+	fn has_zone(&self, zone: &str) -> ZoneOp<'_> {
+		let zone = zone.to_string();
+		Box::pin(crate::dns::providers::within(async move {
+			// The zone lookup answers the question on its own: it reads
+			// one zone by name, not the records of a zone.
+			Ok(self.find_zone_id(&zone).await?.is_some())
+		}))
+	}
 }
 
 /// Whether a refused write may have been refused over its tags: a client
@@ -571,13 +594,18 @@ fn retry_without_tags(status: reqwest::StatusCode) -> bool {
 	status.is_client_error() && !matches!(status.as_u16(), 401 | 403 | 429)
 }
 
-/// Decode a JSON body, mapping a 401/403 to an auth error.
+/// Decode a JSON body, mapping a 401/403 to an auth error and every other
+/// unsuccessful status to a remote error, before the body is read at all: a
+/// reply that is not an answer never gets to be one.
 async fn decode<T: serde::de::DeserializeOwned>(
 	response: reqwest::Response,
 ) -> Result<T, ProviderError> {
 	let status = response.status();
 	if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
 		return Err(ProviderError::Auth);
+	}
+	if !status.is_success() {
+		return Err(ProviderError::Remote(format!("HTTP {status}")));
 	}
 	let text = crate::dns::providers::read_body(response).await?;
 	serde_json::from_str(&text).map_err(|e| ProviderError::Remote(e.to_string()))
@@ -597,13 +625,4 @@ async fn decode_ok(response: reqwest::Response) -> Result<(), ProviderError> {
 }
 
 #[cfg(test)]
-#[path = "tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "tests_path.rs"]
-mod path_tests;
-
-#[cfg(test)]
-#[path = "tests_proxied.rs"]
-mod proxied_tests;

@@ -275,17 +275,4 @@ async fn autodiscover_v2_handler(
 }
 
 #[cfg(test)]
-#[path = "autodiscovery_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "autodiscovery_tests_mobileconfig.rs"]
-mod tests_mobileconfig;
-
-#[cfg(test)]
-#[path = "autodiscovery_tests_tls.rs"]
-mod tests_tls;
-
-#[cfg(test)]
-#[path = "autodiscovery_tests_disabled.rs"]
-mod tests_disabled;

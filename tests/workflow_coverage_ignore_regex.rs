@@ -11,10 +11,10 @@
 //! what guarantees the gate covers the test files. A future PR that adds
 //! the `regex` crate as a dev-dependency can grow this into a true
 //! match/no-match check that asserts, for example, that the regex matches
-//! `src/api/jmap_tests_b.rs`, `src/cli/init/apply_tests_b.rs`,
-//! `src/cli/local/test_support.rs` and `src/foo_tests.rs`, and does NOT
-//! match `src/smtp/server/run.rs`, `src/antispam/subjectpass.rs` or
-//! `src/cli/config_check.rs`. Until then the substring assertion is the
+//! `src/api/tests/jmap_b.rs`, `src/cli/init/apply/tests/reuse.rs`,
+//! `src/cli/local/test_support.rs` and `src/cidr/tests/base.rs`, and does NOT
+//! match `src/smtp/server/run.rs`, `src/antispam/subjectpass/mod.rs` or
+//! `src/cli/config/check/mod.rs`. Until then the substring assertion is the
 //! strongest one available without pulling in a new dependency.
 //!
 //! Two extra families of split test files exist beyond the simple
@@ -39,13 +39,13 @@ const TEST_FILE_FRAGMENTS: &[&str] = &[
 	// Covers *_tests_b.rs, *_tests_c.rs, ..., *_tests_<word>.rs.
 	r"_tests(_[a-z0-9_]+)?",
 	// Covers cli/local/test_support.rs, dns/providers/gcloud/test_support.rs
-	// and smtp/directory_test_support.rs.
+	// and smtp/directory/test_support.rs.
 	r"test_support",
-	// Covers dns/providers/namecheap/tests_basic.rs, tests_path.rs and the
+	// Covers dns/providers/namecheap/tests/basic.rs, tests_path.rs and the
 	// other tests_<word>.rs files beside a module.
 	r"tests_[a-z0-9_]+",
 	// Covers a module directory's own tests.rs, such as
-	// dns/providers/cloudflare/tests.rs.
+	// dns/providers/cloudflare/tests/base.rs.
 	r"/tests",
 ];
 

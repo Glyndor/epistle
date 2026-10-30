@@ -41,6 +41,7 @@ pub mod carddav;
 pub mod carddav_filter;
 pub mod handler;
 mod href;
+mod if_match;
 pub mod path;
 pub mod propfind;
 pub mod quota;
@@ -125,4 +126,4 @@ pub fn router_for(state: WebDavState) -> Router {
 }
 
 #[cfg(test)]
-mod href_tests;
+mod tests;

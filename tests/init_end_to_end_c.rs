@@ -489,15 +489,14 @@ fn init_staging_config_is_owner_only_from_the_start() {
 	);
 }
 
-/// Finding 8: when `openssl` is not on `PATH`, the apply phase
-/// must omit `rsa_selector` and `rsa_key_file` from the generated
-/// config rather than point them at the Ed25519 key. A config
-/// that names an RSA selector and an Ed25519 key file does not
-/// start: the RSA loader rejects the Ed25519 material before
-/// `serve` finishes binding its listeners.
+/// The RSA DKIM key is made in process, so the apply phase writes it
+/// and names it in the config even when nothing is on `PATH`: the
+/// image the stack runs ships no `openssl`
+/// (Glyndor/epistle#1376), and a config that omits the RSA fields
+/// leaves the server signing with one key only.
 #[cfg(unix)]
 #[test]
-fn init_omits_rsa_dkim_keys_when_openssl_is_absent() {
+fn init_writes_the_rsa_dkim_key_without_openssl() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let empty_path = dir.path().join("empty-bin");
 	std::fs::create_dir(&empty_path).expect("mkdir empty-bin");
@@ -528,28 +527,33 @@ fn init_omits_rsa_dkim_keys_when_openssl_is_absent() {
 	);
 	let config_text = std::fs::read_to_string(&config_path).expect("read config");
 	assert!(
-		!config_text.contains("rsa_selector") && !config_text.contains("rsa_key_file"),
-		"the generated config must NOT carry rsa_selector or rsa_key_file when no RSA key exists: {config_text}"
+		config_text.contains("rsa_selector") && config_text.contains("rsa_key_file"),
+		"the generated config must carry the RSA dkim fields: {config_text}"
 	);
 	assert!(
 		config_text.contains("selector = \"s1\"") && config_text.contains("key_file"),
 		"the generated config must still carry the ed25519 dkim block: {config_text}"
 	);
+	let s2 = data_dir.join("keys").join("s2.pem");
 	assert!(
-		!data_dir.join("keys").join("s2.pem").exists(),
-		"s2.pem must not be written when openssl is absent"
+		s2.exists(),
+		"s2.pem must be written without openssl on PATH"
+	);
+	assert!(
+		config_text.contains(&s2.display().to_string()),
+		"the config must name the RSA key it wrote: {config_text}"
 	);
 }
 
-/// Finding 9: when openssl returns after the first run wrote a
-/// config without RSA fields, the next run must show the plan as
-/// an `update` (not `identical`) so the operator sees that the
-/// about-to-be-written config adds the RSA fields. The plan is
-/// built from the planned post-step key state, so it agrees with
-/// the apply phase.
+/// An existing config that does not carry the RSA fields (a config
+/// written before the RSA key was made in process, or one the
+/// operator edited) must show the plan as an `update` and not as
+/// `identical`: the about-to-be-written config adds the RSA fields.
+/// The plan is built from the planned post-step key state, so it
+/// agrees with the apply phase.
 #[cfg(unix)]
 #[test]
-fn init_plan_says_update_when_openssl_returns_for_an_existing_config() {
+fn init_plan_says_update_when_an_existing_config_lacks_the_rsa_fields() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let empty_path = dir.path().join("empty-bin");
 	std::fs::create_dir(&empty_path).expect("mkdir empty-bin");
@@ -566,8 +570,7 @@ fn init_plan_says_update_when_openssl_returns_for_an_existing_config() {
 		config_path.display(),
 	);
 	let answers = write_answers(dir.path(), "answers.toml", &body);
-	// First run with openssl unavailable: writes a config without
-	// RSA fields, no s2.pem.
+	// First run: writes the config with the RSA fields.
 	let first = {
 		let mut cmd = Command::new(binary());
 		cmd.args(["init", "--answers", answers.to_str().unwrap()]);
@@ -584,12 +587,17 @@ fn init_plan_says_update_when_openssl_returns_for_an_existing_config() {
 	);
 	let on_text = std::fs::read_to_string(&config_path).expect("read config");
 	assert!(
-		!on_text.contains("rsa_"),
-		"first-run config must not carry RSA fields: {on_text}"
+		on_text.contains("rsa_"),
+		"first-run config must carry the RSA fields: {on_text}"
 	);
-	// Second run with the host's normal PATH (openssl available):
-	// the plan must say the config will be updated to add the RSA
-	// fields, not that it is identical.
+	// The operator strips the RSA fields: the next run must offer to
+	// write them back, not call the config identical.
+	let stripped: String = on_text
+		.lines()
+		.filter(|line| !line.trim_start().starts_with("rsa_"))
+		.collect::<Vec<_>>()
+		.join("\n");
+	std::fs::write(&config_path, stripped).expect("write config");
 	let second = run_init(&answers);
 	let stderr = String::from_utf8_lossy(&second.stderr);
 	assert!(

@@ -229,33 +229,4 @@ fn limits_only(leaf: &Leaf) -> Vec<Reason> {
 }
 
 #[cfg(test)]
-#[path = "corpus.rs"]
-pub(crate) mod corpus;
-
-#[cfg(test)]
-#[path = "inspect_tests.rs"]
-mod tests;
-
-#[cfg(test)]
-#[path = "inspect_tests_evasion.rs"]
-mod tests_evasion;
-
-#[cfg(test)]
-#[path = "inspect_tests_failclosed.rs"]
-mod tests_failclosed;
-
-#[cfg(test)]
-#[path = "inspect_tests_names.rs"]
-mod tests_names;
-
-#[cfg(test)]
-#[path = "inspect_tests_regressions.rs"]
-mod tests_regressions;
-
-#[cfg(test)]
-#[path = "inspect_tests_regressions_b.rs"]
-mod tests_regressions_b;
-
-#[cfg(test)]
-#[path = "docs_tests.rs"]
-mod docs_tests;
+pub(crate) mod tests;

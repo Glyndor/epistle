@@ -109,5 +109,4 @@ pub(super) fn complete(args: &[OsString]) -> Option<Vec<OsString>> {
 }
 
 #[cfg(test)]
-#[path = "mod_tests.rs"]
 mod tests;

@@ -40,17 +40,12 @@ pub use ldap::{LdapAccount, LdapAuthenticator, load_ldap_accounts};
 
 mod build;
 
-#[path = "forward_catch_all_mutators.rs"]
 mod forward_catch_all_mutators;
-#[path = "mutators.rs"]
 mod mutators;
 pub mod scram_upgrade;
 
-#[path = "password_policy_settings.rs"]
 mod password_policy_settings;
-#[path = "scram_settings.rs"]
 mod scram_settings;
-#[path = "set_totp.rs"]
 mod set_totp;
 
 /// Watcher that reloads the dynamic stores when a sibling process
@@ -341,7 +336,8 @@ pub struct AccountStore {
 	/// Runtime password policy (default `ASCII_ONLY`; production wiring
 	/// sets it from `[auth] unicode_passwords` via `with_password_policy`).
 	password_policy: Policy,
-	/// At-rest encryption for the TOTP secret (see `set_totp.rs`).
+	/// At-rest encryption for the TOTP secret (see
+	/// `src/directory_store/set_totp/mod.rs`).
 	crypto: crate::storage::MessageCrypto,
 	handle: DirectoryHandle,
 }
@@ -731,17 +727,4 @@ impl std::fmt::Debug for AccountStore {
 }
 
 #[cfg(test)]
-#[path = "account_mutators_tests.rs"]
-mod account_mutators_tests;
-
-#[cfg(test)]
-#[path = "cross_handle_tests.rs"]
-mod cross_handle_tests;
-
-#[cfg(test)]
-#[path = "lowercase_tests.rs"]
-mod lowercase_tests;
-
-#[cfg(test)]
-#[path = "paused_tests.rs"]
-mod paused_tests;
+mod tests;

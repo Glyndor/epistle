@@ -6,11 +6,7 @@
 pub mod address;
 pub mod auth;
 pub mod command;
-#[cfg(test)]
-mod command_tests;
 pub mod directory;
-#[cfg(test)]
-pub mod directory_scram_test_counter;
 pub mod diskspace;
 pub(crate) mod identification;
 mod inbound_headers;
@@ -24,6 +20,9 @@ pub mod reply;
 pub mod scram;
 pub mod server;
 pub mod session;
+pub mod session_log;
 pub mod sink;
 pub mod submission_budget;
+#[cfg(test)]
+pub mod tests;
 pub mod trace;

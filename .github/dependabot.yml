@@ -1,16 +1,30 @@
 version: 2
 
 updates:
+  # One pull request a week for every action bump that is not a major. Each
+  # pull request costs a full CI run and a second one in the merge queue, so a
+  # daily entry with no group opened a separate pull request per action. A
+  # major bump stays alone because it is the one that can break a workflow.
+  # Security updates ignore the schedule and the groups below.
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "daily"
+      interval: "weekly"
+      day: "monday"
     labels: ["type:deps", "type:ci"]
-    open-pull-requests-limit: 10
+    open-pull-requests-limit: 5
     target-branch: "develop"
+    cooldown:
+      default-days: 3
+    groups:
+      actions:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
 
   # The images the generated stack runs (deploy/images/Dockerfile, which the
-  # binary reads at build time) and the container image's base (Containerfile).
+  # binary reads at build time), the container image's base (Containerfile) and
+  # the OpenLDAP image the directory tests run against, whose digest nothing
+  # watched.
   # One group across both directories, because the mail base digest must be
   # the same in the two files and a test compares them. A PostgreSQL major is
   # ignored: it needs `epistle db upgrade`, not a new digest.
@@ -18,6 +32,7 @@ updates:
     directories:
       - "/"
       - "/deploy/images"
+      - "/tests/fixtures/ldap"
     schedule:
       interval: "weekly"
     labels: ["type:deps"]
@@ -30,26 +45,34 @@ updates:
       - dependency-name: "*postgres*"
         update-types: ["version-update:semver-major"]
 
-  # The crate itself. Without this entry nothing watches the dependencies a
-  # mail server is actually built out of — TLS, DNS, hashing, the HTTP stack —
-  # which is exactly where an advisory hurts most.
+  # The crate itself and the fuzz targets, which are their own crate outside the
+  # root manifest and carry their own lockfile that also resolves the parent's
+  # dependencies. One entry over both directories, so a crate that both
+  # manifests name moves in the same pull request and neither lockfile is left
+  # behind (a bump under /fuzz alone left the root lockfile stale and every job
+  # died on --locked). Daily and ungrouped this opened a pull request per crate
+  # per directory, and each one ran the whole suite twice. Minor and patch
+  # bumps come together once a week; a major bump stays alone because it needs
+  # a reading of its changelog. Without this entry nothing watches the
+  # dependencies a mail server is built out of (TLS, DNS, hashing, the HTTP
+  # stack), which is where an advisory hurts most. Security updates ignore the
+  # schedule and the groups.
   - package-ecosystem: "cargo"
-    directory: "/"
+    directories:
+      - "/"
+      - "/fuzz"
     schedule:
-      interval: "daily"
-    labels: ["type:deps"]
-    open-pull-requests-limit: 10
-    target-branch: "develop"
-
-  # The fuzz targets are their own crate, outside the root manifest, so the
-  # entry above does not reach them.
-  - package-ecosystem: "cargo"
-    directory: "/fuzz"
-    schedule:
-      interval: "daily"
+      interval: "weekly"
+      day: "monday"
     labels: ["type:deps"]
     open-pull-requests-limit: 5
     target-branch: "develop"
+    cooldown:
+      default-days: 3
+    groups:
+      rust-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
 
   # The release-signing script (`.github/scripts/sign.py`) pulls `cryptography`
   # from `sign-requirements.txt`, and nothing was watching that file. Every
@@ -69,7 +92,11 @@ updates:
   - package-ecosystem: "pip"
     directory: "/.github/scripts"
     schedule:
-      interval: "daily"
+      interval: "weekly"
+      day: "monday"
     labels: ["type:deps", "type:security"]
     open-pull-requests-limit: 5
     target-branch: "develop"
+    groups:
+      signing-tooling:
+        patterns: ["*"]

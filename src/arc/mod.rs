@@ -7,6 +7,7 @@
 
 pub mod ams;
 pub mod chain;
+pub(crate) mod key;
 pub mod seal;
 pub mod sealer;
 pub mod signature;
@@ -16,14 +17,4 @@ pub mod validate;
 pub(crate) use ams::header_names;
 
 #[cfg(test)]
-mod ams_tests;
-#[cfg(test)]
-mod chain_tests;
-#[cfg(test)]
-mod seal_tests;
-#[cfg(test)]
-mod sealer_tests;
-#[cfg(test)]
-mod signature_tests;
-#[cfg(test)]
-mod validate_tests;
+mod tests;

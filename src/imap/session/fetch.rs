@@ -203,7 +203,7 @@ fn sets_seen(item: &FetchItem) -> bool {
 
 fn data_item(
 	item: &FetchItem,
-	parsed: &mail_parser::Message<'_>,
+	parsed: &crate::imap::fetch::ParsedMessage<'_>,
 	raw: &[u8],
 ) -> Result<Vec<u8>, ()> {
 	use crate::imap::fetch::{bodystructure, envelope, section};

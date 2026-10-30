@@ -3,13 +3,13 @@
 //! The full module used to live in a single `backup.rs`. The dump
 //! (and replay) of the database split out into `db_dump.rs` to keep
 //! this file under the per-file 500-code-line cap; the test
-//! modules are split into the same-named `*_tests_<topic>.rs`
-//! siblings and re-pulled in with `#[path]` so each compile unit
-//! stays small.
+//! modules live in each owner's `tests/` directory, with leaves by
+//! topic so each compile unit stays small.
 
 mod db_dump;
 mod keys_note;
 mod restore_files;
+mod restore_signals;
 mod tar_format;
 
 use restore_files::{check_files, lay_files, load_failure_state};
@@ -268,6 +268,14 @@ fn restore_summarising(
 		);
 		return ExitCode::FAILURE;
 	}
+	// From here on a stop signal is held: the restore either stops before it
+	// writes anything or finishes both halves, and the signal is raised again
+	// when `_held` is dropped at the end of this function.
+	let _held = restore_signals::HeldSignals::hold();
+	if let Err(error) = restore_signals::stop_if_arrived() {
+		super::style::error(format_args!("restore: {error}; nothing was restored"));
+		return ExitCode::FAILURE;
+	}
 	let mut database_loaded = false;
 	if let Some(db) = &config.database {
 		steps.begin("database");
@@ -397,7 +405,7 @@ fn data_dir_has_accounts(data_dir: &Path) -> Result<(), String> {
 /// shares the live `podup` binary the rest of the CLI calls, so the
 /// answer is what the operator sees.
 fn mail_service_is_running(data_dir: &Path) -> bool {
-	super::stack_started::mail_started_at(data_dir, "podup")
+	super::stack::started::mail_started_at(data_dir, "podup")
 		.ok()
 		.flatten()
 		.is_some()
@@ -584,41 +592,4 @@ pub(super) use db_dump::run_command_capturing_stdout;
 pub(crate) use db_dump::{BackupError, CommandSpec, split_url_password};
 
 #[cfg(test)]
-#[path = "helpers_tests.rs"]
-mod helpers;
-
-#[cfg(test)]
-#[path = "../backup_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "../backup_restore_tests.rs"]
-mod tests_b;
-
-#[cfg(test)]
-#[path = "../backup_pg_tests.rs"]
-mod tests_pg;
-
-#[cfg(test)]
-#[path = "../backup_container_tests.rs"]
-mod tests_container;
-
-#[cfg(test)]
-#[path = "../backup_restore_run_tests.rs"]
-mod tests_restore_run;
-
-#[cfg(test)]
-#[path = "../backup_db_sql_tests.rs"]
-mod tests_db_sql;
-
-#[cfg(test)]
-#[path = "../backup_restore_guards_tests.rs"]
-mod tests_restore_guards;
-
-#[cfg(test)]
-#[path = "../backup_tests_paths.rs"]
-mod tests_paths;
-
-#[cfg(test)]
-#[path = "../backup_tests_long_paths.rs"]
-mod tests_long_paths;

@@ -1,0 +1,266 @@
+//! Tests for merging SQL-sourced accounts into the directory and the
+//! static-over-SQL precedence. These need no database: they exercise the
+//! row→directory mapping by feeding [`SqlAccount`] values directly into the
+//! store. The async loader itself is covered by the gated integration tests in
+//! `tests/database.rs`.
+
+use super::SqlAccount;
+use crate::config::Account;
+use crate::directory_store::AccountStore;
+use crate::smtp::auth::tests::base::{fixture_password, second_password, wrong_password};
+use crate::smtp::directory::Resolution;
+
+fn static_account(name: &str, address: &str, password: Option<&str>) -> Account {
+	Account {
+		display_name: None,
+		name: name.to_string(),
+		addresses: vec![address.to_string()],
+		password_hash: password.map(crate::smtp::auth::tests::base::hash),
+		catch_all: Vec::new(),
+		quota_bytes: None,
+		forward: Vec::new(),
+		forward_keep_local: true,
+		allowed_protocols: None,
+	}
+}
+
+fn store_with(static_accounts: Vec<Account>) -> AccountStore {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let path = dir.path().to_path_buf();
+	// Leak the `TempDir` so the directory stays alive for the rest of
+	// the process. The store's on-disk writes need a live parent
+	// directory (the rename-then-fsync-the-parent contract for secret
+	// writes); without this the directory drops when `store_with`
+	// returns and any mutator that follows errors out. Leaking is
+	// fine here because the storage used by a handful of unit
+	// tests amounts to a few KB per case and is collected when the
+	// test binary exits.
+	std::mem::forget(dir);
+	AccountStore::open(
+		&path,
+		vec!["example.org".to_string()],
+		std::collections::HashMap::new(),
+		static_accounts,
+	)
+	.expect("open store")
+}
+
+fn sql(name: &str, address: &str, password: Option<&str>) -> SqlAccount {
+	SqlAccount {
+		name: name.to_string(),
+		addresses: vec![address.to_string()],
+		password_hash: password.map(crate::smtp::auth::tests::base::hash),
+	}
+}
+
+#[test]
+fn sql_accounts_resolve_and_authenticate() {
+	let store = store_with(Vec::new()).with_sql_accounts(vec![sql(
+		"carol",
+		"carol@example.org",
+		Some(fixture_password()),
+	)]);
+	let directory = store.handle().current();
+
+	assert_eq!(
+		directory.resolve(&crate::smtp::address::Address::parse("carol@example.org").unwrap()),
+		Resolution::Account("carol".to_string())
+	);
+	assert_eq!(
+		directory.authenticate(
+			"carol@example.org",
+			fixture_password(),
+			crate::config::Protocol::Api
+		),
+		Some("carol".to_string())
+	);
+	assert_eq!(
+		directory.authenticate(
+			"carol@example.org",
+			wrong_password(),
+			crate::config::Protocol::Api
+		),
+		None
+	);
+}
+
+#[test]
+fn receive_only_sql_account_cannot_authenticate() {
+	let store = store_with(Vec::new()).with_sql_accounts(vec![sql("dan", "dan@example.org", None)]);
+	let directory = store.handle().current();
+	assert_eq!(
+		directory.resolve(&crate::smtp::address::Address::parse("dan@example.org").unwrap()),
+		Resolution::Account("dan".to_string())
+	);
+	assert_eq!(
+		directory.authenticate(
+			"dan@example.org",
+			wrong_password(),
+			crate::config::Protocol::Api
+		),
+		None
+	);
+}
+
+#[test]
+fn static_account_takes_precedence_over_sql() {
+	// Same name and address in both sources, different passwords: the static
+	// account's credentials must win. The two passwords are distinct on
+	// purpose, so the test pins that the SQL hash does not leak through
+	// when a static account with a different hash shadows it.
+	let store = store_with(vec![static_account(
+		"shared",
+		"shared@example.org",
+		Some(fixture_password()),
+	)])
+	.with_sql_accounts(vec![sql(
+		"shared",
+		"shared@example.org",
+		Some(second_password()),
+	)]);
+	let directory = store.handle().current();
+
+	assert_eq!(
+		directory.authenticate(
+			"shared@example.org",
+			fixture_password(),
+			crate::config::Protocol::Api
+		),
+		Some("shared".to_string())
+	);
+	assert_eq!(
+		directory.authenticate(
+			"shared@example.org",
+			second_password(),
+			crate::config::Protocol::Api
+		),
+		None
+	);
+}
+
+#[test]
+fn refresh_replaces_sql_accounts() {
+	let store =
+		store_with(Vec::new()).with_sql_accounts(vec![sql("old", "old@example.org", Some("pw"))]);
+	// A refresh with a new set drops the previous SQL accounts entirely.
+	store.set_sql_accounts(vec![sql("new", "new@example.org", Some("pw"))]);
+	let directory = store.handle().current();
+
+	assert_eq!(
+		directory.resolve(&crate::smtp::address::Address::parse("old@example.org").unwrap()),
+		Resolution::UnknownUser
+	);
+	assert_eq!(
+		directory.resolve(&crate::smtp::address::Address::parse("new@example.org").unwrap()),
+		Resolution::Account("new".to_string())
+	);
+}
+
+#[test]
+fn a_sql_account_whose_name_escapes_the_data_dir_is_dropped() {
+	// The account name doubles as a directory name under `<data_dir>/accounts/`
+	// and `mailbox_dir` joins it without checking — it validates the mailbox
+	// name and trusts the account. Config accounts and API/SCIM accounts are
+	// validated on the way in; SQL rows were not, so a directory returning
+	// `../..` reached the filesystem through the authenticated session.
+	let store = store_with(Vec::new());
+	store.set_sql_accounts(vec![
+		sql("../../etc", "escape@example.org", Some("secret")),
+		sql("ok", "ok@example.org", Some("secret")),
+	]);
+	let resolve = |address: &str| {
+		store
+			.handle()
+			.current()
+			.resolve(&crate::smtp::address::Address::parse(address).expect("address"))
+	};
+	assert!(
+		matches!(resolve("ok@example.org"), Resolution::Account(ref n) if n == "ok"),
+		"the well-named row must still resolve",
+	);
+	assert!(
+		!matches!(resolve("escape@example.org"), Resolution::Account(_)),
+		"a name that would escape the data dir must not become an account",
+	);
+}
+
+#[test]
+fn one_bad_sql_row_does_not_take_the_whole_directory_offline() {
+	// These sources are reloaded on a timer, so failing the refresh outright
+	// would turn one malformed row into an outage for everyone else.
+	let store = store_with(Vec::new());
+	store.set_sql_accounts(vec![
+		sql("Uppercase", "a@example.org", Some("secret")),
+		sql("has/slash", "b@example.org", Some("secret")),
+		sql("good", "good@example.org", Some("secret")),
+	]);
+	assert!(matches!(
+		store
+			.handle()
+			.current()
+			.resolve(&crate::smtp::address::Address::parse("good@example.org").expect("address")),
+		Resolution::Account(ref name) if name == "good"
+	));
+}
+
+fn resolve_in(store: &AccountStore, address: &str) -> Resolution {
+	store
+		.handle()
+		.current()
+		.resolve(&crate::smtp::address::Address::parse(address).expect("address"))
+}
+
+#[test]
+fn sql_and_ldap_style_names_resolve_while_unsafe_ones_are_dropped() {
+	let store = store_with(Vec::new());
+	store.set_sql_accounts(vec![
+		sql("J_Smith", "smith@example.org", Some("secret")),
+		sql("../evil", "evil@example.org", Some("secret")),
+		sql(".", "dot@example.org", Some("secret")),
+		sql("a/b", "slash@example.org", Some("secret")),
+	]);
+	store.set_ldap_accounts(vec![
+		crate::directory_store::LdapAccount {
+			name: "john.doe".to_string(),
+			addresses: vec!["john@example.org".to_string()],
+		},
+		crate::directory_store::LdapAccount {
+			name: "..".to_string(),
+			addresses: vec!["dots@example.org".to_string()],
+		},
+	]);
+	assert!(
+		matches!(resolve_in(&store, "smith@example.org"), Resolution::Account(ref n) if n == "J_Smith")
+	);
+	assert!(
+		matches!(resolve_in(&store, "john@example.org"), Resolution::Account(ref n) if n == "john.doe")
+	);
+	for address in [
+		"evil@example.org",
+		"dot@example.org",
+		"slash@example.org",
+		"dots@example.org",
+	] {
+		assert!(
+			!matches!(resolve_in(&store, address), Resolution::Account(_)),
+			"{address}"
+		);
+	}
+}
+
+#[test]
+fn creating_an_account_keeps_the_strict_policy() {
+	let store = store_with(Vec::new());
+	for name in ["john.doe", "J_Smith", "../alice"] {
+		let result = store.add(crate::directory_store::DynamicAccount {
+			name: name.to_string(),
+			addresses: vec!["x@example.org".to_string()],
+			password_hash: "$argon2id$stub".to_string(),
+			..crate::directory_store::DynamicAccount::default()
+		});
+		assert!(
+			matches!(&result, Err(crate::directory_store::StoreError::Invalid(m)) if m.contains("lowercase")),
+			"creating {name} must stay refused by the name policy"
+		);
+	}
+}
