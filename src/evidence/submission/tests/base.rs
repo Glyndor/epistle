@@ -230,24 +230,48 @@ fn the_rest_submission_does_not_read_a_body_after_a_leading_blank_line_as_header
 }
 
 #[test]
-fn the_rest_submission_reports_reader_disagreement_and_invalid_encoding() {
+fn the_rest_submission_reports_ambiguous_identity_names_and_invalid_encoding() {
+	// The old date vector is safe in 1.0; malformed identity names still
+	// have to be refused, with the original bytes left intact.
 	for (raw, expected) in [
-		(b"From: news@example.org\r\nDate: Mon, 1 Jan 2020 00:00:00 -0500x\r\n\r\nFrom: victim@example.net\r\n".as_slice(), "I cannot accept headers whose From or Sender field counts disagree between readers"),
-		(b"From: news@example.org\r\nSubject: caf\xe9\r\n\r\nx".as_slice(), "I cannot accept submission headers that are not UTF-8"),
+		(
+			b"From: news@example.org\r\nFr om: victim@example.net\r\n\r\nbody\r\n".as_slice(),
+			"submission header field names must use printable ASCII without embedded whitespace",
+		),
+		(
+			b"From: news@example.org\r\nSen der: victim@example.net\r\n\r\nbody\r\n".as_slice(),
+			"submission header field names must use printable ASCII without embedded whitespace",
+		),
+		(
+			b"From: news@example.org\r\nSubject: caf\xe9\r\n\r\nx".as_slice(),
+			"I cannot accept submission headers that are not UTF-8",
+		),
 	] {
 		let mut submitted = raw_message(raw);
-		let refusal = prepare(&mut submitted, ClassSources::default(), None, &Policy::default(), None).expect_err("invalid headers");
+		let refusal = prepare(
+			&mut submitted,
+			ClassSources::default(),
+			None,
+			&Policy::default(),
+			None,
+		)
+		.expect_err("invalid headers");
 		assert_eq!(refusal.message(), expected);
 		assert_eq!(submitted.data, raw);
 	}
 }
 
 #[test]
-fn the_rest_submission_refuses_identity_disagreement_created_by_crlf_normalization() {
-	let raw = b"From: news@example.org\nDate: Mon, 1 Jan 2020 00:00:00 -0500x\n\nFrom: victim@example.net\n";
+fn the_rest_submission_refuses_ambiguous_identity_names_across_crlf_normalization() {
+	let raw = b"From: news@example.org\nFr om: victim@example.net\n\nbody\n";
 	assert_eq!(
 		crate::smtp::identification::reject_ambiguous_headers(raw),
-		Ok(())
+		Err(MarketingRefusal::AmbiguousHeaderName)
+	);
+	let normalized = crate::util::header_block::outbound_crlf(raw);
+	assert_eq!(
+		crate::smtp::identification::reject_ambiguous_headers(&normalized),
+		Err(MarketingRefusal::AmbiguousHeaderName)
 	);
 	let mut submitted = raw_message(raw);
 	let refusal = prepare(
@@ -257,12 +281,44 @@ fn the_rest_submission_refuses_identity_disagreement_created_by_crlf_normalizati
 		&Policy::default(),
 		None,
 	)
-	.expect_err("I expect the CRLF reader disagreement to be refused");
+	.expect_err("I expect the ambiguous identity to be refused before changing the message");
 	assert_eq!(
 		refusal.message(),
-		"I cannot accept headers whose From or Sender field counts disagree between readers"
+		"submission header field names must use printable ASCII without embedded whitespace"
 	);
 	assert_eq!(submitted.data, raw);
+}
+
+#[test]
+fn the_rest_submission_keeps_date_following_body_identities_out_after_normalization() {
+	for ending in ["\n", "\r\n"] {
+		let raw = format!(
+			"From: news@example.org{ending}Date: Mon, 1 Jan 2020 00:00:00 -0500x{ending}{ending}From: victim@example.net{ending}Sender: victim@example.net{ending}"
+		);
+		let mut submitted = raw_message(raw.as_bytes());
+		prepare(
+			&mut submitted,
+			ClassSources::default(),
+			None,
+			&Policy::default(),
+			None,
+		)
+		.expect("1.0 keeps both body identities outside the header block");
+		assert_eq!(
+			crate::dmarc::author::author(&submitted.data),
+			crate::dmarc::author::Author::Addresses(vec!["news@example.org".to_string()])
+		);
+		let parsed = mail_parser::MessageParser::default()
+			.parse_headers(&submitted.data)
+			.expect("headers");
+		assert_eq!(parsed.headers().all("From").count(), 1);
+		assert!(!parsed.headers().contains("Sender"));
+		assert!(
+			submitted
+				.data
+				.ends_with(b"\r\n\r\nFrom: victim@example.net\r\nSender: victim@example.net\r\n")
+		);
+	}
 }
 
 #[test]

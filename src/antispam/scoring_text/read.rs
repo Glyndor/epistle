@@ -9,7 +9,7 @@
 //! headers are read as they are and, where they carry RFC 2047 encoded words,
 //! decoded.
 
-use mail_parser::{Addr, Address, HeaderValue, MessageParser};
+use mail_parser::{HeaderValue, MessageParser};
 
 use super::Window;
 
@@ -187,27 +187,22 @@ pub(super) fn push_header(window: &mut Window, block: &[u8]) {
 		return;
 	};
 	for header in parsed.headers() {
-		match &header.value {
+		match header.value() {
 			HeaderValue::Text(text) => window.push_str(text),
 			HeaderValue::TextList(list) => list.iter().for_each(|text| window.push_str(text)),
-			HeaderValue::Address(Address::List(list)) => push_addresses(window, list),
-			HeaderValue::Address(Address::Group(groups)) => {
-				for group in groups {
-					if let Some(name) = &group.name {
+			HeaderValue::Address(list) => {
+				for (name, members) in list.groups() {
+					if let Some(name) = name {
 						window.push_str(name);
 					}
-					push_addresses(window, &group.addresses);
+					for addr in members {
+						if let Some(name) = addr.name() {
+							window.push_str(name);
+						}
+					}
 				}
 			}
 			_ => {}
-		}
-	}
-}
-
-fn push_addresses(window: &mut Window, list: &[Addr<'_>]) {
-	for addr in list {
-		if let Some(name) = &addr.name {
-			window.push_str(name);
 		}
 	}
 }

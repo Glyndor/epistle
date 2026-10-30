@@ -1,6 +1,7 @@
 epistle (0.12.4) UNRELEASED; urgency=medium
 
   * Build the binary with Rust 1.99 and move the runtime image to Debian 13.
+  * The mail reading library moves to version 1.0 and the minimum Rust version rises to 1.98.
   * The DNS provider carries a guarded contract beside the one it already had: a provider can be asked for a snapshot of the zone, for a change applied under a precondition, and for what became of an operation whose answer was lost. A provider that does not implement the three publishes nothing: the guarded write never falls back to the write that replaces a whole set at a name, so a record of somebody else is not written over by a change planned against an older listing.
   * Namecheap publishes the dns-01 challenge of a subdomain in its registered domain with the full relative host name: `_acme-challenge.mail.example.org` becomes `_acme-challenge.mail` in `example.org`. The zone search accepted `mail.example.org` after querying `example.org`, so the write dropped `mail` and the challenge never became visible. A failure querying the registered domain still stops the search.
   * The DNS lookup can now be asked for the SRV records of a name, and the answer says for every offer the priority, the weight, the port and the canonical target of the host that offers the service. A resolver that cannot answer for SRV reports a temporary failure and not an empty list, so a caller can tell a service that is not published from a name nobody looked up. Nothing reads the query yet: it is the piece the DNS publisher needs to read back what it wrote.

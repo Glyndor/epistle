@@ -103,14 +103,15 @@ fn parse_structure<'a>(
 }
 
 pub(super) fn preview(message: &Message<'_>, text: &[&Value]) -> String {
+	let parts: Vec<_> = message.root().parts().collect();
 	let content = text
 		.iter()
 		.filter_map(|part| {
 			let index = part["partId"].as_str()?.parse::<usize>().ok()?;
-			let text = message.parts.get(index)?.text_contents()?;
+			let text = parts.get(index)?.text()?;
 			match part["type"].as_str()? {
-				"text/html" => Some(mail_parser::decoders::html::html_to_text(text)),
-				"text/plain" => Some(text.to_owned()),
+				"text/html" => Some(mail_parser::decoders::html::html_to_text(&text)),
+				"text/plain" => Some(text.into_owned()),
 				_ => None,
 			}
 		})

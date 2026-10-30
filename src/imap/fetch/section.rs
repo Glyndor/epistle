@@ -1,29 +1,25 @@
 //! Raw MIME sections and transfer-decoded BINARY sections.
 
-use super::{raw_body, raw_header};
+use super::{ParsedMessage, body_end, raw_body, raw_header, source};
 use crate::imap::command::{FetchSection, SectionKind};
-use mail_parser::{HeaderName, Message, MessagePart, PartType};
+use mail_parser::{HeaderName, MessagePart, PartKind};
 
 pub(in crate::imap) fn render(
-	message: &Message<'_>,
+	message: &ParsedMessage<'_>,
 	section: &FetchSection,
 ) -> Result<Vec<u8>, ()> {
 	render_label(message, section, &section.label())
 }
 
 pub(in crate::imap) fn render_label(
-	message: &Message<'_>,
+	message: &ParsedMessage<'_>,
 	section: &FetchSection,
 	label: &str,
 ) -> Result<Vec<u8>, ()> {
 	if section.path.len() > super::MAX_DEPTH {
 		return Ok(empty(section, label));
 	}
-	let Selected {
-		mut owner,
-		mut part,
-		depth,
-	} = match select(message, &section.path) {
+	let Selected { mut part, depth } = match select(message, &section.path) {
 		Ok(selected) => selected,
 		Err(SelectError::TooDeep) => return Ok(empty(section, label)),
 		Err(SelectError::Missing) => return Ok(format!("{label} NIL").into_bytes()),
@@ -31,7 +27,7 @@ pub(in crate::imap) fn render_label(
 	// Where the body of `part` ends. An encapsulated message's root part
 	// stops at its last boundary, but its TEXT runs to the end of the
 	// message/rfc822 part that holds it, epilogue included.
-	let body_end = part.offset_end;
+	let body_end = body_end(message, &part);
 	if !section.path.is_empty()
 		&& matches!(
 			section.kind,
@@ -40,41 +36,32 @@ pub(in crate::imap) fn render_label(
 		if depth >= super::MAX_DEPTH {
 			return Ok(empty(section, label));
 		}
-		let PartType::Message(nested) = &part.body else {
+		let PartKind::Message(nested) = part.kind() else {
 			return Ok(format!("{label} NIL").into_bytes());
 		};
-		owner = nested;
-		let Some(root) = owner.parts.first() else {
-			return Ok(format!("{label} NIL").into_bytes());
-		};
-		part = root;
+		part = nested.root_part();
 	}
 	let mut data = match &section.kind {
-		SectionKind::Entire if section.path.is_empty() && !section.binary => {
-			owner.raw_message().to_vec()
-		}
-		SectionKind::Text => owner
-			.raw_message
-			.get(part.offset_body as usize..body_end as usize)
+		SectionKind::Entire if section.path.is_empty() && !section.binary => message.raw.to_vec(),
+		SectionKind::Text => source(message, &part)
+			.get(part.offset_body() as usize..body_end)
 			.unwrap_or_default()
 			.to_vec(),
-		SectionKind::Entire => raw_body(owner, part).to_vec(),
-		SectionKind::Header | SectionKind::Mime => owner
-			.raw_message
-			.get(part.offset_header as usize..part.offset_body as usize)
+		SectionKind::Entire => raw_body(message, &part).to_vec(),
+		SectionKind::Header | SectionKind::Mime => source(message, &part)
+			.get(part.offset_header() as usize..part.offset_body() as usize)
 			.unwrap_or_default()
 			.to_vec(),
 		SectionKind::Fields { names, exclude } => {
 			let mut data = Vec::new();
-			for header in &part.headers {
+			for header in part.headers() {
 				let included = names
 					.iter()
-					.any(|n| n.eq_ignore_ascii_case(header.name.as_str()));
+					.any(|n| n.eq_ignore_ascii_case(header.name().as_str()));
 				if included != *exclude {
 					data.extend_from_slice(
-						owner
-							.raw_message
-							.get(header.offset_field as usize..header.offset_end as usize)
+						source(message, &part)
+							.get(header.offset_field() as usize..header.offset_end() as usize)
 							.unwrap_or_default(),
 					);
 				}
@@ -84,12 +71,11 @@ pub(in crate::imap) fn render_label(
 		}
 	};
 	if section.binary {
-		data = decoded(owner, part)?;
+		data = decoded(message, &part)?;
 		// BINARY[] is the whole message: its header, then the decoded body.
 		if section.path.is_empty() && matches!(section.kind, SectionKind::Entire) {
-			let header = owner
-				.raw_message
-				.get(..part.offset_body as usize)
+			let header = source(message, &part)
+				.get(..part.offset_body() as usize)
 				.unwrap_or_default();
 			data.splice(0..0, header.iter().copied());
 		}
@@ -113,14 +99,13 @@ pub(in crate::imap) fn render_label(
 	Ok(out)
 }
 
-pub(super) fn decoded(message: &Message<'_>, part: &MessagePart<'_>) -> Result<Vec<u8>, ()> {
+pub(super) fn decoded(message: &ParsedMessage<'_>, part: &MessagePart<'_>) -> Result<Vec<u8>, ()> {
 	let body = raw_body(message, part);
-	let encoding =
-		raw_header(message, part, HeaderName::ContentTransferEncoding).unwrap_or(b"7bit");
+	let encoding = raw_header(part, HeaderName::ContentTransferEncoding).unwrap_or(b"7bit");
 	if encoding.eq_ignore_ascii_case(b"base64") {
-		mail_parser::decoders::base64::base64_decode(body).ok_or(())
+		crate::util::mail_parser::base64_decode(body).ok_or(())
 	} else if encoding.eq_ignore_ascii_case(b"quoted-printable") {
-		mail_parser::decoders::quoted_printable::quoted_printable_decode(body).ok_or(())
+		crate::util::mail_parser::quoted_printable_decode(body).ok_or(())
 	} else if [b"7bit".as_slice(), b"8bit", b"binary"]
 		.iter()
 		.any(|known| encoding.eq_ignore_ascii_case(known))
@@ -140,8 +125,7 @@ fn empty(section: &FetchSection, label: &str) -> Vec<u8> {
 }
 
 struct Selected<'a> {
-	owner: &'a Message<'a>,
-	part: &'a MessagePart<'a>,
+	part: MessagePart<'a>,
 	depth: usize,
 }
 
@@ -150,24 +134,22 @@ enum SelectError {
 	TooDeep,
 }
 
-fn select<'a>(message: &'a Message<'a>, path: &[u32]) -> Result<Selected<'a>, SelectError> {
-	let mut owner = message;
-	let mut part = owner.parts.first().ok_or(SelectError::Missing)?;
+fn select<'a>(message: &'a ParsedMessage<'_>, path: &[u32]) -> Result<Selected<'a>, SelectError> {
+	let mut part = message.root().root_part();
 	let mut mime_depth = 0;
 	for (depth, number) in path.iter().enumerate() {
 		let mut entered_message = false;
 		if depth > 0
-			&& let PartType::Message(nested) = &part.body
+			&& let PartKind::Message(nested) = part.kind()
 		{
 			mime_depth += 1;
 			if mime_depth > super::MAX_DEPTH {
 				return Err(SelectError::TooDeep);
 			}
-			owner = nested;
-			part = owner.parts.first().ok_or(SelectError::Missing)?;
+			part = nested.root_part();
 			entered_message = true;
 		}
-		if let PartType::Multipart(children) = &part.body {
+		if part.is_multipart() {
 			mime_depth += 1;
 			if mime_depth > super::MAX_DEPTH {
 				return Err(SelectError::TooDeep);
@@ -176,14 +158,12 @@ fn select<'a>(message: &'a Message<'a>, path: &[u32]) -> Result<Selected<'a>, Se
 				.ok()
 				.and_then(|number| number.checked_sub(1))
 				.ok_or(SelectError::Missing)?;
-			let id = children.get(index).ok_or(SelectError::Missing)?;
-			part = owner.parts.get(*id as usize).ok_or(SelectError::Missing)?;
+			part = part.children().nth(index).ok_or(SelectError::Missing)?;
 		} else if *number != 1 || (depth != 0 && !entered_message) {
 			return Err(SelectError::Missing);
 		}
 	}
 	Ok(Selected {
-		owner,
 		part,
 		depth: mime_depth,
 	})

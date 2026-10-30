@@ -3,7 +3,7 @@
 
 use super::mailbox::{self, Snapshot};
 use crate::util::encoded_word;
-use mail_parser::{Addr, Address, HeaderValue, parsers::MessageStream};
+use mail_parser::{HeaderForm, HeaderValue, Mailbox};
 
 /// Whether any field named `name` contains `needle` (both lowercased by the
 /// parser), case-insensitively. An empty needle matches any message that has
@@ -68,26 +68,21 @@ fn header_values(message: &str, name: &str) -> Vec<String> {
 fn addresses_text(value: &str) -> String {
 	let input = format!("{value}\r\n");
 	let mut parts = Vec::new();
-	match MessageStream::new(input.as_bytes()).parse_address() {
-		HeaderValue::Address(Address::List(items)) => {
-			parts.extend(items.iter().map(address_text));
-		}
-		HeaderValue::Address(Address::Group(groups)) => {
-			for group in groups {
-				let members: Vec<String> = group.addresses.iter().map(address_text).collect();
-				match &group.name {
-					Some(name) => parts.push(format!("{name}: {};", members.join(", "))),
-					None => parts.extend(members),
-				}
+	let parsed = HeaderForm::Addresses.parse(input.as_bytes());
+	if let HeaderValue::Address(list) = parsed.value() {
+		for (name, members) in list.groups() {
+			let members: Vec<String> = members.map(address_text).collect();
+			match name {
+				Some(name) => parts.push(format!("{name}: {};", members.join(", "))),
+				None => parts.extend(members),
 			}
 		}
-		_ => {}
 	}
 	parts.join(", ")
 }
 
-fn address_text(addr: &Addr<'_>) -> String {
-	match (addr.name.as_deref(), addr.address.as_deref()) {
+fn address_text(addr: Mailbox<'_>) -> String {
+	match (addr.name(), addr.address()) {
 		(Some(name), Some(address)) => format!("{name} <{address}>"),
 		(None, Some(address)) => address.to_string(),
 		(Some(name), None) => name.to_string(),

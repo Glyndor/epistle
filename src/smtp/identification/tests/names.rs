@@ -1,18 +1,10 @@
 //! The identity of a header name: the same for the strip, the deduplication
 //! and the lookup, and the same a reader downstream reads.
 //!
-//! mail-parser 0.11.9 drops every ASCII whitespace byte out of a name before
-//! it looks the name up in its table of the known ones (`parse_header_name`),
-//! so `List -Id` is `List-Id` and `Authenti cation-Results` is
-//! `Authentication-Results` to it. Comparing the bytes of a name as they
-//! stand gave the three operations an identity narrower than the reader's: a
-//! submission could carry two `List-Unsubscribe` under two spellings and a
-//! `Authentication-Results` about a check this hop never made, in a spelling
-//! the reader resolves to the field of that name.
-//!
-//! Every assertion below counts with mail-parser rather than with
-//! `header_values`, so the comparator under test is never the oracle of its
-//! own test.
+//! The strip, deduplication and lookup retain their permissive matching
+//! for clients that fold whitespace. mail-parser 1.0 instead keeps such
+//! names distinct. Tests check that reading explicitly and still require
+//! exact removal and retention of the original bytes.
 
 use super::*;
 use crate::smtp::trace::{header_values, keep_first_of_each_in_place, strip_headers_in_place};
@@ -53,20 +45,28 @@ fn reader_sees(raw: &[u8], canonical: &str) -> usize {
 		.expect("a header block")
 		.headers()
 		.iter()
-		.filter(|header| header.name() == canonical)
+		.filter(|header| header.name().as_str() == canonical)
 		.count()
 }
 
-/// Every spelling above resolves to the header it names, which is what the
-/// three tests below stand on: without it a green result would prove nothing.
+/// The new parser keeps interior whitespace, while the strip must still
+/// protect clients that fold it. Check both the canonical and raw names.
 #[test]
-fn a_reader_resolves_every_spaced_spelling_to_its_header() {
+fn a_reader_keeps_every_spaced_spelling_distinct() {
 	let raw = carrying(&spellings(), "forged.example; dkim=pass");
+	let parsed = mail_parser::MessageParser::default()
+		.parse(&raw)
+		.expect("message");
 	for (canonical, spaced) in SPACED {
 		assert_eq!(
 			reader_sees(&raw, canonical),
+			0,
+			"{spaced} became {canonical}"
+		);
+		assert_eq!(
+			parsed.headers().all(*spaced).count(),
 			1,
-			"{spaced} is not the {canonical} a reader reads"
+			"{spaced} was lost"
 		);
 	}
 }
@@ -78,6 +78,11 @@ fn the_strip_removes_every_spaced_spelling() {
 	let mut raw = carrying(&spellings(), "forged.example; dkim=pass");
 	let names: Vec<&str> = SPACED.iter().map(|(canonical, _)| *canonical).collect();
 	strip_headers_in_place(&mut raw, &names);
+	assert_eq!(
+		raw,
+		carrying(&[], ""),
+		"every forged field must be removed byte for byte"
+	);
 	for (canonical, spaced) in SPACED {
 		assert_eq!(
 			reader_sees(&raw, canonical),
@@ -101,8 +106,24 @@ fn the_deduplication_collapses_two_spellings_of_one_name() {
 		"<https://example.org/u/one>",
 	);
 	keep_first_of_each_in_place(&mut raw, &["List-Unsubscribe", "List-Unsubscribe-Post"]);
-	assert_eq!(reader_sees(&raw, "List-Unsubscribe"), 1, "two unsubscribes");
-	assert_eq!(reader_sees(&raw, "List-Unsubscribe-Post"), 1, "two posts");
+	assert_eq!(
+		reader_sees(&raw, "List-Unsubscribe"),
+		0,
+		"the first spelling stays distinct"
+	);
+	assert_eq!(
+		reader_sees(&raw, "List-Unsubscribe-Post"),
+		0,
+		"the first spelling stays distinct"
+	);
+	assert_eq!(
+		raw,
+		carrying(
+			&["List -Unsubscribe", "List -Unsubscribe-Post"],
+			"<https://example.org/u/one>"
+		),
+		"deduplication must retain exactly the first spelling of each field"
+	);
 	assert_eq!(
 		header_values(&raw, "list-unsubscribe"),
 		["<https://example.org/u/one>"],

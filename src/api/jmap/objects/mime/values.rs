@@ -1,6 +1,6 @@
 //! Requested text values, charset conversion and UTF-8 byte limits.
 
-use mail_parser::{Message, MessagePart, MimeHeaders};
+use mail_parser::{Message, MessagePart, PartFlags};
 use serde_json::{Map, Value, json};
 
 pub(super) fn body_values(
@@ -25,6 +25,7 @@ pub(super) fn body_values(
 		.as_u64()
 		.and_then(|n| usize::try_from(n).ok())
 		.unwrap_or(0);
+	let parts: Vec<_> = message.root().parts().collect();
 	let mut result = Map::new();
 	for node in selected {
 		if !node["type"]
@@ -36,10 +37,10 @@ pub(super) fn body_values(
 		let Some(id) = node["partId"].as_str() else {
 			continue;
 		};
-		let Some(part) = id.parse::<usize>().ok().and_then(|i| message.parts.get(i)) else {
+		let Some(part) = id.parse::<usize>().ok().and_then(|i| parts.get(i)) else {
 			continue;
 		};
-		let (mut content, encoding_problem) = decoded_text(message, part);
+		let (mut content, encoding_problem) = decoded_text(part);
 		let truncated = max_bytes > 0 && content.len() > max_bytes;
 		if truncated {
 			let mut end = max_bytes;
@@ -76,8 +77,8 @@ fn collect_leaves<'a>(part: &'a Value, selected: &mut Vec<&'a Value>) {
 	}
 }
 
-fn decoded_text(message: &Message<'_>, part: &MessagePart<'_>) -> (String, bool) {
-	let octets = super::decoded_octets(message, part);
+fn decoded_text(part: &MessagePart<'_>) -> (String, bool) {
+	let octets = super::decoded_octets(part);
 	let charset = part
 		.content_type()
 		.and_then(|ct| ct.attribute("charset"))
@@ -96,7 +97,7 @@ fn decoded_text(message: &Message<'_>, part: &MessagePart<'_>) -> (String, bool)
 			std::str::from_utf8(&octets).is_err(),
 		)
 	} else if let Some(decoder) =
-		mail_parser::decoders::charsets::map::charset_decoder(charset.as_bytes())
+		mail_parser::decoders::charsets::charset_decoder(charset.as_bytes())
 	{
 		let content = decoder(&octets);
 		let problem = content.contains('\u{fffd}');
@@ -112,6 +113,31 @@ fn decoded_text(message: &Message<'_>, part: &MessagePart<'_>) -> (String, bool)
 	});
 	(
 		content.replace("\r\n", "\n"),
-		part.is_encoding_problem || charset_problem || unknown_transfer,
+		legacy_structure_problem(part)
+			|| transfer_problem(part)
+			|| charset_problem
+			|| unknown_transfer,
 	)
+}
+
+// The removed flag included transfer-decoding failures. Preserve the old
+// fallible codec check instead of treating 1.0's best-effort output as success.
+fn transfer_problem(part: &MessagePart<'_>) -> bool {
+	match part.content_transfer_encoding().map(str::trim) {
+		Some(encoding) if encoding.eq_ignore_ascii_case("base64") => {
+			crate::util::mail_parser::base64_decode(part.raw_body()).is_none()
+		}
+		Some(encoding) if encoding.eq_ignore_ascii_case("quoted-printable") => {
+			crate::util::mail_parser::quoted_printable_decode(part.raw_body()).is_none()
+		}
+		_ => false,
+	}
+}
+
+// New structural flags also describe recoveries that 0.11 accepted without
+// setting is_encoding_problem (for example a delimiter in mid-line).
+fn legacy_structure_problem(part: &MessagePart<'_>) -> bool {
+	let flags = part.flags();
+	flags.contains(PartFlags::NO_BLANK_LINE)
+		|| (flags.contains(PartFlags::MISSING_DELIMITER) && !part.is_multipart())
 }

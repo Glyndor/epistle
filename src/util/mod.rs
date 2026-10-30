@@ -18,3 +18,4 @@ pub mod validation;
 pub mod warn_limited;
 
 pub(crate) mod fs_walk;
+pub(crate) mod mail_parser;

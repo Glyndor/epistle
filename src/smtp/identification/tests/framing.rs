@@ -12,13 +12,34 @@ fn reader_field_count(raw: &[u8], name: &str) -> usize {
 			message
 				.headers()
 				.iter()
-				.filter(|header| header.name().eq_ignore_ascii_case(name))
+				.filter(|header| header.name().as_str().eq_ignore_ascii_case(name))
 				.count()
 		})
 }
 
 fn author_from_count(raw: &[u8]) -> usize {
 	from_fields(raw).expect("UTF-8 headers").len()
+}
+
+#[test]
+fn reader_disagreement_still_refuses_from_sender_and_field_boundary_changes() {
+	let counts = (1, 1, 3);
+	assert_eq!(compare_header_readers(counts, counts), Ok(()));
+	for (reader, expected) in [
+		((0, 1, 2), MarketingRefusal::HeaderReaderMismatch),
+		((2, 1, 4), MarketingRefusal::HeaderReaderMismatch),
+		((1, 0, 2), MarketingRefusal::HeaderReaderMismatch),
+		((1, 2, 4), MarketingRefusal::HeaderReaderMismatch),
+		((1, 1, 2), MarketingRefusal::HeaderReaderFramingMismatch),
+		((1, 1, 4), MarketingRefusal::HeaderReaderFramingMismatch),
+	] {
+		let refusal = compare_header_readers(reader, counts).expect_err("reader disagreement");
+		assert_eq!(refusal, expected);
+		assert_eq!(
+			refusal.smtp_reply().to_string(),
+			format!("550 5.7.1 {}\r\n", refusal.message())
+		);
+	}
 }
 
 #[test]
@@ -168,7 +189,7 @@ fn accepted_messages_make_the_author_and_reader_agree_on_from_fields() {
 }
 
 #[test]
-fn reader_disagreement_is_refused_for_from_and_sender() {
+fn date_parsing_keeps_body_from_and_sender_out_of_the_headers() {
 	for ending in ["\r\n", "\n"] {
 		for date in ["Date", "Resent-Date"] {
 			for zone in ["-0500x", "+0000x"] {
@@ -195,16 +216,22 @@ fn reader_disagreement_is_refused_for_from_and_sender() {
 					} else {
 						0
 					};
-					assert!(reader_field_count(raw.as_bytes(), field) > own, "{raw:?}");
-					let refusal =
-						reject_ambiguous_headers(raw.as_bytes()).expect_err("reader disagreement");
+					assert_eq!(reader_field_count(raw.as_bytes(), field), own, "{raw:?}");
+					assert_eq!(reject_ambiguous_headers(raw.as_bytes()), Ok(()), "{raw:?}");
+					let parsed = mail_parser::MessageParser::default()
+						.parse_headers(raw.as_bytes())
+						.expect("headers");
 					assert_eq!(
-						refusal.message(),
-						"I cannot accept headers whose From or Sender field counts disagree between readers"
+						parsed.headers().len(),
+						2,
+						"body fields became headers: {raw:?}"
 					);
+					let separator = format!("{ending}{ending}");
+					let offset = raw.find(&separator).expect("blank line") + separator.len();
 					assert_eq!(
-						refusal.smtp_reply().to_string(),
-						format!("550 5.7.1 {}\r\n", refusal.message())
+						parsed.root().root_part().offset_body() as usize,
+						offset,
+						"{raw:?}"
 					);
 				}
 			}
@@ -227,7 +254,7 @@ fn non_utf8_headers_report_the_encoding_cause() {
 }
 
 #[test]
-fn a_field_swallowed_before_header_removal_is_refused() {
+fn date_parsing_keeps_trust_fields_visible_for_removal() {
 	for field in [
 		"Authentication-Results: forged",
 		"Epistle-Class: personal",
@@ -240,11 +267,25 @@ fn a_field_swallowed_before_header_removal_is_refused() {
 			reader_field_count(raw.as_bytes(), "From"),
 			author_from_count(raw.as_bytes())
 		);
-		let refusal = reject_ambiguous_headers(raw.as_bytes())
-			.expect_err("I expect the swallowed field to be refused before removal");
-		assert_eq!(
-			refusal.message(),
-			"I cannot accept headers whose field boundaries disagree between readers"
+		assert_eq!(reject_ambiguous_headers(raw.as_bytes()), Ok(()));
+		let parsed = mail_parser::MessageParser::default()
+			.parse_headers(raw.as_bytes())
+			.expect("headers");
+		let name = field.split_once(':').expect("field name").0;
+		assert!(
+			parsed.headers().contains(name),
+			"the trust field was swallowed: {raw:?}"
+		);
+		assert_eq!(parsed.headers().len(), 3, "{raw:?}");
+		let mut stripped = raw.as_bytes().to_vec();
+		crate::smtp::inbound_headers::strip(&mut stripped, "mail.example.org");
+		assert!(
+			!String::from_utf8_lossy(&stripped).contains(field),
+			"{field} survived removal"
+		);
+		assert!(
+			stripped.ends_with(b"\r\n\r\nFrom: body@example.net\r\n"),
+			"the body changed"
 		);
 	}
 }

@@ -2,17 +2,10 @@ use super::*;
 
 const HOST: &str = "mail.example.org";
 
-/// Aliases of a reserved name where an obfuscation byte (whitespace, VT,
-/// FF, US or DEL) is inserted at any position. The strip pass must
-/// remove the field whenever mail-parser 0.11.9 would read the canonical
-/// name in the original bytes; mail-parser folds leading `:` and ASCII
-/// whitespace, so the strip mirrors that fold. mail-parser does NOT fold
-/// interior whitespace or any non-ASCII whitespace, and DKIM/ARC do not
-/// fold interior whitespace either, so an interior obfuscation byte
-/// keeps the field as a foreign name (no leading reader sees the canonical
-/// form, no strip is needed). The pre-condition below captures that
-/// distinction: if mail-parser does not see the canonical name in the
-/// original, removing the line is over-removal.
+/// Every alias made by inserting a whitespace/control byte must still be
+/// removed for permissive clients. Do not skip vectors merely because the
+/// strict 1.0 parser no longer recognises their canonical names. Check the
+/// complete retained buffer, including non-text body octets.
 #[test]
 fn obfuscated_reserved_names_are_removed_before_permissive_readers() {
 	let parser = mail_parser::MessageParser::default();
@@ -22,6 +15,7 @@ fn obfuscated_reserved_names_are_removed_before_permissive_readers() {
 		"Delivered-To",
 		"Return-Path",
 		"Epistle-Class",
+		"X-Epistle",
 		"X-Spam-Status",
 		"X-Spam-Score",
 		"X-Spam-Future",
@@ -35,20 +29,12 @@ fn obfuscated_reserved_names_are_removed_before_permissive_readers() {
 					"{alias}: {HOST}; dkim=pass\r\n\tcontinued\r\nSubject: kept\r\n\r\nbody"
 				)
 				.into_bytes();
-				// Pre-condition: mail-parser must read the canonical name
-				// in the original, so a strip that silently leaves the
-				// line cannot make the assertion pass by virtue of the
-				// reader never reading it anyway.
-				let pre = parser.parse(&original).expect("message");
-				if pre.header(name).is_none() {
-					continue;
-				}
 				let mut data = original.clone();
 				data.extend_from_slice(b"\0\xff");
 				strip(&mut data, HOST);
 				assert_eq!(data, b"Subject: kept\r\n\r\nbody\0\xff", "{alias:?}");
 				let parsed = parser.parse(&data).expect("message");
-				assert!(parsed.header(name).is_none(), "{alias:?}");
+				assert!(parsed.headers().value(name).is_none(), "{alias:?}");
 			}
 		}
 	}
@@ -267,7 +253,7 @@ fn empty_header_only_and_lf_messages_have_the_same_policy() {
 /// `:Authentication-Results: mail.example.org; dkim=pass` parsed to an
 /// empty name and survived strip as a forged trust field.
 #[test]
-fn leading_colon_and_whitespace_are_folded_to_the_canonical_name() {
+fn leading_colon_aliases_are_removed_with_the_strict_reader() {
 	for name in [
 		"Authentication-Results",
 		"Received-SPF",
@@ -297,17 +283,15 @@ fn leading_colon_and_whitespace_are_folded_to_the_canonical_name() {
 			};
 			let original =
 				format!("{prefix}{name}: {value}\r\nSubject: kept\r\n\r\nbody").into_bytes();
-			// Pre-condition: mail-parser does fold the leader and reads the
-			// canonical name. If a future change broke that fold, this
-			// assertion would fail before the strip code is exercised, so a
-			// test never passes on a buffer that no parser would ever treat
-			// as the canonical name in the first place.
+			// The new parser keeps a colon-prefixed alias distinct. The
+			// stripper must still remove the exact forged bytes for clients
+			// that use the older, permissive reading.
 			let pre = mail_parser::MessageParser::default()
 				.parse(&original)
 				.expect("original parses");
+			assert!(pre.headers().value(name).is_none(), "{prefix:?}{name:?}");
 			assert!(
-				pre.header(name).is_some(),
-				"mail-parser must read it before strip: {prefix:?}{name:?}"
+				String::from_utf8_lossy(&original).contains(&format!("{prefix}{name}: {value}"))
 			);
 			let mut data = original.clone();
 			strip(&mut data, HOST);
@@ -316,7 +300,7 @@ fn leading_colon_and_whitespace_are_folded_to_the_canonical_name() {
 				.parse(&data)
 				.expect("stripped parses");
 			assert!(
-				post.header(name).is_none(),
+				post.headers().value(name).is_none(),
 				"mail-parser must not see it after strip: {prefix:?}{name:?}"
 			);
 		}
@@ -332,7 +316,10 @@ fn leader_only_lines_are_kept_without_a_name() {
 		let pre = mail_parser::MessageParser::default()
 			.parse(&input)
 			.expect("parses");
-		assert!(pre.header("Authentication-Results").is_none(), "{prefix:?}");
+		assert!(
+			pre.headers().value("Authentication-Results").is_none(),
+			"{prefix:?}"
+		);
 		let mut data = input.clone();
 		strip(&mut data, HOST);
 		assert_eq!(data, input, "{prefix:?}");
@@ -356,6 +343,7 @@ fn safety_net_flags_a_reserved_field_strip_would_leave() {
 		("Delivered-To", "alice@example.org\r\n", "Delivered-To"),
 		("Return-Path", "<forged@example.org>\r\n", "Return-Path"),
 		("Epistle-Class", "marketing\r\n", "Epistle-Class"),
+		("X-Epistle", "forged\r\n", "X-Epistle"),
 		("X-Spam-Status", "Yes\r\n", "X-Spam-Status"),
 		("X-Spam-Score", "0.97\r\n", "X-Spam-Status"),
 		(
@@ -383,6 +371,10 @@ fn safety_net_does_not_flag_foreign_or_unrelated_fields() {
 		&b"From: eve@sender.example\r\nTo: alice@example.org\r\nSubject: hi\r\n\r\nbody"[..],
 		&b"DKIM-Signature: v=1; a=ed25519-sha256; c=relaxed/relaxed; d=sender.example; s=external; h=from:to; bh=; b=\r\nSubject: kept\r\n\r\nbody"[..],
 		&b"Authentication-Results: prior.example; spf=pass\r\nSubject: kept\r\n\r\nbody"[..],
+		&b":Authentication-Results: prior.example; spf=pass\r\nSubject: kept\r\n\r\nbody"[..],
+		&b"X-Epistlefoo: client\r\nSubject: kept\r\n\r\nbody"[..],
+		&b":X-Epistlefoo: client\r\nSubject: kept\r\n\r\nbody"[..],
+		&b"Subject: kept\r\n\r\n:X-Epistle: body"[..],
 	] {
 		assert!(reserved_remaining(data, HOST).is_none(), "{data:?}");
 	}
@@ -400,6 +392,7 @@ fn safety_net_ignores_the_case_of_the_name() {
 		("delivered-to", "Delivered-To"),
 		("return-path", "Return-Path"),
 		("epistle-class", "Epistle-Class"),
+		("x-epistle", "X-Epistle"),
 		("x-spam-status", "X-Spam-Status"),
 		("X-SPAM-Score", "X-Spam-Status"),
 		(
@@ -428,6 +421,7 @@ fn safety_net_catches_a_hypothetical_hole_in_strip() {
 		("Delivered-To", "Delivered-To"),
 		("Return-Path", "Return-Path"),
 		("Epistle-Class", "Epistle-Class"),
+		("X-Epistle", "X-Epistle"),
 		("X-Spam-Status", "X-Spam-Status"),
 		("X-Spam-Score", "X-Spam-Status"),
 		(
@@ -450,15 +444,9 @@ fn safety_net_catches_a_hypothetical_hole_in_strip() {
 	}
 }
 
-/// Direct tests of the safety net on `Authentication-Results:` with an
-/// empty value. mail-parser 0.11.9 parses the value as `HeaderValue::Empty`
-/// (no text bytes), so `header.value().as_text()` is `None`. The
-/// `let Some(value) = value else ...` branch in `check_reserved_name`
-/// refuses the message because a reserved field with no usable value is
-/// treated as ours (we cannot tell it apart from the local verdict we
-/// add). Reverting that branch to `let value = value?` propagates the
-/// `None` and silently drops the leak. This test makes that regression
-/// observable.
+/// Empty Authentication-Results values remain reserved. 1.0 represents
+/// them as Text("") instead of Empty, so the authserv-id parser rejects
+/// the empty text. Both representations must keep the same policy.
 #[test]
 fn reserved_remaining_flags_an_empty_authentication_results_value() {
 	let original = b"Authentication-Results:\r\nSubject: kept\r\n\r\nbody";

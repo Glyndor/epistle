@@ -3,7 +3,7 @@ name = "epistle"
 version = "0.12.3"
 edition = "2024"
 # The floor CI builds on, and the one `epistle` claims to support. It now comes
-# from sqlx 0.9's own `rust-version` (1.94), so it is a derived floor rather
+# from mail-parser 1.0's own `rust-version` (1.98), so it is a derived floor rather
 # than a measured one; standards/testing forbids that derivation for packaging
 # floors, but this one is not a packaging floor.
 #
@@ -15,7 +15,7 @@ edition = "2024"
 #
 # 1.88 was the previous floor; it came from a build that failed (`rcgen`, `time`
 # and `icu_properties` each wanted more than `edition = "2024"` implies).
-rust-version = "1.94"
+rust-version = "1.98"
 license = "MIT"
 description = "Self-hosted, headless mail server: SMTP, IMAP and modern email security through an API and CLI."
 repository = "https://github.com/Glyndor/epistle"
@@ -99,7 +99,7 @@ uuid = { version = "1.23.2", features = ["v7", "serde"] }
 webpki-roots = "1.0.7"
 x509-parser = "0.18.1"
 zeroize = "=1.9.1"
-mail-parser = { version = "0.11.9", default-features = false }
+mail-parser = { version = "1.0.0", default-features = false }
 toml_edit = "0.25"
 unicode-normalization = "0.1.25"
 

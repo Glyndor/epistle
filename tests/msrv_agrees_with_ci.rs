@@ -6,11 +6,11 @@
 //! counterpart this test compared against stopped existing.
 //!
 //! Retiring it was the wrong answer. The floor is still a real claim: epistle
-//! supports 1.94, and CI proves it by building there. What changed is where the
+//! supports 1.98, and CI proves it by building there. What changed is where the
 //! claim lives, so it moved to `rust-version` in `Cargo.toml`, which is where
 //! Rust keeps an MSRV and which cargo itself enforces.
 //!
-//! 1.94 is now derived from sqlx 0.9's own `rust-version`, so it is a
+//! 1.98 is now derived from mail-parser 1.0's own `rust-version`, so it is a
 //! measured floor on the build graph rather than a packaging floor.
 //! Standards/testing forbids that derivation for packaging floors, but there is
 //! no packaging floor now. 1.88 was the previous floor and came from a build

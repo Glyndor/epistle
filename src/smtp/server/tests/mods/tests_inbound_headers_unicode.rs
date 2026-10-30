@@ -79,7 +79,7 @@ async fn unicode_whitespace_after_a_reserved_field_is_removed_on_data_and_bdat()
 					.parse(data)
 					.expect("delivered parses");
 				assert!(
-					parsed.header(*name).is_none(),
+					parsed.headers().value(*name).is_none(),
 					"mail-parser must not read {name:?} from delivered bytes ({ws:?}, BDAT={bdat})"
 				);
 			}

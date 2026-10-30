@@ -1,7 +1,7 @@
 //! The builder's output, read back with the same MIME parser JMAP uses.
 
 use super::*;
-use mail_parser::{MessageParser, MimeHeaders, PartType};
+use mail_parser::{MessageParser, PartKind};
 
 fn attachment(kind: &str, data: &[u8], name: Option<&str>) -> Leaf {
 	Leaf {
@@ -22,8 +22,8 @@ fn build(bodies: Bodies) -> Vec<u8> {
 fn shape(raw: &[u8]) -> Vec<String> {
 	let message = MessageParser::default().parse(raw).expect("parse");
 	message
-		.parts
-		.iter()
+		.root()
+		.parts()
 		.map(|part| {
 			let ct = part.content_type().expect("content type");
 			format!("{}/{}", ct.ctype(), ct.subtype().unwrap_or(""))
@@ -98,8 +98,8 @@ fn binary_attachments_round_trip_byte_for_byte() {
 		..Bodies::default()
 	});
 	let message = MessageParser::default().parse(&raw).expect("parse");
-	let part = message.attachment(0).expect("attachment");
-	assert_eq!(part.contents(), data.as_slice());
+	let part = message.attachments().next().expect("attachment");
+	assert_eq!(part.decoded().as_ref(), data.as_slice());
 }
 
 #[test]
@@ -113,7 +113,7 @@ fn long_or_non_ascii_file_names_use_rfc_2231_and_read_back() {
 	assert!(text.contains("filename*0*=utf-8''"), "{text}");
 	assert!(text.split("\r\n").all(|line| line.len() <= 78), "{text}");
 	let message = MessageParser::default().parse(&raw).expect("parse");
-	let part = message.attachment(0).expect("attachment");
+	let part = message.attachments().next().expect("attachment");
 	assert_eq!(part.attachment_name(), Some(name.as_str()));
 }
 
@@ -127,7 +127,10 @@ fn an_attached_message_stays_unencoded() {
 	let text = String::from_utf8_lossy(&raw);
 	assert!(text.contains("Content-Type: message/rfc822\r\nContent-Transfer-Encoding: 8bit"));
 	let message = MessageParser::default().parse(&raw).expect("parse");
-	assert!(matches!(message.parts[2].body, PartType::Message(_)));
+	assert!(matches!(
+		message.part(2).expect("part").kind(),
+		PartKind::Message(_)
+	));
 	let long = format!("Subject: {}\r\n\r\nx", "y".repeat(1000));
 	let refused = write(
 		&[],

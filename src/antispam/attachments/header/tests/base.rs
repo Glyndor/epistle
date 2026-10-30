@@ -37,6 +37,25 @@ fn a_header_block_mail_parser_cannot_read_is_scanned_as_an_attachment() {
 }
 
 #[test]
+fn an_empty_header_block_is_not_an_unreadable_attachment() {
+	for block in [b"".as_slice(), b"\r\n", b" \t\r\n"] {
+		let header = parse(block);
+		assert!(!header.attachment, "{header:?}");
+		assert!(!header.ambiguous, "{header:?}");
+	}
+}
+
+#[test]
+fn extended_charset_damage_does_not_hide_other_charset_candidates() {
+	let header = parse(b"Content-Type: text/plain; charset*=utf-16le''x\r\nContent-Type: text/plain; charset=\"X-UNKNOWN\"\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Type: text/plain; charset=\"utf 16le\"\r\n");
+	assert_eq!(
+		header.charsets,
+		["x-unknown", "utf-8", "utf 16le", "utf-16le"]
+	);
+	assert!(header.ambiguous);
+}
+
+#[test]
 fn a_repeated_content_type_or_encoding_is_ambiguous() {
 	for block in [
 		&b"Content-Type: text/plain\r\nContent-Type: application/x-msdownload\r\n"[..],

@@ -64,24 +64,24 @@ pub fn parse(block: &[u8]) -> PartHeader {
 	let parsed = MessageParser::new().parse_headers(&block);
 	let headers = parsed
 		.as_ref()
-		.map(|message| message.headers())
-		.unwrap_or(&[]);
-	let mut types: Vec<&ContentType<'_>> = Vec::new();
-	let mut dispositions: Vec<&ContentType<'_>> = Vec::new();
+		.into_iter()
+		.flat_map(|message| message.headers());
+	let mut types: Vec<ContentType<'_>> = Vec::new();
+	let mut dispositions: Vec<ContentType<'_>> = Vec::new();
 	let mut encodings: Vec<String> = Vec::new();
 	// A Content-Type mail-parser could not read as a type: clients fall
 	// back to text or to an opaque file, so the part is scanned as a file.
 	let mut unparsed_type = false;
 	for header in headers {
-		match header.name {
-			HeaderName::ContentType => match header.value.as_content_type() {
+		match header.name() {
+			HeaderName::ContentType => match header.value().as_content_type() {
 				Some(ct) => types.push(ct),
 				None => unparsed_type = true,
 			},
-			HeaderName::ContentDisposition => dispositions.extend(header.value.as_content_type()),
+			HeaderName::ContentDisposition => dispositions.extend(header.value().as_content_type()),
 			HeaderName::ContentTransferEncoding => encodings.extend(
 				header
-					.value
+					.value()
 					.as_text()
 					.map(|value| value.trim().to_ascii_lowercase()),
 			),
@@ -90,14 +90,19 @@ pub fn parse(block: &[u8]) -> PartHeader {
 	}
 	// A block mail-parser cannot read at all is scanned as an opaque
 	// attachment rather than skipped as text.
-	let unreadable = parsed.is_none() && block.iter().any(|byte| !byte.is_ascii_whitespace());
+	// 1.0 can return Some with zero fields when the appended blank line
+	// follows non-header garbage. That is still an unreadable input block.
+	let unreadable = parsed
+		.as_ref()
+		.is_none_or(|message| message.headers().is_empty())
+		&& block.iter().any(|byte| !byte.is_ascii_whitespace());
 	let mut ambiguous = unreadable
 		|| unparsed_type
 		|| types.len() > 1
 		|| dispositions.len() > 1
 		|| encodings.len() > 1;
 
-	let type_name = |ct: &&ContentType<'_>| {
+	let type_name = |ct: &ContentType<'_>| {
 		match ct.subtype() {
 			Some(subtype) => format!("{}/{}", ct.ctype(), subtype),
 			None => ct.ctype().to_string(),
@@ -121,13 +126,13 @@ pub fn parse(block: &[u8]) -> PartHeader {
 		(&types, &["name", "filename"][..]),
 	] {
 		for ct in params.iter() {
-			for attribute in ct.attributes().unwrap_or(&[]) {
-				let key = attribute.name.trim_end_matches('*');
+			for (name, value) in ct.attributes() {
+				let key = name.trim_end_matches('*');
 				if keys.iter().any(|wanted| key.eq_ignore_ascii_case(wanted))
-					&& !attribute.value.is_empty()
-					&& !names.iter().any(|seen| *seen == attribute.value)
+					&& !value.is_empty()
+					&& !names.iter().any(|seen| *seen == value)
 				{
-					names.push(attribute.value.to_string());
+					names.push(value.to_string());
 				}
 			}
 		}
@@ -181,17 +186,12 @@ pub fn parse(block: &[u8]) -> PartHeader {
 	let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
 	let from_attributes = types
 		.iter()
-		.flat_map(|ct| ct.attributes().unwrap_or(&[]))
-		.filter(|attribute| {
-			attribute
-				.name
-				.trim_end_matches('*')
-				.eq_ignore_ascii_case("charset")
-		})
-		.map(|attribute| attribute.value.to_ascii_lowercase());
+		.flat_map(|ct| ct.attributes())
+		.filter(|(name, _)| name.trim_end_matches('*').eq_ignore_ascii_case("charset"))
+		.map(|(_, value)| value.to_ascii_lowercase());
 	for name in from_attributes.chain(extended_charsets(&block)) {
 		let name = name.trim().to_string();
-		if !name.is_empty() && seen.insert(name.clone()) {
+		if crate::util::mail_parser::is_charset_label(&name) && seen.insert(name.clone()) {
 			charsets.push(name);
 		}
 	}

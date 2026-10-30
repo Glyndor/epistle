@@ -65,7 +65,7 @@ fn trailing_unicode_whitespace_does_not_let_a_reserved_field_through() {
 			// canonical form: this is the gap the safety net covers.
 			let pre = parser.parse(&raw).expect("pre parses");
 			assert_eq!(
-				pre.header(*name),
+				pre.headers().value(*name),
 				None,
 				"mail-parser must keep the trailing {ws:?} on {name:?}"
 			);
@@ -75,7 +75,7 @@ fn trailing_unicode_whitespace_does_not_let_a_reserved_field_through() {
 			strip(&mut data, HOST);
 			assert_eq!(data, b"Subject: kept\r\n\r\nbody", "{name:?} {ws:?}");
 			let post = parser.parse(&data).expect("post parses");
-			assert!(post.header(*name).is_none(), "{name:?} {ws:?}");
+			assert!(post.headers().value(*name).is_none(), "{name:?} {ws:?}");
 			assert!(
 				!dkim_names(&data).iter().any(|n| n == *name),
 				"DKIM must not see {name:?} after strip ({ws:?})"
@@ -121,7 +121,7 @@ fn stray_dashes_in_field_names_are_not_stripped_as_obfuscation() {
 	for (raw, kept) in cases {
 		let pre = parser.parse(&raw[..]).expect("pre parses");
 		assert!(
-			pre.header(*kept).is_some(),
+			pre.headers().value(*kept).is_some(),
 			"mail-parser must keep the distinct name before strip: {kept}"
 		);
 		let mut data = raw.to_vec();
@@ -129,7 +129,7 @@ fn stray_dashes_in_field_names_are_not_stripped_as_obfuscation() {
 		assert_eq!(data.as_slice(), *raw, "{kept}");
 		let post = parser.parse(&data).expect("post parses");
 		assert!(
-			post.header(*kept).is_some(),
+			post.headers().value(*kept).is_some(),
 			"strip must not remove the distinct name: {kept}"
 		);
 		assert!(

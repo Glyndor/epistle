@@ -3,7 +3,7 @@
 
 use super::helpers::{date_to_epoch_day, header_value_raw, load_content};
 use super::mailbox::{self, Snapshot};
-use mail_parser::{HeaderValue, parsers::MessageStream};
+use mail_parser::{HeaderForm, HeaderValue};
 
 /// `BODY`: `needle` (lowercased by the parser) occurs after the header block.
 /// `content` is the lowercased message shared by the other keys.
@@ -38,7 +38,8 @@ pub(super) fn sent_epoch_day(snapshot: &Snapshot, message: &mailbox::MessageRef)
 	let text = String::from_utf8_lossy(&raw);
 	let mut value = header_value_raw(&text, "date")?;
 	value.push_str("\r\n");
-	match MessageStream::new(value.as_bytes()).parse_date() {
+	let parsed = HeaderForm::Date.parse(value.as_bytes());
+	match parsed.value() {
 		HeaderValue::DateTime(date) if date.month != 0 && date.day != 0 => Some(date_to_epoch_day(
 			u32::from(date.year),
 			date.month,
