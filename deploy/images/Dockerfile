@@ -1,7 +1,7 @@
 # The container images the generated stack runs, pinned by tag and digest.
 #
 # Nothing builds this file. epistle reads it at build time
-# (src/cli/init/images.rs), so the compose files `epistle init` and
+# (src/cli/init/images/mod.rs), so the compose files `epistle init` and
 # `epistle stack update` render use exactly these references, and a
 # Dependabot pull request that moves a digest here is what moves it on every
 # install at the next release. Keep the name: Dependabot's docker ecosystem
