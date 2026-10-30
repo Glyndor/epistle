@@ -161,18 +161,25 @@ fn webhook_http_is_accepted_only_for_a_real_loopback_host() {
 	}
 }
 
-/// A private destination is refused until the operator says so in the
-/// section: the webhook client would not reach it either way.
+/// A private destination loads without the option where it loaded before
+/// (https anywhere, plain http on loopback) and warns that it will not be
+/// delivered; plain http to a private host that is not loopback stays refused
+/// until the operator allows it.
 #[test]
-fn a_private_webhook_needs_the_option() {
+fn a_private_webhook_loads_and_http_to_a_private_host_needs_the_option() {
 	for url in [
 		"http://127.0.0.1:8080/hook",
 		"http://[::1]:9000/hook",
 		"http://localhost/hook",
-		"http://10.0.0.1/hook",
 		"https://10.0.0.1/hook",
 		"http://2130706433/hook",
 	] {
+		assert!(
+			webhook_config(url).is_ok(),
+			"{url} must load without the option"
+		);
+	}
+	for url in ["http://10.0.0.1/hook", "http://192.168.1.5/hook"] {
 		assert!(webhook_config(url).is_err(), "{url} must be refused");
 		assert!(
 			webhook_config_with(url, true).is_ok(),

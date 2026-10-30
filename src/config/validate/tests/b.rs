@@ -173,11 +173,12 @@ fn webhook_url_must_be_https_or_loopback() {
 	assert!(ok(&format!(
 		"{BASE}\n[webhook]\nurl = \"https://hooks.example/x\"\n"
 	)));
-	// A private destination needs the operator to say so.
-	assert!(invalid(&format!(
+	// A loopback destination without the option still loads: the webhook
+	// is advisory and the log warns that it will not be delivered.
+	assert!(ok(&format!(
 		"{BASE}\n[webhook]\nurl = \"http://127.0.0.1:9000/x\"\n"
 	)));
-	assert!(invalid(&format!(
+	assert!(ok(&format!(
 		"{BASE}\n[webhook]\nurl = \"http://localhost/x\"\n"
 	)));
 	// Loopback http is allowed with the option (never leaves the host).
