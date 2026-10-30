@@ -1,4 +1,4 @@
-epistle (0.12.4) UNRELEASED; urgency=medium
+epistle (0.12.4) unstable; urgency=medium
 
   * Build the binary with Rust 1.99 and move the runtime image to Debian 13.
   * The mail reading library moves to version 1.0 and the minimum Rust version rises to 1.98.
@@ -29,7 +29,11 @@ epistle (0.12.4) UNRELEASED; urgency=medium
   * `epistle probe` and the `ports` check of `epistle status` fail while the stack's `mail` container is not running, for example between the stop and the start of a restart; they used to warn and exit 0, so a script waiting for probe sent mail before SMTP listened.
   * The DKIM signature and the ARC message signature now canonicalize the body as RFC 6376 section 3.4.4 requires: the relaxed body reduces the whitespace at the start of a line to one space instead of deleting it, and it ignores every empty line at the end of the body, so a body without content is hashed as the empty string. A body with indented lines was canonicalized without the indentation, and the signatures epistle made with it were not valid at the receivers. A signature that was already sent cannot be repaired.
 
- -- Glyndor <packages@glyndor.net>  Mon, 26 Oct 2026 20:00:00 +0000
+  * Operators: a webhook whose address resolves to a private destination (loopback, link-local, a private range or an IPv6 translation prefix that embeds one) is refused unless `[webhook] allow_private_webhooks = true`, and the client that enforces it ignores the proxy settings of the environment. A webhook that points at an internal host stops delivering after the upgrade until it sets the flag; The log warns at start when a section names such an address without it, and the server still starts.
+  * The outbound SMTP client bounds the reply line it reads from a server, and the envelope addresses of a queued message are checked before they are written to the spool.
+  * The DKIM verifier bounds how many signatures it checks on one message and how many header names one signature may list, so a message cannot make it spend unbounded work.
+
+ -- Glyndor <packages@glyndor.net>  Fri, 30 Oct 2026 12:00:00 +0000
 
 epistle (0.12.3) unstable; urgency=medium
 

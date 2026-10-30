@@ -1,6 +1,6 @@
 [package]
 name = "epistle"
-version = "0.12.3"
+version = "0.12.4"
 edition = "2024"
 # The floor CI builds on, and the one `epistle` claims to support. It now comes
 # from mail-parser 1.0's own `rust-version` (1.98), so it is a derived floor rather
