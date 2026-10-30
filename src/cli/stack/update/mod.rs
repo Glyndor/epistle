@@ -314,9 +314,4 @@ fn step(parts: &[&str]) -> Step {
 mod execute;
 
 #[cfg(test)]
-#[path = "mod_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "mod_tests_steps.rs"]
-mod tests_steps;

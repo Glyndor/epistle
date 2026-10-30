@@ -6,7 +6,7 @@
 //! The tests read `debian/epistle.preinst` as text and assert the two literal
 //! names the Rust store expects: the binary at `epistle-<version>/epistle` and
 //! its digest at `epistle-<version>/epistle.sha256`. The Rust side keeps the
-//! inverse assertion in `src/cli/stack/rollback/store_tests.rs`
+//! inverse assertion in `src/cli/stack/rollback/store/tests/base.rs`
 //! (`the_store_source_keeps_the_published_names`). If either side moves,
 //! that file's test fails here too.
 

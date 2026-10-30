@@ -12,7 +12,6 @@ mod flow;
 mod host;
 
 #[cfg(test)]
-#[path = "mod_tests.rs"]
 mod tests;
 
 pub(super) use host::{query, query_within};

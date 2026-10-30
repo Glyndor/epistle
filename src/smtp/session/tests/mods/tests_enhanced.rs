@@ -116,6 +116,10 @@ fn sources(dir: &std::path::Path, out: &mut Vec<(String, String)>) {
 	for entry in std::fs::read_dir(dir).expect("read dir").flatten() {
 		let path = entry.path();
 		if path.is_dir() {
+			// A `tests` folder holds test code, not replies a client sees.
+			if path.file_name().is_some_and(|name| name == "tests") {
+				continue;
+			}
 			sources(&path, out);
 			continue;
 		}

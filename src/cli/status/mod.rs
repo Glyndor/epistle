@@ -299,5 +299,4 @@ async fn check_area(area: CheckArea, ctx: &Ctx) -> AreaReport {
 }
 
 #[cfg(test)]
-#[path = "mod_tests.rs"]
 mod tests;

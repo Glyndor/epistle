@@ -289,5 +289,4 @@ mod cleanup;
 mod show;
 
 #[cfg(test)]
-#[path = "mod_tests.rs"]
 mod tests;

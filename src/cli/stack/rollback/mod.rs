@@ -142,5 +142,4 @@ pub(super) use run::restore_db;
 pub(in crate::cli) use run::run_as_root;
 
 #[cfg(test)]
-#[path = "mod_tests.rs"]
 mod tests;

@@ -283,9 +283,9 @@ async fn an_empty_uid_window_is_checkpointed_before_a_later_failure() {
 
 mod interrupted;
 
-mod recovery_tests;
+mod recovery;
 
-mod final_review_tests;
+mod final_review;
 
 #[allow(unused_imports)]
 use super::base as tests;

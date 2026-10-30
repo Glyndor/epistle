@@ -65,7 +65,7 @@ mod auth_ban_owner_known_network;
 mod auth_ban_toctou;
 mod auth_bans;
 mod basic;
-mod commands_tests;
+mod commands;
 mod condstore_search;
 mod encoded_search;
 mod esearch_sets;

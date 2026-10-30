@@ -9,8 +9,7 @@ mod protocol;
 mod show;
 
 #[cfg(test)]
-#[path = "mod_tests_values.rs"]
-mod tests_values;
+mod tests;
 
 mod keys;
 pub use keys::Key;
@@ -410,63 +409,3 @@ fn run_with_restart(
 		}
 	}
 }
-
-#[cfg(test)]
-#[path = "mod_tests_config.rs"]
-mod tests_config;
-
-#[cfg(test)]
-#[path = "mod_tests_domains.rs"]
-mod tests_domains;
-
-#[cfg(test)]
-#[path = "mod_tests_data_rate.rs"]
-mod tests_data_rate;
-
-#[cfg(test)]
-#[path = "mod_tests_session_limits.rs"]
-mod tests_session_limits;
-
-#[cfg(test)]
-#[path = "mod_tests_connection.rs"]
-mod tests_connection;
-
-#[cfg(test)]
-#[path = "mod_tests_schedule.rs"]
-mod tests_schedule;
-
-#[cfg(test)]
-#[path = "mod_tests_queue.rs"]
-mod tests_queue;
-
-#[cfg(test)]
-#[path = "mod_tests_tenants.rs"]
-mod tests_tenants;
-
-#[cfg(test)]
-#[path = "mod_tests_budget.rs"]
-mod tests_budget;
-
-#[cfg(test)]
-#[path = "mod_tests_recipients.rs"]
-mod tests_recipients;
-
-#[cfg(test)]
-#[path = "mod_tests_should_warn.rs"]
-mod tests_should_warn;
-
-#[cfg(test)]
-#[path = "mod_tests_catalog.rs"]
-mod tests_catalog;
-
-#[cfg(test)]
-#[path = "mod_tests_protocol.rs"]
-mod tests_protocol;
-
-#[cfg(test)]
-#[path = "mod_tests_scan.rs"]
-mod tests_scan;
-
-#[cfg(test)]
-#[path = "mod_tests_cli.rs"]
-mod tests_cli;

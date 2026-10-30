@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 use std::process::ExitCode;
 
-use crate::cli::term::table::tests::visible;
+use crate::cli::term::table::tests::base::visible;
 use crate::cli::term::{Decor, fake};
 use crate::config::Config;
 

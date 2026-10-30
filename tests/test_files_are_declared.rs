@@ -1,5 +1,5 @@
 //! A sibling test file that no `mod` or `#[path]` names is never compiled, so its
-//! tests never run and nothing says so. `src/cli/limits/mod_tests_cli.rs` sat
+//! tests never run and nothing says so. `src/cli/limits/tests/cli.rs` sat
 //! that way after a move, and three more files like it were found when this
 //! guard was written.
 //!

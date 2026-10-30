@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 
 pub(crate) use copy::Chown;
 #[cfg(test)]
-pub(crate) use shown::tests::with_pair as with_shown_pair;
+pub(crate) use shown::tests::base::with_pair as with_shown_pair;
 pub(crate) use shown::{ENV as SHOWN_ENV, shown};
 use table::{Kind, Staged};
 
@@ -346,8 +346,4 @@ fn stage_dir(
 }
 
 #[cfg(test)]
-#[path = "mod_tests.rs"]
 mod tests;
-#[cfg(test)]
-#[path = "mod_tests_message.rs"]
-mod tests_message;

@@ -355,7 +355,7 @@ fn dkim_selectors_fail_on_invalid_rotation_state() {
 
 #[test]
 fn on_a_terminal_each_record_carries_its_symbol_inside_the_width() {
-	use crate::cli::term::table::tests::visible;
+	use crate::cli::term::table::tests::base::visible;
 	use crate::cli::term::{Decor, fake};
 	let dns = FakeDns::default();
 	let mut out = Vec::new();
