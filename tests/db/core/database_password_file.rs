@@ -2,7 +2,7 @@
 //! connection must read the secret from disk and present it to PostgreSQL
 //! when the URL omits the password, and must refuse when the file holds the
 //! wrong secret. Skipped when `DATABASE_URL` is not set, the same gating the
-//! other integration tests in `tests/database.rs` and `tests/database_bans.rs`
+//! other integration tests in `tests/db/core/database.rs` and `tests/db/core/database_bans.rs`
 //! apply so the `Database` workflow exercises the full matrix on every push
 //! and the default `cargo test` run stays self-contained.
 //!
