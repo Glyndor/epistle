@@ -1,0 +1,4 @@
+subject:external vector folded
+to:Bob <bob@example.net>
+from:Alice <alice@example.test>
+dkim-signature:v=1; a=rsa-sha256; c=relaxed/relaxed; d=example.test; s=external; h=subject:to:from:from:to:cc:subject:reply-to:date:message-id: list-unsubscribe:list-unsubscribe-post:content-type: disposition-notification-to:return-receipt-to:auto-submitted; bh=VwbiVmSrr0pBRHQSPGZMHw50LJ8kfwr6TdTJgJSvhBY=; b=

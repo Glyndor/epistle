@@ -1,0 +1,11 @@
+DKIM-Signature: v=1; a=ed25519-sha256; c=relaxed/relaxed; d=example.test; s=external; h=from:to:subject; bh=VwbiVmSrr0pBRHQSPGZMHw50LJ8kfwr6TdTJgJSvhBY=; b=SNwBXz4dbK17QK4EFmPg9cNx3WPuTc0z88z87z8Uff5rZ416esHJqxj/lQ3Y7f0dLbNf64DcwUVvt1Gx/+49Dg==
+FrOm: Alice <alice@example.test>
+To: Bob <bob@example.net>
+SuBJeCt:  external	vector
+	 folded  
+
+	  indented	text 	
+
+line		 two
+ 	
+

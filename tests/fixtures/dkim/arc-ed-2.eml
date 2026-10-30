@@ -1,0 +1,16 @@
+ARC-Seal: i=2; a=ed25519-sha256; d=example.test; s=seal; cv=pass; b=hL8I1FG2j2Fjvy3TlkD4meANiRXbqdZiphzFpxnLzT2yFzS/SxVoi2Zgjy936dYIaf71rtAOfgWyqTStSdASCg==
+ARC-Message-Signature: i=2; a=ed25519-sha256; c=relaxed/relaxed; d=example.test; s=ams; h=from:to:subject:from:subject; bh=VwbiVmSrr0pBRHQSPGZMHw50LJ8kfwr6TdTJgJSvhBY=; b=cOuqlF/r+QGWyCSkv57/6+8Z4wnzLvLLiuAU4eDOkp6FYeE6zGAhyLqUTn1+2UPv9CkToZxz60DQJM5d0JipDg==
+ARC-Authentication-Results: i=2; mx.example.test; dkim=pass header.d=example.test
+ARC-Seal: i=1; a=ed25519-sha256; d=example.test; s=seal; cv=none; b=Myuo4T6C8XJVUlS2xzaH3MgHsQVVHRmEsgbLOf4KMC2XxSmj/gFB2L/0uupKX3oFE/TnftVzfTbnbUZVASw4AA==
+ARC-Message-Signature: i=1; a=ed25519-sha256; c=relaxed/relaxed; d=example.test; s=ams; h=from:to:subject:from:subject; bh=VwbiVmSrr0pBRHQSPGZMHw50LJ8kfwr6TdTJgJSvhBY=; b=eq7djESs7BUChad+ClS6nrszoS/URuexXKxO0SG8H+jPDhJwXuuv830dmuTsWZwxe8E0aUoPsZK7Q4T6dvCzAQ==
+ARC-Authentication-Results: i=1; mx.example.test; dkim=pass header.d=example.test
+FrOm: Alice <alice@example.test>
+To: Bob <bob@example.net>
+SuBJeCt:  external	vector
+	 folded  
+
+	  indented	text 	
+
+line		 two
+ 	
+
