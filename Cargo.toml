@@ -9,7 +9,7 @@ edition = "2024"
 #
 # The packaging path has none: debian/control carries no rustc on `Build-Depends`
 # because the .deb is built for musl with a rustup toolchain, and
-# `release.yml` pins that toolchain at 1.98.0. tests/msrv_agrees_with_ci.rs ties
+# `release.yml` pins that toolchain at 1.99.0. tests/msrv_agrees_with_ci.rs ties
 # this to ci.yml's `msrv` input, and cargo itself refuses to build on anything
 # older.
 #

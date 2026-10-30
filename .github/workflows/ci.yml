@@ -21,13 +21,13 @@ jobs:
     with:
       # Pin the toolchain so CI no longer floats to whatever `stable` is that
       # day — an unpinned toolchain turned every open PR red when Rust 1.97
-      # widened a clippy lint. Now on 1.98 (the org default), with that lint
+      # widened a clippy lint. Now on 1.99 (the org default), with that lint
       # fixed; bump deliberately through this input, never by tracking stable.
       # Kept equal to the rust-supply-chain.yml default — a repo whose SBOM is
       # produced by a compiler its test suite never ran is podup#1487.
-      toolchain: "1.98"
+      toolchain: "1.99"
       # The floor CI builds on. It no longer comes from `debian/control`: the .deb
-      # is built for musl with a rustup toolchain (`release.yml` pins 1.98.0), so
+      # is built for musl with a rustup toolchain (`release.yml` pins 1.99.0), so
       # there is no packaging floor to promise. 1.94 is now derived from sqlx
       # 0.9's own `rust-version`, which makes it a measured floor on the build
       # graph rather than on the operating system, and tied to `rust-version` in

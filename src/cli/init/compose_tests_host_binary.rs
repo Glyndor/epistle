@@ -2,7 +2,7 @@
 //! file: the default answers (no `image`) produce a `mail`
 //! service that runs the host's statically linked
 //! `/usr/bin/epistle` bind-mounted read-only on the
-//! digest-pinned `gcr.io/distroless/static-debian12:nonroot`
+//! digest-pinned `gcr.io/distroless/static-debian13:nonroot`
 //! base, while an explicit `image` answer preserves the old
 //! shape. Both shapes share volumes, network mode, the
 //! `serve --config ...` command and the keep-id mapping.

@@ -144,7 +144,7 @@ impl ComposeService {
 	/// Build the `mail` service. The default mode (answers
 	/// leave `image` unset) mounts the host's `/usr/bin/epistle`
 	/// bind-mounted read-only into the digest-pinned
-	/// `gcr.io/distroless/static-debian12:nonroot` base and
+	/// `gcr.io/distroless/static-debian13:nonroot` base and
 	/// overrides the entrypoint to `/usr/bin/epistle`; the custom
 	/// mode keeps the old shape (the operator's image as
 	/// provided, no binary mount, image's own entrypoint/CMD).

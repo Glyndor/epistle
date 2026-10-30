@@ -1,6 +1,6 @@
 //! `epistle dkim-keygen --rsa` must not need `openssl` on `PATH`.
 //!
-//! The image the stack runs (`gcr.io/distroless/static-debian12:nonroot`)
+//! The image the stack runs (`gcr.io/distroless/static-debian13:nonroot`)
 //! ships no `openssl`, and the first DKIM rotation of a fresh install
 //! failed there for that reason (Glyndor/epistle#1376): the key was made
 //! by shelling out to `openssl genpkey`. The key is made in process now,
