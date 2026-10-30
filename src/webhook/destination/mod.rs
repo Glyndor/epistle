@@ -232,5 +232,4 @@ impl Resolve for DestinationResolver {
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
 #[cfg(test)]
-#[path = "webhook_destination_tests.rs"]
 mod tests;
