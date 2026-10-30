@@ -10,7 +10,7 @@
 //! This file holds the answer each surface gives, so a surface that starts
 //! accepting one turns the build red instead of waiting for the next audit.
 //!
-//! Declared from `tests/validation_matrix.rs`; see that file for why a
+//! Declared from `tests/contracts/validation_matrix.rs`; see that file for why a
 //! module under `tests/` that is not a test target of its own is a module
 //! rather than a file.
 

@@ -1,5 +1,5 @@
-//! Helpers shared by `tests/stack_podup.rs` and
-//! `tests/stack_podup_errors.rs`. Each `tests/*.rs` is its own
+//! Helpers shared by `tests/cli/stack/stack_podup.rs` and
+//! `tests/cli/stack/stack_podup_errors.rs`. Each integration test root is its own
 //! Cargo binary, so the helpers are pulled in with a `#[path]`
 //! attribute. Anything in here is plumbing: writing a stub
 //! `podup` to a temp dir, recording its argv, and spawning the

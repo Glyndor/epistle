@@ -1,8 +1,8 @@
 //! Positive paths for `epistle stack`: every subcommand and the
 //! `--json` flag, driving the real binary against a stub `podup`
 //! placed first on `PATH`. The error and refusal paths live in
-//! `tests/stack_podup_errors.rs`; the helpers are shared from
-//! `tests/stack_podup_helpers.rs`. Each test pins the exact argv
+//! `tests/cli/stack/stack_podup_errors.rs`; the helpers are shared from
+//! `tests/cli/stack/stack_podup_helpers.rs`. Each test pins the exact argv
 //! podup received so a regression in argv order or in the
 //! passed flags is one assert away.
 

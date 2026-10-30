@@ -269,7 +269,7 @@ fn the_page_names_every_header_the_source_writes_or_removes() {
 		.collect();
 	assert!(
 		missing.is_empty(),
-		"docs/headers.md does not mention these headers the source writes or removes (put each in backticks in the tables there, or, if it is not a header of a message, add it to NOT_HEADERS in tests/headers_documented.rs with the reason): {missing:?}"
+		"docs/headers.md does not mention these headers the source writes or removes (put each in backticks in the tables there, or, if it is not a header of a message, add it to NOT_HEADERS in tests/contracts/headers_documented.rs with the reason): {missing:?}"
 	);
 }
 

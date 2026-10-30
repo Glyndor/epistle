@@ -31,6 +31,7 @@ use tokio_rustls::rustls::pki_types::pem::PemObject;
 use tokio_rustls::rustls::pki_types::{CertificateDer, ServerName};
 use tokio_rustls::rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 
+#[path = "../../common/mod.rs"]
 mod common;
 use common::{
 	BANNER_READ_DEADLINE, BIND_DEADLINE, Child, TLS_PROBE_IO_TIMEOUT, is_eaddrinuse,

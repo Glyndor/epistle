@@ -8,7 +8,7 @@
 //! written into the table as cells, so a third behaviour, or an entry that
 //! quietly starts accepting a `$`, turns the build red.
 //!
-//! Declared from `tests/validation_matrix.rs`.
+//! Declared from `tests/contracts/validation_matrix.rs`.
 
 use super::common::{Row, assert_printable, cell, matrix, toml_string};
 use super::single_label::{config_refusal, epistle};

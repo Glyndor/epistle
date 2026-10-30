@@ -372,3 +372,95 @@ path = "tests/cli/cli_stdout_clean.rs"
 [[test]]
 name = "cli_terminal"
 path = "tests/cli/cli_terminal.rs"
+
+[[test]]
+name = "service"
+path = "tests/cli/stack/service.rs"
+
+[[test]]
+name = "stack_podup"
+path = "tests/cli/stack/stack_podup.rs"
+
+[[test]]
+name = "stack_podup_errors"
+path = "tests/cli/stack/stack_podup_errors.rs"
+
+[[test]]
+name = "debian_control_depends_on_the_keyring"
+path = "tests/packaging/debian_control_depends_on_the_keyring.rs"
+
+[[test]]
+name = "debian_isolated_user"
+path = "tests/packaging/debian_isolated_user.rs"
+
+[[test]]
+name = "local_mode"
+path = "tests/cli/local/local_mode.rs"
+
+[[test]]
+name = "local_mode_restart"
+path = "tests/cli/local/local_mode_restart.rs"
+
+[[test]]
+name = "serve_drain"
+path = "tests/cli/local/serve_drain.rs"
+
+[[test]]
+name = "e2e"
+path = "tests/system/e2e.rs"
+
+[[test]]
+name = "interop"
+path = "tests/system/interop.rs"
+
+[[test]]
+name = "ldap"
+path = "tests/system/ldap.rs"
+
+[[test]]
+name = "upgrade"
+path = "tests/system/upgrade.rs"
+
+[[test]]
+name = "api_md_matches_code"
+path = "tests/contracts/api_md_matches_code.rs"
+
+[[test]]
+name = "clamd_detection_log"
+path = "tests/contracts/clamd_detection_log.rs"
+
+[[test]]
+name = "clock_external_live"
+path = "tests/contracts/clock_external_live.rs"
+
+[[test]]
+name = "configuration_md_ports"
+path = "tests/contracts/configuration_md_ports.rs"
+
+[[test]]
+name = "headers_documented"
+path = "tests/contracts/headers_documented.rs"
+
+[[test]]
+name = "headers_system_mail"
+path = "tests/contracts/headers_system_mail.rs"
+
+[[test]]
+name = "limits_docs"
+path = "tests/contracts/limits_docs.rs"
+
+[[test]]
+name = "mta_sts_serve"
+path = "tests/contracts/mta_sts_serve.rs"
+
+[[test]]
+name = "validation_matrix"
+path = "tests/contracts/validation_matrix.rs"
+
+[[test]]
+name = "hostile_outbound"
+path = "tests/outbound/hostile_outbound.rs"
+
+[[test]]
+name = "webhook_proxy"
+path = "tests/http/webhook_proxy.rs"

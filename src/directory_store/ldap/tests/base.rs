@@ -1,7 +1,7 @@
 //! Unit tests for the pure parts of the LDAP backend: RFC 4515 filter escaping,
 //! `%s` substitution and attribute mapping. The live-bind and search-load paths
 //! need a real server and are covered by the gated integration tests in
-//! `tests/ldap.rs`.
+//! `tests/system/ldap.rs`.
 
 use std::collections::HashMap;
 

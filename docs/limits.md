@@ -2,7 +2,7 @@
 
 This page is the operator-facing mirror of the catalog `epistle limits show`
 enumerates. The two surfaces are kept in lockstep by a test
-(`tests/limits_docs.rs`) that reads every row of the in-process catalog and
+(`tests/contracts/limits_docs.rs`) that reads every row of the in-process catalog and
 asserts a corresponding row here; a row the catalog gains without a row
 added to this page trips the test, and a row removed trips it too.
 

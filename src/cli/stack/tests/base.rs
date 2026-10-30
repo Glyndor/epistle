@@ -1,6 +1,6 @@
 //! Unit tests for the version floor and the table formatter.
 //!
-//! The integration coverage in `tests/stack_podup.rs` drives the real
+//! The integration coverage in `tests/cli/stack/stack_podup.rs` drives the real
 //! binary against a stub `podup` on `PATH`; this file stays inside
 //! the module so the helpers (`version_at_least`, `parse_version`,
 //! the table) and the `debian/control` constant-pin test run in

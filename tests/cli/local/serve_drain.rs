@@ -21,6 +21,7 @@ use tokio_rustls::rustls::pki_types::{CertificateDer, ServerName};
 use tokio_rustls::rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 
 #[allow(dead_code)]
+#[path = "../../common/mod.rs"]
 mod common;
 use common::{BIND_DEADLINE, Child, is_eaddrinuse, pick_port_base, redact_password, wait_for_bind};
 

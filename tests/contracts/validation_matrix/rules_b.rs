@@ -1,7 +1,7 @@
 //! The boundary table of the name, credential and network rules, driven through
 //! every surface that reaches them.
 //!
-//! The other half is `tests/validation_matrix.rs`, which holds the identity
+//! The other half is `tests/contracts/validation_matrix.rs`, which holds the identity
 //! rules. Together they are the premise the validation audit rests on: each
 //! case asserts the *observed* answer, and a refusal names the row it belongs
 //! to, so a rule that drifts between two surfaces turns the build red.
@@ -9,7 +9,7 @@
 //! These are the rules that decide what a name may *look like*, and what a
 //! credential, a network range or a size is allowed to be.
 //!
-//! Declared from `tests/validation_matrix.rs` rather than discovered on its
+//! Declared from `tests/contracts/validation_matrix.rs` rather than discovered on its
 //! own: a file under `tests/` that is not a test target of its own runs only if
 //! something names it, which is the orphan `tests/repository/test_discovery_premise.rs`
 //! watches for.

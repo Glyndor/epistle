@@ -1,7 +1,7 @@
 //! The address boundary table, on its own because it is the widest of the
 //! identity tables and the head file already carries two.
 //!
-//! Declared from `tests/validation_matrix.rs`; see that file for why a
+//! Declared from `tests/contracts/validation_matrix.rs`; see that file for why a
 //! module under `tests/` that is not a test target of its own is a module
 //! rather than a file.
 

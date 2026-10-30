@@ -15,7 +15,7 @@
 - [ ] `cargo test --locked --all-features --workspace` passes locally
 - [ ] `cargo test --locked --test database` passes against a live Postgres, if this PR touches `migrations/`, `src/db/**` or `tests/database.rs`
 - [ ] `cargo test --locked --test interop` passes against a live Postfix, if this PR touches `src/smtp/**`, `src/imap/**`, `src/queue/**`, `src/storage/**` or `src/tls/**`
-- [ ] `cargo test --locked --test e2e` passes against a live `epistle` under `systemd`, if this PR touches `src/**` or `tests/e2e.rs`
+- [ ] `cargo test --locked --test e2e` passes against a live `epistle` under `systemd`, if this PR touches `src/**` or `tests/system/e2e.rs`
 
 <!--
 A test that was not watched fail is not a test. If this PR adds or changes

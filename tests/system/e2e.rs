@@ -1,6 +1,6 @@
 //! Full-server end-to-end test against a real, already-running `epistle serve`.
 //!
-//! Unlike `tests/interop.rs` (which binds epistle's servers in-process), this
+//! Unlike `tests/system/interop.rs` (which binds epistle's servers in-process), this
 //! test drives the actual shipped binary over real TCP ports with implicit TLS:
 //! it submits a message through the `submissions` listener and retrieves it back
 //! through the `imaps` listener, proving the whole pipeline — TLS, SASL auth,
@@ -11,7 +11,7 @@
 //! workflow, or a local operator, starts the server and exports them);
 //! otherwise it prints "skipping" and returns, so the default `cargo test` run
 //! never needs a live server. This mirrors the skip-when-unset gating of
-//! `tests/interop.rs` and `tests/db/core/database.rs`.
+//! `tests/system/interop.rs` and `tests/db/core/database.rs`.
 //!
 //! Required environment:
 //! - `E2E_HOST` — host the server listens on (e.g. `127.0.0.1`).

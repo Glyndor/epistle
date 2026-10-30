@@ -7,7 +7,7 @@
 //! `api-key list` would print. The rule is one (`epistle::util::label_rule`);
 //! this table is the premise that every entry applies it.
 //!
-//! Declared from `tests/validation_matrix.rs`.
+//! Declared from `tests/contracts/validation_matrix.rs`.
 
 use std::io::Write;
 use std::process::{Command, Stdio};

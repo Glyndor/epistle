@@ -14,7 +14,7 @@
 //! - the server log carries no `ERROR` line from the restart.
 //!
 //! The test is `#[ignore]`d in the default `cargo test` run and executed
-//! explicitly by the workflow, exactly like `tests/e2e.rs`.
+//! explicitly by the workflow, exactly like `tests/system/e2e.rs`.
 //!
 //! Required environment:
 //! - `UPGRADE_HOST`: host the server listens on (e.g. `127.0.0.1`).

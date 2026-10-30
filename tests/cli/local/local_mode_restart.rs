@@ -12,6 +12,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+#[path = "../../common/mod.rs"]
 mod common;
 use common::{
 	BANNER_READ_DEADLINE, BIND_DEADLINE, Child, is_eaddrinuse, pick_port_base, read_banner,

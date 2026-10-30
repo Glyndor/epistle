@@ -1,8 +1,8 @@
 //! Error and refusal paths for `epistle stack`: a too-old podup
 //! version, a missing `podup` binary, a missing compose file,
 //! and a failing `podup` exit code. The positive subcommand
-//! coverage lives in `tests/stack_podup.rs`; the helpers are
-//! shared from `tests/stack_podup_helpers.rs`. Every test
+//! coverage lives in `tests/cli/stack/stack_podup.rs`; the helpers are
+//! shared from `tests/cli/stack/stack_podup_helpers.rs`. Every test
 //! asserts the operator-facing message as well as the exit
 //! code: an exit code alone is not enough to keep a wrong
 //! diagnosis out of the field.

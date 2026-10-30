@@ -6,9 +6,9 @@ code as it is today, not as it is meant to become. If you build on it, read
 [Planned changes](#planned-changes) first: some of what this page says will
 move.
 
-The tests read this page. `tests/headers_documented.rs` fails when the source
+The tests read this page. `tests/contracts/headers_documented.rs` fails when the source
 writes or removes a header this page does not name, and
-`tests/headers_system_mail.rs` builds each message of [System mail](#system-mail)
+`tests/contracts/headers_system_mail.rs` builds each message of [System mail](#system-mail)
 and fails when its header names differ from the table.
 `dkim::sign::tests_headers::signed_header_table_matches_the_signer` ties the
 DKIM table below to the signed names and their repetition counts in CI.
@@ -160,7 +160,7 @@ draft may still carry a `Feedback-ID` or an `Organization` of its own.
 ## System mail
 
 The messages the server writes by itself. The table lists the top-level header
-names the builder of each message writes; `tests/headers_system_mail.rs` builds
+names the builder of each message writes; `tests/contracts/headers_system_mail.rs` builds
 each one and compares.
 
 | Message | Top-level headers |

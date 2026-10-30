@@ -373,7 +373,7 @@ fn the_sample_unit_recipe_installs_a_config_the_service_can_read() {
 	);
 }
 
-#[path = "stack_service/docs.rs"]
+#[path = "../cli/stack/stack_service/docs.rs"]
 mod stack_service_docs;
 
 #[path = "debian/socket.rs"]

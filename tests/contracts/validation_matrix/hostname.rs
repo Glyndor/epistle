@@ -12,7 +12,7 @@
 //!   ASCII, so the file on disk stays ASCII;
 //! - `epistle init` reads the answer as typed and stores the A-label.
 //!
-//! Declared from `tests/validation_matrix.rs`.
+//! Declared from `tests/contracts/validation_matrix.rs`.
 
 use std::path::Path;
 
