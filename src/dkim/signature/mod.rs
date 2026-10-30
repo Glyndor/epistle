@@ -66,6 +66,15 @@ pub struct SignatureError(pub String);
 /// The most tags a signature may carry before it is refused.
 const MAX_TAGS: usize = 64;
 
+/// The most names a `h=` tag may list.
+///
+/// The list of signed headers is the one part of a signature whose length
+/// the sender alone controls, and every name in it costs the verifier a
+/// lookup. A message carries a handful of header fields, so a name count
+/// past this one describes a signature no real message could satisfy: it is
+/// refused while the tag is read, before the list is built.
+pub const MAX_SIGNED_HEADER_NAMES: usize = 256;
+
 /// Parse the value of a `DKIM-Signature` header.
 pub fn parse(value: &str) -> Result<Signature, SignatureError> {
 	let mut version = None;
@@ -118,12 +127,19 @@ pub fn parse(value: &str) -> Result<Signature, SignatureError> {
 			"d" => domain = Some(compact.to_ascii_lowercase()),
 			"s" => selector = Some(compact.to_ascii_lowercase()),
 			"h" => {
-				signed_headers = Some(
-					compact
-						.split(':')
-						.map(|h| h.to_ascii_lowercase())
-						.collect::<Vec<_>>(),
-				);
+				// The list is read with a budget: past it the signature is
+				// refused, and the names after the budget are never held
+				// in memory.
+				let mut names = Vec::new();
+				for name in compact.split(':') {
+					if names.len() == MAX_SIGNED_HEADER_NAMES {
+						return Err(SignatureError(format!(
+							"h= lists more than {MAX_SIGNED_HEADER_NAMES} header names"
+						)));
+					}
+					names.push(name.to_ascii_lowercase());
+				}
+				signed_headers = Some(names);
 			}
 			"bh" => body_hash = Some(decode_base64(&compact, "bh")?),
 			"b" => signature = Some(decode_base64(&compact, "b")?),

@@ -58,7 +58,7 @@ fn alert_rule_bounced_ge_50(window_secs: u64, cooldown_secs: u64) -> Alert {
 async fn runner_fires_webhook_when_counter_crosses_threshold() {
 	let captured: Arc<Mutex<Vec<WebhookEvent>>> = Arc::new(Mutex::new(Vec::new()));
 	let url = capture_server(captured.clone()).await;
-	let webhook = Arc::new(Webhook::new(&url, None).expect("webhook"));
+	let webhook = Arc::new(Webhook::new_allowing_private(&url, None).expect("webhook"));
 	let metrics = Arc::new(Metrics::new());
 	let dir = tempfile::tempdir().expect("tempdir");
 	let spool = Arc::new(FsSpool::open(dir.path()).expect("spool"));
@@ -107,7 +107,7 @@ async fn runner_fires_webhook_when_counter_crosses_threshold() {
 async fn runner_respects_cooldown_and_hysteresis() {
 	let captured: Arc<Mutex<Vec<WebhookEvent>>> = Arc::new(Mutex::new(Vec::new()));
 	let url = capture_server(captured.clone()).await;
-	let webhook = Arc::new(Webhook::new(&url, None).expect("webhook"));
+	let webhook = Arc::new(Webhook::new_allowing_private(&url, None).expect("webhook"));
 	let metrics = Arc::new(Metrics::new());
 	let dir = tempfile::tempdir().expect("tempdir");
 	let spool = Arc::new(FsSpool::open(dir.path()).expect("spool"));

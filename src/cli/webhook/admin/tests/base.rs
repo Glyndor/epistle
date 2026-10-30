@@ -88,12 +88,13 @@ fn show_masks_the_secret_and_reports_an_absent_webhook() {
 	let run = run(HOOK, &["show"]);
 	assert_eq!(
 		run.out,
-		"url\thttps://hooks.example/mail\nsecret\tset\nenabled\tyes\n"
+		"url\thttps://hooks.example/mail\nsecret\tset\nenabled\tyes\nallow_private_webhooks\tno\n"
 	);
 	assert!(!run.out.contains("hook-secret"));
 	assert_eq!(
 		crate::cli::webhook::admin::tests::base::run(HOOK, &["show", "--json"]).out,
-		"{\"enabled\":true,\"secret\":\"set\",\"url\":\"https://hooks.example/mail\"}\n"
+		"{\"allow_private_webhooks\":false,\"enabled\":true,\"secret\":\"set\",\"url\":\"https://hooks.example/mail\"}
+"
 	);
 	assert_eq!(
 		crate::cli::webhook::admin::tests::base::run("", &["show"]).out,
@@ -146,7 +147,7 @@ fn serve(status: u16) -> (String, std::thread::JoinHandle<String>) {
 
 fn config_for(url: &str) -> (tempfile::TempDir, tempfile::NamedTempFile, Config) {
 	let (dir, file) = test_config(&format!(
-		"\n[webhook]\nurl = '{url}'\nsecret = 'hook-secret'\n"
+		"\n[webhook]\nurl = '{url}'\nsecret = 'hook-secret'\nallow_private_webhooks = true\n"
 	));
 	let config = Config::load(file.path()).unwrap();
 	(dir, file, config)

@@ -5,10 +5,13 @@
 //! logged and never blocks mail processing.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+
+pub(crate) mod destination;
 
 /// A delivery event worth notifying about. Serializes to the POST body.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -168,16 +171,81 @@ pub struct Webhook {
 	metrics: Option<std::sync::Arc<crate::metrics::Metrics>>,
 }
 
+/// Why a webhook poster could not be built.
+#[derive(Debug)]
+pub enum WebhookError {
+	/// The transport refused to be built.
+	Transport(reqwest::Error),
+	/// The destination is one this server may not post to.
+	Destination(String),
+}
+
+impl std::fmt::Display for WebhookError {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match self {
+			WebhookError::Transport(error) => write!(f, "{error}"),
+			WebhookError::Destination(reason) => write!(f, "{reason}"),
+		}
+	}
+}
+
+impl std::error::Error for WebhookError {}
+
+impl From<reqwest::Error> for WebhookError {
+	fn from(error: reqwest::Error) -> Self {
+		WebhookError::Transport(error)
+	}
+}
+
+/// The poster for a configured webhook section: the section says whether a
+/// private destination is allowed, and the poster follows.
+pub fn poster(section: &crate::config::Webhook) -> Result<Webhook, WebhookError> {
+	match section.allow_private_webhooks {
+		true => Webhook::new_allowing_private(&section.url, section.secret.clone()),
+		false => Webhook::new(&section.url, section.secret.clone()),
+	}
+}
+
 impl Webhook {
 	/// Build a webhook poster for `url`, optionally signing with `secret`.
-	pub fn new(url: &str, secret: Option<String>) -> Result<Self, reqwest::Error> {
-		let client = reqwest::Client::builder()
+	///
+	/// A destination inside the networks this host belongs to is refused:
+	/// the endpoint is operator-chosen, but the address it names may be
+	/// one the host must not reach on its own. Use
+	/// [`Webhook::new_allowing_private`] when that is what the operator
+	/// asked for.
+	pub fn new(url: &str, secret: Option<String>) -> Result<Self, WebhookError> {
+		Self::build(url, secret, false)
+	}
+
+	/// Build a webhook poster that may post to a private destination, for
+	/// an operator who says so in the configuration.
+	pub fn new_allowing_private(url: &str, secret: Option<String>) -> Result<Self, WebhookError> {
+		Self::build(url, secret, true)
+	}
+
+	fn build(url: &str, secret: Option<String>, allow_private: bool) -> Result<Self, WebhookError> {
+		destination::check_url(url, allow_private).map_err(WebhookError::Destination)?;
+		let mut builder = reqwest::Client::builder()
 			.timeout(Duration::from_secs(15))
 			// Never follow a redirect: the POST carries the signature and the
 			// event, and a 307 would resend both wherever the endpoint (or
 			// whoever took it over) points, an internal address included.
 			.redirect(reqwest::redirect::Policy::none())
-			.build()?;
+			// The addresses the host name resolves to are checked as well:
+			// a name that points inside the networks of this host is as
+			// private as the address it spells.
+			.dns_resolver(Arc::new(destination::DestinationResolver { allow_private }));
+		if !allow_private {
+			// The proxy of the environment resolves the name itself and
+			// connects to the address it chooses, so neither the check above
+			// nor the resolver would see the address the event reaches. The
+			// client that refuses private destinations goes to the endpoint
+			// directly; the one that allows them uses the proxy as any
+			// other client does.
+			builder = builder.no_proxy();
+		}
+		let client = builder.build()?;
 		Ok(Webhook {
 			client,
 			url: url.to_string(),

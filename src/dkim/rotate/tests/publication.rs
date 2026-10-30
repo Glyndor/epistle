@@ -221,7 +221,7 @@ async fn a_withdrawn_rotation_reaches_the_webhook() {
 	tokio::spawn(async move { axum::serve(listener, app).await });
 
 	let f = fixture(View::Never);
-	let webhook = crate::webhook::Webhook::new(&url, None).expect("webhook");
+	let webhook = crate::webhook::Webhook::new_allowing_private(&url, None).expect("webhook");
 	let rotator = f
 		.rotator
 		.with_publication_check(f.resolver.clone(), Vec::new())

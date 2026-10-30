@@ -17,6 +17,13 @@ pub struct Webhook {
 	/// `epistle webhook disable|enable` flips it.
 	#[serde(default = "default_enabled")]
 	pub enabled: bool,
+	/// Whether the endpoint may be a private destination: a loopback
+	/// address, a private network of the site, or the link-local address
+	/// where the cloud metadata lives. Off by default: the webhook client
+	/// refuses those destinations, and a webhook that names one without
+	/// this option would never deliver anything.
+	#[serde(default)]
+	pub allow_private_webhooks: bool,
 }
 
 const fn default_enabled() -> bool {
@@ -29,6 +36,7 @@ impl std::fmt::Debug for Webhook {
 			.field("url", &self.url)
 			.field("secret", &self.secret.as_ref().map(|_| "***"))
 			.field("enabled", &self.enabled)
+			.field("allow_private_webhooks", &self.allow_private_webhooks)
 			.finish()
 	}
 }

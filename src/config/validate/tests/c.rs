@@ -112,8 +112,22 @@ email = ["ops@example.org"]
 }
 
 fn webhook_config(url: &str) -> Result<crate::config::Config, crate::config::ConfigError> {
+	webhook_config_with(url, false)
+}
+
+/// The same section, with or without the option that lets the webhook
+/// reach a private destination.
+fn webhook_config_with(
+	url: &str,
+	allow_private: bool,
+) -> Result<crate::config::Config, crate::config::ConfigError> {
+	let option = if allow_private {
+		"allow_private_webhooks = true\n"
+	} else {
+		""
+	};
 	config_from(&format!(
-		"hostname = \"mail.example.org\"\ndata_dir = \"/var/lib/mail\"\ndomains = [\"example.org\"]\n\n[webhook]\nurl = \"{url}\"\n"
+		"hostname = \"mail.example.org\"\ndata_dir = \"/var/lib/mail\"\ndomains = [\"example.org\"]\n\n[webhook]\nurl = \"{url}\"\n{option}"
 	))
 }
 
@@ -130,7 +144,10 @@ fn webhook_http_is_accepted_only_for_a_real_loopback_host() {
 		"http://localhost/hook",
 		"http://LOCALHOST:8080/hook",
 	] {
-		assert!(webhook_config(url).is_ok(), "{url} must be accepted");
+		assert!(
+			webhook_config_with(url, true).is_ok(),
+			"{url} must be accepted with the option"
+		);
 	}
 	for url in [
 		"http://localhost.evil.example/hook",
@@ -141,5 +158,32 @@ fn webhook_http_is_accepted_only_for_a_real_loopback_host() {
 		"not a url",
 	] {
 		assert!(webhook_config(url).is_err(), "{url} must be refused");
+	}
+}
+
+/// A private destination loads without the option where it loaded before
+/// (https anywhere, plain http on loopback) and warns that it will not be
+/// delivered; plain http to a private host that is not loopback stays refused
+/// until the operator allows it.
+#[test]
+fn a_private_webhook_loads_and_http_to_a_private_host_needs_the_option() {
+	for url in [
+		"http://127.0.0.1:8080/hook",
+		"http://[::1]:9000/hook",
+		"http://localhost/hook",
+		"https://10.0.0.1/hook",
+		"http://2130706433/hook",
+	] {
+		assert!(
+			webhook_config(url).is_ok(),
+			"{url} must load without the option"
+		);
+	}
+	for url in ["http://10.0.0.1/hook", "http://192.168.1.5/hook"] {
+		assert!(webhook_config(url).is_err(), "{url} must be refused");
+		assert!(
+			webhook_config_with(url, true).is_ok(),
+			"{url} must be accepted with the option"
+		);
 	}
 }

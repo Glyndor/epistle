@@ -437,7 +437,9 @@ async fn permanent_failure_fires_delivery_failed_webhook() {
 		sink: Arc::new(MemorySink::new()),
 		domain: "remote.example".to_string(),
 	});
-	let webhook = crate::webhook::Webhook::new(&format!("http://{addr}/hook"), None).expect("wh");
+	let webhook =
+		crate::webhook::Webhook::new_allowing_private(&format!("http://{addr}/hook"), None)
+			.expect("wh");
 	let worker = Worker::new(spool, connector, "mail.sender.example")
 		.with_bounce_sink(Arc::new(MemorySink::new()) as Arc<dyn MessageSink>)
 		.with_webhook(Arc::new(webhook));

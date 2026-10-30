@@ -178,6 +178,16 @@ fn build_report(
 		// Never bounce a bounce.
 		return None;
 	}
+	// The failed recipient is written into the `Final-Recipient` field and
+	// into the human-readable part of the report. A value that is not an
+	// address would open a header of its own there, so the report is
+	// refused instead of written.
+	if recipients
+		.iter()
+		.any(|recipient| !is_address(&recipient.recipient))
+	{
+		return None;
+	}
 
 	let date = clock::rfc5322(now);
 	let boundary = format!(
@@ -275,6 +285,12 @@ Content-Type: message/rfc822-headers\r\n\
 		sender_verified: false,
 		no_dsn: Vec::new(),
 	})
+}
+
+/// Whether `raw` is an address this server may write into a report. The
+/// parser is the one the inbound path applies to every recipient.
+fn is_address(raw: &str) -> bool {
+	crate::util::address_reason::parse(raw).is_ok()
 }
 
 /// Sanitize a remote MTA's reply for safe inclusion in a DSN. Every control

@@ -80,11 +80,16 @@ pub struct Target {
 /// The webhook the queue actions notify: the configured one, unless it is
 /// switched off.
 pub(super) fn webhook_for(config: &crate::config::Config) -> Option<Arc<crate::webhook::Webhook>> {
-	config.active_webhook().map(|section| {
-		Arc::new(
-			crate::webhook::Webhook::new(&section.url, section.secret.clone()).expect("webhook"),
-		)
-	})
+	let section = config.active_webhook()?;
+	match crate::webhook::poster(section) {
+		Ok(webhook) => Some(Arc::new(webhook)),
+		Err(error) => {
+			// The webhook is advisory: a destination the client refuses must
+			// not stop the operator from removing a message.
+			tracing::warn!(%error, "the webhook cannot be used and will not be told");
+			None
+		}
+	}
 }
 
 /// Run one queue action against the spool under `data_dir`, writing data to

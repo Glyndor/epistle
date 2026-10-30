@@ -36,7 +36,9 @@ fn spool_with_extra() -> (tempfile::TempDir, Uuid) {
 async fn remove_keeps_the_extra_of_the_message_on_the_record_and_the_event() {
 	let (url, captured) = webhook_receiver().await;
 	let (dir, id) = spool_with_extra();
-	let webhook = std::sync::Arc::new(crate::webhook::Webhook::new(&url, None).expect("webhook"));
+	let webhook = std::sync::Arc::new(
+		crate::webhook::Webhook::new_allowing_private(&url, None).expect("webhook"),
+	);
 	let mut out = Vec::new();
 	let code = run(
 		dir.path(),

@@ -190,7 +190,9 @@ async fn a_detection_fires_the_outbound_virus_webhook() {
 		}),
 	);
 	tokio::spawn(async move { axum::serve(listener, app).await.expect("serve") });
-	let webhook = Arc::new(Webhook::new(&format!("http://{address}/hook"), None).expect("webhook"));
+	let webhook = Arc::new(
+		Webhook::new_allowing_private(&format!("http://{address}/hook"), None).expect("webhook"),
+	);
 	let clamd = FakeClamd::start();
 	let (sink, _, _) = sink(true, &clamd.socket, Some(webhook));
 	assert!(submit(&sink, &eicar()).is_err());

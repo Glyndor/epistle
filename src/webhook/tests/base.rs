@@ -79,7 +79,7 @@ async fn mock_server(captured: Captured) -> String {
 async fn delivers_signed_payload() {
 	let captured: Captured = Arc::new(Mutex::new(None));
 	let url = mock_server(captured.clone()).await;
-	let webhook = Webhook::new(&url, Some("topsecret".into())).expect("webhook");
+	let webhook = Webhook::new_allowing_private(&url, Some("topsecret".into())).expect("webhook");
 
 	let event = WebhookEvent::MessageReceived {
 		account: "alice".into(),
@@ -102,7 +102,7 @@ async fn delivers_signed_payload() {
 async fn unsigned_delivery_omits_signature_header() {
 	let captured: Captured = Arc::new(Mutex::new(None));
 	let url = mock_server(captured.clone()).await;
-	let webhook = Webhook::new(&url, None).expect("webhook");
+	let webhook = Webhook::new_allowing_private(&url, None).expect("webhook");
 	webhook
 		.notify(&WebhookEvent::MessageReceived {
 			account: "a".into(),
@@ -118,7 +118,7 @@ async fn unsigned_delivery_omits_signature_header() {
 #[tokio::test]
 async fn unreachable_endpoint_fails_open() {
 	// Port 1 refuses; notify must return without panicking.
-	let webhook = Webhook::new("http://127.0.0.1:1/hook", None).expect("webhook");
+	let webhook = Webhook::new_allowing_private("http://127.0.0.1:1/hook", None).expect("webhook");
 	webhook
 		.notify(&WebhookEvent::MessageReceived {
 			account: "a".into(),
@@ -137,7 +137,7 @@ async fn records_delivery_metrics() {
 	let metrics = Arc::new(crate::metrics::Metrics::new());
 
 	// A successful delivery bumps webhook_sent.
-	let ok = Webhook::new(&url, None)
+	let ok = Webhook::new_allowing_private(&url, None)
 		.expect("wh")
 		.with_metrics(metrics.clone());
 	ok.notify(&WebhookEvent::DeliveryFailed {
@@ -156,7 +156,7 @@ async fn records_delivery_metrics() {
 	);
 
 	// An unreachable endpoint bumps webhook_failed.
-	let bad = Webhook::new("http://127.0.0.1:1/hook", None)
+	let bad = Webhook::new_allowing_private("http://127.0.0.1:1/hook", None)
 		.expect("wh")
 		.with_metrics(metrics.clone());
 	bad.notify(&WebhookEvent::DeliveryFailed {
@@ -190,7 +190,7 @@ fn test_event_has_the_documented_shape() {
 async fn send_test_posts_a_signed_test_event_and_returns_the_status() {
 	let captured: Captured = Arc::new(Mutex::new(None));
 	let url = mock_server(captured.clone()).await;
-	let webhook = Webhook::new(&url, Some("topsecret".into())).expect("webhook");
+	let webhook = Webhook::new_allowing_private(&url, Some("topsecret".into())).expect("webhook");
 	let status = webhook.send_test().await.expect("reachable endpoint");
 	assert_eq!(status.as_u16(), 200);
 	let (body, sig) = captured.lock().expect("lock").clone().expect("a request");
@@ -209,9 +209,9 @@ async fn send_test_posts_a_signed_test_event_and_returns_the_status() {
 async fn send_test_reports_an_error_status_and_an_unreachable_endpoint() {
 	let captured: Captured = Arc::new(Mutex::new(None));
 	let url = mock_server(captured).await;
-	let missing = Webhook::new(&format!("{url}-missing"), None).expect("webhook");
+	let missing = Webhook::new_allowing_private(&format!("{url}-missing"), None).expect("webhook");
 	assert_eq!(missing.send_test().await.expect("answered").as_u16(), 404);
-	let down = Webhook::new("http://127.0.0.1:1/hook", None).expect("webhook");
+	let down = Webhook::new_allowing_private("http://127.0.0.1:1/hook", None).expect("webhook");
 	assert!(
 		down.send_test().await.is_err(),
 		"a refused connection is an error"
@@ -335,4 +335,34 @@ fn delivery_failed_with_a_pre_addition_body_still_deserialises() {
 		}
 		other => panic!("expected DeliveryFailed, got {other:?}"),
 	}
+}
+
+#[test]
+fn a_private_destination_is_refused() {
+	// The endpoint is operator-chosen, but the address it names may be
+	// one this host must not reach on its own.
+	for url in [
+		"http://127.0.0.1/hook",
+		"http://[::1]/hook",
+		"http://10.0.0.1/hook",
+		"http://172.16.0.1/hook",
+		"http://192.168.0.1/hook",
+		"http://169.254.169.254/latest/meta-data/",
+		"http://[::ffff:127.0.0.1]/hook",
+		"http://2130706433/hook",
+		"http://0177.0.0.1/hook",
+		"http://0x7f000001/hook",
+	] {
+		assert!(Webhook::new(url, None).is_err(), "{url} must be refused");
+	}
+}
+
+#[test]
+fn a_private_destination_is_reached_when_the_operator_allows_it() {
+	assert!(Webhook::new_allowing_private("http://127.0.0.1/hook", None).is_ok());
+}
+
+#[test]
+fn a_public_destination_is_accepted() {
+	assert!(Webhook::new("https://hooks.example/mail", None).is_ok());
 }

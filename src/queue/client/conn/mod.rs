@@ -173,6 +173,9 @@ impl Conn {
 
 	async fn read_reply(&mut self) -> Result<String, DeliveryError> {
 		loop {
+			if oversized_line(&self.buffer) {
+				return Err(DeliveryError::Transient("oversized reply line".into()));
+			}
 			if let Some(reply) = complete_reply(&self.buffer) {
 				let text = String::from_utf8_lossy(&self.buffer[..reply]).to_string();
 				self.buffer.drain(..reply);
@@ -195,6 +198,28 @@ impl Conn {
 			self.buffer.extend_from_slice(&chunk[..read]);
 		}
 	}
+}
+
+/// The longest reply line the client accepts, its line ending included
+/// (RFC 5321 section 4.5.3.1.1: the total length of a reply line, CRLF
+/// counted, must not exceed 512 octets).
+const MAX_REPLY_LINE: usize = 512;
+
+/// Whether the buffer holds a reply line longer than [`MAX_REPLY_LINE`].
+///
+/// Only a line whose end has arrived is judged: one that is still growing
+/// is caught by the accumulated cap, which bounds the memory a reply may
+/// hold.
+fn oversized_line(buffer: &[u8]) -> bool {
+	let mut offset = 0;
+	while let Some(at) = buffer[offset..].windows(2).position(|w| w == b"\r\n") {
+		let end = offset + at + 2;
+		if end - offset > MAX_REPLY_LINE {
+			return true;
+		}
+		offset = end;
+	}
+	false
 }
 
 /// Length of a complete reply in `buffer` (through the final CRLF of its

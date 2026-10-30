@@ -26,10 +26,9 @@ pub(super) fn run_within(
 	let settings = config.webhook.as_ref().ok_or_else(|| {
 		ResourceError::from("no webhook is configured; run `epistle webhook set` first")
 	})?;
-	let webhook =
-		crate::webhook::Webhook::new(&settings.url, settings.secret.clone()).map_err(|error| {
-			ResourceError::Failure(format!("cannot prepare the webhook client: {error}"))
-		})?;
+	let webhook = crate::webhook::poster(settings).map_err(|error| {
+		ResourceError::Failure(format!("cannot prepare the webhook client: {error}"))
+	})?;
 	let runtime = tokio::runtime::Builder::new_current_thread()
 		.enable_all()
 		.build()

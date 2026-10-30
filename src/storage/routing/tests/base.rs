@@ -470,7 +470,9 @@ async fn local_delivery_fires_message_received_webhook() {
 	tokio::spawn(async move { axum::serve(listener, app).await.expect("serve") });
 
 	let dir = tempfile::tempdir().expect("tempdir");
-	let webhook = crate::webhook::Webhook::new(&format!("http://{addr}/hook"), None).expect("wh");
+	let webhook =
+		crate::webhook::Webhook::new_allowing_private(&format!("http://{addr}/hook"), None)
+			.expect("wh");
 	let sink = SplitDelivery::new(dir.path(), directory())
 		.expect("sink")
 		.with_webhook(Arc::new(webhook));
