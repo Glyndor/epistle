@@ -200,3 +200,87 @@ path = "tests/workflows/workflow_toolchain_pins.rs"
 [[test]]
 name = "msrv_agrees_with_ci"
 path = "tests/workflows/msrv_agrees_with_ci.rs"
+
+[[test]]
+name = "database"
+path = "tests/db/core/database.rs"
+
+[[test]]
+name = "database_bans"
+path = "tests/db/core/database_bans.rs"
+
+[[test]]
+name = "database_bans_admin"
+path = "tests/db/core/database_bans_admin.rs"
+
+[[test]]
+name = "database_bans_cli"
+path = "tests/db/core/database_bans_cli.rs"
+
+[[test]]
+name = "database_bans_known_network"
+path = "tests/db/core/database_bans_known_network.rs"
+
+[[test]]
+name = "database_greylist"
+path = "tests/db/core/database_greylist.rs"
+
+[[test]]
+name = "database_password_file"
+path = "tests/db/core/database_password_file.rs"
+
+[[test]]
+name = "migrations_expand_contract"
+path = "tests/db/core/migrations_expand_contract.rs"
+
+[[test]]
+name = "database_learning"
+path = "tests/db/learning/database_learning.rs"
+
+[[test]]
+name = "database_learning_carry"
+path = "tests/db/learning/database_learning_carry.rs"
+
+[[test]]
+name = "database_learning_concurrency"
+path = "tests/db/learning/database_learning_concurrency.rs"
+
+[[test]]
+name = "database_learning_limits"
+path = "tests/db/learning/database_learning_limits.rs"
+
+[[test]]
+name = "database_learning_reading"
+path = "tests/db/learning/database_learning_reading.rs"
+
+[[test]]
+name = "database_learning_wiring"
+path = "tests/db/learning/database_learning_wiring.rs"
+
+[[test]]
+name = "database_bayes_message"
+path = "tests/db/bayes/database_bayes_message.rs"
+
+[[test]]
+name = "database_bayes_score"
+path = "tests/db/bayes/database_bayes_score.rs"
+
+[[test]]
+name = "database_bayes_shared_training"
+path = "tests/db/bayes/database_bayes_shared_training.rs"
+
+[[test]]
+name = "database_bayes_train"
+path = "tests/db/bayes/database_bayes_train.rs"
+
+[[test]]
+name = "database_bayes_train_statements"
+path = "tests/db/bayes/database_bayes_train_statements.rs"
+
+[[test]]
+name = "bayes_train_memory"
+path = "tests/db/bayes/bayes_train_memory.rs"
+
+[[test]]
+name = "hostile_smtp"
+path = "tests/smtp/hostile_smtp.rs"

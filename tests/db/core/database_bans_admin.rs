@@ -2,7 +2,7 @@
 //! network bans, unbanning, and the allow list that the ban policy consults.
 //! They need a real PostgreSQL and only run when `DATABASE_URL` is set (the
 //! `Database` CI workflow provides one); otherwise they skip, like
-//! `tests/database_bans.rs`.
+//! `tests/db/core/database_bans.rs`.
 //!
 //! The ban and allow tables are shared by every test in the run, so each test
 //! works in its own `2001:db8:x:y::/64` block (the documentation range, never a

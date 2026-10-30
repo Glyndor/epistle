@@ -11,7 +11,7 @@
 //! workflow, or a local operator, starts the server and exports them);
 //! otherwise it prints "skipping" and returns, so the default `cargo test` run
 //! never needs a live server. This mirrors the skip-when-unset gating of
-//! `tests/interop.rs` and `tests/database.rs`.
+//! `tests/interop.rs` and `tests/db/core/database.rs`.
 //!
 //! Required environment:
 //! - `E2E_HOST` — host the server listens on (e.g. `127.0.0.1`).

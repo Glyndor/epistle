@@ -7,7 +7,7 @@
 //! lock order is checked by holding one lock from the test and looking at
 //! which others the operation under test took before it had to wait, so it
 //! does not depend on timing. The helpers are duplicated from the other
-//! `tests/database*.rs` files: cargo builds each as its own crate.
+//! `tests/db/core/database*.rs` files: cargo builds each as its own crate.
 
 use epistle::antispam::corpus::BayesStore;
 use epistle::config::DatabaseTls;

@@ -1,5 +1,5 @@
 //! `epistle ban` driven as the real binary against a live PostgreSQL. Runs only
-//! when `DATABASE_URL` is set, like `tests/database_bans.rs`. Each step asserts
+//! when `DATABASE_URL` is set, like `tests/db/core/database_bans.rs`. Each step asserts
 //! the exact line printed and the effect the running server would see (a fresh
 //! ban-store check on the same database), which is how a CLI change reaches the
 //! server without a restart.

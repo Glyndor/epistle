@@ -4,7 +4,7 @@
 //! GitHub Actions enables this target only in the path-filtered E2E step via
 //! `HOSTILE_SMTP_RUN=1`; other workflows can still compile the target.
 
-#[path = "common/mod.rs"]
+#[path = "../common/mod.rs"]
 #[allow(dead_code)]
 mod common;
 

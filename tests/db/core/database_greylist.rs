@@ -1,21 +1,21 @@
 //! Database integration tests for the persistent greylist store. These
-//! need a real PostgreSQL, like the rest of the `tests/database*.rs`
+//! need a real PostgreSQL, like the rest of the `tests/db/core/database*.rs`
 //! integration tests, and only run when `DATABASE_URL` is set (the
 //! `Database` CI workflow provides one); otherwise they skip so the
 //! default test run needs no database.
 //!
-//! Split out of `tests/database.rs` because the bayes + directory tests
+//! Split out of `tests/db/core/database.rs` because the bayes + directory tests
 //! were already approaching the per-file line cap and the greylist
 //! suite would have pushed it past the limit. The helpers the rest of
 //! the database tests share (`database_url`) are duplicated here so
 //! each integration binary stays self-contained: cargo builds every
-//! `tests/database*.rs` as a separate crate, so `common/` does not
+//! `tests/db/core/database*.rs` as a separate crate, so `common/` does not
 //! bleed across them.
 
 use epistle::config::DatabaseTls;
 
 /// The connection URL, or `None` when no database is configured for this run.
-/// Mirrors the helper in `tests/database.rs`; cargo builds the two as
+/// Mirrors the helper in `tests/db/core/database.rs`; cargo builds the two as
 /// independent binaries, so duplication is the cleanest path.
 fn database_url() -> Option<String> {
 	std::env::var("DATABASE_URL").ok().filter(|u| !u.is_empty())

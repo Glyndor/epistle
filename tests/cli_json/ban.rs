@@ -1,5 +1,5 @@
 //! `epistle ban ... --json` against a real PostgreSQL. Runs only when
-//! `DATABASE_URL` is set, like `tests/database_bans_cli.rs`, and says so
+//! `DATABASE_URL` is set, like `tests/db/core/database_bans_cli.rs`, and says so
 //! when it does not.
 
 use serde_json::json;
