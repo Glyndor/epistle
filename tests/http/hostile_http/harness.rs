@@ -64,7 +64,7 @@ impl Harness {
 	pub fn new() -> Self {
 		let dir = tempfile::Builder::new()
 			.prefix(".http-fixture-")
-			.tempdir_in("tests/hostile_http")
+			.tempdir_in("tests/http/hostile_http")
 			.expect("fixture directory inside worktree");
 		let domains = vec!["example.test".to_string()];
 		let accounts = ["alice", "bob"].map(|name| epistle::config::Account {

@@ -284,3 +284,27 @@ path = "tests/db/bayes/bayes_train_memory.rs"
 [[test]]
 name = "hostile_smtp"
 path = "tests/smtp/hostile_smtp.rs"
+
+[[test]]
+name = "hostile_imap"
+path = "tests/imap/hostile_imap.rs"
+
+[[test]]
+name = "hostile_pop3"
+path = "tests/protocols/hostile_pop3.rs"
+
+[[test]]
+name = "hostile_managesieve"
+path = "tests/protocols/hostile_managesieve.rs"
+
+[[test]]
+name = "hostile_http"
+path = "tests/http/hostile_http.rs"
+
+[[test]]
+name = "hostile_dkim"
+path = "tests/dkim/hostile_dkim.rs"
+
+[[test]]
+name = "dkim_keygen_without_openssl"
+path = "tests/dkim/dkim_keygen_without_openssl.rs"
