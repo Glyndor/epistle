@@ -15,6 +15,6 @@
 # the parent script ends each boot by `rm -rf`ing `assets/config`,
 # which is why this Dockerfile exists and the workflow builds the
 # image rather than bind-mounting the LDIF.
-FROM docker.io/osixia/openldap@sha256:18742e9c449c9c1afe129d3f2f3ee15fb34cc43e5f940a20f3399728f41d7c28
+FROM docker.io/osixia/openldap@sha256:3f68751292b43564a2586fc29fb7337573e2dad692b92d4e78e49ad5c22e567b
 
 COPY seed.ldif /container/service/slapd/assets/config/bootstrap/ldif/seed.ldif
