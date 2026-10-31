@@ -464,3 +464,7 @@ path = "tests/outbound/hostile_outbound.rs"
 [[test]]
 name = "webhook_proxy"
 path = "tests/http/webhook_proxy.rs"
+
+[[test]]
+name = "dkim_rfc_conformance"
+path = "tests/dkim/dkim_rfc_conformance.rs"

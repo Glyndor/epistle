@@ -8,7 +8,7 @@ use crate::spf::{DnsFailure, DnsLookup};
 
 use super::canon;
 use super::key_record;
-use super::signature::Algorithm;
+use super::signature::{Algorithm, Canon};
 
 /// Outcome of one signature (RFC 8601 keywords).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -187,6 +187,21 @@ async fn verify_one(
 	};
 	let domain = Some(signature.domain.clone());
 
+	// RFC 6376 sections 5.4 and 8.15: require h= to cover every From instance.
+	if header_index.positions.get("from").is_some_and(|positions| {
+		positions.len()
+			> signature
+				.signed_headers
+				.iter()
+				.filter(|name| name.as_str() == "from")
+				.count()
+	}) {
+		return DkimResult {
+			outcome: DkimOutcome::PermError,
+			domain,
+		};
+	}
+
 	// Expiry check: reject signatures past their x= timestamp before DNS.
 	if let Some(exp) = signature.expiration {
 		let now = std::time::SystemTime::now()
@@ -268,13 +283,23 @@ async fn verify_one(
 		let header = &message.headers[positions[position]];
 		hash_input.push_str(&canon::header(
 			signature.header_canon,
-			header.name,
+			match signature.header_canon {
+				Canon::Simple => header.raw_name,
+				Canon::Relaxed => header.name,
+			},
 			header.value,
 		));
 	}
 	let dkim_header = &message.headers[signature_index];
 	let unsigned_value = strip_b_tag(dkim_header.value);
-	let mut dkim_line = canon::header(signature.header_canon, dkim_header.name, &unsigned_value);
+	let mut dkim_line = canon::header(
+		signature.header_canon,
+		match signature.header_canon {
+			Canon::Simple => dkim_header.raw_name,
+			Canon::Relaxed => dkim_header.name,
+		},
+		&unsigned_value,
+	);
 	// The DKIM-Signature line is included without its trailing CRLF.
 	if dkim_line.ends_with("\r\n") {
 		dkim_line.truncate(dkim_line.len() - 2);
@@ -377,6 +402,7 @@ struct Message<'a> {
 
 struct Header<'a> {
 	name: &'a str,
+	raw_name: &'a str,
 	value: &'a str,
 }
 
@@ -442,6 +468,8 @@ fn parse_header(raw: &str) -> Option<Header<'_>> {
 	let (name, rest) = raw.split_at(colon);
 	Some(Header {
 		name: name.trim_end(),
+		// RFC 6376 section 3.4.1: simple keeps whitespace before the colon.
+		raw_name: name,
 		value: &rest[1..],
 	})
 }
