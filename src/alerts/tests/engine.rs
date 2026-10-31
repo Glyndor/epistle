@@ -191,22 +191,19 @@ fn end_to_end_with_real_metrics() {
 	assert_eq!(evaluate(&rule, &mut state, delta, 1_000), Verdict::Fire);
 }
 
-/// Control-loss test for the cooldown gate: drop the
-/// `now_unix.saturating_sub(last) >= rule.cooldown_secs` check and confirm a
-/// sustained-true rule re-fires every tick within the cooldown, which the
-/// production code forbids. Restores the check after.
+/// The cooldown gate on its own. The condition goes true, then false, then
+/// true again inside the cooldown, so the hysteresis gate is open and only the
+/// cooldown can hold the second alert: it holds at 1200 (200 seconds after the
+/// fire, cooldown 900) and fires at exactly 1900. Dropping the cooldown term
+/// from `evaluate` fails this test at 1200.
 #[test]
-fn removing_cooldown_gate_lets_alert_storm() {
+fn cooldown_blocks_a_rearmed_alert_until_the_boundary() {
 	let rule = rule(AlertOp::Ge, 50, 900);
 	let mut state = State::new();
-	evaluate(&rule, &mut state, 60, 1_000);
-	// Production code: must hold at t=1200 (within cooldown, condition still
-	// true). This is the assertion we protect by the gate.
-	assert_eq!(
-		evaluate(&rule, &mut state, 80, 1_200),
-		Verdict::Hold,
-		"cooldown gate is required to keep sustained-true rules quiet"
-	);
+	assert_eq!(evaluate(&rule, &mut state, 60, 1_000), Verdict::Fire);
+	assert_eq!(evaluate(&rule, &mut state, 10, 1_100), Verdict::Hold);
+	assert_eq!(evaluate(&rule, &mut state, 80, 1_200), Verdict::Hold);
+	assert_eq!(evaluate(&rule, &mut state, 80, 1_900), Verdict::Fire);
 }
 
 /// Control-loss test for the hysteresis gate: drop the
