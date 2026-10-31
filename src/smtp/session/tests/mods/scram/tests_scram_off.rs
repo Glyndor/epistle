@@ -10,7 +10,7 @@ use super::*;
 use crate::smtp::auth::tests::base::{fixture_password, hash as hash_password};
 
 /// Local copy of `tests_auth::tls_session` so the toggle tests do not
-/// depend on a sibling module's pub(super) items.
+/// depend on a sibling module's pub(in crate::smtp::session::tests::mods) items.
 fn tls_session() -> super::Session {
 	let directory = crate::smtp::directory::Directory::new(
 		["example.org".to_string()],

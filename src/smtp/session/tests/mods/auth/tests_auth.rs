@@ -2,7 +2,7 @@ use super::*;
 use crate::smtp::auth::tests::base::{fixture_password, wrong_password};
 use crate::test_fixtures as fixtures;
 
-pub(super) fn reply_code(action: &Action) -> u16 {
+pub(in crate::smtp::session::tests::mods) fn reply_code(action: &Action) -> u16 {
 	match action {
 		Action::Continue(r)
 		| Action::CollectData(r)
@@ -15,7 +15,7 @@ pub(super) fn reply_code(action: &Action) -> u16 {
 	}
 }
 
-pub(super) fn reply_text(action: &Action) -> String {
+pub(in crate::smtp::session::tests::mods) fn reply_text(action: &Action) -> String {
 	match action {
 		Action::Continue(r)
 		| Action::CollectData(r)
@@ -28,7 +28,7 @@ pub(super) fn reply_text(action: &Action) -> String {
 	}
 }
 
-pub(super) fn auth_directory() -> Arc<Directory> {
+pub(in crate::smtp::session::tests::mods) fn auth_directory() -> Arc<Directory> {
 	Arc::new(
 		Directory::new(
 			["example.org".to_string()],
@@ -41,12 +41,12 @@ pub(super) fn auth_directory() -> Arc<Directory> {
 	)
 }
 
-pub(super) fn plain(authcid: &str, password: &str) -> String {
+pub(in crate::smtp::session::tests::mods) fn plain(authcid: &str, password: &str) -> String {
 	use base64::Engine;
 	base64::engine::general_purpose::STANDARD.encode(format!("\0{authcid}\0{password}"))
 }
 
-pub(super) fn tls_session() -> Session {
+pub(in crate::smtp::session::tests::mods) fn tls_session() -> Session {
 	let mut session = Session::new("mail.example.org")
 		.with_directory(auth_directory())
 		.with_tls_active();
@@ -54,7 +54,7 @@ pub(super) fn tls_session() -> Session {
 	session
 }
 
-pub(super) fn authenticated_session() -> Session {
+pub(in crate::smtp::session::tests::mods) fn authenticated_session() -> Session {
 	let mut session = tls_session();
 	session.command_line(&format!(
 		"AUTH PLAIN {}",
@@ -65,14 +65,14 @@ pub(super) fn authenticated_session() -> Session {
 }
 
 // Unauthenticated session with no TLS — used for relay/sender tests.
-pub(super) fn greeted_plain() -> Session {
+pub(in crate::smtp::session::tests::mods) fn greeted_plain() -> Session {
 	let mut session = Session::new("mail.example.org").with_directory(auth_directory());
 	session.command_line("EHLO client.example.org");
 	session
 }
 
 #[test]
-pub(super) fn auth_login_authenticates() {
+pub(in crate::smtp::session::tests::mods) fn auth_login_authenticates() {
 	use base64::Engine;
 	use base64::engine::general_purpose::STANDARD as B64;
 	let mut session = tls_session();
@@ -210,7 +210,7 @@ fn scram_sha256_wrong_password_fails() {
 }
 
 #[test]
-pub(super) fn auth_rejected_outside_tls() {
+pub(in crate::smtp::session::tests::mods) fn auth_rejected_outside_tls() {
 	let mut session = greeted_plain();
 	let action = session.command_line(&format!(
 		"AUTH PLAIN {}",
@@ -221,7 +221,7 @@ pub(super) fn auth_rejected_outside_tls() {
 }
 
 #[test]
-pub(super) fn ehlo_advertises_auth_only_inside_tls() {
+pub(in crate::smtp::session::tests::mods) fn ehlo_advertises_auth_only_inside_tls() {
 	let mut plain_session = greeted_plain();
 	let Action::Continue(reply) = plain_session.command_line("EHLO c.example.org") else {
 		panic!("expected continue");
@@ -239,7 +239,7 @@ pub(super) fn ehlo_advertises_auth_only_inside_tls() {
 }
 
 #[test]
-pub(super) fn ehlo_advertises_requiretls_only_inside_tls() {
+pub(in crate::smtp::session::tests::mods) fn ehlo_advertises_requiretls_only_inside_tls() {
 	let mut plain_session = greeted_plain();
 	let Action::Continue(reply) = plain_session.command_line("EHLO c.example.org") else {
 		panic!("expected continue");
@@ -260,21 +260,21 @@ pub(super) fn ehlo_advertises_requiretls_only_inside_tls() {
 }
 
 #[test]
-pub(super) fn requiretls_rejected_without_tls() {
+pub(in crate::smtp::session::tests::mods) fn requiretls_rejected_without_tls() {
 	let mut session = greeted_plain();
 	let action = session.command_line("MAIL FROM:<eve@sender.example> REQUIRETLS");
 	assert_eq!(reply_code(&action), 530);
 }
 
 #[test]
-pub(super) fn requiretls_accepted_inside_tls() {
+pub(in crate::smtp::session::tests::mods) fn requiretls_accepted_inside_tls() {
 	let mut session = tls_session();
 	let action = session.command_line("MAIL FROM:<eve@sender.example> REQUIRETLS");
 	assert_eq!(reply_code(&action), 250);
 }
 
 #[test]
-pub(super) fn requiretls_flows_to_accepted_message() {
+pub(in crate::smtp::session::tests::mods) fn requiretls_flows_to_accepted_message() {
 	let mut session = tls_session();
 	session.command_line("MAIL FROM:<eve@sender.example> REQUIRETLS");
 	session.command_line("RCPT TO:<alice@example.org>");
@@ -292,7 +292,7 @@ pub(super) fn requiretls_flows_to_accepted_message() {
 }
 
 #[test]
-pub(super) fn auth_with_initial_response_succeeds() {
+pub(in crate::smtp::session::tests::mods) fn auth_with_initial_response_succeeds() {
 	let mut session = tls_session();
 	let action = session.command_line(&format!(
 		"AUTH PLAIN {}",
@@ -303,7 +303,7 @@ pub(super) fn auth_with_initial_response_succeeds() {
 }
 
 #[test]
-pub(super) fn auth_by_address_succeeds() {
+pub(in crate::smtp::session::tests::mods) fn auth_by_address_succeeds() {
 	let mut session = tls_session();
 	let action = session.command_line(&format!(
 		"AUTH PLAIN {}",
@@ -313,7 +313,7 @@ pub(super) fn auth_by_address_succeeds() {
 }
 
 #[test]
-pub(super) fn auth_challenge_flow_succeeds() {
+pub(in crate::smtp::session::tests::mods) fn auth_challenge_flow_succeeds() {
 	let mut session = tls_session();
 	let action = session.command_line("AUTH PLAIN");
 	assert!(matches!(action, Action::CollectAuthResponse(_)));
@@ -323,7 +323,7 @@ pub(super) fn auth_challenge_flow_succeeds() {
 }
 
 #[test]
-pub(super) fn auth_challenge_can_be_cancelled() {
+pub(in crate::smtp::session::tests::mods) fn auth_challenge_can_be_cancelled() {
 	let mut session = tls_session();
 	session.command_line("AUTH PLAIN");
 	let action = session.auth_line("*");
@@ -340,7 +340,7 @@ fn wrong_password_gets_535_without_detail() {
 }
 
 #[test]
-pub(super) fn unknown_user_gets_same_reply_as_wrong_password() {
+pub(in crate::smtp::session::tests::mods) fn unknown_user_gets_same_reply_as_wrong_password() {
 	let mut session = tls_session();
 	let action = session.command_line(&format!(
 		"AUTH PLAIN {}",
@@ -350,7 +350,7 @@ pub(super) fn unknown_user_gets_same_reply_as_wrong_password() {
 }
 
 #[test]
-pub(super) fn third_failure_closes_connection() {
+pub(in crate::smtp::session::tests::mods) fn third_failure_closes_connection() {
 	let mut session = tls_session();
 	for _ in 0..2 {
 		let action =
@@ -362,7 +362,7 @@ pub(super) fn third_failure_closes_connection() {
 }
 
 #[test]
-pub(super) fn auth_after_success_is_bad_sequence() {
+pub(in crate::smtp::session::tests::mods) fn auth_after_success_is_bad_sequence() {
 	let mut session = tls_session();
 	session.command_line(&format!(
 		"AUTH PLAIN {}",
@@ -382,7 +382,7 @@ fn unsupported_mechanism_gets_504() {
 }
 
 #[test]
-pub(super) fn auth_inside_transaction_is_bad_sequence() {
+pub(in crate::smtp::session::tests::mods) fn auth_inside_transaction_is_bad_sequence() {
 	let mut session = tls_session();
 	session.command_line("MAIL FROM:<alice@example.org>");
 	let action = session.command_line(&format!(
@@ -393,7 +393,7 @@ pub(super) fn auth_inside_transaction_is_bad_sequence() {
 }
 
 #[test]
-pub(super) fn authenticated_user_may_relay_to_foreign_domains() {
+pub(in crate::smtp::session::tests::mods) fn authenticated_user_may_relay_to_foreign_domains() {
 	let mut session = authenticated_session();
 	session.command_line("MAIL FROM:<alice@example.org>");
 	let action = session.command_line("RCPT TO:<bob@elsewhere.example>");
@@ -401,7 +401,7 @@ pub(super) fn authenticated_user_may_relay_to_foreign_domains() {
 }
 
 #[test]
-pub(super) fn unauthenticated_relay_stays_denied() {
+pub(in crate::smtp::session::tests::mods) fn unauthenticated_relay_stays_denied() {
 	let mut session = tls_session();
 	session.command_line("MAIL FROM:<someone@elsewhere.example>");
 	let action = session.command_line("RCPT TO:<bob@elsewhere.example>");
@@ -409,21 +409,22 @@ pub(super) fn unauthenticated_relay_stays_denied() {
 }
 
 #[test]
-pub(super) fn authenticated_sender_must_own_the_address() {
+pub(in crate::smtp::session::tests::mods) fn authenticated_sender_must_own_the_address() {
 	let mut session = authenticated_session();
 	let action = session.command_line("MAIL FROM:<other@elsewhere.example>");
 	assert_eq!(reply_code(&action), 553);
 }
 
 #[test]
-pub(super) fn authenticated_sender_cannot_use_null_path() {
+pub(in crate::smtp::session::tests::mods) fn authenticated_sender_cannot_use_null_path() {
 	let mut session = authenticated_session();
 	let action = session.command_line("MAIL FROM:<>");
 	assert_eq!(reply_code(&action), 553);
 }
 
 #[test]
-pub(super) fn authenticated_relay_still_rejects_unknown_local_users() {
+pub(in crate::smtp::session::tests::mods) fn authenticated_relay_still_rejects_unknown_local_users()
+{
 	let mut session = authenticated_session();
 	session.command_line("MAIL FROM:<alice@example.org>");
 	let action = session.command_line("RCPT TO:<stranger@example.org>");
@@ -433,13 +434,13 @@ pub(super) fn authenticated_relay_still_rejects_unknown_local_users() {
 // TLS / STARTTLS tests
 
 #[test]
-pub(super) fn starttls_without_tls_configured_is_unavailable() {
+pub(in crate::smtp::session::tests::mods) fn starttls_without_tls_configured_is_unavailable() {
 	let mut session = greeted_plain();
 	assert_eq!(reply_code(&session.command_line("STARTTLS")), 454);
 }
 
 #[test]
-pub(super) fn ehlo_advertises_starttls_when_available() {
+pub(in crate::smtp::session::tests::mods) fn ehlo_advertises_starttls_when_available() {
 	let mut session = Session::new("mail.example.org").with_tls_available();
 	let Action::Continue(reply) = session.command_line("EHLO client.example.org") else {
 		panic!("expected continue");
@@ -448,7 +449,7 @@ pub(super) fn ehlo_advertises_starttls_when_available() {
 }
 
 #[test]
-pub(super) fn ehlo_advertises_dsn() {
+pub(in crate::smtp::session::tests::mods) fn ehlo_advertises_dsn() {
 	let mut session = Session::new("mail.example.org");
 	let Action::Continue(reply) = session.command_line("EHLO client.example.org") else {
 		panic!("expected continue");
@@ -457,7 +458,7 @@ pub(super) fn ehlo_advertises_dsn() {
 }
 
 #[test]
-pub(super) fn ehlo_does_not_advertise_starttls_when_unavailable() {
+pub(in crate::smtp::session::tests::mods) fn ehlo_does_not_advertise_starttls_when_unavailable() {
 	let mut session = greeted_plain();
 	let Action::Continue(reply) = session.command_line("EHLO client.example.org") else {
 		panic!("expected continue");
@@ -466,7 +467,7 @@ pub(super) fn ehlo_does_not_advertise_starttls_when_unavailable() {
 }
 
 #[test]
-pub(super) fn starttls_upgrades_after_greeting() {
+pub(in crate::smtp::session::tests::mods) fn starttls_upgrades_after_greeting() {
 	let mut session = Session::new("mail.example.org").with_tls_available();
 	session.command_line("EHLO client.example.org");
 	let action = session.command_line("STARTTLS");
@@ -475,13 +476,13 @@ pub(super) fn starttls_upgrades_after_greeting() {
 }
 
 #[test]
-pub(super) fn starttls_before_greeting_is_bad_sequence() {
+pub(in crate::smtp::session::tests::mods) fn starttls_before_greeting_is_bad_sequence() {
 	let mut session = Session::new("mail.example.org").with_tls_available();
 	assert_eq!(reply_code(&session.command_line("STARTTLS")), 503);
 }
 
 #[test]
-pub(super) fn starttls_inside_transaction_is_bad_sequence() {
+pub(in crate::smtp::session::tests::mods) fn starttls_inside_transaction_is_bad_sequence() {
 	let mut session = Session::new("mail.example.org").with_tls_available();
 	session.command_line("EHLO client.example.org");
 	session.command_line("MAIL FROM:<a@example.org>");
@@ -489,7 +490,7 @@ pub(super) fn starttls_inside_transaction_is_bad_sequence() {
 }
 
 #[test]
-pub(super) fn tls_started_resets_session() {
+pub(in crate::smtp::session::tests::mods) fn tls_started_resets_session() {
 	let mut session = Session::new("mail.example.org").with_tls_available();
 	session.command_line("EHLO client.example.org");
 	session.tls_started();
@@ -529,7 +530,7 @@ fn auth_rejects_malformed_base64() {
 }
 
 #[test]
-pub(super) fn submission_rate_limit_defers_over_the_limit() {
+pub(in crate::smtp::session::tests::mods) fn submission_rate_limit_defers_over_the_limit() {
 	let limiter = std::sync::Arc::new(crate::smtp::ratelimit::SendLimiter::new(60));
 	let mut session = Session::new("mail.example.org")
 		.with_directory(auth_directory())
@@ -545,13 +546,13 @@ pub(super) fn submission_rate_limit_defers_over_the_limit() {
 
 	// First authenticated submission is within the limit.
 	assert_eq!(
-		super::tests_ratelimit::send_one(&mut session, "alice@example.org"),
+		super::super::limits::tests_ratelimit::send_one(&mut session, "alice@example.org"),
 		250
 	);
 
 	// The second within the window exceeds the per-account limit -> 4xx defer.
 	assert_eq!(
-		super::tests_ratelimit::send_one(&mut session, "alice@example.org"),
+		super::super::limits::tests_ratelimit::send_one(&mut session, "alice@example.org"),
 		450
 	);
 }

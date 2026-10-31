@@ -1,7 +1,7 @@
 use super::*;
 use crate::test_fixtures as fixtures;
 
-pub(super) fn reply_code(action: &Action) -> u16 {
+pub(in crate::smtp::session::tests::mods) fn reply_code(action: &Action) -> u16 {
 	match action {
 		Action::Continue(r)
 		| Action::CollectData(r)
@@ -14,7 +14,7 @@ pub(super) fn reply_code(action: &Action) -> u16 {
 	}
 }
 
-pub(super) fn scram_directory() -> Arc<Directory> {
+pub(in crate::smtp::session::tests::mods) fn scram_directory() -> Arc<Directory> {
 	use crate::smtp::scram::{ScramCredentials, ScramStored};
 	let stored = ScramStored::from_credentials(&ScramCredentials::derive(
 		fixtures::password(),
@@ -34,7 +34,7 @@ pub(super) fn scram_directory() -> Arc<Directory> {
 	)
 }
 
-pub(super) fn scram_session(inject_nonce: bool) -> Session {
+pub(in crate::smtp::session::tests::mods) fn scram_session(inject_nonce: bool) -> Session {
 	let mut session = Session::new("mail.example.org")
 		.with_directory(scram_directory())
 		.with_tls_active();
@@ -45,12 +45,12 @@ pub(super) fn scram_session(inject_nonce: bool) -> Session {
 	session
 }
 
-pub(super) fn b64(s: &str) -> String {
+pub(in crate::smtp::session::tests::mods) fn b64(s: &str) -> String {
 	use base64::Engine;
 	base64::engine::general_purpose::STANDARD.encode(s)
 }
 
-pub(super) fn b64_bytes(bytes: &[u8]) -> String {
+pub(in crate::smtp::session::tests::mods) fn b64_bytes(bytes: &[u8]) -> String {
 	use base64::Engine;
 	base64::engine::general_purpose::STANDARD.encode(bytes)
 }
@@ -64,7 +64,10 @@ const CERT_HASH: &[u8] = b"0123456789abcdef0123456789abcdef";
 /// reply to the acknowledgement: the `235` of a successful exchange, or
 /// the `535` of a refused one (a refused proof never reaches the
 /// challenge).
-pub(super) fn finish_scram(session: &mut Session, client_final: &str) -> u16 {
+pub(in crate::smtp::session::tests::mods) fn finish_scram(
+	session: &mut Session,
+	client_final: &str,
+) -> u16 {
 	let challenge = session.auth_line(&b64(client_final));
 	if reply_code(&challenge) != 334 {
 		return reply_code(&challenge);
@@ -82,7 +85,7 @@ fn scram_plus_session() -> Session {
 		.tap_ehlo()
 }
 
-pub(super) trait TapEhlo {
+pub(in crate::smtp::session::tests::mods) trait TapEhlo {
 	fn tap_ehlo(self) -> Self;
 }
 impl TapEhlo for Session {

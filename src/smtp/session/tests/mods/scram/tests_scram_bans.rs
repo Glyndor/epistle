@@ -19,7 +19,7 @@ use base64::Engine;
 /// credential-lookup counter; the ban tests inject a fresh atomic
 /// here so they can assert the lookup never happened without racing
 /// other tests in the same process on a shared counter.
-pub(super) fn scram_directory_with_ban_store(
+pub(in crate::smtp::session::tests::mods) fn scram_directory_with_ban_store(
 	ban_store: std::sync::Arc<dyn crate::antispam::bans::BanStore>,
 	lookup_counter: Option<std::sync::Arc<std::sync::atomic::AtomicUsize>>,
 ) -> Arc<Directory> {
@@ -195,7 +195,7 @@ async fn smtp_scram_client_final_rechecks_ban() {
 /// Strip the `334 <base64>\r\n` envelope from a SCRAM challenge reply
 /// and decode the base64 payload, so the test can feed the server-first
 /// into the SCRAM proof computation.
-pub(super) fn decode_server_first(reply: &str) -> String {
+pub(in crate::smtp::session::tests::mods) fn decode_server_first(reply: &str) -> String {
 	use base64::Engine;
 	let trimmed = reply.trim_start_matches("334 ").trim_end();
 	let raw = base64::engine::general_purpose::STANDARD
@@ -206,7 +206,7 @@ pub(super) fn decode_server_first(reply: &str) -> String {
 
 /// Render a SCRAM challenge action to its wire text so the test can
 /// pull the base64 server-first out of the `334` line.
-pub(super) fn scram_challenge_text(action: &Action) -> String {
+pub(in crate::smtp::session::tests::mods) fn scram_challenge_text(action: &Action) -> String {
 	match action {
 		Action::Continue(r)
 		| Action::CollectData(r)
@@ -225,7 +225,11 @@ pub(super) fn scram_challenge_text(action: &Action) -> String {
 /// message (everything after the GS2 header), e.g. `n=alice,r=CN`,
 /// because the SCRAM `auth_message` is the bare part, not the full
 /// client-first with its `n,,` prefix.
-pub(super) fn valid_client_final(client_first: &str, server_first: &str, password: &str) -> String {
+pub(in crate::smtp::session::tests::mods) fn valid_client_final(
+	client_first: &str,
+	server_first: &str,
+	password: &str,
+) -> String {
 	use base64::Engine;
 	use ring::{digest, hmac, pbkdf2};
 	use std::num::NonZeroU32;

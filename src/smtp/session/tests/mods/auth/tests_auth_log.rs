@@ -13,9 +13,9 @@
 
 use tracing_subscriber::layer::SubscriberExt;
 
+use super::super::scram::tests_scram::{b64, reply_code, scram_session};
+use super::super::scram::tests_scram_final::at_server_final;
 use super::tests_oauth::{auth_directory, bearer_response, verifier_and_key};
-use super::tests_scram::{b64, reply_code, scram_session};
-use super::tests_scram_final::at_server_final;
 use super::*;
 use crate::cli::trace::capture::CapturedEvent;
 

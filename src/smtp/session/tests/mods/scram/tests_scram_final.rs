@@ -16,7 +16,7 @@ use super::*;
 use crate::test_fixtures as fixtures;
 
 /// What the client sends in the last round, and what it expects back.
-pub(super) struct Client {
+pub(in crate::smtp::session::tests::mods) struct Client {
 	/// The client-final, proof included.
 	final_message: String,
 	/// The server-final the client expects (`v=<base64>`).
@@ -86,7 +86,7 @@ fn client_exchange(server_first: &str, password: &str) -> Client {
 
 /// Drive the exchange up to the server-final challenge: the session,
 /// what the client expects and what the server actually sent.
-pub(super) fn at_server_final() -> (Session, Client, String) {
+pub(in crate::smtp::session::tests::mods) fn at_server_final() -> (Session, Client, String) {
 	let mut session = scram_session(true);
 	let challenge = session.command_line(&format!("AUTH SCRAM-SHA-256 {}", b64("n,,n=alice,r=CN")));
 	assert_eq!(reply_code(&challenge), 334);

@@ -2,8 +2,8 @@
 //! account, an account with a second factor and an address in a switched-off
 //! domain are refused by PLAIN, LOGIN, SCRAM, OAUTHBEARER and EXTERNAL alike.
 
-use super::tests_scram::{b64, finish_scram, reply_code};
-use super::tests_scram_bans::{decode_server_first, scram_challenge_text};
+use super::super::scram::tests_scram::{b64, finish_scram, reply_code};
+use super::super::scram::tests_scram_bans::{decode_server_first, scram_challenge_text};
 use super::*;
 use crate::smtp::directory::gate_fixture::*;
 use crate::test_fixtures as fixtures;
