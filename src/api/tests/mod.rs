@@ -63,6 +63,7 @@ pub(super) mod jmap_sieve_validate;
 pub(super) mod jmap_vacation;
 pub(super) mod jmap_vacation_b;
 pub(super) mod jmap_ws_revoke;
+pub(super) mod jmap_ws_size;
 pub(super) mod key_reload;
 pub(super) mod masked;
 pub(super) mod newrecipients;

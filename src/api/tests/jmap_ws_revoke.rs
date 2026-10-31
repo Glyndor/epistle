@@ -136,6 +136,27 @@ impl Client {
 		self.stream.write_all(&out).await.expect("send frame");
 	}
 
+	/// One masked text frame of `len` octets of filler, written as a single
+	/// frame with a 64-bit length, in the pieces a real peer would send.
+	pub(in super::super) async fn send_text_of(&mut self, len: usize) {
+		let mask = [0x11u8, 0x22, 0x33, 0x44];
+		let mut head = vec![0x81u8, 0x80 | 127];
+		head.extend_from_slice(&(len as u64).to_be_bytes());
+		head.extend_from_slice(&mask);
+		self.stream.write_all(&head).await.ok();
+		let piece: Vec<u8> = (0..65_536).map(|i| b' ' ^ mask[i % 4]).collect();
+		let mut left = len;
+		while left > 0 {
+			let take = left.min(piece.len());
+			// Every piece is a multiple of four octets except the last, so
+			// the mask phase stays aligned.
+			if self.stream.write_all(&piece[..take]).await.is_err() {
+				return;
+			}
+			left -= take;
+		}
+	}
+
 	/// The next frame's opcode and payload; opcode 0 (a continuation, which
 	/// this server never sends) when the connection ended without one.
 	pub(in super::super) async fn next(&mut self) -> (u8, Vec<u8>) {
