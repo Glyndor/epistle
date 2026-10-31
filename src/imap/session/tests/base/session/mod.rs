@@ -22,12 +22,6 @@ mod gate_busy;
 mod hierarchy_surfaces;
 
 #[cfg(test)]
-mod learn_e2e;
-
-#[cfg(test)]
-mod learn_moves;
-
-#[cfg(test)]
 mod metadata;
 
 #[cfg(test)]
@@ -46,19 +40,16 @@ mod paths;
 mod per_account;
 
 #[cfg(test)]
-mod quota_names;
-
-#[cfg(test)]
-mod quota_zero;
-
-#[cfg(test)]
 mod save_sent;
 
 #[cfg(test)]
 mod uidvalidity;
 
 #[cfg(test)]
-mod utf8;
+mod learning;
 
 #[cfg(test)]
-mod utf8_responses;
+mod quota;
+
+#[cfg(test)]
+mod unicode;

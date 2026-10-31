@@ -1,8 +1,5 @@
 # path<TAB>ceiling<TAB>reason. Use . for the repository root.
 # Measured with scripts/folder-limit/folder-limit.sh. A ceiling may only go down; remove an entry once the folder holds 20 files or fewer.
 fuzz/fuzz_targets	21	cargo-fuzz names each target by file; moving them needs [[bin]] path edits in fuzz/Cargo.toml.
-src/api/tests	94	Module unit tests, flat for historical reasons; split by route area (jmap, v1, auth).
 src/cli/init/compose/tests	27	Module unit tests; split by generated file.
-src/cli/tests	32	Module unit tests; split by command group.
-src/imap/session/tests/base	63	Module unit tests; split by command.
 tests/fixtures/dkim	193	External DKIM and ARC vectors, one file per vector; group by source.
