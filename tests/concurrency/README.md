@@ -27,8 +27,7 @@ control after each mutation. The quota case uses real disk accounting and
 storage, without an artificial serialising test sink. Its schedule is a
 contention test, not an exhaustive proof of all interleavings.
 
-Use `python3 tests/concurrency/check_limit_mutation.py` for a baseline, removal
-of the submission cap, expected assertion failure, restoration, and final
-baseline. The script always restores the exact original test bytes. It requires
-a writable Cargo target directory. Compilation, execution and the full mutation
-run are pending maintainer verification.
+To check that the submission test can fail, remove the cap on the line
+`.with_global_submission_rate_limit(Some(LIMIT as u32));` of `submissions.rs`
+(use `None`) and run the test: it accepts all 64 submissions instead of 7 and
+fails on the assertion. Restore the line afterwards.
