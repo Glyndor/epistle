@@ -166,6 +166,11 @@ pub async fn fetch_keys(
 	// whatever a second lookup answers: a name that rebinds between the two
 	// cannot move the fetch to an address the screen never saw.
 	let mut pinned = builder();
+	if !allow_private_jwks {
+		// A proxy would resolve the name itself and make the pin and the
+		// screen decide nothing, so the fetch goes direct.
+		pinned = pinned.no_proxy();
+	}
 	if let Some(url::Host::Domain(name)) = jwks_uri.as_url().host() {
 		let port = jwks_uri.as_url().port_or_known_default().unwrap_or(443);
 		let addrs: Vec<std::net::SocketAddr> = screened
