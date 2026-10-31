@@ -9,7 +9,7 @@ use crate::dkim::test_support::KeyDns;
 use crate::smtp::sink::MemorySink;
 use crate::smtp::trace::header_values;
 
-pub(super) const PLAIN: &str =
+pub(in crate::smtp::server::tests::mods) const PLAIN: &str =
 	"From: eve@sender.example\r\nTo: alice@example.org\r\nSubject: hi\r\n\r\nbody\r\n";
 const FORGED: &str = "Authentication-Results: mail.example.org; spf=pass; dkim=pass\r\n\
 	Received-SPF: forged\r\nX-Spam-Status: forged\r\nX-Spam-Score: forged\r\n\
@@ -17,7 +17,7 @@ const FORGED: &str = "Authentication-Results: mail.example.org; spf=pass; dkim=p
 	X-Epistle-Other: forged\r\nDelivered-To: forged\r\nReturn-Path: <forged>\r\n\
 	Epistle-Class: marketing\r\n";
 
-pub(super) async fn receive(server: Server, data: &str, bdat: bool) {
+pub(in crate::smtp::server::tests::mods) async fn receive(server: Server, data: &str, bdat: bool) {
 	let (client, stream) = tokio::io::duplex(256 * 1024);
 	let task = tokio::spawn(async move {
 		server
@@ -242,7 +242,7 @@ async fn authenticated_submission_keeps_its_existing_header_policy() {
 		 Received: from forged.example\r\n{}",
 		PLAIN.replace("eve@sender.example", "alice@example.org")
 	);
-	let answer = super::tests_virus::submit(sink.clone(), &data).await;
+	let answer = super::super::scanning::tests_virus::submit(sink.clone(), &data).await;
 	assert!(answer.starts_with("250 "), "{answer}");
 	let messages = sink.messages();
 	assert_eq!(messages.len(), 1);

@@ -5,7 +5,7 @@
 
 use std::net::IpAddr;
 
-use super::tests_data_rate::{Client, OPEN, reply_codes, test_directory};
+use super::super::rate::tests_data_rate::{Client, OPEN, reply_codes, test_directory};
 use super::*;
 use crate::smtp::sink::MemorySink;
 

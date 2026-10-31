@@ -1,7 +1,7 @@
 //! A BDAT chunk that breaks the line framing ends the connection, and what
 //! the client sent behind it in the same write is never run as commands.
 
-use super::tests_data_rate::{Client, OPEN, reply_codes, test_directory};
+use super::super::rate::tests_data_rate::{Client, OPEN, reply_codes, test_directory};
 use super::*;
 use crate::smtp::sink::MemorySink;
 

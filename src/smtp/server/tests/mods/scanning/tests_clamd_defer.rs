@@ -14,17 +14,20 @@ use crate::smtp::sink::MemorySink;
 
 const DEFERRED: &str = "451 4.7.1 content scan unavailable, try again later\r\n";
 
-pub(super) const INBOUND: &str =
+pub(in crate::smtp::server::tests::mods) const INBOUND: &str =
 	"From: x@example.net\r\nTo: alice@example.org\r\nSubject: hi\r\n\r\nhello\r\n";
 
 /// A clamd hook whose socket does not exist, so every scan fails.
-pub(super) fn down(dir: &std::path::Path, on_error: ClamdOnError) -> Arc<ClamdHook> {
+pub(in crate::smtp::server::tests::mods) fn down(
+	dir: &std::path::Path,
+	on_error: ClamdOnError,
+) -> Arc<ClamdHook> {
 	Arc::new(ClamdHook::new(dir.join("clamd.sock")).with_on_error(on_error))
 }
 
 /// Deliver [`INBOUND`] from an unauthenticated client with `hook` as the
 /// scanner; the reply to the end of DATA and what reached the sink.
-pub(super) async fn deliver(hook: Arc<ClamdHook>) -> (String, usize) {
+pub(in crate::smtp::server::tests::mods) async fn deliver(hook: Arc<ClamdHook>) -> (String, usize) {
 	let sink = Arc::new(MemorySink::new());
 	let server = Server::new("mail.example.org", sink.clone())
 		.with_directory(directory_with_password())
