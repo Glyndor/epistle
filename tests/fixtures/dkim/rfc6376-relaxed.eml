@@ -1,0 +1,10 @@
+DKIM-Signature: v=1; a=ed25519-sha256; c=relaxed/relaxed; d=example.test; s=external; h=from:a:b; bh=unak6JHq0wL+Q1HP7dW1tjBx9FLA6DffoZ0qrLwbbpo=; b=eSHmYHds5aMzmsyeEJr+e2UV6mPzxZ9WMHbVllurjEnPU1RYHcHNsb48JjX3U28qOIvf1mCdk/aHokPvErOdDQ==
+From: alice@example.test
+A: X
+B : Y 	
+	 Z  
+
+ C 
+D 	 E
+
+

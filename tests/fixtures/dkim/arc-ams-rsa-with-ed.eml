@@ -1,0 +1,13 @@
+ARC-Seal: i=1; a=ed25519-sha256; d=example.test; s=seal; cv=none; b=UVfzI6i8DB57mwLSPh5MEA6MVKsygLF/k08c32WLwzOrFDxQ4Pxnb/mqvIuvkFe0hO6UZCeSZVLABH9VLOcWCg==
+ARC-Message-Signature: i=1; a=rsa-sha256; c=relaxed/relaxed; d=example.test; s=ams; h=from:to:subject:from:subject; bh=VwbiVmSrr0pBRHQSPGZMHw50LJ8kfwr6TdTJgJSvhBY=; b=JK4muXBm8q1hATGO3k7isaoCgtPdmc3ay0PHjFsCsVN8O+0MmnvIAvLOiwFJQ+ij0+fip4bPfNbOKs3yUrl9Cw==
+ARC-Authentication-Results: i=1; mx.example.test; dkim=pass header.d=example.test
+FrOm: Alice <alice@example.test>
+To: Bob <bob@example.net>
+SuBJeCt:  external	vector
+	 folded  
+
+	  indented	text 	
+
+line		 two
+ 	
+

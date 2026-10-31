@@ -1,0 +1,250 @@
+#!/usr/bin/env python3
+"""Regenerate fixed DKIM/ARC vectors: python3 -I tests/fixtures/dkim/generate.
+
+No project signer, Rust canonicalizer, network, clock, or random key generation.
+Private PEM files are public test material. RSA PKCS1v15 and Ed25519 signatures
+are deterministic given these committed keys. RFC fixtures are immutable inputs.
+"""
+import base64
+import hashlib
+import json
+import re
+from pathlib import Path
+
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ed25519, padding
+
+ROOT = Path(__file__).resolve().parent
+KEYS = {
+	name: serialization.load_pem_private_key((ROOT / f"{name}.pem").read_bytes(), None)
+	for name in ("ed25519", "rsa2048", "rsa1024", "rsa512")
+}
+MANIFEST = {}
+
+
+def b64(data):
+	return base64.b64encode(data).decode("ascii")
+
+
+def body_canon(raw, mode):
+	lines = raw.split(b"\r\n")
+	if mode == "relaxed":
+		lines = [re.sub(rb"[ \t]+", b" ", line).rstrip(b" ") for line in lines]
+	while lines and lines[-1] == b"":
+		lines.pop()
+	return b"\r\n".join(lines) + b"\r\n" if lines else (b"\r\n" if mode == "simple" else b"")
+
+
+def header_canon(name, value, mode="relaxed"):
+	if mode == "relaxed":
+		name = name.rstrip(" \t").lower()
+		value = re.sub(r"\r\n(?=[ \t])", "", value)
+		value = re.sub(r"[ \t]+", " ", value).strip(" ")
+	return f"{name}:{value}\r\n".encode("ascii")
+
+
+def sign(key_name, data, advertised):
+	key = KEYS[key_name]
+	# Malicious cross-algorithm vectors deliberately use the wrong primitive.
+	if advertised == "ed25519-sha256":
+		data = hashlib.sha256(data).digest()
+	if isinstance(key, ed25519.Ed25519PrivateKey):
+		result = key.sign(data)
+		key.public_key().verify(result, data)
+	else:
+		result = key.sign(data, padding.PKCS1v15(), hashes.SHA256())
+		key.public_key().verify(result, data, padding.PKCS1v15(), hashes.SHA256())
+	return b64(result)
+
+
+def dns_record(key_name):
+	key = KEYS[key_name].public_key()
+	if key_name == "ed25519":
+		kind = "ed25519"
+		der = key.public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+	else:
+		kind = "rsa"
+		der = key.public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
+	return f"v=DKIM1; k={kind}; p={b64(der)}"
+
+
+def signed_headers(headers, names, mode):
+	remaining = list(headers)
+	out = b""
+	for name in names:
+		for i in range(len(remaining) - 1, -1, -1):
+			if remaining[i][0].rstrip().lower() == name.lower():
+				out += header_canon(*remaining.pop(i), mode)
+				break
+	return out
+
+
+HEADERS = [("FrOm", " Alice <alice@example.test>"), ("To", " Bob <bob@example.net>"),
+	("SuBJeCt", "  external\tvector\r\n\t folded  ")]
+BODY = b"\t  indented\ttext \t\r\n\r\nline\t\t two\r\n \t\r\n\r\n"
+NAMES = ["from", "to", "subject", "from", "subject"]
+
+
+def wire(headers, body):
+	return b"".join(f"{n}:{v}\r\n".encode("ascii") for n, v in headers) + b"\r\n" + body
+
+
+def save(name, raw, record, **metadata):
+	(ROOT / f"{name}.eml").write_bytes(raw)
+	(ROOT / f"{name}.dns").write_text(record + "\n")
+	MANIFEST[name] = {"sha256": hashlib.sha256(raw).hexdigest(), **metadata}
+
+
+def dkim(name, key="ed25519", hc="relaxed", bc="relaxed", body=BODY,
+		headers=None, names=None, length=None, extra="", algorithm=None, hash_full=False):
+	headers = HEADERS if headers is None else headers
+	names = NAMES if names is None else names
+	algorithm = algorithm or ("ed25519-sha256" if key == "ed25519" else "rsa-sha256")
+	canonical = body_canon(body, bc)
+	covered = canonical if length is None or hash_full else canonical[:length]
+	value = f" v=1; a={algorithm}; c={hc}/{bc}; d=example.test; s=external; h={':'.join(names)}; "
+	if length is not None:
+		value += f"l={length}; "
+	value += extra + f"bh={b64(hashlib.sha256(covered).digest())}; b="
+	data = signed_headers(headers, names, hc) + header_canon("DKIM-Signature", value, hc)[:-2]
+	sig = sign(key, data, algorithm)
+	raw = wire([("DKIM-Signature", value + sig)] + headers, body)
+	save(name, raw, dns_record(key), algorithm=algorithm, canon=f"{hc}/{bc}", length=length,
+		canonical_body=b64(canonical), signed_input_sha256=hashlib.sha256(data).hexdigest())
+	return raw
+
+
+def arc(name, count=1, key="ed25519", ams_key=None, seal_key=None,
+		ams_alg=None, seal_alg=None, body=BODY, hc="relaxed", bc="relaxed",
+		length=None, cv_override=None, names=None):
+	names = NAMES if names is None else names
+	ams_key, seal_key = ams_key or key, seal_key or key
+	ams_alg = ams_alg or ("ed25519-sha256" if ams_key == "ed25519" else "rsa-sha256")
+	seal_alg = seal_alg or ("ed25519-sha256" if seal_key == "ed25519" else "rsa-sha256")
+	prior = []
+	for i in range(1, count + 1):
+		canonical = body_canon(body, bc)
+		covered = canonical if length is None else canonical[:length]
+		ams = f" i={i}; a={ams_alg}; c={hc}/{bc}; d=example.test; s=ams; h={':'.join(names)}; "
+		if length is not None:
+			ams += f"l={length}; "
+		ams += f"bh={b64(hashlib.sha256(covered).digest())}; b="
+		data = signed_headers(HEADERS, names, hc) + header_canon("ARC-Message-Signature", ams, hc)[:-2]
+		ams += sign(ams_key, data, ams_alg)
+		aar = f" i={i}; mx.example.test; dkim=pass header.d=example.test"
+		cv = cv_override if cv_override is not None else ("none" if i == 1 else "pass")
+		seal = f" i={i}; a={seal_alg}; d=example.test; s=seal; cv={cv}; b="
+		data = b"".join(header_canon(n, v) for triple in prior for n, v in triple)
+		data += header_canon("ARC-Authentication-Results", aar)
+		data += header_canon("ARC-Message-Signature", ams)
+		data += header_canon("ARC-Seal", seal)[:-2]
+		seal += sign(seal_key, data, seal_alg)
+		prior.append([("ARC-Authentication-Results", aar), ("ARC-Message-Signature", ams), ("ARC-Seal", seal)])
+	# Normal transport order is newest first, AS then AMS then AAR.
+	headers = [pair for triple in reversed(prior) for pair in reversed(triple)]
+	raw = wire(headers + HEADERS, body)
+	save(name, raw, dns_record(ams_key), instances=count, ams_algorithm=ams_alg, seal_algorithm=seal_alg)
+	(ROOT / f"{name}.seal.dns").write_text(dns_record(seal_key) + "\n")
+	return raw
+
+
+def signer_oracle():
+	# This is the documented signing policy, implemented independently.
+	oversign = ["from", "to", "cc", "subject", "reply-to", "date", "message-id",
+		"list-unsubscribe", "list-unsubscribe-post", "content-type",
+		"disposition-notification-to", "return-receipt-to", "auto-submitted"]
+	(ROOT / "signer-raw.eml").write_bytes(wire(HEADERS, BODY))
+	names = [n.lower() for n, _ in reversed(HEADERS)] + oversign
+	for key, algorithm in [("ed25519", "ed25519-sha256"), ("rsa2048", "rsa-sha256")]:
+		# Fold tags at 78 columns, independently of the Rust wire module.
+		text, column = "", len("DKIM-Signature:")
+		def token(word, space=False):
+			nonlocal text, column
+			if column + int(space) + len(word) > 78:
+				text += "\r\n\t"
+				column = 1
+			elif space:
+				text += " "
+				column += 1
+			text += word
+			column += len(word)
+		for tag in ["v=1;", f"a={algorithm};", "c=relaxed/relaxed;", "d=example.test;", "s=external;", "h="]:
+			token(tag, True)
+		for i, name in enumerate(names):
+			token(name + (":" if i < len(names) - 1 else ";"))
+		token(f"bh={b64(hashlib.sha256(body_canon(BODY, 'relaxed')).digest())};", True)
+		token("b=", True)
+		data = signed_headers(HEADERS, names, "relaxed") + header_canon("DKIM-Signature", text)[:-2]
+		sig = sign(key, data, algorithm)
+		# Compare the decoded signature, independently of signature-value folding.
+		(ROOT / f"signer-{key}.signature").write_text(sig + "\n")
+		(ROOT / f"signer-{key}.unsigned").write_bytes(text.encode("ascii"))
+		(ROOT / f"signer-{key}.input").write_bytes(data)
+
+
+def anchor_vectors():
+	# Literal RFC 6376 section 3.4.5 outputs anchor the independent oracle.
+	raw = b" C \r\nD \t E\r\n\r\n\r\n"
+	assert body_canon(raw, "simple") == b" C \r\nD \t E\r\n"
+	assert body_canon(raw, "relaxed") == b" C\r\nD E\r\n"
+	assert header_canon("A", " X") == b"a:X\r\n"
+	assert header_canon("B ", " Y \t\r\n\t Z  ") == b"b:Y Z\r\n"
+	assert b64(hashlib.sha256(body_canon(b"", "simple")).digest()) == "frcCV1k9oG9oKj3dpUqdJg1PxRT2RSN/XKdLCPjaYaY="
+	assert b64(hashlib.sha256(body_canon(b"", "relaxed")).digest()) == "47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU="
+
+
+def main():
+	anchor_vectors()
+	for key in ("ed25519", "rsa2048"):
+		for hc in ("simple", "relaxed"):
+			for bc in ("simple", "relaxed"):
+				for shape, body in [("mixed", BODY), ("empty", b""), ("blank", b" \t\r\n\r\n")]:
+					dkim(f"{key}-{hc}-{bc}-{shape}", key, hc, bc, body)
+	for mode in ("simple", "relaxed"):
+		# RFC 6376 section 3.4.5, including the space before B's colon.
+		headers = [("From", " alice@example.test"), ("A", " X"), ("B ", " Y \t\r\n\t Z  ")]
+		dkim(f"rfc6376-{mode}", hc=mode, bc=mode, headers=headers,
+			names=["from", "a", "b"], body=b" C \r\nD \t E\r\n\r\n\r\n")
+	canonical_len = len(body_canon(BODY, "relaxed"))
+	for name, length in [("length-equal", canonical_len), ("length-short", 3),
+		("length-long", canonical_len + 1), ("length-zero", 0)]:
+		dkim(name, length=length)
+	dkim("length-zero-empty", length=0, body=b"")
+	dkim("length-short-fullhash", length=3, hash_full=True)
+	dkim("length-zero-fullhash", length=0, hash_full=True)
+	dkim("no-from", names=["subject"])
+	dkim("single-from", names=["from", "to", "subject"])
+	dkim("identity-subdomain", extra="i=user@child.example.test; ")
+	for bits in (512, 1024):
+		dkim(f"rsa{bits}", key=f"rsa{bits}")
+	dkim("rsa-with-ed-key", algorithm="rsa-sha256")
+	dkim("ed-with-rsa-key", key="rsa2048", algorithm="ed25519-sha256")
+	extra = [(f"X-Padding-{i}", " value") for i in range(8996)]
+	dkim("headers-9000", headers=extra + HEADERS)
+	for count in (1, 2, 50):
+		arc(f"arc-ed-{count}", count=count)
+	arc("arc-rsa", key="rsa2048")
+	arc("arc-ams-rsa", ams_key="rsa2048")
+	arc("arc-seal-rsa", seal_key="rsa2048")
+	arc("arc-ams-rsa-with-ed", ams_alg="rsa-sha256")
+	arc("arc-seal-rsa-with-ed", seal_alg="rsa-sha256")
+	arc("arc-ams-ed-with-rsa", ams_key="rsa2048", ams_alg="ed25519-sha256")
+	arc("arc-seal-ed-with-rsa", seal_key="rsa2048", seal_alg="ed25519-sha256")
+	arc("arc-ams-simple-folded", hc="simple")
+	arc("arc-length-zero", length=0)
+	arc("arc-length-exact", length=canonical_len)
+	arc("arc-build", names=["from", "to", "subject"])
+	arc("arc-cv-first-pass", cv_override="pass")
+	arc("arc-cv-later-none", count=2, cv_override="none")
+	signer_oracle()
+	# Independent verification of the published RFC signature.
+	raw = (ROOT / "rfc8463.eml").read_bytes()
+	value = raw.split(b"\r\nFrom:", 1)[0].split(b" b=", 1)[1]
+	pub = ed25519.Ed25519PublicKey.from_public_bytes(base64.b64decode("11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo="))
+	pub.verify(base64.b64decode(value), hashlib.sha256((ROOT / "rfc8463.input").read_bytes()).digest())
+	(ROOT / "manifest.json").write_text(json.dumps(MANIFEST, sort_keys=True, indent=2) + "\n")
+	print(f"Generated and cryptographically checked {len(MANIFEST)} external messages")
+
+
+if __name__ == "__main__":
+	main()
