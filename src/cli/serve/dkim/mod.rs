@@ -68,6 +68,11 @@ pub(in crate::cli) fn build_split_with_companions(
 ) -> std::io::Result<SplitCompanions> {
 	let evidence = super::evidence::open(config, &crypto)?;
 	let mut split = SplitDelivery::new_with_crypto(&config.data_dir, directory, crypto)?
+		.with_quota(
+			config
+				.quota_bytes
+				.unwrap_or(crate::imap::session::DEFAULT_QUOTA_BYTES),
+		)
 		.with_evidence(Arc::clone(&evidence.service))
 		.with_rules(config.rules.clone())
 		.with_identification(crate::smtp::identification::Policy::from_config(config))

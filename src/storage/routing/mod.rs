@@ -71,6 +71,12 @@ impl SplitDelivery {
 		})
 	}
 
+	/// Apply the server default quota to local copies from every ingress path.
+	pub fn with_quota(mut self, default_bytes: u64) -> Self {
+		self.local = self.local.with_quota(default_bytes);
+		self
+	}
+
 	/// Set which identification and reputation headers the mail this sink
 	/// generates gets. The same policy the submission paths use.
 	pub fn with_identification(mut self, policy: crate::smtp::identification::Policy) -> Self {
@@ -376,9 +382,19 @@ impl SplitDelivery {
 				recipients: local,
 				..message.clone()
 			};
-			let delivered = self
+			let delivered = match self
 				.local
-				.deliver_routed(&local_message, mailbox.as_deref())?;
+				.deliver_routed(&local_message, mailbox.as_deref())
+			{
+				Ok(delivered) => delivered,
+				Err(SinkError::MailboxFull(_)) if !remote.is_empty() || !srs_returns.is_empty() => {
+					super::delivery::Delivered {
+						over_quota: local_message.recipients.clone(),
+						..Default::default()
+					}
+				}
+				Err(error) => return Err(error),
+			};
 			*done = Some(LocalDone {
 				recipients: local_message.recipients.clone(),
 				reject: delivered.reject.clone(),
@@ -427,6 +443,44 @@ impl SplitDelivery {
 					self.outbound
 						.store(&bounce, account, extra)
 						.map_err(|error| SinkError::Unavailable(error.to_string()))?;
+				}
+			}
+			let full: Vec<_> = delivered
+				.over_quota
+				.iter()
+				.filter(|recipient| {
+					!local_message.no_dsn.contains(recipient)
+						&& !local_message.recipients.iter().any(|original| {
+							local_message.no_dsn.contains(original)
+								&& Address::parse(original)
+									.ok()
+									.and_then(|address| {
+										self.directory.current().final_recipients(&address)
+									})
+									.is_some_and(|finals| {
+										finals.iter().any(|(_, address)| address == *recipient)
+									})
+						})
+				})
+				.cloned()
+				.collect();
+			let hostname = full
+				.first()
+				.and_then(|address| address.rsplit_once('@'))
+				.map_or("localhost", |(_, domain)| domain);
+			if !full.is_empty()
+				&& let Some(report) = crate::queue::bounce::build(
+					hostname,
+					&message.reverse_path,
+					&full,
+					"552 5.2.2 mailbox full",
+					&message.data,
+					std::time::SystemTime::now(),
+					self.identification.system_auto_submitted,
+				) {
+				// A report failure does not repeat copies already delivered.
+				if let Err(error) = self.store_outbound(&report) {
+					tracing::warn!(%error, "mailbox-full report not queued");
 				}
 			}
 			self.queue_redirects(&message, delivered.redirects)?;

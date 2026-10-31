@@ -62,50 +62,6 @@ fn split_over_quota(
 	exclude_over_quota(session, message, full)
 }
 
-impl Session {
-	/// Acquire only the quota domains this message can write to.
-	pub(crate) async fn lock_delivery_quota(
-		&self,
-		recipients: &[String],
-	) -> Vec<tokio::sync::OwnedMutexGuard<()>> {
-		match self.policy.quota() {
-			Some(quota) => quota.lock_delivery(&self.directory, recipients).await,
-			None => Vec::new(),
-		}
-	}
-
-	/// Recheck the completed copy while the server holds the recipient quota
-	/// locks. The caller keeps those locks through the synchronous sink call.
-	pub(crate) fn recheck_delivery_quota(
-		&mut self,
-		message: AcceptedMessage,
-	) -> Option<AcceptedMessage> {
-		let full = self.policy.quota().map_or_else(Vec::new, |quota| {
-			message
-				.recipients
-				.iter()
-				.filter(|recipient| {
-					let Ok(address) = super::Address::parse(recipient) else {
-						return false;
-					};
-					let super::Resolution::Account(account) = self.directory.resolve(&address)
-					else {
-						return false;
-					};
-					let copy = crate::storage::local_delivery_copy(
-						&message.reverse_path,
-						recipient,
-						&message.data,
-					);
-					quota.would_overflow(&self.directory, &account, copy.len() as u64)
-				})
-				.cloned()
-				.collect()
-		});
-		exclude_over_quota(self, message, full)
-	}
-}
-
 fn exclude_over_quota(
 	session: &mut Session,
 	mut message: AcceptedMessage,

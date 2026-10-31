@@ -268,6 +268,7 @@ fn acting_account(state: &ApiState, principal: &Principal, from: &str) -> Option
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn sink_refusal(error: SinkError) -> ApiError {
 	match error {
+		SinkError::MailboxFull(recipient) => ApiError::mailbox_full(&recipient),
 		SinkError::VirusDetected(signature) => ApiError::virus_detected(&signature),
 		SinkError::AttachmentRefused(reasons) => ApiError::attachment_refused(&reasons),
 		SinkError::ScanUnavailable => ApiError::scan_unavailable(),
