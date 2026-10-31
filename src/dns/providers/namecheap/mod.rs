@@ -52,6 +52,27 @@ const MAX_BODY: usize = 256 * 1024;
 type Op<'a> = Pin<Box<dyn Future<Output = Result<(), ProviderError>> + Send + 'a>>;
 type ListOp<'a> = Pin<Box<dyn Future<Output = Result<Vec<DnsRecord>, ProviderError>> + Send + 'a>>;
 
+/// The write lock of one zone of one account. The API replaces the whole host
+/// list with `setHosts`, so a change is read, edited and written back; two
+/// changes interleaved there would each write a list that lacks the other's
+/// edit and the later write would erase it. Every provider in the process
+/// that names the same account and zone takes the same lock.
+fn zone_lock(api_user: &str, zone: &str) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+	use std::collections::HashMap;
+	use std::sync::{Arc, Mutex, OnceLock};
+	static LOCKS: OnceLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> = OnceLock::new();
+	let key = format!(
+		"{}\u{0}{}",
+		api_user.to_ascii_lowercase(),
+		zone.to_ascii_lowercase()
+	);
+	let mut locks = LOCKS
+		.get_or_init(|| Mutex::new(HashMap::new()))
+		.lock()
+		.unwrap_or_else(std::sync::PoisonError::into_inner);
+	Arc::clone(locks.entry(key).or_default())
+}
+
 /// A Namecheap-backed DNS provider for one zone.
 pub struct NamecheapProvider {
 	client: reqwest::Client,
@@ -199,6 +220,8 @@ impl NamecheapProvider {
 	async fn upsert_inner(&self, zone: &str, record: DnsRecord) -> Result<(), ProviderError> {
 		self.authorize(&record)?;
 		Self::api_kind(&record.kind)?;
+		let lock = zone_lock(&self.api_user, zone);
+		let _held = lock.lock().await;
 		let mut hosts = self.get_hosts(zone).await?;
 		let label = host_label(&record.name, zone);
 		let kind_str = record.kind.as_str();
@@ -219,6 +242,8 @@ impl NamecheapProvider {
 	async fn delete_inner(&self, zone: &str, record: DnsRecord) -> Result<(), ProviderError> {
 		self.authorize(&record)?;
 		Self::api_kind(&record.kind)?;
+		let lock = zone_lock(&self.api_user, zone);
+		let _held = lock.lock().await;
 		let hosts = self.get_hosts(zone).await?;
 		let label = host_label(&record.name, zone);
 		let kind_str = record.kind.as_str();

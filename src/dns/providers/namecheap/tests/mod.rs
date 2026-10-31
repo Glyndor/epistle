@@ -2,6 +2,7 @@ pub use super::*;
 
 pub(super) mod base;
 pub(super) mod basic;
+pub(super) mod concurrent;
 pub(super) mod contract;
 pub(super) mod dns01;
 pub(super) mod errors;
