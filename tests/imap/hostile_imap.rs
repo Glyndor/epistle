@@ -5,6 +5,10 @@
 mod abuse;
 #[path = "hostile_imap/auth_tls.rs"]
 mod auth_tls;
+#[path = "hostile_imap/compress.rs"]
+mod compress;
+#[path = "hostile_imap/compress_support.rs"]
+mod compress_support;
 #[path = "hostile_imap/framing.rs"]
 mod framing;
 #[path = "hostile_imap/harness.rs"]
