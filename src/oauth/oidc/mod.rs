@@ -147,19 +147,54 @@ impl NameResolver for SystemResolver {
 /// reqwest is built without the `json` feature here, so bodies are read with
 /// `.text()` and parsed with `serde_json`, matching the other callers.
 pub async fn fetch_keys(
-	client: &reqwest::Client,
+	builder: &(dyn Fn() -> reqwest::ClientBuilder + Sync),
 	discovery_url: &HttpsUrl,
 	default_alg: Algorithm,
 	allow_private_jwks: bool,
 	resolver: &dyn NameResolver,
 ) -> Result<Vec<Jwk>, OidcError> {
-	let body = get_text(client, discovery_url).await?;
+	let client = builder()
+		.build()
+		.map_err(|e| OidcError::Network(e.to_string()))?;
+	let body = get_text(&client, discovery_url).await?;
 	let discovery: Discovery =
 		serde_json::from_str(&body).map_err(|e| OidcError::BadJson(e.to_string()))?;
 	let jwks_uri = parse_endpoint(&discovery.jwks_uri)?;
-	ensure_jwks_uri_in_scope(discovery_url, &jwks_uri, allow_private_jwks, resolver).await?;
-	let jwks_body = get_text(client, &jwks_uri).await?;
+	let screened =
+		ensure_jwks_uri_in_scope(discovery_url, &jwks_uri, allow_private_jwks, resolver).await?;
+	// The connection goes to the addresses the screen just judged, not to
+	// whatever a second lookup answers: a name that rebinds between the two
+	// cannot move the fetch to an address the screen never saw.
+	let mut pinned = builder();
+	if !allow_private_jwks {
+		// A proxy would resolve the name itself and make the pin and the
+		// screen decide nothing, so the fetch goes direct.
+		pinned = pinned.no_proxy();
+	}
+	if let Some(url::Host::Domain(name)) = jwks_uri.as_url().host() {
+		let port = jwks_uri.as_url().port_or_known_default().unwrap_or(443);
+		let addrs: Vec<std::net::SocketAddr> = screened
+			.iter()
+			.map(|ip| std::net::SocketAddr::new(*ip, port))
+			.collect();
+		pinned = pinned.resolve_to_addrs(name, &addrs);
+	}
+	let pinned = pinned
+		.build()
+		.map_err(|e| OidcError::Network(e.to_string()))?;
+	let jwks_body = get_text(&pinned, &jwks_uri).await?;
 	parse_jwks(&jwks_body, default_alg)
+}
+
+/// The HTTP client the discovery and JWKS fetches use: no redirects (a
+/// compromised IdP must not 302 the fetch to an internal address) and a hard
+/// timeout (never hang on a stalled IdP). The body itself is size-bounded in
+/// `get_text`. [`fetch_keys`] takes a builder so it can pin the JWKS host to
+/// the addresses it screened.
+pub fn client_builder() -> reqwest::ClientBuilder {
+	reqwest::Client::builder()
+		.timeout(std::time::Duration::from_secs(30))
+		.redirect(reqwest::redirect::Policy::none())
 }
 
 /// Confirm the `jwks_uri` published by the IdP does not pivot to a host the
@@ -170,24 +205,21 @@ pub async fn fetch_keys(
 /// Resolving the host goes through `resolver` so tests can pin the addresses
 /// the screen sees instead of standing up a real DNS server.
 ///
-/// This is a screen, not a guarantee: between the resolve here and the actual
-/// connect in `get_text`, DNS may rotate and a second query can return a
-/// different address (TOCTOU). Closing that window means binding the socket to
-/// the already-resolved IP before connecting, which is a separate piece of work
-/// not done here.
+/// The addresses the screen judged are returned so the caller can connect to
+/// exactly those, which closes the window between this lookup and the connect.
 pub(crate) async fn ensure_jwks_uri_in_scope(
 	discovery_url: &HttpsUrl,
 	jwks_uri: &HttpsUrl,
 	allow_private_jwks: bool,
 	resolver: &dyn NameResolver,
-) -> Result<(), OidcError> {
+) -> Result<Vec<IpAddr>, OidcError> {
 	let jwks_ips = collect_ips(jwks_uri, resolver).await?;
 	if jwks_uri_allowed(&jwks_ips, &[], allow_private_jwks) {
-		return Ok(());
+		return Ok(jwks_ips);
 	}
 	let discovery_ips = collect_ips(discovery_url, resolver).await?;
 	if jwks_uri_allowed(&jwks_ips, &discovery_ips, allow_private_jwks) {
-		Ok(())
+		Ok(jwks_ips)
 	} else {
 		let offending = jwks_ips
 			.iter()
@@ -210,7 +242,9 @@ pub(crate) async fn ensure_jwks_uri_in_scope_for_test(
 	allow_private_jwks: bool,
 	resolver: &dyn NameResolver,
 ) -> Result<(), OidcError> {
-	ensure_jwks_uri_in_scope(discovery_url, jwks_uri, allow_private_jwks, resolver).await
+	ensure_jwks_uri_in_scope(discovery_url, jwks_uri, allow_private_jwks, resolver)
+		.await
+		.map(|_| ())
 }
 
 /// Every address `url` currently points at: the literal IPv4 / IPv6 in the
