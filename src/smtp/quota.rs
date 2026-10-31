@@ -16,8 +16,6 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
-use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
-
 use super::address::Address;
 use super::directory::{Directory, Resolution};
 use crate::storage::MessageCrypto;
@@ -36,7 +34,7 @@ pub fn limit_for(directory: &Directory, account: &str, default: u64) -> Option<u
 /// How many bytes an account stores.
 pub type UsageProbe = Arc<dyn Fn(&str) -> u64 + Send + Sync>;
 
-type DeliveryLocks = Mutex<HashMap<String, Weak<AsyncMutex<()>>>>;
+type DeliveryLocks = Mutex<HashMap<String, Weak<Mutex<()>>>>;
 type StoreLocks = Mutex<HashMap<PathBuf, Weak<DeliveryLocks>>>;
 
 /// Listeners using the same mail store share quota admission locks.
@@ -110,47 +108,17 @@ impl MailboxQuota {
 			.is_some_and(|limit| (self.usage)(account).saturating_add(size) > limit)
 	}
 
-	/// Hold each recipient account's quota until its delivery finishes. Accounts
-	/// are locked in order, once each, so overlapping recipient sets can wait
-	/// without deadlocking. Waiting yields the task; other accounts stay available.
-	pub(crate) async fn lock_delivery(
-		&self,
-		directory: &Directory,
-		recipients: &[String],
-	) -> Vec<OwnedMutexGuard<()>> {
-		let mut accounts: Vec<String> = recipients
-			.iter()
-			.filter_map(|recipient| Address::parse(recipient).ok())
-			.filter_map(|address| directory.final_recipients(&address))
-			.flatten()
-			.map(|(account, _)| account)
-			.filter(|account| self.limit(directory, account).is_some())
-			.collect();
-		accounts.sort_unstable();
-		accounts.dedup();
-		let locks: Vec<_> = {
-			let mut locks = self
-				.delivery_locks
-				.lock()
-				.unwrap_or_else(|e| e.into_inner());
-			locks.retain(|_, lock| lock.strong_count() > 0);
-			accounts
-				.into_iter()
-				.map(|account| {
-					let entry = locks.entry(account).or_default();
-					let lock = entry
-						.upgrade()
-						.unwrap_or_else(|| Arc::new(AsyncMutex::new(())));
-					*entry = Arc::downgrade(&lock);
-					lock
-				})
-				.collect()
-		};
-		let mut held = Vec::with_capacity(locks.len());
-		for lock in locks {
-			held.push(lock.lock_owned().await);
-		}
-		held
+	/// The shared lock for one final account's synchronous copy admission.
+	pub(crate) fn delivery_lock(&self, account: &str) -> Arc<Mutex<()>> {
+		let mut locks = self
+			.delivery_locks
+			.lock()
+			.unwrap_or_else(|e| e.into_inner());
+		locks.retain(|_, lock| lock.strong_count() > 0);
+		let entry = locks.entry(account.to_string()).or_default();
+		let lock = entry.upgrade().unwrap_or_else(|| Arc::new(Mutex::new(())));
+		*entry = Arc::downgrade(&lock);
+		lock
 	}
 
 	/// The recipients among `recipients` that are a local account `size`

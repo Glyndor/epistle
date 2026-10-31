@@ -318,6 +318,7 @@ fn submit_email(
 		Err(error) => {
 			charge.refund();
 			return Err(match error {
+				crate::smtp::sink::SinkError::MailboxFull(_) => "overQuota".into(),
 				// RFC 8621 section 7.5.2: the server refuses to send this message.
 				crate::smtp::sink::SinkError::VirusDetected(signature) => Refusal {
 					kind: "forbiddenToSend",

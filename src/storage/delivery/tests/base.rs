@@ -193,3 +193,59 @@ fn tmp_leftovers_are_not_visible_in_inbox() {
 	fs::write(dir.path().join("accounts/alice/tmp/crash.eml"), b"partial").expect("write tmp");
 	assert_eq!(list_inbox(dir.path(), "alice").len(), 1);
 }
+
+#[test]
+fn final_delivery_admission_includes_the_stored_trace_headers() {
+	let message = AcceptedMessage {
+		reverse_path: "alice@sender.example".to_string(),
+		recipients: vec!["bob@example.org".to_string()],
+		no_dsn: Vec::new(),
+		data: b"Subject: hi\r\n\r\nbody\r\n".to_vec(),
+		require_tls: false,
+		mailbox: None,
+		tlsrpt_verified: false,
+		sender_verified: false,
+	};
+	let bytes = super::super::trace::final_copy(
+		&message.reverse_path,
+		&message.recipients[0],
+		&message.data,
+	)
+	.len() as u64;
+	let directory =
+		crate::directory_store::DirectoryHandle::new(crate::smtp::directory::Directory::new(
+			["example.org".to_string()],
+			[("bob@example.org".to_string(), "bob".to_string())],
+		));
+	let exact_root = tempfile::tempdir().expect("exact store");
+	let exact = LocalDelivery::new(exact_root.path(), directory.clone())
+		.expect("local delivery")
+		.with_quota(bytes);
+	assert!(exact.deliver(message.clone()).is_ok());
+	let smaller_root = tempfile::tempdir().expect("smaller store");
+	let smaller = LocalDelivery::new(smaller_root.path(), directory)
+		.expect("local delivery")
+		.with_quota(bytes - 1);
+	assert!(matches!(
+		smaller.deliver(message),
+		Err(SinkError::MailboxFull(_))
+	));
+}
+
+#[test]
+fn a_storage_error_releases_final_copy_admission() {
+	let root = tempfile::tempdir().expect("mail store");
+	let sink = LocalDelivery::new(root.path(), directory()).expect("local delivery");
+	crate::imap::mailbox::ensure_defaults(root.path(), "bob").expect("mailboxes");
+	let tmp = root.path().join("accounts/bob/tmp");
+	fs::remove_dir(&tmp).expect("remove staging directory");
+	fs::write(&tmp, b"occupied").expect("staging file");
+	let copy = message(&["bob@example.org"]);
+	assert!(matches!(
+		sink.deliver(copy.clone()),
+		Err(SinkError::Unavailable(_))
+	));
+	fs::remove_file(&tmp).expect("remove staging file");
+	assert!(sink.deliver(copy).is_ok());
+	assert_eq!(list_inbox(root.path(), "bob").len(), 1);
+}

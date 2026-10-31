@@ -8,6 +8,12 @@ new dependency is needed.
 - Exactly N final DATA acceptances for 64 parallel submissions by one account.
 - Concurrent deliveries stay within one mailbox quota; each final 250 has one
   complete stored copy, with no loss or duplication.
+- Alias deliveries check each final member independently, including list and
+  trace headers. A full member is skipped and reported, while the member with
+  room receives every acknowledged message exactly once.
+- Incoming SMTP, authenticated local submission and REST share the final-copy
+  quota admission. A bounded rendezvous after their protocol checks makes all
+  three reach the sink before storage starts; it does not serialise the writes.
 - A login in progress cannot succeed after password replacement or account
   disable returns. This case is neutrally ignored pending lifecycle review.
   Run it explicitly with `cargo test --locked --test concurrency_suite credentials:: -- --ignored --nocapture`.
