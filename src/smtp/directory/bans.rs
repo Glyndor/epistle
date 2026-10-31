@@ -213,19 +213,28 @@ impl Directory {
 		// this the guesses queued behind the one that earned the ban would
 		// all be counted, and one client could push an account past its own
 		// limit.
-		let Ok(local) = self.hash_gate.run(|| {
-			if matches!(self.check_ban(login, ip, protocol), BanOutcome::Banned) {
+		let Ok(waited) = self.hash_gate.run(|| {
+			let again = self.check_ban(login, ip, protocol);
+			if matches!(again, BanOutcome::Banned) {
 				return None;
 			}
-			Some(self.authenticate_local(login, password, ip, protocol))
+			let bypassed_now = matches!(again, BanOutcome::BannedButKnown { .. });
+			Some((
+				self.authenticate_local(login, password, ip, protocol),
+				bypassed_now,
+			))
 		}) else {
 			self.note_gate_rejection(protocol);
 			return hash_gate::Verdict::Busy;
 		};
-		let Some(local) = local else {
+		let Some((local, bypassed_now)) = waited else {
 			self.record_auth_outcome(login, None, ip, protocol);
 			return hash_gate::Verdict::Refused;
 		};
+		// A ban armed while this check waited is bypassed for this request
+		// the same way one found by the first question is: a success must
+		// not lift it for the other clients.
+		let bypassed = bypassed || bypassed_now;
 		let verified = local
 			.or_else(|| {
 				// Local/SQL credentials did not match: try the live LDAP bind, if any.
