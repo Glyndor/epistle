@@ -16,7 +16,7 @@ untouched (see [What was left alone](#what-was-left-alone)).
   command parsing (`src/imap/command`). Every connection runs these once per
   line.
 - **Per-message response building** — IMAP FETCH/STORE response rendering
-  (`src/imap/session/fetchstore.rs`, `src/imap/mailbox/flag.rs`). Runs once per
+  (`src/imap/session/fetch/store.rs`, `src/imap/mailbox/flag.rs`). Runs once per
   message in a result set.
 - **Flag persistence** — IMAP STORE writing the `.flags` sidecar
   (`src/imap/snapshot.rs`, `src/imap/flags.rs`).

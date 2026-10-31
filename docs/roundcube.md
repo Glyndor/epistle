@@ -89,7 +89,7 @@ client verifies it and replies with an empty line; only then does epistle
 return `235 2.7.0 authentication successful`. This is implemented in
 [`src/smtp/session/scram.rs`](../src/smtp/session/scram.rs), in
 `scram_client_final` and `scram_server_final`, and covered by
-[`src/smtp/session/tests/mods/tests_scram_final.rs`](../src/smtp/session/tests/mods/tests_scram_final.rs).
+[`src/smtp/session/tests/mods/scram/tests_scram_final.rs`](../src/smtp/session/tests/mods/scram/tests_scram_final.rs).
 Those tests have not been run for this guide.
 
 Do not work around an old client assumption that the server-final belongs on
