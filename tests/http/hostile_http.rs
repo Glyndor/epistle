@@ -13,3 +13,5 @@ mod headers;
 mod jmap;
 #[path = "hostile_http/webdav.rs"]
 mod webdav;
+#[path = "hostile_http/webdav_race.rs"]
+mod webdav_race;
