@@ -52,7 +52,7 @@ fn a_disabled_account_takes_as_long_to_refuse_as_a_wrong_password() {
 
 /// How many password hashes one refused attempt for `login` ran.
 fn hashes_for_a_refusal(login: &str) -> usize {
-	use super::decoy_counters::DecoyCounters;
+	use super::bans::decoy_counters::DecoyCounters;
 	let counters = std::sync::Arc::new(DecoyCounters::default());
 	let (directory, _, _) = gate_directory_with_app_passwords();
 	let directory = directory.with_decoy_counters(counters.clone());

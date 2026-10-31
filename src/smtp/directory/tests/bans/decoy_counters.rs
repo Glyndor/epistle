@@ -43,19 +43,19 @@ impl Directory {
 		self
 	}
 
-	pub(in super::super) fn count_password_decoy(&self) {
+	pub(in crate::smtp::directory) fn count_password_decoy(&self) {
 		if let Some(counters) = &self.decoy_counters {
 			counters.password.fetch_add(1, Ordering::Relaxed);
 		}
 	}
 
-	pub(in super::super) fn count_password_hash(&self) {
+	pub(in crate::smtp::directory) fn count_password_hash(&self) {
 		if let Some(counters) = &self.decoy_counters {
 			counters.hashes.fetch_add(1, Ordering::Relaxed);
 		}
 	}
 
-	pub(in super::super) fn count_scram_decoy(&self) {
+	pub(in crate::smtp::directory) fn count_scram_decoy(&self) {
 		if let Some(counters) = &self.decoy_counters {
 			counters.scram.fetch_add(1, Ordering::Relaxed);
 		}

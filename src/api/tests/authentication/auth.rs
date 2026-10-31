@@ -141,9 +141,9 @@ fn sql_account_state(dir: &std::path::Path, key: Option<super::api_keys::ApiKey>
 
 fn count_directory(
 	handle: &crate::directory_store::DirectoryHandle,
-) -> Arc<crate::smtp::directory::tests::decoy_counters::DecoyCounters> {
+) -> Arc<crate::smtp::directory::tests::bans::decoy_counters::DecoyCounters> {
 	let counters =
-		Arc::new(crate::smtp::directory::tests::decoy_counters::DecoyCounters::default());
+		Arc::new(crate::smtp::directory::tests::bans::decoy_counters::DecoyCounters::default());
 	let directory = handle.current();
 	handle.replace(crate::smtp::directory::Directory::default());
 	let directory = Arc::try_unwrap(directory).expect("exclusive directory snapshot");
@@ -156,7 +156,7 @@ fn sql_account_state_counted(
 	key: Option<super::api_keys::ApiKey>,
 ) -> (
 	ApiState,
-	Arc<crate::smtp::directory::tests::decoy_counters::DecoyCounters>,
+	Arc<crate::smtp::directory::tests::bans::decoy_counters::DecoyCounters>,
 ) {
 	if let Some(key) = key {
 		let mut key_store = crate::api::ApiKeyStore::open(dir).expect("open key store");
