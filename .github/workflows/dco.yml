@@ -12,7 +12,7 @@ on:
   # reads the range off whichever event fired; on merge_group it is the squash
   # commit GitHub builds for the group, so the trailer is checked on the commit
   # that will land on develop. `paths:` and `branches:` filters do not apply to
-  # merge_group. See docs/merge-queue.md.
+  # merge_group. See docs/operations/merge-queue.md.
   merge_group:
     types: [checks_requested]
 

@@ -6,7 +6,7 @@ on:
   pull_request:
   # Required check `sbom-and-licenses / SBOM and license attribution`.
   # `paths:` and `branches:` filters do not apply to merge_group, so the
-  # trigger sits at the top level. See docs/merge-queue.md.
+  # trigger sits at the top level. See docs/operations/merge-queue.md.
   merge_group:
     types: [checks_requested]
 

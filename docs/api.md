@@ -107,7 +107,7 @@ Set the listener itself to `addr = "0.0.0.0"` (the container side). With this
 the API answers on `10.0.0.1:8025` and not on any other host address. `epistle
 stack update` and `epistle probe` check the API on the loopback of the host,
 so they report `5 of 6 listeners answer` while the stack is running as
-intended. See [the container stack](container.md#bringing-up-the-stack) and the
+intended. See [the container stack](operations/container.md#bringing-up-the-stack) and the
 notes on customizations in [`epistle stack`](cli.md).
 
 Two things stay true whichever way the port is published:
@@ -506,7 +506,7 @@ The server posts events to the URL in `[webhook]` (`epistle webhook set URL
 | `suppressed` | The recipient was on a suppression list | `spool_id`, `recipient`, `extra` |
 | `canceled` | An operator removed the entry through the API or `epistle queue remove` | `spool_id`, `recipient`, `extra` |
 | `message_received` | A message was delivered to a local recipient | `account` (the recipient address), `from` (the envelope sender, empty for a bounce), `subject`, `message_id` (the last two may be `null`) |
-| `metric_alert`, `dkim_rotation_failed`, `outbound_virus`, `warmup.ok`, `warmup.held`, `warmup.backoff` | Operator events | See [configuration](configuration.md#webhook) and [warm-up](warmup.md) |
+| `metric_alert`, `dkim_rotation_failed`, `outbound_virus`, `warmup.ok`, `warmup.held`, `warmup.backoff` | Operator events | See [configuration](configuration.md#webhook) and [warm-up](operations/warmup.md) |
 | `test` | Only `epistle webhook test` | `message` |
 
 `extra` is left out when empty; `spool_id` is the `queued` id the send

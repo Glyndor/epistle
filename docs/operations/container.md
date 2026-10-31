@@ -90,7 +90,7 @@ home and container mounts. Rollback validates ownership, permissions, file type
 and the saved SHA-256 digest before stopping mail. Legacy copies under the
 service account home are ignored. An upgrade must save a trusted copy in the
 new store before it can be used. Database dumps stay in `<data_dir>/backups`;
-see [Rolling back an upgrade](cli.md#rolling-back-an-upgrade). Purge removes the
+see [Rolling back an upgrade](../cli.md#rolling-back-an-upgrade). Purge removes the
 host binary store.
 
 The minimum a Podman or Docker compose unit needs is:
@@ -305,7 +305,7 @@ services:
       - "10.0.0.1:8025:8025"
 ```
 
-[Exposing the API on a private interface](api.md#exposing-the-api-on-a-private-interface)
+[Exposing the API on a private interface](../api.md#exposing-the-api-on-a-private-interface)
 covers the API case, including what `--ip-cidr` sees when the container
 network does not carry the client's address.
 
@@ -398,7 +398,7 @@ defaults above.
 
 The containers share the host kernel's clock, and epistle does not set it.
 DKIM signatures, certificate validity, token and key expiry, the timestamp
-authority's seals and the [evidence log](evidence.md#the-clock) all depend on
+authority's seals and the [evidence log](../evidence.md#the-clock) all depend on
 it. `epistle status` has a `clock` area that warns when the host is not
 synchronised with a time source, and `epistle init` warns about the same;
 neither changes anything. The `.deb` recommends `systemd-timesyncd` or
@@ -469,7 +469,7 @@ with mode `0600`. `epistle dns provider set <provider> --zone <zone> --store-tok
 moves an existing inline or environment token there, updates the generated
 Compose file to mount it read-only only in `mail`, and recreates that service.
 Supply any other settings required by your provider. For `init`, point
-`dns.token_file` in the answers at this file. See [DNS token storage](dns.md#dns-provider-token-storage).
+`dns.token_file` in the answers at this file. See [DNS token storage](../dns.md#dns-provider-token-storage).
 
 A token you already keep elsewhere is named with `--token-file /absolute/path`:
 the command leaves the file where it is and mounts that path read-only into

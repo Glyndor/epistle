@@ -1,5 +1,5 @@
 //! The shape of the role scripts. What they do to a real cluster is
-//! measured on a running stack (see docs/container.md); these pin the
+//! measured on a running stack (see docs/operations/container.md); these pin the
 //! parts that keep a failure recoverable.
 
 use super::*;

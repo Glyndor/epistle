@@ -223,7 +223,7 @@ control, its test and the residual risks, see the [threat model](threat-model.md
   clamd uses to step down to its own user, on a read-only root filesystem, with
   memory and process limits; `mail` connects to PostgreSQL as a role without
   superuser that owns only its database. The measurements and the upgrade path
-  are in [the container stack](container.md#what-each-container-may-do).
+  are in [the container stack](operations/container.md#what-each-container-may-do).
 
 ### A private subordinate id range
 
