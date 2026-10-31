@@ -2,7 +2,7 @@
 //! `454 4.7.0` instead of `535`, whatever the login and the password, and the
 //! attempt does not count toward the failures that close the connection.
 
-use super::tests_scram::{b64, reply_code};
+use super::super::scram::tests_scram::{b64, reply_code};
 use super::*;
 use crate::smtp::directory::gate_fixture::*;
 use crate::smtp::directory::hash_gate::HashGate;

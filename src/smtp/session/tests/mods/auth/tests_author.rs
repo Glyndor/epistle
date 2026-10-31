@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::smtp::auth::tests::base::fixture_password;
-use crate::smtp::session::tests::mods::tests_auth::{plain, reply_text};
+use crate::smtp::session::tests::mods::auth::tests_auth::{plain, reply_text};
 
 fn session() -> Session {
 	let directory = Arc::new(

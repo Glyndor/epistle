@@ -2,16 +2,16 @@
 //! message: past it the client gets the exact 421 line and the session
 //! ends, whatever mix of junk it sent and whether it is logged in.
 
-use super::tests_auth::tls_session;
+use super::super::auth::tests_auth::tls_session;
 use super::tests_basic::{greeted, reply_code};
 use super::*;
 
 /// The line a session past its junk-command limit is closed with.
-pub(super) const TOO_MANY: &str =
+pub(in crate::smtp::session::tests::mods) const TOO_MANY: &str =
 	"421 4.7.0 too many commands without progress, closing connection\r\n";
 
 /// The reply of a step that closes the connection; `None` otherwise.
-pub(super) fn closing(action: &Action) -> Option<String> {
+pub(in crate::smtp::session::tests::mods) fn closing(action: &Action) -> Option<String> {
 	match action {
 		Action::Close(reply) => Some(reply.to_string()),
 		_ => None,
@@ -19,7 +19,11 @@ pub(super) fn closing(action: &Action) -> Option<String> {
 }
 
 /// Send `command` `times` times and assert none of them closes the session.
-pub(super) fn send_kept(session: &mut Session, command: &str, times: usize) {
+pub(in crate::smtp::session::tests::mods) fn send_kept(
+	session: &mut Session,
+	command: &str,
+	times: usize,
+) {
 	for sent in 1..=times {
 		let action = session.command_line(command);
 		assert_eq!(
@@ -199,7 +203,7 @@ fn a_successful_auth_does_not_reset_the_count() {
 	send_kept(&mut session, "NOOP", 99);
 	assert_eq!(reply_code(&session.command_line("AUTH PLAIN")), 334);
 	let password = crate::smtp::auth::tests::base::fixture_password();
-	let action = session.auth_line(&super::tests_auth::plain("alice", password));
+	let action = session.auth_line(&super::super::auth::tests_auth::plain("alice", password));
 	assert_eq!(reply_code(&action), 235, "the login itself is answered");
 	assert_eq!(session.authenticated(), Some("alice"));
 	assert_eq!(

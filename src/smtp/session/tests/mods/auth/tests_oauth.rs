@@ -20,7 +20,7 @@ fn reply_code(action: &Action) -> u16 {
 	}
 }
 
-pub(super) fn auth_directory() -> Arc<Directory> {
+pub(in crate::smtp::session::tests::mods) fn auth_directory() -> Arc<Directory> {
 	Arc::new(Directory::new(
 		["example.org".to_string()],
 		[("alice@example.org".to_string(), "alice".to_string())],
@@ -28,7 +28,8 @@ pub(super) fn auth_directory() -> Arc<Directory> {
 }
 
 /// An ES256 verifier plus its signing key.
-pub(super) fn verifier_and_key() -> (Arc<crate::oauth::OauthVerifier>, EcdsaKeyPair, SystemRandom) {
+pub(in crate::smtp::session::tests::mods) fn verifier_and_key()
+-> (Arc<crate::oauth::OauthVerifier>, EcdsaKeyPair, SystemRandom) {
 	let rng = SystemRandom::new();
 	let pkcs8 = EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, &rng).unwrap();
 	let pair =
@@ -41,7 +42,11 @@ pub(super) fn verifier_and_key() -> (Arc<crate::oauth::OauthVerifier>, EcdsaKeyP
 	(verifier, pair, rng)
 }
 
-pub(super) fn bearer_response(pair: &EcdsaKeyPair, rng: &SystemRandom, email: &str) -> String {
+pub(in crate::smtp::session::tests::mods) fn bearer_response(
+	pair: &EcdsaKeyPair,
+	rng: &SystemRandom,
+	email: &str,
+) -> String {
 	let header = B64URL.encode(br#"{"alg":"ES256","typ":"JWT"}"#);
 	let payload = B64URL.encode(
 		serde_json::to_vec(&serde_json::json!({

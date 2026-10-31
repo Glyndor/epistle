@@ -2,7 +2,7 @@
 //! `tests_auth.rs` only to stay under the per-file line limit; the
 //! harness lives there.
 
-use super::tests_auth::*;
+use super::super::auth::tests_auth::*;
 use super::*;
 use crate::smtp::auth::tests::base::fixture_password;
 
@@ -325,7 +325,7 @@ fn an_account_in_two_limited_domains_gets_the_strictest_limit() {
 
 /// One message from `from` to a remote recipient, through to the end of
 /// the data. The `MAIL FROM` reply code; a 250 there must end delivered.
-pub(super) fn send_one(session: &mut Session, from: &str) -> u16 {
+pub(in crate::smtp::session::tests::mods) fn send_one(session: &mut Session, from: &str) -> u16 {
 	let mail = reply_code(&session.command_line(&format!("MAIL FROM:<{from}>")));
 	if mail != 250 {
 		return mail;
