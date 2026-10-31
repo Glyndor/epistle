@@ -7,12 +7,12 @@ use std::time::Instant;
 
 use super::support::DEADLINE;
 
-fn ptrace(request: u32, tid: i32, data: usize) -> io::Result<()> {
+fn ptrace(request: impl Into<i64>, tid: i32, data: usize) -> io::Result<()> {
 	// SAFETY: tid is our child's announced runtime thread. GETREGS receives
 	// a writable user_regs_struct; other requests interpret data as flags.
 	let result = unsafe {
 		libc::ptrace(
-			request as _,
+			request.into() as _,
 			tid,
 			std::ptr::null_mut::<libc::c_void>(),
 			data as *mut libc::c_void,
