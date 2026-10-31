@@ -14,18 +14,20 @@ use super::*;
 use crate::smtp::sink::MemorySink;
 
 /// The exact line a client below the floor gets before the close.
-pub(super) const TOO_SLOW: &str = "421 4.4.2 transfer too slow, closing connection\r\n";
+pub(in crate::smtp::server::tests::mods) const TOO_SLOW: &str =
+	"421 4.4.2 transfer too slow, closing connection\r\n";
 
 /// The default grace period: no client is judged before it.
-pub(super) const GRACE: Duration = Duration::from_secs(120);
+pub(in crate::smtp::server::tests::mods) const GRACE: Duration = Duration::from_secs(120);
 
 /// The default floor, in bytes per second.
-pub(super) const FLOOR: usize = 10 * 1024;
+pub(in crate::smtp::server::tests::mods) const FLOOR: usize = 10 * 1024;
 
-pub(super) const OPEN: &[u8] = b"EHLO client.example.org\r\nMAIL FROM:<a@example.net>\r\n\
+pub(in crate::smtp::server::tests::mods) const OPEN: &[u8] =
+	b"EHLO client.example.org\r\nMAIL FROM:<a@example.net>\r\n\
 RCPT TO:<bob@example.org>\r\n";
 
-pub(super) fn test_directory() -> DirectoryHandle {
+pub(in crate::smtp::server::tests::mods) fn test_directory() -> DirectoryHandle {
 	DirectoryHandle::new(Directory::new(
 		["example.org".to_string()],
 		[("bob@example.org".to_string(), "bob".to_string())],
@@ -33,7 +35,7 @@ pub(super) fn test_directory() -> DirectoryHandle {
 }
 
 /// A server with the built-in rate floor and an in-memory sink.
-pub(super) fn default_server() -> (Arc<Server>, Arc<MemorySink>) {
+pub(in crate::smtp::server::tests::mods) fn default_server() -> (Arc<Server>, Arc<MemorySink>) {
 	let sink = Arc::new(MemorySink::new());
 	let server = Server::new("mail.example.org", sink.clone() as Arc<dyn MessageSink>)
 		.with_directory(test_directory());
@@ -42,7 +44,7 @@ pub(super) fn default_server() -> (Arc<Server>, Arc<MemorySink>) {
 
 /// One client connection driven by the test, the server running in its
 /// own task.
-pub(super) struct Client {
+pub(in crate::smtp::server::tests::mods) struct Client {
 	read: ReadHalf<DuplexStream>,
 	write: WriteHalf<DuplexStream>,
 	seen: Vec<u8>,
@@ -50,13 +52,16 @@ pub(super) struct Client {
 }
 
 impl Client {
-	pub(super) fn connect(server: &Arc<Server>) -> Self {
+	pub(in crate::smtp::server::tests::mods) fn connect(server: &Arc<Server>) -> Self {
 		Self::connect_from(server, None)
 	}
 
 	/// A connection from `peer`, so the per-client share of the budget
 	/// applies to it.
-	pub(super) fn connect_from(server: &Arc<Server>, peer: Option<std::net::IpAddr>) -> Self {
+	pub(in crate::smtp::server::tests::mods) fn connect_from(
+		server: &Arc<Server>,
+		peer: Option<std::net::IpAddr>,
+	) -> Self {
 		let (client, server_stream) = tokio::io::duplex(64 * 1024);
 		let server = Arc::clone(server);
 		let task = tokio::spawn(async move { server.handle(server_stream, peer).await });
@@ -67,7 +72,7 @@ impl Client {
 	}
 
 	/// The client end of a connection a listener accepts on its own.
-	pub(super) fn over(stream: DuplexStream) -> Self {
+	pub(in crate::smtp::server::tests::mods) fn over(stream: DuplexStream) -> Self {
 		let (read, write) = tokio::io::split(stream);
 		Client {
 			read,
@@ -79,7 +84,7 @@ impl Client {
 
 	/// Send `bytes` and let the server task read them before the clock
 	/// moves on: the rate is measured on what the server has read.
-	pub(super) async fn send(&mut self, bytes: &[u8]) {
+	pub(in crate::smtp::server::tests::mods) async fn send(&mut self, bytes: &[u8]) {
 		self.write
 			.write_all(bytes)
 			.await
@@ -90,7 +95,7 @@ impl Client {
 	}
 
 	/// Read until the server has written `needle` (in the whole output).
-	pub(super) async fn wait_for(&mut self, needle: &str) {
+	pub(in crate::smtp::server::tests::mods) async fn wait_for(&mut self, needle: &str) {
 		let mut buffer = [0u8; 4096];
 		while !String::from_utf8_lossy(&self.seen).contains(needle) {
 			let read = self.read.read(&mut buffer).await.expect("client read");
@@ -100,7 +105,7 @@ impl Client {
 	}
 
 	/// Read to the close and return everything the server wrote.
-	pub(super) async fn finish(mut self) -> String {
+	pub(in crate::smtp::server::tests::mods) async fn finish(mut self) -> String {
 		self.read
 			.read_to_end(&mut self.seen)
 			.await
@@ -113,7 +118,7 @@ impl Client {
 }
 
 /// The code of every final reply line the server wrote, in order.
-pub(super) fn reply_codes(output: &str) -> Vec<&str> {
+pub(in crate::smtp::server::tests::mods) fn reply_codes(output: &str) -> Vec<&str> {
 	output
 		.split("\r\n")
 		.filter(|line| line.len() >= 4 && line.as_bytes()[3] == b' ')
@@ -122,7 +127,7 @@ pub(super) fn reply_codes(output: &str) -> Vec<&str> {
 }
 
 /// `bytes` of body as 512-byte lines (510 octets and CRLF).
-pub(super) fn body(bytes: usize) -> Vec<u8> {
+pub(in crate::smtp::server::tests::mods) fn body(bytes: usize) -> Vec<u8> {
 	assert_eq!(bytes % 512, 0, "whole lines only");
 	let mut lines = Vec::with_capacity(bytes);
 	for _ in 0..bytes / 512 {
@@ -134,7 +139,7 @@ pub(super) fn body(bytes: usize) -> Vec<u8> {
 
 /// Let `time` pass on the paused clock, then let the server task act on
 /// any deadline that came due before the client does anything else.
-pub(super) async fn pass(time: Duration) {
+pub(in crate::smtp::server::tests::mods) async fn pass(time: Duration) {
 	tokio::time::advance(time).await;
 	for _ in 0..4 {
 		tokio::task::yield_now().await;
@@ -142,7 +147,7 @@ pub(super) async fn pass(time: Duration) {
 }
 
 /// Assert the 421 came exactly when the grace ran out.
-pub(super) fn assert_cut_at_grace(started: Instant) {
+pub(in crate::smtp::server::tests::mods) fn assert_cut_at_grace(started: Instant) {
 	let elapsed = started.elapsed();
 	assert!(
 		elapsed >= GRACE && elapsed < GRACE + Duration::from_millis(5),
@@ -231,9 +236,10 @@ async fn a_fast_data_client_is_never_cut_even_when_it_pauses() {
 
 /// A listener whose connections arrive when the test sends them, all from
 /// one peer address.
-pub(super) struct Arrivals {
-	pub(super) next: tokio::sync::Mutex<mpsc::UnboundedReceiver<DuplexStream>>,
-	pub(super) peer: SocketAddr,
+pub(in crate::smtp::server::tests::mods) struct Arrivals {
+	pub(in crate::smtp::server::tests::mods) next:
+		tokio::sync::Mutex<mpsc::UnboundedReceiver<DuplexStream>>,
+	pub(in crate::smtp::server::tests::mods) peer: SocketAddr,
 }
 
 impl crate::net::accept::Accept for Arrivals {

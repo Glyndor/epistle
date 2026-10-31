@@ -7,7 +7,9 @@ use std::time::Duration;
 
 use tokio::time::Instant;
 
-use super::tests_data_rate::{Client, FLOOR, OPEN, body, pass, reply_codes, test_directory};
+use super::super::rate::tests_data_rate::{
+	Client, FLOOR, OPEN, body, pass, reply_codes, test_directory,
+};
 use super::tests_session_limits::{listen, one_slot_server, the_address_delivers_again};
 use super::*;
 use crate::smtp::line::filler;

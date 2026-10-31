@@ -28,7 +28,10 @@ fn message(body: &str) -> String {
 
 /// Submit `data` as alice over STARTTLS and AUTH LOGIN; the reply to the
 /// end of DATA.
-pub(super) async fn submit(sink: Arc<dyn MessageSink>, data: &str) -> String {
+pub(in crate::smtp::server::tests::mods) async fn submit(
+	sink: Arc<dyn MessageSink>,
+	data: &str,
+) -> String {
 	submit_to(
 		Server::new("mail.example.org", sink).with_directory(directory_with_password()),
 		data,
@@ -37,7 +40,7 @@ pub(super) async fn submit(sink: Arc<dyn MessageSink>, data: &str) -> String {
 }
 
 /// [`submit`] through `server`, which gets the TLS acceptor here.
-pub(super) async fn submit_to(server: Server, data: &str) -> String {
+pub(in crate::smtp::server::tests::mods) async fn submit_to(server: Server, data: &str) -> String {
 	let (acceptor, cert) = crate::tls::test_support::acceptor_and_cert();
 	let server = server.with_tls(
 		crate::tls::ReloadableAcceptor::new(acceptor),

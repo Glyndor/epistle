@@ -2,7 +2,7 @@
 //! only in part; the server refuses it at DATA, so the cut is never reached
 //! by mail from outside.
 
-use super::tests_data_rate::{Client, reply_codes, test_directory};
+use super::super::rate::tests_data_rate::{Client, reply_codes, test_directory};
 use super::*;
 use crate::smtp::sink::MemorySink;
 use crate::smtp::trace::MAX_HEADER_FIELDS;

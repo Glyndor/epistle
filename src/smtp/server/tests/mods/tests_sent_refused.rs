@@ -2,8 +2,8 @@
 //! sender's `Sent` folder: the copy is stored only once the message was
 //! accepted, as the API already does.
 
+use super::scanning::tests_virus::submit_to;
 use super::tests_auth::directory_with_password;
-use super::tests_virus::submit_to;
 use super::*;
 use crate::antispam::attachments::policy::Policy;
 use crate::antispam::clamd::ClamdHook;

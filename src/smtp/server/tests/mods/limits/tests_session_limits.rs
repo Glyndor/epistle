@@ -5,7 +5,7 @@
 
 use tokio::sync::mpsc;
 
-use super::tests_data_rate::{Arrivals, Client, OPEN, reply_codes, test_directory};
+use super::super::rate::tests_data_rate::{Arrivals, Client, OPEN, reply_codes, test_directory};
 use super::*;
 use crate::smtp::sink::MemorySink;
 
@@ -14,7 +14,7 @@ const TOO_MANY: &str = "421 4.7.0 too many commands without progress, closing co
 
 /// A listener for one address that admits one connection from it at a time,
 /// with a budget for one small message.
-pub(super) fn one_slot_server(
+pub(in crate::smtp::server::tests::mods) fn one_slot_server(
 	budget: &Arc<MemoryBudget>,
 	configure: impl FnOnce(Server) -> Server,
 ) -> (Arc<Server>, Arc<MemorySink>) {
@@ -28,7 +28,7 @@ pub(super) fn one_slot_server(
 }
 
 /// Start `server` on a listener whose connections the test hands over.
-pub(super) fn listen(
+pub(in crate::smtp::server::tests::mods) fn listen(
 	server: &Arc<Server>,
 ) -> (
 	mpsc::UnboundedSender<tokio::io::DuplexStream>,
@@ -44,7 +44,7 @@ pub(super) fn listen(
 
 /// Connect again from the same address and deliver one message: possible
 /// only once the earlier connection gave its slot and its octets back.
-pub(super) async fn the_address_delivers_again(
+pub(in crate::smtp::server::tests::mods) async fn the_address_delivers_again(
 	arrive: &mpsc::UnboundedSender<tokio::io::DuplexStream>,
 	sink: &MemorySink,
 ) {
