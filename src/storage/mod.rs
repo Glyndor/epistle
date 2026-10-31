@@ -32,6 +32,7 @@ pub use crypto::{
 	CryptoAuthError, CryptoError, KEY_LEN, MAGIC, MessageCrypto, OVERHEAD, generate_key_base64,
 };
 pub use delivery::LocalDelivery;
+pub(crate) use delivery::local_delivery_copy;
 pub use delivery_log::{DEFAULT_DELIVERY_LOG_DAYS, DeliveryLog, DeliveryOutcome, DeliveryRecord};
 
 #[cfg(test)]

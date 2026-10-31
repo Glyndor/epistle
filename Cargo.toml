@@ -468,3 +468,7 @@ path = "tests/http/webhook_proxy.rs"
 [[test]]
 name = "dkim_rfc_conformance"
 path = "tests/dkim/dkim_rfc_conformance.rs"
+
+[[test]]
+name = "concurrency_suite"
+path = "tests/concurrency/suite.rs"

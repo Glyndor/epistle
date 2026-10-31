@@ -214,7 +214,7 @@ impl Server {
 					let _held_body = session.take_delivery_reservation();
 					// DSNs for recipients this message did not fit for; sent
 					// only if the message itself is delivered.
-					let quota_reports = session.take_quota_reports();
+					let mut quota_reports = session.take_quota_reports();
 					// The submission-limit charge, refunded on drop by every
 					// refusal below and kept only once the message is handed on.
 					let mut charge = PendingCharge::new(session.take_submission_charge());
@@ -582,8 +582,20 @@ impl Server {
 							(submitted, accepted)
 						}
 						None => {
+							let held = session.lock_delivery_quota(&message.recipients).await;
+							let Some(message) = session.recheck_delivery_quota(message) else {
+								drop(held);
+								send(&mut stream, &Reply::single(552, "5.2.2 mailbox full"))
+									.await?;
+								continue;
+							};
+							quota_reports.extend(session.take_quota_reports());
 							let accepted = self.accepted_record(&message);
-							(self.sink.deliver(message), accepted)
+							let handed = self.sink.deliver(message);
+							// Published bytes are visible to the next admission, including
+							// after an error. Release before sending replies or reports.
+							drop(held);
+							(handed, accepted)
 						}
 					};
 					let reply = match handed {

@@ -160,3 +160,41 @@ fn a_zero_default_quota_is_unlimited() {
 	let carol = session.command_line("RCPT TO:<carol@example.org>");
 	assert_eq!(reply_line(&carol), "250 2.0.0 ok\r\n");
 }
+
+#[test]
+fn final_delivery_admission_includes_the_stored_trace_headers() {
+	let message = AcceptedMessage {
+		reverse_path: "alice@sender.example".to_string(),
+		recipients: vec!["bob@example.org".to_string()],
+		no_dsn: Vec::new(),
+		data: b"Subject: hi\r\n\r\nbody\r\n".to_vec(),
+		require_tls: false,
+		mailbox: None,
+		tlsrpt_verified: false,
+		sender_verified: false,
+	};
+	let bytes = crate::storage::local_delivery_copy(
+		&message.reverse_path,
+		&message.recipients[0],
+		&message.data,
+	)
+	.len() as u64;
+	let directory = Arc::new(Directory::new(
+		["example.org".to_string()],
+		[("bob@example.org".to_string(), "bob".to_string())],
+	));
+	let mut exact = Session::new("mx.example.org")
+		.with_directory(directory.clone())
+		.with_quota(Arc::new(crate::smtp::quota::MailboxQuota::new(
+			|_| 0,
+			bytes,
+		)));
+	assert!(exact.recheck_delivery_quota(message.clone()).is_some());
+	let mut smaller = Session::new("mx.example.org")
+		.with_directory(directory)
+		.with_quota(Arc::new(crate::smtp::quota::MailboxQuota::new(
+			|_| 0,
+			bytes - 1,
+		)));
+	assert!(smaller.recheck_delivery_quota(message).is_none());
+}

@@ -12,8 +12,11 @@
 //! is full is the whole message refused with `552 5.2.2`. The API refuses
 //! the request instead.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock, Weak};
+
+use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 
 use super::address::Address;
 use super::directory::{Directory, Resolution};
@@ -33,10 +36,17 @@ pub fn limit_for(directory: &Directory, account: &str, default: u64) -> Option<u
 /// How many bytes an account stores.
 pub type UsageProbe = Arc<dyn Fn(&str) -> u64 + Send + Sync>;
 
+type DeliveryLocks = Mutex<HashMap<String, Weak<AsyncMutex<()>>>>;
+type StoreLocks = Mutex<HashMap<PathBuf, Weak<DeliveryLocks>>>;
+
+/// Listeners using the same mail store share quota admission locks.
+static ON_DISK_LOCKS: OnceLock<StoreLocks> = OnceLock::new();
+
 /// Quota checks for local accounts.
 pub struct MailboxQuota {
 	usage: UsageProbe,
 	default_bytes: u64,
+	delivery_locks: Arc<DeliveryLocks>,
 }
 
 impl std::fmt::Debug for MailboxQuota {
@@ -54,16 +64,33 @@ impl MailboxQuota {
 		MailboxQuota {
 			usage: Arc::new(usage),
 			default_bytes,
+			delivery_locks: Arc::new(Mutex::new(HashMap::new())),
 		}
 	}
 
 	/// Quota checks reading the mail stored under `data_dir`, the way IMAP
 	/// QUOTA measures it.
 	pub fn on_disk(data_dir: PathBuf, crypto: MessageCrypto, default_bytes: u64) -> Self {
-		MailboxQuota::new(
+		let root = data_dir.canonicalize().unwrap_or_else(|_| data_dir.clone());
+		let delivery_locks = {
+			let mut stores = ON_DISK_LOCKS
+				.get_or_init(|| Mutex::new(HashMap::new()))
+				.lock()
+				.unwrap_or_else(|e| e.into_inner());
+			stores.retain(|_, locks| locks.strong_count() > 0);
+			let entry = stores.entry(root).or_default();
+			let locks = entry
+				.upgrade()
+				.unwrap_or_else(|| Arc::new(Mutex::new(HashMap::new())));
+			*entry = Arc::downgrade(&locks);
+			locks
+		};
+		let mut quota = MailboxQuota::new(
 			move |account| crate::imap::mailbox::account_usage(&data_dir, account, &crypto),
 			default_bytes,
-		)
+		);
+		quota.delivery_locks = delivery_locks;
+		quota
 	}
 
 	/// The quota in force for `account`; `None` is no limit.
@@ -81,6 +108,49 @@ impl MailboxQuota {
 	pub fn would_overflow(&self, directory: &Directory, account: &str, size: u64) -> bool {
 		self.limit(directory, account)
 			.is_some_and(|limit| (self.usage)(account).saturating_add(size) > limit)
+	}
+
+	/// Hold each recipient account's quota until its delivery finishes. Accounts
+	/// are locked in order, once each, so overlapping recipient sets can wait
+	/// without deadlocking. Waiting yields the task; other accounts stay available.
+	pub(crate) async fn lock_delivery(
+		&self,
+		directory: &Directory,
+		recipients: &[String],
+	) -> Vec<OwnedMutexGuard<()>> {
+		let mut accounts: Vec<String> = recipients
+			.iter()
+			.filter_map(|recipient| Address::parse(recipient).ok())
+			.filter_map(|address| directory.final_recipients(&address))
+			.flatten()
+			.map(|(account, _)| account)
+			.filter(|account| self.limit(directory, account).is_some())
+			.collect();
+		accounts.sort_unstable();
+		accounts.dedup();
+		let locks: Vec<_> = {
+			let mut locks = self
+				.delivery_locks
+				.lock()
+				.unwrap_or_else(|e| e.into_inner());
+			locks.retain(|_, lock| lock.strong_count() > 0);
+			accounts
+				.into_iter()
+				.map(|account| {
+					let entry = locks.entry(account).or_default();
+					let lock = entry
+						.upgrade()
+						.unwrap_or_else(|| Arc::new(AsyncMutex::new(())));
+					*entry = Arc::downgrade(&lock);
+					lock
+				})
+				.collect()
+		};
+		let mut held = Vec::with_capacity(locks.len());
+		for lock in locks {
+			held.push(lock.lock_owned().await);
+		}
+		held
 	}
 
 	/// The recipients among `recipients` that are a local account `size`
@@ -103,3 +173,6 @@ impl MailboxQuota {
 			.collect()
 	}
 }
+
+#[cfg(test)]
+mod tests;
