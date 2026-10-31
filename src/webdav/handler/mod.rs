@@ -352,6 +352,7 @@ async fn put(target: &Path, quota: &Quota, request: Request) -> Response {
 	if let Some(refusal) = super::if_match::refusal(request.headers(), target, existed) {
 		return refusal;
 	}
+	let conditions = request.headers().clone();
 	let limit =
 		if caldav::is_ics_path(&uri_name(target)) || carddav::is_vcard_path(&uri_name(target)) {
 			MAX_RESOURCE_BYTES as usize
@@ -378,6 +379,14 @@ async fn put(target: &Path, quota: &Quota, request: Request) -> Response {
 	if let Err(response) = quota.check_create(target, None).await {
 		reservation.invalidate();
 		return *response;
+	}
+	// The head was judged before the body arrived. Another writer may have
+	// replaced the resource meanwhile, so the precondition is judged again
+	// while this request holds the account's lock, immediately before it
+	// writes.
+	if let Some(refusal) = super::if_match::refusal(&conditions, target, target.is_file()) {
+		reservation.invalidate();
+		return refusal;
 	}
 	let written = tokio::fs::write(target, &body).await;
 	if written.is_err() {
