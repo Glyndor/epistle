@@ -51,7 +51,15 @@ pub async fn ws_upgrade(
 	Extension(auth): Extension<MatchedAuth>,
 	upgrade: WebSocketUpgrade,
 ) -> impl IntoResponse {
-	upgrade.on_upgrade(move |socket| serve(socket, state, auth))
+	// The transport's own defaults let one message grow to tens of megabytes
+	// before any JMAP check sees it. A request may be at most
+	// `maxSizeRequest` octets, so a message is refused at that size, with a
+	// little room for the JSON envelope, before it is buffered whole.
+	let cap = super::limits::MAX_SIZE_REQUEST + 4096;
+	upgrade
+		.max_message_size(cap)
+		.max_frame_size(cap)
+		.on_upgrade(move |socket| serve(socket, state, auth))
 }
 
 /// Per-connection loop: read text frames, answer each, and emit any in-band push
