@@ -8,7 +8,7 @@ on:
   # `merge_group` on a temporary `gh-readonly-queue/...` branch and a required check that
   # does not report there leaves the queue waiting forever.
   # `paths:` and `branches:` filters do not apply to merge_group, so the
-  # trigger sits at the top level. See docs/merge-queue.md.
+  # trigger sits at the top level. See docs/operations/merge-queue.md.
   merge_group:
     types: [checks_requested]
 

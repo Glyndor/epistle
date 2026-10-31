@@ -2,7 +2,7 @@
 
 This is the plan for the work tracked in #1399 and #1400, and the decisions that
 have to hold across its phases. It describes what is intended, not what runs
-today: `docs/container.md` describes the stack as it is.
+today: `docs/operations/container.md` describes the stack as it is.
 
 ## Where it starts
 
