@@ -177,7 +177,7 @@ pub struct Directory {
 	/// credential of their own (see `scram/tests/test_counter.rs`).
 	#[cfg(test)]
 	decoy_counters:
-		Option<std::sync::Arc<crate::smtp::directory::tests::decoy_counters::DecoyCounters>>,
+		Option<std::sync::Arc<crate::smtp::directory::tests::bans::decoy_counters::DecoyCounters>>,
 }
 
 impl Directory {

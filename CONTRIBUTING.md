@@ -234,12 +234,12 @@ CI is split by responsibility rather than gathered in one file:
 | `fuzz.yml` | nightly fuzz on the protocol parsers |
 | `rust-audit.yml` | `cargo audit` against current RUSTSEC |
 | `supply-chain.yml` | SBOM and license set |
-| `merge-group-triggers.yml` | a required check that would not report in the merge queue, see `docs/merge-queue.md` |
+| `merge-group-triggers.yml` | a required check that would not report in the merge queue, see `docs/operations/merge-queue.md` |
 | `main-guard.yml` | a pull request into `main` whose head is not `develop` |
 | `release.yml` | the tag, the changelog, the audit and the signing |
 
 The workflows that emit a required check also run on `merge_group`, so the
-repository can use GitHub's merge queue; `docs/merge-queue.md` says how.
+repository can use GitHub's merge queue; `docs/operations/merge-queue.md` says how.
 
 Every reusable this repository calls lives under `.github/workflows/` as
 a local copy of a named `Glyndor/.github` tag. Nothing is pulled

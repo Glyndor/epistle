@@ -5,7 +5,7 @@
 
 use super::*;
 use crate::smtp::line::{LineCheck, LineDecoder, MAX_LINE_LENGTH};
-use crate::smtp::session::tests::mods::tests_auth::reply_text;
+use crate::smtp::session::tests::mods::auth::tests_auth::reply_text;
 use crate::smtp::trace::line_error_reply;
 
 /// How a message ended.

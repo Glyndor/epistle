@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use super::tests_auth::*;
+use super::auth::tests_auth::*;
 use super::*;
 use crate::smtp::auth::tests::base::fixture_password;
 

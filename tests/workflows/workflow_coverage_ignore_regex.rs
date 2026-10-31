@@ -11,7 +11,7 @@
 //! what guarantees the gate covers the test files. A future PR that adds
 //! the `regex` crate as a dev-dependency can grow this into a true
 //! match/no-match check that asserts, for example, that the regex matches
-//! `src/api/tests/jmap_b.rs`, `src/cli/init/apply/tests/reuse.rs`,
+//! `src/api/tests/jmap_email/jmap_b.rs`, `src/cli/init/apply/tests/reuse.rs`,
 //! `src/cli/local/test_support.rs` and `src/cidr/tests/base.rs`, and does NOT
 //! match `src/smtp/server/run.rs`, `src/antispam/subjectpass/mod.rs` or
 //! `src/cli/config/check/mod.rs`. Until then the substring assertion is the

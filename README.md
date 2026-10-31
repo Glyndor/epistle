@@ -72,14 +72,14 @@ network at all and are reached only through Unix sockets.
 | [Message headers](docs/headers.md) | Which headers the server adds, removes and leaves alone, path by path |
 | [Storage](docs/storage.md) | On-disk layout, at-rest encryption, the spool hardening |
 | [DNS setup](docs/dns.md) | The records to publish and the supported DNS providers |
-| [IP warm-up](docs/warmup.md) | Ramping a new sending address up per receiver group |
+| [IP warm-up](docs/operations/warmup.md) | Ramping a new sending address up per receiver group |
 | [Attachments](docs/attachments.md) | What the attachment policy detects, its defaults and limits |
 | [Evidence of sending](docs/evidence.md) | Mail classes, the signed and timestamped evidence log, bundles a third party can check |
-| [Migration](docs/migration.md) | Moving from Mox, Stalwart or any IMAP server |
-| [Container stack](docs/container.md) | What `epistle stack` runs and how it is built |
+| [Migration](docs/operations/migration.md) | Moving from Mox, Stalwart or any IMAP server |
+| [Container stack](docs/operations/container.md) | What `epistle stack` runs and how it is built |
 | [Security](docs/security.md) and [threat model](docs/threat-model.md) | The controls, what they protect and what they assume |
 | [ASVS mapping](docs/asvs.md) | The controls mapped to OWASP ASVS |
-| [Performance](docs/performance.md) | The measured hot paths and how to reproduce them |
+| [Performance](docs/operations/performance.md) | The measured hot paths and how to reproduce them |
 | [Repository structure](docs/structure.md) | Where the code and its tests live, and the layout rules |
 | [Contributing](CONTRIBUTING.md) | Building from source, tests and the contribution flow |
 
