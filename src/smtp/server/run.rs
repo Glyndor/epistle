@@ -360,24 +360,7 @@ impl Server {
 					// strip work inside the body's own buffer, so the only
 					// new body-sized allocation is the stamped one below.
 					if session.authenticated().is_some() {
-						let stamp_domain = message
-							.reverse_path
-							.rsplit_once('@')
-							.map(|(_, d)| d.to_ascii_lowercase())
-							.unwrap_or_else(|| self.hostname.to_ascii_lowercase());
-						crate::smtp::trace::ensure_submission_headers_in_place(
-							&mut message.data,
-							&stamp_domain,
-							std::time::SystemTime::now(),
-						);
-						// The MSA drops Bcc: those recipients are on the envelope.
-						crate::smtp::trace::strip_bcc_in_place(&mut message.data);
-						// The trace header is this hop's, written just above;
-						// a client may not write one of its own.
-						crate::smtp::trace::strip_headers_in_place(
-							&mut message.data,
-							&["received"],
-						);
+						Self::stamp_submission(&mut message, &self.hostname);
 					}
 					// Build the final stamped buffer in one allocation of
 					// the exact trace + auth + body length: the body is

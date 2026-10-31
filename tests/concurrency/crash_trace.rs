@@ -51,7 +51,7 @@ fn wait(tid: i32, deadline: Instant) -> io::Result<i32> {
 
 fn registers(tid: i32) -> io::Result<libc::user_regs_struct> {
 	let mut regs = std::mem::MaybeUninit::<libc::user_regs_struct>::uninit();
-	ptrace(libc::PTRACE_GETREGS as u32, tid, regs.as_mut_ptr() as usize)?;
+	ptrace(libc::PTRACE_GETREGS, tid, regs.as_mut_ptr() as usize)?;
 	// SAFETY: successful GETREGS initialized this exact structure.
 	Ok(unsafe { regs.assume_init() })
 }
@@ -146,16 +146,16 @@ pub fn kill_at(
 	let _cleanup = KillOnDrop(pid);
 	let deadline = Instant::now() + DEADLINE;
 	ptrace(
-		libc::PTRACE_SEIZE as u32,
+		libc::PTRACE_SEIZE,
 		tid,
 		libc::PTRACE_O_TRACESYSGOOD as usize,
 	)?;
-	ptrace(libc::PTRACE_INTERRUPT as u32, tid, 0)?;
+	ptrace(libc::PTRACE_INTERRUPT, tid, 0)?;
 	let status = wait(tid, deadline)?;
 	if !libc::WIFSTOPPED(status) {
 		return Err(io::Error::other("child exited before tracing"));
 	}
-	ptrace(libc::PTRACE_SYSCALL as u32, tid, 0)?;
+	ptrace(libc::PTRACE_SYSCALL, tid, 0)?;
 	ready
 		.send(())
 		.map_err(|_| io::Error::other("parent left before tracer armed"))?;
@@ -185,10 +185,10 @@ pub fn kill_at(
 				}
 				reached += 1;
 			}
-			ptrace(libc::PTRACE_SYSCALL as u32, tid, 0)?;
+			ptrace(libc::PTRACE_SYSCALL, tid, 0)?;
 		} else {
 			// Preserve unrelated signal delivery while tracing.
-			ptrace(libc::PTRACE_SYSCALL as u32, tid, signal as usize)?;
+			ptrace(libc::PTRACE_SYSCALL, tid, signal as usize)?;
 		}
 	}
 }

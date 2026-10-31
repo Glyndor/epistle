@@ -110,3 +110,31 @@ impl Server {
 		let _ = session;
 	}
 }
+
+impl Server {
+	/// Authenticated submission: stamp Message-ID and Date when the client
+	/// omitted them. The domain is the reverse-path's own (the authenticated
+	/// account's domain), with the server hostname as a last resort. It runs
+	/// before the Received block is added so the trace header stays the
+	/// outermost line, and it works inside the body's own buffer.
+	pub(super) fn stamp_submission(
+		message: &mut crate::smtp::session::AcceptedMessage,
+		hostname: &str,
+	) {
+		let stamp_domain = message
+			.reverse_path
+			.rsplit_once('@')
+			.map(|(_, d)| d.to_ascii_lowercase())
+			.unwrap_or_else(|| hostname.to_ascii_lowercase());
+		crate::smtp::trace::ensure_submission_headers_in_place(
+			&mut message.data,
+			&stamp_domain,
+			std::time::SystemTime::now(),
+		);
+		// The MSA drops Bcc: those recipients are on the envelope.
+		crate::smtp::trace::strip_bcc_in_place(&mut message.data);
+		// The trace header is this hop's, written just above; a client may
+		// not write one of its own.
+		crate::smtp::trace::strip_headers_in_place(&mut message.data, &["received"]);
+	}
+}
