@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 
-use super::fetchstore::collect_mailbox_keywords;
+use super::fetch::store::collect_mailbox_keywords;
 use super::mailbox::{Snapshot, render_flags};
 use super::select::flags_line_for;
 use super::state::State;
