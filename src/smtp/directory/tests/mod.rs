@@ -4,6 +4,7 @@ pub(super) mod alias;
 pub(super) mod app_password;
 pub(super) mod auth_audit;
 pub(super) mod ban_policy;
+pub(super) mod ban_protocols;
 pub(super) mod base;
 pub(crate) mod decoy_counters;
 pub(super) mod disabled_domain;

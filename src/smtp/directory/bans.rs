@@ -207,12 +207,24 @@ impl Directory {
 		// The hashing runs off the async worker and a few at a time. A check
 		// turned away for lack of a place verified nothing: it moves no
 		// strike, it is not a failed login, and the session says "try again".
-		let Ok(local) = self
-			.hash_gate
-			.run(|| self.authenticate_local(login, password, ip, protocol))
-		else {
+		//
+		// A check that waited for its place asks the store again before it
+		// hashes: a burst passes the first question all at once, so without
+		// this the guesses queued behind the one that earned the ban would
+		// all be counted, and one client could push an account past its own
+		// limit.
+		let Ok(local) = self.hash_gate.run(|| {
+			if matches!(self.check_ban(login, ip, protocol), BanOutcome::Banned) {
+				return None;
+			}
+			Some(self.authenticate_local(login, password, ip, protocol))
+		}) else {
 			self.note_gate_rejection(protocol);
 			return hash_gate::Verdict::Busy;
+		};
+		let Some(local) = local else {
+			self.record_auth_outcome(login, None, ip, protocol);
+			return hash_gate::Verdict::Refused;
 		};
 		let verified = local
 			.or_else(|| {
