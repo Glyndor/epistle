@@ -57,6 +57,12 @@ pub fn load_or_create_account_key(data_dir: &Path) -> Result<AccountKey, AcmeErr
 /// sibling temp file `0600` up front, write and fsync it, then atomically
 /// rename it onto the target. Best effort (plain write) on non-Unix.
 fn write_secret(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+	write_atomic(path, contents, 0o600)
+}
+
+/// The same write with the file mode the caller names: the certificate chain
+/// is public and keeps `0644`, the key keeps `0600`.
+fn write_atomic(path: &Path, contents: &[u8], mode: u32) -> std::io::Result<()> {
 	#[cfg(unix)]
 	{
 		use std::io::Write;
@@ -68,7 +74,7 @@ fn write_secret(path: &Path, contents: &[u8]) -> std::io::Result<()> {
 		let mut file = fs::OpenOptions::new()
 			.write(true)
 			.create_new(true)
-			.mode(0o600)
+			.mode(mode)
 			.open(&tmp)?;
 		file.write_all(contents)?;
 		file.sync_all()?;
@@ -77,6 +83,7 @@ fn write_secret(path: &Path, contents: &[u8]) -> std::io::Result<()> {
 	}
 	#[cfg(not(unix))]
 	{
+		let _ = mode;
 		fs::write(path, contents)
 	}
 }
@@ -143,6 +150,29 @@ fn now_secs() -> u64 {
 		.unwrap_or(0)
 }
 
+/// Put an issued pair in place. The pair is judged first, as a TLS acceptor
+/// built from the bytes in memory: a chain the key does not belong to, or one
+/// that does not parse, is refused while the files on disk and the acceptor
+/// in use are still the previous good pair. Only then are the two files
+/// replaced, each through a temporary file and a rename, and the acceptor
+/// swapped.
+fn install(
+	data_dir: &Path,
+	chain: &str,
+	key_pem: &str,
+	reloadable: &ReloadableAcceptor,
+) -> Result<(), AcmeError> {
+	let acceptor = crate::tls::acceptor_from_pem(chain.as_bytes(), key_pem.as_bytes())
+		.map_err(|e| AcmeError::Protocol(e.to_string()))?;
+	fs::create_dir_all(data_dir.join("acme")).map_err(|e| AcmeError::Transport(e.to_string()))?;
+	write_atomic(&cert_path(data_dir), chain.as_bytes(), 0o644)
+		.map_err(|e| AcmeError::Transport(e.to_string()))?;
+	write_secret(&key_path(data_dir), key_pem.as_bytes())
+		.map_err(|e| AcmeError::Transport(e.to_string()))?;
+	reloadable.reload(acceptor);
+	Ok(())
+}
+
 /// A DNS provider plus the mail hostname, used to refresh the DANE TLSA record
 /// when the certificate rotates.
 type TlsaPublisher = (
@@ -169,15 +199,7 @@ async fn issue(
 	client.register(contacts).await?;
 	let (chain, key_pem) = client.obtain_certificate(domains, responder, 10).await?;
 
-	let dir = data_dir.join("acme");
-	fs::create_dir_all(&dir).map_err(|e| AcmeError::Transport(e.to_string()))?;
-	fs::write(cert_path(data_dir), &chain).map_err(|e| AcmeError::Transport(e.to_string()))?;
-	write_secret(&key_path(data_dir), key_pem.as_bytes())
-		.map_err(|e| AcmeError::Transport(e.to_string()))?;
-
-	let acceptor = crate::tls::acceptor_from_pem(chain.as_bytes(), key_pem.as_bytes())
-		.map_err(|e| AcmeError::Protocol(e.to_string()))?;
-	reloadable.reload(acceptor);
+	install(data_dir, &chain, &key_pem, reloadable)?;
 	tracing::info!(?domains, "ACME certificate issued and TLS reloaded");
 
 	// Refresh the DANE TLSA record for the new certificate (best-effort: a DNS
