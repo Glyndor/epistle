@@ -1,8 +1,8 @@
 //! THREAD=ORDEREDSUBJECT as Dovecot's imaptest `thread-orderedsubject` and
 //! `thread-orderedsubject2` scripts check it.
 
-use super::sort_dates::append_mbox;
-use super::sort_text::SUBJECTS_MBOX;
+use super::super::searching::sort_dates::append_mbox;
+use super::super::searching::sort_text::SUBJECTS_MBOX;
 use super::*;
 
 /// The messages of imaptest's `thread-orderedsubject2.mbox`: the Date header

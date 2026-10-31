@@ -66,7 +66,7 @@ fn sort_addresses_fold_case_and_put_a_missing_field_first() {
 
 /// The messages of imaptest's `sort-subject.mbox`, which
 /// `thread-orderedsubject.mbox` repeats byte for byte.
-pub(super) const SUBJECTS_MBOX: &str = "\
+pub(in crate::imap::session::tests::base) const SUBJECTS_MBOX: &str = "\
 From user@domain  Fri Feb 22 23:00:00 2008 +0200
 Subject: a
 

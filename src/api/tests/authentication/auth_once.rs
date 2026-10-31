@@ -4,8 +4,8 @@
 //! principal, each per-call scope check) would cost another argon2
 //! verification on the same request.
 
+use super::super::jmap_state::jmap_principal_b::{key, state_with_key};
 use super::base::TOKEN;
-use super::jmap_principal_b::{key, state_with_key};
 use super::router;
 use super::state::CONFIGURED_HASH_CHECKS;
 use axum::Router;

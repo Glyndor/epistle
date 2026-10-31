@@ -3,7 +3,7 @@
 //! UID THREAD, search criteria and the command's error paths. The
 //! algorithm's own cases live with it in `thread_references/`.
 
-use super::sort_dates::append_mbox;
+use super::super::searching::sort_dates::append_mbox;
 use super::*;
 
 /// imaptest `thread.mbox`: the second message names the third as its

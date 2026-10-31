@@ -59,104 +59,25 @@ pub fn scram_directory() -> Arc<Directory> {
 }
 
 mod acl;
-mod auth;
-mod auth_ban_lifecycle;
-mod auth_ban_owner_known_network;
-mod auth_ban_toctou;
-mod auth_bans;
-mod basic;
-mod commands;
-mod condstore_search;
-mod encoded_search;
-mod esearch_sets;
-mod gate_busy;
-mod keyword_search;
-mod learn_e2e;
-mod learn_moves;
-mod login_gate;
-mod metadata;
-mod misc;
-mod oauth_flow;
-mod paths;
-mod quota_zero;
-mod scram_decoy;
-mod search;
-mod search_headers;
-mod search_keys;
-
-mod rev1;
-
-mod rev1_recent;
-
-mod rev1_search;
-
-mod rev1_check;
-
-mod rev1_list;
-
-mod rev1_flow;
-
-mod rfc9051_select;
-
-mod rfc5182_searchres;
-
-mod rfc9051_uid_star;
-
-mod rfc9051_poll;
-
-#[cfg(test)]
-mod default_mailboxes;
-
-mod fetch_envelope;
-
-mod fetch_structure;
-
-mod fetch_sections;
-
-mod fetch_aliases;
-
-mod fetch_edges;
-
-mod fetch_depth;
-
-mod capabilities;
-
-mod utf8;
-
-mod quota_names;
-
-mod hierarchy_surfaces;
-
-mod utf8_responses;
-
 mod flags_update;
 
-mod save_sent;
+#[cfg(test)]
+mod append;
 
-mod append_exists;
+#[cfg(test)]
+mod authentication;
 
-mod noop_exists;
+#[cfg(test)]
+mod fetch;
 
-mod cross_session;
+#[cfg(test)]
+mod searching;
 
-mod sort_dates;
+#[cfg(test)]
+mod imap4rev1;
 
-mod sort_text;
+#[cfg(test)]
+mod session;
 
-mod thread_ordered;
-
-mod thread_references;
-
-mod appendlimit;
-
-mod per_account;
-
-mod notify_status;
-
-mod uidvalidity;
-
-mod fetch_whole;
-
-mod append_binary;
-
-mod append_date;
+#[cfg(test)]
+mod thread_order;

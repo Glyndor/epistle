@@ -2,9 +2,9 @@
 //! looks at, whichever way the message gets to the recipient: JMAP
 //! `EmailSubmission/set` and the local delivery itself refuse it like SMTP.
 
+use super::super::send::send_outbound::routed_state;
+use super::super::send::send_virus::jmap_submit;
 use super::router;
-use super::send_outbound::routed_state;
-use super::send_virus::jmap_submit;
 use crate::directory_store::DirectoryHandle;
 use crate::smtp::session::AcceptedMessage;
 use crate::smtp::sink::SinkError;

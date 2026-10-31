@@ -5,7 +5,11 @@
 use super::*;
 
 /// APPEND `body` to INBOX with the quoted INTERNALDATE `date`.
-pub(super) fn append_dated(session: &mut Session, date: &str, body: &str) {
+pub(in crate::imap::session::tests::base) fn append_dated(
+	session: &mut Session,
+	date: &str,
+	body: &str,
+) {
 	let ready =
 		text(&session.command_line(&format!("p APPEND INBOX \"{date}\" {{{}}}", body.len())));
 	assert!(ready.starts_with("+ "), "{ready}");
@@ -16,7 +20,7 @@ pub(super) fn append_dated(session: &mut Session, date: &str, body: &str) {
 /// APPEND every message of an mbox text the way imaptest does: each `From `
 /// line gives the INTERNALDATE, and the lines up to the next one, the blank
 /// separator included, become the message with CRLF line ends.
-pub(super) fn append_mbox(session: &mut Session, mbox: &str) {
+pub(in crate::imap::session::tests::base) fn append_mbox(session: &mut Session, mbox: &str) {
 	let mut messages: Vec<(String, String)> = Vec::new();
 	for line in mbox.lines() {
 		if let Some(from) = line.strip_prefix("From ") {
@@ -39,7 +43,10 @@ pub(super) fn append_mbox(session: &mut Session, mbox: &str) {
 }
 
 /// Run each SORT and compare its untagged reply.
-pub(super) fn assert_sorts(session: &mut Session, cases: &[(&str, &str)]) {
+pub(in crate::imap::session::tests::base) fn assert_sorts(
+	session: &mut Session,
+	cases: &[(&str, &str)],
+) {
 	for (keys, expected) in cases {
 		let response = text(&session.command_line(&format!("s SORT ({keys}) US-ASCII ALL")));
 		assert_eq!(

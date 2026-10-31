@@ -2,8 +2,8 @@
 //! owned by an account the credential may act for, the same rule
 //! `EmailSubmission/set` applies to `mailFrom`.
 
+use super::super::jmap_state::jmap_principal_b::{key, state_with_key};
 use super::base::{TOKEN, request_with_body};
-use super::jmap_principal_b::{key, state_with_key};
 use super::router;
 use axum::http::StatusCode;
 use serde_json::json;

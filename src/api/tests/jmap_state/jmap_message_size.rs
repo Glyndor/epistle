@@ -73,7 +73,7 @@ async fn configured_max_message_size_smaller_than_default_rejects_what_default_a
 /// built-in default would have admitted the body.
 #[tokio::test]
 async fn email_set_respects_the_configured_message_size_cap() {
-	use super::jmap_email_create::create;
+	use super::super::jmap_email::jmap_email_create::create;
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = router(super::base::test_state(dir.path(), 0).with_max_message_size(8 * 1024));
 	// Each `=` quoted-prints to three octets; a 4 KiB body of `=`
