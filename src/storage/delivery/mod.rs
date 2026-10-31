@@ -7,6 +7,7 @@ mod reports;
 mod trace;
 
 pub use trace::Redirect;
+pub(crate) use trace::final_copy as local_delivery_copy;
 pub(super) use trace::forwarded_copy;
 mod vacation;
 

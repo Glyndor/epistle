@@ -126,6 +126,8 @@ impl Server {
 					.await?;
 					return Ok(());
 				};
+				// Each command and AUTH round uses the latest published account rules.
+				session = session.with_directory(self.directory.current());
 				match mode {
 					Mode::Commands => Some(session.command_line(&line_str)),
 					// Argon2 is CPU-bound; per-connection rate limiting keeps attempts scarce.
@@ -214,7 +216,7 @@ impl Server {
 					let _held_body = session.take_delivery_reservation();
 					// DSNs for recipients this message did not fit for; sent
 					// only if the message itself is delivered.
-					let quota_reports = session.take_quota_reports();
+					let mut quota_reports = session.take_quota_reports();
 					// The submission-limit charge, refunded on drop by every
 					// refusal below and kept only once the message is handed on.
 					let mut charge = PendingCharge::new(session.take_submission_charge());
@@ -358,24 +360,7 @@ impl Server {
 					// strip work inside the body's own buffer, so the only
 					// new body-sized allocation is the stamped one below.
 					if session.authenticated().is_some() {
-						let stamp_domain = message
-							.reverse_path
-							.rsplit_once('@')
-							.map(|(_, d)| d.to_ascii_lowercase())
-							.unwrap_or_else(|| self.hostname.to_ascii_lowercase());
-						crate::smtp::trace::ensure_submission_headers_in_place(
-							&mut message.data,
-							&stamp_domain,
-							std::time::SystemTime::now(),
-						);
-						// The MSA drops Bcc: those recipients are on the envelope.
-						crate::smtp::trace::strip_bcc_in_place(&mut message.data);
-						// The trace header is this hop's, written just above;
-						// a client may not write one of its own.
-						crate::smtp::trace::strip_headers_in_place(
-							&mut message.data,
-							&["received"],
-						);
+						Self::stamp_submission(&mut message, &self.hostname);
 					}
 					// Build the final stamped buffer in one allocation of
 					// the exact trace + auth + body length: the body is
@@ -582,8 +567,20 @@ impl Server {
 							(submitted, accepted)
 						}
 						None => {
+							let held = session.lock_delivery_quota(&message.recipients).await;
+							let Some(message) = session.recheck_delivery_quota(message) else {
+								drop(held);
+								send(&mut stream, &Reply::single(552, "5.2.2 mailbox full"))
+									.await?;
+								continue;
+							};
+							quota_reports.extend(session.take_quota_reports());
 							let accepted = self.accepted_record(&message);
-							(self.sink.deliver(message), accepted)
+							let handed = self.sink.deliver(message);
+							// Published bytes are visible to the next admission, including
+							// after an error. Release before sending replies or reports.
+							drop(held);
+							(handed, accepted)
 						}
 					};
 					let reply = match handed {

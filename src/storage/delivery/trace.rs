@@ -29,7 +29,7 @@ pub struct Redirect {
 
 /// The copy of `data` that lands in the mailbox of `delivered_to`, for a
 /// message whose envelope sender was `reverse_path`.
-pub(super) fn final_copy(reverse_path: &str, delivered_to: &str, data: &[u8]) -> Vec<u8> {
+pub(crate) fn final_copy(reverse_path: &str, delivered_to: &str, data: &[u8]) -> Vec<u8> {
 	let mut copy = format!(
 		"Return-Path: <{}>\r\nDelivered-To: {}\r\n",
 		one_line(reverse_path),
