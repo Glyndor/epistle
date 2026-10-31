@@ -1,11 +1,11 @@
 //! IMAP FETCH and STORE handlers, including CONDSTORE conditional
 //! operations (RFC 7162).
 
-use super::super::command::SequenceSet;
-use super::mailbox::{Flag, Snapshot, render_flags};
-use super::select::flags_line_for;
-use super::state::State;
-use super::{Output, Session, StoreMode};
+use super::super::super::command::SequenceSet;
+use super::super::mailbox::{Flag, Snapshot, render_flags};
+use super::super::select::flags_line_for;
+use super::super::state::State;
+use super::super::{Output, Session, StoreMode};
 
 /// The flag set a STORE in `mode` with `flags` leaves on a message that
 /// carries `current`. Keywords match without regard to case, and the
@@ -16,11 +16,11 @@ fn next_flags(mode: StoreMode, current: &[Flag], flags: &[Flag]) -> Vec<Flag> {
 		StoreMode::Add => current.iter().chain(flags).cloned().collect(),
 		StoreMode::Remove => current
 			.iter()
-			.filter(|flag| !super::mailbox::flag_set_contains(flags, flag))
+			.filter(|flag| !super::super::mailbox::flag_set_contains(flags, flag))
 			.cloned()
 			.collect(),
 	};
-	super::mailbox::dedup_flags(&mut next);
+	super::super::mailbox::dedup_flags(&mut next);
 	next
 }
 
@@ -29,10 +29,10 @@ fn next_flags(mode: StoreMode, current: &[Flag], flags: &[Flag]) -> Vec<Flag> {
 /// places a keyword on a message so the response can advertise it via
 /// an updated FLAGS line (RFC 9051 7.3.5) before the FETCH that
 /// mentions the keyword.
-pub(super) fn collect_mailbox_keywords(snapshot: &Snapshot) -> Vec<String> {
+pub(in crate::imap::session) fn collect_mailbox_keywords(snapshot: &Snapshot) -> Vec<String> {
 	let mut out: Vec<String> = Vec::new();
 	for message in snapshot.messages() {
-		for keyword in super::mailbox::keywords_in(&message.flags) {
+		for keyword in super::super::mailbox::keywords_in(&message.flags) {
 			let name = keyword.as_str().to_string();
 			if !out
 				.iter()
@@ -49,7 +49,7 @@ impl Session {
 	// CONDSTORE adds the seventh data argument; a params struct would not read
 	// any clearer than the flat command shape here.
 	#[allow(clippy::too_many_arguments)]
-	pub(super) fn store(
+	pub(in crate::imap::session) fn store(
 		&mut self,
 		tag: &str,
 		sequence: &SequenceSet,
@@ -109,13 +109,14 @@ impl Session {
 				None => return Output::text(format!("{tag} BAD unsupported flag\r\n")),
 			}
 		}
-		super::mailbox::dedup_flags(&mut flags);
+		super::super::mailbox::dedup_flags(&mut flags);
 		// Per-message keyword cap, checked before any message is touched.
 		// A FLAGS list over the cap is refused whatever the mailbox holds.
-		if matches!(mode, StoreMode::Set) && super::mailbox::count_keywords(&flags).is_none() {
+		if matches!(mode, StoreMode::Set) && super::super::mailbox::count_keywords(&flags).is_none()
+		{
 			return Output::text(format!(
 				"{tag} BAD too many keywords (max {})\r\n",
-				super::super::keyword::MAX_KEYWORDS_PER_MESSAGE
+				super::super::super::keyword::MAX_KEYWORDS_PER_MESSAGE
 			));
 		}
 
@@ -159,12 +160,16 @@ impl Session {
 				let selector = if uid { message.uid } else { sequence_number };
 				if sequence.contains(selector, maximum, &saved)
 					&& !gone.contains(&sequence_number)
-					&& super::mailbox::count_keywords(&next_flags(mode, &message.flags, &flags))
-						.is_none()
+					&& super::super::mailbox::count_keywords(&next_flags(
+						mode,
+						&message.flags,
+						&flags,
+					))
+					.is_none()
 				{
 					return Output::text(format!(
 						"{tag} NO [LIMIT] too many keywords on a message (max {})\r\n",
-						super::super::keyword::MAX_KEYWORDS_PER_MESSAGE
+						super::super::super::keyword::MAX_KEYWORDS_PER_MESSAGE
 					));
 				}
 			}
@@ -211,7 +216,7 @@ impl Session {
 			// queue never waits and a full one drops the job, so the
 			// STORE reply does not depend on it.
 			if let Some(queue) = &training {
-				super::super::junk_trainer::enqueue_junk_transition_within(
+				super::super::super::junk_trainer::enqueue_junk_transition_within(
 					queue,
 					&account,
 					&previous_flags,
@@ -271,7 +276,7 @@ impl Session {
 		let code = if modified.is_empty() {
 			String::new()
 		} else {
-			format!("[MODIFIED {}] ", super::codes::uid_set(&modified))
+			format!("[MODIFIED {}] ", super::super::codes::uid_set(&modified))
 		};
 		response.push_str(&format!("{tag} OK {code}STORE completed\r\n"));
 		Output::text(response)

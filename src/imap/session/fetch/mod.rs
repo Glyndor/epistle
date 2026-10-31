@@ -6,6 +6,8 @@ use super::mailbox::{Flag, render_flags};
 use super::state::State;
 use super::{FetchItem, Output, Session};
 
+pub(super) mod store;
+
 impl Session {
 	pub(super) fn fetch(
 		&mut self,
