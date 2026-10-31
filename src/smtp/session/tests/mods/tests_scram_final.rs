@@ -160,3 +160,96 @@ fn the_cancellation_in_the_last_round_leaves_the_session_unauthenticated() {
 	assert_eq!(reply_code(&action), 501);
 	assert_eq!(session.authenticated(), None);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn scram_requires_current_credentials_and_account_rules_at_each_final_round() {
+	use crate::antispam::bans::BanPolicy;
+	use crate::antispam::bans::tests::base::FakeBanStore;
+	use crate::smtp::scram::ScramStored;
+
+	for before_proof in [true, false] {
+		for mutation in 0..10 {
+			let bans = Arc::new(FakeBanStore::new(BanPolicy::default()));
+			let original = Arc::try_unwrap(super::tests_scram::scram_directory())
+				.expect("unique directory")
+				.with_ban_store(bans.clone());
+			let mut session = scram_session(true).with_directory(Arc::new(original));
+			session.set_peer_ip(Some("203.0.113.53".parse().expect("peer")));
+			let challenge =
+				session.command_line(&format!("AUTH SCRAM-SHA-256 {}", b64("n,,n=alice,r=CN")));
+			assert_eq!(reply_code(&challenge), 334);
+			let first = decode_server_first(&scram_challenge_text(&challenge));
+			let client = client_exchange(&first, fixtures::password());
+			let hash = session
+				.directory
+				.credentials("alice")
+				.expect("password hash")
+				.1
+				.to_string();
+			if !before_proof {
+				assert_eq!(
+					reply_code(&session.auth_line(&b64(&client.final_message))),
+					334
+				);
+			}
+
+			let current = Arc::try_unwrap(super::tests_scram::scram_directory())
+				.expect("unique directory")
+				.with_password_hashes([("alice".into(), hash)]);
+			let current = match mutation {
+				0 => Directory::default(),
+				1 => current.with_disabled(["alice".into()]),
+				2 => current.with_allowed_protocols([("alice".into(), vec![])]),
+				3 => current.with_totp([("alice".into(), "JBSWY3DPEHPK3PXP".into())]),
+				4 => current.with_password_hashes([("alice".into(), "changed hash".into())]),
+				5 => current.with_scram([]),
+				_ => {
+					let mut credentials = current.scram_credentials("alice").expect("verifier");
+					match mutation {
+						6 => credentials.stored_key[0] ^= 1,
+						7 => credentials.server_key[0] ^= 1,
+						8 => credentials.salt[0] ^= 1,
+						9 => credentials.iterations += 1,
+						_ => unreachable!(),
+					}
+					current
+						.with_scram([("alice".into(), ScramStored::from_credentials(&credentials))])
+				}
+			};
+			session.set_directory_for_test(Arc::new(current.with_ban_store(bans.clone())));
+			let response = if before_proof {
+				session.auth_line(&b64(&client.final_message))
+			} else {
+				session.auth_line("")
+			};
+			assert_eq!(
+				scram_challenge_text(&response),
+				"535 5.7.8 authentication credentials invalid\r\n",
+				"mutation={mutation}, before_proof={before_proof}"
+			);
+			assert_eq!(session.authenticated(), None);
+			assert_eq!(session.auth_failures, 1);
+			assert!(session.pending_scram.is_none());
+			assert_eq!(bans.call_count("record_failure"), 3);
+			assert_eq!(bans.call_count("clear_success"), 0);
+		}
+	}
+}
+
+#[test]
+fn scram_accepts_an_equivalent_directory_snapshot() {
+	let (mut session, _, _) = at_server_final();
+	// A directory publication with unchanged credentials preserves the exchange.
+	let hash = session
+		.directory
+		.credentials("alice")
+		.expect("password hash")
+		.1
+		.to_string();
+	let current = Arc::try_unwrap(super::tests_scram::scram_directory())
+		.expect("unique directory")
+		.with_password_hashes([("alice".into(), hash)]);
+	session.set_directory_for_test(Arc::new(current));
+	assert_eq!(reply_code(&session.auth_line("")), 235);
+	assert_eq!(session.authenticated(), Some("alice"));
+}

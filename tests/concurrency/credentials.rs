@@ -82,7 +82,6 @@ async fn pending_login(stream: &mut TlsStream, password: &str) {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "pending credential lifecycle review"]
 async fn an_inflight_login_cannot_succeed_after_a_credential_mutation() {
 	seed("credentials");
 	let mut order = [false, true];

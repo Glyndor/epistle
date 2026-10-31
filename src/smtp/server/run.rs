@@ -126,6 +126,8 @@ impl Server {
 					.await?;
 					return Ok(());
 				};
+				// Each command and AUTH round uses the latest published account rules.
+				session = session.with_directory(self.directory.current());
 				match mode {
 					Mode::Commands => Some(session.command_line(&line_str)),
 					// Argon2 is CPU-bound; per-connection rate limiting keeps attempts scarce.
