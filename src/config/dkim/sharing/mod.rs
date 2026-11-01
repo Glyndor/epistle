@@ -60,7 +60,7 @@ impl Dkim {
 		}
 		Some(format!(
 			"{} domains sign with the one [dkim] key ({}): a leaked key signs as every one of them. \
-			 give each its own with `epistle dkim-keygen` and one [[dkim.domain]] entry",
+			 `epistle dkim split --dry-run` shows the plan that gives each its own key",
 			sharing.len(),
 			sharing.join(", ")
 		))

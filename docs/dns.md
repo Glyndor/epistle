@@ -110,7 +110,9 @@ the key, so sharing one buys no reputation. A domain's own key goes in a
 and is published at `<selector>._domainkey.<that domain>`. Two domains
 that name one key, or whose key files hold the same public key, are
 refused; several domains on the `[dkim]` key still work and are reported
-by `config-check`, `status` and `dkim show`.
+by `config-check`, `status` and `dkim show`, and `epistle dkim split` moves
+them to keys of their own without a signature failing in between (it
+publishes the new records, waits until they resolve, and only then switches).
 
 Multiple selectors at different names are normal (the Ed25519 + RSA
 pair), but two at the same selector name is the same configuration

@@ -1,7 +1,7 @@
 use super::*;
 use std::io::Write;
 
-fn fresh_signer(selector: &str) -> Arc<Signer> {
+pub(super) fn fresh_signer(selector: &str) -> Arc<Signer> {
 	let (pem, _) = crate::dkim::generate_key().expect("key");
 	let mut file = tempfile::NamedTempFile::new().expect("temp file");
 	file.write_all(pem.as_bytes()).expect("write");

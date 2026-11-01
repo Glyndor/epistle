@@ -24,7 +24,7 @@ use crate::config::Config;
 use super::config_edit::ConfigDocument;
 use super::style;
 
-mod own_key;
+pub(in crate::cli) mod own_key;
 mod set;
 mod state;
 

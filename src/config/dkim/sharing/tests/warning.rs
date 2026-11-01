@@ -35,7 +35,10 @@ fn two_domains_on_the_default_key_are_named() {
 		warning.starts_with("2 domains sign with the one [dkim] key (a.example, b.example)"),
 		"{warning}"
 	);
-	assert!(warning.contains("one [[dkim.domain]] entry"), "{warning}");
+	assert!(
+		warning.contains("epistle dkim split --dry-run"),
+		"{warning}"
+	);
 }
 
 #[test]

@@ -41,6 +41,24 @@ pub enum DkimCli {
 		#[arg(long)]
 		domain: Option<String>,
 	},
+	/// Give every domain that shares the `[dkim]` key a key of its own.
+	///
+	/// One domain keeps the `[dkim]` key. Every other domain that signs with
+	/// it gets a key under `keys/dkim/<domain>/` with its own selector. The
+	/// records are published (through `[dns]` when it reaches the domain, by
+	/// hand otherwise) and a domain signs with its new key only after a
+	/// resolver shows the record, so no signature breaks. The entries are then
+	/// written and the server restarted. Running it again continues a run that
+	/// stopped.
+	Split {
+		/// Print the plan; make no key, publish nothing, change nothing.
+		#[arg(long)]
+		dry_run: bool,
+		/// Seconds to wait for the new records to resolve before giving up
+		/// (0 asks once). Nothing is switched until they do.
+		#[arg(long, value_name = "SECONDS", default_value_t = 120)]
+		wait: u64,
+	},
 	/// Remove DKIM keys and TXT records no rotation uses.
 	///
 	/// List the `dkim-ed<day>.key` and `dkim-rsa<day>.key` files and the
@@ -77,6 +95,12 @@ pub(super) fn run(
 			rotate_now(config, dry_run, now_epoch(), domain, json, out)
 		}
 		DkimCli::Cleanup { dry_run, yes } => cleanup::cleanup(config, dry_run, yes, json, out),
+		// `split` edits the configuration file, so the dispatcher gives it the
+		// path (`run_split`); the loaded `Config` alone cannot.
+		DkimCli::Split { .. } => {
+			super::style::error("dkim split needs the configuration file path");
+			ExitCode::FAILURE
+		}
 	}
 }
 
@@ -292,8 +316,20 @@ pub(super) fn rotate_now_with(
 	report.object(result)
 }
 
+/// Run `dkim split` against the configuration file at `path`.
+pub(super) fn run_split(
+	path: &std::path::Path,
+	dry_run: bool,
+	wait: u64,
+	json: bool,
+	out: &mut impl std::io::Write,
+) -> ExitCode {
+	split::run(path, &split::Options { dry_run, wait }, json, out)
+}
+
 mod cleanup;
 mod show;
+mod split;
 
 #[cfg(test)]
 mod tests;
