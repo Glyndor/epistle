@@ -55,9 +55,17 @@ impl Drop for Published {
 		let entries = std::mem::take(&mut self.entries);
 		let responder = self.responder.clone();
 		let key = self.key.clone();
+		// The withdrawal of a dropped order runs detached. It is not
+		// guaranteed: a runtime that stops before the task finishes drops it,
+		// so what was pending is logged now, where an operator can clean it.
+		let pending: Vec<&str> = entries.iter().map(|(domain, _)| domain.as_str()).collect();
+		tracing::warn!(
+			?pending,
+			"acme: order dropped with challenges still published; withdrawing them detached"
+		);
 		let Ok(runtime) = tokio::runtime::Handle::try_current() else {
 			tracing::warn!(
-				challenges = entries.len(),
+				?pending,
 				"acme: order dropped outside a runtime; its challenges were not withdrawn"
 			);
 			return;
