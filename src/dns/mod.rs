@@ -15,6 +15,7 @@ pub mod rrset;
 pub mod service_records;
 #[cfg(test)]
 mod tests;
+pub mod tlsa;
 pub mod txt;
 pub mod zone;
 

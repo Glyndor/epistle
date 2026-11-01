@@ -238,6 +238,27 @@ envelope target, the JSONL store lives at
 If the zone is DNSSEC-signed, publish a `TLSA` record for `mail.example.org:25`
 so senders authenticate your TLS certificate without relying on a public CA.
 
+With a `[dns]` provider, epistle refreshes that record after every certificate
+change (ACME renewal or a replaced `[tls]` pair):
+
+- **Retry.** A refresh the provider refuses is not forgotten. It is kept in
+  `data_dir/dns-tlsa/state.json` and retried every minute tick with a growing
+  wait (one minute, doubling, at most one hour) until it succeeds, always for
+  the certificate that is in service at that moment. `epistle status` shows it
+  as a `tlsa-pending` item with the reason and the value to publish by hand.
+- **Ownership.** Only TLSA values this instance published (or the association
+  of the certificate it just replaced) are replaced. A record of somebody else
+  at `_25._tcp.<hostname>`, such as the certificate of a second SMTP node, is
+  never removed. A provider that applies guarded changes keeps those records
+  and leaves the previous value next to the new one until the next rotation. A
+  provider that can only replace the whole set does not write while foreign
+  records are there: the refresh stays pending and `status` names them.
+  Replacing everything needs you to remove them or publish by hand.
+- **Zone.** The zone the credential sees is not assumed to serve the name. If
+  the zone lists an NS delegation at or above `_25._tcp.<hostname>` the write
+  is refused. Providers that cannot list their zone (`route53`, `rfc2136`)
+  cannot be checked and keep writing into the zone you configured.
+
 ## Client autodiscovery
 
 So users configure a client from just their address and password:
