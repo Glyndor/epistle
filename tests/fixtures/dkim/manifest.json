@@ -1,109 +1,101 @@
 {
-  "arc-ams-ed-with-rsa": {
+  "arc/arc-ams-ed-with-rsa": {
     "ams_algorithm": "ed25519-sha256",
     "instances": 1,
     "seal_algorithm": "ed25519-sha256",
     "sha256": "0959649481f17d3b78630080113c715261e071f5e9c49838c25b02c4d3801e24"
   },
-  "arc-ams-rsa": {
+  "arc/arc-ams-rsa": {
     "ams_algorithm": "rsa-sha256",
     "instances": 1,
     "seal_algorithm": "ed25519-sha256",
     "sha256": "1afa25e3d46ebaf71c2110172504d753d572691c72fa549df965aa6fb0fe9a3a"
   },
-  "arc-ams-rsa-with-ed": {
+  "arc/arc-ams-rsa-with-ed": {
     "ams_algorithm": "rsa-sha256",
     "instances": 1,
     "seal_algorithm": "ed25519-sha256",
     "sha256": "84ab69ed74c34d50ebb13c2c694bdb9ebde6feded403563a9dcbff2c7c088451"
   },
-  "arc-ams-simple-folded": {
+  "arc/arc-ams-simple-folded": {
     "ams_algorithm": "ed25519-sha256",
     "instances": 1,
     "seal_algorithm": "ed25519-sha256",
     "sha256": "f55891ce3b4404a2ae309a26fcda8386c5fb7c179a92190504e32a9f9d6513e4"
   },
-  "arc-build": {
+  "arc/arc-build": {
     "ams_algorithm": "ed25519-sha256",
     "instances": 1,
     "seal_algorithm": "ed25519-sha256",
     "sha256": "63c8ac2edce2a316a9a6dfb9074f9a58f06607a3f10cea637a744bd389d7e76b"
   },
-  "arc-cv-first-pass": {
+  "arc/arc-cv-first-pass": {
     "ams_algorithm": "ed25519-sha256",
     "instances": 1,
     "seal_algorithm": "ed25519-sha256",
     "sha256": "5bb8e152f31d5643c2f240053a7f0a9c9fe7eb8d4ea7d270ad962247ecfc2939"
   },
-  "arc-cv-later-none": {
+  "arc/arc-cv-later-none": {
     "ams_algorithm": "ed25519-sha256",
     "instances": 2,
     "seal_algorithm": "ed25519-sha256",
     "sha256": "47fa6a64397ba363792101feb271d65ae5b7b0d5c9150806221e880da5fca383"
   },
-  "arc-ed-1": {
+  "arc/arc-ed-1": {
     "ams_algorithm": "ed25519-sha256",
     "instances": 1,
     "seal_algorithm": "ed25519-sha256",
     "sha256": "8afcda1b4eeac1e3ccd85c1a149af518bff4f7164b509dd4f4b9f54bffdc5f5c"
   },
-  "arc-ed-2": {
+  "arc/arc-ed-2": {
     "ams_algorithm": "ed25519-sha256",
     "instances": 2,
     "seal_algorithm": "ed25519-sha256",
     "sha256": "242f8d297ab75fb4492133a706fa1602fdd979b751a49e330afa0bb8a47aa2ff"
   },
-  "arc-ed-50": {
+  "arc/arc-ed-50": {
     "ams_algorithm": "ed25519-sha256",
     "instances": 50,
     "seal_algorithm": "ed25519-sha256",
     "sha256": "055b1850e775f84821c0d3904c04a566f55a6289769a8e769540b4cebebad2a7"
   },
-  "arc-length-exact": {
+  "arc/arc-length-exact": {
     "ams_algorithm": "ed25519-sha256",
     "instances": 1,
     "seal_algorithm": "ed25519-sha256",
     "sha256": "29341624735a28229c0fc460bfeb6277733c2444c807ee344c67ef90024eb42d"
   },
-  "arc-length-zero": {
+  "arc/arc-length-zero": {
     "ams_algorithm": "ed25519-sha256",
     "instances": 1,
     "seal_algorithm": "ed25519-sha256",
     "sha256": "fb93edbdcf721509d85d4ee9e63167256521f295e98b28f06c1f4d3a1bfe0ea8"
   },
-  "arc-rsa": {
+  "arc/arc-rsa": {
     "ams_algorithm": "rsa-sha256",
     "instances": 1,
     "seal_algorithm": "rsa-sha256",
     "sha256": "c0557a3ac1efbf7f1160027f109176664be80149a1bc5d183e48865b4d95aab5"
   },
-  "arc-seal-ed-with-rsa": {
+  "arc/arc-seal-ed-with-rsa": {
     "ams_algorithm": "ed25519-sha256",
     "instances": 1,
     "seal_algorithm": "ed25519-sha256",
     "sha256": "680b0b0aabb11bba4c77de3c0e8f7996a7d4b88fe9ff0f22a778d5ceaf58fee0"
   },
-  "arc-seal-rsa": {
+  "arc/arc-seal-rsa": {
     "ams_algorithm": "ed25519-sha256",
     "instances": 1,
     "seal_algorithm": "rsa-sha256",
     "sha256": "a53110e947f2e89d52e88ee64c612c76cfdf52526bc3a3ca6e61ceb302a6618f"
   },
-  "arc-seal-rsa-with-ed": {
+  "arc/arc-seal-rsa-with-ed": {
     "ams_algorithm": "ed25519-sha256",
     "instances": 1,
     "seal_algorithm": "rsa-sha256",
     "sha256": "97948551e994760dacdf13875f69edf63d349971160008e170f7179c1d155453"
   },
-  "ed-with-rsa-key": {
-    "algorithm": "ed25519-sha256",
-    "canon": "relaxed/relaxed",
-    "canonical_body": "IGluZGVudGVkIHRleHQNCg0KbGluZSB0d28NCg==",
-    "length": null,
-    "sha256": "ff6476b40ee20b62a0236a0b153a7ffdd223fd1fdd3e470c6f79a16197997871",
-    "signed_input_sha256": "8bd01f6d1911c82e5e4ac6302b436cbdc9f3e667e8032b21d2e5492cebe929f3"
-  },
-  "ed25519-relaxed-relaxed-blank": {
+  "ed25519/ed25519-relaxed-relaxed-blank": {
     "algorithm": "ed25519-sha256",
     "canon": "relaxed/relaxed",
     "canonical_body": "",
@@ -111,7 +103,7 @@
     "sha256": "d05bbf602a0c43d201820b176274e727d8651b67110acbfbf1af717f8ce934af",
     "signed_input_sha256": "96b0eb86a3942d2edb372b60bee2b2a2bcf2ff8564636d5d4c21f2ddc1c27be9"
   },
-  "ed25519-relaxed-relaxed-empty": {
+  "ed25519/ed25519-relaxed-relaxed-empty": {
     "algorithm": "ed25519-sha256",
     "canon": "relaxed/relaxed",
     "canonical_body": "",
@@ -119,7 +111,7 @@
     "sha256": "529b803a636bd50d0b635f92554a210e16717e6e2979145c2e82690f79a43366",
     "signed_input_sha256": "96b0eb86a3942d2edb372b60bee2b2a2bcf2ff8564636d5d4c21f2ddc1c27be9"
   },
-  "ed25519-relaxed-relaxed-mixed": {
+  "ed25519/ed25519-relaxed-relaxed-mixed": {
     "algorithm": "ed25519-sha256",
     "canon": "relaxed/relaxed",
     "canonical_body": "IGluZGVudGVkIHRleHQNCg0KbGluZSB0d28NCg==",
@@ -127,7 +119,7 @@
     "sha256": "90d2b4c555d7b9aa0424487f8e6bb782fb9aed4b7ff98833a7ac2f3422b8ec2d",
     "signed_input_sha256": "8bd01f6d1911c82e5e4ac6302b436cbdc9f3e667e8032b21d2e5492cebe929f3"
   },
-  "ed25519-relaxed-simple-blank": {
+  "ed25519/ed25519-relaxed-simple-blank": {
     "algorithm": "ed25519-sha256",
     "canon": "relaxed/simple",
     "canonical_body": "IAkNCg==",
@@ -135,7 +127,7 @@
     "sha256": "3945240e155b50f3e51fd6119a90c1f6c4327894786b4d998ced928f690a92f9",
     "signed_input_sha256": "87852f941854bc10ebe5f323ce8df9d61266af15332afb989bd994fca86a4ceb"
   },
-  "ed25519-relaxed-simple-empty": {
+  "ed25519/ed25519-relaxed-simple-empty": {
     "algorithm": "ed25519-sha256",
     "canon": "relaxed/simple",
     "canonical_body": "DQo=",
@@ -143,7 +135,7 @@
     "sha256": "699c07d642a3c4e732c4b4705521dd3bc8b302f08bbc75a27b0a4b0311806507",
     "signed_input_sha256": "c0eccf9b84949f001b717f9fe999e4f34246ecf6bf2a9f30e28c553de512af6a"
   },
-  "ed25519-relaxed-simple-mixed": {
+  "ed25519/ed25519-relaxed-simple-mixed": {
     "algorithm": "ed25519-sha256",
     "canon": "relaxed/simple",
     "canonical_body": "CSAgaW5kZW50ZWQJdGV4dCAJDQoNCmxpbmUJCSB0d28NCiAJDQo=",
@@ -151,7 +143,7 @@
     "sha256": "4771844f67bc8ebb228e21c5f00199fbd213dab2361956b4a08320b1882ef240",
     "signed_input_sha256": "de1006f7f27fc3f83c82c2ea889f448386dd20e7b6b448590b3d4d1a62971eca"
   },
-  "ed25519-simple-relaxed-blank": {
+  "ed25519/ed25519-simple-relaxed-blank": {
     "algorithm": "ed25519-sha256",
     "canon": "simple/relaxed",
     "canonical_body": "",
@@ -159,7 +151,7 @@
     "sha256": "2d9972bf27790e8b4ef0aa16afc5a9de2481daa1f34ebe3b407c6da2cd242c8d",
     "signed_input_sha256": "0092cfb0188ee3a13b8c162e85899845d94ddbf4e85a7e6e0dd9ea50f2b0438e"
   },
-  "ed25519-simple-relaxed-empty": {
+  "ed25519/ed25519-simple-relaxed-empty": {
     "algorithm": "ed25519-sha256",
     "canon": "simple/relaxed",
     "canonical_body": "",
@@ -167,7 +159,7 @@
     "sha256": "a09f7bca4337df548168be0356a04ed6c5be92073cf230578cba38b12d4cb079",
     "signed_input_sha256": "0092cfb0188ee3a13b8c162e85899845d94ddbf4e85a7e6e0dd9ea50f2b0438e"
   },
-  "ed25519-simple-relaxed-mixed": {
+  "ed25519/ed25519-simple-relaxed-mixed": {
     "algorithm": "ed25519-sha256",
     "canon": "simple/relaxed",
     "canonical_body": "IGluZGVudGVkIHRleHQNCg0KbGluZSB0d28NCg==",
@@ -175,7 +167,7 @@
     "sha256": "12947fa7d21a799a0cd85bbcefe4f046321d5e11515d97d00ada3e9969aa1742",
     "signed_input_sha256": "6925a1d07f69ca8bed1dc19d419cc31061fced731cea9e7797a3394bd722d678"
   },
-  "ed25519-simple-simple-blank": {
+  "ed25519/ed25519-simple-simple-blank": {
     "algorithm": "ed25519-sha256",
     "canon": "simple/simple",
     "canonical_body": "IAkNCg==",
@@ -183,7 +175,7 @@
     "sha256": "00cff1e3895a77690ef3df826dc5038ced94a143a6ea3604a2ced140e8cbacde",
     "signed_input_sha256": "634c24eb7ecc47f1862c6fc85861a0bc96e604948614cb054ee4d1317f6823d9"
   },
-  "ed25519-simple-simple-empty": {
+  "ed25519/ed25519-simple-simple-empty": {
     "algorithm": "ed25519-sha256",
     "canon": "simple/simple",
     "canonical_body": "DQo=",
@@ -191,7 +183,7 @@
     "sha256": "2383bcb9b28c14762cbe180d6c9cc985b5495c09c63365bb70c7d7ec6f428938",
     "signed_input_sha256": "35f7dff16c773600f2cb462e99d494e6f6f558ecbcf2527695121c68cf0737ef"
   },
-  "ed25519-simple-simple-mixed": {
+  "ed25519/ed25519-simple-simple-mixed": {
     "algorithm": "ed25519-sha256",
     "canon": "simple/simple",
     "canonical_body": "CSAgaW5kZW50ZWQJdGV4dCAJDQoNCmxpbmUJCSB0d28NCiAJDQo=",
@@ -199,23 +191,7 @@
     "sha256": "c9e8f4bd47c515c9f1fb79ed8b52371ba766f3a9b395ee468f1e58fa338762f4",
     "signed_input_sha256": "eef37e14f20111fe4892586cc9ff8a201e4c5cbca9bc78c32ad56b69d898cf68"
   },
-  "headers-9000": {
-    "algorithm": "ed25519-sha256",
-    "canon": "relaxed/relaxed",
-    "canonical_body": "IGluZGVudGVkIHRleHQNCg0KbGluZSB0d28NCg==",
-    "length": null,
-    "sha256": "8741e23ff03c9a5ff465abed372994817527be337ba13caea47769c24227b5c6",
-    "signed_input_sha256": "8bd01f6d1911c82e5e4ac6302b436cbdc9f3e667e8032b21d2e5492cebe929f3"
-  },
-  "identity-subdomain": {
-    "algorithm": "ed25519-sha256",
-    "canon": "relaxed/relaxed",
-    "canonical_body": "IGluZGVudGVkIHRleHQNCg0KbGluZSB0d28NCg==",
-    "length": null,
-    "sha256": "9c11b6783ba99ecb4afbda441e08211d4f5b94455201082a39153aa004e2a6e1",
-    "signed_input_sha256": "da4ace835477c8c8e7e7078b2c45be6ff265e4d442c53f48467eefa45e40dd8a"
-  },
-  "length-equal": {
+  "length/length-equal": {
     "algorithm": "ed25519-sha256",
     "canon": "relaxed/relaxed",
     "canonical_body": "IGluZGVudGVkIHRleHQNCg0KbGluZSB0d28NCg==",
@@ -223,7 +199,7 @@
     "sha256": "172802db869701171e6e5d29bd184e935cd705c8a50c9d02fe70d8016a0b1b63",
     "signed_input_sha256": "30da5af94d48644a62662eca71a5ad5629a1a82fcf15fda272a4de75027b4973"
   },
-  "length-long": {
+  "length/length-long": {
     "algorithm": "ed25519-sha256",
     "canon": "relaxed/relaxed",
     "canonical_body": "IGluZGVudGVkIHRleHQNCg0KbGluZSB0d28NCg==",
@@ -231,7 +207,7 @@
     "sha256": "aeb0bf16ac702a2397ef957dd668e7663a791a0e173548c57319f1a487a195cc",
     "signed_input_sha256": "05045d7a9e180e92f20e1a0da357c38e42e2a8e3113bfa10b513bafe985c3ed2"
   },
-  "length-short": {
+  "length/length-short": {
     "algorithm": "ed25519-sha256",
     "canon": "relaxed/relaxed",
     "canonical_body": "IGluZGVudGVkIHRleHQNCg0KbGluZSB0d28NCg==",
@@ -239,7 +215,7 @@
     "sha256": "28c77c9ba01ea4ddcc9092d8e30490c9de1b8e40bbf656f751a4df563e1ab215",
     "signed_input_sha256": "18c49581069f439b52e74f63ed0fef4eb3e0b612b5190c2a75cb096c5bfce2ff"
   },
-  "length-short-fullhash": {
+  "length/length-short-fullhash": {
     "algorithm": "ed25519-sha256",
     "canon": "relaxed/relaxed",
     "canonical_body": "IGluZGVudGVkIHRleHQNCg0KbGluZSB0d28NCg==",
@@ -247,7 +223,7 @@
     "sha256": "567d396398dbb484fe2998d1564d7e7ceae5ce3beec5e3a48258ca1178707452",
     "signed_input_sha256": "7b599ed381979e7c8794a1827ee50cdf37d77a2ed40a1d64d7d42b5573208720"
   },
-  "length-zero": {
+  "length/length-zero": {
     "algorithm": "ed25519-sha256",
     "canon": "relaxed/relaxed",
     "canonical_body": "IGluZGVudGVkIHRleHQNCg0KbGluZSB0d28NCg==",
@@ -255,7 +231,7 @@
     "sha256": "d1550dd1fcaeae34c36dca4f0ccc7e436258291def80a0a945296827e5b731eb",
     "signed_input_sha256": "56139d59287d5c33b960d6bc765c838ca5d5c53da650d0a5a4ca5364fb591440"
   },
-  "length-zero-empty": {
+  "length/length-zero-empty": {
     "algorithm": "ed25519-sha256",
     "canon": "relaxed/relaxed",
     "canonical_body": "",
@@ -263,7 +239,7 @@
     "sha256": "0f4badae686c2c5b5c87c8e56259ef38b5cee799e3d3df162b99d88428996606",
     "signed_input_sha256": "56139d59287d5c33b960d6bc765c838ca5d5c53da650d0a5a4ca5364fb591440"
   },
-  "length-zero-fullhash": {
+  "length/length-zero-fullhash": {
     "algorithm": "ed25519-sha256",
     "canon": "relaxed/relaxed",
     "canonical_body": "IGluZGVudGVkIHRleHQNCg0KbGluZSB0d28NCg==",
@@ -271,7 +247,31 @@
     "sha256": "ad6ddcda976fe7d24173547555c2534d5373995b7ab8da9a4ef0429e5b7b4603",
     "signed_input_sha256": "5da5db0d6f3ac16401032e2ff64404e7652435cb7a9cccaec73beb7d7fe520f9"
   },
-  "no-from": {
+  "misc/ed-with-rsa-key": {
+    "algorithm": "ed25519-sha256",
+    "canon": "relaxed/relaxed",
+    "canonical_body": "IGluZGVudGVkIHRleHQNCg0KbGluZSB0d28NCg==",
+    "length": null,
+    "sha256": "ff6476b40ee20b62a0236a0b153a7ffdd223fd1fdd3e470c6f79a16197997871",
+    "signed_input_sha256": "8bd01f6d1911c82e5e4ac6302b436cbdc9f3e667e8032b21d2e5492cebe929f3"
+  },
+  "misc/headers-9000": {
+    "algorithm": "ed25519-sha256",
+    "canon": "relaxed/relaxed",
+    "canonical_body": "IGluZGVudGVkIHRleHQNCg0KbGluZSB0d28NCg==",
+    "length": null,
+    "sha256": "8741e23ff03c9a5ff465abed372994817527be337ba13caea47769c24227b5c6",
+    "signed_input_sha256": "8bd01f6d1911c82e5e4ac6302b436cbdc9f3e667e8032b21d2e5492cebe929f3"
+  },
+  "misc/identity-subdomain": {
+    "algorithm": "ed25519-sha256",
+    "canon": "relaxed/relaxed",
+    "canonical_body": "IGluZGVudGVkIHRleHQNCg0KbGluZSB0d28NCg==",
+    "length": null,
+    "sha256": "9c11b6783ba99ecb4afbda441e08211d4f5b94455201082a39153aa004e2a6e1",
+    "signed_input_sha256": "da4ace835477c8c8e7e7078b2c45be6ff265e4d442c53f48467eefa45e40dd8a"
+  },
+  "misc/no-from": {
     "algorithm": "ed25519-sha256",
     "canon": "relaxed/relaxed",
     "canonical_body": "IGluZGVudGVkIHRleHQNCg0KbGluZSB0d28NCg==",
@@ -279,7 +279,15 @@
     "sha256": "8dcab64575a5a8e08322585e2a47b049eb6e7de5799700ab34ea69e824461fbc",
     "signed_input_sha256": "e8808ef404b3182278f7fd015532eb8d33c2e0fe745472046644f128abcd083f"
   },
-  "rfc6376-relaxed": {
+  "misc/single-from": {
+    "algorithm": "ed25519-sha256",
+    "canon": "relaxed/relaxed",
+    "canonical_body": "IGluZGVudGVkIHRleHQNCg0KbGluZSB0d28NCg==",
+    "length": null,
+    "sha256": "6a47a201311aaa585c3678d5b0a29de424bc6bc17e50cfa9e667e708f1fd99d0",
+    "signed_input_sha256": "d17e32caf8ac2265963db92dcb3698fc066d7aeac54fedc3bd6e7fd93e8be174"
+  },
+  "rfc/rfc6376-relaxed": {
     "algorithm": "ed25519-sha256",
     "canon": "relaxed/relaxed",
     "canonical_body": "IEMNCkQgRQ0K",
@@ -287,7 +295,7 @@
     "sha256": "06090687f9789af37543b0b390b18bbbf62599805093fa545e636c01a9e5993b",
     "signed_input_sha256": "127df8b047e8ab8e2c6fba64735c0a8e98cfe173cd38d47c769e2ceb186860fe"
   },
-  "rfc6376-simple": {
+  "rfc/rfc6376-simple": {
     "algorithm": "ed25519-sha256",
     "canon": "simple/simple",
     "canonical_body": "IEMgDQpEIAkgRQ0K",
@@ -295,7 +303,7 @@
     "sha256": "6b4c9264bf32cd9f2248082eff30427039430180d162caa1dc9365ec930358c4",
     "signed_input_sha256": "3d979aa8fe293228206a8b309517149fd7f4498a5be016e8419043597d2f05d6"
   },
-  "rsa-with-ed-key": {
+  "rsa/rsa-with-ed-key": {
     "algorithm": "rsa-sha256",
     "canon": "relaxed/relaxed",
     "canonical_body": "IGluZGVudGVkIHRleHQNCg0KbGluZSB0d28NCg==",
@@ -303,7 +311,7 @@
     "sha256": "d1a8f68569b21829ae88fcc925728c60c3832307ab2612919dcc925a5a93ad57",
     "signed_input_sha256": "c6541e0aa2c4a577af2eed4c225043c198623a5c7ddccb74ec7a431eb238b58a"
   },
-  "rsa1024": {
+  "rsa/rsa1024": {
     "algorithm": "rsa-sha256",
     "canon": "relaxed/relaxed",
     "canonical_body": "IGluZGVudGVkIHRleHQNCg0KbGluZSB0d28NCg==",
@@ -311,7 +319,7 @@
     "sha256": "237da2b9e7e7e23bc75e4c2b0c1d4e6520aaed9b99ab3152949eb6e39b785209",
     "signed_input_sha256": "c6541e0aa2c4a577af2eed4c225043c198623a5c7ddccb74ec7a431eb238b58a"
   },
-  "rsa2048-relaxed-relaxed-blank": {
+  "rsa/rsa2048-relaxed-relaxed-blank": {
     "algorithm": "rsa-sha256",
     "canon": "relaxed/relaxed",
     "canonical_body": "",
@@ -319,7 +327,7 @@
     "sha256": "d3541b34b75bb8b2a61435024f47fae7313d36b4cf480d689a980d25a74b19f1",
     "signed_input_sha256": "37d26b6f8344afbd268f5c5f5c3eb20da63662a9b43795368a0f9d18cf7470b6"
   },
-  "rsa2048-relaxed-relaxed-empty": {
+  "rsa/rsa2048-relaxed-relaxed-empty": {
     "algorithm": "rsa-sha256",
     "canon": "relaxed/relaxed",
     "canonical_body": "",
@@ -327,7 +335,7 @@
     "sha256": "a3704289a258aacbd28f967a0d56143dba921c1709f081a2164807a7b4d7ca84",
     "signed_input_sha256": "37d26b6f8344afbd268f5c5f5c3eb20da63662a9b43795368a0f9d18cf7470b6"
   },
-  "rsa2048-relaxed-relaxed-mixed": {
+  "rsa/rsa2048-relaxed-relaxed-mixed": {
     "algorithm": "rsa-sha256",
     "canon": "relaxed/relaxed",
     "canonical_body": "IGluZGVudGVkIHRleHQNCg0KbGluZSB0d28NCg==",
@@ -335,7 +343,7 @@
     "sha256": "38be935da5ac602442db75a60ee9eb8d0bcb49dfb29cf9e9ca5ba3ff232cedef",
     "signed_input_sha256": "c6541e0aa2c4a577af2eed4c225043c198623a5c7ddccb74ec7a431eb238b58a"
   },
-  "rsa2048-relaxed-simple-blank": {
+  "rsa/rsa2048-relaxed-simple-blank": {
     "algorithm": "rsa-sha256",
     "canon": "relaxed/simple",
     "canonical_body": "IAkNCg==",
@@ -343,7 +351,7 @@
     "sha256": "c84efcbfde5ac7142fae62330e2d6c1b62255d3bb20f8c245a5b21154bd87919",
     "signed_input_sha256": "699ab3d3f016c751d93e294bd7462e0d0c1ede3dab91ced07bdeb647f6913a40"
   },
-  "rsa2048-relaxed-simple-empty": {
+  "rsa/rsa2048-relaxed-simple-empty": {
     "algorithm": "rsa-sha256",
     "canon": "relaxed/simple",
     "canonical_body": "DQo=",
@@ -351,7 +359,7 @@
     "sha256": "85c9bbe0f051a2856a983200157dccdc9b475bc1f59db6c7b9de32963492daae",
     "signed_input_sha256": "08b193328e846d1511c486474257b121ca9f610df2310e198393c410217ade73"
   },
-  "rsa2048-relaxed-simple-mixed": {
+  "rsa/rsa2048-relaxed-simple-mixed": {
     "algorithm": "rsa-sha256",
     "canon": "relaxed/simple",
     "canonical_body": "CSAgaW5kZW50ZWQJdGV4dCAJDQoNCmxpbmUJCSB0d28NCiAJDQo=",
@@ -359,7 +367,7 @@
     "sha256": "72fbe6f93b43371281f967d1891bfaf59d851bd4e523f7da66d7b56d08121d1b",
     "signed_input_sha256": "0ec41880bd99e8f27936b27e5bfd2735827eed9e8edca2c59b5f6a4e65f8a42d"
   },
-  "rsa2048-simple-relaxed-blank": {
+  "rsa/rsa2048-simple-relaxed-blank": {
     "algorithm": "rsa-sha256",
     "canon": "simple/relaxed",
     "canonical_body": "",
@@ -367,7 +375,7 @@
     "sha256": "33cbaf7e7425ca6c94d96e215028a44049c58f1deea60905cf1484cc27213d8b",
     "signed_input_sha256": "0b03d13762c8aea55e54b41469ba025716b4ceb722518053bef8335c65782c51"
   },
-  "rsa2048-simple-relaxed-empty": {
+  "rsa/rsa2048-simple-relaxed-empty": {
     "algorithm": "rsa-sha256",
     "canon": "simple/relaxed",
     "canonical_body": "",
@@ -375,7 +383,7 @@
     "sha256": "b923be738823b3a015473166d0ef4d9fbfc0aad7dcdeb850ef45391b4d9a04eb",
     "signed_input_sha256": "0b03d13762c8aea55e54b41469ba025716b4ceb722518053bef8335c65782c51"
   },
-  "rsa2048-simple-relaxed-mixed": {
+  "rsa/rsa2048-simple-relaxed-mixed": {
     "algorithm": "rsa-sha256",
     "canon": "simple/relaxed",
     "canonical_body": "IGluZGVudGVkIHRleHQNCg0KbGluZSB0d28NCg==",
@@ -383,7 +391,7 @@
     "sha256": "32dc23d258024437a59f477f3c474c8f7869c71768effa85c7a5c04ba3bfda81",
     "signed_input_sha256": "0d2c3d592e2a976a9f86dc89517b68e7e1104a65f9554508e03f70a3163f7e1c"
   },
-  "rsa2048-simple-simple-blank": {
+  "rsa/rsa2048-simple-simple-blank": {
     "algorithm": "rsa-sha256",
     "canon": "simple/simple",
     "canonical_body": "IAkNCg==",
@@ -391,7 +399,7 @@
     "sha256": "aefb48471cd67417f3199836fe7c4a0bc7ca815d598943997adb52f2b8e43db8",
     "signed_input_sha256": "7da7a37cca0697f5a1779f53ddee082944a36bd4207ac561f87ec06ae45e8bc4"
   },
-  "rsa2048-simple-simple-empty": {
+  "rsa/rsa2048-simple-simple-empty": {
     "algorithm": "rsa-sha256",
     "canon": "simple/simple",
     "canonical_body": "DQo=",
@@ -399,7 +407,7 @@
     "sha256": "2c3c7f599f08add6542722c74e16e93c3e8cc73ab8c2cb530ad211d8e88687b0",
     "signed_input_sha256": "1c4dffdf70fa399e8d30f4fbe2c5cb81e05e2bd69fac5158ac5d32a9ff578b8e"
   },
-  "rsa2048-simple-simple-mixed": {
+  "rsa/rsa2048-simple-simple-mixed": {
     "algorithm": "rsa-sha256",
     "canon": "simple/simple",
     "canonical_body": "CSAgaW5kZW50ZWQJdGV4dCAJDQoNCmxpbmUJCSB0d28NCiAJDQo=",
@@ -407,20 +415,12 @@
     "sha256": "69cc90f6e460eeda3172e1eca0aaa5834788380e9b7027ca003d38bf5a245b78",
     "signed_input_sha256": "181fe6888076f9ab8575c37fab912636760f1ac2ef0f97873dcc5ce8a1fb038a"
   },
-  "rsa512": {
+  "rsa/rsa512": {
     "algorithm": "rsa-sha256",
     "canon": "relaxed/relaxed",
     "canonical_body": "IGluZGVudGVkIHRleHQNCg0KbGluZSB0d28NCg==",
     "length": null,
     "sha256": "7afcd27fd9fdf05a69e45f4d730a2b1f33ef33c08cebcb1854de177dadd888d6",
     "signed_input_sha256": "c6541e0aa2c4a577af2eed4c225043c198623a5c7ddccb74ec7a431eb238b58a"
-  },
-  "single-from": {
-    "algorithm": "ed25519-sha256",
-    "canon": "relaxed/relaxed",
-    "canonical_body": "IGluZGVudGVkIHRleHQNCg0KbGluZSB0d28NCg==",
-    "length": null,
-    "sha256": "6a47a201311aaa585c3678d5b0a29de424bc6bc17e50cfa9e667e708f1fd99d0",
-    "signed_input_sha256": "d17e32caf8ac2265963db92dcb3698fc066d7aeac54fedc3bd6e7fd93e8be174"
   }
 }

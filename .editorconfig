@@ -35,7 +35,7 @@ trim_trailing_whitespace = unset
 
 # DKIM fixtures are signed bytes: CRLF line ends, trailing whitespace and the
 # exact final bytes belong to the test.
-[tests/fixtures/dkim/*.{eml,dns,input,unsigned}]
+[tests/fixtures/dkim/**/*.{eml,dns,input,unsigned}]
 end_of_line = unset
 insert_final_newline = unset
 trim_trailing_whitespace = unset

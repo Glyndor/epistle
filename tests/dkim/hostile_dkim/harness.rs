@@ -12,8 +12,26 @@ use epistle::dkim::{DkimOutcome, DkimResult, verify_message};
 use epistle::spf::{DnsFailure, DnsLookup};
 
 pub fn path(name: &str) -> PathBuf {
+	let family = if name.starts_with("arc-") {
+		"arc"
+	} else if name.starts_with("ed25519") {
+		"ed25519"
+	} else if name.starts_with("rsa") {
+		"rsa"
+	} else if name.starts_with("tags-") {
+		"tags"
+	} else if name.starts_with("length-") {
+		"length"
+	} else if name.starts_with("signer-") {
+		"signer"
+	} else if name.starts_with("rfc") {
+		"rfc"
+	} else {
+		"misc"
+	};
 	PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 		.join("tests/fixtures/dkim")
+		.join(family)
 		.join(name)
 }
 

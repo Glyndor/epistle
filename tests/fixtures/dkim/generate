@@ -15,8 +15,25 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519, padding
 
 ROOT = Path(__file__).resolve().parent
+
+
+def family(name):
+	if name.startswith("arc-"): return "arc"
+	if name.startswith("ed25519"): return "ed25519"
+	if name.startswith("rsa"): return "rsa"
+	if name.startswith("tags-"): return "tags"
+	if name.startswith("length-"): return "length"
+	if name.startswith("signer-"): return "signer"
+	if name.startswith("rfc"): return "rfc"
+	return "misc"
+
+
+def fixture_path(name):
+	return ROOT / family(name) / name
+
+
 KEYS = {
-	name: serialization.load_pem_private_key((ROOT / f"{name}.pem").read_bytes(), None)
+	name: serialization.load_pem_private_key(fixture_path(f"{name}.pem").read_bytes(), None)
 	for name in ("ed25519", "rsa2048", "rsa1024", "rsa512")
 }
 MANIFEST = {}
@@ -90,9 +107,9 @@ def wire(headers, body):
 
 
 def save(name, raw, record, **metadata):
-	(ROOT / f"{name}.eml").write_bytes(raw)
-	(ROOT / f"{name}.dns").write_text(record + "\n")
-	MANIFEST[name] = {"sha256": hashlib.sha256(raw).hexdigest(), **metadata}
+	fixture_path(f"{name}.eml").write_bytes(raw)
+	fixture_path(f"{name}.dns").write_text(record + "\n")
+	MANIFEST[f"{family(name)}/{name}"] = {"sha256": hashlib.sha256(raw).hexdigest(), **metadata}
 
 
 def dkim(name, key="ed25519", hc="relaxed", bc="relaxed", body=BODY,
@@ -144,7 +161,7 @@ def arc(name, count=1, key="ed25519", ams_key=None, seal_key=None,
 	headers = [pair for triple in reversed(prior) for pair in reversed(triple)]
 	raw = wire(headers + HEADERS, body)
 	save(name, raw, dns_record(ams_key), instances=count, ams_algorithm=ams_alg, seal_algorithm=seal_alg)
-	(ROOT / f"{name}.seal.dns").write_text(dns_record(seal_key) + "\n")
+	fixture_path(f"{name}.seal.dns").write_text(dns_record(seal_key) + "\n")
 	return raw
 
 
@@ -153,7 +170,7 @@ def signer_oracle():
 	oversign = ["from", "to", "cc", "subject", "reply-to", "date", "message-id",
 		"list-unsubscribe", "list-unsubscribe-post", "content-type",
 		"disposition-notification-to", "return-receipt-to", "auto-submitted"]
-	(ROOT / "signer-raw.eml").write_bytes(wire(HEADERS, BODY))
+	fixture_path("signer-raw.eml").write_bytes(wire(HEADERS, BODY))
 	names = [n.lower() for n, _ in reversed(HEADERS)] + oversign
 	for key, algorithm in [("ed25519", "ed25519-sha256"), ("rsa2048", "rsa-sha256")]:
 		# Fold tags at 78 columns, independently of the Rust wire module.
@@ -177,9 +194,9 @@ def signer_oracle():
 		data = signed_headers(HEADERS, names, "relaxed") + header_canon("DKIM-Signature", text)[:-2]
 		sig = sign(key, data, algorithm)
 		# Compare the decoded signature, independently of signature-value folding.
-		(ROOT / f"signer-{key}.signature").write_text(sig + "\n")
-		(ROOT / f"signer-{key}.unsigned").write_bytes(text.encode("ascii"))
-		(ROOT / f"signer-{key}.input").write_bytes(data)
+		fixture_path(f"signer-{key}.signature").write_text(sig + "\n")
+		fixture_path(f"signer-{key}.unsigned").write_bytes(text.encode("ascii"))
+		fixture_path(f"signer-{key}.input").write_bytes(data)
 
 
 def anchor_vectors():
@@ -238,10 +255,10 @@ def main():
 	arc("arc-cv-later-none", count=2, cv_override="none")
 	signer_oracle()
 	# Independent verification of the published RFC signature.
-	raw = (ROOT / "rfc8463.eml").read_bytes()
+	raw = fixture_path("rfc8463.eml").read_bytes()
 	value = raw.split(b"\r\nFrom:", 1)[0].split(b" b=", 1)[1]
 	pub = ed25519.Ed25519PublicKey.from_public_bytes(base64.b64decode("11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo="))
-	pub.verify(base64.b64decode(value), hashlib.sha256((ROOT / "rfc8463.input").read_bytes()).digest())
+	pub.verify(base64.b64decode(value), hashlib.sha256(fixture_path("rfc8463.input").read_bytes()).digest())
 	(ROOT / "manifest.json").write_text(json.dumps(MANIFEST, sort_keys=True, indent=2) + "\n")
 	print(f"Generated and cryptographically checked {len(MANIFEST)} external messages")
 
