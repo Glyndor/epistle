@@ -4,7 +4,7 @@ use std::io::Read;
 use std::os::unix::fs::PermissionsExt;
 use std::time::{Duration, SystemTime};
 
-use super::{KEEP, keep, newest};
+use super::{KEEP, keep, newest, remove_update};
 
 fn at(secs: u64) -> SystemTime {
 	SystemTime::UNIX_EPOCH + Duration::from_secs(secs)
@@ -71,4 +71,37 @@ fn only_the_newest_pre_dumps_are_kept() {
 	let newest_dump = newest(dir.path(), "pre-0.12.1-").expect("the newest pre-0.12.1 dump");
 	assert!(newest_dump.to_string_lossy().contains("pre-0.12.1-"));
 	assert!(newest(dir.path(), "pre-9").is_none());
+}
+
+#[test]
+fn removing_the_update_dumps_leaves_every_other_file() {
+	let dir = tempfile::tempdir().unwrap();
+	let backups = dir.path().join("backups");
+	std::fs::create_dir_all(&backups).unwrap();
+	std::fs::write(backups.join("nightly.tar.gz"), "operator's").unwrap();
+	for (index, name) in ["pre-0.12.2", "pre-db-upgrade-17-to-18", "pre-0.12.3"]
+		.iter()
+		.enumerate()
+	{
+		keep(dir.path(), name, b"x", at(1_760_000_000 + index as u64)).unwrap();
+	}
+	// Written after the prune that `keep` runs, which would count it as a dump.
+	std::fs::write(backups.join("pre-0.9.0.sql.gz"), "no timestamp").unwrap();
+	assert_eq!(remove_update(dir.path()).unwrap(), 2);
+	let mut left: Vec<String> = std::fs::read_dir(&backups)
+		.unwrap()
+		.map(|entry| entry.unwrap().file_name().into_string().unwrap())
+		.collect();
+	left.sort();
+	assert_eq!(left.len(), 3, "{left:?}");
+	assert!(left.contains(&"nightly.tar.gz".to_string()));
+	assert!(left.contains(&"pre-0.9.0.sql.gz".to_string()));
+	assert!(left.iter().any(|name| name.starts_with("pre-db-upgrade-")));
+	assert!(newest(dir.path(), "pre-0.12.").is_none());
+}
+
+#[test]
+fn removing_the_update_dumps_of_a_missing_folder_is_an_error_not_a_panic() {
+	let dir = tempfile::tempdir().unwrap();
+	assert!(remove_update(dir.path()).is_err());
 }

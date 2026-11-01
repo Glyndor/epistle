@@ -263,6 +263,10 @@ impl execute::UpdateHost for Live<'_> {
 		.map_err(|error| error.to_string())
 	}
 
+	fn discard_dumps(&mut self) -> Result<usize, String> {
+		super::dumps::remove_update(&self.config.data_dir).map_err(|error| error.to_string())
+	}
+
 	fn harden_database(&mut self) -> Result<bool, String> {
 		crate::cli::db::harden::run(self.compose)
 	}
