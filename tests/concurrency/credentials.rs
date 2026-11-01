@@ -102,9 +102,9 @@ async fn an_inflight_login_cannot_succeed_after_a_credential_mutation() {
 		let password = &*wire::PASSWORD;
 		let hash = epistle::smtp::auth::hash_password(password).expect("password hash");
 		// A salt minted for this run, so no literal salt sits in the source.
-		let mut salt = [0u8; 16];
-		ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut salt)
-			.expect("random salt");
+		let salt: [u8; 16] = ring::rand::generate(&ring::rand::SystemRandom::new())
+			.expect("random salt")
+			.expose();
 		let scram = ScramStored::from_credentials(&ScramCredentials::derive(password, &salt, 4096));
 		store
 			.add(DynamicAccount {
