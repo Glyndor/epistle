@@ -114,6 +114,70 @@ fn a_kernel_that_refuses_close_range_still_seals_the_descriptors() {
 	assert!(!descriptor_reaches_the_command(|| seal_with(|| -1)));
 }
 
+fn nofile() -> libc::rlimit {
+	let mut limit = libc::rlimit {
+		rlim_cur: 0,
+		rlim_max: 0,
+	};
+	// SAFETY: valid storage for the answer.
+	assert_eq!(
+		unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) },
+		0
+	);
+	limit
+}
+
+#[test]
+fn a_descriptor_above_the_soft_limit_is_sealed_too() {
+	let original = nofile();
+	if original.rlim_max < 8192 {
+		eprintln!("SKIPPED: the hard limit on descriptors is below 8192");
+		return;
+	}
+	// Open a descriptor under a high limit, then lower the limit under it, as
+	// a caller that was started with a larger one can leave things.
+	let high = libc::rlimit {
+		rlim_cur: 8192,
+		rlim_max: original.rlim_max,
+	};
+	// SAFETY: setrlimit reads a valid struct.
+	assert_eq!(unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &high) }, 0);
+	let mut fds = [0 as libc::c_int; 2];
+	// SAFETY: room for the two descriptors pipe writes.
+	assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+	const FAR: libc::c_int = 5000;
+	// SAFETY: duplicating onto a free number below the limit just set.
+	assert_eq!(unsafe { libc::dup2(fds[0], FAR) }, FAR);
+	let low = libc::rlimit {
+		rlim_cur: 1024,
+		rlim_max: original.rlim_max,
+	};
+	// SAFETY: setrlimit reads a valid struct.
+	assert_eq!(unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &low) }, 0);
+	let mut command = Command::new("sh");
+	command.arg("-c").arg(format!(
+		"if [ -e /proc/self/fd/{FAR} ]; then echo open; else echo closed; fi"
+	));
+	// SAFETY: same constraints as in `run_as`: system calls and nothing else.
+	unsafe {
+		std::os::unix::process::CommandExt::pre_exec(&mut command, || seal_with(|| -1));
+	}
+	let output = command.stdout(Stdio::piped()).output();
+	// SAFETY: putting the limit back and closing what was opened above.
+	unsafe {
+		libc::setrlimit(libc::RLIMIT_NOFILE, &original);
+		libc::close(FAR);
+		libc::close(fds[0]);
+		libc::close(fds[1]);
+	}
+	let output = output.unwrap();
+	assert_eq!(
+		String::from_utf8_lossy(&output.stdout).trim(),
+		"closed",
+		"a descriptor above the soft limit reached the command"
+	);
+}
+
 #[test]
 fn without_any_sealing_the_test_descriptor_does_reach_the_command() {
 	// The control: the two tests above mean nothing if it never arrives.

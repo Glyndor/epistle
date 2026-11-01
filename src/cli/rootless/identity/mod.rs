@@ -152,8 +152,8 @@ pub(in crate::cli) fn groups_of(name: &str, gid: u32) -> io::Result<Vec<libc::gi
 /// Mark every descriptor above stderr close-on-exec, so the account's command
 /// starts with the three standard streams and nothing a root caller left open.
 /// The kernel's `close_range` does it in one call; where it answers an error
-/// (before Linux 5.11, a seccomp filter, another system) every descriptor up to
-/// the soft limit is marked one at a time. A descriptor that cannot be marked
+/// (before Linux 5.11, a seccomp filter, another system) the open descriptors
+/// are listed and marked one at a time. A descriptor that cannot be marked
 /// fails the whole thing, so the command never starts with one left open.
 ///
 /// The descriptors are marked, not closed, because the standard library holds
@@ -168,29 +168,134 @@ fn seal_with(close_range: impl FnOnce() -> libc::c_int) -> io::Result<()> {
 	if close_range() == 0 {
 		return Ok(());
 	}
-	let mut limit = libc::rlimit {
-		rlim_cur: 0,
-		rlim_max: 0,
-	};
-	// SAFETY: `limit` is valid storage for getrlimit's answer.
-	let known = unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) } == 0;
-	// No readable limit, or none set: the usual ceiling of a process.
-	let top = if known && limit.rlim_cur != libc::RLIM_INFINITY {
-		limit.rlim_cur.min(1 << 22)
-	} else {
-		1 << 20
-	};
-	for fd in 3..top as libc::c_int {
-		// SAFETY: fcntl on a number that may not be open answers EBADF.
-		let rc = unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) };
-		if rc != 0 {
-			let error = io::Error::last_os_error();
-			if error.raw_os_error() != Some(libc::EBADF) {
-				return Err(error);
-			}
+	// The soft limit is not a bound: it can be lowered after a descriptor was
+	// opened under a higher one. The descriptors actually open are listed, and
+	// only when they cannot be is the whole range the kernel allows swept.
+	seal_by_listing().or_else(|_| seal_by_sweep())
+}
+
+/// Mark `fd` close-on-exec; a number that is not open is fine.
+fn mark(fd: libc::c_int) -> io::Result<()> {
+	// SAFETY: fcntl on a number that may not be open answers EBADF.
+	if unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) } != 0 {
+		let error = io::Error::last_os_error();
+		if error.raw_os_error() != Some(libc::EBADF) {
+			return Err(error);
 		}
 	}
 	Ok(())
+}
+
+/// The number a `/proc/self/fd` entry names, or `None` for `.` and `..`.
+fn fd_number(name: &[u8]) -> Option<libc::c_int> {
+	let end = name
+		.iter()
+		.position(|&byte| byte == 0)
+		.unwrap_or(name.len());
+	let digits = &name[..end];
+	if digits.is_empty() || !digits.iter().all(u8::is_ascii_digit) {
+		return None;
+	}
+	digits.iter().try_fold(0 as libc::c_int, |number, &digit| {
+		number
+			.checked_mul(10)?
+			.checked_add(libc::c_int::from(digit - b'0'))
+	})
+}
+
+/// Mark every open descriptor above stderr by reading `/proc/self/fd` with raw
+/// system calls and a buffer on the stack, so nothing allocates after `fork`.
+#[cfg(target_os = "linux")]
+fn seal_by_listing() -> io::Result<()> {
+	// SAFETY: open takes a NUL-terminated path.
+	let dir = unsafe {
+		libc::open(
+			c"/proc/self/fd".as_ptr(),
+			libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
+		)
+	};
+	if dir < 0 {
+		return Err(io::Error::last_os_error());
+	}
+	let mut buffer = [0_u8; 2048];
+	let result = loop {
+		// SAFETY: getdents64 fills at most `buffer.len()` bytes of `buffer`.
+		let read =
+			unsafe { libc::syscall(libc::SYS_getdents64, dir, buffer.as_mut_ptr(), buffer.len()) };
+		if read < 0 {
+			break Err(io::Error::last_os_error());
+		}
+		if read == 0 {
+			break Ok(());
+		}
+		let (read, mut at) = (read as usize, 0);
+		let mut entries = Ok(());
+		// A linux_dirent64 is an inode, an offset, a 16-bit record length, a
+		// type byte and the name.
+		while at + 19 <= read {
+			let length = usize::from(u16::from_ne_bytes([buffer[at + 16], buffer[at + 17]]));
+			if length < 20 || at + length > read {
+				entries = Err(io::Error::other("a malformed /proc/self/fd entry"));
+				break;
+			}
+			if let Some(fd) = fd_number(&buffer[at + 19..at + length])
+				&& fd >= 3 && fd != dir
+			{
+				entries = entries.and(mark(fd));
+			}
+			at += length;
+		}
+		if entries.is_err() {
+			break entries;
+		}
+	};
+	// SAFETY: closing the descriptor opened above.
+	unsafe { libc::close(dir) };
+	result
+}
+
+#[cfg(not(target_os = "linux"))]
+fn seal_by_listing() -> io::Result<()> {
+	Err(io::Error::other("no way to list the open descriptors"))
+}
+
+/// Mark every descriptor number the kernel allows, up to `fs.nr_open`, which
+/// no descriptor can exceed whatever the soft limit says. Fails, and so does
+/// the spawn, when that bound cannot be read or is too large to sweep.
+fn seal_by_sweep() -> io::Result<()> {
+	let top = nr_open()?;
+	if top > 1 << 24 {
+		return Err(io::Error::other("fs.nr_open is too large to sweep"));
+	}
+	(3..top).try_for_each(mark)
+}
+
+/// `fs.nr_open`, read with raw calls and a buffer on the stack.
+fn nr_open() -> io::Result<libc::c_int> {
+	// SAFETY: open takes a NUL-terminated path.
+	let file = unsafe {
+		libc::open(
+			c"/proc/sys/fs/nr_open".as_ptr(),
+			libc::O_RDONLY | libc::O_CLOEXEC,
+		)
+	};
+	if file < 0 {
+		return Err(io::Error::last_os_error());
+	}
+	let mut buffer = [0_u8; 32];
+	// SAFETY: read fills at most `buffer.len()` bytes of `buffer`.
+	let read = unsafe { libc::read(file, buffer.as_mut_ptr().cast(), buffer.len()) };
+	// SAFETY: closing the descriptor opened above.
+	unsafe { libc::close(file) };
+	if read <= 0 {
+		return Err(io::Error::other("cannot read fs.nr_open"));
+	}
+	let text = &buffer[..read as usize];
+	let end = text
+		.iter()
+		.position(|byte| !byte.is_ascii_digit())
+		.unwrap_or(text.len());
+	fd_number(&text[..end]).ok_or_else(|| io::Error::other("cannot read fs.nr_open"))
 }
 
 /// `close_range(3, ~0, CLOSE_RANGE_CLOEXEC)`: 0 on success, -1 with `errno`
