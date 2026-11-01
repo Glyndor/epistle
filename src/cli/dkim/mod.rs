@@ -58,6 +58,12 @@ pub enum DkimCli {
 		/// (0 asks once). Nothing is switched until they do.
 		#[arg(long, value_name = "SECONDS", default_value_t = 120)]
 		wait: u64,
+		/// Retire the records of the shared key that are still published at
+		/// the domains that left it, once the overlap window has passed.
+		/// Through `[dns]` where it reaches the domain, listed for removal by
+		/// hand otherwise. Never touches the domain that kept the key.
+		#[arg(long)]
+		finish: bool,
 	},
 	/// Remove DKIM keys and TXT records no rotation uses.
 	///
@@ -316,15 +322,59 @@ pub(super) fn rotate_now_with(
 	report.object(result)
 }
 
+/// Run one `dkim` command from its configuration file. `split` and
+/// `split --finish` take the path, because they edit the file; the others
+/// load it.
+pub(super) fn dispatch(path: &std::path::Path, action: DkimCli, json: bool) -> ExitCode {
+	if let DkimCli::Split {
+		dry_run,
+		wait,
+		finish,
+	} = action
+	{
+		return run_split(
+			path,
+			dry_run,
+			(wait, finish),
+			json,
+			&mut std::io::stdout().lock(),
+		);
+	}
+	let config = match Config::load(path) {
+		Ok(config) => config,
+		Err(error) => {
+			super::style::error(error);
+			return ExitCode::FAILURE;
+		}
+	};
+	match action {
+		action @ DkimCli::Rotate { .. } => {
+			super::term::live::run("dkim rotate", json, |mut out| {
+				run(&config, action, json, &mut out)
+			})
+		}
+		action => run(&config, action, json, &mut std::io::stdout().lock()),
+	}
+}
+
 /// Run `dkim split` against the configuration file at `path`.
 pub(super) fn run_split(
 	path: &std::path::Path,
 	dry_run: bool,
-	wait: u64,
+	(wait, finish): (u64, bool),
 	json: bool,
 	out: &mut impl std::io::Write,
 ) -> ExitCode {
-	split::run(path, &split::Options { dry_run, wait }, json, out)
+	split::run(
+		path,
+		&split::Options {
+			dry_run,
+			wait,
+			finish,
+		},
+		json,
+		out,
+	)
 }
 
 mod cleanup;

@@ -103,6 +103,9 @@ pub(super) struct DkimView {
 	/// The key of every hosted domain, so a key several domains share is
 	/// visible.
 	keys: Vec<KeyView>,
+	/// Records of the shared `[dkim]` key still published at a domain that
+	/// has a key of its own: the split is not finished while any is listed.
+	stale_records: Vec<String>,
 	records: Vec<RecordView>,
 }
 
@@ -260,6 +263,17 @@ pub(super) async fn build(
 			rsa.as_ref().map(|rsa| rsa.selector.as_str()),
 		),
 	);
+	let stale_records = match dns {
+		Some(dns) => {
+			let candidates = crate::dkim::stale::names(config)?;
+			crate::dkim::stale::published(dns, candidates)
+				.await
+				.into_iter()
+				.map(|record| record.name)
+				.collect()
+		}
+		None => Vec::new(),
+	};
 	let automatic = !config.dns.is_empty();
 	let rotated_at = state.as_ref().map(|s| s.rotated_at);
 	Ok(DkimView {
@@ -309,6 +323,7 @@ pub(super) async fn build(
 			})
 			.collect(),
 		keys,
+		stale_records,
 		records,
 	})
 }
@@ -426,6 +441,13 @@ fn render_text(view: &DkimView, out: &mut impl std::io::Write) -> std::io::Resul
 			"key {}: {} ({who})",
 			key.domain,
 			pair(&key.selector, key.rsa_selector.as_deref())
+		)?;
+	}
+	if !view.stale_records.is_empty() {
+		writeln!(
+			out,
+			"split incomplete: the shared key is still published at {}; `epistle dkim split --finish` retires it",
+			view.stale_records.join(", ")
 		)?;
 	}
 	for record in &view.records {

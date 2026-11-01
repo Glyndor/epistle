@@ -10,6 +10,7 @@ pub mod sharing;
 mod sign;
 pub(crate) mod signature;
 mod spki;
+pub mod stale;
 mod verify;
 
 #[cfg(test)]

@@ -23,9 +23,11 @@ use crate::cli::json_out::Report;
 use crate::cli::resource::ResourceError;
 use crate::config::Config;
 use crate::dkim::domain_keys::{self, DomainKeys};
+use crate::dkim::stale::{self, Stale};
 use crate::dns::provider::DnsProvider;
 use crate::spf::DnsLookup;
 
+mod finish;
 mod plan;
 mod publish;
 
@@ -35,6 +37,8 @@ pub(super) struct Options {
 	pub dry_run: bool,
 	/// Seconds to wait for the new records to show in DNS.
 	pub wait: u64,
+	/// Retire the shared key's records at the domains that left it.
+	pub finish: bool,
 }
 
 /// What the command talks to besides the file system, so a test can supply
@@ -130,6 +134,34 @@ fn describe(plan: &plan::Plan, moves: &[(String, DomainKeys)]) -> serde_json::Va
 	})
 }
 
+/// The records of the shared key that are still published at the domains
+/// in `moves`, with the grace the operator has before removing them.
+fn stale_of(config: &Config, moves: &[(String, DomainKeys)]) -> Result<Vec<Stale>, String> {
+	let mut all = Vec::new();
+	for (domain, keys) in moves {
+		let mut own = vec![keys.selector.clone()];
+		own.extend(keys.rsa.iter().map(|(selector, _)| selector.clone()));
+		all.extend(stale::names_for(config, domain, &own)?);
+	}
+	Ok(all)
+}
+
+/// Add the stale records to a result object and say them in the text report.
+fn report_stale(report: &mut Report<'_>, result: &mut serde_json::Value, stale: &[Stale]) {
+	for record in stale {
+		report.line(format_args!(
+			"stale after the switch: {} still publishes the shared key; retire it with `epistle dkim split --finish` once the overlap of {} days has passed",
+			record.name,
+			crate::dkim::ROTATE_OVERLAP_DAYS
+		));
+	}
+	result["stale_records"] = stale
+		.iter()
+		.map(|record| record.name.clone())
+		.collect::<Vec<_>>()
+		.into();
+}
+
 /// The command, with its services supplied.
 pub(super) async fn split(
 	path: &Path,
@@ -140,6 +172,9 @@ pub(super) async fn split(
 	restart: impl FnOnce(&Config, crate::cli::stack::StackAction) -> ExitCode,
 ) -> ExitCode {
 	let now = super::now_epoch();
+	if options.finish {
+		return finish::finish(config, options, services, (json, out, err), now).await;
+	}
 	let plan = match plan::build(config) {
 		Ok(Some(plan)) => plan,
 		Ok(None) => {
@@ -182,8 +217,10 @@ pub(super) async fn split(
 				keys.selector
 			));
 		}
-		report.line("dry run: nothing changed");
+		let stale = stale_of(config, &shown).unwrap_or_default();
 		let mut result = describe(&plan, &shown);
+		report_stale(&mut report, &mut result, &stale);
+		report.line("dry run: nothing changed");
 		result["result"] = "dry-run".into();
 		result["action"] = "split".into();
 		return report.object(result);
@@ -240,7 +277,13 @@ pub(super) async fn split(
 			.iter()
 			.map(|m| (m.domain.clone(), m.keys.clone()))
 			.collect();
+		let stale = stale_of(config, &shown).unwrap_or_default();
 		let mut result = describe(&plan, &shown);
+		result["stale_records"] = stale
+			.iter()
+			.map(|r| r.name.clone())
+			.collect::<Vec<_>>()
+			.into();
 		result["result"] = "waiting".into();
 		result["action"] = "split".into();
 		result["missing"] = absent
@@ -251,13 +294,24 @@ pub(super) async fn split(
 		let _ = report.object(result);
 		return ExitCode::FAILURE;
 	}
-	switch(path, (&plan, &moves), &mut report, err, restart)
+	let shown: Vec<_> = moves
+		.iter()
+		.map(|m| (m.domain.clone(), m.keys.clone()))
+		.collect();
+	let stale = match stale_of(config, &shown) {
+		Ok(stale) => stale,
+		Err(reason) => {
+			crate::cli::style::error_to(err, format_args!("dkim split refused: {reason}"));
+			return ExitCode::FAILURE;
+		}
+	};
+	switch(path, (&plan, &moves, &stale), &mut report, err, restart)
 }
 
 /// Write the entries and restart: the one step that changes what signs.
 fn switch(
 	path: &Path,
-	(plan, moves): (&plan::Plan, &[Move]),
+	(plan, moves, stale): (&plan::Plan, &[Move], &[Stale]),
 	report: &mut Report<'_>,
 	err: &mut impl Write,
 	restart: impl FnOnce(&Config, crate::cli::stack::StackAction) -> ExitCode,
@@ -305,7 +359,7 @@ fn switch(
 			}
 		};
 	report.line(format_args!(
-		"{} keeps the [dkim] key; the records of that key at the other domains stay published until you remove them",
+		"{} keeps the [dkim] key; the shared key is still published at the domains that left it",
 		plan.keeps
 	));
 	let shown: Vec<_> = moves
@@ -313,6 +367,7 @@ fn switch(
 		.map(|m| (m.domain.clone(), m.keys.clone()))
 		.collect();
 	let mut result = describe(plan, &shown);
+	report_stale(report, &mut result, stale);
 	result["result"] = "split".into();
 	result["action"] = "split".into();
 	result["reload"] = reload.name().into();

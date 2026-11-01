@@ -8,6 +8,7 @@ use crate::cli::dkim::split::Options;
 const NOW: Options = Options {
 	dry_run: false,
 	wait: 0,
+	finish: false,
 };
 
 fn world(blind: bool, refuses: bool) -> (Zone, Provider, Resolver) {
@@ -183,6 +184,7 @@ fn a_dry_run_changes_nothing() {
 	let options = Options {
 		dry_run: true,
 		wait: 0,
+		finish: false,
 	};
 	let (code, out, _, restarts) = run(&install, &options, Some(provider), &resolver);
 	assert_eq!(code, ExitCode::SUCCESS);

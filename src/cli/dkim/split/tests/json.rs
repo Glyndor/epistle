@@ -31,6 +31,7 @@ fn a_dry_run_names_who_keeps_and_who_moves() {
 	let options = Options {
 		dry_run: true,
 		wait: 0,
+		finish: false,
 	};
 	let (code, out, _, _) = run_as(&install(), &options, Some(provider), &resolver, true);
 	assert_eq!(code, ExitCode::SUCCESS);
@@ -53,6 +54,7 @@ fn waiting_lists_the_records_that_do_not_resolve() {
 	let options = Options {
 		dry_run: false,
 		wait: 0,
+		finish: false,
 	};
 	let (code, out, _, _) = run_as(&install(), &options, Some(provider), &resolver, true);
 	assert_eq!(code, ExitCode::FAILURE);
@@ -68,6 +70,7 @@ fn a_finished_split_says_how_the_server_picked_it_up() {
 	let options = Options {
 		dry_run: false,
 		wait: 0,
+		finish: false,
 	};
 	let (code, out, _, _) = run_as(&install, &options, Some(provider), &resolver, true);
 	assert_eq!(code, ExitCode::SUCCESS);

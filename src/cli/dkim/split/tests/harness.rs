@@ -50,8 +50,12 @@ impl DnsProvider for Provider {
 		})
 	}
 
-	fn delete(&self, _zone: &str, _record: DnsRecord) -> Op<'_> {
-		panic!("dkim split deletes nothing")
+	fn delete(&self, _zone: &str, record: DnsRecord) -> Op<'_> {
+		let records = Arc::clone(&self.zone.records);
+		Box::pin(async move {
+			records.lock().unwrap().remove(&record.name);
+			Ok(())
+		})
 	}
 
 	fn list(&self, _zone: &str) -> ListOp<'_> {
