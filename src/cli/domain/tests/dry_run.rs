@@ -65,7 +65,7 @@ fn run_action(path: &std::path::Path, action: DomainCli, dry_run: bool) -> ExitC
 			let config = Config::load(path).expect("config loads");
 			show(&config, &domain, json, &mut out).expect("show");
 		}
-		DomainCli::Add { domain } => {
+		DomainCli::Add { domain, .. } => {
 			let config = Config::load(path).expect("config loads");
 			let mut document = ConfigDocument::open(path).expect("document open");
 			add_domain(&config, &mut document, &domain).expect("add_domain");

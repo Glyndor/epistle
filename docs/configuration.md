@@ -351,7 +351,7 @@ With `rsa_selector` and `rsa_key_file` set (dual signing), each rotation also re
 | `rotate_overlap_days` | **Deprecated.** Ignored. Same backward-compatibility note as `rotate_days`. |
 
 #### `[[dkim.domain]]`
-Optional per-domain keys. A domain listed here signs with its own key instead of the `[dkim]` default, so one domain's key can be replaced, or kept from another server, without touching the others; every other domain keeps the default. The signer picks the key of the signature's `d=` domain and never another domain's. `epistle dns-records`, `verify-dns`, `status` and `dkim show` show each domain's own selector and record.
+Per-domain keys. A domain listed here signs with its own key instead of the `[dkim]` default, so one domain's key can be replaced, or kept from another server, without touching the others; every other domain keeps the default. `epistle init` (for every domain after the first) and `epistle domain add` write these entries themselves, with the key files under `<data_dir>/keys/dkim/<domain>/`, so a new install has one key per domain; an install made before that has the entries it had, and none are added to it. The signer picks the key of the signature's `d=` domain and never another domain's. `epistle dns-records`, `verify-dns`, `status` and `dkim show` show each domain's own selector and record.
 
 ```toml
 [dkim]

@@ -41,8 +41,11 @@ pub(in crate::cli::init::apply) struct DesiredConfig {
 /// Sections and keys `init` writes only into a configuration it creates.
 /// On an existing file they are left as the operator has them, so an
 /// upgrade that re-runs `init` keeps today's behaviour.
-pub(in crate::cli::init::apply) const NEW_INSTALL_ONLY: &[(&str, Option<&str>)] =
-	&[("attachments", None), ("antispam", Some("clamd_on_error"))];
+pub(in crate::cli::init::apply) const NEW_INSTALL_ONLY: &[(&str, Option<&str>)] = &[
+	("attachments", None),
+	("antispam", Some("clamd_on_error")),
+	("dkim", Some("domain")),
+];
 
 /// The `[attachments]` section for a new install: quarantine disguised
 /// files and macros, flag encrypted archives.
@@ -91,6 +94,22 @@ pub(in crate::cli::init::apply) struct DesiredListener {
 
 #[derive(Debug, Serialize)]
 pub(in crate::cli::init::apply) struct DesiredDkim {
+	pub(in crate::cli::init::apply) selector: String,
+	pub(in crate::cli::init::apply) key_file: String,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub(in crate::cli::init::apply) rsa_selector: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub(in crate::cli::init::apply) rsa_key_file: Option<String>,
+	/// A key of its own for every domain after the first, which signs with
+	/// the keys above. Written only into a configuration `init` creates.
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	pub(in crate::cli::init::apply) domain: Vec<DesiredDkimDomain>,
+}
+
+/// One `[[dkim.domain]]` entry `init` writes for a domain of its own.
+#[derive(Debug, Serialize)]
+pub(in crate::cli::init::apply) struct DesiredDkimDomain {
+	pub(in crate::cli::init::apply) name: String,
 	pub(in crate::cli::init::apply) selector: String,
 	pub(in crate::cli::init::apply) key_file: String,
 	#[serde(skip_serializing_if = "Option::is_none")]

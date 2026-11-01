@@ -156,6 +156,56 @@ impl ConfigDocument {
 		Ok(())
 	}
 
+	/// Remove every element of a nested `[[parent.array]]`, like
+	/// `[[dkim.domain]]`, whose `match_key` equals `match_value` without
+	/// regard to case. Returns how many were removed; a missing parent or
+	/// array removes nothing.
+	pub fn remove_nested_elements(
+		&mut self,
+		parent_path: &[&str],
+		array: &str,
+		match_key: &str,
+		match_value: &str,
+	) -> Result<usize, String> {
+		let mut table = self.document.as_table_mut();
+		for segment in parent_path {
+			match table.get_mut(segment) {
+				Some(item) => {
+					table = item.as_table_mut().ok_or_else(|| {
+						format!("expected a table at [{}]", parent_path.join("."))
+					})?;
+				}
+				None => return Ok(0),
+			}
+		}
+		let Some(item) = table.get_mut(array) else {
+			return Ok(0);
+		};
+		let tables = item
+			.as_array_of_tables_mut()
+			.ok_or_else(|| format!("expected [[{}]] to be an array of tables", array))?;
+		let mut comments = String::new();
+		let indices: Vec<_> = tables
+			.iter()
+			.enumerate()
+			.filter(|(_, table)| {
+				table
+					.get(match_key)
+					.and_then(Item::as_str)
+					.is_some_and(|value| value.eq_ignore_ascii_case(match_value))
+			})
+			.map(|(index, table)| {
+				comments.push_str(&table_comments(table));
+				index
+			})
+			.collect();
+		for index in indices.iter().rev() {
+			tables.remove(*index);
+		}
+		self.keep_comments(&comments);
+		Ok(indices.len())
+	}
+
 	/// Remove every array-of-tables element with the matching key value.
 	pub fn remove_elements(
 		&mut self,

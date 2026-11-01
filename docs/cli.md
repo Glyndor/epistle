@@ -794,6 +794,19 @@ refuses when the domain is already configured, when it collides with
 a `domain_aliases` source or target, or when the loader rejects the
 final document.
 
+With `[dkim]` configured, `add` also gives the new domain a DKIM key of its
+own: the Ed25519 key (and the RSA key, when `[dkim]` signs with one) is written
+`0600` under `<data_dir>/keys/dkim/<domain>/`, and a `[[dkim.domain]]` entry
+names it with the selectors `own<day>` and `ownrsa<day>`, which are not the
+ones `[dkim]` publishes, so the new record never replaces the one the default
+key is still published under. The records `add` prints are that key's. A key
+of the domain's own means a leaked key signs only as that domain.
+`--shared-dkim-key` keeps the old behaviour (the domain signs with the
+`[dkim]` key, which `config-check` and `status` then report). `--dry-run`
+shows the entry and writes no key. `remove` and `alias remove` take the
+domain's `[[dkim.domain]]` entry out with it and leave the key files, which are
+yours to delete once the record is gone from DNS.
+
 `remove` walks every account (static `[accounts]` plus `<data_dir>/accounts.toml`),
 every `[alias]` and its members and senders, every `domain_aliases`
 entry and every masked address on disk. If any of those still uses the
@@ -1452,7 +1465,11 @@ What this build does:
   `secrets/` beside data_dir instead (see [the container
   stack](operations/container.md#what-each-container-may-do)); a key that already exists
   is reused, never regenerated, whatever the answers say, and one an older
-  release left under `keys/` is moved;
+  release left under `keys/` is moved; with more than one domain, the first
+  signs with `s1.pem`/`s2.pem` and every other domain gets a key of its own
+  under `keys/dkim/<domain>/`, named by a `[[dkim.domain]]` entry (only in a
+  configuration `init` creates: running it again on one that exists keeps the
+  `[[dkim.domain]]` entries the file has and adds none);
 - writes the configuration file at `config_path` (also `0600`) through a
   staging path that `Config::load`s the candidate before renaming, so a config
   that does not validate never reaches its destination;

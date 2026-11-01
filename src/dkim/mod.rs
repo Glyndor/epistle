@@ -1,6 +1,7 @@
 //! DKIM signing and verification (RFC 6376).
 
 pub(crate) mod canon;
+pub mod domain_keys;
 pub(crate) mod key_record;
 mod per_domain;
 pub mod rotate;

@@ -130,6 +130,12 @@ pub(crate) fn reconcile(
 			let keep_dns_list = existing_table
 				.get("dns")
 				.is_some_and(|dns| matches!(dns, Value::Array(_)));
+			// The per-domain keys are the operator's, not `init`'s: replacing
+			// `[dkim]` must not send a domain back to the default key.
+			let own_keys = existing_table
+				.get("dkim")
+				.and_then(|dkim| dkim.get("domain"))
+				.cloned();
 			for key in INIT_MANAGED_KEYS {
 				if *key == "listeners" && keep_existing_listeners {
 					continue;
@@ -161,9 +167,57 @@ pub(crate) fn reconcile(
 				};
 				existing_table.insert(key, new);
 			}
+			if let Some(own_keys) = own_keys {
+				keep_own_keys(&mut existing_table, own_keys);
+			}
 			Value::Table(existing_table)
 		}
 		(_, desired) => desired,
+	}
+}
+
+/// Put the `[[dkim.domain]]` entries the operator had back into the merged
+/// `[dkim]`, those whose domain is still hosted (in `domains` or
+/// `domain_aliases`): an entry for a domain `init` just dropped would stop the
+/// configuration from loading. A `[dkim]` that came with entries of its own is
+/// left as it is.
+fn keep_own_keys(merged: &mut toml::map::Map<String, toml::Value>, own_keys: toml::Value) {
+	let hosted = |name: &str| {
+		let listed = |value: Option<&toml::Value>| {
+			value
+				.and_then(toml::Value::as_array)
+				.is_some_and(|domains| {
+					domains
+						.iter()
+						.filter_map(toml::Value::as_str)
+						.any(|domain| domain.eq_ignore_ascii_case(name))
+				})
+		};
+		let aliased = merged
+			.get("domain_aliases")
+			.and_then(toml::Value::as_table)
+			.is_some_and(|aliases| aliases.keys().any(|alias| alias.eq_ignore_ascii_case(name)));
+		listed(merged.get("domains")) || aliased
+	};
+	let kept: Vec<toml::Value> = own_keys
+		.as_array()
+		.into_iter()
+		.flatten()
+		.filter(|entry| {
+			entry
+				.get("name")
+				.and_then(toml::Value::as_str)
+				.is_some_and(&hosted)
+		})
+		.cloned()
+		.collect();
+	if kept.is_empty() {
+		return;
+	}
+	if let Some(dkim) = merged.get_mut("dkim").and_then(toml::Value::as_table_mut)
+		&& !dkim.contains_key("domain")
+	{
+		dkim.insert("domain".to_string(), toml::Value::Array(kept));
 	}
 }
 
