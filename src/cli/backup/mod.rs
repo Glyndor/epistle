@@ -483,7 +483,7 @@ fn warn_externally_referenced(config: &Config, archived: &usize, warnings: &mut 
 		}
 	}
 	for dns in &config.dns {
-		let section = if config.dns.len() > 1 {
+		let section = if config.dns.scoped() {
 			format!("[[dns]] zone = {}", dns.zone)
 		} else {
 			"[dns]".to_string()

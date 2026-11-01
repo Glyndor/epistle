@@ -297,3 +297,72 @@ fn stored_tokens_get_a_file_each_once_there_is_a_second_zone() {
 		"dns_provider_token_example_net"
 	);
 }
+
+#[test]
+fn unset_with_a_zone_unmounts_its_token_and_keeps_the_others() {
+	let (_dir, path, compose) = stack_with(&one_zone(TOKEN), &[(TOKEN, TOKEN)]);
+	run_on(
+		&path,
+		&[
+			"set",
+			"desec",
+			"--zone",
+			"example.net",
+			"--token-file",
+			OTHER,
+		],
+	)
+	.unwrap();
+	run_on(&path, &["unset", "--zone", "example.org"]).unwrap();
+	assert!(
+		!mounted(&compose, TOKEN),
+		"the token of the removed zone stayed mounted"
+	);
+	assert!(mounted(&compose, OTHER), "the other zone lost its token");
+}
+
+#[test]
+fn unset_with_a_zone_keeps_a_token_file_another_zone_still_reads() {
+	let (_dir, path, compose) = stack_with(&one_zone(TOKEN), &[(TOKEN, TOKEN)]);
+	run_on(
+		&path,
+		&[
+			"set",
+			"desec",
+			"--zone",
+			"example.net",
+			"--token-file",
+			TOKEN,
+		],
+	)
+	.unwrap();
+	run_on(&path, &["unset", "--zone", "example.org"]).unwrap();
+	assert!(mounted(&compose, TOKEN), "a token still read was unmounted");
+}
+
+#[test]
+fn unset_with_a_zone_stops_forwarding_its_variable() {
+	let body = "hostname = 'mail.example.org'\ndata_dir = {data:?}\n[dns]\nprovider = 'cloudflare'\nzone = 'example.org'\ntoken_env = 'ORG_TOKEN'\n";
+	let (_dir, path, compose) = stack_with(body, &[]);
+	run_on(
+		&path,
+		&[
+			"set",
+			"desec",
+			"--zone",
+			"example.net",
+			"--token-file",
+			OTHER,
+		],
+	)
+	.unwrap();
+	// The compose file the stack wrote forwards the first zone's variable.
+	let mut document: serde_json::Value =
+		serde_json::from_str(&std::fs::read_to_string(&compose).unwrap()).unwrap();
+	document["services"]["mail"]["environment"]["ORG_TOKEN"] = "${ORG_TOKEN}".into();
+	std::fs::write(&compose, document.to_string()).unwrap();
+	run_on(&path, &["unset", "--zone", "example.org"]).unwrap();
+	let after: serde_json::Value =
+		serde_json::from_str(&std::fs::read_to_string(&compose).unwrap()).unwrap();
+	assert!(after["services"]["mail"]["environment"]["ORG_TOKEN"].is_null());
+}

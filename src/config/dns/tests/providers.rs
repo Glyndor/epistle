@@ -191,3 +191,53 @@ async fn an_entry_without_credentials_does_not_lend_its_zone_to_its_parent() {
 		.expect_err("refused");
 	assert!(matches!(error, ProviderError::Unsupported));
 }
+
+#[test]
+fn a_list_of_one_entry_is_scoped_to_its_zone() {
+	let config = config(&entry("example.org", ""));
+	assert!(config.dns.scoped());
+	assert!(config.dns.entry_for("mail.example.org").is_some());
+	assert!(
+		config.dns.entry_for("mail.example.com").is_none(),
+		"a [[dns]] list of one served a name outside its zone"
+	);
+}
+
+#[test]
+fn a_list_of_one_entry_gets_the_strict_checks() {
+	let bad_zone = config(&entry("not a zone", ""));
+	assert!(bad_zone.validate().is_err());
+
+	let acme = "[acme]\ndirectory_url = \"https://acme.example/dir\"\ndomains = [\"mail.example.org\", \"example.net\"]\nchallenge = \"dns-01\"\n";
+	let text = format!("{BASE}{acme}{}", entry("example.org", ""));
+	let error = toml::from_str::<Config>(&text)
+		.unwrap()
+		.validate()
+		.unwrap_err()
+		.to_string();
+	assert!(error.contains("example.net"), "{error}");
+}
+
+#[test]
+fn a_dns_table_is_not_scoped() {
+	let config = config("[dns]\nprovider = \"cloudflare\"\nzone = \"example.org\"\n");
+	assert!(!config.dns.scoped());
+}
+
+#[tokio::test]
+async fn a_list_of_one_entry_builds_a_router_that_refuses_other_zones() {
+	use crate::dns::provider::{DnsRecord, ProviderError, RecordKind};
+	let provider = config(&entry("example.org", &token()))
+		.dns
+		.build_for_host("mail.example.org")
+		.expect("builds");
+	let record = DnsRecord {
+		name: "x.example.com".into(),
+		kind: RecordKind::Txt,
+		value: "v=spf1 -all".into(),
+		ttl: 300,
+		proxied: None,
+	};
+	let error = provider.upsert("example.com", record).await.unwrap_err();
+	assert!(matches!(error, ProviderError::Unsupported));
+}

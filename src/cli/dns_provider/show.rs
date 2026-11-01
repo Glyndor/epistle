@@ -50,7 +50,7 @@ pub(super) fn run(config: &Config, json: bool, out: &mut impl Write) -> Result<(
 			}
 			writeln!(out, "provider\tunset").map_err(|error| error.to_string())
 		}
-		1 => {
+		1 if !config.dns.scoped() => {
 			let dns = config.dns.first().ok_or("no provider")?;
 			if json {
 				return resource::json(out, &rows(dns));

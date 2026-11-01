@@ -38,7 +38,7 @@ pub(super) fn settle(config: &Config, requested: Option<&str>) -> Result<Target,
 			"{domain} is not in the {zone} zone the [dns] provider manages"
 		));
 	}
-	let several = config.dns.len() > 1;
+	let several = config.dns.scoped();
 	if several && entry.is_none() {
 		return Err(format!(
 			"{domain} is not in the zone of any [[dns]] entry: {}",

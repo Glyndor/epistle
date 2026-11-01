@@ -141,7 +141,7 @@ pub(super) fn preflight(config: &Config, now: u64) -> Result<Plan, String> {
 	};
 	if !out_of_zone.is_empty() {
 		return Err(format!(
-			"signing domain(s) {} lie outside the [dns] zone {}: their TXT records cannot be kept in sync",
+			"signing domain(s) {} lie outside the [dns] zone {}, or in a zone whose entry cannot publish: their TXT records cannot be kept in sync",
 			out_of_zone.join(", "),
 			config.dns.zones().join(", ")
 		));

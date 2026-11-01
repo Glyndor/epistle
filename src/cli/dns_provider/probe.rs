@@ -25,7 +25,7 @@ pub(super) fn run(
 	for dns in &config.dns {
 		match entry(config, dns, out, status) {
 			Ok(_) => {}
-			Err(error) if config.dns.len() > 1 => {
+			Err(error) if config.dns.scoped() => {
 				writeln!(status, "{}: {error}", crate::cli::term::sanitize(&dns.zone))
 					.map_err(|error| super::resource::ResourceError::Failure(error.to_string()))?;
 				failed = true;

@@ -47,6 +47,14 @@ pub(crate) fn merge_with_read_config(
 			let existing_value: toml::Value = parsed(existing).map_err(|e| {
 				ApplyError::ConfigRead(path.to_path_buf(), std::io::Error::other(e.to_string()))
 			})?;
+			if existing_value.get("dns").is_some_and(toml::Value::is_array)
+				&& desired_value.get("dns").is_some()
+			{
+				eprintln!(
+					"warning: {} has a list of [[dns]] tables; init keeps it and ignores the dns answers",
+					path.display()
+				);
+			}
 			let merged = reconcile(existing_value, desired_value, keep_existing_listeners);
 			if merged == parsed(existing)? {
 				if let Err(error) = opened.validate(path) {

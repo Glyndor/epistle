@@ -59,7 +59,7 @@ fn run_with(
 	// A single `[dns]` reports as it always did. Several `[[dns]]` entries
 	// each get their own report, labelled with the zone, so one credential
 	// that fails is not hidden behind another that works.
-	if config.dns.len() <= 1 {
+	if !config.dns.scoped() {
 		let report = match config.dns.first() {
 			Some(dns) => entry_report(dns, &config.hostname, &names, &mut build)?,
 			None => AccessReport::unknown(),

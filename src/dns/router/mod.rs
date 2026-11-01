@@ -17,9 +17,11 @@
 
 use std::sync::Arc;
 
-use crate::dns::provider::{DnsProvider, DnsRecord, ListOp, ManualProvider, Op, ZoneOp};
+use crate::dns::provider::{
+	DnsProvider, DnsRecord, ListOp, ManualProvider, Op, ProviderError, ZoneOp,
+};
 use crate::dns::providers::check::CheckOp;
-use crate::dns::publish::provider::{Change, ReceiptOp, SnapshotOp};
+use crate::dns::publish::provider::{Change, Receipt, ReceiptOp, SnapshotOp};
 
 /// The provider of each configured zone.
 pub struct ZoneRouter {
@@ -42,17 +44,32 @@ impl ZoneRouter {
 		}
 	}
 
-	/// The provider that owns `zone`: the route with the longest zone that
-	/// equals `zone` or contains it. The manual provider when there is none.
-	fn route(&self, zone: &str) -> &dyn DnsProvider {
-		let zone = normalize(zone);
+	/// The index of the route that owns `name`: the one with the longest zone
+	/// that equals it or contains it.
+	fn index(&self, name: &str) -> Option<usize> {
+		let name = normalize(name);
 		self.routes
 			.iter()
-			.filter(|(owned, _)| contains(owned, &zone))
-			.max_by_key(|(owned, _)| owned.len())
-			.map_or(&self.unrouted as &dyn DnsProvider, |(_, provider)| {
-				provider.as_ref()
+			.enumerate()
+			.filter(|(_, (owned, _))| contains(owned, &name))
+			.max_by_key(|(_, (owned, _))| owned.len())
+			.map(|(index, _)| index)
+	}
+
+	/// The provider that owns `zone`. The manual provider when no route does.
+	fn route(&self, zone: &str) -> &dyn DnsProvider {
+		self.index(zone)
+			.map_or(&self.unrouted as &dyn DnsProvider, |index| {
+				self.routes[index].1.as_ref()
 			})
+	}
+
+	/// Whether the route that owns `zone` also owns `name`. A record is
+	/// written with the credential of the zone that holds its name, so a
+	/// caller that hands over the zone of a parent for a name of a nested
+	/// zone is refused instead of served with the parent's token.
+	fn agrees(&self, zone: &str, name: &str) -> bool {
+		self.index(zone) == self.index(name)
 	}
 }
 
@@ -74,21 +91,40 @@ impl DnsProvider for ZoneRouter {
 		self.route(zone).check_access(zone, names)
 	}
 	fn upsert(&self, zone: &str, record: DnsRecord) -> Op<'_> {
+		if !self.agrees(zone, &record.name) {
+			return Box::pin(async { Err(ProviderError::Unsupported) });
+		}
 		self.route(zone).upsert(zone, record)
 	}
 	fn delete(&self, zone: &str, record: DnsRecord) -> Op<'_> {
+		if !self.agrees(zone, &record.name) {
+			return Box::pin(async { Err(ProviderError::Unsupported) });
+		}
 		self.route(zone).delete(zone, record)
 	}
 	fn list(&self, zone: &str) -> ListOp<'_> {
 		self.route(zone).list(zone)
 	}
+	// A zone named in the configuration is a zone: the candidate that is
+	// exactly a route's zone answers yes without asking, so the search for
+	// the zone of a name stops there even when that provider cannot list or
+	// name zones, and never climbs to the parent's route. A candidate no route
+	// contains is not a zone of this router. One below a route's zone is the
+	// provider's to answer.
 	fn has_zone<'a>(&'a self, zone: &'a str) -> ZoneOp<'a> {
-		self.route(zone).has_zone(zone)
+		match self.index(zone) {
+			None => Box::pin(async { Ok(false) }),
+			Some(index) if self.routes[index].0 == normalize(zone) => Box::pin(async { Ok(true) }),
+			Some(index) => self.routes[index].1.has_zone(zone),
+		}
 	}
 	fn publish_snapshot<'a>(&'a self, zone: &'a str) -> SnapshotOp<'a> {
 		self.route(zone).publish_snapshot(zone)
 	}
 	fn apply_guarded<'a>(&'a self, zone: &'a str, change: Change) -> ReceiptOp<'a> {
+		if !self.agrees(zone, &change.name) {
+			return Box::pin(async { Receipt::Unsupported });
+		}
 		self.route(zone).apply_guarded(zone, change)
 	}
 	// `lookup_operation` keeps the default (unsupported): an operation id

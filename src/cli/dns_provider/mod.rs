@@ -138,19 +138,19 @@ fn execute_with(
 				restart,
 			);
 		}
-		ProviderCli::Unset { zone } => {
-			let fields = zone.as_ref().map_or_else(
-				|| serde_json::json!({}),
-				|zone| serde_json::json!({ "zone": zone }),
-			);
-			let change: resource::Change = Box::new(move |document, _| match &zone {
-				Some(zone) => unset::zone(document, zone).map_err(resource::ResourceError::Failure),
-				None => document
+		// One zone's entry leaves with its credential: the generated compose
+		// file stops mounting its token, so this writes both files.
+		ProviderCli::Unset { zone: Some(zone) } => {
+			return unset::run(path, &zone, dry_run, json, out, status, restart);
+		}
+		ProviderCli::Unset { zone: None } => {
+			let change: resource::Change = Box::new(|document, _| {
+				document
 					.remove_table(&["dns"])
 					.map(|_| ())
-					.map_err(resource::ResourceError::Failure),
+					.map_err(resource::ResourceError::Failure)
 			});
-			(change, "provider unset", fields)
+			(change, "provider unset", serde_json::json!({}))
 		}
 	};
 	let edit = resource::Edit {

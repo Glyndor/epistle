@@ -17,41 +17,58 @@ use crate::dns::router::{ZoneRouter, contains, normalize};
 /// A configuration with a single `[dns]` table holds one entry and behaves as
 /// it always did. Several `[[dns]]` tables hold one credential each; a name is
 /// served by the entry whose zone is the longest one containing it.
+///
+/// What the file used decides the rules: a `[dns]` table keeps the lone-entry
+/// behaviour, and any `[[dns]]` list, even of one element, is scoped to the
+/// zones it names.
 #[derive(Clone, Default)]
-pub struct DnsProviders(Vec<Dns>);
+pub struct DnsProviders {
+	entries: Vec<Dns>,
+	list: bool,
+}
 
 impl DnsProviders {
-	/// A set of entries, in file order.
+	/// A set of entries written as `[[dns]]` tables, in file order.
 	pub fn new(entries: Vec<Dns>) -> Self {
-		DnsProviders(entries)
+		DnsProviders {
+			entries,
+			list: true,
+		}
+	}
+
+	/// Whether the entries came from `[[dns]]` tables. A scoped set serves
+	/// only the zones it names and takes the strict validation, whatever its
+	/// length; a lone `[dns]` table serves every name, as it always did.
+	pub fn scoped(&self) -> bool {
+		self.list
 	}
 
 	/// The entries in file order.
 	pub fn iter(&self) -> std::slice::Iter<'_, Dns> {
-		self.0.iter()
+		self.entries.iter()
 	}
 
 	/// Whether no `[dns]` entry is configured.
 	pub fn is_empty(&self) -> bool {
-		self.0.is_empty()
+		self.entries.is_empty()
 	}
 
 	/// How many entries are configured.
 	pub fn len(&self) -> usize {
-		self.0.len()
+		self.entries.len()
 	}
 
 	/// The first entry. Only the places that describe a single `[dns]`
 	/// section (the `init` wizard) use it; everything that writes DNS goes
 	/// through [`Self::entry_for`] or [`Self::build_for_host`].
 	pub fn first(&self) -> Option<&Dns> {
-		self.0.first()
+		self.entries.first()
 	}
 
 	/// The entry configured for exactly `zone`.
 	pub fn for_zone(&self, zone: &str) -> Option<&Dns> {
 		let zone = normalize(zone);
-		self.0.iter().find(|dns| normalize(&dns.zone) == zone)
+		self.entries.iter().find(|dns| normalize(&dns.zone) == zone)
 	}
 
 	/// The entry that serves `name`: the one with the longest zone that
@@ -59,11 +76,13 @@ impl DnsProviders {
 	/// with it, as a lone `[dns]` always did; with several entries a name
 	/// outside all of them has no provider and falls back to manual.
 	pub fn entry_for(&self, name: &str) -> Option<&Dns> {
-		if let [only] = self.0.as_slice() {
+		if let [only] = self.entries.as_slice()
+			&& !self.list
+		{
 			return Some(only);
 		}
 		let name = normalize(name);
-		self.0
+		self.entries
 			.iter()
 			.filter(|dns| contains(&normalize(&dns.zone), &name))
 			.max_by_key(|dns| normalize(&dns.zone).len())
@@ -78,7 +97,7 @@ impl DnsProviders {
 
 	/// The zones the entries are scoped to, in file order.
 	pub fn zones(&self) -> Vec<String> {
-		self.0.iter().map(|dns| dns.zone.clone()).collect()
+		self.entries.iter().map(|dns| dns.zone.clone()).collect()
 	}
 
 	/// Reject what the build cannot use. A `provider` the build does not know
@@ -90,7 +109,7 @@ impl DnsProviders {
 	/// credential was in use.
 	pub(crate) fn validate(&self) -> Result<(), ConfigError> {
 		let mut zones = std::collections::HashSet::new();
-		for dns in &self.0 {
+		for dns in &self.entries {
 			if !is_supported_provider(&dns.provider) {
 				return Err(ConfigError::Invalid(format!(
 					"[dns] provider {:?} is not a supported provider; supported: {}",
@@ -98,7 +117,7 @@ impl DnsProviders {
 					SUPPORTED_PROVIDERS.join(", "),
 				)));
 			}
-			if self.0.len() > 1 {
+			if self.list {
 				validate_dns_name("[[dns]] zone", &dns.zone)?;
 				if !zones.insert(normalize(&dns.zone)) {
 					return Err(ConfigError::Invalid(format!(
@@ -119,12 +138,14 @@ impl DnsProviders {
 	/// and writes nothing, and a zone outside every entry is refused. `None`
 	/// when no entry can build a provider, like a lone `manual`.
 	pub fn build_for_host(&self, hostname: &str) -> Option<Arc<dyn DnsProvider>> {
-		if let [only] = self.0.as_slice() {
+		if let [only] = self.entries.as_slice()
+			&& !self.list
+		{
 			return only.build_for_host(hostname);
 		}
 		let mut any = false;
 		let routes = self
-			.0
+			.entries
 			.iter()
 			.map(|dns| {
 				let built = dns.build_for_host(hostname);
@@ -142,19 +163,22 @@ impl<'a> IntoIterator for &'a DnsProviders {
 	type Item = &'a Dns;
 	type IntoIter = std::slice::Iter<'a, Dns>;
 	fn into_iter(self) -> Self::IntoIter {
-		self.0.iter()
+		self.entries.iter()
 	}
 }
 
 impl From<Dns> for DnsProviders {
 	fn from(dns: Dns) -> Self {
-		DnsProviders(vec![dns])
+		DnsProviders {
+			entries: vec![dns],
+			list: false,
+		}
 	}
 }
 
 impl fmt::Debug for DnsProviders {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		f.debug_list().entries(&self.0).finish()
+		f.debug_list().entries(&self.entries).finish()
 	}
 }
 
@@ -171,7 +195,7 @@ impl<'de> Deserialize<'de> for DnsProviders {
 
 			fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<Self::Value, A::Error> {
 				let dns = Dns::deserialize(de::value::MapAccessDeserializer::new(map))?;
-				Ok(DnsProviders(vec![dns]))
+				Ok(DnsProviders::from(dns))
 			}
 
 			fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
@@ -179,7 +203,7 @@ impl<'de> Deserialize<'de> for DnsProviders {
 				while let Some(dns) = seq.next_element::<Dns>()? {
 					entries.push(dns);
 				}
-				Ok(DnsProviders(entries))
+				Ok(DnsProviders::new(entries))
 			}
 		}
 
