@@ -91,7 +91,7 @@ Every change is validated before it is written, keeps the comments in
 
 Every `epistle` subcommand splits its output into two streams by purpose:
 
-- **stdout** carries command data or listings. The four data commands below
+- **stdout** carries command data or listings. The five data commands below
   never carry an ANSI escape sequence there, no matter the terminal, no matter
   `NO_COLOR`, no matter `CLICOLOR_FORCE`; the property is pinned by
   `tests/cli/cli_stdout_clean.rs`. `clap`'s `--help` and `--version` also write to
@@ -113,7 +113,7 @@ is not a terminal (for the pick, stdin and stderr), when `NO_COLOR` is set, when
 one scripts read, byte for byte, and a missing argument is a usage error with
 exit code 2. `CLICOLOR_FORCE` never turns any of this on in a pipe.
 
-Four commands produce binary or quoted data on stdout and would silently break if
+Five commands produce binary or quoted data on stdout and would silently break if
 an escape sequence or spinner frame were ever written there, so they are pinned by
 `tests/cli/cli_stdout_clean.rs`:
 
@@ -311,11 +311,15 @@ after 5 s. `--config` defaults to `/etc/epistle/mail.toml`.
 | `db` | `[database]` connects and answers `SELECT 1` (or is not configured) | | cannot connect within 5 s |
 | `api_keys` | every key has a distant expiry and a narrow reach, and each `scim` key has an associated domain | a key has no expiry, expires within 14 days or has expired, holds every scope (a legacy key), holds `write` or `send` with no domain, account or usable `--ip-cidr`, or is a `scim` key with no domain; findings identify the label and scopes. The store has no creation or last-use timestamps | |
 | `antivirus` | clamd answers `PING` with `PONG` and reports its signature age (or is not configured) | `VERSION` fails | no `PONG` |
+| `antispam` | something is wired in: greylisting, or the `[database]` features (Bayes, reputation, persistent bans, greylist persistence), or the clamd scanner; each feature is listed | no `[database]`: those four features are off and the finding says so; with nothing at all wired in the summary says antispam is off | |
 | `queue` | oldest queued message under 4 h | over 4 h | over 24 h |
 | `disk` | 10% or more free on the filesystem holding `data_dir` | under 10% | under 5%, or under 25 MiB free (SMTP then answers 452) |
+| `spool` | no file or directory under `<data_dir>/spool/` is looser than owner-only; the finding also says whether messages are sealed (`encrypt_at_rest`) | a file or directory is looser than owner-only | the spool cannot be scanned, or the storage encryption cannot be set up |
 | `resources` | the `mem_limit` values in `compose.yaml` add up to 85% of the host's `MemTotal` or less, and the message memory budget fits the `mail` container's `mem_limit` | the limits add up to more than 85% of `MemTotal` (the finding names the two largest and the `epistle stack resources set` command that brings the sum under it, never below what the service needs: for `mail` five messages of `max_message_size` and 256 MiB), `/proc/meminfo` is unreadable, or a configured `message_memory_budget` (or one raised to `max_message_size`) would take more than 70% of the `mail` limit when full, at about 3 times its size | |
 | `clock` | the kernel reports the host clock disciplined by a time source (`adjtimex`, with `timedatectl show -p NTPSynchronized` when the syscall is refused), and the external probe is off, or every valid offset is below `warn_seconds` | the clock is not synchronised, or neither probe could tell; the finding gives the fix and nothing is changed; a valid offset reaches `warn_seconds`, or one or two readings are valid below it | no reading is valid, or a valid offset reaches `fail_seconds` |
+| `evidence` | the last verification of the evidence is under an hour old and found nothing to flag | the server has not verified yet, timestamp tokens are pending or failing, timestamps are disabled, a task reported an error, the last verification took half of the time it is given or more, or it is older than an hour | transactional mail is held (clear it with `epistle evidence acknowledge` once understood), or the status cannot be read |
 | `subid` | the ranges `glyndor-epistle` holds in `/etc/subuid` and `/etc/subgid` overlap no other account's | `glyndor-epistle` has no range in a table | a range overlaps another account's; the finding names that account and the shared interval (see [Moving an overlapping range](#moving-an-overlapping-subordinate-id-range)) |
+| `warmup` | one finding per receiver group (cap, sent today, deferred and bounced share, verdict, next cap, waiting); also `off` when the warm-up is not running | a group's verdict is `very_bad`; the warm-up is off while the address looks new and 200 or more recipients went out today or are queued (see [warm-up](operations/warmup.md)); the warm-up files cannot be read | |
 
 The `clock` area adds two read-only probes. The host probe asks the
 kernel via `adjtimex`, with `timedatectl show -p NTPSynchronized` when
@@ -502,9 +506,12 @@ stack.
 | `inbound-rate-per-ip` | Inbound messages per minute per client IP, default disabled. |
 | `inbound-rate-per-sender` | Inbound messages per minute per envelope sender, default disabled. |
 | `max-connections-per-listener` | Concurrent connections, default depends on the protocol. |
+| `max-recipients` | Recipients one message may name, on SMTP, REST send and JMAP submission, default 100. Not below 100 (RFC 5321 §4.5.3.1.8), and `limits set` refuses less. |
 | `max-message-size` | Per-instance cap, default 25 MiB. Applied to SMTP, JMAP `Email/set` create, JMAP upload body limit, REST `POST /api/v1/send`. Refused above `message-memory-budget`. |
 | `max-connections-per-ip` | Concurrent connections per client IP (IPv6: per /64) on each SMTP listener, default 20. Extra connections get `421 4.7.0` and are closed. |
 | `message-memory-budget` | Shared byte budget every SMTP `DATA` / `BDAT` reservation draws from, by default a fifth of the `mail` container's memory limit (at least `max-message-size`, at most 1 GiB); one client may hold a quarter of it. Refused below `max-message-size`. `0` disables the cap. |
+| `max-connections-per-account-per-ip` | Authenticated connections one account may hold from one client IP on the IMAP, POP3 and JMAP listeners together, default 10. Extra ones get `NO [LIMIT]`, `-ERR [IN-USE]` or `429` and are closed. |
+| `max-connections-per-account-total` | Authenticated connections one account may hold across every client IP on the same listeners, default 50. |
 | `min-data-rate` | Minimum average rate of one inbound message, in bytes per second (`K`/`M`/`G` suffixes), default 10240 (a 25 MiB message has about 43 minutes). Measured over the whole `DATA` or `BDAT` transaction, time between chunks included; below it the client gets `421 4.4.2` and is disconnected. `0` turns it off and shows as `disabled`. |
 | `data-rate-grace` | Time from the start of a message before `min-data-rate` applies, once per transaction, default 120 seconds, between 1 second and 1 hour. |
 | `junk-command-limit` | Commands without progress (`NOOP`, `RSET`, `VRFY`, unknown commands, a repeated `EHLO`, an empty `BDAT` chunk, `AUTH` response lines) one SMTP session may send before `421 4.7.0` and a disconnect, default 100, never reset during the session; refused commands count against the same limit since the last accepted message. `0` turns it off and shows as `disabled`; otherwise between 10 and 10000. |
@@ -514,6 +521,7 @@ stack.
 | `max-http-connections` | Concurrent connections each plain-HTTP listener (API and JMAP, WebDAV, autoconfig without TLS, ACME, metrics) serves, default 1024. Extra ones get `503` and are closed. `0` is the default, not "no limit", and `limits set` says so. |
 | `max-http-connections-per-ip` | Concurrent connections one client (IPv6: per /64) may hold on each plain-HTTP listener, default 256, over the same `503`. `0` is the default, not "no limit", and `limits set` says so. |
 | `masked-addresses-max` | Masked addresses per account, default 100. |
+| `known-network-window` | Time a successful sign-in keeps a network on the list that lets a banned account in from it, default 30 days (`known_network_window_secs`); see [Authentication bans](#authentication-bans). |
 | `first-time-sender-delay` | First-time sender delay, default 0 seconds. |
 | `greylist-delay` | Greylist deferral window, default 0 seconds. |
 | `queue-concurrency` | Outbound SMTP conversations at once, default 8, between 1 and 1024 (`[queue] concurrency`). |
@@ -861,6 +869,12 @@ epistle antispam set clamd-socket /run/clamav/clamd.sock
 epistle antispam set clamd-on-found reject
 epistle antispam set clamd-on-error defer
 epistle antispam set scan-authenticated off
+epistle antispam set first-time-sender-delay 1m
+epistle antispam set clamd-timeout 30
+epistle antispam set clamd-max-size 26M
+epistle antispam set subjectpass on
+epistle antispam set llm-uncertain-low 0.3
+epistle antispam set llm-uncertain-high 0.9
 epistle antispam unset greylist-delay
 epistle antispam add dnsbl-zones zen.spamhaus.org
 epistle antispam remove dnsbl-zones zen.spamhaus.org
@@ -873,6 +887,14 @@ keys (`dnsbl-zones`, `dnsbl-domain-zones`, `dnsbl-url-zones`) print as
 The LLM block fields (`llm-endpoint`, `llm-model`, `llm-api-key-env`)
 print as `set`/`unset` only, the values are secrets and never appear
 on stdout.
+
+Besides the DNSBL lists, the keys are `greylist-delay` and
+`first-time-sender-delay` (durations such as `5m`; whole seconds also work), `clamd-socket`,
+`clamd-on-found` (`quarantine` or `reject`), `clamd-on-error` (`accept` or
+`defer`), `clamd-timeout` (whole seconds, default 30), `clamd-max-size` (bytes or a
+`K`, `M`, `G`, `T` suffix), `scan-authenticated` and `subjectpass` (`on` or `off`),
+the LLM block (`llm-endpoint`, `llm-model`, `llm-api-key-env`) and the band
+`llm-uncertain-low` and `llm-uncertain-high` (numbers from 0.0 to 1.0, low below high).
 
 `set <key> <value>` writes one key. For list keys the value replaces
 the whole list; for every other key exactly one value is accepted.
@@ -1533,6 +1555,16 @@ scope here):
   run `epistle init`, and then add the `[api]` section by hand (or with
   `epistle token-hash` followed by an editor pass) before `epistle serve`.
 
+## DNS records and listener probes
+
+| Command | What it does |
+|---|---|
+| `epistle dns-records [--json]` | Print the DNS records this deployment should publish: SPF, DKIM, DMARC, MTA-STS, MX, and a DANE TLSA record when a certificate is present. Reads the configuration only; nothing is queried or changed. |
+| `epistle verify-dns [--json]` | Look the same records up in DNS and report drift. Read-only. Exits 1 when a record is missing or differs. See [DNS](dns.md). |
+| `epistle probe [--json]` | Dial each enabled listener on loopback and read its greeting. Exits 0 when every listener answers and 1 when one is down or greets wrongly. It is the container healthcheck, and the `ports` area of `status` runs the same check. |
+
+All three take `--config FILE`.
+
 ## Keys and tokens
 
 | Command | What it does |
@@ -1540,6 +1572,7 @@ scope here):
 | `epistle dkim-keygen --out F` | Generate an Ed25519 DKIM key and print the DNS record value. |
 | `epistle dkim-keygen --rsa [--bits 2048\|4096] --out F` | Generate an RSA DKIM key (in process, no external program) and print the `k=rsa` record. The RSA `p=` value is large enough to need 255-octet TXT splitting; the printed record is already in the form a zone file accepts. |
 | `epistle storage-keygen` | Print a fresh base64 32-byte key for at-rest message encryption (`[storage]`). |
+| `epistle oauth-keygen --out F` | Generate the ES256 key pair for the built-in OAuth server: the base64 PKCS#8 private key for `[oauth] signing_key` and the matching public point for `[oauth] public_key`, written to `F` (mode 0600, an existing file is refused). The private key is never printed. |
 | `epistle token-hash` | Read a bearer token on stdin, print the `sha256:<hex>` for `[api] token_hash`. |
 
 The API keys made with `epistle api-key` open the HTTP API, described in the [HTTP API guide](api.md).
@@ -1605,6 +1638,7 @@ Only `epistle init` turns one into the other: it derives the name from the addre
 | `epistle account address add\|remove N a@b` | Add or remove a delivery address. The last address cannot be removed. |
 | `epistle account quota N SIZE\|none` | Storage quota (`500M`, `10G`, `1T`); `none` falls back to the domain, then the server default. |
 | `epistle account protocols N LIST\|all` | Restrict sign-in to some protocols (`imap,smtp,api,webdav`); `all` clears it. |
+| `epistle account set N --default-class CLASS` | The [mail class](evidence.md) granted to the account's mail when neither the request nor the credential names one: `transactional`, `marketing`, `personal`, or `none` to clear it. |
 | `epistle account save-sent N on\|off` | Save a copy of every message the account sends into its `Sent` folder. Default on; `off` is the per-account opt-out. The app-password override (`app-password create --save-sent`) wins when set. |
 | `epistle account show N [--json]` | Public view: log id, addresses, disabled, quota, protocols. Works for static accounts. Never a secret. |
 | `epistle account find-log-id acct-…` | Map a log pseudonym back to its account. |
@@ -1613,12 +1647,12 @@ Only `epistle init` turns one into the other: it derives the name from the addre
 | `epistle account 2fa show N [--json]` | Whether a TOTP secret is enrolled (never the secret). |
 | `epistle account 2fa disable N [--yes\|-y]` | Remove the TOTP secret; the password alone signs in again. Asks first. |
 | `epistle app-password list [--account N] [--json]` | App passwords (label, expiry as an RFC 3339 UTC instant, IP restriction), never the secret. `--json` keeps the epoch second. |
-| `epistle app-password create N LABEL [--expires-at EPOCH] [--ip-cidr CIDR] [--save-sent on\|off]` | Create an IMAP/SMTP app password; prints it once. The label is 1 to 64 characters without control characters. `--save-sent` overrides the account-wide setting for this credential (`on` opts the credential in even if the account is off; `off` opts it out even if the account is on). Dynamic accounts only. |
+| `epistle app-password create N LABEL [--expires-at EPOCH] [--ip-cidr CIDR] [--save-sent on\|off] [--class CLASS]` | Create an IMAP/SMTP app password; prints it once. The label is 1 to 64 characters without control characters. `--class` (`transactional`, `marketing` or `personal`) is the [mail class](evidence.md) granted to mail sent with this credential. `--save-sent` overrides the account-wide setting for this credential (`on` opts the credential in even if the account is off; `off` opts it out even if the account is on). Dynamic accounts only. |
 | `epistle app-password rotate N LABEL [--yes\|-y] [--dry-run]` | Replace the secret and print the new one once. The label, expiry, address range and `save-sent` setting stay; the old secret stops working in the same write, and the running server picks the change up from the file within a few seconds (`reload` says `loaded`, `no-server` or `timed-out`). Asks first, because every client using the old secret stops working. `--dry-run` checks that the credential exists and prints no secret. |
 | `epistle app-password rename N LABEL NEW_LABEL [--dry-run]` | Give the credential a new label; the secret and the settings stay, so clients keep working. Refuses a label that is taken (exit 2). `previous_label` in the JSON result holds the old one. |
 | `epistle app-password revoke N LABEL [--yes\|-y]` | Revoke it. Asks first. |
 | `epistle api-key list [--json]` | API keys: label, expiry (RFC 3339, `--json` keeps the epoch), CIDR, scopes, domains, bound account. Never the key. |
-| `epistle api-key create LABEL --scope S [--scope …] [--domain D] [--account N] [--expires-at WHEN \| --expires-in 90d]` | Create a key; prints it once. `WHEN` is an epoch, a date, an RFC 3339 instant or a duration; no key expires unless one is given, and `status` warns about the ones that do not (see [Expiry is opt-in](api.md#expiry-is-opt-in)). Scopes: `read`, `write`, `send`, `scim`. `--domain` confines it to domains. `--account` binds it to one account (static or dynamic): it then reaches only JMAP and `/api/v1/send`, cannot hold `scim`, and takes no `--domain`. |
+| `epistle api-key create LABEL --scope S [--scope …] [--domain D] [--account N] [--expires-at WHEN \| --expires-in 90d] [--ip-cidr CIDR] [--class CLASS]` | Create a key; prints it once. `--ip-cidr` is an allowlist of one CIDR for the client address. `--class` (`transactional`, `marketing` or `personal`) is the [mail class](evidence.md) `/api/v1/send` grants to mail the request gives none. `WHEN` is an epoch, a date, an RFC 3339 instant or a duration; no key expires unless one is given, and `status` warns about the ones that do not (see [Expiry is opt-in](api.md#expiry-is-opt-in)). Scopes: `read`, `write`, `send`, `scim`. `--domain` confines it to domains. `--account` binds it to one account (static or dynamic): it then reaches only JMAP and `/api/v1/send`, cannot hold `scim`, and takes no `--domain`. |
 | `epistle api-key revoke LABEL [--yes\|-y]` | Revoke a key. Asks first. |
 | `epistle api-key rotate LABEL` | New secret, same scopes; prints it once. |
 
@@ -1629,7 +1663,7 @@ Only `epistle init` turns one into the other: it derives the name from the addre
 | `epistle export --account N [--maildir DIR]` | Export an account's mailboxes as an mbox stream on stdout, or as a Maildir tree where `Work/Project` is the Maildir++ folder `.Work.Project`. |
 | `epistle import --account N [--maildir DIR]` | Import an mbox stream from stdin, or a Maildir tree. Maildir++ folders become nested folders: `.Work.Project` is `Work/Project`. |
 | `epistle migrate imap --account N --host H --user U` | Copy a remote IMAP account, resumably. See [migration](operations/migration.md). |
-| `epistle migrate mox --from DIR` / `migrate stalwart --from FILE` | Import domains, accounts, aliases and DKIM keys. |
+| `epistle migrate mox --from DIR` / `migrate stalwart --from FILE` | Import domains, accounts, aliases and DKIM keys. Needs `--passwords-out FILE` (a new file, mode 0600, one `account<TAB>password` line per new account) or `--password-reset`, except with `--dry-run`. `--merge` keeps what already exists and adds the rest; `--json` prints the plan and the changes. |
 | `epistle queue` | List the outbound delivery queue (same as `queue list`). See [Outbound queue](#outbound-queue). |
 | `epistle delivery list [--recipient ADDR] [--account NAME] [--since WHEN] [--until WHEN] [--status S] [--limit N] [--json]` | Read the per-recipient delivery log: one record per delivered, failed, suppressed or canceled recipient, and one per deferred recipient for each distinct reply, at most eight per recipient (a retry deferred for the same reason adds none), newest day first, at most `N` records (default 100, at most 100000; a larger value is a usage error). The log is read a line at a time, so memory does not grow with the size of a day's file, and days outside `--since`/`--until` are not opened. `--since` and `--until` take an RFC 3339 time or a duration such as `24h` or `7d` counted back from now; `--since` after `--until` is refused, and so is a filter given empty (`--account ""`): it is a usage error (exit 2), never "no filter". `--status` (also `--outcome`) is `delivered`, `deferred`, `failed`, `suppressed` or `canceled`. Metadata only, never a subject or body. The time of each record is an RFC 3339 UTC instant; `--json` keeps the epoch second. `epistle delivery` alone is `delivery list`. Needs `[storage] delivery_log_days` above 0. |
 | `epistle delivery show ID [--json]` | Every record of one message, oldest first. `ID` is the spool id of the `SPOOL` column of `delivery list`. The time of each record is an RFC 3339 UTC instant; `--json` keeps the epoch second. The remote host and its reply are escaped for the terminal. Exits 2 for an id that is not a UUID or that has no record. |

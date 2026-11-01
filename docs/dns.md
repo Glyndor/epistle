@@ -82,14 +82,14 @@ collapses them.
 Sign outbound mail. Generate the key and record:
 
 ```sh
-epistle dkim-keygen --out /etc/glyndor/epistle/dkim/ed1.pem
+epistle dkim-keygen --out /etc/epistle/dkim/ed1.pem
 ```
 
 The default is an Ed25519 key (44-byte `p=`, always fits in one TXT
 string). For receivers without Ed25519 support, add an RSA selector:
 
 ```sh
-epistle dkim-keygen --rsa --out /etc/glyndor/epistle/dkim/rsa1.pem
+epistle dkim-keygen --rsa --out /etc/epistle/dkim/rsa1.pem
 ```
 
 `--rsa` makes the key in process, so nothing has to be on `PATH`.

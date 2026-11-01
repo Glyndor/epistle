@@ -56,7 +56,7 @@ control, its test and the residual risks, see the [threat model](threat-model.md
   and POP clients mangle non-ASCII credentials in AUTH PLAIN/LOGIN on
   the wire — the operator opts in knowing their clients need to normalise
   consistently, which SCRAM-SHA-256's standard preparation already does.
-  See [the configuration reference](configuration.md#auth-unicode-passwords).
+  See [the configuration reference](configuration.md#auth-unicode_passwords-auth-unicode_passwords--true).
 - **SCRAM-SHA-256** authenticates without the password crossing the wire, and
   **SCRAM-SHA-256-PLUS** adds TLS channel binding (`tls-server-end-point`) with
   downgrade rejection (RFC 5802 §6). `-PLUS` is offered when a static `[tls]`

@@ -103,7 +103,7 @@ function name is the stable reference.
 | 5.2.x Sanitize unstructured / hostile content | Met (fixed in this sweep) | A remote MTA's reply is sanitized (controls → space, length-capped) before it reaches any DSN header or body (`src/queue/bounce/mod.rs::sanitize_reason`). |
 | 5.3.1 Output encoding / no header (CRLF) injection | Met | Inbound: bare CR/LF/NUL rejected by the decoder (`src/smtp/line/mod.rs`). Outbound: bounce/DSN reason sanitized (above); addresses are validated values. |
 | 5.3.4 Parameterized queries only (SQLi) | Met | Every query is a sqlx **compile-time macro** with bound `$n` params — no string-built SQL anywhere (`src/antispam/corpus/mod.rs`, `src/antispam/reputation/mod.rs`). |
-| 5.3.6 No injection into LDAP/OS command | Met | No shell-out on attacker input; no LDAP. |
+| 5.3.6 No injection into LDAP/OS command | Met | No shell-out on attacker input. The optional LDAP backend escapes the login per RFC 4515 before it enters `user_filter` (`src/directory_store/ldap/mod.rs`). |
 | 5.3.8 Deserialization is safe | Met | TOML/JSON via serde into typed structs; no arbitrary-type deserialization. |
 | 5.5 SSRF defenses | Met | No per-request attacker-controlled fetch: webhook URLs are operator config validated at startup (`src/config/validate/mod.rs`); MTA-STS fetches a fixed `https://mta-sts.<domain>/.well-known/...` with redirects disabled (`src/mtasts/policy/mod.rs`); autodiscovery only *serves* config. |
 
