@@ -3,7 +3,7 @@
 //! SMTP listeners enforce.
 
 use super::base::{TOKEN, request_with_body, test_state};
-use super::jmap_f::{seed_email, submission_request};
+use super::jmap_email::jmap_f::{seed_email, submission_request};
 use super::router;
 use axum::http::StatusCode;
 

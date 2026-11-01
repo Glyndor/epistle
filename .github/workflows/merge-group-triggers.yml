@@ -1,7 +1,7 @@
 name: Merge group triggers
 
 # Keeps every check required on develop reachable from a merge queue: see
-# .github/scripts/check_merge_group_triggers.py and docs/merge-queue.md.
+# .github/scripts/check_merge_group_triggers.py and docs/operations/merge-queue.md.
 #
 # Not a required check, and it must not carry `merge_group` itself: the script
 # refuses any workflow that does without emitting a required check.

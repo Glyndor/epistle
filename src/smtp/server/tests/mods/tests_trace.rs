@@ -79,7 +79,7 @@ async fn a_submission_keeps_tls_required_for_the_queue() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let split =
 		crate::storage::SplitDelivery::new(dir.path(), directory_with_password()).expect("sink");
-	let answer = super::tests_virus::submit(
+	let answer = super::scanning::tests_virus::submit(
 		Arc::new(split),
 		"TLS-Required: No\r\nFrom: alice@example.org\r\nTo: bob@elsewhere.example\r\n\
 		 Subject: s\r\n\r\nbody\r\n",
