@@ -444,6 +444,11 @@ impl Cli {
 			Command::Dkim {
 				config,
 				json,
+				action: dkim::DkimCli::Split { dry_run, wait },
+			} => dkim::run_split(&config, dry_run, wait, json, &mut std::io::stdout().lock()),
+			Command::Dkim {
+				config,
+				json,
 				action,
 			} => match Config::load(&config) {
 				Ok(config) => match action {
