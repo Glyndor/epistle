@@ -1,5 +1,5 @@
 //! Tests for the database check. A real PostgreSQL is used only when
-//! `DATABASE_URL` is set (as in `tests/database_bans.rs`); the rest use a
+//! `DATABASE_URL` is set (as in `tests/db/core/database_bans.rs`); the rest use a
 //! closed port and a listener that never answers.
 
 use std::time::{Duration, Instant};

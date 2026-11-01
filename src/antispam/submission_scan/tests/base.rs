@@ -61,6 +61,9 @@ async fn a_submission_carrying_a_virus_is_refused_with_its_signature() {
 		Err(SinkError::AttachmentRefused(_)) => {
 			panic!("expected a virus refusal, got an attachment refusal")
 		}
+		Err(SinkError::MailboxFull(_)) => {
+			panic!("expected a virus refusal, got a full mailbox")
+		}
 		Err(SinkError::ScanUnavailable) => {
 			panic!("expected a virus refusal, got a busy scanner")
 		}

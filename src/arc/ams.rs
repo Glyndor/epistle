@@ -171,10 +171,10 @@ pub(crate) fn strip_b(value: &str) -> String {
 		.join(";")
 }
 
-/// Unfolded headers `(name, value)` plus the message body.
+/// Headers `(name, value)` with original folding, plus the message body.
 type SplitMessage = (Vec<(String, String)>, Vec<u8>);
 
-/// Split a raw message into unfolded `(name, value)` headers and the body.
+/// Split a raw message into folded `(name, value)` headers and the body.
 fn split_message(raw: &[u8]) -> Option<SplitMessage> {
 	let block_end = raw.windows(4).position(|w| w == b"\r\n\r\n");
 	let (header_end, body_start) = match block_end {
@@ -190,6 +190,9 @@ fn split_message(raw: &[u8]) -> Option<SplitMessage> {
 		let content = line.strip_suffix("\r\n").unwrap_or(line);
 		if content.starts_with(' ') || content.starts_with('\t') {
 			if let Some(buffer) = &mut current {
+				// RFC 8617 section 4.1.2 and RFC 6376 section 3.4:
+				// canonicalization reads the original header folding.
+				buffer.push_str("\r\n");
 				buffer.push_str(content);
 			}
 			continue;

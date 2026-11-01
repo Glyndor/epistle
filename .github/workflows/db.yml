@@ -8,6 +8,14 @@ name: Database
 on:
   push:
     branches: [develop, main]
+    paths:
+      - ".github/workflows/db.yml"
+      - "src/**"
+      - "tests/**"
+      - "migrations/**"
+      - ".sqlx/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
   pull_request:
     paths:
       # This file is in its own filter on purpose. A workflow whose path
@@ -20,6 +28,29 @@ on:
       - ".sqlx/**"
       - "Cargo.toml"
       - "Cargo.lock"
+      # A pull request that only changes tests which never open a database
+      # does not pay for a PostgreSQL job. Only these folders are listed:
+      # grep for DATABASE_URL finds none in them. A pull request that also
+      # changes code outside them still matches `src/**` and runs, and the
+      # push to develop above runs everything.
+      - "!tests/http/**"
+      - "!tests/imap/**"
+      - "!tests/protocols/**"
+      - "!tests/smtp/**"
+      - "!tests/dkim/**"
+      - "!tests/outbound/**"
+      - "!tests/packaging/**"
+      - "!tests/workflows/**"
+      - "!tests/repository/**"
+      - "!tests/system/**"
+      - "!tests/contracts/**"
+      - "!src/api/tests/**"
+      - "!src/smtp/**/tests/**"
+      - "!src/queue/**/tests/**"
+      - "!src/dns/**/tests/**"
+      - "!src/oauth/**/tests/**"
+      - "!src/acme/**/tests/**"
+      - "!src/webdav/**/tests/**"
 
 # A newer push to a pull request supersedes the run in flight. Queue and
 # branch runs are never cancelled: only a pull_request event is.
@@ -47,6 +78,8 @@ jobs:
     # name to carry the major is safe.
     name: database integration (PostgreSQL ${{ matrix.postgres }})
     runs-on: ubuntu-latest
+    # Measured 2026-10-30: the slowest of four green runs took 36 min.
+    timeout-minutes: 75
     strategy:
       # One leg: the floor (`MIN_SERVER_VERSION = 18` in `src/db/mod.rs`),
       # which is also the major the stack runs. When a newer major ships,

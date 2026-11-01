@@ -96,6 +96,9 @@ fn declared_paths(files: &[PathBuf], sources: &[String]) -> HashSet<PathBuf> {
 				paths.insert(dir.join(format!("{name}.rs")));
 				paths.insert(dir.join(name).join("mod.rs"));
 				paths.insert(own_folder.join(format!("{name}.rs")));
+				// `base.rs` may declare a folder module whose file is
+				// `base/<name>/mod.rs`.
+				paths.insert(own_folder.join(name).join("mod.rs"));
 			}
 		}
 	}

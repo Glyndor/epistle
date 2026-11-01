@@ -484,9 +484,14 @@ impl Server {
 					// everything after it is deflated. The write and flush
 					// above have already put it on the wire in the clear, so
 					// wrapping here is the first byte of the compressed
-					// stream. The line decoder keeps its state: compression
-					// is a transport layer, and unlike STARTTLS it discards
-					// nothing that was already parsed.
+					// stream. The line decoder keeps its state, but anything
+					// it already holds arrived in the clear behind the
+					// COMPRESS line: a client waits for the OK before it
+					// deflates, so a surplus is a forged command that must
+					// not run as plaintext after the switch.
+					if decoder.discard_buffered(usize::MAX) > 0 {
+						return Ok(());
+					}
 					stream = Box::new(super::compress::Deflate::new(stream));
 					// break, not continue: this inner loop re-reads the same
 					// `output`, whose `compress` flag is still set, so

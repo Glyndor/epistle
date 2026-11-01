@@ -1,7 +1,7 @@
 //! The account rules in [`Directory::admit_login`], the SCRAM planning built
 //! on them, and the password path checked against every protocol.
 
-use super::decoy_counters::DecoyCounters;
+use super::bans::decoy_counters::DecoyCounters;
 use super::gate_fixture::*;
 use super::{Directory, Proof, ScramRefusal};
 use crate::config::Protocol;

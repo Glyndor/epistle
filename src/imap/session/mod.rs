@@ -16,7 +16,6 @@ mod condstore;
 mod defaults;
 mod expunge;
 mod fetch;
-mod fetchstore;
 mod helpers;
 mod idle;
 mod list_status;

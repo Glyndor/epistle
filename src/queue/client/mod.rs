@@ -25,6 +25,13 @@ use super::tls_outcome::{
 };
 
 mod conn;
+
+/// The length of the complete reply at the start of `buffer`, for the fuzz
+/// target of the outbound client (see `crate::fuzzing`).
+#[doc(hidden)]
+pub fn complete_reply_for_fuzzing(buffer: &[u8]) -> Option<usize> {
+	conn::complete_reply(buffer)
+}
 #[cfg(test)]
 use conn::complete_reply;
 use conn::{Conn, Stream};

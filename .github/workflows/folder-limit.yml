@@ -1,0 +1,48 @@
+name: Folder limit
+
+# Counting the tree takes under a second, so the job runs on every pull request
+# without a decide step. The gate is loaded from the base commit so a pull
+# request cannot rewrite its own checker.
+on:
+  pull_request:
+    branches: [main, develop]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  folder-limit:
+    name: folder limit
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check direct file counts with the base gate
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        # Load the gate from the base so a PR cannot rewrite its own checker.
+        # Only the first introducing PR, whose base has no script, uses the PR
+        # copy. Distinguish absence from an unreadable commit: errors must fail.
+        run: |
+          set -euo pipefail
+          base="$(git rev-parse --verify "${BASE}^{commit}")"
+          script="$RUNNER_TEMP/folder-limit.sh"
+          git ls-tree --name-only "$base" -- scripts/folder-limit/folder-limit.sh >"$RUNNER_TEMP/folder-limit-base-path"
+          if [ -s "$RUNNER_TEMP/folder-limit-base-path" ]; then
+            git show "$base:scripts/folder-limit/folder-limit.sh" >"$script"
+          else
+            echo "base has no folder-limit gate; using PR copy for its first introduction" >&2
+            cp scripts/folder-limit/folder-limit.sh "$script"
+          fi
+          bash "$script"
+
+      - name: Test the proposed gate
+        run: bash scripts/folder-limit/folder-limit.test.sh

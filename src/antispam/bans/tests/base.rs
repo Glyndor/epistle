@@ -2,7 +2,7 @@
 //! trait that asserts the policy thresholds and the backoff doubling,
 //! the `clear_success` flow, the `sweep` horizon, and the fail-open path
 //! when the lookup errors out. The live-database cases live in
-//! `tests/database.rs`.
+//! `tests/db/core/database.rs`.
 
 use std::collections::HashMap;
 use std::net::IpAddr;

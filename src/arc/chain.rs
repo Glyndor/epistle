@@ -111,7 +111,11 @@ pub fn extract(raw: &[u8]) -> Result<Option<Vec<Instance>>, ChainError> {
 
 	// Bucket each header into its instance slot. `slots[i]` holds instance i+1.
 	let highest = headers.iter().map(|h| h.instance).max().unwrap_or(0);
-	if highest == 0 || highest > MAX_INSTANCE {
+	// RFC 8617 section 4.2.1: each instance is in 1..=50 before indexing.
+	if headers
+		.iter()
+		.any(|header| !(1..=MAX_INSTANCE).contains(&header.instance))
+	{
 		return Err(ChainError::BadInstance);
 	}
 	let mut slots: Vec<[Option<String>; 3]> = (0..highest).map(|_| [None, None, None]).collect();
@@ -176,8 +180,10 @@ fn arc_headers(raw: &[u8]) -> Result<Vec<RawHeader>, ChainError> {
 	for line in block.split_inclusive("\r\n") {
 		let content = line.strip_suffix("\r\n").unwrap_or(line);
 		if content.starts_with(' ') || content.starts_with('\t') {
-			// Folded continuation.
+			// Folded continuation, kept as the sender folded it: c=simple
+			// reads the header bytes as they are (RFC 6376 section 3.4.1).
 			if let Some(buffer) = &mut current {
+				buffer.push_str("\r\n");
 				buffer.push_str(content);
 			}
 			continue;
@@ -204,7 +210,7 @@ fn push_arc(headers: &mut Vec<RawHeader>, line: &str) -> Result<(), ChainError> 
 	let Some(kind) = ArcKind::from_name(name) else {
 		return Ok(());
 	};
-	let value = line[colon + 1..].trim_start();
+	let value = &line[colon + 1..];
 	let instance = tag(value, "i")
 		.and_then(|i| i.parse::<u32>().ok())
 		.ok_or(ChainError::Malformed)?;

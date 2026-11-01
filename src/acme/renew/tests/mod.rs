@@ -2,6 +2,7 @@ pub use super::*;
 
 pub(super) mod base;
 pub(super) mod expiry;
+pub(super) mod install;
 pub(super) mod placeholder;
 pub(super) mod request;
 pub(super) mod usability;

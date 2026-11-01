@@ -29,7 +29,7 @@
 //!
 //! The minimum-file floor is the analogue of the
 //! `expected at least N toolchain pins` check in
-//! `tests/workflow_toolchain_pins.rs`: a regex that never matches is the
+//! `tests/workflows/workflow_toolchain_pins.rs`: a regex that never matches is the
 //! same green as a regex that does match and finds nothing, so the test
 //! would silently pass even if the pattern were broken or the directory
 //! moved. The floor forces the test to actually walk the tree and find
@@ -114,7 +114,7 @@ fn src_has_no_local_now_or_equivalent_call() {
 		files.len() >= MIN_SOURCE_FILES,
 		"expected at least {MIN_SOURCE_FILES} .rs files under {}, found {}. \
 		 The minimum is the analogue of the pin floor in \
-		 tests/workflow_toolchain_pins.rs: a regex that never matches is the \
+		 tests/workflows/workflow_toolchain_pins.rs: a regex that never matches is the \
 		 same green as a regex that matches nothing, so this floor forces \
 		 the test to actually walk the source tree.",
 		files.len(),

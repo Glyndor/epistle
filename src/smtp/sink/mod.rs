@@ -71,6 +71,9 @@ impl Submission {
 /// Why a delivery could not be accepted.
 #[derive(Debug, thiserror::Error)]
 pub enum SinkError {
+	/// No local copy fits the recipient mailbox quota.
+	#[error("mailbox full: {0}")]
+	MailboxFull(String),
 	/// Storage is unavailable right now (transient): disk full, network
 	/// error talking to the spool, mutex poisoned. The caller should answer
 	/// with a 4xx so the client retries later.
@@ -121,6 +124,7 @@ impl SinkError {
 	pub fn smtp_reply(&self) -> crate::smtp::reply::Reply {
 		use crate::smtp::reply::Reply;
 		match self {
+			SinkError::MailboxFull(_) => Reply::single(552, "5.2.2 mailbox full"),
 			SinkError::Unavailable(_) | SinkError::Gone(_) => {
 				Reply::single(451, "4.3.0 temporary storage failure, try again")
 			}

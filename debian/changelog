@@ -1,3 +1,18 @@
+epistle (0.12.5) unstable; urgency=medium
+
+  * The DKIM verifier and the ARC chain read the headers as RFC 6376 and RFC 8617 say: a signature that covers only one of several `From` headers is refused, and the chain checks follow the order and the instance numbers the RFC fixes.
+  * A command sent in the same write as IMAP `COMPRESS` is no longer run as plaintext after the switch: the connection closes when anything was buffered behind the command.
+  * A password guess that waited for its place at the password gate asks the ban store again before it is checked, so a burst of guesses from one client ends at its own ban instead of being counted against the account.
+  * The mailbox quota covers the final copy with the headers added on delivery and each member of an alias, and inbound SMTP, local delivery from submission and the API share one admission under the account lock. A member whose mailbox is full is skipped and reported while the others receive the message.
+  * A WebDAV `PUT` judges `If-Match` again under the account lock, immediately before it writes: two writers holding the same entity tag no longer both succeed.
+  * An issued ACME certificate is checked against its key before it replaces the pair in use, and the two files are replaced through temporary files.
+  * A JMAP WebSocket message is limited to `maxSizeRequest` before it is buffered.
+  * The JWKS fetch connects to the addresses it screened, goes direct (no proxy) when the URI must stay public, and no longer resolves the name a second time.
+  * Changes to one Namecheap zone are made one at a time, so two changes made together no longer erase each other.
+  * The documentation pages about running the product move to `docs/operations`.
+
+ -- Glyndor <packages@glyndor.net>  Sun, 01 Nov 2026 12:00:00 +0000
+
 epistle (0.12.4) unstable; urgency=medium
 
   * Build the binary with Rust 1.99 and move the runtime image to Debian 13.

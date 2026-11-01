@@ -89,7 +89,7 @@ client verifies it and replies with an empty line; only then does epistle
 return `235 2.7.0 authentication successful`. This is implemented in
 [`src/smtp/session/scram.rs`](../src/smtp/session/scram.rs), in
 `scram_client_final` and `scram_server_final`, and covered by
-[`src/smtp/session/tests/mods/tests_scram_final.rs`](../src/smtp/session/tests/mods/tests_scram_final.rs).
+[`src/smtp/session/tests/mods/scram/tests_scram_final.rs`](../src/smtp/session/tests/mods/scram/tests_scram_final.rs).
 Those tests have not been run for this guide.
 
 Do not work around an old client assumption that the server-final belongs on
@@ -157,7 +157,7 @@ The exact Roundcube folder-subscription screen is **not verified** here.
 `epistle migrate imap` now subscribes the folders it puts in the account,
 including an already existing folder it copies into. It does not require a
 separate manual subscription pass for those folders. See
-[IMAP migration](migration.md#copying-mail-over-imap),
+[IMAP migration](operations/migration.md#copying-mail-over-imap),
 [`src/migrate/imap/copy.rs`](../src/migrate/imap/copy.rs), and
 [`src/migrate/imap/tests/subscribe.rs`](../src/migrate/imap/tests/subscribe.rs).
 This does not establish the subscription state of folders from unrelated
@@ -236,7 +236,7 @@ UI wording is **not verified**.
 | `504 5.5.4 mechanism not supported` | The selected mechanism is unknown or unavailable. In particular, `[auth] scram = false` makes SCRAM unavailable. | [`auth_dispatch.rs`](../src/smtp/session/auth_dispatch.rs), [Auth configuration](configuration.md#auth) |
 | SCRAM ends at `334`, or `501 5.5.2 invalid authentication response` | The server-final requires an empty-line acknowledgement. A nonempty response is refused. Check client support or explicitly select PLAIN/LOGIN over TLS. | [`scram.rs`](../src/smtp/session/scram.rs) |
 | `535 5.7.8 authentication credentials invalid` | Check password, protocol permissions, disabled account/domain, TOTP and ban subjects. A ban deliberately looks like bad credentials. | [Authentication](security.md#authentication), [`auth_dispatch.rs`](../src/smtp/session/auth_dispatch.rs) |
-| Folders exist but are absent from a subscribed listing | Compare subscriptions with `LIST`; migration now subscribes the folders it copies. | [Migration](migration.md#copying-mail-over-imap) |
+| Folders exist but are absent from a subscribed listing | Compare subscriptions with `LIST`; migration now subscribes the folders it copies. | [Migration](operations/migration.md#copying-mail-over-imap) |
 | `552 5.3.4 message exceeds maximum size` | The complete submitted message exceeded `max_message_size`. | [Size cap](configuration.md#top-level-keys) |
 | `452 4.3.1 insufficient system resources; try again later` | The shared message-memory budget is exhausted. | [Memory budget](configuration.md#top-level-keys) |
 | `550 5.7.1` attachment refusal, or `451 4.7.1 content scan unavailable, try again later` | Attachment policy refused the content, or inspection could not run. | [Attachments](attachments.md#the-policy) |

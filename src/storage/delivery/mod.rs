@@ -51,6 +51,8 @@ pub(super) fn received_hops(data: &[u8]) -> usize {
 /// was refused as a forwarding loop.
 #[derive(Debug, Default)]
 pub struct Delivered {
+	/// Expanded final addresses whose local copy did not fit.
+	pub over_quota: Vec<String>,
 	pub redirects: Vec<Redirect>,
 	pub reject: Option<String>,
 	/// Autoresponses (e.g. Sieve vacation) to queue to the outbound spool.
@@ -68,6 +70,7 @@ pub struct LocalDelivery {
 	data_dir: PathBuf,
 	directory: DirectoryHandle,
 	crypto: MessageCrypto,
+	quota: crate::smtp::quota::MailboxQuota,
 	metrics: Option<std::sync::Arc<crate::metrics::Metrics>>,
 }
 
@@ -90,9 +93,24 @@ impl LocalDelivery {
 		Ok(LocalDelivery {
 			data_dir: data_dir.to_path_buf(),
 			directory,
+			quota: crate::smtp::quota::MailboxQuota::on_disk(
+				data_dir.to_path_buf(),
+				crypto.clone(),
+				crate::imap::session::DEFAULT_QUOTA_BYTES,
+			),
 			crypto,
 			metrics: None,
 		})
+	}
+
+	/// Set the default quota for every local delivery path using this store.
+	pub fn with_quota(mut self, default_bytes: u64) -> Self {
+		self.quota = crate::smtp::quota::MailboxQuota::on_disk(
+			self.data_dir.clone(),
+			self.crypto.clone(),
+			default_bytes,
+		);
+		self
 	}
 
 	/// Attach a metrics handle so the report-ingest hook can count
@@ -109,6 +127,27 @@ impl LocalDelivery {
 	/// belongs to, when that delivery went through one.
 	fn accounts_for(&self, message: &AcceptedMessage) -> Result<lists::Recipients, SinkError> {
 		lists::accounts_for(&self.directory.current(), message)
+	}
+
+	fn store_copy(
+		&self,
+		account: &str,
+		mailbox: Option<&str>,
+		data: &[u8],
+		flags: &[String],
+	) -> Result<Uuid, SinkError> {
+		let lock = self.quota.delivery_lock(account);
+		let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
+		// Each final copy includes its trace and list headers. Published bytes
+		// remain visible to the next admission even when a later step fails.
+		if self
+			.quota
+			.would_overflow(&self.directory.current(), account, data.len() as u64)
+		{
+			return Err(SinkError::MailboxFull(account.to_string()));
+		}
+		self.deliver_to_account(account, mailbox, data, flags)
+			.map_err(|error| SinkError::Unavailable(error.to_string()))
 	}
 
 	fn deliver_to_account(
@@ -187,21 +226,37 @@ impl LocalDelivery {
 		// several accounts.
 		let mut ingested = reports::Ingested::new();
 		let mut listed = lists::ListedCopies::new(message);
+		let mut refused = 0;
+		let mut stored = 0;
 		for (account, (delivered_to, list)) in &accounts {
 			// Mailing list: the copies of the accounts the list reaches
 			// carry that list's `List-*` headers; every other copy is the
 			// message as it came.
-			let one = self.deliver_for_account(
+			let one = match self.deliver_for_account(
 				account,
 				delivered_to,
 				listed.for_list(list.as_ref()),
 				mailbox,
 				&mut ingested,
-			)?;
+				&mut stored,
+			) {
+				Ok(one) => one,
+				Err(SinkError::MailboxFull(_)) => {
+					// A full alias member is skipped; other members still receive
+					// their copies, and the routing sink reports the full address.
+					delivered.over_quota.push(delivered_to.clone());
+					refused += 1;
+					continue;
+				}
+				Err(error) => return Err(error),
+			};
 			delivered.redirects.extend(one.redirects);
 			delivered.reject = delivered.reject.or(one.reject);
 			delivered.replies.extend(one.replies);
 			delivered.looped.extend(one.looped);
+		}
+		if refused == accounts.len() && stored == 0 {
+			return Err(SinkError::MailboxFull(delivered.over_quota[0].clone()));
 		}
 		// Report-ingest hook: fires after normal delivery, never affects
 		// outcome, and never fires twice for the same (Kind, domain).
@@ -226,12 +281,17 @@ impl LocalDelivery {
 		message: &AcceptedMessage,
 		hint: Option<&str>,
 		_ingested: &mut reports::Ingested,
+		stored_copies: &mut usize,
 	) -> Result<Delivered, SinkError> {
 		let stored = trace::final_copy(&message.reverse_path, delivered_to, &message.data);
 		let data = &stored;
+		let mut store = |mailbox: Option<&str>, flags: &[String]| {
+			self.store_copy(account, mailbox, data, flags)?;
+			*stored_copies += 1;
+			Ok::<(), SinkError>(())
+		};
 		if let Some(mailbox) = hint {
-			self.deliver_to_account(account, Some(mailbox), data, &[])
-				.map_err(|error| SinkError::Unavailable(error.to_string()))?;
+			store(Some(mailbox), &[])?;
 			return Ok(Delivered::default());
 		}
 		// Admin-configured external forwarding, independent of the user filter.
@@ -243,8 +303,7 @@ impl LocalDelivery {
 			// No filter (or it failed to compile): normal INBOX delivery, unless
 			// the account forwards with keep_local = false (pure forwarding).
 			if keep_local || forwards.is_empty() {
-				self.deliver_to_account(account, None, data, &[])
-					.map_err(|error| SinkError::Unavailable(error.to_string()))?;
+				store(None, &[])?;
 			}
 			return Ok(Delivered {
 				redirects: trace::redirects(forwards, delivered_to),
@@ -307,8 +366,7 @@ impl LocalDelivery {
 		// both cases the same.
 		let mut kept = keep || folders.iter().any(Option::is_none);
 		if kept {
-			self.deliver_to_account(account, None, data, &outcome.flags)
-				.map_err(|error| SinkError::Unavailable(error.to_string()))?;
+			store(None, &outcome.flags)?;
 		}
 		for folder in folders.iter().flatten() {
 			if !io::mailbox_exists(&self.data_dir, account, folder) {
@@ -323,15 +381,13 @@ impl LocalDelivery {
 						);
 					}
 					if !kept {
-						self.deliver_to_account(account, None, data, &outcome.flags)
-							.map_err(|error| SinkError::Unavailable(error.to_string()))?;
+						store(None, &outcome.flags)?;
 						kept = true;
 					}
 					continue;
 				}
 			}
-			self.deliver_to_account(account, Some(folder), data, &outcome.flags)
-				.map_err(|error| SinkError::Unavailable(error.to_string()))?;
+			store(Some(folder), &outcome.flags)?;
 		}
 		// vacation (RFC 5230, RFC 8621 section 8): an autoresponse alongside
 		// normal delivery, from the JMAP setting or the Sieve action.
@@ -344,6 +400,7 @@ impl LocalDelivery {
 			reject: None,
 			replies,
 			looped: Vec::new(),
+			over_quota: Vec::new(),
 		})
 	}
 }

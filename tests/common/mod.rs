@@ -1,7 +1,7 @@
 //! Shared helpers for the `epistle local` integration tests. Every
-//! helper here was originally in `tests/local_mode.rs`; the restart
+//! helper here was originally in `tests/cli/local/local_mode.rs`; the restart
 //! test split them out so neither file would cross the 500-code-line
-//! cap. Each `tests/*.rs` is a separate Cargo
+//! cap. Each integration test root is a separate Cargo
 //! binary, so the helpers are pulled in via `mod common;` with a
 //! `#[path]` attribute.
 

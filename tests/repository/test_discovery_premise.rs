@@ -6,7 +6,7 @@
 //! test file exists and no workflow invokes it. It exists because a test once lived in `apt/tests/`,
 //! passed by hand, and nothing in CI called it. epistle does not carry that
 //! guard, and the reason is narrow: every test here is a Rust test, cargo
-//! discovers `tests/*.rs` and `#[cfg(test)]` modules on its own, and
+//! discovers the roots of the integration tests and `#[cfg(test)]` modules on its own, and
 //! `cargo test --locked` runs all of them. Nothing can be added to a Rust test
 //! target and stay unrun.
 //!
@@ -40,11 +40,18 @@ const SKIP_DIRS: &[&str] = &["target", ".git", "vendor", "node_modules", "cargo-
 /// MUST carry the name of the workflow that runs it in the comment, so that
 /// deleting the workflow without deleting the exemption surfaces the lie
 /// rather than hiding it.
-const WORKFLOW_INVOKED_DIRS: &[(&str, &str, &str)] = &[(
-	".github/scripts",
-	".github/workflows/scripts.yml",
-	"unittest discover -s .github/scripts",
-)];
+const WORKFLOW_INVOKED_DIRS: &[(&str, &str, &str)] = &[
+	(
+		".github/scripts",
+		".github/workflows/scripts.yml",
+		"unittest discover -s .github/scripts",
+	),
+	(
+		"scripts/folder-limit",
+		".github/workflows/folder-limit.yml",
+		"folder-limit.test.sh",
+	),
+];
 
 /// Extensions whose test files are not discovered by any runner — something has
 /// to invoke them by name, which is the condition this test watches for.

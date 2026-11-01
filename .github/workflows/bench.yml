@@ -8,6 +8,12 @@ name: Benchmarks
 on:
   push:
     branches: [develop, main]
+    paths:
+      - ".github/workflows/bench.yml"
+      - "benches/**"
+      - "src/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
   pull_request:
     paths:
       - ".github/workflows/bench.yml"
@@ -30,6 +36,8 @@ jobs:
   compile:
     name: Compile benchmarks
     runs-on: ubuntu-latest
+    # Measured 2026-10-30: the slowest of four green runs took 11 min.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 

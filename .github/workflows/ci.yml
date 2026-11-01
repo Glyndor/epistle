@@ -8,7 +8,7 @@ on:
   # `merge_group` on a temporary `gh-readonly-queue/...` branch and a required check that
   # does not report there leaves the queue waiting forever.
   # `paths:` and `branches:` filters do not apply to merge_group, so the
-  # trigger sits at the top level. See docs/merge-queue.md.
+  # trigger sits at the top level. See docs/operations/merge-queue.md.
   merge_group:
     types: [checks_requested]
 
@@ -61,7 +61,7 @@ jobs:
       # rather than padded with hollow tests:
       #   db/mod, antispam/{reputation,corpus,hook}, directory_store/sql — need
       #     PostgreSQL; the Database workflow exercises them (without measuring).
-      #   directory_store/ldap — needs an LDAP server (tests/ldap.rs, gated on
+      #   directory_store/ldap — needs an LDAP server (tests/system/ldap.rs, gated on
       #     INTEROP_LDAP_URL).
       #     The two directory_store modules are folders now (sql/mod.rs and
       #     ldap/mod.rs), so the entry names both.

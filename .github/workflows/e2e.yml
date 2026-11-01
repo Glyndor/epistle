@@ -2,7 +2,7 @@ name: E2E
 
 # Full-server end-to-end matrix: build the real binary, run it under systemd on
 # GitHub's VM runners (the "VM matrix") with real ports and TLS, then submit a
-# message over SMTP and retrieve it over IMAP via `tests/e2e.rs`.
+# message over SMTP and retrieve it over IMAP via `tests/system/e2e.rs`.
 
 # Path filter on pull_request only. The full-server end-to-end matrix
 # is the slowest check in the repo, so a PR that does not touch the
@@ -15,9 +15,9 @@ on:
     branches: [develop, main]
     paths:
       - 'src/**'
-      - 'tests/e2e.rs'
-      - 'tests/hostile_smtp.rs'
-      - 'tests/hostile_smtp/**'
+      - 'tests/system/e2e.rs'
+      - 'tests/smtp/hostile_smtp.rs'
+      - 'tests/smtp/hostile_smtp/**'
       - 'docs/epistle.service'
       - '.github/workflows/e2e.yml'
       - 'Cargo.toml'
@@ -25,9 +25,9 @@ on:
   pull_request:
     paths:
       - "src/**"
-      - "tests/e2e.rs"
-      - "tests/hostile_smtp.rs"
-      - "tests/hostile_smtp/**"
+      - "tests/system/e2e.rs"
+      - "tests/smtp/hostile_smtp.rs"
+      - "tests/smtp/hostile_smtp/**"
       - "docs/epistle.service"
       - ".github/workflows/e2e.yml"
       - "Cargo.toml"
@@ -46,6 +46,8 @@ jobs:
   e2e:
     name: full-server e2e (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    # Measured 2026-10-30: the slowest of four green runs took 8 min.
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:

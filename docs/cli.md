@@ -75,7 +75,7 @@ Every change is validated before it is written, keeps the comments in
 | [Limits: quota, send rate, connections](#server-limits-epistle-limits) | `epistle limits show\|set\|unset` |
 | [Bans and the IP allow list](#authentication-bans) | `epistle ban …` |
 | [Outbound queue: retry, hold, release](#outbound-queue) | `epistle queue …` |
-| [IP warm-up for a new sending address](warmup.md) | `epistle warmup …` |
+| [IP warm-up for a new sending address](operations/warmup.md) | `epistle warmup …` |
 | [Evidence of sending: verify, export, check](evidence.md) | `epistle evidence …` |
 | [Antispam: DNSBL, greylisting, ClamAV](#antispam-epistle-antispam) | `epistle antispam …` |
 | [Attachment policy and checking a message](#attachments-epistle-attachments) | `epistle attachments policy\|check` |
@@ -94,7 +94,7 @@ Every `epistle` subcommand splits its output into two streams by purpose:
 - **stdout** carries command data or listings. The four data commands below
   never carry an ANSI escape sequence there, no matter the terminal, no matter
   `NO_COLOR`, no matter `CLICOLOR_FORCE`; the property is pinned by
-  `tests/cli_stdout_clean.rs`. `clap`'s `--help` and `--version` also write to
+  `tests/cli/cli_stdout_clean.rs`. `clap`'s `--help` and `--version` also write to
   stdout and follow the same precedence, so `--help` may colourise its text
   under `CLICOLOR_FORCE=1` or a real terminal.
 - **stderr** carries status, warnings, errors and progress, including the
@@ -115,7 +115,7 @@ exit code 2. `CLICOLOR_FORCE` never turns any of this on in a pipe.
 
 Four commands produce binary or quoted data on stdout and would silently break if
 an escape sequence or spinner frame were ever written there, so they are pinned by
-`tests/cli_stdout_clean.rs`:
+`tests/cli/cli_stdout_clean.rs`:
 
 | Command | stdout payload |
 |---|---|
@@ -979,7 +979,7 @@ sequence and its exit code becomes epistle's exit code.
 | `sudo epistle stack logs [--follow] [SERVICE]` | Streams service logs. |
 | `sudo epistle stack restart [SERVICE]` | Restarts the stack or one service. |
 | `sudo epistle stack stop [SERVICE]` / `sudo epistle stack start [SERVICE]` | Stop or start the whole stack, or one service, without removing containers or the autostart unit. `stack stop mail` is how to take the mail server down for `epistle restore` while the database stays up to receive the dump. |
-| `sudo epistle stack update` | Renders `compose.yaml` again with this release's code, shows what changed and replaces it, then runs `podup up -d` so only changed services are recreated. In default mode it also restarts `mail` when its definition did not change, so it runs the host binary the new .deb installed; in custom image mode it runs `podup pull` first. Before any of that it dumps the stack's database to `<data_dir>/backups/pre-<version>-<timestamp>.sql.gz` (mode 0600, the newest three `pre-*` dumps kept), because the new server migrates the schema when it starts; a failed dump stops the update before anything changes. Afterwards it waits up to five minutes for `mail` to report healthy and runs the `config`, `ports` and `db` checks of `epistle status`; a failure names the area and exits non-zero, and the apt upgrade prints it framed with the rollback command. Data and volumes are kept. Before it writes the new file it moves the storage and OAuth signing keys out of data_dir, and once `db` runs it takes SUPERUSER away from an `epistle` role an older release created (see [the container stack](container.md#the-database-roles)). |
+| `sudo epistle stack update` | Renders `compose.yaml` again with this release's code, shows what changed and replaces it, then runs `podup up -d` so only changed services are recreated. In default mode it also restarts `mail` when its definition did not change, so it runs the host binary the new .deb installed; in custom image mode it runs `podup pull` first. Before any of that it dumps the stack's database to `<data_dir>/backups/pre-<version>-<timestamp>.sql.gz` (mode 0600, the newest three `pre-*` dumps kept), because the new server migrates the schema when it starts; a failed dump stops the update before anything changes. Afterwards it waits up to five minutes for `mail` to report healthy and runs the `config`, `ports` and `db` checks of `epistle status`; a failure names the area and exits non-zero, and the apt upgrade prints it framed with the rollback command. Data and volumes are kept. Before it writes the new file it moves the storage and OAuth signing keys out of data_dir, and once `db` runs it takes SUPERUSER away from an `epistle` role an older release created (see [the container stack](operations/container.md#the-database-roles)). |
 | `sudo epistle stack resources [--json]` | Lists each service's `mem_limit` and `pids_limit` from `compose.yaml`, and their sum. Does not run `podup`. |
 | `sudo epistle stack resources set SERVICE [--memory SIZE] [--pids N] [--json]` | Changes the limit of `mail`, `db`, `clamav` or `freshclam` (`SIZE` is a whole number with `k`, `m` or `g`) in `compose.yaml`; `mail` is refused less than five messages of `max_message_size` and 256 MiB (381 MiB at the default 25 MiB), so the budget derived from its limit holds one message, where `init` records answered limits, so `stack update` keeps it. The running container keeps its old limit until `sudo epistle stack update` recreates it. `set` and `stack update` take the same lock on `compose.yaml` (`.compose.yaml.lock` beside it), so one waits for the other and neither loses the other's change. |
 | `sudo epistle stack rollback [--to VERSION] [--yes]` | Asks before it changes anything (`--yes` skips the question; without a terminal and without `--yes` it exits 2). Puts back the binary the last upgrade replaced (the preinst keeps the two newest under `/var/lib/epistle-rollback`, root:root mode 0700) and, when the new release already migrated the schema, restores the dump `stack update` took before the restart. See [Rolling back an upgrade](#rolling-back-an-upgrade). |
@@ -1405,7 +1405,7 @@ What this build does:
   public key; the at-rest storage key, the
   OAuth signing key and, with the database, the PostgreSQL admin password go to
   `secrets/` beside data_dir instead (see [the container
-  stack](container.md#what-each-container-may-do)); a key that already exists
+  stack](operations/container.md#what-each-container-may-do)); a key that already exists
   is reused, never regenerated, whatever the answers say, and one an older
   release left under `keys/` is moved;
 - writes the configuration file at `config_path` (also `0600`) through a
@@ -1605,7 +1605,7 @@ Only `epistle init` turns one into the other: it derives the name from the addre
 |---|---|
 | `epistle export --account N [--maildir DIR]` | Export an account's mailboxes as an mbox stream on stdout, or as a Maildir tree where `Work/Project` is the Maildir++ folder `.Work.Project`. |
 | `epistle import --account N [--maildir DIR]` | Import an mbox stream from stdin, or a Maildir tree. Maildir++ folders become nested folders: `.Work.Project` is `Work/Project`. |
-| `epistle migrate imap --account N --host H --user U` | Copy a remote IMAP account, resumably. See [migration](migration.md). |
+| `epistle migrate imap --account N --host H --user U` | Copy a remote IMAP account, resumably. See [migration](operations/migration.md). |
 | `epistle migrate mox --from DIR` / `migrate stalwart --from FILE` | Import domains, accounts, aliases and DKIM keys. |
 | `epistle queue` | List the outbound delivery queue (same as `queue list`). See [Outbound queue](#outbound-queue). |
 | `epistle delivery list [--recipient ADDR] [--account NAME] [--since WHEN] [--until WHEN] [--status S] [--limit N] [--json]` | Read the per-recipient delivery log: one record per delivered, failed, suppressed or canceled recipient, and one per deferred recipient for each distinct reply, at most eight per recipient (a retry deferred for the same reason adds none), newest day first, at most `N` records (default 100, at most 100000; a larger value is a usage error). The log is read a line at a time, so memory does not grow with the size of a day's file, and days outside `--since`/`--until` are not opened. `--since` and `--until` take an RFC 3339 time or a duration such as `24h` or `7d` counted back from now; `--since` after `--until` is refused, and so is a filter given empty (`--account ""`): it is a usage error (exit 2), never "no filter". `--status` (also `--outcome`) is `delivered`, `deferred`, `failed`, `suppressed` or `canceled`. Metadata only, never a subject or body. The time of each record is an RFC 3339 UTC instant; `--json` keeps the epoch second. `epistle delivery` alone is `delivery list`. Needs `[storage] delivery_log_days` above 0. |

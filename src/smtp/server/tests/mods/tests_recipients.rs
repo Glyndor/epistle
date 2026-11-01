@@ -1,7 +1,7 @@
 //! The recipient cap a listener is given reaches every session it opens:
 //! the connection advertises it and `RCPT TO` enforces it on the wire.
 
-use super::tests_data_rate::{Client, reply_codes, test_directory};
+use super::rate::tests_data_rate::{Client, reply_codes, test_directory};
 use super::*;
 use crate::smtp::sink::MemorySink;
 

@@ -17,6 +17,11 @@ name: Scripts
 on:
   push:
     branches: [develop, main]
+    paths:
+      - ".github/workflows/scripts.yml"
+      - ".github/scripts/**"
+      - "debian/rules"
+      - ".github/workflows/release.yml"
   pull_request:
     paths:
       - ".github/workflows/scripts.yml"

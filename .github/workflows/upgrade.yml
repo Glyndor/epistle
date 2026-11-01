@@ -6,7 +6,7 @@ name: Upgrade
 # `submissions` + `imaps` setup `e2e.yml` uses, creates the account, submits
 # a message, sets a flag and creates an app password, then stops it. It
 # builds this commit's binary, starts it on the same data and config, and
-# runs `tests/upgrade.rs` against it: the password still logs in, the
+# runs `tests/system/upgrade.rs` against it: the password still logs in, the
 # message and its flag are still there, the app password still
 # authenticates, and the new server's startup log has no `ERROR` line.
 #
@@ -19,11 +19,18 @@ name: Upgrade
 on:
   push:
     branches: [develop, main]
-  pull_request:
     paths:
       - "src/**"
       - "migrations/**"
       - "tests/upgrade.rs"
+      - ".github/workflows/upgrade.yml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+  pull_request:
+    paths:
+      - "src/**"
+      - "migrations/**"
+      - "tests/system/upgrade.rs"
       - ".github/workflows/upgrade.yml"
       - "Cargo.toml"
       - "Cargo.lock"
@@ -43,6 +50,8 @@ jobs:
     # The published binary links against glibc 2.39; 22.04 ships 2.35
     # and cannot start it.
     runs-on: ubuntu-24.04
+    # Measured 2026-10-30: the slowest of four green runs took 8 min.
+    timeout-minutes: 15
     env:
       SQLX_OFFLINE: "true"
       E2E_HOST: "127.0.0.1"

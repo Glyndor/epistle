@@ -52,13 +52,21 @@ pub(super) fn rate_limited() -> Reply {
 /// (SMTP has no per-recipient reply after DATA).
 fn split_over_quota(
 	session: &mut Session,
-	mut message: AcceptedMessage,
+	message: AcceptedMessage,
 	size: u64,
 ) -> Option<AcceptedMessage> {
 	let Some(quota) = session.policy.quota() else {
 		return Some(message);
 	};
 	let full = quota.overflowing(&session.directory, &message.recipients, size);
+	exclude_over_quota(session, message, full)
+}
+
+fn exclude_over_quota(
+	session: &mut Session,
+	mut message: AcceptedMessage,
+	full: Vec<String>,
+) -> Option<AcceptedMessage> {
 	if full.is_empty() {
 		return Some(message);
 	}

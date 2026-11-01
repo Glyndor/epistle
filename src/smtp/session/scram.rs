@@ -2,9 +2,10 @@
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
+use std::sync::Arc;
 
 use super::super::directory::bans::BanOutcome;
-use super::super::directory::{ScramPlan, ScramRefusal};
+use super::super::directory::{Directory, ScramPlan, ScramRefusal};
 use super::super::reply::Reply;
 use super::super::scram::{ChannelBinding, ScramCredentials, ScramServer, username_of};
 use super::{Action, Session};
@@ -20,6 +21,7 @@ pub(super) enum PendingScram {
 		server: Box<ScramServer>,
 		credentials: Box<ScramCredentials>,
 		account: String,
+		directory: Arc<Directory>,
 		/// `Some` when the server-first was built on decoy credentials: the
 		/// exchange cannot succeed, and the refusal says whether it still
 		/// counts as a failed attempt (see [`ScramRefusal`]). A banned
@@ -30,7 +32,10 @@ pub(super) enum PendingScram {
 	/// The proof was verified and the server-final went out as a `334`
 	/// challenge; awaiting the client's acknowledgement (the empty line)
 	/// before the session is authenticated.
-	ServerFinal { account: String },
+	ServerFinal {
+		account: String,
+		directory: Arc<Directory>,
+	},
 }
 
 impl Session {
@@ -113,6 +118,7 @@ impl Session {
 			server: Box::new(server),
 			credentials: Box::new(plan.credentials),
 			account: plan.account,
+			directory: self.directory.clone(),
 			refusal: plan.refusal,
 		});
 		Action::CollectAuthResponse(Reply::single(334, &BASE64.encode(server_first)))
@@ -130,8 +136,8 @@ impl Session {
 		}
 	}
 
-	/// Process the base64 client-final message: verify the proof and, on
-	/// success, authenticate and return the server signature.
+	/// Verify the client proof against the original credentials and return
+	/// the server signature only while those credentials remain current.
 	pub(super) fn scram_client_final(
 		&mut self,
 		encoded: &str,
@@ -139,6 +145,7 @@ impl Session {
 		credentials: ScramCredentials,
 		account: &str,
 		refusal: Option<ScramRefusal>,
+		directory: Arc<Directory>,
 	) -> Action {
 		// A refused exchange stays refused at client-final. A ban that was in
 		// force at client-first holds even if it has since expired: a banned
@@ -154,37 +161,25 @@ impl Session {
 			}
 			None => {}
 		}
-		// The recheck at client-final: a ban that fired between
-		// client-first and client-final still refuses the exchange,
-		// because `Banned` is only emitted when the ban is in force at
-		// the time of the check.
-		// The flag that decides whether the success lifts the ban rows
-		// comes from THIS check, not from any value carried from
-		// client-first: between the two messages a ban can fire
-		// (turning a `Clear` into a `Banned` that the recheck refuses)
-		// or lapse (turning a `BannedButKnown` into a `Clear` that
-		// lifts the ban as a normal success would).
-		let bypassed = match self
+		// Each final round checks the current ban. Only the last round
+		// records success, using its own known-network bypass decision.
+		match self
 			.directory
 			.check_ban(account, self.peer_ip, self.auth_protocol)
 		{
 			BanOutcome::Banned => return self.scram_failure(),
-			BanOutcome::BannedButKnown { .. } => true,
-			BanOutcome::Clear { .. } => false,
-		};
+			BanOutcome::BannedButKnown { .. } | BanOutcome::Clear { .. } => {}
+		}
 		let Some(client_final) = decode(encoded) else {
 			self.record_scram_outcome(account, Some(account), false, false);
 			return self.scram_failure();
 		};
-		match server.finish(&client_final, &credentials) {
-			Ok(server_final) => {
-				// Clear the ban store for both subjects on a successful
-				// proof; the ban check at client-first already consulted
-				// the same store with the same keys, so the success here
-				// undoes any in-flight strikes the same way the PLAIN path
-				// does. A bypass lift keeps the ban row in force: only
-				// the bypass list gets refreshed.
-				self.record_scram_outcome(account, Some(account), true, bypassed);
+		let proof = server.finish(&client_final, &credentials);
+		let current =
+			self.directory
+				.scram_credentials_current(account, &directory, self.auth_protocol);
+		match proof {
+			Ok(server_final) if current => {
 				// The server-final travels as a challenge. SMTP has no room
 				// for the SASL "additional data with a successful outcome"
 				// (RFC 4954 §4), so the `235` cannot carry it; the client
@@ -194,10 +189,11 @@ impl Session {
 				// and walks away does not get in.
 				self.pending_scram = Some(PendingScram::ServerFinal {
 					account: account.to_string(),
+					directory,
 				});
 				Action::CollectAuthResponse(Reply::single(334, &BASE64.encode(server_final)))
 			}
-			Err(_) => {
+			_ => {
 				self.record_scram_outcome(account, Some(account), false, false);
 				self.scram_failure()
 			}
@@ -207,13 +203,33 @@ impl Session {
 	/// The last round: the client acknowledges the server-final with the
 	/// empty line and the session is authenticated. Any other line is a
 	/// protocol error (RFC 4954 §4) and leaves the session
-	/// unauthenticated. The outcome of the exchange was already recorded
-	/// when the proof was verified, so this round moves no strike and
-	/// clears no ban.
-	pub(super) fn scram_server_final(&mut self, line: &str, account: String) -> Action {
+	/// unauthenticated. Admission and the ban outcome use the current
+	/// directory only after the acknowledgement.
+	pub(super) fn scram_server_final(
+		&mut self,
+		line: &str,
+		account: String,
+		directory: Arc<Directory>,
+	) -> Action {
 		if !line.is_empty() {
 			return Action::Continue(Reply::single(501, "5.5.2 invalid authentication response"));
 		}
+		let bypassed = match self
+			.directory
+			.check_ban(&account, self.peer_ip, self.auth_protocol)
+		{
+			BanOutcome::Banned => return self.scram_failure(),
+			BanOutcome::BannedButKnown { .. } => true,
+			BanOutcome::Clear { .. } => false,
+		};
+		if !self
+			.directory
+			.scram_credentials_current(&account, &directory, self.auth_protocol)
+		{
+			self.record_scram_outcome(&account, Some(&account), false, false);
+			return self.scram_failure();
+		}
+		self.record_scram_outcome(&account, Some(&account), true, bypassed);
 		// The exchange succeeded. The line that says so at the default
 		// level: the password path writes the audit channel instead, and
 		// this mechanism never reached it.

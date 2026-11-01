@@ -220,10 +220,17 @@ mod charged_at_least {
 		}
 	}
 
+	/// Each of these tests puts a trigger on `bayes_learned` and takes it off
+	/// again. Run in parallel against one database, two of them can ask for
+	/// the exclusive lock on the table while the other holds a row lock, and
+	/// PostgreSQL ends one with "deadlock detected". One at a time they cannot.
+	static ONE_TRAP_AT_A_TIME: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 	async fn lesson_behind(code: Option<&str>, pause: f64) -> Option<(Lesson, Duration)> {
 		let url = std::env::var("DATABASE_URL")
 			.ok()
 			.filter(|u| !u.is_empty())?;
+		let _alone = ONE_TRAP_AT_A_TIME.lock().await;
 		let pool = crate::db::connect(&url, crate::config::DatabaseTls::Insecure, 5, None)
 			.await
 			.expect("connect and migrate");

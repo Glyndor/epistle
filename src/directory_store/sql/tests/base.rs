@@ -2,7 +2,7 @@
 //! static-over-SQL precedence. These need no database: they exercise the
 //! row→directory mapping by feeding [`SqlAccount`] values directly into the
 //! store. The async loader itself is covered by the gated integration tests in
-//! `tests/database.rs`.
+//! `tests/db/core/database.rs`.
 
 use super::SqlAccount;
 use crate::config::Account;
