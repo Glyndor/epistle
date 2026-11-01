@@ -92,8 +92,9 @@ service account home are ignored. An upgrade must save a trusted copy in the
 new store before it can be used. Once the stack comes back healthy after an
 upgrade, the saved binaries and the dumps `stack update` took are removed, so
 rollback exists only while an upgrade can still fail; see
-[Rolling back an upgrade](../cli.md#rolling-back-an-upgrade). Purge removes the
-host binary store.
+[Rolling back an upgrade](../cli.md#rolling-back-an-upgrade). The same step
+removes the container images the previous compose file ran and the new one does
+not, when no container uses them. Purge removes the host binary store.
 
 The minimum a Podman or Docker compose unit needs is:
 

@@ -199,6 +199,7 @@ pub(crate) enum StackAction {
 
 pub(super) mod dumps;
 pub(super) mod health;
+mod images;
 pub(super) mod resources;
 mod retry;
 pub(super) mod rollback;

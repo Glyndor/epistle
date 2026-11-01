@@ -41,6 +41,9 @@ pub(super) struct UpdatePlan {
 	pub(super) steps: Vec<Step>,
 	/// The config path the `mail` service serves, which `status` reads.
 	pub(super) config_path: std::path::PathBuf,
+	/// The images the new compose file stops naming, to remove once the
+	/// update is verified.
+	pub(super) images: super::images::Change,
 }
 
 /// The generated file as text. Every writer of it holds the common lock while
@@ -86,6 +89,7 @@ pub(super) fn plan_update(
 		notes: regenerated.notes,
 		steps,
 		config_path: regenerated.config_path,
+		images: super::images::change(&old, &new),
 	})
 }
 
@@ -265,6 +269,13 @@ impl execute::UpdateHost for Live<'_> {
 
 	fn discard_dumps(&mut self) -> Result<usize, String> {
 		super::dumps::remove_update(&self.config.data_dir).map_err(|error| error.to_string())
+	}
+
+	fn discard_images(
+		&mut self,
+		change: &super::images::Change,
+	) -> Result<super::images::Outcome, String> {
+		super::images::discard(&mut super::images::Podman, change)
 	}
 
 	fn harden_database(&mut self) -> Result<bool, String> {
