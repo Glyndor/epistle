@@ -125,45 +125,45 @@ impl Llm {
 	pub(super) fn validate(&self) -> Result<(), super::ConfigError> {
 		if self.uncertain_low < 0.0 || self.uncertain_low > 1.0 {
 			return Err(super::ConfigError::Invalid(format!(
-				"[antispam.llm] uncertain_low must be in [0.0, 1.0]: {}",
+				"[antispam_llm] uncertain_low must be in [0.0, 1.0]: {}",
 				self.uncertain_low
 			)));
 		}
 		if self.uncertain_high < 0.0 || self.uncertain_high > 1.0 {
 			return Err(super::ConfigError::Invalid(format!(
-				"[antispam.llm] uncertain_high must be in [0.0, 1.0]: {}",
+				"[antispam_llm] uncertain_high must be in [0.0, 1.0]: {}",
 				self.uncertain_high
 			)));
 		}
 		if self.uncertain_low >= self.uncertain_high {
 			return Err(super::ConfigError::Invalid(format!(
-				"[antispam.llm] uncertain_low ({}) must be < uncertain_high ({})",
+				"[antispam_llm] uncertain_low ({}) must be < uncertain_high ({})",
 				self.uncertain_low, self.uncertain_high
 			)));
 		}
 		if self.timeout_secs == 0 {
 			return Err(super::ConfigError::Invalid(
-				"[antispam.llm] timeout_secs must be > 0".into(),
+				"[antispam_llm] timeout_secs must be > 0".into(),
 			));
 		}
 		if self.max_body_bytes == 0 {
 			return Err(super::ConfigError::Invalid(
-				"[antispam.llm] max_body_bytes must be > 0".into(),
+				"[antispam_llm] max_body_bytes must be > 0".into(),
 			));
 		}
 		if self.endpoint.trim().is_empty() {
 			return Err(super::ConfigError::Invalid(
-				"[antispam.llm] endpoint must not be empty".into(),
+				"[antispam_llm] endpoint must not be empty".into(),
 			));
 		}
 		if self.api_key_env.trim().is_empty() {
 			return Err(super::ConfigError::Invalid(
-				"[antispam.llm] api_key_env must not be empty".into(),
+				"[antispam_llm] api_key_env must not be empty".into(),
 			));
 		}
 		if self.model.trim().is_empty() {
 			return Err(super::ConfigError::Invalid(
-				"[antispam.llm] model must not be empty".into(),
+				"[antispam_llm] model must not be empty".into(),
 			));
 		}
 		Ok(())
