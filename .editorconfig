@@ -39,3 +39,8 @@ trim_trailing_whitespace = unset
 end_of_line = unset
 insert_final_newline = unset
 trim_trailing_whitespace = unset
+
+# The frozen storage key of the v0.12.5 credential stores is exactly the bytes
+# the release wrote, without a final newline.
+[tests/contracts/testdata/credentials-*/encryption.key]
+insert_final_newline = unset
