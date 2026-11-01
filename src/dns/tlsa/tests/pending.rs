@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use super::support::{HOST, Zone, certificate};
 use super::*;
+use crate::dns::provider::ProviderError;
 
 fn target<'a>(zone: &'a Zone, dir: &'a Path) -> Target<'a> {
 	Target {
@@ -26,7 +27,7 @@ async fn a_failed_publication_is_kept_as_pending() {
 	zone.fail_with(Some(refused()));
 	let (pem, value) = certificate();
 
-	let outcome = refresh(&target(&zone, dir.path()), &pem, 1_000).await;
+	let outcome = refresh(&target(&zone, dir.path()), &pem, None, 1_000).await;
 
 	match outcome {
 		Outcome::Pending {
@@ -56,12 +57,10 @@ async fn the_owed_publication_survives_the_watcher_marking_the_files_loaded() {
 	let zone = Zone::empty();
 	zone.fail_with(Some(refused()));
 	let (pem, value) = certificate();
-	let cert = dir.path().join("cert.pem");
-	std::fs::write(&cert, &pem).expect("cert");
-	refresh(&target(&zone, dir.path()), &pem, 1_000).await;
+	refresh(&target(&zone, dir.path()), &pem, None, 1_000).await;
 
 	zone.fail_with(None);
-	let outcome = retry_due(&target(&zone, dir.path()), &cert, 1_060)
+	let outcome = retry_due(&target(&zone, dir.path()), &pem, 1_060)
 		.await
 		.expect("the wait is over");
 
@@ -84,12 +83,10 @@ async fn nothing_is_tried_before_the_wait_is_over() {
 	let zone = Zone::empty();
 	zone.fail_with(Some(refused()));
 	let (pem, _) = certificate();
-	let cert = dir.path().join("cert.pem");
-	std::fs::write(&cert, &pem).expect("cert");
-	refresh(&target(&zone, dir.path()), &pem, 1_000).await;
+	refresh(&target(&zone, dir.path()), &pem, None, 1_000).await;
 	zone.fail_with(None);
 
-	let early = retry_due(&target(&zone, dir.path()), &cert, 1_059).await;
+	let early = retry_due(&target(&zone, dir.path()), &pem, 1_059).await;
 
 	assert!(early.is_none(), "one second early is still waiting");
 	assert_eq!(zone.writes(), 0, "no write went out");
@@ -110,11 +107,9 @@ async fn a_second_failure_counts_the_attempt_and_keeps_the_first_date() {
 	let zone = Zone::empty();
 	zone.fail_with(Some(refused()));
 	let (pem, _) = certificate();
-	let cert = dir.path().join("cert.pem");
-	std::fs::write(&cert, &pem).expect("cert");
-	refresh(&target(&zone, dir.path()), &pem, 1_000).await;
+	refresh(&target(&zone, dir.path()), &pem, None, 1_000).await;
 
-	retry_due(&target(&zone, dir.path()), &cert, 1_060)
+	retry_due(&target(&zone, dir.path()), &pem, 1_060)
 		.await
 		.expect("due");
 
@@ -130,13 +125,11 @@ async fn a_renewed_certificate_replaces_the_owed_one() {
 	let zone = Zone::empty();
 	zone.fail_with(Some(refused()));
 	let (old_pem, old_value) = certificate();
-	refresh(&target(&zone, dir.path()), &old_pem, 1_000).await;
+	refresh(&target(&zone, dir.path()), &old_pem, None, 1_000).await;
 
 	let (new_pem, new_value) = certificate();
-	let cert = dir.path().join("cert.pem");
-	std::fs::write(&cert, &new_pem).expect("cert");
 	zone.fail_with(None);
-	retry_due(&target(&zone, dir.path()), &cert, 1_060)
+	retry_due(&target(&zone, dir.path()), &new_pem, 1_060)
 		.await
 		.expect("due");
 
@@ -151,7 +144,7 @@ async fn a_provider_that_cannot_write_leaves_the_record_to_the_operator() {
 	zone.fail_with(Some(ProviderError::Unsupported));
 	let (pem, value) = certificate();
 
-	let outcome = refresh(&target(&zone, dir.path()), &pem, 1_000).await;
+	let outcome = refresh(&target(&zone, dir.path()), &pem, None, 1_000).await;
 
 	assert_eq!(outcome, Outcome::ByHand { value });
 	assert!(
@@ -169,8 +162,14 @@ async fn no_provider_means_by_hand_and_a_chain_without_certificate_means_nothing
 		hostname: HOST,
 		data_dir: dir.path(),
 	};
-	assert_eq!(refresh(&none, &pem, 1).await, Outcome::ByHand { value });
-	assert_eq!(refresh(&none, "garbage", 1).await, Outcome::NoCertificate);
+	assert_eq!(
+		refresh(&none, &pem, None, 1).await,
+		Outcome::ByHand { value }
+	);
+	assert_eq!(
+		refresh(&none, "garbage", None, 1).await,
+		Outcome::NoCertificate
+	);
 }
 
 #[tokio::test]
@@ -179,7 +178,7 @@ async fn a_state_for_another_host_is_not_ours() {
 	let zone = Zone::empty();
 	zone.fail_with(Some(refused()));
 	let (pem, _) = certificate();
-	refresh(&target(&zone, dir.path()), &pem, 1_000).await;
+	refresh(&target(&zone, dir.path()), &pem, None, 1_000).await;
 
 	assert!(
 		State::load(dir.path(), "other.example.net")

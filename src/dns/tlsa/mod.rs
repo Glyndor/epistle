@@ -10,12 +10,17 @@
 //! watcher) tries again with a growing wait until the provider accepts it.
 //! `epistle status` reads the same state to show what is owed.
 
+mod plan;
 mod state;
+mod write;
 
 use std::path::Path;
 
-use crate::dns::provider::{DnsProvider, ProviderError};
+use crate::dns::provider::DnsProvider;
 pub use state::{Pending, State, path as state_path, wait_after};
+
+/// The TTL of the record.
+const TTL: u32 = 3600;
 
 /// Where a TLSA record is published.
 pub struct Target<'a> {
@@ -56,9 +61,20 @@ pub enum Outcome {
 }
 
 /// Publish the TLSA record of `chain_pem`, the leaf certificate now in
-/// service, at `now` (seconds since the epoch). A failure is stored as the
-/// pending publication; a success clears it.
-pub async fn refresh(target: &Target<'_>, chain_pem: &str, now: u64) -> Outcome {
+/// service, at `now` (seconds since the epoch). `previous_chain` is the
+/// certificate it replaces, when known: its association is a value this
+/// instance served, so it may be replaced even when the state does not
+/// remember publishing it. A failure is stored as the pending publication;
+/// a success clears it.
+///
+/// Only values this instance published are replaced. A TLSA record at the
+/// name that is not one of them stays; see [`write`].
+pub async fn refresh(
+	target: &Target<'_>,
+	chain_pem: &str,
+	previous_chain: Option<&str>,
+	now: u64,
+) -> Outcome {
 	let Some(value) = crate::dns::records::tlsa_full_cert(chain_pem) else {
 		return Outcome::NoCertificate;
 	};
@@ -66,34 +82,40 @@ pub async fn refresh(target: &Target<'_>, chain_pem: &str, now: u64) -> Outcome 
 		return Outcome::ByHand { value };
 	};
 	let mut state = State::load(target.data_dir, target.hostname);
-	match crate::dns::records::publish_tlsa(provider, target.hostname, chain_pem).await {
+	let mut known = state.managed.clone();
+	known.extend(previous_chain.and_then(crate::dns::records::tlsa_full_cert));
+	// The intent is stored before the zone is touched, so a write whose
+	// answer is lost is still known as epistle's own at the next refresh.
+	state.intend(&value, &known);
+	store(&state, target);
+	match write::publish(provider, target.hostname, &value, &known).await {
 		Ok(()) => {
 			state.pending = None;
 			store(&state, target);
 			Outcome::Published { value }
 		}
 		// A provider that cannot write at all is not a failure to retry.
-		Err(ProviderError::Unsupported) => Outcome::ByHand { value },
-		Err(error) => {
-			state.fail(&value, error.to_string(), now);
+		Err(write::Refused::Unsupported) => Outcome::ByHand { value },
+		Err(write::Refused::Failed(reason)) => {
+			state.fail(&value, reason, now);
 			store(&state, target);
 			pending_outcome(&state, value)
 		}
 	}
 }
 
-/// Try the owed publication again when its wait is over. `cert_file` is the
-/// chain in service now, so a certificate renewed in the meantime is the one
-/// published. `None` when nothing is owed or the wait is not over.
-pub async fn retry_due(target: &Target<'_>, cert_file: &Path, now: u64) -> Option<Outcome> {
+/// Try the owed publication again when its wait is over. `chain_pem` is the
+/// chain actually in service now, so a certificate renewed in the meantime
+/// is the one published, and a pair on disk that was never put in service
+/// is never published. `None` when nothing is owed or the wait is not over.
+pub async fn retry_due(target: &Target<'_>, chain_pem: &str, now: u64) -> Option<Outcome> {
 	target.provider?;
 	let state = State::load(target.data_dir, target.hostname);
 	let pending = state.pending?;
 	if now < pending.next_attempt {
 		return None;
 	}
-	let chain_pem = std::fs::read_to_string(cert_file).ok()?;
-	Some(refresh(target, &chain_pem, now).await)
+	Some(refresh(target, chain_pem, None, now).await)
 }
 
 fn pending_outcome(state: &State, value: String) -> Outcome {

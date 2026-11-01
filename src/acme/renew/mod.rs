@@ -199,6 +199,8 @@ async fn issue(
 	client.register(contacts).await?;
 	let (chain, key_pem) = client.obtain_certificate(domains, responder, 10).await?;
 
+	// The certificate being replaced: its TLSA value is one this server served.
+	let previous = fs::read_to_string(cert_path(data_dir)).ok();
 	install(data_dir, &chain, &key_pem, reloadable)?;
 	tracing::info!(?domains, "ACME certificate issued and TLS reloaded");
 
@@ -211,7 +213,8 @@ async fn issue(
 			hostname,
 			data_dir,
 		};
-		let outcome = crate::dns::tlsa::refresh(&target, &chain, now_secs()).await;
+		let outcome =
+			crate::dns::tlsa::refresh(&target, &chain, previous.as_deref(), now_secs()).await;
 		crate::dns::tlsa::log_outcome(&outcome, hostname);
 	}
 	Ok(())
@@ -253,9 +256,16 @@ async fn retry_tlsa(issuer: &AcmeIssuer) {
 		hostname,
 		data_dir: &issuer.data_dir,
 	};
-	if let Some(outcome) =
-		crate::dns::tlsa::retry_due(&target, &cert_path(&issuer.data_dir), now_secs()).await
-	{
+	// Only a pair that works together is in service; anything else on disk
+	// is not published.
+	let (cert, key) = (cert_path(&issuer.data_dir), key_path(&issuer.data_dir));
+	if !crate::tls::usable_pair(&cert, &key) {
+		return;
+	}
+	let Ok(chain) = fs::read_to_string(&cert) else {
+		return;
+	};
+	if let Some(outcome) = crate::dns::tlsa::retry_due(&target, &chain, now_secs()).await {
 		crate::dns::tlsa::log_outcome(&outcome, hostname);
 	}
 }

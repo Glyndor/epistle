@@ -26,6 +26,9 @@ pub struct CertWatcher {
 	tls: Tls,
 	reloadable: ReloadableAcceptor,
 	end_point: Option<EndPoint>,
+	/// The chain (PEM) of the pair in service: the one that passed
+	/// validation, which is not always the one on disk.
+	served_chain: Option<String>,
 	/// The stamps of the pair in service.
 	loaded: Option<(Stamp, Stamp)>,
 	/// The stamps of the last pair refused, so it is reported once.
@@ -51,7 +54,9 @@ impl CertWatcher {
 	/// Watch `tls`, whose pair `reloadable` presents now.
 	pub fn new(tls: Tls, reloadable: ReloadableAcceptor) -> Self {
 		let loaded = stamps(&tls).ok();
+		let served_chain = load_pair(&tls).ok().map(|pair| pair.chain_pem);
 		CertWatcher {
+			served_chain,
 			tls,
 			reloadable,
 			end_point: None,
@@ -66,9 +71,10 @@ impl CertWatcher {
 		self
 	}
 
-	/// The certificate file being watched.
-	pub fn cert_file(&self) -> &std::path::Path {
-		&self.tls.cert_file
+	/// The chain (PEM) of the certificate in service, `None` when the pair
+	/// at start did not load. A pair on disk that was refused is not it.
+	pub fn served_chain(&self) -> Option<&str> {
+		self.served_chain.as_deref()
 	}
 
 	/// Look at the files once: swap a changed, valid pair in, refuse a
@@ -91,6 +97,7 @@ impl CertWatcher {
 				}
 				self.loaded = Some(current);
 				self.refused = None;
+				self.served_chain = Some(pair.chain_pem.clone());
 				Polled::Reloaded {
 					chain_pem: pair.chain_pem,
 				}
@@ -115,7 +122,8 @@ pub async fn run(
 	hostname: String,
 	data_dir: std::path::PathBuf,
 ) {
-	let cert_file = watcher.cert_file().to_path_buf();
+	// The chain in service, whose TLSA value is the one a reload replaces.
+	let mut previous = watcher.served_chain().map(str::to_string);
 	let mut ticker = tokio::time::interval(WATCH_INTERVAL);
 	// The first tick is immediate and the files were just loaded.
 	ticker.tick().await;
@@ -128,8 +136,9 @@ pub async fn run(
 		};
 		match watcher.poll() {
 			Polled::Unchanged => {
-				if let Some(outcome) =
-					crate::dns::tlsa::retry_due(&target, &cert_file, epoch_secs()).await
+				if let Some(chain) = watcher.served_chain()
+					&& let Some(outcome) =
+						crate::dns::tlsa::retry_due(&target, chain, epoch_secs()).await
 				{
 					crate::dns::tlsa::log_outcome(&outcome, &hostname);
 				}
@@ -138,7 +147,14 @@ pub async fn run(
 				tracing::info!(
 					"the [tls] certificate files changed; the new certificate is in service"
 				);
-				let outcome = crate::dns::tlsa::refresh(&target, &chain_pem, epoch_secs()).await;
+				let outcome = crate::dns::tlsa::refresh(
+					&target,
+					&chain_pem,
+					previous.as_deref(),
+					epoch_secs(),
+				)
+				.await;
+				previous = Some(chain_pem);
 				crate::dns::tlsa::log_outcome(&outcome, &hostname);
 			}
 			Polled::Refused(reason) => tracing::warn!(

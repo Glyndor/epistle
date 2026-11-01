@@ -8,6 +8,8 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+use super::plan::normal;
+
 /// The first wait after a failed attempt.
 const FIRST_WAIT_SECS: u64 = 60;
 
@@ -39,7 +41,16 @@ pub struct State {
 	/// The publication still owed, if any.
 	#[serde(default)]
 	pub pending: Option<Pending>,
+	/// The values this instance published (or meant to), newest first. They
+	/// are the only TLSA values a refresh may replace; every other value at
+	/// the name belongs to somebody else.
+	#[serde(default)]
+	pub managed: Vec<String>,
 }
+
+/// How many values the state keeps: the current one, the one it overlaps
+/// and one more for a publication that failed halfway.
+const MANAGED_KEPT: usize = 3;
 
 /// Where the state of a deployment lives.
 pub fn path(data_dir: &Path) -> PathBuf {
@@ -78,6 +89,20 @@ impl State {
 		let staging = target.with_extension("json.new");
 		std::fs::write(&staging, text)?;
 		std::fs::rename(&staging, &target)
+	}
+
+	/// Record that this instance is about to publish `value`, ahead of
+	/// `others` (values it published before), so a write that went out and
+	/// whose answer was lost is still known as its own afterwards.
+	pub fn intend(&mut self, value: &str, others: &[String]) {
+		let mut managed = vec![value.to_string()];
+		for other in others {
+			if !managed.iter().any(|kept| normal(kept) == normal(other)) {
+				managed.push(other.clone());
+			}
+		}
+		managed.truncate(MANAGED_KEPT);
+		self.managed = managed;
 	}
 
 	/// Note that publishing `value` failed at `now` for `reason`.
