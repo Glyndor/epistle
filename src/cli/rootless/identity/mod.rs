@@ -85,12 +85,31 @@ impl Identity {
 	/// Whether the process now has exactly this identity in all of its ids.
 	fn took_effect(&self) -> bool {
 		// SAFETY: plain getters, no preconditions.
-		unsafe {
+		let plain = unsafe {
 			libc::getuid() == self.uid
 				&& libc::geteuid() == self.uid
 				&& libc::getgid() == self.gid
 				&& libc::getegid() == self.gid
-		}
+		};
+		plain && self.saved_ids_match()
+	}
+
+	/// The saved ids are the way back to root, so they are read too.
+	#[cfg(target_os = "linux")]
+	fn saved_ids_match(&self) -> bool {
+		let (mut r, mut e, mut s) = (0, 0, 0);
+		// SAFETY: three valid out-pointers.
+		let uids =
+			unsafe { libc::getresuid(&mut r, &mut e, &mut s) } == 0 && [r, e, s] == [self.uid; 3];
+		// SAFETY: as above.
+		let gids =
+			unsafe { libc::getresgid(&mut r, &mut e, &mut s) } == 0 && [r, e, s] == [self.gid; 3];
+		uids && gids
+	}
+
+	#[cfg(not(target_os = "linux"))]
+	fn saved_ids_match(&self) -> bool {
+		true
 	}
 }
 
@@ -132,13 +151,51 @@ pub(in crate::cli) fn groups_of(name: &str, gid: u32) -> io::Result<Vec<libc::gi
 
 /// Mark every descriptor above stderr close-on-exec, so the account's command
 /// starts with the three standard streams and nothing a root caller left open.
-/// Best effort: the kernels without `close_range` (before 5.9) or its
-/// close-on-exec flag (before 5.11) answer an error, and the descriptors the
-/// standard library opens are close-on-exec already.
+/// The kernel's `close_range` does it in one call; where it answers an error
+/// (before Linux 5.11, a seccomp filter, another system) every descriptor up to
+/// the soft limit is marked one at a time. A descriptor that cannot be marked
+/// fails the whole thing, so the command never starts with one left open.
 ///
 /// The descriptors are marked, not closed, because the standard library holds
 /// a pipe open across the exec to report a failed one.
-fn seal_descriptors() {
+fn seal_descriptors() -> io::Result<()> {
+	seal_with(close_range_cloexec)
+}
+
+/// [`seal_descriptors`] with the first attempt injected, so a kernel that
+/// refuses it can be played. Makes system calls only, no allocation.
+fn seal_with(close_range: impl FnOnce() -> libc::c_int) -> io::Result<()> {
+	if close_range() == 0 {
+		return Ok(());
+	}
+	let mut limit = libc::rlimit {
+		rlim_cur: 0,
+		rlim_max: 0,
+	};
+	// SAFETY: `limit` is valid storage for getrlimit's answer.
+	let known = unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) } == 0;
+	// No readable limit, or none set: the usual ceiling of a process.
+	let top = if known && limit.rlim_cur != libc::RLIM_INFINITY {
+		limit.rlim_cur.min(1 << 22)
+	} else {
+		1 << 20
+	};
+	for fd in 3..top as libc::c_int {
+		// SAFETY: fcntl on a number that may not be open answers EBADF.
+		let rc = unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) };
+		if rc != 0 {
+			let error = io::Error::last_os_error();
+			if error.raw_os_error() != Some(libc::EBADF) {
+				return Err(error);
+			}
+		}
+	}
+	Ok(())
+}
+
+/// `close_range(3, ~0, CLOSE_RANGE_CLOEXEC)`: 0 on success, -1 with `errno`
+/// set when the kernel does not support it, and always -1 off Linux.
+fn close_range_cloexec() -> libc::c_int {
 	#[cfg(target_os = "linux")]
 	{
 		const CLOSE_RANGE_CLOEXEC: libc::c_uint = 4;
@@ -149,8 +206,12 @@ fn seal_descriptors() {
 				3 as libc::c_uint,
 				libc::c_uint::MAX,
 				CLOSE_RANGE_CLOEXEC,
-			)
-		};
+			) as libc::c_int
+		}
+	}
+	#[cfg(not(target_os = "linux"))]
+	{
+		-1
 	}
 }
 
@@ -163,7 +224,7 @@ pub(in crate::cli) fn run_as(command: &mut Command, identity: Identity) {
 	// or name-service lookup (the groups were listed in the parent).
 	unsafe {
 		command.pre_exec(move || {
-			seal_descriptors();
+			seal_descriptors()?;
 			identity.switch(Identity::perform)?;
 			if identity.took_effect() {
 				Ok(())
