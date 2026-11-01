@@ -153,7 +153,7 @@ fn mail_image_uses_cargo_pkg_version_by_default() {
 		.expect("image is a string");
 	assert_eq!(
 		image,
-		super::super::super::images::mail_base(),
+		super::super::super::super::images::mail_base(),
 		"the default mail image must be the digest-pinned distroless base; got {image:?}"
 	);
 }

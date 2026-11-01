@@ -58,7 +58,7 @@ fn no_other_service_gets_the_keys() {
 #[test]
 fn the_keys_are_outside_every_bind_mount_of_mail() {
 	let value = render(&stack_answers(), true);
-	let secrets_dir = super::super::super::host_secrets::dir(&stack_answers().data_dir);
+	let secrets_dir = super::super::super::super::host_secrets::dir(&stack_answers().data_dir);
 	for volume in value["services"]["mail"]["volumes"].as_array().unwrap() {
 		if let Some(source) = volume["source"].as_str() {
 			assert!(

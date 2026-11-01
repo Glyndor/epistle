@@ -4,7 +4,7 @@
 //! lays down under `<data_dir>/secrets/`: its shape, the
 //! create-then-reuse round-trip, the refuse-to-overwrite rule
 //! for an existing operator-supplied secret, and the empty-file
-//! edge case. Sister to `src/cli/init/compose/tests/base.rs` (which carries the
+//! edge case. Sister to `src/cli/init/compose/tests/rendering/base.rs` (which carries the
 //! shape-of-the-rendered-file tests) so the per-file code-line
 //! limit stays under 500.
 //!

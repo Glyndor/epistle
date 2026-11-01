@@ -8,7 +8,7 @@ fn mandatory_clamav_stack_and_socket_config() {
 	let clamd = &value["services"]["clamav"];
 	assert_eq!(
 		clamd["image"],
-		super::super::super::images::clamav(),
+		super::super::super::super::images::clamav(),
 		"mandatory clamd image is missing"
 	);
 	assert_eq!(clamd["network_mode"], "none");
@@ -30,7 +30,7 @@ fn mandatory_clamav_stack_and_socket_config() {
 			.contains(&json!("clamd-socket:/run/clamav"))
 	);
 	let fresh = &value["services"]["freshclam"];
-	assert_eq!(fresh["image"], super::super::super::images::clamav());
+	assert_eq!(fresh["image"], super::super::super::super::images::clamav());
 	assert_eq!(fresh["network_mode"], "pasta");
 	assert_eq!(fresh["entrypoint"][2], "freshclam");
 	assert!(fresh.get("ports").is_none());
