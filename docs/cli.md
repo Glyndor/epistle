@@ -968,7 +968,7 @@ than 5% free. An output that is a link, a hard link, or not owned by
 for the server to read, so those files must be readable by the account where
 they are.
 
-Stack requires podup 5.14.0 or newer. A failed podup command stops the
+Stack requires podup 5.15.4 or newer. A failed podup command stops the
 sequence and its exit code becomes epistle's exit code.
 
 | Command | What it does |
@@ -1224,8 +1224,8 @@ known whether the dump was committed and points at `epistle db status`. If the
 files fail after the database loaded, the message says so, and running the
 restore again with `--force` finishes the job.
 
-`podup exec` does not forward stdin (measured against `podup 5.10.13` and
-`5.14.0`), which is why the restore path uses `podup cp` to land the SQL file
+`podup exec` did not forward stdin before 5.15.0 (measured against `podup 5.10.13`
+and `5.14.0`), which is why the restore path uses `podup cp` to land the SQL file
 inside the `db` container rather than `psql < archive.sql`. The temp
 file on the host is created in `$TMPDIR` at `0644`, inside a directory
 created at `0700`, under a name unique to that restore, and a guard removes
