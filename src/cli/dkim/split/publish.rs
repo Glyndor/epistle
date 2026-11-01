@@ -67,19 +67,19 @@ pub(super) async fn publish(
 	failed
 }
 
-/// Delete the TXT records called `names` from `zone`. Every one is tried;
-/// the failures come back named.
+/// Delete the TXT records `(name, exact value)` from `zone`. Every one is
+/// tried; the failures come back named.
 pub(super) async fn retire(
 	provider: &dyn DnsProvider,
 	zone: &str,
-	names: &[String],
+	records: &[(String, String)],
 ) -> Vec<String> {
 	let mut failed = Vec::new();
-	for name in names {
+	for (name, value) in records {
 		let txt = DnsRecord {
 			name: name.clone(),
 			kind: RecordKind::Txt,
-			value: String::new(),
+			value: value.clone(),
 			ttl: 300,
 			proxied: None,
 		};

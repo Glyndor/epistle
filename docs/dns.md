@@ -112,7 +112,7 @@ that name one key, or whose key files hold the same public key, are
 refused; several domains on the `[dkim]` key still work and are reported
 by `config-check`, `status` and `dkim show`, and `epistle dkim split` moves
 them to keys of their own without a signature failing in between (it
-publishes the new records, waits until they resolve, and only then switches); `epistle dkim split --finish` then retires the shared key's records at the moved domains once the overlap has passed, and `status` warns until it has.
+publishes the new records, waits until they resolve, and only then switches); `epistle dkim split --finish` then retires the shared key's records at the moved domains once the overlap has passed, and `status` warns until it has, and also when it cannot tell.
 
 Multiple selectors at different names are normal (the Ed25519 + RSA
 pair), but two at the same selector name is the same configuration

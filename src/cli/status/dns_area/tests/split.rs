@@ -25,11 +25,12 @@ fn config(dir: &std::path::Path) -> crate::config::Config {
 async fn the_shared_key_still_published_at_a_moved_domain_warns() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let config = config(dir.path());
+	let shared = crate::dkim::Signer::load("mail", &dir.path().join("shared.pem"))
+		.expect("loads")
+		.dns_record_value();
 	let mut dns = FakeDns::healthy();
-	dns.txt.insert(
-		"mail._domainkey.example.org".into(),
-		vec!["v=DKIM1; k=ed25519; p=AAAA".into()],
-	);
+	dns.txt
+		.insert("mail._domainkey.example.org".into(), vec![shared]);
 	let report = evaluate(&config, &dns).await;
 	let item = report
 		.items
@@ -50,6 +51,39 @@ async fn once_the_record_is_gone_the_warning_goes() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let config = config(dir.path());
 	let report = evaluate(&config, &FakeDns::healthy()).await;
+	assert!(
+		report
+			.items
+			.iter()
+			.all(|item| !item.name.starts_with("DKIM split")),
+		"{report:?}"
+	);
+}
+
+#[tokio::test]
+async fn a_lookup_that_fails_is_not_read_as_a_finished_split() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let config = config(dir.path());
+	let report = evaluate(&config, &crate::dkim::test_support::FailingDns).await;
+	let item = report
+		.items
+		.iter()
+		.find(|item| item.name == "DKIM split mail._domainkey.example.org")
+		.expect("an item for the record that could not be read");
+	assert_eq!(item.status, Level::Warn);
+	assert!(item.detail.contains("could not check"), "{}", item.detail);
+}
+
+#[tokio::test]
+async fn another_key_at_the_name_is_not_a_split_warning() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let config = config(dir.path());
+	let mut dns = FakeDns::healthy();
+	dns.txt.insert(
+		"mail._domainkey.example.org".into(),
+		vec!["v=DKIM1; k=ed25519; p=AAAA".into()],
+	);
+	let report = evaluate(&config, &dns).await;
 	assert!(
 		report
 			.items

@@ -30,6 +30,7 @@ use crate::spf::DnsLookup;
 mod finish;
 mod plan;
 mod publish;
+mod switched;
 
 /// How the command is asked to run.
 pub(super) struct Options {
@@ -39,6 +40,8 @@ pub(super) struct Options {
 	pub wait: u64,
 	/// Retire the shared key's records at the domains that left it.
 	pub finish: bool,
+	/// With `finish`: retire even when the overlap window is not confirmed.
+	pub skip_overlap_check: bool,
 }
 
 /// What the command talks to besides the file system, so a test can supply
@@ -305,13 +308,21 @@ pub(super) async fn split(
 			return ExitCode::FAILURE;
 		}
 	};
-	switch(path, (&plan, &moves, &stale), &mut report, err, restart)
+	switch(
+		path,
+		(&plan, &moves, &stale),
+		now,
+		&mut report,
+		err,
+		restart,
+	)
 }
 
 /// Write the entries and restart: the one step that changes what signs.
 fn switch(
 	path: &Path,
 	(plan, moves, stale): (&plan::Plan, &[Move], &[Stale]),
+	now: u64,
 	report: &mut Report<'_>,
 	err: &mut impl Write,
 	restart: impl FnOnce(&Config, crate::cli::stack::StackAction) -> ExitCode,
@@ -343,6 +354,16 @@ fn switch(
 			return ExitCode::FAILURE;
 		}
 	};
+	// The overlap before the shared key's records may go runs from here.
+	let moved: Vec<String> = moves.iter().map(|m| m.domain.clone()).collect();
+	if let Err(why) = switched::record(&edited.data_dir, &moved, now) {
+		crate::cli::style::warn_to(
+			err,
+			format_args!(
+				"{why}; `dkim split --finish` will refuse until --skip-overlap-check says otherwise"
+			),
+		);
+	}
 	for m in moves {
 		report.line(format_args!(
 			"{} signs with {} from the next start",
