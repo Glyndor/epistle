@@ -57,6 +57,20 @@ fn a_child_started_as_the_account_runs_with_its_ids_and_groups() {
 }
 
 #[test]
+fn the_command_sees_the_account_as_its_user() {
+	let mut command = Command::new("true");
+	run_as(&mut command, Identity::new(987, 986, vec![986]));
+	let env: std::collections::BTreeMap<_, _> = command.get_envs().collect();
+	for name in ["USER", "LOGNAME"] {
+		assert_eq!(
+			env.get(std::ffi::OsStr::new(name)).copied().flatten(),
+			Some(std::ffi::OsStr::new("glyndor-epistle")),
+			"{name} is still the caller's: podup reads it to find the account"
+		);
+	}
+}
+
+#[test]
 fn a_failed_change_is_a_spawn_error_and_the_command_never_runs() {
 	if is_root() {
 		eprintln!("SKIPPED: as root the change succeeds; run this test as an ordinary user");

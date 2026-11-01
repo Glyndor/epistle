@@ -323,7 +323,14 @@ fn close_range_cloexec() -> libc::c_int {
 /// Make `command` run as `identity`: after the `fork` and before the `exec` it
 /// seals the descriptors and changes groups, gid and uid, in that order. When
 /// a step fails the `exec` does not happen and the spawn reports the error.
+///
+/// `USER` and `LOGNAME` become the account's name, as `runuser` made them:
+/// left as root's, `podup` looked at root's linger setting instead of the
+/// account's. The rest of the environment is the caller's.
 pub(in crate::cli) fn run_as(command: &mut Command, identity: Identity) {
+	command
+		.env("USER", super::ACCOUNT)
+		.env("LOGNAME", super::ACCOUNT);
 	// SAFETY: the closure runs between fork and exec, so it must use only
 	// async-signal-safe calls. It does: system calls, and no allocation, lock
 	// or name-service lookup (the groups were listed in the parent).
