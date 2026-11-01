@@ -1,5 +1,5 @@
 //! The real [`Host`]: the tables under `/etc`, `usermod`, and the account's
-//! user manager and Podman reached through `runuser`.
+//! user manager and Podman reached as the account (see `rootless::identity`).
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -16,6 +16,8 @@ pub(super) struct System {
 	uid: u32,
 	/// The account's home, which holds its Podman storage.
 	home: PathBuf,
+	/// What a child takes to run as the account.
+	identity: super::super::rootless::identity::Identity,
 	/// Every tree whose files may carry ids of the account's block.
 	roots: Vec<PathBuf>,
 }
@@ -28,9 +30,11 @@ impl System {
 		let user = super::super::rootless::lookup_user()
 			.map_err(|error| format!("cannot look up {ACCOUNT}: {error}"))?
 			.ok_or_else(|| format!("there is no {ACCOUNT} account"))?;
+		let identity = user.identity();
 		let mut system = Self {
 			uid: user.uid,
 			home: user.home,
+			identity,
 			roots: Vec::new(),
 		};
 		system.roots.push(system.home.clone());
@@ -55,9 +59,9 @@ impl System {
 	/// and rootless Podman expect.
 	fn account(&self, program: &str) -> Command {
 		let runtime = self.runtime();
-		let mut command = Command::new("runuser");
+		let mut command = Command::new(program);
+		super::super::rootless::identity::run_as(&mut command, self.identity.clone());
 		command
-			.args(["-u", ACCOUNT, "--", program])
 			.env("HOME", &self.home)
 			.env("XDG_RUNTIME_DIR", &runtime)
 			.env(
@@ -263,7 +267,7 @@ impl Host for System {
 			return Ok(());
 		}
 		// What outlives the user manager runs outside its cgroup, like a pause
-		// process a `runuser podman` started. The stack is down, so end it.
+		// process a `podman` run as the account started. The stack is down, so end it.
 		for (pid, line) in processes_of(self.uid) {
 			self.log(&format!("stopping leftover process {line}"));
 			// SAFETY: kill only sends a signal; the pid was read from /proc
