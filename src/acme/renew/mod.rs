@@ -202,13 +202,17 @@ async fn issue(
 	install(data_dir, &chain, &key_pem, reloadable)?;
 	tracing::info!(?domains, "ACME certificate issued and TLS reloaded");
 
-	// Refresh the DANE TLSA record for the new certificate (best-effort: a DNS
-	// failure must not fail an otherwise-successful issuance).
-	if let Some((provider, hostname)) = tlsa
-		&& let Err(error) =
-			crate::dns::records::publish_tlsa(provider.as_ref(), hostname, &chain).await
-	{
-		tracing::warn!(%error, "TLSA refresh after cert rotation failed");
+	// Refresh the DANE TLSA record for the new certificate. A DNS failure must
+	// not fail an otherwise-successful issuance, and it is not dropped either:
+	// the publication is kept and the renewal loop retries it.
+	if let Some((provider, hostname)) = tlsa {
+		let target = crate::dns::tlsa::Target {
+			provider: Some(provider.as_ref()),
+			hostname,
+			data_dir,
+		};
+		let outcome = crate::dns::tlsa::refresh(&target, &chain, now_secs()).await;
+		crate::dns::tlsa::log_outcome(&outcome, hostname);
 	}
 	Ok(())
 }
@@ -238,6 +242,24 @@ impl Issuer for AcmeIssuer {
 	}
 }
 
+/// Publish again a TLSA record whose last attempt failed, once its wait is
+/// over, for the certificate in service.
+async fn retry_tlsa(issuer: &AcmeIssuer) {
+	let Some((provider, hostname)) = &issuer.tlsa else {
+		return;
+	};
+	let target = crate::dns::tlsa::Target {
+		provider: Some(provider.as_ref()),
+		hostname,
+		data_dir: &issuer.data_dir,
+	};
+	if let Some(outcome) =
+		crate::dns::tlsa::retry_due(&target, &cert_path(&issuer.data_dir), now_secs()).await
+	{
+		crate::dns::tlsa::log_outcome(&outcome, hostname);
+	}
+}
+
 /// Renewal loop: wakes every minute and either serves an operator's request or
 /// issues when the certificate is inside its renewal window. Errors are logged
 /// and retried after a back-off; a CA outage never crashes serving.
@@ -263,6 +285,7 @@ pub async fn run(
 	};
 	let mut backoff = Backoff::default();
 	loop {
+		retry_tlsa(&issuer).await;
 		if let Outcome::Failed(error) = cycle(
 			&issuer,
 			&data_dir,

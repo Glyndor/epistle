@@ -66,6 +66,11 @@ impl CertWatcher {
 		self
 	}
 
+	/// The certificate file being watched.
+	pub fn cert_file(&self) -> &std::path::Path {
+		&self.tls.cert_file
+	}
+
 	/// Look at the files once: swap a changed, valid pair in, refuse a
 	/// changed pair that does not load.
 	pub fn poll(&mut self) -> Polled {
@@ -100,28 +105,41 @@ impl CertWatcher {
 
 /// Look at the files every [`WATCH_INTERVAL`] for the life of the server.
 /// A reloaded certificate gets its TLSA record republished through
-/// `provider`, or a warning with the value to publish by hand; a refused
+/// `provider`, or a warning with the value to publish by hand. A
+/// publication the provider refused is kept in `data_dir` and retried on
+/// the ticks that follow, whether or not the files changed again; a refused
 /// pair is logged once and the certificate in service stays.
 pub async fn run(
 	mut watcher: CertWatcher,
 	provider: Option<std::sync::Arc<dyn crate::dns::provider::DnsProvider>>,
 	hostname: String,
+	data_dir: std::path::PathBuf,
 ) {
+	let cert_file = watcher.cert_file().to_path_buf();
 	let mut ticker = tokio::time::interval(WATCH_INTERVAL);
 	// The first tick is immediate and the files were just loaded.
 	ticker.tick().await;
 	loop {
 		ticker.tick().await;
+		let target = crate::dns::tlsa::Target {
+			provider: provider.as_deref(),
+			hostname: &hostname,
+			data_dir: &data_dir,
+		};
 		match watcher.poll() {
-			Polled::Unchanged => {}
+			Polled::Unchanged => {
+				if let Some(outcome) =
+					crate::dns::tlsa::retry_due(&target, &cert_file, epoch_secs()).await
+				{
+					crate::dns::tlsa::log_outcome(&outcome, &hostname);
+				}
+			}
 			Polled::Reloaded { chain_pem } => {
 				tracing::info!(
 					"the [tls] certificate files changed; the new certificate is in service"
 				);
-				let update =
-					super::watch_tlsa::republish_tlsa(provider.as_deref(), &hostname, &chain_pem)
-						.await;
-				super::watch_tlsa::log_tlsa(&update, &hostname);
+				let outcome = crate::dns::tlsa::refresh(&target, &chain_pem, epoch_secs()).await;
+				crate::dns::tlsa::log_outcome(&outcome, &hostname);
 			}
 			Polled::Refused(reason) => tracing::warn!(
 				%reason,
@@ -129,6 +147,13 @@ pub async fn run(
 			),
 		}
 	}
+}
+
+fn epoch_secs() -> u64 {
+	std::time::SystemTime::now()
+		.duration_since(std::time::UNIX_EPOCH)
+		.map(|elapsed| elapsed.as_secs())
+		.unwrap_or(0)
 }
 
 fn stamps(tls: &Tls) -> std::io::Result<(Stamp, Stamp)> {

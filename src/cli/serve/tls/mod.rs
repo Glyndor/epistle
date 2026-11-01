@@ -81,6 +81,7 @@ pub(super) fn build_tls(
 			watcher,
 			provider,
 			config.hostname.clone(),
+			config.data_dir.clone(),
 		));
 	}
 
