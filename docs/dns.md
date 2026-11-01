@@ -295,6 +295,12 @@ inside `example.org`) is published in `example.org`, and the dns-01
 challenge of an ACME order for such a hostname is published in the same
 zone and withdrawn from it.
 
+With several `[[dns]]` entries (see [`configuration.md`](configuration.md)
+§`[dns]`) the zone also picks the credential: every write goes to the entry
+whose zone contains the name, never to another one, and a name outside all of
+them is left to you as in manual mode. A signing domain in any configured zone is
+rotated, in its own zone.
+
 A zone the provider does not hold is not a zone it could not answer
 about: the search goes on to the parent only in the first case. When the
 provider fails — a timeout, a refused token, a reply that does not parse
@@ -303,7 +309,8 @@ in the parent zone would put it in a zone the operator did not ask for.
 
 ### Checking provider credentials
 
-Run `epistle dns provider check [--json]` to inspect the configured credential.
+Run `epistle dns provider check [--json]` to inspect the configured credential
+(each credential, with several `[[dns]]` entries, labelled with its zone).
 This command only reports findings. It never changes records or settings,
 restarts the server, or prevents another command from running. Findings use
 `verified`, `not verifiable with this provider` (`not_verifiable` in JSON),

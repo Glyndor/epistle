@@ -202,7 +202,7 @@ pub(super) async fn build(
 			}
 		}
 	}
-	let automatic = config.dns.is_some();
+	let automatic = !config.dns.is_empty();
 	let rotated_at = state.as_ref().map(|s| s.rotated_at);
 	Ok(DkimView {
 		selector: active.selector,

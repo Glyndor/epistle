@@ -11,6 +11,7 @@ pub mod providers;
 pub mod proxied_check;
 pub mod publish;
 pub mod records;
+pub mod router;
 pub mod rrset;
 pub mod service_records;
 #[cfg(test)]

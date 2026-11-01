@@ -6,3 +6,5 @@ pub(super) mod secret;
 pub(super) mod set;
 #[cfg(all(test, unix))]
 pub(super) mod write;
+#[cfg(all(test, unix))]
+pub(super) mod zones;

@@ -44,8 +44,8 @@ pub(super) async fn check(ctx: &Ctx) -> AreaReport {
 	let mut items: Vec<_> = std::iter::once(restart).chain(addresses).collect();
 	if config
 		.dns
-		.as_ref()
-		.is_some_and(|dns| dns.token.is_some() || dns.token_env.is_some())
+		.iter()
+		.any(|dns| dns.token.is_some() || dns.token_env.is_some())
 	{
 		let detail = "DNS token is inline or supplied through the environment; move it with `epistle dns provider set <provider> --zone <zone> --store-token`, including the provider's other required settings";
 		summary.push_str("; ");

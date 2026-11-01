@@ -39,18 +39,27 @@ impl AcmeChallenge {
 /// weeks later. HTTP-01 needs nothing beyond the `acme` listener.
 pub(super) fn validate_challenge(
 	acme: &Acme,
-	dns: Option<&super::Dns>,
+	dns: &super::DnsProviders,
 	listeners: &[super::Listener],
 ) -> Result<(), String> {
 	use super::ListenerKind;
 	match acme.challenge {
 		AcmeChallenge::Http01 => Ok(()),
 		AcmeChallenge::Dns01 => {
-			let publishes = dns.is_some_and(|dns| !dns.provider.eq_ignore_ascii_case("manual"));
-			if publishes {
-				Ok(())
-			} else {
-				Err("[acme] challenge = \"dns-01\" needs a [dns] provider that can publish records (any provider other than \"manual\")".into())
+			let publishes = dns
+				.iter()
+				.any(|dns| !dns.provider.eq_ignore_ascii_case("manual"));
+			if !publishes {
+				return Err("[acme] challenge = \"dns-01\" needs a [dns] provider that can publish records (any provider other than \"manual\")".into());
+			}
+			// Each certificate name is answered through the entry of its own
+			// zone; a name outside every entry (or inside a manual one) would
+			// fail at the first renewal.
+			match acme.domains.iter().find(|name| !dns.publishes(name)) {
+				None => Ok(()),
+				Some(name) => Err(format!(
+					"[acme] challenge = \"dns-01\": {name} is not in the zone of any [dns] entry that can publish records"
+				)),
 			}
 		}
 		AcmeChallenge::TlsAlpn01 => {

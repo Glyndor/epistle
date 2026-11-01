@@ -60,8 +60,8 @@ pub fn find_proxied(domains: &[String], hostname: &str, records: &[DnsRecord]) -
 pub fn proxy_aware_provider(config: &Config) -> bool {
 	config
 		.dns
-		.as_ref()
-		.is_some_and(|dns| dns.provider.eq_ignore_ascii_case("cloudflare"))
+		.iter()
+		.any(|dns| dns.provider.eq_ignore_ascii_case("cloudflare"))
 }
 
 /// List `zone` through `provider` and return the proxied mail names of

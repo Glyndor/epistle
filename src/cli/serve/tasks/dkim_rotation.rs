@@ -48,7 +48,7 @@ pub fn decide_dkim_rotation(config: &Config) -> DkimRotationPlan {
 		return DkimRotationPlan::Off;
 	};
 	let deprecated = dkim.rotate_days.is_some() || dkim.rotate_overlap_days.is_some();
-	let Some(dns) = &config.dns else {
+	if config.dns.is_empty() {
 		return DkimRotationPlan::Off;
 	};
 	let mut all = std::collections::BTreeSet::new();
@@ -67,7 +67,23 @@ pub fn decide_dkim_rotation(config: &Config) -> DkimRotationPlan {
 		.into_iter()
 		.filter(|domain| dkim.override_for(domain).is_none())
 	{
-		if crate::dkim::Rotator::is_in_zone(&domain, &dns.zone) {
+		// With `[[dns]]` entries a domain is published through the entry of
+		// its own zone, so that entry has to be able to publish: a `manual`
+		// zone, or one whose credential cannot be read, holds the rotation
+		// back like a zone nobody configured. A lone `[dns]` keeps the old
+		// rule, and its credential is checked when the task starts.
+		let covered = if config.dns.scoped() {
+			config.dns.entry_for(&domain).is_some_and(|dns| {
+				crate::dkim::Rotator::is_in_zone(&domain, &dns.zone)
+					&& dns.build_for_host(&config.hostname).is_some()
+			})
+		} else {
+			config
+				.dns
+				.iter()
+				.any(|dns| crate::dkim::Rotator::is_in_zone(&domain, &dns.zone))
+		};
+		if covered {
 			signing_domains.push(domain);
 		} else {
 			out_of_zone.push(domain);
@@ -107,7 +123,7 @@ pub fn spawn_dkim_rotation(
 			// is a security property and the operator may have intended to
 			// enable it. Other "off" cases (no [dkim], no signer) are
 			// intentional and already visible from the surrounding config.
-			if config.dkim.is_some() && config.dns.is_none() {
+			if config.dkim.is_some() && config.dns.is_empty() {
 				tracing::info!(
 					"[dkim] rotation is inactive: no [dns] provider is configured; \
                      DKIM keys will not rotate automatically"
@@ -140,15 +156,11 @@ pub fn spawn_dkim_rotation(
 			// gates so a startup-time warning still fires even when those
 			// gates would also refuse to spawn.
 			if !out_of_zone.is_empty() {
-				let zone = config
-					.dns
-					.as_ref()
-					.map(|dns| dns.zone.as_str())
-					.unwrap_or("");
+				let zone = config.dns.zones().join(", ");
 				tracing::warn!(
 					out_of_zone = ?out_of_zone,
 					zone = %zone,
-					"[dkim] rotation is disabled: domain(s) above lie outside the [dns] zone; \
+					"[dkim] rotation is disabled: domain(s) above lie outside the [dns] zones, or in a zone whose [dns] entry is manual or has unreadable credentials; \
 					 automatic DKIM rotation cannot keep their TXT records in sync. \
 					 Move the domain(s) under the managed zone or remove them from [domains] \
 					 and [domain_aliases] to re-enable rotation",
@@ -163,22 +175,23 @@ pub fn spawn_dkim_rotation(
 			let Some(signer) = dkim_signer else {
 				return;
 			};
-			let Some(dns) = config.dns.as_ref() else {
+			let Some(first) = config.dns.first() else {
 				return;
 			};
-			let Some(provider) = dns.build_for_host(&config.hostname) else {
+			let Some(provider) = config.dns.build_for_host(&config.hostname) else {
 				return;
 			};
-			let zone = dns.zone.clone();
+			let zone = first.zone.clone();
 			let mut rotator = crate::dkim::Rotator::new(
 				config.data_dir.clone(),
 				signer.clone(),
 				provider,
-				zone.clone(),
+				zone,
 				signing_domains,
 				interval,
 				overlap,
-			);
+			)
+			.with_zones(config.dns.zones());
 			// A rotated key signs only once a resolver sees it. Without a
 			// resolver there is no way to confirm that, so rotation does not
 			// run: the configured key keeps signing.

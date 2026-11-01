@@ -73,10 +73,7 @@ pub(super) fn build_tls(
 		if let Some(end_point) = &channel_binding {
 			watcher = watcher.with_end_point(end_point.clone());
 		}
-		let provider = config
-			.dns
-			.as_ref()
-			.and_then(|dns| dns.build_for_host(&config.hostname));
+		let provider = config.dns.build_for_host(&config.hostname);
 		tokio::spawn(crate::tls::watch::run(
 			watcher,
 			provider,
@@ -94,8 +91,7 @@ pub(super) fn build_tls(
 				// every certificate rotation.
 				let tlsa = config
 					.dns
-					.as_ref()
-					.and_then(|dns| dns.build_for_host(&config.hostname))
+					.build_for_host(&config.hostname)
 					.map(|provider| (provider, config.hostname.clone()));
 				let responder = responder(config, challenge_store, alpn_store)?;
 				tokio::spawn(crate::acme::renew::run(
@@ -139,15 +135,11 @@ fn responder(
 	match (challenge, alpn) {
 		(Some(AcmeChallenge::TlsAlpn01), Some(store)) => Ok(Arc::new(store)),
 		(Some(AcmeChallenge::Dns01), _) => {
-			let provider = config
-				.dns
-				.as_ref()
-				.and_then(|dns| dns.build_for_host(&config.hostname))
-				.ok_or_else(|| {
-					std::io::Error::other(
-						"[acme] challenge = \"dns-01\": the [dns] provider could not be built (check its credentials)",
-					)
-				})?;
+			let provider = config.dns.build_for_host(&config.hostname).ok_or_else(|| {
+				std::io::Error::other(
+					"[acme] challenge = \"dns-01\": the [dns] provider could not be built (check its credentials)",
+				)
+			})?;
 			let visibility = crate::acme::dns01_authoritative::AuthoritativeTxt::from_system()?;
 			Ok(Arc::new(Dns01::new(provider, Arc::new(visibility))))
 		}

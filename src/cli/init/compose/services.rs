@@ -177,12 +177,17 @@ impl ComposeService {
 		}
 		let mut environment = BTreeMap::new();
 		environment.insert("TZ".to_string(), "UTC".to_string());
-		if let Some(dns) = &answers.dns {
-			if let Some(name) = &dns.token_env {
+		let mut token_files = Vec::new();
+		for (token_env, token_file) in super::dns_credentials::of(answers) {
+			if let Some(name) = &token_env {
 				environment.insert(name.clone(), format!("${{{name}}}"));
 			}
-			if let Some(path) = &dns.token_file {
-				volumes.push(VolumeMount::bind(path, path, true));
+			if let Some(path) = token_file {
+				// Two zones may read one file; it is mounted once.
+				if !token_files.contains(&path) {
+					volumes.push(VolumeMount::bind(&path, &path, true));
+					token_files.push(path);
+				}
 			}
 		}
 		// The host-binary default: bind-mount the system-supplied

@@ -1426,15 +1426,60 @@ Common keys (every provider):
 
 | Key | Meaning |
 |---|---|
-| `provider` | One of `cloudflare`, `desec`, `digitalocean`, `namecheap`, `route53`, `manual`. |
-| `provider` | One of `cloudflare`, `desec`, `gcloud`, `namecheap`, `route53`, `manual`. |
-| `provider` | One of `cloudflare`, `desec`, `dnsimple`, `namecheap`, `route53`, `manual`. |
-| `provider` | One of `bunny`, `cloudflare`, `desec`, `namecheap`, `route53`, `manual`. |
-| `provider` | One of `cloudflare`, `desec`, `digitalocean`, `namecheap`, `route53`, `rfc2136`, `spaceship`, `manual`. |
+| `provider` | One of `bunny`, `cloudflare`, `desec`, `digitalocean`, `dnsimple`, `gcloud`, `godaddy`, `namecheap`, `ovh`, `porkbun`, `route53`, `rfc2136`, `spaceship`, `manual`. |
 | `zone` | The DNS zone the token is scoped to (least privilege). |
 | `token` | Inline API token — discouraged, prefer `token_file` or `token_env`. |
 | `token_env` | Name of an env var holding the API token. |
 | `token_file` | Path to a `0600` file holding the API token. |
+
+#### `[dns]`: several zones, one credential each
+
+A server that hosts domains in more than one zone, or in zones at different
+providers, writes one `[[dns]]` table per zone instead of a single `[dns]`
+table. Each table has its own `provider`, its own `zone` and its own
+credential, and the providers may differ:
+
+```toml
+[[dns]]
+provider   = "cloudflare"
+zone       = "example.org"
+token_file = "/etc/epistle/secrets/dns_provider_token"
+
+[[dns]]
+provider   = "desec"
+zone       = "client.example"
+token_file = "/etc/epistle/secrets/dns_provider_token_client_example"
+```
+
+A record is written with the credential of the zone that holds its name: the
+table whose `zone` is the longest one containing the name (`mail.eu.example.org`
+goes to a `eu.example.org` table before an `example.org` one). It is never
+written with another table's credential, so a token that leaks can change
+only the zone it was issued for. DKIM rotation, the TLSA refresh, the ACME
+`dns-01` challenge and `epistle dns lockdown` all use this lookup.
+
+- A name that no table contains is handled as manual for that name only: the
+  records are printed for you to add, and the other zones keep publishing.
+- A table whose credential cannot be read (a missing file, an empty variable)
+  still owns its zone and writes nothing there. Its names are not handed to the
+  table of a parent zone.
+- Two tables for the same zone are refused at start. With `[[dns]]` every
+  `zone` must be a plain domain name.
+- With `challenge = "dns-01"`, every `[acme]` domain must fall in a zone whose
+  table is not `manual`; the start is refused otherwise.
+- A single `[dns]` table keeps working exactly as before, including serving
+  every name with its one credential. A `[[dns]]` list is always scoped to the
+  zones it names, even with one table, and takes the checks above. Adding a
+  second table to the file narrows the first to its own zone.
+- DKIM rotation publishes a signing domain through the table of its own zone,
+  so a domain in a `manual` zone, or in one whose credential cannot be read,
+  holds the rotation back like a domain outside every zone (the server logs
+  which).
+- `epistle init` run again keeps a `[[dns]]` list, mounts and forwards the
+  credential of each table in the generated compose file, and warns that it
+  ignored its own `dns` answers.
+- Keep one token file per zone and give each token only the permission to edit
+  that zone. `epistle dns provider check` and `test` report every table.
 
 #### `[dns]` — DigitalOcean specifics
 

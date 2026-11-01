@@ -1,5 +1,6 @@
 use super::*;
 use crate::cli::dns_provider::tests::base::run;
+use crate::config::DnsProviders;
 use crate::dns::provider::{DnsProvider, ManualProvider, ProviderError};
 use crate::dns::providers::check::{Finding, failure_cause};
 
@@ -243,7 +244,10 @@ fn check_passes_every_own_name_to_the_provider() {
 		"example.net".into(),
 		"example.org".into(),
 	];
-	config.dns = Some(toml::from_str("provider = 'cloudflare'\nzone = 'example.org'").unwrap());
+	config.dns = DnsProviders::from(
+		toml::from_str::<crate::config::Dns>("provider = 'cloudflare'\nzone = 'example.org'")
+			.unwrap(),
+	);
 	let expected = vec![
 		"autoconfig.example.net",
 		"autoconfig.example.org",

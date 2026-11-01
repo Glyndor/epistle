@@ -52,7 +52,7 @@ pub use attachments::{
 pub use auth::Auth;
 pub use database::{Database, DatabaseTls};
 pub use dkim::{DKIM_RSA_REQUIRED_FROM, Dkim, DkimDomain};
-pub use dns::Dns;
+pub use dns::{Dns, DnsProviders};
 pub(crate) use dns::{SUPPORTED_PROVIDERS, is_supported_provider};
 pub use ldap::Ldap;
 pub use listener::{Listener, ListenerKind, Protocol};
@@ -282,9 +282,11 @@ pub struct Config {
 	pub log_format: LogFormat,
 	/// Automatic TLS (ACME). Present enables certificate issuance/renewal.
 	pub acme: Option<Acme>,
-	/// DNS provider for record automation (e.g. TLSA refresh on cert rotation).
+	/// DNS providers for record automation (e.g. TLSA refresh on cert
+	/// rotation): one `[dns]` table, or one `[[dns]]` table per zone, each
+	/// with its own credential.
 	#[serde(default)]
-	pub dns: Option<Dns>,
+	pub dns: DnsProviders,
 	/// Default storage quota (bytes) per domain, applied to accounts in that
 	/// domain that have no quota of their own.
 	#[serde(default)]

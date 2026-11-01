@@ -123,7 +123,7 @@ pub fn orphan_records(
 pub async fn find_orphans(
 	data_dir: &Path,
 	provider: Option<&dyn DnsProvider>,
-	zone: &str,
+	zones: &[String],
 	domains: &[String],
 	keep: &[String],
 ) -> Result<Orphans, RotateError> {
@@ -134,10 +134,22 @@ pub async fn find_orphans(
 			Vec::new(),
 			Some("no [dns] provider is configured".to_string()),
 		),
-		Some(provider) => match provider.list(zone).await {
-			Ok(listed) => (orphan_records(&listed, domains, state.as_ref(), keep), None),
-			Err(error) => (Vec::new(), Some(format!("cannot list {zone}: {error}"))),
-		},
+		Some(provider) => {
+			let mut listed = Vec::new();
+			let mut failed = Vec::new();
+			for zone in zones {
+				match provider.list(zone).await {
+					Ok(records) => listed.extend(records),
+					Err(error) => failed.push(format!("cannot list {zone}: {error}")),
+				}
+			}
+			let orphans = orphan_records(&listed, domains, state.as_ref(), keep);
+			if failed.is_empty() {
+				(orphans, None)
+			} else {
+				(orphans, Some(failed.join("; ")))
+			}
+		}
 	};
 	Ok(Orphans {
 		key_files,
@@ -165,7 +177,7 @@ impl Rotator {
 		find_orphans(
 			&self.data_dir,
 			Some(self.provider.as_ref()),
-			&self.zone,
+			&self.zones(),
 			&self.signing_domains,
 			&self.keep,
 		)
@@ -202,7 +214,11 @@ impl Rotator {
 		let orphans = self.orphans().await?;
 		let mut failed = Vec::new();
 		for name in &orphans.records {
-			if let Err(error) = self.provider.delete(&self.zone, txt_record(name, "")).await {
+			if let Err(error) = self
+				.provider
+				.delete(self.zone_for(name), txt_record(name, ""))
+				.await
+			{
 				failed.push(format!("delete {name}: {error}"));
 			}
 		}

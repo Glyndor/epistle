@@ -22,10 +22,7 @@ pub(super) fn cleanup(
 	json: bool,
 	out: &mut impl std::io::Write,
 ) -> ExitCode {
-	let provider = config
-		.dns
-		.as_ref()
-		.and_then(|dns| dns.build_for_host(&config.hostname));
+	let provider = config.dns.build_for_host(&config.hostname);
 	cleanup_with(config, provider.as_deref(), dry_run, yes, json, out)
 }
 
@@ -54,7 +51,7 @@ pub(super) fn cleanup_with(
 		),
 		DkimRotationPlan::Off => (Vec::new(), false),
 	};
-	let zone = config.dns.as_ref().map_or("", |dns| dns.zone.as_str());
+	let zones = config.dns.zones();
 	let keep = dkim.kept_selectors();
 	let runtime = match tokio::runtime::Runtime::new() {
 		Ok(runtime) => runtime,
@@ -66,7 +63,7 @@ pub(super) fn cleanup_with(
 	let orphans = match runtime.block_on(find_orphans(
 		&config.data_dir,
 		provider,
-		zone,
+		&zones,
 		&domains,
 		&keep,
 	)) {

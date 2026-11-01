@@ -26,7 +26,7 @@ impl Config {
 		self.validate_data_dir()?;
 		self.validate_domains()?;
 		self.validate_disabled_domains()?;
-		self.validate_dns()?;
+		self.dns.validate()?;
 		self.validate_accounts()?;
 		self.validate_srs()?;
 		self.validate_api()?;
@@ -211,7 +211,7 @@ impl Config {
 				)));
 			}
 		}
-		super::acme::validate_challenge(acme, self.dns.as_ref(), &self.listeners)
+		super::acme::validate_challenge(acme, &self.dns, &self.listeners)
 			.map_err(ConfigError::Invalid)
 	}
 
@@ -398,27 +398,6 @@ impl Config {
 			return Err(ConfigError::Invalid(format!(
 				"data_dir \"{}\" must be an absolute path",
 				self.data_dir.display()
-			)));
-		}
-		Ok(())
-	}
-
-	/// Reject a `dns.provider` value the build does not know. Without
-	/// this check, a typo like `provider = "cloudfare"` falls through
-	/// `Dns::build` to the manual-mode arm and the operator's automation
-	/// silently never runs. The check is case-insensitive because the
-	/// build lowercases on entry; the list in the message comes from
-	/// `SUPPORTED_PROVIDERS` so the operator sees every name they could
-	/// have written.
-	fn validate_dns(&self) -> Result<(), ConfigError> {
-		let Some(dns) = &self.dns else {
-			return Ok(());
-		};
-		if !super::is_supported_provider(&dns.provider) {
-			return Err(ConfigError::Invalid(format!(
-				"[dns] provider {:?} is not a supported provider; supported: {}",
-				dns.provider,
-				super::SUPPORTED_PROVIDERS.join(", "),
 			)));
 		}
 		Ok(())

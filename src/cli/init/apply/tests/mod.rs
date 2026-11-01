@@ -10,6 +10,7 @@ mod fifo;
 mod implicit_tls;
 mod invalid_keys;
 mod invalid_paths;
+mod keep_dns_list;
 mod keep_listeners;
 mod listeners_lines;
 mod reuse;

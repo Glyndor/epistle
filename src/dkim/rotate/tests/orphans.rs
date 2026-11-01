@@ -94,7 +94,7 @@ async fn orphans_are_removed_only_on_request_and_named_ones_stay() {
 	let found = find_orphans(
 		&lab.root,
 		Some(lab.zone.as_ref()),
-		"example.org",
+		&["example.org".to_string()],
 		&DOMAINS.map(String::from),
 		&[],
 	)
