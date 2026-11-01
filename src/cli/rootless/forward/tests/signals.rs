@@ -1,19 +1,105 @@
 //! A stop signal reaches the command and does not end the process waiting
 //! for it (#1342).
+//!
+//! The relay installs process-wide signal handlers, and the test binary also
+//! runs the restore tests, which hold the same signals. So each scenario runs
+//! in a child process of its own, in a process group of its own, and the parent
+//! test sends the signals to that child and never to itself: a signal that goes
+//! wrong ends the child and fails the parent, not the whole test binary.
 
 use super::*;
-use std::os::unix::process::ExitStatusExt;
+use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::Path;
-use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-/// The relay is process-wide state, so the tests that use it take turns.
-static TURN: Mutex<()> = Mutex::new(());
+/// Set in the child: the scenario to play.
+const MODE: &str = "EPISTLE_TEST_RELAY_MODE";
+/// Set in the child: a directory for the notes the scenario leaves.
+const DIR: &str = "EPISTLE_TEST_RELAY_DIR";
 
 fn shell(script: &str) -> Command {
 	let mut command = Command::new("sh");
 	command.arg("-c").arg(script);
 	command
+}
+
+fn disposition(signal: libc::c_int) -> libc::sighandler_t {
+	// SAFETY: a zeroed sigaction is valid storage for the query.
+	let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
+	// SAFETY: reads the current disposition into `action`.
+	unsafe { libc::sigaction(signal, std::ptr::null(), &mut action) };
+	action.sa_sigaction
+}
+
+/// The scenarios the parent tests start. Does nothing in an ordinary run.
+#[test]
+fn relay_child() {
+	let Some(mode) = std::env::var_os(MODE) else {
+		return;
+	};
+	let dir = std::path::PathBuf::from(std::env::var_os(DIR).expect("scenario directory"));
+	let ok = match mode.to_str().expect("utf-8 mode") {
+		"slow-stop" => {
+			let (ready, clean) = (dir.join("ready"), dir.join("clean"));
+			// Like a restore that holds the stop signals: on SIGTERM it takes
+			// three seconds to close, longer than the two after which
+			// `runuser` killed it.
+			let mut command = shell(&format!(
+				"trap 'sleep 3; echo clean > {clean}; exit 0' TERM; echo up > {ready}; \
+				 while :; do sleep 0.1; done",
+				clean = clean.display(),
+				ready = ready.display(),
+			));
+			run(&mut command).is_ok_and(|status| status.success()) && clean.exists()
+		}
+		"early" => {
+			let guard = Relay::install().expect("no other relay is alive");
+			// The handler runs before there is a command to pass it to.
+			relay(libc::SIGTERM);
+			let mut child = shell("sleep 30").spawn().unwrap();
+			guard.attach(child.id() as libc::pid_t);
+			child.wait().unwrap().signal() == Some(libc::SIGTERM)
+		}
+		"restored" => {
+			let before = disposition(libc::SIGTERM);
+			let status = run(&mut shell("exit 3")).unwrap();
+			status.code() == Some(3)
+				&& disposition(libc::SIGTERM) == before
+				&& Relay::install().is_some()
+		}
+		"reaped-last" => {
+			let mut seen = None;
+			let status = run_with(&mut shell("exit 5"), |pid| {
+				let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
+				// The state follows the command name, which ends at the last ")".
+				let state = stat.rsplit(')').next().unwrap().trim().chars().next();
+				seen = Some((CHILD.load(Ordering::SeqCst), state));
+			})
+			.unwrap();
+			// Nothing may signal the pid any more, and it is not yet reaped:
+			// a zombie keeps the number from being given to another process.
+			status.code() == Some(5) && seen == Some((0, Some('Z')))
+		}
+		other => panic!("unknown scenario {other}"),
+	};
+	std::process::exit(if ok { 0 } else { 1 });
+}
+
+/// Start the scenario `mode` in a child process of its own group.
+fn start(mode: &str, dir: &Path) -> std::process::Child {
+	Command::new(std::env::current_exe().expect("test binary"))
+		.args([
+			"--exact",
+			"cli::rootless::forward::tests::signals::relay_child",
+			"--test-threads=1",
+		])
+		.env(MODE, mode)
+		.env(DIR, dir)
+		.process_group(0)
+		.stdout(std::process::Stdio::null())
+		.stderr(std::process::Stdio::null())
+		.spawn()
+		.expect("start the scenario")
 }
 
 /// Wait, with a bound, until `path` exists.
@@ -30,36 +116,21 @@ fn exists_within(path: &Path, limit: Duration) -> bool {
 
 #[test]
 fn a_command_that_needs_longer_than_runuser_allowed_finishes_cleanly() {
-	let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
 	let dir = tempfile::tempdir().unwrap();
-	let (ready, clean) = (dir.path().join("ready"), dir.path().join("clean"));
-	// Like a restore that holds the stop signals: on SIGTERM it takes three
-	// seconds to close, longer than the two after which `runuser` killed it.
-	let mut command = shell(&format!(
-		"trap 'sleep 3; echo clean > {clean}; exit 0' TERM; echo up > {ready}; \
-		 while :; do sleep 0.1; done",
-		clean = clean.display(),
-		ready = ready.display(),
-	));
-	let waiting = std::thread::spawn(move || {
-		let started = Instant::now();
-		(run(&mut command), started)
-	});
+	let mut child = start("slow-stop", dir.path());
 	assert!(
-		exists_within(&ready, Duration::from_secs(10)),
+		exists_within(&dir.path().join("ready"), Duration::from_secs(20)),
 		"the command never started"
 	);
-	// A process-wide signal, as one aimed at the group reaches this process.
-	// Without the relay it ends the test process by the default action.
-	// SAFETY: kill sends a signal to this very process.
-	unsafe { libc::kill(libc::getpid(), libc::SIGTERM) };
-	let (status, started) = waiting.join().unwrap();
-	let status = status.unwrap();
+	let started = Instant::now();
+	// SAFETY: kill sends a signal to the group of the child just started,
+	// which holds the scenario and the shell it waits for, and not this test.
+	unsafe { libc::kill(-(child.id() as libc::pid_t), libc::SIGTERM) };
+	let status = child.wait().unwrap();
 	assert!(
 		status.success(),
-		"the command was ended instead of finishing: {status:?}"
+		"the waiting process or the command was ended instead of finishing: {status:?}"
 	);
-	assert!(clean.exists(), "the command did not reach its clean finish");
 	assert!(
 		started.elapsed() >= Duration::from_secs(3),
 		"the command was not given the time it asked for"
@@ -68,40 +139,23 @@ fn a_command_that_needs_longer_than_runuser_allowed_finishes_cleanly() {
 
 #[test]
 fn a_signal_that_came_while_the_command_started_is_passed_on() {
-	let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
-	let relay_guard = Relay::install().expect("no other relay is alive");
-	// The handler runs before there is a command to pass it to.
-	relay(libc::SIGTERM);
-	let mut command = shell("sleep 30");
-	let mut child = command.spawn().unwrap();
-	relay_guard.attach(child.id() as libc::pid_t);
-	let status = child.wait().unwrap();
-	assert_eq!(
-		status.signal(),
-		Some(libc::SIGTERM),
-		"the early signal must reach the command: {status:?}"
-	);
+	let dir = tempfile::tempdir().unwrap();
+	let status = start("early", dir.path()).wait().unwrap();
+	assert!(status.success(), "{status:?}");
 }
 
 #[test]
 fn the_handlers_are_put_back_when_the_command_ends() {
-	let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
-	let before = disposition(libc::SIGTERM);
-	let status = run(&mut shell("exit 3")).unwrap();
-	assert_eq!(status.code(), Some(3));
-	assert_eq!(disposition(libc::SIGTERM), before);
-	assert!(
-		Relay::install().is_some(),
-		"a finished run must release its hold"
-	);
+	let dir = tempfile::tempdir().unwrap();
+	let status = start("restored", dir.path()).wait().unwrap();
+	assert!(status.success(), "{status:?}");
 }
 
-fn disposition(signal: libc::c_int) -> libc::sighandler_t {
-	// SAFETY: a zeroed sigaction is valid storage for the query.
-	let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
-	// SAFETY: reads the current disposition into `action`.
-	unsafe { libc::sigaction(signal, std::ptr::null(), &mut action) };
-	action.sa_sigaction
+#[test]
+fn the_command_is_reaped_only_after_nothing_can_signal_it() {
+	let dir = tempfile::tempdir().unwrap();
+	let status = start("reaped-last", dir.path()).wait().unwrap();
+	assert!(status.success(), "{status:?}");
 }
 
 #[test]

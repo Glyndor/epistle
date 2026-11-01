@@ -39,6 +39,8 @@ static CHILD: AtomicI32 = AtomicI32::new(0);
 /// The first signal that came before the command had a pid.
 static EARLY: AtomicI32 = AtomicI32::new(0);
 static HELD: AtomicBool = AtomicBool::new(false);
+/// How many handler calls are between reading `CHILD` and sending the signal.
+static ACTIVE: AtomicI32 = AtomicI32::new(0);
 
 /// Relays SIGINT, SIGTERM and SIGHUP to the command while it is alive; the
 /// previous dispositions come back when it is dropped.
@@ -125,22 +127,70 @@ impl Drop for Relay {
 /// Signal handler: pass the signal to the command, or keep the first one
 /// until there is a command. Only async-signal-safe calls.
 extern "C" fn relay(signal: libc::c_int) {
-	let pid = CHILD.load(Ordering::Acquire);
+	ACTIVE.fetch_add(1, Ordering::SeqCst);
+	let pid = CHILD.load(Ordering::SeqCst);
 	if pid > 0 {
-		// SAFETY: kill only sends a signal; `pid` is the child being waited for.
+		// SAFETY: kill only sends a signal; `pid` is the child being waited
+		// for, and it is not reaped while `ACTIVE` is above zero.
 		unsafe { libc::kill(pid, signal) };
 	} else {
 		let _ = EARLY.compare_exchange(0, signal, Ordering::AcqRel, Ordering::Acquire);
+	}
+	ACTIVE.fetch_sub(1, Ordering::SeqCst);
+}
+
+/// Wait until the child `pid` has ended without reaping it, so its pid stays
+/// taken and no signal can reach a process that reused it.
+fn wait_for_exit(pid: libc::pid_t) -> io::Result<()> {
+	loop {
+		// SAFETY: a zeroed siginfo is valid storage for waitid's answer.
+		let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+		// SAFETY: `info` outlives the call; WNOWAIT leaves the child to reap.
+		let rc = unsafe {
+			libc::waitid(
+				libc::P_PID,
+				pid as libc::id_t,
+				&mut info,
+				libc::WEXITED | libc::WNOWAIT,
+			)
+		};
+		if rc == 0 {
+			return Ok(());
+		}
+		let error = io::Error::last_os_error();
+		if error.kind() != io::ErrorKind::Interrupted {
+			return Err(error);
+		}
 	}
 }
 
 /// Run `command` and wait for it, relaying the stop signals to it meanwhile.
 /// The command is not ended from here whatever it takes to finish.
 pub(super) fn run(command: &mut Command) -> io::Result<ExitStatus> {
+	run_with(command, |_| {})
+}
+
+/// [`run`], calling `ended` once the command has ended but is not yet reaped
+/// and nothing can signal it any more.
+///
+/// The order is the point: wait without reaping, stop the handler from
+/// signalling the pid and wait for a handler already on its way, and only then
+/// reap. Reaping first frees the pid, and a signal sent to it afterwards could
+/// land on an unrelated process that was given the number.
+fn run_with(command: &mut Command, ended: impl FnOnce(libc::pid_t)) -> io::Result<ExitStatus> {
 	let relay = Relay::install();
 	let mut child = command.spawn()?;
-	if let (Some(relay), Ok(pid)) = (&relay, libc::pid_t::try_from(child.id())) {
+	let pid = libc::pid_t::try_from(child.id()).ok();
+	if let (Some(relay), Some(pid)) = (&relay, pid) {
 		relay.attach(pid);
+		let waited = wait_for_exit(pid);
+		CHILD.store(0, Ordering::SeqCst);
+		while ACTIVE.load(Ordering::SeqCst) != 0 {
+			std::hint::spin_loop();
+		}
+		ended(pid);
+		// A failed wait is reported by the reaping wait below.
+		let _ = waited;
 	}
 	child.wait()
 }
