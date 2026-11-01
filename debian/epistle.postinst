@@ -59,6 +59,44 @@ epistle_add_account() {
 		--shell /usr/sbin/nologin --disabled-password glyndor-epistle
 }
 
+# Remove the copies of the previous binary the preinst saved for
+# `epistle stack rollback`, once the upgrade they guard has been verified. The
+# store is owned by the account running this script and is entered only when it
+# is a plain directory; only the generations and staging directories the
+# preinst creates are removed, so anything else an operator left there stays.
+# A failure is a warning: the upgrade itself succeeded.
+epistle_clear_rollback() {
+	clear_dir=/var/lib/epistle-rollback
+	if [ ! -d "$clear_dir" ] || [ -L "$clear_dir" ] || [ ! -O "$clear_dir" ]; then
+		return 0
+	fi
+	if [ -z "$(find "$clear_dir" -mindepth 1 -maxdepth 1 \( -name 'epistle-*' -o -name '.stage-*' \) -print -quit 2>/dev/null)" ]; then
+		return 0
+	fi
+	if find "$clear_dir" -mindepth 1 -maxdepth 1 \( -name 'epistle-*' -o -name '.stage-*' \) -exec rm -rf -- {} + 2>/dev/null; then
+		echo "epistle: the stack came back healthy, so the saved copy of the previous binary was removed and epistle stack rollback has nothing to go back to" >&2
+	else
+		echo "epistle: could not remove the saved copies of the previous binary under $clear_dir" >&2
+	fi
+}
+
+# Remove the copies the old layout kept under the service account home. They
+# are ignored by `epistle stack rollback`, so once the upgrade is verified
+# nothing reads them. Neither the home nor the folder may be a link, and the
+# removal stays on one file system and never follows a link inside it.
+epistle_clear_legacy_rollback() {
+	legacy_home=/var/lib/glyndor/epistle
+	legacy_dir=$legacy_home/rollback
+	if [ -L "$legacy_home" ] || [ ! -d "$legacy_home" ] || [ -L "$legacy_dir" ] || [ ! -d "$legacy_dir" ]; then
+		return 0
+	fi
+	if rm -rf --one-file-system -- "$legacy_dir" 2>/dev/null; then
+		echo "epistle: removed the rollback copies of the old layout under $legacy_dir" >&2
+	else
+		echo "epistle: could not remove the rollback copies of the old layout under $legacy_dir" >&2
+	fi
+}
+
 # Create directory $2 with mode $1 for the service account. The account can
 # be created a moment before a cached name service answers for it, which
 # makes `install` fail with an unknown user, so it is tried again.
@@ -463,6 +501,9 @@ configure)
 						echo "**********************************************************************"
 						echo
 					} >&2
+				else
+					epistle_clear_rollback
+					epistle_clear_legacy_rollback
 				fi
 			fi
 		)

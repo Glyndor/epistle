@@ -89,8 +89,10 @@ The package keeps replaced host binaries for `sudo epistle stack rollback` in
 home and container mounts. Rollback validates ownership, permissions, file type
 and the saved SHA-256 digest before stopping mail. Legacy copies under the
 service account home are ignored. An upgrade must save a trusted copy in the
-new store before it can be used. Database dumps stay in `<data_dir>/backups`;
-see [Rolling back an upgrade](../cli.md#rolling-back-an-upgrade). Purge removes the
+new store before it can be used. Once the stack comes back healthy after an
+upgrade, the saved binaries and the dumps `stack update` took are removed, so
+rollback exists only while an upgrade can still fail; see
+[Rolling back an upgrade](../cli.md#rolling-back-an-upgrade). Purge removes the
 host binary store.
 
 The minimum a Podman or Docker compose unit needs is:
