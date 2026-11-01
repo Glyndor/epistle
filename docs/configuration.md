@@ -1432,7 +1432,7 @@ Common keys (every provider):
 | `token_env` | Name of an env var holding the API token. |
 | `token_file` | Path to a `0600` file holding the API token. |
 
-#### `[dns]` — several zones, one credential each
+#### `[dns]`: several zones, one credential each
 
 A server that hosts domains in more than one zone, or in zones at different
 providers, writes one `[[dns]]` table per zone instead of a single `[dns]`
