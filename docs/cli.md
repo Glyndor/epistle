@@ -596,7 +596,8 @@ two entries share is mounted once and stays mounted while one of them reads it.
 `--store-token` keeps `secrets/dns_provider_token` for a configuration with one zone and
 uses `secrets/dns_provider_token_<zone>` (dots as underscores) once there are several, so
 replacing one token never overwrites another. `unset` removes every entry; `unset --zone`
-removes the one for that zone and refuses a zone that has none. `show`, `check` and `test`
+removes the one for that zone, takes its token file mount and its variable out of the
+generated compose file unless another entry still reads them, and refuses a zone that has none. `show`, `check` and `test`
 report every entry: `show --json` prints a list when there are several entries, and
 `check` prints each line with the zone in front (its `--json` is a list of
 `{zone, provider, report}`). The provider name and the settings it needs are checked the way

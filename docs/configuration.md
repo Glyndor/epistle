@@ -1468,8 +1468,16 @@ only the zone it was issued for. DKIM rotation, the TLSA refresh, the ACME
 - With `challenge = "dns-01"`, every `[acme]` domain must fall in a zone whose
   table is not `manual`; the start is refused otherwise.
 - A single `[dns]` table keeps working exactly as before, including serving
-  every name with its one credential. Adding a second table to the file narrows
-  the first to its own zone.
+  every name with its one credential. A `[[dns]]` list is always scoped to the
+  zones it names, even with one table, and takes the checks above. Adding a
+  second table to the file narrows the first to its own zone.
+- DKIM rotation publishes a signing domain through the table of its own zone,
+  so a domain in a `manual` zone, or in one whose credential cannot be read,
+  holds the rotation back like a domain outside every zone (the server logs
+  which).
+- `epistle init` run again keeps a `[[dns]]` list, mounts and forwards the
+  credential of each table in the generated compose file, and warns that it
+  ignored its own `dns` answers.
 - Keep one token file per zone and give each token only the permission to edit
   that zone. `epistle dns provider check` and `test` report every table.
 
