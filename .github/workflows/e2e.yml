@@ -32,6 +32,15 @@ on:
       - ".github/workflows/e2e.yml"
       - "Cargo.toml"
       - "Cargo.lock"
+      # Files that only exist under #[cfg(test)] cannot change what this job
+      # builds or runs, so a pull request that touches only them does not pay
+      # for it. Same exclusions as db.yml. The module that declares them
+      # (`mod tests;` in a mod.rs) is not matched, and the push above still
+      # runs everything.
+      - "!src/**/tests/**"
+      - "!src/**/*_tests*.rs"
+      - "!src/**/tests_*.rs"
+      - "!src/**/test_support.rs"
 
 # A newer push to a pull request supersedes the run in flight. Queue and
 # branch runs are never cancelled: only a pull_request event is.
