@@ -31,13 +31,15 @@ fn this_process_is_found_under_its_own_uid() {
 
 mod wiring {
 	use super::super::super::{manager_answers, usermod_with};
-	use std::os::unix::fs::PermissionsExt;
 	use std::path::Path;
 	use std::process::Command;
 	use std::time::Duration;
 
 	/// A script that appends a line per call to `log`, with the locale it saw,
-	/// and runs `body`.
+	/// and runs `body`. It is never executed itself: a file just written can
+	/// still be open for writing in a sibling test's fork until that child
+	/// execs, and running it then fails with "Text file busy". `sh <path>`
+	/// only reads it, so `usermod_stub` and `probe_stub` run it that way.
 	fn script(dir: &Path, log: &Path, body: &str) -> String {
 		let path = dir.join("stub");
 		std::fs::write(
@@ -49,8 +51,19 @@ mod wiring {
 			),
 		)
 		.unwrap();
-		std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
 		path.to_str().unwrap().to_string()
+	}
+
+	fn usermod_stub(stub: &str, args: &[String]) -> Result<(), String> {
+		let mut argv = vec![stub.to_string()];
+		argv.extend_from_slice(args);
+		usermod_with("/bin/sh", &argv, Duration::ZERO)
+	}
+
+	fn probe_stub(stub: &str) -> Command {
+		let mut command = Command::new("/bin/sh");
+		command.arg(stub);
+		command
 	}
 
 	fn calls(log: &Path) -> Vec<String> {
@@ -71,7 +84,7 @@ mod wiring {
 			"[ \"$n\" -ge 2 ] || { echo 'usermod: cannot lock /etc/subuid; try again later.' >&2; exit 10; }",
 		);
 		let args = vec!["--add-subuids".to_string(), "1-2".to_string()];
-		assert_eq!(usermod_with(&stub, &args, Duration::ZERO), Ok(()));
+		assert_eq!(usermod_stub(&stub, &args), Ok(()));
 		assert_eq!(
 			calls(&log),
 			vec!["C --add-subuids 1-2 glyndor-epistle"; 3],
@@ -88,9 +101,42 @@ mod wiring {
 			&log,
 			"echo \"usermod: user 'glyndor-epistle' does not exist\" >&2; exit 6",
 		);
-		let result = usermod_with(&stub, &[], Duration::ZERO);
+		let result = usermod_stub(&stub, &[]);
 		assert!(result.is_err());
 		assert_eq!(calls(&log).len(), 1);
+	}
+
+	/// Other threads fork while a stub is written and run: the child holds
+	/// the stub's write descriptor open until its own `exec`, so running the
+	/// stub itself can fail with "Text file busy".
+	#[test]
+	fn a_stub_runs_while_other_threads_fork() {
+		let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+		let noise: Vec<_> = (0..8)
+			.map(|_| {
+				let stop = stop.clone();
+				std::thread::spawn(move || {
+					while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+						let _ = Command::new("/bin/true").status();
+					}
+				})
+			})
+			.collect();
+		for _ in 0..100 {
+			let dir = tempfile::tempdir().unwrap();
+			let log = dir.path().join("log");
+			std::fs::write(&log, "").unwrap();
+			let stub = script(dir.path(), &log, "exit 6");
+			let result = usermod_stub(&stub, &[]);
+			assert!(
+				result.as_ref().unwrap_err().contains("exited with"),
+				"{result:?}"
+			);
+		}
+		stop.store(true, std::sync::atomic::Ordering::Relaxed);
+		for thread in noise {
+			thread.join().unwrap();
+		}
 	}
 
 	#[test]
@@ -104,7 +150,7 @@ mod wiring {
 		let dir = tempfile::tempdir().unwrap();
 		let log = dir.path().join("log");
 		let stub = script(dir.path(), &log, "[ \"$n\" -ge 2 ]");
-		let probe = || Command::new(&stub);
+		let probe = || probe_stub(&stub);
 		assert!(manager_answers(probe, 10, Duration::ZERO));
 		assert_eq!(calls(&log).len(), 3);
 	}
@@ -114,7 +160,7 @@ mod wiring {
 		let dir = tempfile::tempdir().unwrap();
 		let log = dir.path().join("log");
 		let stub = script(dir.path(), &log, "exit 1");
-		assert!(!manager_answers(|| Command::new(&stub), 4, Duration::ZERO));
+		assert!(!manager_answers(|| probe_stub(&stub), 4, Duration::ZERO));
 		assert_eq!(calls(&log).len(), 4, "bounded");
 	}
 }
