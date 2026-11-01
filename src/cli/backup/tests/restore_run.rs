@@ -7,7 +7,6 @@
 //! process `PATH` (which would race other parallel tests).
 
 use super::*;
-use std::os::unix::fs::PermissionsExt;
 
 /// The path of `database.sql` inside the backup archive. Re-exposed
 /// here so the test reads as one block; the production path uses the
