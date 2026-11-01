@@ -434,11 +434,22 @@ jobs:
           GLYNDOR_RELEASE_ED25519_KEY: ${{ secrets.GLYNDOR_RELEASE_ED25519_KEY }}
         run: .github/scripts/sign_release.sh dist "$TAG"
 
+      # A rehearsal may name a tag older than the signing script, so the script
+      # comes from the commit that launched the dispatch. Nothing signed here is
+      # published: the key is the throwaway one and the job after this is skipped.
+      - name: Take the signing script from the dispatch commit (rehearsal)
+        if: ${{ inputs.dry-run }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: rehearsal-tools
+          persist-credentials: false
+
       - name: Sign artifacts with the throwaway key (rehearsal)
         if: ${{ inputs.dry-run }}
         env:
           GLYNDOR_RELEASE_ED25519_KEY: ${{ env.REHEARSAL_KEY }}
-        run: .github/scripts/sign_release.sh dist "$TAG"
+        run: rehearsal-tools/.github/scripts/sign_release.sh dist "$TAG"
 
       - name: Hand the signatures to the next job
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
