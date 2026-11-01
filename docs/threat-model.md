@@ -42,7 +42,7 @@ PEM in `[tls]`).
 | The at-rest master key | `encryption_key_env` or `encryption_key_file` in `[storage]` | turns a stolen disk or backup from plaintext into ciphertext, and back |
 | The API bearer token and labeled API keys | `[api] token_hash` and `<data_dir>/api_keys.toml` (`src/api/api_keys/mod.rs:8`) | full administration of accounts, domains, queue and mail |
 | ACME account key and issued certificates | `<data_dir>/acme/account.key` (`src/acme/renew/mod.rs:27`) and the certificate beside it | the mail protocols' TLS identity |
-| DNS provider tokens | `[dns]` `token_file` or `token_env` (`src/config/dns/mod.rs:33`) | a leaked token edits the zone: MX, SPF, DKIM, TLSA |
+| DNS provider tokens | `[dns]` `token_file` or `token_env` (`src/config/dns/mod.rs:33`) | a leaked token edits the zone: MX, SPF, DKIM, TLSA; with one `[[dns]]` entry per zone it edits only its own zone |
 | Backups | whatever `epistle backup` writes to (`src/cli/backup/mod.rs::run`) | a complete copy of everything above, wherever the operator keeps it |
 
 ## Actors and trust boundaries

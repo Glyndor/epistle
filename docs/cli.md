@@ -583,11 +583,23 @@ epistle dns provider set route53 --zone example.org --access-key AKIA... \
   --secret-key-env AWS_SECRET --hosted-zone-id Z123
 epistle dns provider set manual --zone example.org
 epistle dns provider unset
+epistle dns provider unset --zone client.example
 epistle dns provider test
 ```
 
-`set` rewrites the whole `[dns]` section, so switching provider never leaves an old
-credential behind. The provider name and the settings it needs are checked the way
+`set` rewrites the entry for its `--zone`, so switching provider never leaves an old
+credential behind. A zone that has no entry yet is added: the first extra zone turns
+the single `[dns]` table into `[[dns]]` tables (see
+[`configuration.md`](configuration.md) §`[dns]`), and every other entry, its token
+and its mount in the generated compose file are left as they are. A token file that
+two entries share is mounted once and stays mounted while one of them reads it.
+`--store-token` keeps `secrets/dns_provider_token` for a configuration with one zone and
+uses `secrets/dns_provider_token_<zone>` (dots as underscores) once there are several, so
+replacing one token never overwrites another. `unset` removes every entry; `unset --zone`
+removes the one for that zone and refuses a zone that has none. `show`, `check` and `test`
+report every entry: `show --json` prints a list when there are several entries, and
+`check` prints each line with the zone in front (its `--json` is a list of
+`{zone, provider, report}`). The provider name and the settings it needs are checked the way
 the loader builds the provider; a setting the provider does not use is refused.
 Secrets are never passed on the command line: name an environment variable
 (`--token-env`, `--secret-key-env`, `--consumer-key-env`) or a 0600 file
@@ -1526,7 +1538,7 @@ The API keys made with `epistle api-key` open the HTTP API, described in the [HT
 | Command | What it does |
 |---|---|
 | `epistle dkim show [--json]` | The DKIM key in service (selector, key file, rotation time, next scheduled rotation, previous selector and when it retires, the RSA selector in service, from `state` or `config`, with the RSA selector a rotation retires or moves to) and whether the published TXT of each signing domain matches it. A domain with a `[[dkim.domain]]` key is listed under `overrides` and checked against that key. Reads the same rotation state as `serve`, `dns-records` and `verify-dns`; an unreadable state file is an error, never a silent fallback to the configured key. A rotation the server began and has not finished is listed with its selector (`in_progress` in JSON), or with the reason it is being withdrawn. Every time it prints (when the key rotated, when the next rotation is due, when the previous selector retires, when the rotation began, when it was requested) is an RFC 3339 UTC instant such as `2026-12-31T23:59:59Z`; `--json` keeps the epoch seconds. |
-| `epistle dkim rotate [--dry-run]` | Rotate the Ed25519 key now, and with dual signing the RSA key in the same step (new selector `rsa<day>`). Refuses what the server refuses: no `[dkim]` or `[dns]`, a signing domain outside the `[dns]` zone, a provider that cannot be built, a second rotation on the same UTC day. Domains with a `[[dkim.domain]]` key are not signing domains of the default key. `--dry-run` prints the selectors and the TXT names and changes nothing. `--domain D` is always refused: a `[[dkim.domain]]` key does not rotate, and the refusal says how to replace it (or that `D` signs with the default). |
+| `epistle dkim rotate [--dry-run]` | Rotate the Ed25519 key now, and with dual signing the RSA key in the same step (new selector `rsa<day>`). Refuses what the server refuses: no `[dkim]` or `[dns]`, a signing domain outside every `[dns]` zone, a provider that cannot be built, a second rotation on the same UTC day. Domains with a `[[dkim.domain]]` key are not signing domains of the default key. `--dry-run` prints the selectors and the TXT names and changes nothing. `--domain D` is always refused: a `[[dkim.domain]]` key does not rotate, and the refusal says how to replace it (or that `D` signs with the default). |
 | `epistle dkim cleanup [--dry-run] [--yes]` | List the `dkim-ed<day>.key` and `dkim-rsa<day>.key` files and `ed<day>._domainkey` and `rsa<day>._domainkey` TXT records of the signing domains that neither the active, the previous, a pending nor a configured selector (`[dkim]` or `[[dkim.domain]]`) uses (left by crashes in older releases), ask for confirmation and queue their removal. `--dry-run` only lists; `--yes` skips the question. Refused when the rotation state cannot be read, and nothing is queued when the server does not rotate keys for this configuration. |
 | `epistle tls show [--json]` | The certificate the server presents (the ACME pair when `[acme]` is set and `<data_dir>/acme/{cert,key}.pem` is usable, otherwise the pair the `[tls]` section names, otherwise the bootstrap pair `init` wrote in `<data_dir>/keys/`): subject, names, issuer, expiry as an RFC 3339 UTC date (for example `2026-12-31T23:59:59Z`), days left, and `acme` or `static` as the source. JSON adds `not_after_utc` and keeps the epoch-second `not_after` field. The time a renewal was requested for is an RFC 3339 UTC instant as well. `serve`, `probe` and this command resolve it the same way. |
 | `epistle tls renew [--force]` | Ask the server to renew the ACME certificate. Without `--force` nothing is queued while the ACME pair is usable, its certificate is issued by an authority, and it is outside its `renew_before_days` window. An unusable pair or a self-issued certificate is due regardless of that window. |
