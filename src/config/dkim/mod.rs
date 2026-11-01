@@ -136,6 +136,7 @@ impl DkimDomain {
 	}
 }
 
+mod sharing;
 mod validate;
 
 #[cfg(test)]
