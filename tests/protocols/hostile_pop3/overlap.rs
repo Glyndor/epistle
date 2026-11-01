@@ -91,7 +91,7 @@ async fn rset_keeps_the_message_through_quit_while_another_session_drops_its_del
 	expect(&mut other, "+OK message 1 deleted\r\n").await;
 	send(&mut other, b"RSET\r\n").await;
 	expect(&mut other, "+OK 1 messages\r\n").await;
-	drop(dropped);
+	abandon(&mut dropped).await;
 	quit(&mut other).await;
 	assert_eq!(std::fs::read(path).expect("uncommitted message"), MESSAGE);
 	assert_eq!(destroyed(&server, "tester", &id), 0);
