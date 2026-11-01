@@ -1,0 +1,28 @@
+[[accounts]]
+name = "password"
+addresses = ["password@example.test"]
+password_hash = "$argon2id$v=19$m=19456,t=2,p=1$lFHe54IxBsmY1laqrr9iqQ$l1oRerxE5VUCyFuOo2PiVRw8bl4nABpT4iccJfxpT1s"
+disabled = false
+forward = []
+catch_all = []
+
+[accounts.scram]
+salt = "qcvtngQXeL70PQVSmx5RNg=="
+iterations = 600000
+stored_key = "eqByg7LT8jjMGSMluy/qrvQDnlt/WCbMpaNo6GzESeQ="
+server_key = "jO7YygChGomRuAxrujHPC40P5UIsNxu/+HD3D9jXPDY="
+
+[[accounts]]
+name = "secondfactor"
+addresses = ["secondfactor@example.test"]
+password_hash = "$argon2id$v=19$m=19456,t=2,p=1$EliEVoW4gno14TZBUJcbCQ$bUH27E+XoTLukYyaD4VE1QIxZKt6UP1XC9D3xWN0GV4"
+totp_secret = "OVYGO4TBMRSS2Y3PNZ2HEYLDOQWXI33UOA"
+disabled = false
+forward = []
+catch_all = []
+
+[accounts.scram]
+salt = "X/VoqnOA8NOXd25DpKeI0w=="
+iterations = 600000
+stored_key = "T+CkYt3lcbvoOGMlQ8SMe8dqyszagGgccyqAXg1ioXc="
+server_key = "W9VezR+9inE6Ur0qN43q8dvSDiVG/TWhaHzdkwExXqc="

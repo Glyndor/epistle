@@ -1,0 +1,4 @@
+hashes = [
+    "sha256:08c33eb4ca6e137ef4d4267a19d5b18e125905e2483166d0579ed504a9f7d130",
+    "$argon2id$v=19$m=19456,t=2,p=1$rajioS77/wviz5rFHuc/gQ$vE1N31TD/cXCUt0t4jdE/ZuYRWKcYKyMaDA7hL89rCU",
+]

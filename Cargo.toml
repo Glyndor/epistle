@@ -472,3 +472,7 @@ path = "tests/dkim/dkim_rfc_conformance.rs"
 [[test]]
 name = "concurrency_suite"
 path = "tests/concurrency/suite.rs"
+
+[[test]]
+name = "credentials_survive_upgrade"
+path = "tests/contracts/credentials_survive_upgrade.rs"

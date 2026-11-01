@@ -1,0 +1,14 @@
+[[accounts]]
+name = "sealed"
+addresses = ["sealed@example.test"]
+password_hash = "$argon2id$v=19$m=19456,t=2,p=1$fJcNcBHreh3lt+Kuqc83Yg$Yjv7RDSlDmBSMu2IEeVqdVbM3SFr4b4IjE1Dl58crIg"
+totp_secret = "enc:v1:RVBFTkMxAEFtJRWxIlbOxXX3s7tUoW4R74B9HUFkcMCTn7Sa0/3u8S595ZjINTGslpZO+ws0aC472fnVXzQT/JZZEZ/A"
+disabled = false
+forward = []
+catch_all = []
+
+[accounts.scram]
+salt = "9VT2iSi8yb8JXI85RyD1ng=="
+iterations = 600000
+stored_key = "avMooQGcdYGnDiQPISkq/+Qp1fZRMQZreZB7CZsTmWg="
+server_key = "e5o8ZS+6HO56ft93iU5EoeIbkG4EJdjNwPJAGG+HjoE="
