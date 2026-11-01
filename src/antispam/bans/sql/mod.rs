@@ -81,6 +81,22 @@ impl PgBanStore {
 	}
 }
 
+/// Serialize every writer of one subject for the rest of the transaction.
+/// Without it, two concurrent failures each count only the rows already
+/// committed, so both read a count under the threshold and the ban never
+/// fires; the `FOR UPDATE` on `auth_ban` cannot help, because the row may
+/// not exist yet. The lock is released at commit or rollback.
+async fn lock_subject(
+	tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+	subject: &str,
+) -> Result<(), sqlx::Error> {
+	sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+		.bind(subject)
+		.execute(&mut **tx)
+		.await?;
+	Ok(())
+}
+
 impl BanStore for PgBanStore {
 	fn record_failure(
 		&self,
@@ -108,9 +124,10 @@ impl BanStore for PgBanStore {
 	fn clear_success(
 		&self,
 		subject: &str,
+		now_secs: u64,
 	) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
 		let subject = subject.to_string();
-		Box::pin(async move { self.clear_success_inner(&subject).await })
+		Box::pin(async move { self.clear_success_inner(&subject, now_secs).await })
 	}
 
 	fn is_allow_listed(
@@ -172,6 +189,7 @@ impl PgBanStore {
 		let window_start_secs = now_secs.saturating_sub(self.policy.window_secs);
 		let result = async {
 			let mut tx = self.pool.begin().await?;
+			lock_subject(&mut tx, subject).await?;
 			sqlx::query(
 				"INSERT INTO auth_failure (id, subject, protocol, seen_at) \
 				 VALUES ($1, $2, $3, to_timestamp($4))",
@@ -300,17 +318,32 @@ impl PgBanStore {
 		}
 	}
 
-	async fn clear_success_inner(&self, subject: &str) {
+	/// A success drops the failure history and the spent ban row of
+	/// `subject`, but never an active ban: a ban stays in force until its
+	/// `until`, whoever signs in meanwhile. The check and the deletes run
+	/// under the same per-subject lock as [`Self::record_failure_inner`], so
+	/// a failure that trips the ban cannot slip between them.
+	async fn clear_success_inner(&self, subject: &str, now_secs: u64) {
 		let result = async {
 			let mut tx = self.pool.begin().await?;
-			sqlx::query("DELETE FROM auth_ban WHERE subject = $1")
-				.bind(subject)
-				.execute(&mut *tx)
-				.await?;
-			sqlx::query("DELETE FROM auth_failure WHERE subject = $1")
-				.bind(subject)
-				.execute(&mut *tx)
-				.await?;
+			lock_subject(&mut tx, subject).await?;
+			let active: Option<(i32,)> = sqlx::query_as(
+				"SELECT 1 FROM auth_ban WHERE subject = $1 AND until > to_timestamp($2)",
+			)
+			.bind(subject)
+			.bind(now_secs as i64)
+			.fetch_optional(&mut *tx)
+			.await?;
+			if active.is_none() {
+				sqlx::query("DELETE FROM auth_ban WHERE subject = $1")
+					.bind(subject)
+					.execute(&mut *tx)
+					.await?;
+				sqlx::query("DELETE FROM auth_failure WHERE subject = $1")
+					.bind(subject)
+					.execute(&mut *tx)
+					.await?;
+			}
 			tx.commit().await?;
 			Ok::<(), sqlx::Error>(())
 		}

@@ -214,6 +214,10 @@ name = "database_bans_admin"
 path = "tests/db/core/database_bans_admin.rs"
 
 [[test]]
+name = "database_bans_atomicity"
+path = "tests/db/core/database_bans_atomicity.rs"
+
+[[test]]
 name = "database_bans_cli"
 path = "tests/db/core/database_bans_cli.rs"
 

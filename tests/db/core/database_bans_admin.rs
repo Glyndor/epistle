@@ -57,6 +57,14 @@ async fn connect() -> Option<(sqlx::PgPool, PgBanStore)> {
 	Some((pool, store))
 }
 
+/// Clear what a test left on `subject`. A success cannot lift an active ban,
+/// so the check asks as of a moment after any ban the policy can set.
+async fn clean_after(store: &PgBanStore, subject: &str) {
+	store
+		.clear_success(subject, now() + policy().max_secs + 1)
+		.await;
+}
+
 async fn fail_times(store: &PgBanStore, subject: &str, times: usize) {
 	for _ in 0..times {
 		store.record_failure(subject, "smtp", now()).await;
@@ -263,7 +271,7 @@ async fn removing_an_account_drops_its_pair_rows_and_nobody_elses() {
 		store.is_banned(&kept_pair, t).await.is_some(),
 		"another account's pair must stay"
 	);
-	store.clear_success(&kept_pair).await;
+	clean_after(&store, &kept_pair).await;
 }
 
 #[tokio::test]
@@ -303,8 +311,8 @@ async fn an_account_needs_four_times_the_failures_of_a_client_to_be_banned() {
 	fail_times(&store, &account, 1).await;
 	let info = store.is_banned(&account, t).await.expect("twenty ban it");
 	assert_eq!(info.reason, "20 failed authentications in 60 seconds");
-	store.clear_success(&pair).await;
-	store.clear_success(&account).await;
+	clean_after(&store, &pair).await;
+	clean_after(&store, &account).await;
 }
 
 #[tokio::test]

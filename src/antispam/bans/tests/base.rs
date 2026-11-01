@@ -240,10 +240,20 @@ impl BanStore for FakeBanStore {
 	fn clear_success(
 		&self,
 		subject: &str,
+		now_secs: u64,
 	) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
 		let subject = subject.to_string();
 		self.record_call("clear_success");
 		Box::pin(async move {
+			let active = self
+				.bans
+				.lock()
+				.expect("lock")
+				.get(&subject)
+				.is_some_and(|info| info.until_secs > now_secs);
+			if active {
+				return;
+			}
 			self.failures.lock().expect("lock").remove(&subject);
 			self.bans.lock().expect("lock").remove(&subject);
 			self.strikes.lock().expect("lock").remove(&subject);
@@ -469,7 +479,7 @@ async fn fake_store_backoff_caps_at_max_secs() {
 }
 
 #[tokio::test]
-async fn fake_store_success_clears_both_ban_and_failures() {
+async fn fake_store_success_cannot_lift_an_active_ban() {
 	let store = FakeBanStore::new(policy());
 	let subject = "ip:203.0.113.5";
 	let now: u64 = 1_700_000_000;
@@ -477,8 +487,22 @@ async fn fake_store_success_clears_both_ban_and_failures() {
 		store.record_failure(subject, "smtp", now).await;
 	}
 	assert!(store.is_banned(subject, now).await.is_some());
-	store.clear_success(subject).await;
-	assert!(store.is_banned(subject, now).await.is_none());
+	store.clear_success(subject, now).await;
+	assert!(store.is_banned(subject, now).await.is_some());
+	assert_eq!(store.failure_count(subject, 0), 5);
+}
+
+#[tokio::test]
+async fn fake_store_success_clears_the_failures_once_the_ban_is_spent() {
+	let store = FakeBanStore::new(policy());
+	let subject = "ip:203.0.113.5";
+	let now: u64 = 1_700_000_000;
+	for _ in 0..5 {
+		store.record_failure(subject, "smtp", now).await;
+	}
+	let after_ban = now + policy().base_secs + 1;
+	assert!(store.is_banned(subject, after_ban).await.is_none());
+	store.clear_success(subject, after_ban).await;
 	assert_eq!(store.failure_count(subject, 0), 0);
 }
 
