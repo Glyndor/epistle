@@ -21,7 +21,7 @@ fn db_image_is_the_pinned_postgres_18_digest() {
 	// The digest comes from deploy/images/Dockerfile and moves with
 	// Dependabot; the major must not, because a new major needs a dump and
 	// restore rather than a swapped image.
-	assert_eq!(db_image, super::super::super::images::postgres());
+	assert_eq!(db_image, super::super::super::super::images::postgres());
 	assert!(
 		db_image.starts_with("docker.io/library/postgres:18@sha256:"),
 		"the rendered db image must stay digest-pinned on major 18: {db_image}"

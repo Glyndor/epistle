@@ -32,6 +32,8 @@ each generated message digest, canonicalization, canonical body, and signing
 input digest where applicable. `signer-*.signature`, `.unsigned`, and `.input`
 are independent expected outputs for testing production signing.
 
+Fixtures are grouped under `arc/`, `ed25519/`, `rsa/`, `tags/`, `length/`, `signer/`, `rfc/`, and `misc/`; `manifest.json` keys include the family directory. The generator and hostile DKIM harness resolve fixture names through those directories.
+
 Messages use CRLF bytes. Preserve them when editing or checking out this tree.
 `*.dns` contains TXT data only. ARC uses separate `ams` and `seal` selectors.
 Malformed syntax, bit changes, duplicate fields, and resource probes are built

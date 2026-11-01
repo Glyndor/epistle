@@ -1,7 +1,7 @@
 //! Compose-file write tests.
 //!
-//! Sister to `src/cli/init/compose/tests/base.rs` (which covers the rendered
-//! shape) and `src/cli/init/compose/tests/password.rs` (the database
+//! Sister to `src/cli/init/compose/tests/rendering/base.rs` (which covers the rendered
+//! shape) and `src/cli/init/compose/tests/database/password.rs` (the database
 //! secret). The tests here drive `ensure_compose_file` end to
 //! end: the first run writes the file, the second run says
 //! `identical, not touched`, and a different answer set forces
