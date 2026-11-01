@@ -100,6 +100,66 @@ async fn the_apex_name_servers_are_not_a_delegation() {
 	assert_eq!(provider.writes(), 1);
 }
 
+/// A provider whose listing ignores the zone asked for and whose zone
+/// lookup accepts the first candidate: the listing then describes a zone
+/// other than the one `has_zone` accepted.
+struct IgnoresZone {
+	listing: Vec<DnsRecord>,
+	upserts: Mutex<usize>,
+}
+
+impl DnsProvider for IgnoresZone {
+	fn upsert(&self, _zone: &str, _record: DnsRecord) -> Op<'_> {
+		*self.upserts.lock().expect("upserts") += 1;
+		Box::pin(async { Ok(()) })
+	}
+
+	fn delete(&self, _zone: &str, _record: DnsRecord) -> Op<'_> {
+		Box::pin(async { Ok(()) })
+	}
+
+	fn list(&self, _zone: &str) -> ListOp<'_> {
+		let listing = self.listing.clone();
+		Box::pin(async move { Ok(listing) })
+	}
+}
+
+#[tokio::test]
+async fn a_listing_of_another_zone_still_shows_the_delegation() {
+	let provider = IgnoresZone {
+		listing: vec![ns("sub.example.org")],
+		upserts: Mutex::new(0),
+	};
+	let result = publish_tlsa(
+		&provider,
+		"mail.sub.example.org",
+		&pem("mail.sub.example.org"),
+	)
+	.await;
+	assert!(
+		result.is_err(),
+		"the cut is found whatever zone was accepted"
+	);
+	assert_eq!(*provider.upserts.lock().expect("upserts"), 0);
+}
+
+#[tokio::test]
+async fn a_proved_apex_is_not_a_delegation_even_when_the_zone_is_a_name() {
+	let soa = DnsRecord::new(
+		"example.org",
+		RecordKind::Other("SOA".to_string()),
+		"ns1.example.net hostmaster.example.org 1 2 3 4 5",
+		3600,
+	);
+	let provider = IgnoresZone {
+		listing: vec![ns("example.org"), soa],
+		upserts: Mutex::new(0),
+	};
+	publish_tlsa(&provider, "mail.example.org", &pem("mail.example.org"))
+		.await
+		.expect("an apex shown by its SOA serves the name");
+}
+
 /// A provider that cannot read its zone, or whose listing fails.
 struct Unreadable(ProviderError);
 

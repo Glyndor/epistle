@@ -78,13 +78,52 @@ pub async fn resolve_serving(
 		Err(ProviderError::Unsupported) => return Ok(zone),
 		Err(error) => return Err(error),
 	};
-	let canonical_zone = crate::dns::names::canonical_name(&zone);
-	let cuts = crate::dns::rrset::Cuts::new(&canonical_zone, &listing);
-	match cuts.above(&crate::dns::names::canonical_name(record_name)) {
-		None => Ok(zone),
+	refuse_if_delegated(&zone, record_name, &listing)?;
+	Ok(zone)
+}
+
+/// Refuse a write of `record_name` in `zone` when `listing`, the records
+/// the provider returned, delegates the name. An NS rrset at a name that is
+/// `record_name` or above it (two labels at least) hands the name to other
+/// nameservers, and a record written here would never be served.
+///
+/// The cuts are read from every NS in the listing, not only from those under
+/// `zone`: a provider that does not bind a listing to the zone asked for
+/// (it answers for the account, or for a parent) describes a zone other than
+/// the one the lookup accepted, and cuts computed against `zone` alone would
+/// miss the delegation. An NS is the apex of its own zone, and no cut, only
+/// when it is at `zone` itself or the listing proves the apex with an SOA at
+/// that name. Anything else is treated as a cut: the write fails closed. The
+/// failure names the highest such name.
+pub fn refuse_if_delegated(
+	zone: &str,
+	record_name: &str,
+	listing: &[crate::dns::provider::DnsRecord],
+) -> Result<(), ProviderError> {
+	use crate::dns::names::{canonical_name, in_domain};
+	use crate::dns::provider::RecordKind;
+
+	let zone = canonical_name(zone);
+	let record = canonical_name(record_name);
+	let is_soa = |kind: &RecordKind| matches!(kind, RecordKind::Other(token) if token == "SOA");
+	let apexes: Vec<String> = listing
+		.iter()
+		.filter(|r| is_soa(&r.kind))
+		.map(|r| canonical_name(&r.name))
+		.collect();
+	let cut = listing
+		.iter()
+		.filter(|r| r.kind == RecordKind::Ns)
+		.map(|r| canonical_name(&r.name))
+		.filter(|name| name.contains('.') && !name.starts_with("*."))
+		.filter(|name| *name != zone && !apexes.contains(name))
+		.filter(|name| in_domain(&record, name))
+		.min_by_key(|name| name.len());
+	match cut {
+		None => Ok(()),
 		Some(cut) => Err(ProviderError::Remote(format!(
-			"{} is delegated to other nameservers inside the zone {}, which does not serve it; no record was written there",
-			crate::cli::term::sanitize(cut),
+			"{} is delegated to other nameservers, so the zone {} does not serve it; no record was written there",
+			crate::cli::term::sanitize(&cut),
 			crate::cli::term::sanitize(&zone),
 		))),
 	}
