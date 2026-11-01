@@ -18,14 +18,23 @@ ROOT = Path(__file__).resolve().parent
 
 
 def family(name):
-	if name.startswith("arc-"): return "arc"
-	if name.startswith("ed25519"): return "ed25519"
-	if name.startswith("rsa"): return "rsa"
-	if name.startswith("tags-"): return "tags"
-	if name.startswith("length-"): return "length"
-	if name.startswith("signer-"): return "signer"
-	if name.startswith("rfc"): return "rfc"
-	return "misc"
+	top = "misc"
+	for prefix, folder in (("arc-", "arc"), ("ed25519", "ed25519"), ("rsa", "rsa"),
+			("tags-", "tags"), ("length-", "length"), ("signer-", "signer"), ("rfc", "rfc")):
+		if name.startswith(prefix):
+			top = folder
+			break
+	parts = name.split("-")
+	if top == "arc":
+		second = parts[1].split(".")[0]
+		return f"arc/{second if second in ('ams', 'seal', 'cv', 'length') else 'chain'}"
+	if top == "tags":
+		return f"tags/{parts[1].split('.')[0]}"
+	if top in ("ed25519", "rsa"):
+		if len(parts) >= 3 and parts[1] in ("simple", "relaxed"):
+			return f"{top}/{parts[1]}-{parts[2]}"
+		return f"{top}/other"
+	return top
 
 
 def fixture_path(name):

@@ -11,27 +11,48 @@ use std::time::Duration;
 use epistle::dkim::{DkimOutcome, DkimResult, verify_message};
 use epistle::spf::{DnsFailure, DnsLookup};
 
+/// The folder under `tests/fixtures/dkim` that holds `name`. The generator
+/// (`tests/fixtures/dkim/generate`) applies the same rule; the two must agree.
+fn family(name: &str) -> String {
+	let top = [
+		("arc-", "arc"),
+		("ed25519", "ed25519"),
+		("rsa", "rsa"),
+		("tags-", "tags"),
+		("length-", "length"),
+		("signer-", "signer"),
+		("rfc", "rfc"),
+	]
+	.iter()
+	.find(|(prefix, _)| name.starts_with(prefix))
+	.map_or("misc", |(_, folder)| folder);
+	let parts: Vec<&str> = name.split('-').collect();
+	match top {
+		"arc" => {
+			let second = parts[1].split('.').next().unwrap_or("");
+			let sub = if ["ams", "seal", "cv", "length"].contains(&second) {
+				second
+			} else {
+				"chain"
+			};
+			format!("arc/{sub}")
+		}
+		"tags" => format!("tags/{}", parts[1].split('.').next().unwrap_or("")),
+		"ed25519" | "rsa" => {
+			if parts.len() >= 3 && ["simple", "relaxed"].contains(&parts[1]) {
+				format!("{top}/{}-{}", parts[1], parts[2])
+			} else {
+				format!("{top}/other")
+			}
+		}
+		other => other.to_string(),
+	}
+}
+
 pub fn path(name: &str) -> PathBuf {
-	let family = if name.starts_with("arc-") {
-		"arc"
-	} else if name.starts_with("ed25519") {
-		"ed25519"
-	} else if name.starts_with("rsa") {
-		"rsa"
-	} else if name.starts_with("tags-") {
-		"tags"
-	} else if name.starts_with("length-") {
-		"length"
-	} else if name.starts_with("signer-") {
-		"signer"
-	} else if name.starts_with("rfc") {
-		"rfc"
-	} else {
-		"misc"
-	};
 	PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 		.join("tests/fixtures/dkim")
-		.join(family)
+		.join(family(name))
 		.join(name)
 }
 
