@@ -333,8 +333,9 @@ pub async fn publish_tlsa(
 	// The zone that holds the mail hostname, not the hostname itself: a
 	// provider that names its zones looks a zone up by its exact name, and
 	// `mail.example.org` is a name inside the `example.org` zone, not a
-	// zone of its own.
-	let zone = crate::dns::zone::resolve(provider, hostname).await?;
+	// zone of its own. The zone must also serve the record name: a zone
+	// the credential sees but that delegates the name elsewhere is refused.
+	let zone = crate::dns::zone::resolve_serving(provider, hostname, &record.name).await?;
 	provider.upsert(&zone, record).await
 }
 

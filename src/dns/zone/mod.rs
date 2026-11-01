@@ -54,5 +54,41 @@ pub async fn resolve(provider: &dyn DnsProvider, name: &str) -> Result<String, P
 	Ok(name.to_string())
 }
 
+/// The zone to write `record_name` in, proved to be the one that serves it.
+///
+/// [`resolve`] finds the longest zone of `host` the credential can see.
+/// That is a statement about access, not about DNS: when the child zone
+/// is delegated to other nameservers and the credential only sees the
+/// parent, the parent still holds the name, and a record written there is
+/// one no validator ever reads. The zone is therefore listed, and a zone
+/// cut (an NS rrset below the apex) at or above `record_name` refuses the
+/// write: the failure names the cut, and nothing is written.
+///
+/// A provider that cannot list its zone ([`ProviderError::Unsupported`])
+/// gives no delegation to read, so the zone it names is the one the
+/// operator configured for the credential and is taken as it is.
+pub async fn resolve_serving(
+	provider: &dyn DnsProvider,
+	host: &str,
+	record_name: &str,
+) -> Result<String, ProviderError> {
+	let zone = resolve(provider, host).await?;
+	let listing = match provider.list(&zone).await {
+		Ok(listing) => listing,
+		Err(ProviderError::Unsupported) => return Ok(zone),
+		Err(error) => return Err(error),
+	};
+	let canonical_zone = crate::dns::names::canonical_name(&zone);
+	let cuts = crate::dns::rrset::Cuts::new(&canonical_zone, &listing);
+	match cuts.above(&crate::dns::names::canonical_name(record_name)) {
+		None => Ok(zone),
+		Some(cut) => Err(ProviderError::Remote(format!(
+			"{} is delegated to other nameservers inside the zone {}, which does not serve it; no record was written there",
+			crate::cli::term::sanitize(cut),
+			crate::cli::term::sanitize(&zone),
+		))),
+	}
+}
+
 #[cfg(test)]
 mod tests;
