@@ -6,6 +6,9 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 
+#[path = "../../../common/executable.rs"]
+pub mod executable;
+
 /// A password the policy accepts, piped to `account add`. Integration
 /// tests cannot reach the crate's private test fixtures, so it is
 /// spelled here; it protects nothing outside the temporary directory.
@@ -139,13 +142,11 @@ pub fn chatty_podup(env: &Env) -> std::path::PathBuf {
 	let bin = env.dir.path().join("bin");
 	std::fs::create_dir_all(&bin).expect("bin dir");
 	let shim = bin.join("podup");
-	std::fs::write(
+	executable::write_executable(
 		&shim,
 		"#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'podup version v5.15.4'; exit 0; fi\n\
 		 echo \"podup says: $*\"\nexit 0\n",
-	)
-	.expect("write shim");
-	std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).expect("chmod shim");
+	);
 	let compose = env.data_dir().join("compose/compose.yaml");
 	std::fs::create_dir_all(compose.parent().expect("parent")).expect("compose dir");
 	std::fs::write(&compose, b"# compose fixture\n").expect("write compose");

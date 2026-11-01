@@ -59,8 +59,7 @@ fn write_shell_stub(path: &std::path::Path, body: &[u8]) {
 	if let Some(parent) = path.parent() {
 		std::fs::create_dir_all(parent).expect("mkdir stub parent");
 	}
-	std::fs::write(path, body).expect("write stub");
-	std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).expect("chmod 0755");
+	crate::test_executable::write_executable(path, body);
 }
 
 #[test]

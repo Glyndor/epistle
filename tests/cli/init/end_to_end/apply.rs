@@ -115,13 +115,10 @@ fn second_apply_with_database_leaves_compose_and_password_files_untouched() {
 	let probe_dir = dir.path().join("bin");
 	std::fs::create_dir(&probe_dir).unwrap();
 	let probe = probe_dir.join("podman");
-	std::fs::write(
+	super::helpers::executable::write_executable(
 		&probe,
 		"#!/bin/sh\n[ \"$*\" = 'volume exists epistle_epistle-pgdata' ] || exit 2\nexit 1\n",
-	)
-	.unwrap();
-	use std::os::unix::fs::PermissionsExt;
-	std::fs::set_permissions(&probe, std::fs::Permissions::from_mode(0o755)).unwrap();
+	);
 	let probe_path = format!(
 		"{}:{}",
 		probe_dir.display(),

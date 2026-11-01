@@ -1,5 +1,4 @@
 use super::helpers::*;
-use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 
 #[test]
@@ -19,12 +18,10 @@ fn every_stack_action_repairs_an_absent_socket_before_podup() {
 		.unwrap();
 		install_podup_shim(&shim, &ps_shim(&log, &canned));
 		let systemctl = shim.join("systemctl");
-		std::fs::write(
+		executable::write_executable(
 			&systemctl,
 			format!("#!/bin/sh\nprintf '%s\\n' \"$@\" >> '{}'\n", log.display()),
-		)
-		.unwrap();
-		std::fs::set_permissions(&systemctl, std::fs::Permissions::from_mode(0o755)).unwrap();
+		);
 		let data = data_dir_with_compose(dir.path());
 		let cfg = write_config(&data);
 		std::fs::write(
@@ -73,8 +70,7 @@ fn failed_socket_activation_prints_one_repair_error_and_never_invokes_podup() {
 	let log = dir.path().join("argv.log");
 	install_podup_shim(&shim, &recorder_shim(&log));
 	let systemctl = shim.join("systemctl");
-	std::fs::write(&systemctl, "#!/bin/sh\necho systemctl-noise >&2\nexit 1\n").unwrap();
-	std::fs::set_permissions(&systemctl, std::fs::Permissions::from_mode(0o755)).unwrap();
+	executable::write_executable(&systemctl, "#!/bin/sh\necho systemctl-noise >&2\nexit 1\n");
 	let data = data_dir_with_compose(dir.path());
 	let cfg = write_config(&data);
 	let output = Command::new(binary())
