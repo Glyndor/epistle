@@ -1,12 +1,8 @@
-//! The `serve` command: bind listeners and run until interrupted.
-
-use std::process::ExitCode;
-use std::sync::Arc;
-
 use crate::config::{Config, ListenerKind};
 use crate::directory_store::FileWatcher;
 use crate::smtp::server::{Server, TlsMode};
-
+use std::sync::Arc;
+mod api_listener;
 mod connection_limits;
 pub(super) mod dkim;
 mod evidence;
@@ -15,55 +11,21 @@ mod metrics;
 mod queue;
 mod ratelimit;
 mod smtp_state;
+mod startup;
 mod store;
 pub(super) mod tasks;
 mod tasks_delivery;
 mod tls;
 mod webdav;
-
 use dkim::SplitCompanions;
 use ratelimit::RateLimiters;
 use smtp_state::SmtpSharedState;
 use tls::TlsStack;
-
-/// Run the server with a validated configuration.
-pub fn run(config: Config) -> ExitCode {
-	let runtime = match tokio::runtime::Runtime::new() {
-		Ok(runtime) => runtime,
-		Err(error) => {
-			super::style::error(format_args!("cannot start async runtime: {error}"));
-			return ExitCode::FAILURE;
-		}
-	};
-	// Initialise tracing inside the runtime so the OTLP batch exporter (if any)
-	// can spawn its background task. The provider is held for a clean shutdown.
-	let _guard = runtime.enter();
-	let otel_provider = super::trace::init_tracing(&config);
-
-	let result = runtime.block_on(serve(config));
-
-	// Flush any buffered spans to the collector before exiting.
-	if let Some(provider) = otel_provider
-		&& let Err(error) = provider.shutdown()
-	{
-		tracing::warn!(%error, "otel provider shutdown failed");
-	}
-	match result {
-		Ok(()) => ExitCode::SUCCESS,
-		Err(error) => {
-			super::style::error(error);
-			ExitCode::FAILURE
-		}
-	}
-}
-
+mod run;
+pub use run::run;
 async fn serve(config: Config) -> std::io::Result<()> {
-	// The log pseudonym key must exist before the first log line names an account.
 	crate::log_id::init(&config.data_dir)?;
 	crate::mtasts::publish::write_policy(&config)?;
-	// Single-signature DKIM warning at the very top of startup so it is
-	// visible before any listener binds. The wording is the shared helper
-	// reused by `config-check` and `verify-dns`.
 	tasks::log_single_signature_dkim_warning(&config);
 	connection_limits::log_retry_schedule_warnings(&config);
 	connection_limits::log_adjusted_values(&config);
@@ -71,65 +33,30 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		super::style::warn("no listeners configured, nothing to serve");
 		return Ok(());
 	}
-
-	// Recipient resolution and credentials: static config plus the
-	// API-managed dynamic accounts, hot-swapped on mutation. An optional live
-	// LDAP authenticator is attached here so per-request binds work immediately.
 	let ldap_auth = tasks::build_ldap_authenticator(&config);
-	// At-rest encryption, loaded once and shared. Fail closed: with
-	// encryption enabled but no usable key the server refuses to start.
-	// Built before the account store, which seals TOTP secrets with it.
 	let crypto = crate::storage::MessageCrypto::from_config(config.storage.as_ref())
 		.map_err(std::io::Error::other)?;
 	let mut store = store::open_account_store(&config)?;
-	// Two owners of one address are never merged: the first keeps it and
-	// both are named here (and in `epistle status`) until someone fixes it.
 	for collision in store.address_collisions() {
 		tracing::error!("{collision}");
 	}
 	if let Some(auth) = ldap_auth {
 		store = store.with_ldap_authenticator(auth);
 	}
-	// Shared metrics across SMTP listeners, delivery, and the metrics endpoint.
 	let metrics = Arc::new(crate::metrics::Metrics::new());
-	// Probe the system clock before anything else binds a socket: a drift
-	// past the TOTP window breaks two-factor for every account at once,
-	// and the counter is what the alert engine reads. The probe sleeps
-	// for ~100 ms; doing it before listener setup means the metric is
-	// already in place if a slow startup happens to coincide with one.
 	crate::clock::check_drift(&metrics);
-	// Optional reputation database, migrated at startup. An unreachable
-	// database degrades the antispam engine instead of stopping the mail, unless
-	// `[database] directory = true` makes it the source of the accounts.
 	let reputation_pool = tasks::connect_database(&config, &metrics).await?;
-
-	// The directory's audit counters are bumped from the SMTP, IMAP,
-	// ManageSieve, WebDAV, API and OAuth paths — every directory rebuilt
-	// here shares the same `Arc<Metrics>` so the counters are coherent.
 	store = store.with_metrics(metrics.clone());
-	// When `[database]` is configured the shared ban store is built and
-	// attached to every rebuilt directory. Without a database, the ban
-	// store is absent and the per-connection three-strikes counters are
-	// the only defence; exactly the pre-table behaviour. The policy is
-	// bound here so the periodic sweeper spawned below reads the same
-	// `known_network_window_secs` the operator set.
 	let policy = ban_policy::ban_policy_for(&config);
 	if let Some(pool) = &reputation_pool {
 		store = store.with_ban_store(ban_policy::pg_ban_store(pool, &metrics, policy));
 	}
-	// `into_shared` wires the live store as the SCRAM upgrader, so a
-	// successful cleartext login rewrites a low-iteration verifier.
 	let account_store = store
 		.with_scram_enabled(config.auth.scram)
 		.with_password_policy(crate::password::Policy::from_config(&config.auth))
 		.with_crypto(crypto.clone())
 		.into_shared();
 	let directory = account_store.handle();
-
-	// Local recipients go to account mailboxes; authenticated relay mail
-	// is queued in the outbound spool, DKIM-signed when configured. The
-	// split delivery and its four delivery-path companions (DKIM, SRS,
-	// webhook, ARC sealer) are built by `serve::dkim::build_split_with_companions`.
 	let SplitCompanions {
 		split,
 		dkim_signer,
@@ -137,38 +64,15 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		arc_sealer,
 		mut evidence,
 	} = dkim::build_split_with_companions(&config, &metrics, directory.clone(), crypto.clone())?;
-
-	// Optional greylisting store, shared across SMTP listeners. A background
-	// task prunes stale triplets so the map stays bounded. The store is
-	// PostgreSQL-backed when `[database]` is configured, in-memory otherwise;
-	// the choice is logged once at startup.
 	let greylist = tasks::build_greylist(&config, reputation_pool.as_ref()).await;
-
-	// Optional OAuth2/OIDC token verifier for OAUTHBEARER/XOAUTH2. A malformed
-	// configuration is fatal (fail closed rather than silently disable it). With
-	// OIDC discovery this fetches the JWKS and spawns the hourly refresh task.
 	let oauth_verifier = crate::cli::oauth::advice::build_and_say(&config).await?;
-
-	// ACME HTTP-01 challenge store, shared by the responder listener and (later)
-	// the renewal task that publishes key authorizations into it.
 	let challenge_store = crate::acme::http01::ChallengeStore::new();
-
-	// SPF verification for unauthenticated inbound mail.
 	let spf_dns: Arc<dyn crate::spf::DnsLookup> = Arc::new(crate::spf::SystemDns::from_system()?);
-
-	// Per-listener rate limiters (submission, inbound per-IP, inbound per-sender).
-	// All three are shared across SMTP listeners and each one is created only
-	// when its `[server]` section is configured.
 	let RateLimiters {
 		send_limiter,
 		inbound_ip_limit,
 		inbound_sender_limit,
 	} = ratelimit::build_rate_limiters(&config);
-
-	// Per-listener shared state: tenant limits, correspondent store, daily
-	// new-recipient cap, disk-space guard, max-connections cap, and the
-	// optional scanner and LLM antispam hooks. Fail closed: a malformed
-	// scanner URL or a missing LLM key stops the start.
 	let SmtpSharedState {
 		tenant_limits,
 		correspondents,
@@ -188,8 +92,6 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	} = smtp_state::build_smtp_shared_state(&config, &metrics)?;
 	let mailbox_limits = connection_limits::MailboxLimits::from_config(&config);
 	let http_limits = connection_limits::http_limits(&config);
-	// Every submission (SMTP after AUTH, the API, JMAP) reaches the routing
-	// sink through `submit`; the antivirus scan wraps it there.
 	let sink = crate::antispam::submission_scan::ScanningSink::wrap_with_attachments(
 		config.antispam.scan_authenticated,
 		Arc::new(split),
@@ -198,41 +100,10 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		Some(metrics.clone()),
 		webhook.clone(),
 	)?;
-
-	// One Bayesian store and one training worker for the whole process.
-	// SMTP trains and scores through the store; IMAP and JMAP feed the
-	// worker's bounded queue; account removal drops rows through the store.
 	let bayes = tasks::open_bayes(&config, &reputation_pool, &crypto, &metrics)?;
-
-	// Optional SQL directory backend: load accounts into the store and refresh.
 	tasks::spawn_sql_directory(&config, &reputation_pool, Arc::clone(&account_store)).await?;
-
-	// Optional LDAP directory backend: load the resolution set and refresh it.
 	tasks::spawn_ldap_directory(&config, Arc::clone(&account_store)).await?;
-
-	// The hot-reloadable key set for the bearer middleware. The CLI is a
-	// sibling process that mutates `api_keys.toml`; the watcher reads it
-	// on the same 2 s loop and calls `reload_from` on the set whenever the
-	// fingerprint moves. Built once and shared with the watcher and every
-	// API listener so the bearer middleware and the watcher see the same
-	// `Arc`. A missing or unreadable file at startup leaves the set
-	// empty with a warning; the static token still authenticates, and a corrected file
-	// is observed on the next poll.
-	let api_keys_set = Arc::new(
-		crate::api::ApiKeySet::open(&config.data_dir)
-			.unwrap_or_else(|error| {
-				tracing::warn!(%error, "api_keys.toml unreadable at startup; no API keys loaded until it is fixed");
-				crate::api::ApiKeySet::empty()
-			}),
-	);
-
-	// Pick up CLI edits to the dynamic account files (accounts.toml,
-	// app_passwords.toml, masked.json, aliases.json) while the server
-	// is running. Each tick stats the four files and asks the store
-	// to swap the matching in-memory mirror on a fingerprint change;
-	// the polling interval sits well inside the 5 s deadline the
-	// operators see on the CLI. The same loop watches `api_keys.toml`
-	// and feeds the API-key reloader below.
+	let api_keys_set = startup::api_keys(&config);
 	let warmup = queue::open_warmup(&config, &metrics, webhook.as_ref());
 	let watcher = FileWatcher::new(config.data_dir.clone(), Arc::clone(&account_store))
 		.with_api_keys(Arc::clone(&api_keys_set)
@@ -241,9 +112,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 			Arc::clone(&warmup) as Arc<dyn crate::directory_store::file_watcher::WarmupReloader>
 		)
 		.spawn(crate::directory_store::reload_status::POLL_INTERVAL);
-
 	evidence::spawn(evidence.tasks.take());
-	// The queue worker drains the outbound spool in the background.
 	queue::spawn_queue_worker(
 		&config,
 		crypto.clone(),
@@ -254,13 +123,9 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		warmup,
 		Arc::clone(&evidence.service),
 	)?;
-
-	// DMARC aggregate report flush runs hourly in the background.
 	tasks::spawn_dmarc_flush(&config, Arc::clone(&spf_dns), Arc::clone(&sink))?;
 	tasks::spawn_tlsrpt_reports(&config, Arc::clone(&spf_dns), Arc::clone(&sink))?;
-
 	tasks::spawn_dkim_rotation(&config, &dkim_signer, webhook.as_ref().map(Arc::clone));
-
 	tasks::spawn_alert_engine(
 		&config,
 		Arc::clone(&metrics),
@@ -270,104 +135,40 @@ async fn serve(config: Config) -> std::io::Result<()> {
 			crypto.clone(),
 		)?),
 	);
-
 	tasks::spawn_storage_maintenance(&config);
-
-	// Hourly ban sweep: drops stale auth_failure rows and expired bans so
-	// the tables stay bounded. No-op when no database is configured: the
-	// ban store is absent in that case. The bypass list is purged with the
-	// same window the operator set under `[limits] known-network-window`,
-	// so the sweeper does not fall back to the built-in default.
 	tasks::spawn_ban_sweep(reputation_pool.clone(), policy.known_network_window_secs);
-
-	// TLS acceptor, hot-reloadable variant, SCRAM channel binding, and ACME
-	// renewal task. Loaded here so every listener picks the same acceptor up
-	// later. `[acme]` without `[tls]` warns and continues.
 	let TlsStack {
 		tls_acceptor,
 		reloadable_tls,
 		channel_binding,
 	} = tls::build_tls(&config, challenge_store.clone())?;
-
-	// Pre-pass: collect every port that has a `0.0.0.0` listener so the
-	// `[::]:P` bind path knows whether to switch the socket to
-	// `only_v6(true)` and coexist with the explicit IPv4 bind
-	// instead of failing with `EADDRINUSE`. The set is read once
-	// here so the loop below can hand it to every bind call without
-	// re-walking the listener list.
-	let ipv4_any_ports: std::collections::HashSet<u16> = config
-		.listeners
-		.iter()
-		.filter(|l| matches!(l.addr, std::net::IpAddr::V4(v4) if v4.is_unspecified()))
-		.map(|l| l.socket_addr().port())
-		.collect();
-
+	let ipv4_any_ports = startup::ipv4_any_ports(&config);
 	let mut tasks = Vec::new();
 	let drain = crate::shutdown::Drain::new();
 	for listener_config in &config.listeners {
 		match listener_config.kind {
 			ListenerKind::Api => {
-				// Validation guarantees [api] exists for api listeners.
-				let api = config
-					.api
-					.as_ref()
-					.ok_or_else(|| std::io::Error::other("api listener without [api] section"))?;
-				// Resolve the blob backend the operator configured: a missing
-				// or empty `[storage.blobs]` section defaults to the historical
-				// on-disk pool at `data_dir`; the S3 backend replaces it when
-				// the config names `backend = "s3"`. The constructor fails
-				// closed on missing S3 credentials.
-				let blob_backend = crate::storage::build_blob_backend(
-					&config.data_dir,
-					config.storage.as_ref().and_then(|s| s.blobs.as_ref()),
-				)?;
-				let mut state = crate::api::ApiState::new(
-					&api.token_hash,
-					config.data_dir.clone(),
-					config.domains.clone(),
-					Arc::clone(&account_store),
-					crate::storage::FsSpool::open_with_crypto(&config.data_dir, crypto.clone())?,
-				)
-				.with_delivery_log_days(config.delivery_log_days())
-				.with_webhook(webhook.clone())
-				.with_disabled_domains(config.disabled_domains.clone())
-				.with_max_message_size(max_message_size)
-				.with_max_recipients(max_recipients)
-				.with_quota(
-					config
-						.quota_bytes
-						.unwrap_or(crate::imap::session::DEFAULT_QUOTA_BYTES),
-				)
-				.with_api_keys(Arc::clone(&api_keys_set))
-				.with_admins(api.admins.clone())
-				.with_trusted_proxies(api.trusted_proxies.clone())
-				.with_crypto(crypto.clone())
-				.with_directory(directory.clone())
-				.with_blob_backend(blob_backend)
-				.with_correspondents((*correspondents).clone())
-				.with_class_bindings(Arc::clone(&evidence.bindings))
-				.with_identification(crate::smtp::identification::Policy::from_config(&config))
-				.with_new_recipients_per_day(daily_new_recipients)
-				.with_outbound(Arc::clone(&sink));
-				state = ratelimit::wire_api_submission_limits(
-					state,
+				let state = api_listener::build(
 					&config,
-					&send_limiter,
-					&tenant_limits,
-				);
-				if let Some((store, queue)) = &bayes {
-					state = state
-						.with_training(queue.clone())
-						.with_bayes_store(store.clone());
-				}
-				// Built-in OAuth authorization server, when a signing key is set.
-				if let Some(authz) = tasks::build_authz_server(&config)? {
-					state = state.with_authz(authz);
-				}
+					api_listener::Inputs {
+						account_store: &account_store,
+						directory: &directory,
+						api_keys_set: &api_keys_set,
+						crypto: &crypto,
+						correspondents: &correspondents,
+						evidence: &evidence,
+						sink: &sink,
+						webhook: &webhook,
+						max_message_size,
+						max_recipients,
+						daily_new_recipients,
+						send_limiter: &send_limiter,
+						tenant_limits: &tenant_limits,
+						bayes: &bayes,
+					},
+				)?;
 				let listener = tasks::bind(listener_config, &ipv4_any_ports).await?;
 				let router = crate::api::router(state);
-				// Serve with the peer address attached so API-key CIDR
-				// allowlists can be enforced from `ConnectInfo`.
 				tasks.push(tasks::serve_http(listener, router, http_limits));
 			}
 			ListenerKind::Acme => {
@@ -437,7 +238,6 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				)?);
 			}
 			ListenerKind::Autoconfig | ListenerKind::Autoconfigs => {
-				// `autoconfigs` presents the shared, renewing certificate.
 				let tls = match (listener_config.kind, &reloadable_tls) {
 					(ListenerKind::Autoconfig, _) => None,
 					(_, Some(reloadable)) => Some(reloadable.https()),
@@ -498,8 +298,6 @@ async fn serve(config: Config) -> std::io::Result<()> {
 					.with_data_rate(data_rate)
 					.with_session_limits(session_limits)
 					.with_report_dir(config.data_dir.clone())
-					// The Sent copy of a submission is written into the account's
-					// mailboxes, encrypted at rest like any other stored message.
 					.with_data_dir(config.data_dir.clone())
 					.with_crypto(Arc::new(crypto.clone()));
 				if let Some(pool) = &reputation_pool {
@@ -512,8 +310,6 @@ async fn serve(config: Config) -> std::io::Result<()> {
 					server = server.with_hook(Arc::clone(hook));
 				}
 				server = server.with_attachment_policy(attachment_policy.clone());
-				// LLM hook only fires when the Bayesian corpus is also wired
-				// in: without it the uncertain-band check has nothing to read.
 				if let (Some(llm_hook), Some(_)) = (&llm_hook, &reputation_pool) {
 					server = server.with_llm(crate::antispam::llm::LlmHook {
 						classifier: Arc::clone(&llm_hook.classifier),
@@ -521,19 +317,8 @@ async fn serve(config: Config) -> std::io::Result<()> {
 						high: llm_hook.high,
 					});
 				}
-				// SubjectPass: opt-in via [antispam] subjectpass = true, and
-				// only when the Bayesian corpus is also wired in (the
-				// validator refuses the configuration otherwise).
-				if config.subjectpass.enabled
-					&& let Some(_) = &reputation_pool
-				{
-					match crate::antispam::subjectpass::SubjectPass::open(&config.data_dir) {
-						Ok(pass) => server = server.with_subjectpass(pass),
-						Err(error) => {
-							eprintln!("error: cannot open subjectpass key: {error}");
-							return Err(error);
-						}
-					}
+				if let Some(pass) = startup::subjectpass(&config, reputation_pool.is_some())? {
+					server = server.with_subjectpass(pass);
 				}
 				server = server.with_metrics(Arc::clone(&metrics));
 				if let Some(sealer) = &arc_sealer {
@@ -542,10 +327,6 @@ async fn serve(config: Config) -> std::io::Result<()> {
 				if let Some(store) = &greylist {
 					server = server.with_greylist(Arc::clone(store), config.greylist_delay_secs);
 				}
-				// Bayesian thresholds that decide on their own without the
-				// LLM hook: any unauthenticated, trained-corpus message
-				// scored at or above `junk_at` is delivered to Junk;
-				// above `reject_at` it is refused with `550 5.7.1`.
 				server = server.with_bayes_thresholds(
 					config.antispam.bayes_junk_at,
 					config.antispam.bayes_reject_at,
@@ -563,11 +344,6 @@ async fn serve(config: Config) -> std::io::Result<()> {
 							per_min: limit.per_min,
 						});
 				}
-				// The per-account, per-domain and per-tenant submission
-				// limits are wired through `wire_smtp_submission_limits`,
-				// which is the same helper the regression test in
-				// `crate::cli::serve::tests::ratelimit` uses; the production wiring
-				// has exactly one source of truth.
 				server = ratelimit::wire_smtp_submission_limits(
 					server,
 					&config,
@@ -579,7 +355,6 @@ async fn serve(config: Config) -> std::io::Result<()> {
 					},
 				);
 				server = server.with_disk_guard(Arc::clone(&disk_guard));
-				// Same measure and default as IMAP QUOTA.
 				server = server.with_quota(Arc::new(crate::smtp::quota::MailboxQuota::on_disk(
 					config.data_dir.clone(),
 					crypto.clone(),
@@ -587,10 +362,6 @@ async fn serve(config: Config) -> std::io::Result<()> {
 						.quota_bytes
 						.unwrap_or(crate::imap::session::DEFAULT_QUOTA_BYTES),
 				)));
-				// Per-account rolling 24h new-recipient cap (plan 4.10).
-				// The shared `Arc<CorrespondentStore>` is the one already
-				// opened above; the cap itself comes from the static
-				// config so it is the same number across every listener.
 				server = server
 					.with_correspondents(Arc::clone(&correspondents))
 					.with_class_bindings(Arc::clone(&evidence.bindings));
@@ -615,27 +386,14 @@ async fn serve(config: Config) -> std::io::Result<()> {
 			}
 		}
 	}
-
-	// All privileged ports are now bound; drop OS privileges before serving any
-	// connection so a later compromise cannot act as root (no-op when
-	// `[privileges]` is unset). Fails closed: a failed drop aborts startup.
 	crate::privdrop::drop_privileges(config.privileges.as_ref())?;
-
-	// Run until the first listener fails or a stop signal is received, then
-	// let open SMTP and IMAP connections finish.
 	let stopped = wait::until_stopped(tasks, &drain).await;
-	// Stop the watcher before removing its status file, so a poll cannot
-	// write it back; a status left behind would make the CLI wait on a
-	// server that is gone.
 	watcher.abort();
 	let _ = watcher.await;
 	crate::directory_store::remove_reload_status(&config.data_dir);
 	stopped
 }
-
-mod wait;
-
 mod ban_policy;
-
 #[cfg(test)]
 mod tests;
+mod wait;

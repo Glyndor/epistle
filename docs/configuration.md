@@ -373,11 +373,15 @@ rsa_key_file = "/etc/glyndor/epistle/dkim/example.net.rsa.pem"
 The keys are read when the server starts, like the default key: an unreadable or invalid file stops the start, and a changed key or a new entry takes effect after a restart. Per-domain keys are **not rotated**. Automatic rotation covers the `[dkim]` default only, and it neither publishes nor retires records of a domain listed here, so a listed domain outside the `[dns]` zone does not stop it. To replace a per-domain key, generate one (`epistle dkim-keygen`), publish its record under a new selector, point the entry at it and restart; `epistle dkim rotate --domain <name>` refuses and says the same. `epistle dkim cleanup` never offers a listed key or its record for removal.
 
 ### `[api]`
-Management API (consumed by `epistle-panel`). Closed by default.
+Management API (consumed by `epistle-panel`). Serving requires an `api` listener
+and an `[api]` section; `token_hash` is optional. Without it, bearer-protected
+routes accept only labelled keys from `api_keys.toml`. No current route becomes
+unreachable: SCIM accepts `scim` keys and OAuth uses account credentials or
+codes. See [the API guide](api.md#turn-it-on).
 
 | Key | Meaning |
 |---|---|
-| `token_hash` | `sha256:<hex>` (from `epistle token-hash`) or an argon2id PHC string. |
+| `token_hash` | Optional `sha256:<hex>` (from `epistle token-hash`) or legacy argon2id PHC string. Omit for labelled keys only; an empty string is invalid. |
 | `trusted_proxies` | Optional CIDR list for trusted reverse proxies. Default `[]`. See below. |
 | `admins` | Optional list of account names allowed to authenticate to the admin panel (via `POST /api/v1/auth/verify`). Empty (default) means no account can administer the panel. |
 

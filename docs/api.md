@@ -32,7 +32,7 @@ document, with the listener each one is served on.
 
 ## Turn it on
 
-The API is closed until a listener and a token hash are configured:
+The API needs a listener and an `[api]` section. The static token is optional:
 
 ```toml
 [[listeners]]
@@ -41,8 +41,26 @@ addr = "127.0.0.1"
 port = 8025
 
 [api]
-token_hash = "sha256:<64 hex digits>"
+# Optional operator credential:
+# token_hash = "sha256:<64 hex digits>"
 ```
+
+Without `token_hash`, only labelled keys in `api_keys.toml` authenticate on
+bearer-protected routes. Create one with `epistle api-key create app --account
+ACCOUNT --scope send --expires-in 365d`. `epistle init` with `services.api = true`
+and `epistle service enable api` create the section without a static token;
+`epistle status` reports "no static token configured" as a good state.
+
+No routes become unreachable in this release: every bearer-protected route has
+a per-key scope, including SCIM discovery, Users and Groups (`scim`). OAuth's
+`POST /oauth/device_authorization`, `/oauth/device/approve`, `/oauth/authorize`
+and `/oauth/token` use grant codes or account credentials, independently of the
+static token (and still require an OAuth signing key). A key with every scope
+remains a labelled key; it never becomes the configured static identity.
+A route reserved to the static token with no per-key scope must refuse keys
+with `403 forbidden` when no static token is configured. There are currently
+no such routes. Empty bearers and the literal `sha256:` never match an absent
+hash. Unknown credentials are still `401`, subject to failure limits.
 
 `epistle token-hash` reads a token on stdin and prints the hash. That token
 is the static token: it holds every scope and reaches every domain, so keep

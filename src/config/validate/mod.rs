@@ -4,6 +4,8 @@ use std::collections::HashSet;
 
 use super::{Config, ConfigError};
 
+mod credentials;
+mod listeners;
 mod validate_tenants;
 
 mod validate_database;
@@ -215,141 +217,6 @@ impl Config {
 			.map_err(ConfigError::Invalid)
 	}
 
-	fn validate_api(&self) -> Result<(), ConfigError> {
-		if let Some(api) = &self.api {
-			// Accept both token-hash formats the runtime understands: the
-			// `sha256:<64-hex>` form emitted by `mail token-hash` (the current
-			// default), and a legacy argon2id PHC string.
-			let sha256 = api
-				.token_hash
-				.strip_prefix("sha256:")
-				.is_some_and(|hex| hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_hexdigit()));
-			let argon2id = api.token_hash.starts_with("$argon2id$")
-				&& argon2::password_hash::phc::PasswordHash::new(&api.token_hash).is_ok();
-			if !sha256 && !argon2id {
-				return Err(ConfigError::Invalid(
-					"[api] token_hash must be a `sha256:<hex>` (from `mail token-hash`) or argon2id PHC string".into(),
-				));
-			}
-		}
-		Ok(())
-	}
-
-	fn validate_accounts(&self) -> Result<(), ConfigError> {
-		let domains: HashSet<String> = self
-			.domains
-			.iter()
-			.map(|domain| domain.to_ascii_lowercase())
-			.collect();
-		let mut names = HashSet::new();
-		let mut addresses = HashSet::new();
-		let mut catch_all_domains = HashSet::new();
-		for account in &self.accounts {
-			let name = &account.name;
-			// The name becomes a directory under data_dir: keep it boring.
-			if let Err(fault) = crate::util::account_rule::check(name) {
-				return Err(ConfigError::Invalid(crate::util::account_rule::refusal(
-					name, &fault,
-				)));
-			}
-			if !names.insert(name.clone()) {
-				return Err(ConfigError::Invalid(format!(
-					"duplicate account name \"{name}\""
-				)));
-			}
-			if account.addresses.is_empty() {
-				return Err(ConfigError::Invalid(format!(
-					"account \"{name}\" has no addresses"
-				)));
-			}
-			if let Some(raw) = &account.display_name {
-				crate::directory_store::display_name::validate(raw)
-					.map_err(|why| ConfigError::Invalid(format!("account \"{name}\": {why}")))?;
-			}
-			if let Some(hash) = &account.password_hash {
-				let argon2id = hash.starts_with("$argon2id$")
-					&& argon2::password_hash::phc::PasswordHash::new(hash).is_ok();
-				if !argon2id {
-					return Err(ConfigError::Invalid(format!(
-						"account \"{name}\": password_hash must be an argon2id PHC string"
-					)));
-				}
-			}
-			account.validate_forward().map_err(ConfigError::Invalid)?;
-			for raw in &account.addresses {
-				let address = crate::util::address_reason::parse(raw)
-					.map_err(|why| ConfigError::Invalid(format!("account \"{name}\": {why}")))?;
-				if !domains.contains(address.domain()) {
-					return Err(ConfigError::Invalid(format!(
-						"account \"{name}\": {}",
-						crate::util::address_reason::not_handled(address.domain())
-					)));
-				}
-				let key = crate::util::address::normalize(raw);
-				if !addresses.insert(key.clone()) {
-					let first = self
-						.accounts
-						.iter()
-						.find(|other| other.addresses.contains(&key))
-						.map_or(name.as_str(), |other| other.name.as_str());
-					return Err(ConfigError::Invalid(format!(
-						"address \"{key}\" belongs to both account \"{first}\" and account \"{name}\""
-					)));
-				}
-			}
-			for raw in &account.catch_all {
-				let domain = raw.to_ascii_lowercase();
-				if !domains.contains(&domain) {
-					return Err(ConfigError::Invalid(format!(
-						"account \"{name}\": catch_all domain \"{raw}\" is not a configured domain"
-					)));
-				}
-				if !catch_all_domains.insert(domain) {
-					return Err(ConfigError::Invalid(format!(
-						"domain \"{raw}\" has more than one catch-all account"
-					)));
-				}
-			}
-		}
-		// RFC 5321 §4.5.1: the server MUST accept mail addressed to
-		// `postmaster` at every domain it serves. Without an explicit
-		// `postmaster@<domain>` address or a per-domain catch-all, RCPT TO
-		// for that address would resolve to `UnknownUser` and the server
-		// would 5.1.1 the message — the MUST violation. We warn at validate
-		// time so `config-check` and `serve` both surface the missing
-		// address instead of leaving it for the first inbound bounce
-		// report, but we do NOT reject the config: an upgrade that refuses
-		// to start a previously-running server is a worse failure mode than
-		// the RFC violation it was meant to fix, and operators have been
-		// running without a configured `postmaster@` for a while now. The
-		// runtime still rejects `postmaster@<domain>` at delivery time when
-		// no address or catch-all exists; closing the MUST for real is a
-		// follow-up that converts this warning into a hard error behind an
-		// opt-in flag once we know how many deployments rely on the
-		// permissive behaviour. Skipped when no accounts are configured: an
-		// account-less server has nothing to deliver mail to regardless.
-		// RFC 2142 lists `abuse@` as a SHOULD, not a MUST, so it is not
-		// enforced here — when an operator adds it (explicit address or
-		// catch-all), the existing resolution order accepts it.
-		if !self.accounts.is_empty() {
-			for domain in &self.domains {
-				let domain_lc = domain.to_ascii_lowercase();
-				let key = format!("postmaster@{domain_lc}");
-				if addresses.contains(&key) || catch_all_domains.contains(&domain_lc) {
-					continue;
-				}
-				tracing::warn!(
-					domain = %domain,
-					"domain \"{domain}\" has no `postmaster@<domain>` address and no catch-all; \
-					 RFC 5321 §4.5.1 requires the server to accept mail to postmaster. \
-					 Fix by adding a `postmaster@<domain>` address to an account, or by \
-					 adding the domain to some account's `catch_all`."
-				);
-			}
-		}
-		Ok(())
-	}
-
 	fn validate_domains(&self) -> Result<(), ConfigError> {
 		if !self.listeners.is_empty() && self.domains.is_empty() {
 			return Err(ConfigError::Invalid(
@@ -399,70 +266,6 @@ impl Config {
 				"data_dir \"{}\" must be an absolute path",
 				self.data_dir.display()
 			)));
-		}
-		Ok(())
-	}
-
-	fn validate_listeners(&self) -> Result<(), ConfigError> {
-		let mut seen = HashSet::new();
-		for listener in &self.listeners {
-			let addr = listener.socket_addr();
-			if !seen.insert(addr) {
-				return Err(ConfigError::Invalid(format!(
-					"duplicate listener address {addr}"
-				)));
-			}
-			if listener.kind == crate::config::ListenerKind::Submissions && self.tls.is_none() {
-				return Err(ConfigError::Invalid(format!(
-					"listener {addr} is \"submissions\" (implicit TLS) but no [tls] section is configured"
-				)));
-			}
-			// pop3s is implicit TLS by protocol definition (RFC 2595, port 995):
-			// the only way to speak it is INSIDE a TLS session. Refusing here
-			// surfaces the misconfiguration at validate time instead of letting
-			// serve() fail at bind time with a less actionable error.
-			if listener.kind == crate::config::ListenerKind::Pop3s && self.tls.is_none() {
-				return Err(ConfigError::Invalid(format!(
-					"listener {addr} is \"pop3s\" (implicit TLS) but no [tls] section is configured"
-				)));
-			}
-			if listener.kind == crate::config::ListenerKind::Autoconfigs && self.tls.is_none() {
-				return Err(ConfigError::Invalid(format!(
-					"listener {addr} is \"autoconfigs\" (HTTPS) but no [tls] section is configured"
-				)));
-			}
-			let needs_tls = matches!(
-				listener.kind,
-				crate::config::ListenerKind::Imaps
-					| crate::config::ListenerKind::Imap
-					| crate::config::ListenerKind::ManageSieve
-			);
-			if needs_tls && self.tls.is_none() {
-				return Err(ConfigError::Invalid(format!(
-					"listener {addr} requires a [tls] section (logins never cross plaintext)"
-				)));
-			}
-			// Plaintext-capable listeners (Submission, WebDav, Api, Autoconfig,
-			// Metrics) are accepted without [tls] so the typical "front me with
-			// a TLS proxy" deployment keeps working. The loopback default is
-			// the passive defense: when bound externally, warn at validate
-			// time rather than reject — the next release will add an opt-in
-			// flag, then fail closed by default.
-			if Self::plaintext_listener_warn(listener.kind)
-				&& self.tls.is_none()
-				&& !addr.ip().is_loopback()
-			{
-				tracing::warn!(
-					listener = ?listener.kind,
-					addr = %addr,
-					"no-TLS listener bound externally; configure [tls] or front with a TLS proxy"
-				);
-			}
-			if listener.kind == crate::config::ListenerKind::Api && self.api.is_none() {
-				return Err(ConfigError::Invalid(format!(
-					"listener {addr} is \"api\" but no [api] section is configured"
-				)));
-			}
 		}
 		Ok(())
 	}

@@ -5,150 +5,14 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::Path;
 
-use serde::Serialize;
-
 use crate::cli::init::answers::{Answers, Services};
 use crate::cli::init::apply::ApplyError;
 use crate::config::{Listener, ListenerKind};
 
 pub(super) const STACK_DATABASE_URL: &str = "postgres://epistle@%2Frun%2Fpostgresql/epistle";
 
-/// Build the desired `Config` value from the answers. Each listener
-/// line carries its kind and an explicit `addr`; the operator-visible
-/// default of `127.0.0.1` is no longer the answer for any listener
-/// `init` writes, because loopback-only mail listeners receive no
-/// mail and serve nobody.
-#[derive(Debug, Serialize)]
-pub(super) struct DesiredConfig {
-	pub(super) hostname: String,
-	#[serde(skip_serializing_if = "Option::is_none")]
-	pub(super) public_ipv4: Option<String>,
-	#[serde(skip_serializing_if = "Option::is_none")]
-	pub(super) public_ipv6: Option<String>,
-	pub(super) data_dir: String,
-	pub(super) domains: Vec<String>,
-	pub(super) listeners: Vec<DesiredListener>,
-	pub(super) dkim: DesiredDkim,
-	pub(super) tls: DesiredTls,
-	#[serde(skip_serializing_if = "Option::is_none")]
-	pub(super) dns: Option<DesiredDns>,
-	#[serde(skip_serializing_if = "Option::is_none")]
-	pub(super) database: Option<DesiredDatabase>,
-	/// The `[acme]` block init writes when ACME is on. Absent on
-	/// disk is the "ACME off" shape; a present block carries the
-	/// directory URL, contact list, and domains the renewal loop
-	/// should request certificates for.
-	#[serde(skip_serializing_if = "Option::is_none")]
-	pub(super) acme: Option<DesiredAcme>,
-	pub(super) antispam: DesiredAntispam,
-	/// The attachment policy for a new install. Never merged into an
-	/// existing configuration: see [`NEW_INSTALL_ONLY`].
-	pub(super) attachments: DesiredAttachments,
-}
-
-/// Sections and keys `init` writes only into a configuration it creates.
-/// On an existing file they are left as the operator has them, so an
-/// upgrade that re-runs `init` keeps today's behaviour.
-pub(super) const NEW_INSTALL_ONLY: &[(&str, Option<&str>)] =
-	&[("attachments", None), ("antispam", Some("clamd_on_error"))];
-
-/// The `[attachments]` section for a new install: quarantine disguised
-/// files and macros, flag encrypted archives.
-#[derive(Debug, Serialize)]
-pub(super) struct DesiredAttachments {
-	mode: &'static str,
-	macros: &'static str,
-	encrypted_archives: &'static str,
-}
-
-/// The `[acme]` section `init` writes when the answers (or the
-/// public-hostname heuristic) say ACME should be on. `directory_url`
-/// is the CA's ACME directory endpoint (Let's Encrypt production
-/// today); `contacts` is the list of URIs the CA uses to reach the
-/// operator; `domains` is the list of names a certificate should
-/// cover; `renew_before_days` matches the schema default (30) so
-/// the field appears explicitly and a future change to the schema
-/// default flows through `init` as well.
-#[derive(Debug, Serialize)]
-pub(super) struct DesiredAcme {
-	pub(super) directory_url: String,
-	pub(super) contacts: Vec<String>,
-	pub(super) domains: Vec<String>,
-	pub(super) renew_before_days: u32,
-}
-
-#[derive(Debug, Serialize)]
-pub(super) struct DesiredAntispam {
-	/// The stack's clamd; absent when the stack runs no clamav.
-	#[serde(skip_serializing_if = "Option::is_none")]
-	clamd_socket: Option<String>,
-	/// What a scan clamd cannot run does; absent without clamd.
-	#[serde(skip_serializing_if = "Option::is_none")]
-	clamd_on_error: Option<&'static str>,
-}
-
-#[derive(Debug, Serialize)]
-pub(super) struct DesiredListener {
-	pub(super) kind: String,
-	/// Bind address the listener uses. Always written so the schema
-	/// default (`127.0.0.1`) cannot silently take over: an init
-	/// config that names only `kind` would bind loopback and miss
-	/// every packet the network delivers.
-	pub(super) addr: IpAddr,
-}
-
-#[derive(Debug, Serialize)]
-pub(super) struct DesiredDkim {
-	pub(super) selector: String,
-	pub(super) key_file: String,
-	#[serde(skip_serializing_if = "Option::is_none")]
-	pub(super) rsa_selector: Option<String>,
-	#[serde(skip_serializing_if = "Option::is_none")]
-	pub(super) rsa_key_file: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-pub(super) struct DesiredTls {
-	pub(super) cert_file: String,
-	pub(super) key_file: String,
-}
-
-#[derive(Debug, Serialize)]
-pub(super) struct DesiredDns {
-	pub(super) provider: String,
-	pub(super) zone: String,
-	#[serde(skip_serializing_if = "Option::is_none")]
-	pub(super) token: Option<String>,
-	#[serde(skip_serializing_if = "Option::is_none")]
-	pub(super) token_file: Option<String>,
-	#[serde(skip_serializing_if = "Option::is_none")]
-	pub(super) token_env: Option<String>,
-}
-
-/// The `[database]` section `init` writes when the operator asks
-/// for the database service. The URL is the percent-encoded socket
-/// form (`postgres://epistle@%2Frun%2Fpostgresql/epistle`) so the
-/// same connection string works on the host (where `init` and
-/// `config-check` run) and inside the `mail` container (where
-/// `serve` runs). The password file points at the secret the
-/// compose file mounts; the `mail` container reads it through the
-/// data-directory bind mount at the same path.
-#[derive(Debug, Serialize)]
-pub(super) struct DesiredDatabase {
-	pub(super) url: String,
-	pub(super) password_file: String,
-}
-
-/// The outcome of trying to merge the desired config with whatever is
-/// on disk. `Identical` means the file is already byte-for-byte what we
-/// want and stays untouched; `Wrote` means the file did not exist or
-/// was rewritten; `Updated` means an existing file was overwritten with
-/// a different value.
-pub(crate) enum ConfigWrite {
-	Identical,
-	Wrote,
-	Updated,
-}
+mod types;
+pub(super) use types::*;
 
 /// Construct the desired config tree from the answers and the paths to
 /// the keys `apply` generated.
@@ -330,6 +194,7 @@ pub(super) fn build_config(
 		data_dir: answers.data_dir.display().to_string(),
 		domains: answers.domains.clone(),
 		listeners,
+		api: services.api.then(std::collections::BTreeMap::new),
 		dkim,
 		tls: DesiredTls {
 			cert_file: tls_cert.display().to_string(),

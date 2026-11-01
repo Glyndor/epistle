@@ -164,6 +164,22 @@ control, its test and the residual risks, see the [threat model](threat-model.md
 
 ## Authorization
 
+The static API token is optional. With `[api]` and a listener but no
+`token_hash`, bearer authentication accepts only labelled keys from
+`api_keys.toml`; an absent hash cannot match an empty bearer, `sha256:`, or
+any other value. An explicitly empty or malformed hash is rejected by config
+validation. Init and service enable never generate a static token.
+Every currently protected route has a per-key scope, including SCIM (`scim`);
+OAuth grants authenticate account credentials or codes separately. No route
+becomes unreachable solely by omitting the hash. Any static-only route without
+a per-key scope must refuse keys with `403`, even keys holding every scope.
+
+The unconfigured static path returns a miss without hashing or entering the
+argon2 queue. It is faster than a configured SHA-256 miss, and much faster than
+an uncached legacy argon2id miss. This can disclose whether static authentication
+is enabled, which is configuration state; it cannot disclose a missing secret.
+Configured SHA-256 comparisons and legacy argon2id verification are unchanged.
+
 - An authenticated sender may only use a `MAIL FROM` it owns — no spoofing, no
   null reverse-path from an authenticated session.
 - The message itself must carry exactly one `From` field naming one address the

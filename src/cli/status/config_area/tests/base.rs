@@ -129,3 +129,18 @@ async fn the_verified_email_line_is_information_and_leaves_the_area_green() {
 	assert_eq!(item.status, Level::Ok, "{item:?}");
 	assert_eq!(report.status, Level::Ok, "{report:?}");
 }
+
+#[tokio::test]
+async fn no_static_token_is_a_good_configuration_state() {
+	let dir = tempfile::tempdir().unwrap();
+	let ctx = ctx(dir.path(), "[[listeners]]\nkind = 'api'\n[api]\n");
+	let report = check(&ctx).await;
+	let item = report
+		.items
+		.iter()
+		.find(|item| item.name == "API token")
+		.unwrap();
+	assert_eq!(item.status, Level::Ok);
+	assert_eq!(item.detail, "no static token configured");
+	assert!(report.detail.contains("no static token configured"));
+}

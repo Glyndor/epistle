@@ -57,11 +57,11 @@ fn guided_defaults_finish_all_seven_steps() {
 }
 
 #[test]
-fn guided_retries_hostname_domains_paths_api_and_image_in_place() {
+fn guided_retries_invalid_answers_and_accepts_api_without_a_token() {
 	let input = concat!(
 		"manual\nbad hostname\nmail.example.org\nmail.example.org\nexample.org, example.org\nexample.org\n\n",
 		"127.0.0.1\nnone\nnone\nrelative\n/var/lib/glyndor/epistle/data\n/var/lib/glyndor/epistle/data/config.toml\n/etc/epistle/mail.toml\n",
-		"\n\n\n\n\nyes\nno\n\nepistle:latest\nepistle:dev\n"
+		"\n\n\n\n\nyes\nno\nepistle:latest\nepistle:dev\n"
 	);
 	let (result, text, saved) = drive(input, Draft::new());
 	let answers = result.unwrap_or_else(|error| panic!("{error}: {text}"));
@@ -72,13 +72,15 @@ fn guided_retries_hostname_domains_paths_api_and_image_in_place() {
 		"127.0.0.1",
 		"relative",
 		"configuration and data directories must not overlap",
-		"init cannot mint API credentials",
 		"epistle:latest",
 	] {
 		assert!(text.contains(value), "missing {value}: {text}");
 	}
 	assert_eq!(answers.image.as_deref(), Some("epistle:dev"));
-	assert_eq!(saved["API"], "no");
+	assert_eq!(saved["API"], "yes");
+	assert!(answers.services.api);
+	assert!(!text.contains("API token"));
+	assert!(text.contains("labelled API keys"));
 }
 
 #[test]

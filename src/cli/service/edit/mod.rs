@@ -25,6 +25,9 @@ pub(super) fn listener_document(
 		return Ok((document, current));
 	}
 	if enabled {
+		if kind == ListenerKind::Api && current.api.is_none() {
+			document.set_table_fields(&["api"], &[])?;
+		}
 		let addr = super::default_bind(&current, kind).to_string();
 		document.upsert_element("listeners", "kind", kind.as_str(), &[("addr", addr.into())])?;
 	} else {

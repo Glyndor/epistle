@@ -24,7 +24,10 @@ fn test_config(data_dir: &Path, listeners: Vec<Listener>) -> Config {
 #[test]
 fn run_with_no_listeners_exits_cleanly() {
 	let dir = tempfile::tempdir().expect("tempdir");
-	assert_eq!(run(test_config(dir.path(), vec![])), ExitCode::SUCCESS);
+	assert_eq!(
+		run(test_config(dir.path(), vec![])),
+		std::process::ExitCode::SUCCESS
+	);
 }
 
 #[tokio::test]
