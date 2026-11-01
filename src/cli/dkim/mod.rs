@@ -64,6 +64,11 @@ pub enum DkimCli {
 		/// hand otherwise. Never touches the domain that kept the key.
 		#[arg(long)]
 		finish: bool,
+		/// With `--finish`: retire even when no switch time is recorded or the
+		/// overlap window has not passed. Mail signed before the switch may
+		/// still be queued elsewhere.
+		#[arg(long, requires = "finish")]
+		skip_overlap_check: bool,
 	},
 	/// Remove DKIM keys and TXT records no rotation uses.
 	///
@@ -330,12 +335,13 @@ pub(super) fn dispatch(path: &std::path::Path, action: DkimCli, json: bool) -> E
 		dry_run,
 		wait,
 		finish,
+		skip_overlap_check,
 	} = action
 	{
 		return run_split(
 			path,
 			dry_run,
-			(wait, finish),
+			(wait, finish, skip_overlap_check),
 			json,
 			&mut std::io::stdout().lock(),
 		);
@@ -361,7 +367,7 @@ pub(super) fn dispatch(path: &std::path::Path, action: DkimCli, json: bool) -> E
 pub(super) fn run_split(
 	path: &std::path::Path,
 	dry_run: bool,
-	(wait, finish): (u64, bool),
+	(wait, finish, skip_overlap_check): (u64, bool, bool),
 	json: bool,
 	out: &mut impl std::io::Write,
 ) -> ExitCode {
@@ -371,6 +377,7 @@ pub(super) fn run_split(
 			dry_run,
 			wait,
 			finish,
+			skip_overlap_check,
 		},
 		json,
 		out,

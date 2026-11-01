@@ -93,15 +93,32 @@ async fn evaluate(config: &Config, dns: &dyn DnsLookup) -> AreaReport {
 	}
 	// A split that is not finished: the shared key is still published at a
 	// domain that has a key of its own.
-	let stale = match crate::dkim::stale::names(config) {
-		Ok(candidates) => crate::dkim::stale::published(dns, candidates).await,
-		Err(_) => Vec::new(),
+	let (stale, unchecked) = match crate::dkim::stale::names(config) {
+		Ok(candidates) => {
+			let found = crate::dkim::stale::survey(dns, candidates).await;
+			(found.shared, found.unknown)
+		}
+		Err(why) => {
+			findings.push(Item::new(
+				"DKIM split",
+				Level::Warn,
+				format!("could not check whether the split is finished: {why}"),
+			));
+			(Vec::new(), Vec::new())
+		}
 	};
-	for record in &stale {
+	for (record, _) in &stale {
 		findings.push(Item::new(
 			format!("DKIM split {}", record.name),
 			Level::Warn,
 			"split incomplete: the shared [dkim] key is still published here; `epistle dkim split --finish` retires it after the overlap",
+		));
+	}
+	for (record, why) in &unchecked {
+		findings.push(Item::new(
+			format!("DKIM split {}", record.name),
+			Level::Warn,
+			format!("could not check whether the shared key is still published here: {why}"),
 		));
 	}
 	let mut summary = format!("{ok} records ok");
@@ -110,6 +127,7 @@ async fn evaluate(config: &Config, dns: &dyn DnsLookup) -> AreaReport {
 		(inconclusive, "inconclusive"),
 		(mismatches, "DKIM key mismatch"),
 		(stale.len(), "shared DKIM key still published"),
+		(unchecked.len(), "split state not checkable"),
 		(
 			usize::from(signing_key_failed),
 			"DKIM signing key unreadable",

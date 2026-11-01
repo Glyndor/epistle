@@ -18,6 +18,8 @@ type ListOp<'a> = Pin<Box<dyn Future<Output = Result<Vec<DnsRecord>, ProviderErr
 #[derive(Clone, Default)]
 pub(super) struct Zone {
 	pub records: Arc<Mutex<HashMap<String, Vec<String>>>>,
+	/// The `(name, value)` of every delete the provider was asked for.
+	pub deleted: Arc<Mutex<Vec<(String, String)>>>,
 }
 
 impl Zone {
@@ -52,8 +54,20 @@ impl DnsProvider for Provider {
 
 	fn delete(&self, _zone: &str, record: DnsRecord) -> Op<'_> {
 		let records = Arc::clone(&self.zone.records);
+		let deleted = Arc::clone(&self.zone.deleted);
 		Box::pin(async move {
-			records.lock().unwrap().remove(&record.name);
+			deleted
+				.lock()
+				.unwrap()
+				.push((record.name.clone(), record.value.clone()));
+			// Like a real provider: only the record with that exact value goes.
+			let mut records = records.lock().unwrap();
+			if let Some(values) = records.get_mut(&record.name) {
+				values.retain(|value| *value != record.value);
+				if values.is_empty() {
+					records.remove(&record.name);
+				}
+			}
 			Ok(())
 		})
 	}
@@ -86,6 +100,32 @@ impl DnsLookup for Resolver {
 				.unwrap_or_default()
 		};
 		Box::pin(async move { Ok(seen) })
+	}
+
+	fn addresses(
+		&self,
+		_name: &str,
+	) -> Pin<Box<dyn Future<Output = Result<Vec<IpAddr>, DnsFailure>> + Send + '_>> {
+		Box::pin(async { Ok(Vec::new()) })
+	}
+
+	fn mx(
+		&self,
+		_name: &str,
+	) -> Pin<Box<dyn Future<Output = Result<Vec<String>, DnsFailure>> + Send + '_>> {
+		Box::pin(async { Ok(Vec::new()) })
+	}
+}
+
+/// A resolver that cannot answer.
+pub(super) struct Failing;
+
+impl DnsLookup for Failing {
+	fn txt(
+		&self,
+		_name: &str,
+	) -> Pin<Box<dyn Future<Output = Result<Vec<String>, DnsFailure>> + Send + '_>> {
+		Box::pin(async { Err(DnsFailure::Temporary) })
 	}
 
 	fn addresses(
@@ -153,7 +193,7 @@ pub(super) fn run(
 	install: &Install,
 	options: &super::super::Options,
 	provider: Option<Provider>,
-	resolver: &Resolver,
+	resolver: &dyn DnsLookup,
 ) -> (std::process::ExitCode, String, String, usize) {
 	run_as(install, options, provider, resolver, false)
 }
@@ -163,7 +203,7 @@ pub(super) fn run_as(
 	install: &Install,
 	options: &super::super::Options,
 	provider: Option<Provider>,
-	resolver: &Resolver,
+	resolver: &dyn DnsLookup,
 	json: bool,
 ) -> (std::process::ExitCode, String, String, usize) {
 	let config = install.load();

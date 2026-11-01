@@ -106,6 +106,9 @@ pub(super) struct DkimView {
 	/// Records of the shared `[dkim]` key still published at a domain that
 	/// has a key of its own: the split is not finished while any is listed.
 	stale_records: Vec<String>,
+	/// Records whose state could not be read, so the split cannot be called
+	/// finished: a failure is never read as "gone".
+	stale_unchecked: Vec<String>,
 	records: Vec<RecordView>,
 }
 
@@ -263,16 +266,22 @@ pub(super) async fn build(
 			rsa.as_ref().map(|rsa| rsa.selector.as_str()),
 		),
 	);
-	let stale_records = match dns {
-		Some(dns) => {
-			let candidates = crate::dkim::stale::names(config)?;
-			crate::dkim::stale::published(dns, candidates)
-				.await
-				.into_iter()
-				.map(|record| record.name)
-				.collect()
-		}
-		None => Vec::new(),
+	let (stale_records, stale_unchecked) = match dns {
+		Some(dns) => match crate::dkim::stale::names(config) {
+			Ok(candidates) => {
+				let found = crate::dkim::stale::survey(dns, candidates).await;
+				(
+					found.shared.into_iter().map(|(r, _)| r.name).collect(),
+					found
+						.unknown
+						.into_iter()
+						.map(|(r, why)| format!("{}: {why}", r.name))
+						.collect(),
+				)
+			}
+			Err(why) => (Vec::new(), vec![format!("cannot list the records: {why}")]),
+		},
+		None => (Vec::new(), Vec::new()),
 	};
 	let automatic = !config.dns.is_empty();
 	let rotated_at = state.as_ref().map(|s| s.rotated_at);
@@ -324,6 +333,7 @@ pub(super) async fn build(
 			.collect(),
 		keys,
 		stale_records,
+		stale_unchecked,
 		records,
 	})
 }
@@ -448,6 +458,13 @@ fn render_text(view: &DkimView, out: &mut impl std::io::Write) -> std::io::Resul
 			out,
 			"split incomplete: the shared key is still published at {}; `epistle dkim split --finish` retires it",
 			view.stale_records.join(", ")
+		)?;
+	}
+	if !view.stale_unchecked.is_empty() {
+		writeln!(
+			out,
+			"split: could not check whether the shared key is still published ({})",
+			view.stale_unchecked.join("; ")
 		)?;
 	}
 	for record in &view.records {
