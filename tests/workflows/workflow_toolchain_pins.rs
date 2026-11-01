@@ -27,8 +27,9 @@
 //! Pin values are compared after stripping a trailing `.0` so `1.99` and
 //! `1.99.0` agree: they are the same compiler written two ways. `1.99`
 //! and `1.99.1` do not agree, same major.minor but a different patch.
-//! `nightly` is exempt by value (not by file name): fuzzing requires it
-//! and pinning it to a date would defeat the point, but exempting it by
+//! `nightly` and a dated `nightly-YYYY-MM-DD` are exempt by value (not by file
+//! name): fuzzing requires a nightly, and a date keeps a compiler regression of
+//! the day from failing every job, but exempting it by
 //! value rather than by file keeps the rule visible if some other site
 //! starts using nightly.
 //!
@@ -126,7 +127,7 @@ fn workflow_toolchain_pins_agree() {
 	// not.
 	let pins: Vec<(String, String, PinForm)> = pins
 		.into_iter()
-		.filter(|(_, v, _)| v != "nightly")
+		.filter(|(_, v, _)| v != "nightly" && !v.starts_with("nightly-"))
 		.collect();
 
 	let mut by_value: BTreeMap<String, Vec<(String, String, PinForm)>> = BTreeMap::new();

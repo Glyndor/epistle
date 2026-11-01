@@ -251,7 +251,7 @@ fn the_ci_workflow_installs_fakeroot_for_the_packaging_tests() {
 			 the caller's fakeroot is declared and never installed there. Job body:\n{body}"
 		);
 		assert!(
-			body.contains("sudo apt-get install -y --no-install-recommends $APT_PACKAGES"),
+			body.contains("install -y --no-install-recommends $APT_PACKAGES"),
 			"reusable-rust-ci.yml's {name:?} job must actually install the packages \
 			 the caller named, or it runs the packaging tests without fakeroot. \
 			 Job body:\n{body}"

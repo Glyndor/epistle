@@ -93,10 +93,16 @@ jobs:
         with:
           persist-credentials: false
 
+      # Pinned to a dated nightly. On 2026-11-01 the floating `nightly` stopped
+      # compiling `ldap3` (error[E0391]: cycle detected when computing when
+      # `lber::structures::explicit::ExplicitTag` needs async drop), which failed
+      # every fuzz job on every pull request that touched the fuzz lockfile and
+      # would have failed the daily run on main. 2026-10-31 built the whole fuzz
+      # crate. Move the date forward when a newer nightly builds it again.
       - name: Install nightly toolchain
         run: |
-          rustup toolchain install nightly --profile minimal
-          rustup default nightly
+          rustup toolchain install nightly-2026-10-31 --profile minimal
+          rustup default nightly-2026-10-31
 
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
