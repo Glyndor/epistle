@@ -979,7 +979,7 @@ sequence and its exit code becomes epistle's exit code.
 | `sudo epistle stack logs [--follow] [SERVICE]` | Streams service logs. |
 | `sudo epistle stack restart [SERVICE]` | Restarts the stack or one service. |
 | `sudo epistle stack stop [SERVICE]` / `sudo epistle stack start [SERVICE]` | Stop or start the whole stack, or one service, without removing containers or the autostart unit. `stack stop mail` is how to take the mail server down for `epistle restore` while the database stays up to receive the dump. |
-| `sudo epistle stack update` | Renders `compose.yaml` again with this release's code, shows what changed and replaces it, then runs `podup up -d` so only changed services are recreated. In default mode it also restarts `mail` when its definition did not change, so it runs the host binary the new .deb installed; in custom image mode it runs `podup pull` first. Before any of that it dumps the stack's database to `<data_dir>/backups/pre-<version>-<timestamp>.sql.gz` (mode 0600, the newest three `pre-*` dumps kept), because the new server migrates the schema when it starts; a failed dump stops the update before anything changes. Afterwards it waits up to five minutes for `mail` to report healthy and runs the `config`, `ports` and `db` checks of `epistle status`; a failure names the area and exits non-zero, and the apt upgrade prints it framed with the rollback command. Data and volumes are kept. Before it writes the new file it moves the storage and OAuth signing keys out of data_dir, and once `db` runs it takes SUPERUSER away from an `epistle` role an older release created (see [the container stack](operations/container.md#the-database-roles)). |
+| `sudo epistle stack update` | Renders `compose.yaml` again with this release's code, shows what changed and replaces it, then runs `podup up -d` so only changed services are recreated. In default mode it also restarts `mail` when its definition did not change, so it runs the host binary the new .deb installed; in custom image mode it runs `podup pull` first. Before any of that it dumps the stack's database to `<data_dir>/backups/pre-<version>-<timestamp>.sql.gz` (mode 0600, the newest three `pre-*` dumps kept while the update runs), because the new server migrates the schema when it starts; a failed dump stops the update before anything changes. Afterwards it waits up to five minutes for `mail` to report healthy and runs the `config`, `ports` and `db` checks of `epistle status`; a failure names the area and exits non-zero, and the apt upgrade prints it framed with the rollback command. When all of that passes, it deletes the `pre-<version>-*` dumps it took (a dump `db upgrade` took stays); a failed update keeps them. Data and volumes are kept. Before it writes the new file it moves the storage and OAuth signing keys out of data_dir, and once `db` runs it takes SUPERUSER away from an `epistle` role an older release created (see [the container stack](operations/container.md#the-database-roles)). |
 | `sudo epistle stack resources [--json]` | Lists each service's `mem_limit` and `pids_limit` from `compose.yaml`, and their sum. Does not run `podup`. |
 | `sudo epistle stack resources set SERVICE [--memory SIZE] [--pids N] [--json]` | Changes the limit of `mail`, `db`, `clamav` or `freshclam` (`SIZE` is a whole number with `k`, `m` or `g`) in `compose.yaml`; `mail` is refused less than five messages of `max_message_size` and 256 MiB (381 MiB at the default 25 MiB), so the budget derived from its limit holds one message, where `init` records answered limits, so `stack update` keeps it. The running container keeps its old limit until `sudo epistle stack update` recreates it. `set` and `stack update` take the same lock on `compose.yaml` (`.compose.yaml.lock` beside it), so one waits for the other and neither loses the other's change. |
 | `sudo epistle stack rollback [--to VERSION] [--yes]` | Asks before it changes anything (`--yes` skips the question; without a terminal and without `--yes` it exits 2). Puts back the binary the last upgrade replaced (the preinst keeps the two newest under `/var/lib/epistle-rollback`, root:root mode 0700) and, when the new release already migrated the schema, restores the dump `stack update` took before the restart. See [Rolling back an upgrade](#rolling-back-an-upgrade). |
@@ -1082,7 +1082,14 @@ The package creates the store on install or configure and saves the replaced
 `/usr/bin/epistle` on upgrade as one directory per version holding the binary
 and its digest. It stages that pair in an exclusive random temporary directory,
 checks it, and moves it into the store with a single rename, so a copy that
-fails never replaces the one already saved. It keeps the two newest versions.
+fails never replaces the one already saved. It keeps the two newest versions
+until the upgrade is verified: when `stack update` succeeds inside the
+postinst, the postinst removes the saved generations and any staging directory
+left in the store, leaving files it did not create alone, and says so on stderr.
+An upgrade whose stack update failed, was skipped or found the stack switched
+off keeps its copies, so a failed upgrade can still go back. A problem that
+shows up after a verified upgrade has no rollback left; the dumps are gone with
+it.
 The version it saves has to be digits and dots, the only shape `stack rollback`
 can select, so a name carrying a Debian revision, a tilde or a colon is
 refused with a warning instead of taking a slot no listing can choose; so is
@@ -1098,9 +1105,12 @@ changes Debian metadata): no new copy is saved and the line is the only trace.
 Copies from the old `/var/lib/glyndor/epistle/rollback/` layout are ignored and
 never installed, including when owned by root. If only legacy copies exist,
 rollback remains unavailable until an upgrade saves a trusted copy in the new
-store. The package warns when it finds legacy copies. Purging the package
-removes the new store. Database dumps remain under `<data_dir>/backups`, where
-`stack update` can write them as the service account.
+store. The package warns when it finds legacy copies, and removes them together
+with the new store's generations once a stack update has verified the upgrade.
+Purging the package removes
+the new store. Database dumps live under `<data_dir>/backups`, where
+`stack update` can write them as the service account, and it deletes them
+itself once the update is verified.
 
 Limits:
 

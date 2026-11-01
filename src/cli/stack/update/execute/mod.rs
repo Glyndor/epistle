@@ -15,6 +15,9 @@ pub(super) trait UpdateHost {
 	/// Keep the dump as `pre-<version>-<timestamp>.sql.gz` under
 	/// `data_dir/backups`, pruning older ones.
 	fn keep_dump(&mut self, sql: &[u8]) -> Result<PathBuf, String>;
+	/// Delete the `pre-<version>-*` dumps once the update is verified;
+	/// returns how many went.
+	fn discard_dumps(&mut self) -> Result<usize, String>;
 	/// Take the superuser attribute away from the `epistle` role when an
 	/// older install still has it; `true` when it did.
 	fn harden_database(&mut self) -> Result<bool, String>;
@@ -95,6 +98,20 @@ pub(super) fn execute(host: &mut impl UpdateHost, plan: &UpdatePlan) -> Result<(
 		));
 	}
 	host.log("mail is healthy and config, ports and db pass");
+	// The dumps only exist so `stack rollback` can put the schema back; a
+	// verified update has nothing to go back from. A failure here is a
+	// leftover, not a failed update.
+	if host.has_database() {
+		match host.discard_dumps() {
+			Ok(0) => {}
+			Ok(count) => host.log(&format!(
+				"removed {count} dump(s) taken before the update, which came back healthy"
+			)),
+			Err(error) => host.log(&format!(
+				"could not remove the dumps taken before the update: {error}"
+			)),
+		}
+	}
 	Ok(())
 }
 
