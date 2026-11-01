@@ -18,6 +18,7 @@ mod set;
 mod show;
 #[cfg(test)]
 mod tests;
+mod unset;
 mod write;
 
 pub use set::ProviderArgs;
@@ -58,8 +59,12 @@ pub enum ProviderCli {
 		#[command(flatten)]
 		args: Box<ProviderArgs>,
 	},
-	/// Remove the provider and return to manual DNS.
-	Unset,
+	/// Remove the provider, or only the entry of one zone with --zone.
+	Unset {
+		/// The zone whose entry is removed.
+		#[arg(long)]
+		zone: Option<String>,
+	},
 	/// List the zone's records through the provider (read only).
 	Test,
 }
@@ -133,14 +138,19 @@ fn execute_with(
 				restart,
 			);
 		}
-		ProviderCli::Unset => {
-			let change: resource::Change = Box::new(|document, _| {
-				document
+		ProviderCli::Unset { zone } => {
+			let fields = zone.as_ref().map_or_else(
+				|| serde_json::json!({}),
+				|zone| serde_json::json!({ "zone": zone }),
+			);
+			let change: resource::Change = Box::new(move |document, _| match &zone {
+				Some(zone) => unset::zone(document, zone).map_err(resource::ResourceError::Failure),
+				None => document
 					.remove_table(&["dns"])
 					.map(|_| ())
-					.map_err(resource::ResourceError::Failure)
+					.map_err(resource::ResourceError::Failure),
 			});
-			(change, "provider unset", serde_json::json!({}))
+			(change, "provider unset", fields)
 		}
 	};
 	let edit = resource::Edit {

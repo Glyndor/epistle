@@ -37,21 +37,46 @@ fn describe(dns: &Dns) -> Vec<(&'static str, String)> {
 }
 
 pub(super) fn run(config: &Config, json: bool, out: &mut impl Write) -> Result<(), String> {
-	let Some(dns) = &config.dns else {
-		if json {
-			return resource::json(out, &Value::Null);
-		}
-		return writeln!(out, "provider\tunset").map_err(|error| error.to_string());
-	};
-	let rows = describe(dns);
-	if json {
-		let map: Map<String, Value> = rows
+	let rows = |dns: &Dns| -> Map<String, Value> {
+		describe(dns)
 			.into_iter()
 			.map(|(k, v)| (k.into(), json!(v)))
-			.collect();
-		return resource::json(out, &map);
+			.collect()
+	};
+	match config.dns.len() {
+		0 => {
+			if json {
+				return resource::json(out, &Value::Null);
+			}
+			writeln!(out, "provider\tunset").map_err(|error| error.to_string())
+		}
+		1 => {
+			let dns = config.dns.first().ok_or("no provider")?;
+			if json {
+				return resource::json(out, &rows(dns));
+			}
+			print_rows(dns, out)
+		}
+		// Several entries: a list in JSON, and one block per entry in text,
+		// each starting with its `provider` and `zone` rows.
+		_ => {
+			if json {
+				let list: Vec<_> = config.dns.iter().map(rows).collect();
+				return resource::json(out, &list);
+			}
+			for (index, dns) in config.dns.iter().enumerate() {
+				if index > 0 {
+					writeln!(out).map_err(|error| error.to_string())?;
+				}
+				print_rows(dns, out)?;
+			}
+			Ok(())
+		}
 	}
-	for (key, value) in rows {
+}
+
+fn print_rows(dns: &Dns, out: &mut impl Write) -> Result<(), String> {
+	for (key, value) in describe(dns) {
 		writeln!(out, "{key}\t{value}").map_err(|error| error.to_string())?;
 	}
 	Ok(())

@@ -32,11 +32,17 @@ pub(super) fn run(config: &Config, json: bool, out: &mut impl Write) -> Result<(
 	})
 }
 
+type Build<'a> = &'a mut dyn FnMut(
+	&crate::config::Dns,
+	&str,
+)
+	-> Option<std::sync::Arc<dyn crate::dns::provider::DnsProvider>>;
+
 fn run_with(
 	config: &Config,
 	json: bool,
 	out: &mut impl Write,
-	build: impl FnOnce(
+	mut build: impl FnMut(
 		&crate::config::Dns,
 		&str,
 	) -> Option<std::sync::Arc<dyn crate::dns::provider::DnsProvider>>,
@@ -50,22 +56,85 @@ fn run_with(
 	}
 	names.sort();
 	names.dedup();
-	let report = if let Some(dns) = &config.dns {
-		if dns.provider.eq_ignore_ascii_case("manual") {
-			AccessReport::unknown()
-		} else if let Some(provider) = build(dns, &config.hostname) {
-			let runtime = tokio::runtime::Builder::new_current_thread()
-				.enable_all()
-				.build()
-				.map_err(|_| "cannot start the async runtime")?;
-			runtime.block_on(provider.check_access(&dns.zone, &names))
-		} else {
-			AccessReport::failed("provider credentials could not be resolved")
-		}
-	} else {
-		AccessReport::unknown()
+	// A single `[dns]` reports as it always did. Several `[[dns]]` entries
+	// each get their own report, labelled with the zone, so one credential
+	// that fails is not hidden behind another that works.
+	if config.dns.len() <= 1 {
+		let report = match config.dns.first() {
+			Some(dns) => entry_report(dns, &config.hostname, &names, &mut build)?,
+			None => AccessReport::unknown(),
+		};
+		return print(&report, json, out);
+	}
+	let mut reports = Vec::new();
+	for dns in &config.dns {
+		let own: Vec<String> = names
+			.iter()
+			.filter(|name| {
+				crate::dns::router::contains(
+					&crate::dns::router::normalize(&dns.zone),
+					&crate::dns::router::normalize(name),
+				)
+			})
+			.cloned()
+			.collect();
+		reports.push((dns, entry_report(dns, &config.hostname, &own, &mut build)?));
+	}
+	print_all(&reports, json, out)
+}
+
+/// The access report of one entry: unknown for `manual`, a failure when its
+/// credentials cannot be resolved, and the provider's own findings otherwise.
+fn entry_report(
+	dns: &crate::config::Dns,
+	hostname: &str,
+	names: &[String],
+	build: Build<'_>,
+) -> Result<AccessReport, String> {
+	if dns.provider.eq_ignore_ascii_case("manual") {
+		return Ok(AccessReport::unknown());
+	}
+	let Some(provider) = build(dns, hostname) else {
+		return Ok(AccessReport::failed(
+			"provider credentials could not be resolved",
+		));
 	};
-	print(&report, json, out)
+	let runtime = tokio::runtime::Builder::new_current_thread()
+		.enable_all()
+		.build()
+		.map_err(|_| "cannot start the async runtime")?;
+	Ok(runtime.block_on(provider.check_access(&dns.zone, names)))
+}
+
+/// The reports of several entries: a JSON list with the zone and provider of
+/// each, or the usual lines with the zone in front.
+fn print_all(
+	reports: &[(&crate::config::Dns, AccessReport)],
+	json: bool,
+	out: &mut impl Write,
+) -> Result<(), String> {
+	if json {
+		let list: Vec<_> = reports
+			.iter()
+			.map(|(dns, report)| {
+				serde_json::json!({
+					"zone": dns.zone,
+					"provider": dns.provider,
+					"report": report,
+				})
+			})
+			.collect();
+		return super::resource::json(out, &list);
+	}
+	for (dns, report) in reports {
+		let zone = crate::cli::term::sanitize(&dns.zone);
+		let mut lines = Vec::new();
+		print(report, false, &mut lines)?;
+		for line in String::from_utf8_lossy(&lines).lines() {
+			writeln!(out, "{zone}\t{line}").map_err(|error| error.to_string())?;
+		}
+	}
+	Ok(())
 }
 
 pub(super) fn print(report: &AccessReport, json: bool, out: &mut impl Write) -> Result<(), String> {

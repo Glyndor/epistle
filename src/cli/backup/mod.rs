@@ -482,12 +482,17 @@ fn warn_externally_referenced(config: &Config, archived: &usize, warnings: &mut 
 			}
 		}
 	}
-	if let Some(dns) = &config.dns {
+	for dns in &config.dns {
+		let section = if config.dns.len() > 1 {
+			format!("[[dns]] zone = {}", dns.zone)
+		} else {
+			"[dns]".to_string()
+		};
 		if let Some(path) = &dns.token_file {
-			entries.push(format!("[dns] token_file = {}", path.display()));
+			entries.push(format!("{section} token_file = {}", path.display()));
 		}
 		if let Some(path) = &dns.credentials_file {
-			entries.push(format!("[dns] credentials_file = {}", path.display()));
+			entries.push(format!("{section} credentials_file = {}", path.display()));
 		}
 	}
 

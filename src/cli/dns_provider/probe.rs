@@ -14,11 +14,37 @@ pub(super) fn run(
 	out: &mut impl Write,
 	status: &mut impl Write,
 ) -> Result<ExitCode, super::resource::ResourceError> {
-	let dns = config.dns.as_ref().ok_or_else(|| {
-		super::resource::ResourceError::from(
+	if config.dns.is_empty() {
+		return Err(super::resource::ResourceError::from(
 			"no DNS provider is configured; run `epistle dns provider set` first",
-		)
-	})?;
+		));
+	}
+	// Every entry is tried, so one credential that fails does not hide the
+	// state of the others; the command fails when any of them did.
+	let mut failed = false;
+	for dns in &config.dns {
+		match entry(config, dns, out, status) {
+			Ok(_) => {}
+			Err(error) if config.dns.len() > 1 => {
+				writeln!(status, "{}: {error}", crate::cli::term::sanitize(&dns.zone))
+					.map_err(|error| super::resource::ResourceError::Failure(error.to_string()))?;
+				failed = true;
+			}
+			Err(error) => return Err(error),
+		}
+	}
+	if failed {
+		return Err("at least one DNS provider failed the test".into());
+	}
+	Ok(ExitCode::SUCCESS)
+}
+
+fn entry(
+	config: &Config,
+	dns: &crate::config::Dns,
+	out: &mut impl Write,
+	status: &mut impl Write,
+) -> Result<ExitCode, super::resource::ResourceError> {
 	if dns.provider.eq_ignore_ascii_case("manual") {
 		return Err("the manual provider has no API to test".into());
 	}

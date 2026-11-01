@@ -116,8 +116,17 @@ pub(crate) fn reconcile(
 	use toml::Value;
 	match (existing, desired) {
 		(Value::Table(mut existing_table), Value::Table(desired_table)) => {
+			// `init` writes one `[dns]` table. A list of `[[dns]]` tables is
+			// what an operator built with `dns provider set --zone`, one
+			// credential per zone; replacing it would drop every zone but one.
+			let keep_dns_list = existing_table
+				.get("dns")
+				.is_some_and(|dns| matches!(dns, Value::Array(_)));
 			for key in INIT_MANAGED_KEYS {
 				if *key == "listeners" && keep_existing_listeners {
+					continue;
+				}
+				if *key == "dns" && keep_dns_list {
 					continue;
 				}
 				existing_table.remove(*key);
@@ -133,6 +142,9 @@ pub(crate) fn reconcile(
 			}
 			for (key, value) in desired_table {
 				if key == "listeners" && keep_existing_listeners {
+					continue;
+				}
+				if key == "dns" && keep_dns_list {
 					continue;
 				}
 				let new = match existing_table.remove(&key) {

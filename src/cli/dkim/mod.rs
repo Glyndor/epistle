@@ -128,10 +128,9 @@ pub(super) struct Plan {
 /// operator hears a refusal now instead of finding it in the server log.
 pub(super) fn preflight(config: &Config, now: u64) -> Result<Plan, String> {
 	let dkim = config.dkim.as_ref().ok_or("[dkim] is not configured")?;
-	let dns = config
-		.dns
-		.as_ref()
-		.ok_or("[dns] is not configured: the new key could not be published")?;
+	if config.dns.is_empty() {
+		return Err("[dns] is not configured: the new key could not be published".into());
+	}
 	let DkimRotationPlan::Run {
 		signing_domains,
 		out_of_zone,
@@ -144,16 +143,24 @@ pub(super) fn preflight(config: &Config, now: u64) -> Result<Plan, String> {
 		return Err(format!(
 			"signing domain(s) {} lie outside the [dns] zone {}: their TXT records cannot be kept in sync",
 			out_of_zone.join(", "),
-			dns.zone
+			config.dns.zones().join(", ")
 		));
 	}
 	if signing_domains.is_empty() {
 		return Err("no signing domain is configured, so nothing could be published".to_string());
 	}
-	if dns.build().is_none() {
-		return Err(
-			"the [dns] provider cannot be built (missing or empty credentials)".to_string(),
-		);
+	// Every signing domain is published through the entry of its own zone,
+	// so each of those entries has to build.
+	for domain in &signing_domains {
+		let buildable = config
+			.dns
+			.entry_for(domain)
+			.is_some_and(|dns| dns.build().is_some());
+		if !buildable {
+			return Err(
+				"the [dns] provider cannot be built (missing or empty credentials)".to_string(),
+			);
+		}
 	}
 	let active = rotate::active_ed25519(dkim, &config.data_dir).map_err(|e| e.to_string())?;
 	let next = selector_for(now);

@@ -10,7 +10,7 @@ use super::*;
 use clap::Parser;
 use std::os::unix::fs::PermissionsExt;
 
-const TOKEN: &str = "/etc/epistle/secrets/dns.token";
+pub(super) const TOKEN: &str = "/etc/epistle/secrets/dns.token";
 
 /// A stack install whose generated compose file carries no token mount.
 fn stack() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
@@ -19,7 +19,7 @@ fn stack() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
 
 /// A stack install with the given configuration body and the given mounts in
 /// the `mail` service of the generated compose file.
-fn stack_with(
+pub(super) fn stack_with(
 	body: &str,
 	mounts: &[(&str, &str)],
 ) -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
@@ -73,7 +73,7 @@ fn action_of(provider: &str, token_flags: &[&str]) -> DnsCli {
 }
 
 /// The mounts of the `mail` service, as the container engine reads them.
-fn mail_mounts(compose: &std::path::Path) -> Vec<serde_json::Value> {
+pub(super) fn mail_mounts(compose: &std::path::Path) -> Vec<serde_json::Value> {
 	let document: serde_json::Value =
 		serde_json::from_str(&std::fs::read_to_string(compose).unwrap()).unwrap();
 	document["services"]["mail"]["volumes"]
@@ -83,7 +83,7 @@ fn mail_mounts(compose: &std::path::Path) -> Vec<serde_json::Value> {
 }
 
 /// Whether the token file is mounted read-only at its own path.
-fn mounted(compose: &std::path::Path, path: &str) -> bool {
+pub(super) fn mounted(compose: &std::path::Path, path: &str) -> bool {
 	mail_mounts(compose).iter().any(|mount| {
 		mount["source"] == path && mount["target"] == path && mount["read_only"] == true
 	})
@@ -111,7 +111,7 @@ fn a_token_file_is_mounted_into_the_mail_container() {
 	assert_eq!(result.unwrap(), ExitCode::SUCCESS);
 	let config = Config::load(&path).unwrap();
 	assert_eq!(
-		config.dns.unwrap().token_file.as_ref(),
+		config.dns.first().unwrap().token_file.as_ref(),
 		Some(&std::path::PathBuf::from(TOKEN)),
 		"the configuration has to name the token file"
 	);
