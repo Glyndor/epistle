@@ -512,6 +512,24 @@ runuser -u glyndor-epistle -- env XDG_RUNTIME_DIR=/run/user/$(id -u glyndor-epis
 	'PGPASSWORD="$(cat /run/secrets/epistle_db_admin_password)" psql -h /var/run/postgresql -U epistle_admin -d epistle'
 ```
 
+### Limits of the commands run for the service account
+
+When you run `epistle init`, `stack`, `backup`, `restore` or `move-subids` as
+root, epistle starts the part that belongs to `glyndor-epistle` as a direct
+child that changes user, group and supplementary groups itself. Before 0.12.6
+it went through `runuser`, which killed the command two seconds after a stop
+signal to the process group and also applied the PAM `limits` of the account
+(`pam_limits`, from `/etc/security/limits.conf` and `limits.d`).
+
+The direct child does not open a PAM session, so those per-account limits do
+not apply to it. It keeps the limits of the root process that started it
+(`ulimit -a` in your root shell, or `LimitNOFILE` and friends in the unit that
+runs it). If you set `nofile` or `nproc` for `glyndor-epistle` in
+`limits.conf` and rely on them for a command run from a root shell, set the
+same values in that shell first, for example `ulimit -n 65536`. The services
+the stack runs under rootless Podman start from the account's own user manager
+and do not come from these commands.
+
 ## Backup and restore
 
 `epistle backup` and `epistle restore` detect the container stack
