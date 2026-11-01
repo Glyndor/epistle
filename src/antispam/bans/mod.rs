@@ -160,11 +160,14 @@ pub trait BanStore: std::fmt::Debug + Send + Sync {
 		now_secs: u64,
 	) -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<BanInfo>> + Send + '_>>;
 
-	/// A successful authentication clears the ban and the failure
-	/// history for `subject`.
+	/// A successful authentication clears the failure history for
+	/// `subject`, and the ban row once it has expired. A ban still in force
+	/// at `now_secs` is left alone, with its failures: a success cannot lift
+	/// it.
 	fn clear_success(
 		&self,
 		subject: &str,
+		now_secs: u64,
 	) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>>;
 
 	/// Whether the operator's allow list covers `ip`. An allow-listed client

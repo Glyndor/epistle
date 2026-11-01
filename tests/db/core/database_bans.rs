@@ -352,7 +352,7 @@ async fn the_backoff_caps_at_24h() {
 }
 
 #[tokio::test]
-async fn success_clears_the_ban_and_the_failures() {
+async fn success_clears_the_failures_once_the_ban_is_spent() {
 	let Some(url) = database_url() else {
 		eprintln!("skipping: DATABASE_URL not set");
 		return;
@@ -370,8 +370,9 @@ async fn success_clears_the_ban_and_the_failures() {
 		store.record_failure(&subject, "smtp", now).await;
 	}
 	assert!(store.is_banned(&subject, now).await.is_some());
-	store.clear_success(&subject).await;
-	assert!(store.is_banned(&subject, now).await.is_none());
+	let after_ban = now + shrink_policy().base_secs + 1;
+	assert!(store.is_banned(&subject, after_ban).await.is_none());
+	store.clear_success(&subject, after_ban).await;
 	let failures: i64 = sqlx::query_scalar("SELECT count(*) FROM auth_failure WHERE subject = $1")
 		.bind(&subject)
 		.fetch_one(&pool)
