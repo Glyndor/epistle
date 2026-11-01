@@ -1,3 +1,2 @@
 # path<TAB>ceiling<TAB>reason. Use . for the repository root.
 # Measured with scripts/folder-limit/folder-limit.sh. A ceiling may only go down; remove an entry once the folder holds 20 files or fewer.
-fuzz/fuzz_targets	21	cargo-fuzz names each target by file; moving them needs [[bin]] path edits in fuzz/Cargo.toml.
