@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [develop, main]
+    branches: [main]
   pull_request:
   # Required checks `rust / Format & lint`, `rust / Test` and `rust / Coverage`: the merge queue fires
   # `merge_group` on a temporary `gh-readonly-queue/...` branch and a required check that

@@ -22,7 +22,7 @@ on:
     branches: [develop, main]
     paths:
       - "src/directory_store/**"
-      - "tests/ldap.rs"
+      - "tests/system/ldap.rs"
       - "tests/fixtures/ldap/**"
       - ".github/workflows/ldap.yml"
       - "Cargo.toml"
@@ -35,6 +35,15 @@ on:
       - ".github/workflows/ldap.yml"
       - "Cargo.toml"
       - "Cargo.lock"
+      # Files that only exist under #[cfg(test)] cannot change what this job
+      # builds or runs, so a pull request that touches only them does not pay
+      # for it. Same exclusions as db.yml. The module that declares them
+      # (`mod tests;` in a mod.rs) is not matched, and the push above still
+      # runs everything.
+      - "!src/**/tests/**"
+      - "!src/**/*_tests*.rs"
+      - "!src/**/tests_*.rs"
+      - "!src/**/test_support.rs"
 
 # A newer push to a pull request supersedes the run in flight. Queue and
 # branch runs are never cancelled: only a pull_request event is.
@@ -70,6 +79,8 @@ jobs:
       SQLX_OFFLINE: "true"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Build the test OpenLDAP image
         # osixia/openldap is the only OpenLDAP image on Docker Hub
