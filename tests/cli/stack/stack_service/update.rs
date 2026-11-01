@@ -214,3 +214,119 @@ fn update_waits_while_another_command_holds_the_compose_file() {
 	);
 	assert!(changes(&log).len() > 1, "update ran once the lock was free");
 }
+
+/// A `podman` shim that logs each call and answers the four the update
+/// makes about images: which references exist and what they are, which
+/// images a container was made from, and `rmi`.
+fn podman_shim(log: &std::path::Path, known: &[(&str, char)], used: &[char]) -> String {
+	let exists: String = known
+		.iter()
+		.map(|(reference, _)| format!("{reference}) exit 0 ;;\n"))
+		.collect();
+	let inspect: String = known
+		.iter()
+		.map(|(reference, id)| {
+			format!(
+				"{reference}) printf '%s\\n' {} ;;\n",
+				id.to_string().repeat(64)
+			)
+		})
+		.collect();
+	let in_use: String = used
+		.iter()
+		.map(|id| format!("printf '%s\\n' {}\n", id.to_string().repeat(64)))
+		.collect();
+	format!(
+		"#!/bin/sh\n\
+		 printf '%s\\n' \"$*\" >> {log}\n\
+		 case \"$1 $2\" in\n\
+		 \t'image exists') case \"$3\" in\n{exists}*) exit 1 ;; esac ;;\n\
+		 \t'image inspect') case \"$5\" in\n{inspect}*) exit 1 ;; esac ;;\n\
+		 \t'ps --all') {in_use} ;;\n\
+		 esac\n\
+		 exit 0\n",
+		log = log.display()
+	)
+}
+
+/// The `FROM` line of `deploy/images/Dockerfile` that ends in `AS <name>`.
+fn pinned_image(name: &str) -> String {
+	include_str!(concat!(
+		env!("CARGO_MANIFEST_DIR"),
+		"/deploy/images/Dockerfile"
+	))
+	.lines()
+	.filter_map(|line| line.strip_prefix("FROM "))
+	.find_map(|line| line.strip_suffix(&format!(" AS {name}")))
+	.unwrap_or_else(|| panic!("no {name} image in deploy/images/Dockerfile"))
+	.to_string()
+}
+
+#[test]
+fn update_removes_the_images_it_stopped_using_and_only_those() {
+	// A stack made by an older release ran the version-tagged epistle image
+	// and an older ClamAV digest. After the update the new references are
+	// the mail base and the pinned ClamAV; the old mail image has no
+	// container, the old ClamAV one is still held by a container that is not
+	// the stack's.
+	let dir = tempfile::tempdir().unwrap();
+	let shim = dir.path().join("bin");
+	let log = dir.path().join("argv.log");
+	let engine = dir.path().join("podman.log");
+	install_podup_shim(&shim, &healthy_shim(&log));
+	let old_mail = "ghcr.io/glyndor/epistle:0.12.5";
+	let old_clamav = format!("docker.io/clamav/clamav:1.5@sha256:{}", "1".repeat(64));
+	let base = pinned_image("mail");
+	let clamav = pinned_image("clamav");
+	write_podman_shim(
+		&shim,
+		&podman_shim(
+			&engine,
+			&[
+				(old_mail, 'a'),
+				(&old_clamav, 'b'),
+				(&base, 'c'),
+				(&clamav, 'd'),
+				("docker.io/library/redis:8", 'e'),
+			],
+			&['b', 'c', 'd', 'e'],
+		),
+	);
+	let data = data_dir_with_compose(dir.path());
+	let compose = data.join("compose/compose.yaml");
+	let cfg = write_config(&data);
+	std::fs::write(
+		&compose,
+		format!(
+			r#"{{"x-epistle-managed-image":true,"services":{{"mail":{{"image":"{old_mail}","command":["serve","--config",{cfg:?}],"volumes":["data:/data"]}},"clamav":{{"image":"{old_clamav}"}}}},"volumes":{{"data":{{}}}}}}"#
+		),
+	)
+	.unwrap();
+	let out = run_with_podup(
+		&["stack", "--config", cfg.to_str().unwrap(), "update"],
+		&shim,
+	);
+	let stderr = String::from_utf8_lossy(&out.stderr);
+	assert_eq!(out.status.code(), Some(0), "{stderr}");
+	let calls = std::fs::read_to_string(&engine).unwrap();
+	let removals: Vec<&str> = calls
+		.lines()
+		.filter(|line| line.starts_with("rmi"))
+		.collect();
+	assert_eq!(
+		removals,
+		[format!("rmi {}", "a".repeat(64))],
+		"only the retired image nothing uses goes: {calls}"
+	);
+	assert!(
+		stderr.contains(&format!("removed the image {old_mail}"))
+			&& stderr.contains(&format!(
+				"kept the image {old_clamav}: a container still uses it"
+			)),
+		"{stderr}"
+	);
+	assert!(
+		!calls.contains("redis"),
+		"an image the stack never named is not looked at: {calls}"
+	);
+}

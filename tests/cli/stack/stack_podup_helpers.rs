@@ -49,6 +49,23 @@ pub(crate) fn write_podup_shim(shim_dir: &Path, body: &str) -> PathBuf {
 	std::fs::write(&path, body).expect("write shim");
 	std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
 		.expect("chmod 0755 on shim");
+	// `stack update` also asks `podman` which images it left unused. Without
+	// this, a test whose fixture retires an image would reach the Podman of
+	// the machine that runs it and its images.
+	let podman = shim_dir.join("podman");
+	if !podman.exists() {
+		write_podman_shim(shim_dir, "#!/bin/sh\nexit 125\n");
+	}
+	path
+}
+
+/// Write `body` to `<shim_dir>/podman` and mark it executable.
+#[allow(dead_code)]
+pub(crate) fn write_podman_shim(shim_dir: &Path, body: &str) -> PathBuf {
+	let path = shim_dir.join("podman");
+	std::fs::write(&path, body).expect("write podman shim");
+	std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+		.expect("chmod 0755 on podman shim");
 	path
 }
 

@@ -5,6 +5,7 @@
 use std::path::PathBuf;
 
 use super::UpdatePlan;
+use crate::cli::stack::images::{Change, Outcome};
 
 /// What carrying out an update needs from the host.
 pub(super) trait UpdateHost {
@@ -18,6 +19,8 @@ pub(super) trait UpdateHost {
 	/// Delete the `pre-<version>-*` dumps once the update is verified;
 	/// returns how many went.
 	fn discard_dumps(&mut self) -> Result<usize, String>;
+	/// Remove the images the update stopped naming that no container uses.
+	fn discard_images(&mut self, change: &Change) -> Result<Outcome, String>;
 	/// Take the superuser attribute away from the `epistle` role when an
 	/// older install still has it; `true` when it did.
 	fn harden_database(&mut self) -> Result<bool, String>;
@@ -111,6 +114,24 @@ pub(super) fn execute(host: &mut impl UpdateHost, plan: &UpdatePlan) -> Result<(
 				"could not remove the dumps taken before the update: {error}"
 			)),
 		}
+	}
+	// The images of the previous release are only dead weight once the new
+	// one runs; a failed update leaves them where they are. A failure here
+	// is a leftover, not a failed update.
+	match host.discard_images(&plan.images) {
+		Ok(outcome) => {
+			for reference in &outcome.removed {
+				host.log(&format!(
+					"removed the image {reference}, which the update stopped using"
+				));
+			}
+			for line in &outcome.kept {
+				host.log(&format!("kept the image {line}"));
+			}
+		}
+		Err(error) => host.log(&format!(
+			"could not tell which images the update left unused, so none was removed: {error}"
+		)),
 	}
 	Ok(())
 }
