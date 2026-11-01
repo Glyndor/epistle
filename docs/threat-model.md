@@ -40,7 +40,7 @@ PEM in `[tls]`).
 | Credentials | argon2id PHC hashes and SCRAM verifiers in the directory; TOTP secrets beside them | a stolen hash is a slow offline attack; a stolen TOTP secret is a second factor gone |
 | DKIM private keys | the `key_file` paths in `[dkim]` (`src/config/dkim/mod.rs:13`) and the rotated keys the server writes | whoever holds one signs mail as the domain |
 | The at-rest master key | `encryption_key_env` or `encryption_key_file` in `[storage]` | turns a stolen disk or backup from plaintext into ciphertext, and back |
-| The API bearer token and labeled API keys | `[api] token_hash` and `<data_dir>/api_keys.toml` (`src/api/api_keys/mod.rs:8`) | full administration of accounts, domains, queue and mail |
+| The optional API bearer token and labeled API keys | `[api] token_hash` and `<data_dir>/api_keys.toml` (`src/api/api_keys/mod.rs:8`) | full administration of accounts, domains, queue and mail |
 | ACME account key and issued certificates | `<data_dir>/acme/account.key` (`src/acme/renew/mod.rs:27`) and the certificate beside it | the mail protocols' TLS identity |
 | DNS provider tokens | `[dns]` `token_file` or `token_env` (`src/config/dns/mod.rs:33`) | a leaked token edits the zone: MX, SPF, DKIM, TLSA; with one `[[dns]]` entry per zone it edits only its own zone |
 | Backups | whatever `epistle backup` writes to (`src/cli/backup/mod.rs::run`) | a complete copy of everything above, wherever the operator keeps it |
@@ -95,7 +95,7 @@ PEM in `[tls]`).
 
 | Threat | Control | Evidence |
 |---|---|---|
-| Reaching the API without a credential | every route except `/healthz` sits behind `require_bearer_token` (`src/api/mod.rs:31-72`, `src/api/state/mod.rs:605-673`); the listener binds to loopback by default (`src/config/mod.rs:347`); CORS allows nothing (`src/api/mod.rs:60`) | test: `default_bind_is_loopback` (`src/config/mod.rs:560`), `verify_requires_the_bearer_token` (`src/api/tests/authentication/auth.rs:106`) |
+| Reaching the API without a credential | every route except `/healthz` and the self-authenticating `/oauth/*` grants sits behind `require_bearer_token` (`src/api/mod.rs:31-72`, `src/api/state/mod.rs:605-673`); the listener binds to loopback by default (`src/config/mod.rs:347`); CORS allows nothing (`src/api/mod.rs:60`) | test: `default_bind_is_loopback` (`src/config/mod.rs:560`), `verify_requires_the_bearer_token` (`src/api/tests/authentication/auth.rs:106`) |
 | Token comparison leaking timing | the token is stored as `sha256:<hex>` and compared in constant time (`src/api/state/mod.rs:540-553`) | test: `configured_token_still_authorizes`, `wrong_api_key_rejected` (`src/api/state/tests/base.rs:47`, `:64`) |
 | Brute-forcing the token | 20 failures in 60 seconds put the whole API into `429` until the window passes (`src/api/state/mod.rs:90-91`, `:610-620`) | none named for the limiter itself |
 | A leaked key doing more than it was issued for | labeled keys carry `read`, `write`, `send` and `scim` scopes, an expiry and a CIDR, all of which must hold (`src/api/api_keys/mod.rs:24-38`, `:135-150`); the scope a route needs is inferred from method and path and tightened per JMAP method (`src/api/state/mod.rs:580-602`, `:531-536`) | test: `expired_key_rejected`, `ip_mismatch_rejected_match_accepted`, `write_scope_rejected_for_read_only_key`, `write_scope_does_not_imply_read_or_send` (`src/api/api_keys/tests/base.rs:34-71`); `ip_restricted_api_key_enforced` (`src/api/state/tests/base.rs:80`) |
@@ -187,3 +187,15 @@ pull request as the code.
 Report vulnerabilities privately through the repository's **Security tab**.
 The organisation's [security policy](https://github.com/Glyndor/.github/blob/main/SECURITY.md)
 carries the response targets.
+
+### Optional static API token
+
+Omitting `[api] token_hash` removes the static credential. Only labelled keys
+from `api_keys.toml` authenticate bearer-protected routes; empty bearers and the
+literal `sha256:` cannot match an absent hash. An all-scope key remains a key.
+No current routes become unreachable: SCIM has the `scim` scope and OAuth's
+four grant endpoints use account credentials or codes outside bearer middleware.
+A static-only route without a per-key scope must return `403` to keys.
+The unconfigured check performs no digest or argon2 work, so timing can reveal
+that static authentication is disabled, but cannot reveal any secret. Configured
+SHA-256 and legacy argon2id behavior is preserved. See [API setup](api.md#turn-it-on).

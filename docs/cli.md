@@ -216,8 +216,8 @@ and so does `set` asked for the socket the listener already has.
 `set NAME [--bind ADDRESS] [--port PORT]` moves a listener that is already
 enabled, so `enable` is what adds one. It refuses a port another enabled
 listener answers on, a port 0, and an address the parser does not read; a value
-of `--port 70000` is a usage error. The API keeps the token requirement the loader
-enforces. API, WebDAV and
+of `--port 70000` is a usage error. Enabling the API creates `[api]` if absent, without asking for or generating
+a static token. Labelled keys work independently of `token_hash`. API, WebDAV and
 plain HTTP autoconfig have no TLS transport, so `set` refuses an address outside
 loopback for these listeners, even when mail certificates are configured in
 `[tls]`. I keep them behind a TLS reverse proxy on loopback.
@@ -1548,12 +1548,12 @@ scope here):
 - DNS publishing for automatic mode: the plan still lists the `dns` step, but
   the step renders `not implemented in this build`. The operator follows it by
   hand or waits for the next part of `init` to land;
-- a management-API credential: setting `services.api = true` in the answers is
-  refused with a validation error. The api listener needs a bearer token whose
-  hash lives in `[api] token_hash`, and `init` does not generate one. To enable
-  the api service, leave `services.api` at its default (`false`) in the answers,
-  run `epistle init`, and then add the `[api]` section by hand (or with
-  `epistle token-hash` followed by an editor pass) before `epistle serve`.
+- a management-API credential: `services.api = true` writes an API listener and
+  an empty `[api]` section. Create labelled keys with `epistle api-key create`.
+  Operators who want a static token may set `token_hash` themselves using
+  `epistle token-hash`. `epistle status` treats "no static token configured"
+  as a good state. No current SCIM or OAuth route needs the static token;
+  see [the API guide](api.md#turn-it-on).
 
 ## DNS records and listener probes
 

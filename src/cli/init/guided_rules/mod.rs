@@ -54,10 +54,6 @@ pub(super) fn check(answers: &Answers, question: &str) -> Result<(), String> {
 				"use a whitespace-free image pinned to a tag other than latest or a sha256 digest"
 					.into(),
 			),
-			Invalid::ApiUnsupported => (
-				"API",
-				"init cannot mint API credentials; choose no and configure [api] afterwards".into(),
-			),
 			Invalid::DnsProviderMissing | Invalid::DnsProviderUnsupported { .. } => (
 				"DNS provider",
 				format!(

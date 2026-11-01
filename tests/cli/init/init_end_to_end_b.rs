@@ -1,5 +1,5 @@
 //! End-to-end integration tests for the early findings an outside
-//! review of the binary raised: api service refusal (1), key-write
+//! review of the binary raised: API setup without static credentials (1), key-write
 //! failure propagation (2), OAuth pair handling (3), TLS pair
 //! handling (4), and managed-key reconciliation (5). The staging
 //! path, symlink refusal, and staging permission tests live in
@@ -28,11 +28,9 @@ fn run_init(answers: &Path) -> std::process::Output {
 	cmd.output().expect("spawn epistle")
 }
 
-/// Finding 1: `services.api = true` must be refused in the shared
-/// answers validator before any side effect, with a message naming
-/// the `[api]` section the operator has to fill in by hand.
+/// API setup writes a usable listener without creating a static credential.
 #[test]
-fn init_refuses_api_service_in_answers_before_writing_keys() {
+fn init_enables_api_without_a_static_token() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let data_dir = dir.path().join("data");
 	let config_path = dir.path().join("etc").join("mail.toml");
@@ -53,29 +51,29 @@ fn init_refuses_api_service_in_answers_before_writing_keys() {
 	);
 	let answers = write_answers(dir.path(), "answers.toml", &body);
 	let output = run_init(&answers);
-	assert_eq!(
-		output.status.code(),
-		Some(2),
-		"api=true must be a validation rejection (exit 2); got {:?}; stderr: {}",
-		output.status,
+	assert!(
+		output.status.success(),
+		"{}",
 		String::from_utf8_lossy(&output.stderr)
 	);
-	let stderr = String::from_utf8_lossy(&output.stderr);
+	let config = epistle::config::Config::load(&config_path).unwrap();
+	assert!(config.api.unwrap().token_hash.is_none());
 	assert!(
-		stderr.contains("api") && stderr.contains("[api]"),
-		"the rejection must tell the operator to edit [api] by hand: {stderr}"
+		config
+			.listeners
+			.iter()
+			.any(|l| l.kind == epistle::config::ListenerKind::Api)
 	);
 	assert!(
-		!data_dir.exists(),
-		"refusing api=true must not create the data_dir"
+		!std::fs::read_to_string(&config_path)
+			.unwrap()
+			.contains("token_hash")
 	);
 }
 
-/// Finding 1 (dry-run parity): the same answers refused by apply must
-/// also be refused by `--dry-run`, before any plan or report is
-/// printed.
+/// Dry-run accepts API setup and leaves the installation untouched.
 #[test]
-fn dry_run_refuses_api_service_in_answers() {
+fn dry_run_accepts_api_without_a_static_token() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let data_dir = dir.path().join("data");
 	let config_path = dir.path().join("etc").join("mail.toml");
@@ -101,18 +99,13 @@ fn dry_run_refuses_api_service_in_answers() {
 		.stdout(Stdio::piped())
 		.stderr(Stdio::piped());
 	let output = cmd.output().expect("spawn epistle");
-	assert_eq!(
-		output.status.code(),
-		Some(2),
-		"dry-run must also refuse api=true: exit {:?}",
-		output.status
-	);
-	let stderr = String::from_utf8_lossy(&output.stderr);
 	assert!(
-		stderr.contains("api"),
-		"the dry-run rejection must name the api service: {stderr}"
+		output.status.success(),
+		"{}",
+		String::from_utf8_lossy(&output.stderr)
 	);
-	assert!(!stderr.contains("plan:"));
+	assert!(!data_dir.exists());
+	assert!(!config_path.exists());
 }
 
 /// Finding 2: a write failure on a later key file must surface as

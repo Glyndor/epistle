@@ -31,7 +31,6 @@ fn canonical_failures_remain_attached_to_the_question_that_can_fix_them() {
 	add("image", "whitespace-free", |a| {
 		a.image = Some("bad image:dev".into())
 	});
-	add("API", "cannot mint", |a| a.services.api = true);
 	add("DNS zone", "containing every", |a| {
 		a.mode = Mode::Automatic;
 		a.dns = Some(DnsAnswers {

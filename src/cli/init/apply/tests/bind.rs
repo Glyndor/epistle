@@ -241,11 +241,7 @@ fn plan_and_written_config_have_no_ipv4_fallback_for_mail_listeners() {
 
 #[test]
 fn build_config_with_api_writes_api_listener_on_loopback() {
-	// The api branch goes through build_config directly because
-	// enabling api through apply needs an [api] section init does
-	// not generate. We construct the desired config the way apply
-	// would and serialise it; loading back would need an [api]
-	// section the operator writes by hand.
+	// The API listener stays on loopback and needs no static credential.
 	let mut answers = answers_minimal();
 	answers.services = Services {
 		antivirus: None,

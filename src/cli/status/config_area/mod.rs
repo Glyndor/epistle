@@ -43,6 +43,16 @@ pub(super) async fn check(ctx: &Ctx) -> AreaReport {
 	}
 	let mut items: Vec<_> = std::iter::once(restart).chain(addresses).collect();
 	if config
+		.api
+		.as_ref()
+		.is_some_and(|api| api.token_hash.is_none())
+	{
+		let detail = "no static token configured";
+		summary.push_str("; ");
+		summary.push_str(detail);
+		items.push(Item::new("API token", Level::Ok, detail));
+	}
+	if config
 		.dns
 		.iter()
 		.any(|dns| dns.token.is_some() || dns.token_env.is_some())

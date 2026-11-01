@@ -112,7 +112,7 @@ pub(super) fn run<R: BufRead, W: Write>(
 		"Access contacts and calendars. Enter leaves it disabled.",
 		false,
 	)?;
-	answers.services.api = ui.validated("API", "Manage the server over HTTP. Init cannot create its credential yet. Enter leaves it disabled. Options: 1. yes, 2. no.", "no", "no", |raw| {
+	answers.services.api = ui.validated("API", "Manage the server over HTTP with labelled API keys. No static token is created. Enter leaves it disabled. Options: 1. yes, 2. no.", "no", "no", |raw| {
 		let mut candidate = answers.clone();
 		candidate.services.api = boolean(raw)?;
 		super::guided_rules::check(&candidate, "API")?;
