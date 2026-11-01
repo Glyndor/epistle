@@ -417,31 +417,28 @@ jobs:
           # The hashes the build job wrote must still match the bytes received.
           sha256sum --check --strict SHA256SUMS
 
+      # A rehearsal never touches the org key: it signs with a key made on the
+      # spot, so it exercises the same script and leaves nothing that anyone
+      # could trust. Two steps with their own `if`, not one expression, because
+      # `a && '' || b` falls through to `b` when `a` is true.
+      - name: Make a throwaway key for the rehearsal
+        if: ${{ inputs.dry-run }}
+        run: |
+          key=$(python3 -c 'import base64, os; print(base64.b64encode(os.urandom(32)).decode())')
+          echo "::add-mask::$key"
+          echo "REHEARSAL_KEY=$key" >> "$GITHUB_ENV"
+
       - name: Sign artifacts with the org Ed25519 key
+        if: ${{ !inputs.dry-run }}
         env:
           GLYNDOR_RELEASE_ED25519_KEY: ${{ secrets.GLYNDOR_RELEASE_ED25519_KEY }}
-        run: |
-          set -euo pipefail
-          # Fail closed: never publish unsigned artifacts. Verifiers and the
-          # apt archive trust this org Ed25519 signature.
-          if [ -z "${GLYNDOR_RELEASE_ED25519_KEY:-}" ]; then
-            echo "::error::GLYNDOR_RELEASE_ED25519_KEY secret is not configured; refusing to release unsigned artifacts."
-            exit 1
-          fi
-          # Install the signing dependencies into an isolated, hash-pinned
-          # virtualenv so a system-managed cryptography cannot break the pin.
-          python3 -m venv "$RUNNER_TEMP/signvenv"
-          venv_py="$RUNNER_TEMP/signvenv/bin/python"
-          "$venv_py" -m pip install --quiet --require-hashes -r .github/scripts/sign-requirements.txt
-          # The key is read from GLYNDOR_RELEASE_ED25519_KEY in the environment, not argv.
-          "$venv_py" .github/scripts/sign.py "dist/epistle-${TAG}-x86_64-linux"
-          # Each .deb gets its own detached signature: the apt archive verifies
-          # every package against <deb>.sig before admitting it, and refuses to
-          # re-sign with its own GPG key anything it did not verify first.
-          for deb in dist/epistle_*.deb; do
-            "$venv_py" .github/scripts/sign.py "$deb"
-          done
-          "$venv_py" .github/scripts/sign.py dist/SHA256SUMS
+        run: .github/scripts/sign_release.sh dist "$TAG"
+
+      - name: Sign artifacts with the throwaway key (rehearsal)
+        if: ${{ inputs.dry-run }}
+        env:
+          GLYNDOR_RELEASE_ED25519_KEY: ${{ env.REHEARSAL_KEY }}
+        run: .github/scripts/sign_release.sh dist "$TAG"
 
       - name: Hand the signatures to the next job
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -462,11 +459,16 @@ jobs:
     env:
       TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
     steps:
-      - name: Receive the files and their signatures
+      - name: Receive the files
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          pattern: release-*
-          merge-multiple: true
+          name: release-dist
+          path: dist
+
+      - name: Receive the signatures
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-signatures
           path: dist
 
       - name: Check what is going to be published
@@ -476,12 +478,30 @@ jobs:
           if find . -mindepth 1 \( -type l -o ! -type f \) -print -quit | grep -q .; then
             echo "::error::the release files hold something that is not a plain file"; exit 1
           fi
-          # Every file but the signatures is covered by SHA256SUMS, and every
-          # one of those must have its signature.
+          # The same allowlist the signing job applied, plus the signatures.
           for f in *; do
-            case "$f" in *.sig) continue ;; esac
-            [ -f "$f.sig" ] || { echo "::error::no signature for $f"; exit 1; }
+            case "$f" in
+              "epistle-${TAG}-x86_64-linux"|"epistle-${TAG}.cdx.json"|SHA256SUMS) ;;
+              epistle_*_amd64.deb|epistle_*_arm64.deb) ;;
+              "epistle-${TAG}-x86_64-linux.sig"|SHA256SUMS.sig) ;;
+              epistle_*_amd64.deb.sig|epistle_*_arm64.deb.sig) ;;
+              *) echo "::error::unexpected file in the release: $f"; exit 1 ;;
+            esac
           done
+          # Every file but the signatures is signed, and every signature has
+          # content.
+          for f in *; do
+            case "$f" in *.sig) [ -s "$f" ] || { echo "::error::empty signature $f"; exit 1; } ;; *) [ -f "$f.sig" ] || { echo "::error::no signature for $f"; exit 1; } ;; esac
+          done
+          # SHA256SUMS names exactly the files that are being published, no more
+          # and no fewer, and their hashes match.
+          published=$(for f in *; do case "$f" in *.sig|SHA256SUMS) ;; *) echo "$f" ;; esac; done | sort)
+          listed=$(sed -E 's/^[0-9a-f]{64}[ *]+//' SHA256SUMS | sort)
+          if [ "$published" != "$listed" ]; then
+            echo "::error::SHA256SUMS does not name exactly the published files"
+            printf 'files:\n%s\nlisted:\n%s\n' "$published" "$listed"
+            exit 1
+          fi
           sha256sum --check --strict SHA256SUMS
 
       - name: Create release
