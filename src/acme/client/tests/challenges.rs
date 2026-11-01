@@ -200,7 +200,9 @@ fn domains() -> Vec<String> {
 async fn dns01_record_is_removed_when_validation_fails() {
 	let client = client_for("dns-01", "invalid").await;
 	let (provider, _, responder) = dns01(true);
-	let result = client.obtain_certificate(&domains(), &responder, 3).await;
+	let result = client
+		.obtain_certificate(&domains(), Arc::new(responder), 3)
+		.await;
 	assert_eq!(
 		result.err().map(|error| error.to_string()).as_deref(),
 		Some("protocol error: authorization invalid")
@@ -219,7 +221,7 @@ async fn dns01_record_is_removed_after_a_successful_order() {
 	let client = client_for("dns-01", "valid").await;
 	let (provider, visibility, responder) = dns01(true);
 	let (chain, _) = client
-		.obtain_certificate(&domains(), &responder, 3)
+		.obtain_certificate(&domains(), Arc::new(responder), 3)
 		.await
 		.expect("obtain");
 	assert!(chain.starts_with("-----BEGIN CERTIFICATE-----"));
@@ -242,7 +244,7 @@ async fn dns01_publishes_in_the_zone_that_holds_the_challenge_name() {
 	let client = client_for("dns-01", "valid").await;
 	let (provider, _, responder) = dns01_with(true, &["example.org"]);
 	let (_chain, _) = client
-		.obtain_certificate(&domains(), &responder, 3)
+		.obtain_certificate(&domains(), Arc::new(responder), 3)
 		.await
 		.expect("obtain");
 	assert_eq!(
@@ -258,7 +260,9 @@ async fn dns01_publishes_in_the_zone_that_holds_the_challenge_name() {
 async fn dns01_never_visible_times_out_without_asking_the_ca() {
 	let client = client_for("dns-01", "valid").await;
 	let (provider, _, responder) = dns01(false);
-	let result = client.obtain_certificate(&domains(), &responder, 3).await;
+	let result = client
+		.obtain_certificate(&domains(), Arc::new(responder), 3)
+		.await;
 	assert_eq!(
 		result.err().map(|error| error.to_string()).as_deref(),
 		Some(
@@ -286,7 +290,9 @@ async fn dns01_never_visible_times_out_without_asking_the_ca() {
 async fn tls_alpn01_certificate_is_dropped_when_validation_fails() {
 	let client = client_for("tls-alpn-01", "invalid").await;
 	let store = Arc::new(crate::acme::tlsalpn::AlpnChallengeStore::new());
-	let result = client.obtain_certificate(&domains(), &store, 3).await;
+	let result = client
+		.obtain_certificate(&domains(), Arc::new(store.clone()), 3)
+		.await;
 	assert_eq!(
 		result.err().map(|error| error.to_string()).as_deref(),
 		Some("protocol error: authorization invalid")
@@ -298,7 +304,94 @@ async fn tls_alpn01_certificate_is_dropped_when_validation_fails() {
 async fn http01_token_is_dropped_when_validation_fails() {
 	let client = client_for("http-01", "invalid").await;
 	let store = crate::acme::http01::ChallengeStore::new();
-	let result = client.obtain_certificate(&domains(), &store, 3).await;
+	let result = client
+		.obtain_certificate(&domains(), Arc::new(store.clone()), 3)
+		.await;
 	assert!(result.is_err());
 	assert!(store.get(fixtures::api_token()).is_none());
+}
+
+/// A visibility check that never answers: an order stuck waiting for a record
+/// to propagate.
+struct Stalled;
+
+impl TxtVisibility for Stalled {
+	fn visible<'a>(
+		&'a self,
+		_name: &'a str,
+		_value: &'a str,
+	) -> std::pin::Pin<Box<dyn Future<Output = bool> + Send + 'a>> {
+		Box::pin(std::future::pending())
+	}
+}
+
+/// Drive `obtain_certificate` until `limit` passes, then drop it the way a
+/// shutdown or an aborted renewal task does.
+async fn abandon(
+	client: &AcmeClient<Recorded>,
+	responder: Arc<dyn crate::acme::challenge::ChallengeResponder>,
+	limit: Duration,
+) {
+	let outcome =
+		tokio::time::timeout(limit, client.obtain_certificate(&domains(), responder, 100)).await;
+	assert!(outcome.is_err(), "the order was meant to still be running");
+}
+
+/// The calls the provider saw once `count` of them exist, or what it has
+/// after two seconds.
+async fn calls_after(provider: &Journal, count: usize) -> Vec<String> {
+	for _ in 0..200 {
+		let calls = provider.calls.lock().expect("calls").clone();
+		if calls.len() >= count {
+			return calls;
+		}
+		tokio::time::sleep(Duration::from_millis(10)).await;
+	}
+	provider.calls.lock().expect("calls").clone()
+}
+
+#[tokio::test]
+async fn dns01_record_is_removed_when_the_order_is_dropped_waiting_for_propagation() {
+	let client = client_for("dns-01", "valid").await;
+	let provider = Arc::new(Journal::with_zones(&[]));
+	let responder = Dns01::new(provider.clone(), Arc::new(Stalled))
+		.with_bounds(Duration::from_secs(300), Duration::from_secs(5));
+	abandon(&client, Arc::new(responder), Duration::from_millis(100)).await;
+	assert_eq!(
+		calls_after(&provider, 2).await,
+		&[
+			"upsert mail.example.org _acme-challenge.mail.example.org".to_string(),
+			"delete mail.example.org _acme-challenge.mail.example.org".to_string(),
+		]
+	);
+}
+
+#[tokio::test]
+async fn dns01_record_is_removed_when_the_order_is_dropped_while_the_ca_validates() {
+	// The authorization never leaves `pending`: the order is polling the CA
+	// when it is dropped.
+	let client = client_for("dns-01", "pending").await;
+	let (provider, _, responder) = dns01(true);
+	abandon(&client, Arc::new(responder), Duration::from_millis(300)).await;
+	assert_eq!(
+		calls_after(&provider, 2).await,
+		&[
+			"upsert mail.example.org _acme-challenge.mail.example.org".to_string(),
+			"delete mail.example.org _acme-challenge.mail.example.org".to_string(),
+		]
+	);
+}
+
+#[tokio::test]
+async fn http01_token_is_dropped_when_the_order_is_dropped_while_the_ca_validates() {
+	let client = client_for("http-01", "pending").await;
+	let store = crate::acme::http01::ChallengeStore::new();
+	abandon(&client, Arc::new(store.clone()), Duration::from_millis(300)).await;
+	for _ in 0..200 {
+		if store.get(fixtures::api_token()).is_none() {
+			return;
+		}
+		tokio::time::sleep(Duration::from_millis(10)).await;
+	}
+	panic!("the token of an abandoned order is still served");
 }

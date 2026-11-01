@@ -6,12 +6,15 @@
 //! requests after registration.
 
 use std::pin::Pin;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use super::directory::Directory;
 use super::jws::AccountKey;
 use super::problem::Refusal;
 use super::protocol::{self, Authorization, Order};
+
+mod published;
+use published::Published;
 
 /// Errors from the ACME flow.
 #[derive(Debug, thiserror::Error)]
@@ -80,7 +83,7 @@ pub trait AcmeTransport: Send + Sync {
 /// An ACME client bound to one CA directory and account key.
 pub struct AcmeClient<T: AcmeTransport> {
 	transport: T,
-	key: AccountKey,
+	key: Arc<AccountKey>,
 	directory: Directory,
 	nonce: Mutex<String>,
 	account_url: Mutex<Option<String>>,
@@ -98,7 +101,7 @@ impl<T: AcmeTransport> AcmeClient<T> {
 		let nonce = transport.new_nonce(&directory.new_nonce).await?;
 		Ok(AcmeClient {
 			transport,
-			key,
+			key: Arc::new(key),
 			directory,
 			nonce: Mutex::new(nonce),
 			account_url: Mutex::new(None),
@@ -225,21 +228,22 @@ impl<T: AcmeTransport> AcmeClient<T> {
 	/// Every challenge published is withdrawn once validation is over,
 	/// whether it succeeded or not: a DNS-01 TXT record or a TLS-ALPN-01
 	/// certificate left behind would keep answering for an order that no
-	/// longer exists.
+	/// longer exists. The same holds when the returned future is dropped
+	/// mid-order (shutdown, an aborted renewal): what was still published is
+	/// withdrawn by a task spawned on the running runtime, which is why the
+	/// responder is shared rather than borrowed.
 	pub async fn obtain_certificate(
 		&self,
 		domains: &[String],
-		responder: &dyn super::challenge::ChallengeResponder,
+		responder: Arc<dyn super::challenge::ChallengeResponder>,
 		poll: u32,
 	) -> Result<(String, String), AcmeError> {
 		let (order, order_url) = self.new_order(domains).await?;
-		let mut published: Vec<(String, String)> = Vec::new();
+		let mut published = Published::new(responder, self.key.clone());
 		let validated = self
-			.validate_authorizations(&order, responder, poll, &mut published)
+			.validate_authorizations(&order, &mut published, poll)
 			.await;
-		for (domain, token) in &published {
-			responder.withdraw(domain, token, &self.key).await;
-		}
+		published.withdraw_all().await;
 		validated?;
 
 		let csr = super::csr::generate(domains).map_err(|e| AcmeError::Protocol(e.to_string()))?;
@@ -251,15 +255,15 @@ impl<T: AcmeTransport> AcmeClient<T> {
 	}
 
 	/// Answer and validate every authorization of `order`, recording each
-	/// challenge in `published` before it is published so the caller can
-	/// withdraw even a half-published one.
+	/// challenge in `published` before it is published so that even a
+	/// half-published one is withdrawn.
 	async fn validate_authorizations(
 		&self,
 		order: &Order,
-		responder: &dyn super::challenge::ChallengeResponder,
+		published: &mut Published,
 		poll: u32,
-		published: &mut Vec<(String, String)>,
 	) -> Result<(), AcmeError> {
+		let responder = published.responder.clone();
 		let kind = responder.kind();
 		for authz_url in &order.authorizations {
 			let authz = self.authorization(authz_url).await?;
@@ -267,7 +271,7 @@ impl<T: AcmeTransport> AcmeClient<T> {
 				.challenge(kind)
 				.ok_or_else(|| AcmeError::Protocol(format!("no {kind} challenge")))?;
 			let domain = authz.identifier.value.clone();
-			published.push((domain.clone(), challenge.token.clone()));
+			published.record(&domain, &challenge.token);
 			responder
 				.publish(&domain, &challenge.token, &self.key)
 				.await?;
