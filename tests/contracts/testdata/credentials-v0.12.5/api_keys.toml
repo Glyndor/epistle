@@ -1,0 +1,5 @@
+[[keys]]
+label = "upgrade"
+hash = "sha256:08c33eb4ca6e137ef4d4267a19d5b18e125905e2483166d0579ed504a9f7d130"
+scopes = ["read"]
+domains = []
