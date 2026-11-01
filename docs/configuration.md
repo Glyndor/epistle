@@ -4,15 +4,15 @@
 every command with `--config`:
 
 ```sh
-epistle serve --config /etc/glyndor/epistle/mail.toml
-epistle config-check --config /etc/glyndor/epistle/mail.toml   # validate without starting
+epistle serve --config /etc/epistle/mail.toml
+epistle config-check --config /etc/epistle/mail.toml   # validate without starting
 ```
 
 The file must be owner-only — the server refuses to load a file that is group-
 or world-readable:
 
 ```sh
-chmod 600 /etc/glyndor/epistle/mail.toml
+chmod 600 /etc/epistle/mail.toml
 ```
 
 Validation is **fail-closed**: an unknown key, an invalid value, insecure
@@ -77,6 +77,10 @@ a connection URL.
 | `max_session_time` | int | 1800 | Seconds one SMTP session may last. Past it the client gets `421 4.4.2 session time limit reached` and is disconnected at the next command boundary: while the server waits for a command or an `AUTH` response line, or before it runs one. A message body being received (`DATA`, or the chunks of a `BDAT` transaction) is never cut, since `min_data_rate` bounds it; the command after it is, except `QUIT`, and a client whose body ended past the limit has one 300 s idle timeout to send it. `0` turns it off; otherwise between 60 and 86400. |
 | `preauth_timeout` | int | 60 | Seconds an IMAP, POP3 or ManageSieve client gets, from the start of the connection, to sign in. One deadline covers the TLS handshake, every command and every literal (or `AUTHENTICATE` response) before authentication; bytes arriving slowly and a stream of harmless commands (`NOOP`, `CAPABILITY`) do not move it. At the deadline IMAP answers `* BYE idle timeout` and ManageSieve `BYE`, POP3 closes. A signed-in session is not held to it: it gets the idle timeout of its protocol (30 minutes IMAP and ManageSieve, 10 minutes POP3) for each command, counted from the moment the server starts waiting for it, and `IDLE` keeps its own limit. A client that signs in with a very slow password hash or over a very slow link needs a longer value. From 5 to 3600, but on IMAP and POP3 the phase never outlasts the idle timeout of the protocol, so a value above 600 acts as 600 on POP3 and above 1800 acts as 1800 on IMAP. ManageSieve uses the configured pre-authentication deadline without this idle-timeout cap. |
 | `max_mailbox_connections_per_ip` | int | 200 (ManageSieve 40) | Max concurrent connections one client may hold on each IMAP, POP3 and ManageSieve listener. A client over the cap is answered `* BYE too many connections from your address` (IMAP), `-ERR too many connections from your address` (POP3) or `BYE "too many connections from your address"` (ManageSieve) and closed before any handshake or session is set up; a listener that is full gets `... too many connections, try again later`. On the implicit-TLS ports (993, 995) the line arrives in clear, ahead of a TLS handshake that never starts. An IPv6 client is counted by its /64, an IPv4-mapped address as the IPv4 address, and no peer is exempt. The count is released when the connection ends, however it ends. `0` uses the default. A mail client keeps several connections open (three to six, one per folder it watches with `IDLE`), so at four per device and two devices a user holds about eight: 200 serves about 25 active users behind one address, and an office or a mobile carrier sharing one address with more people needs a higher value. 200 is also 40% of the IMAP and POP3 listener (500), so three such addresses can fill it. ManageSieve defaults to 40 because its listener holds 100 and a script editor keeps one or two connections: a cap above the listener's would never act. A value you set applies to the three protocols alike. Behind a proxy or NAT that hides the client address, and with a bridge network or `rootlessport` instead of `pasta` (Podman rootless reports every client as one gateway address), every client shares one count and the ceiling of the listener falls from 500 connections to this value, about 25 users: raise it to about the listener's `max_connections_per_listener`. |
+| `max_connections_per_account_per_ip` | int | 10 | Max concurrent authenticated connections one account may hold from one client IP, on the IMAP, POP3 and JMAP listeners together. Applied after sign-in: a connection over the cap is answered `NO [LIMIT]` (IMAP), `-ERR [IN-USE]` (POP3) or `429` (JMAP) and closed. `0` uses the default. The singular `max_connections_per_account` is refused. |
+| `max_connections_per_account_total` | int | 50 | Max concurrent authenticated connections one account may hold across every client IP, on the same listeners and with the same replies. `0` uses the default. |
+| `max_recipients` | int | 100 | Recipients one message may name, on SMTP (advertised as `LIMITS RCPTMAX`), `POST /api/v1/send` and JMAP `EmailSubmission/set`. Not below 100, the least RFC 5321 §4.5.3.1.8 lets a server offer, and at most 10000. |
+| `known_network_window_secs` | int | 30 days | Seconds a successful sign-in keeps an (account, network) pair on the list that lets a banned account sign in from a network its owner has used before. A network not used within the window falls back to the refusal an unknown one gets. Requires `[database]`; see [Banned account, known network](security.md). |
 | `max_http_connections` | int | 1024 | Max concurrent connections each plain-HTTP listener serves, at most 1000000: the API and JMAP, WebDAV, autoconfig without TLS, the ACME responder and metrics. A connection over the cap gets `503 Service Unavailable` with `Connection: close` and is closed without reading its request. `0` uses the default. A JMAP push (WebSocket) connection keeps its place in both this cap and `max_http_connections_per_ip` for as long as the socket is open, not only until the upgrade. A panel or proxy that carries the sockets of many users from one address needs `max_http_connections_per_ip` raised to match. |
 | `max_http_connections_per_ip` | int | 256 | Max concurrent connections one client may hold on each plain-HTTP listener (API, JMAP, WebDAV, autoconfig without TLS, ACME, metrics), answered with the same `503`, and on each listener that terminates TLS in the server (autoconfig over HTTPS, MTA-STS), where the connection is closed before any TLS handshake so no `503`/`BYE`/`-ERR` is ever written. The cap uses the TCP peer address from the socket, never a forwarded header, so the server never reads `X-Forwarded-For` before admission and `[api].trusted_proxies` does not affect it: the only way to share it is to actually be the same source address. An IPv6 client is counted by its /64 (the /48 a single subscriber receives usually lives in the same /64) and an IPv4-mapped address as the IPv4 address. No peer is exempt. `0` uses the default. The plain-HTTP and TLS caps share this key and value. A reverse proxy or the panel in front of the API is one client for all its users, so raise this to the listener cap (`max_http_connections` for plain HTTP, `max_connections_per_listener` for the autoconfig listener over HTTPS and MTA-STS) when the listener only talks to it; behind a proxy every connection looks like the proxy, so a small default (256) is one user per proxy connection and a single proxy saturating the cap is a denial of service for everyone behind it. The MTA-STS default of 32 (one eighth of the listener default of 256) covers a single resolver fleet refetching at the same time; raise it for a fleet. |
 | `queue_give_up_secs` | int | 5 days | Outbound give-up window: undelivered mail older than this is bounced. A delay-warning DSN is sent once at `queue_delay_warning_secs`. |
@@ -85,6 +89,7 @@ a connection URL.
 | `queue_delay_warning_secs` | int | 4 hours | Message age at which the one "delivery delayed" DSN is sent for the recipients still pending. Below `queue_give_up_secs`. |
 | `scanner_hook_url` | string | unset | External HTTP scanner for unauthenticated inbound mail. Mutually exclusive with `antispam.clamd_socket`. |
 | `antispam` | section | unset | Unix socket clamd scanner. See the settings below. |
+| `ldap` | section | unset | LDAP or Active Directory backend for logins and recipients no local account claims. Absent disables it. See [`[ldap]`](#ldap). |
 | `antispam_llm` | section | unset | LLM-assisted screening for unauthenticated mail whose Bayesian score lands in an uncertain band. Absent disables the hook. |
 | `subjectpass` | section | disabled | Signed token for the uncertain Bayesian band: when no LLM verdict decides a message in the band, the server refuses it with `550 5.7.1` and a token the sender can put in the `Subject:`, and accepts the resend that carries it. Requires `[database]`. Disabled by default (changes what remote senders see). See [`[subjectpass]`](#subjectpass). |
 | `log_format` | `text`\|`json` | `text` | Log output format. |
@@ -190,14 +195,11 @@ addr = "0.0.0.0"   # default: 127.0.0.1
 | `api` | 8025 | Management HTTP API. Requires `[api]`. |
 | `metrics` | 9090 | Prometheus metrics at `GET /metrics`. |
 | `acme` | 80 | ACME HTTP-01 challenge responder. Needed only with `[acme] challenge = "http-01"` (the default). |
-| `autoconfig` | 8091 | Serves Thunderbird autoconfig + Microsoft Autodiscover. Point `autoconfig.<domain>`/`autodiscover.<domain>` here (behind your TLS proxy). |
-
-| `acme` | 80 | ACME HTTP-01 challenge responder. |
 | `autoconfig` | 8091 | Serves Thunderbird autoconfig, Microsoft Autodiscover and the Apple profile (`/mobileconfig?email=`) over plain HTTP, for a deployment that keeps its own TLS proxy. |
 | `autoconfigs` | 443 | The same documents over HTTPS with the server certificate, so `autoconfig.<domain>`/`autodiscover.<domain>` need no proxy. Requires `[tls]`; the certificate (or `[acme] domains`) must cover both names. |
 | `web-dav` | 8090 | WebDAV (RFC 4918) files + CardDAV (RFC 6352) addressbooks + CalDAV (RFC 4791) calendars. HTTP Basic auth as the mail account; each account is confined to its own tree. Run behind a TLS proxy. |
 
-Plaintext listeners (`submission` 587, `web-dav` 8090, `api` 8025, `autoconfig` 8091, `metrics` 9090) are accepted without a `[tls]` block ONLY when bound to a loopback address. When `addr = 0.0.0.0` (or any non-loopback address) and `[tls]` is unset, a warning is emitted at validate time. Hardening follows in the next release: an opt-in `allow_insecure_no_tls` flag, then a hard rejection when the flag is absent.
+Plaintext listeners (`submission` 587, `web-dav` 8090, `api` 8025, `autoconfig` 8091, `metrics` 9090) are accepted without a `[tls]` block ONLY when bound to a loopback address. When `addr = 0.0.0.0` (or any non-loopback address) and `[tls]` is unset, a warning is emitted at validate time.
 
 `[tls]` does not encrypt `api`, `web-dav` or `autoconfig`: those three carry plain HTTP and the mail certificate is not offered on them. Configuring `[tls]` leaves them in plaintext, so the way to expose them is a TLS reverse proxy in front of a loopback listener, which is where I keep them. `epistle service enable` gives them loopback for that reason, on a host install as much as on the container stack, `epistle service set <name> --bind <address>` refuses any address outside loopback, and the generated compose map publishes them on `127.0.0.1` even when nothing narrowed it explicitly.
 
@@ -354,14 +356,14 @@ Optional per-domain keys. A domain listed here signs with its own key instead of
 ```toml
 [dkim]
 selector = "mail"
-key_file = "/etc/glyndor/epistle/dkim/mail.pem"
+key_file = "/etc/epistle/dkim/mail.pem"
 
 [[dkim.domain]]
 name = "example.net"
 selector = "net2024"
-key_file = "/etc/glyndor/epistle/dkim/example.net.pem"
+key_file = "/etc/epistle/dkim/example.net.pem"
 rsa_selector = "net2024r"
-rsa_key_file = "/etc/glyndor/epistle/dkim/example.net.rsa.pem"
+rsa_key_file = "/etc/epistle/dkim/example.net.rsa.pem"
 ```
 
 | Key | Meaning |
@@ -427,7 +429,7 @@ scopes = ["read", "write"]
 domains = ["a.example"]
 ```
 
-Create one with `epistle api-key-create --domain a.example` (repeat the
+Create one with `epistle api-key create --domain a.example` (repeat the
 flag for more). The key then sees only those domains in `GET /domains`,
 only the accounts that live entirely inside them in `GET /accounts`, and
 is refused on any account or address outside them.
@@ -1056,7 +1058,7 @@ it and otherwise ignore it:
 {"event":"test","message":"epistle webhook test: connectivity check, no mail activity"}
 ```
 
-### `[antispam.llm]`
+### `[antispam_llm]`
 LLM-assisted screening for the **uncertain band** — the slice of mail where the
 local Bayesian classifier is not confident in either direction. Outside the band
 the local classifier is trusted and the LLM is not paid for; inside it, the
@@ -1082,7 +1084,7 @@ to the `Rejects` mailbox.
 Example:
 
 ```toml
-[antispam.llm]
+[antispam_llm]
 endpoint = "https://api.openai.com/v1/chat/completions"
 api_key_env = "EPISTLE_LLM_API_KEY"
 model = "gpt-4o-mini"
@@ -1171,13 +1173,7 @@ email = ["ops@example.org"]
 cooldown_secs = 900
 ```
 
-The counter names accepted by `metric` (the ones `Metrics::snapshot` exposes)
-are: `abuse_dropped`, `accepted`, `bounced`, `connections`, `deferred`,
-`forwarded`, `quarantined`, `rejected_dmarc`, `rejected_dnsbl`,
-`rejected_header_fields`, `rejected_loop`, `rejected_reputation`, `rejected_scanner`, `rejected_spf`,
-`relayed`, `sieve_inspection_truncated`, `sieve_rejected`, `vacation_sent`, `webhook_failed`,
-`webhook_sent`, `database_unavailable`, `scanner_clamd_failed`,
-`scanner_clamd_skipped`, `outbound_virus`.
+The counter names accepted by `metric` (the ones `Metrics::snapshot` exposes) are: `abuse_dropped`, `accepted`, `accept_failed`, `auth_hash_gate_rejected`, `auth_login_failed`, `auth_login_succeeded`, `bayes_learning_failed`, `bayes_learning_refused`, `bayes_learning_unreadable`, `bayes_training_dropped`, `bounced`, `clock_drift_exceeded`, `connections`, `database_unavailable`, `deferred`, `dmarc_report_rows_failing`, `dmarc_reports_ingested`, `forwarded`, `mta_sts_connections_dropped`, `outbound_policy_rejected`, `outbound_virus`, `quarantined`, `rejected_dmarc`, `rejected_dnsbl`, `rejected_header_fields`, `rejected_loop`, `rejected_rate_limit`, `rejected_reputation`, `rejected_scanner`, `rejected_spf`, `relayed`, `reports_dropped`, `scanner_clamd_failed`, `scanner_clamd_skipped`, `send_limited_new_recipients`, `sieve_inspection_truncated`, `sieve_rejected`, `subjectpass_challenged`, `subjectpass_passed`, `tlsrpt_failed_sessions`, `tlsrpt_reports_ingested`, `vacation_sent`, `warmup_backoff`, `warmup_held`, `webhook_failed`, `webhook_sent`.
 
 ### `[clock_external]`
 
@@ -1720,7 +1716,7 @@ algorithm = "hmac-sha256"     # default; "hmac-sha384" and "hmac-sha512" support
 #### `[dns]` — Google Cloud DNS specifics
 provider = "gcloud"
 token = "unused"                       # placeholder; auth is signature-based
-credentials_file = "/etc/glyndor/epistle/dns/gcloud.json"
+credentials_file = "/etc/epistle/dns/gcloud.json"
 - **Auth is signature-based, not bearer-based.** `token` (and friends) is a
   placeholder; Google authenticates the service account with a JWT RS256
   signed with the private key from the credentials file. The bearer
@@ -1813,6 +1809,30 @@ secret_key_env = "EPISTLE_SPACESHIP_SECRET"
 - **Supported record kinds:** A, AAAA, TXT, CNAME, TLSA. MX and SRV are
   rejected (`Unsupported`) for the same reason as the other providers.
 
+### `[ldap]`
+LDAP or Active Directory backend. A login that no local or SQL account claims is checked with a bind against the directory, and its users are loaded for recipient resolution. Absent disables it. A malformed section aborts startup. The login is escaped (RFC 4515) before it goes into `user_filter`, and an unknown user and a wrong password get the same refusal.
+
+| Key | Meaning |
+|---|---|
+| `url` | `ldap://host:port` or `ldaps://host:port` (implicit TLS). Required. |
+| `bind_dn` | DN of the service account that searches the directory. Required. |
+| `bind_password` | Password of that account. Required; keep it out of the file with `${VAR}`. |
+| `base_dn` | Base DN the user search starts from. Required. |
+| `user_filter` | Search filter with `%s` where the login goes, for example `(uid=%s)` or `(sAMAccountName=%s)`. Required; it must contain `%s`. |
+| `account_attribute` | Attribute the account name is read from. Default `uid`. |
+| `mail_attribute` | Attribute the delivered addresses are read from. Default `mail`. |
+| `refresh_secs` | Seconds between reloads of the user set. Default `3600`; not `0`. |
+| `tls` | Ask for StartTLS on an `ldap://` URL. Default `false`; ignored for `ldaps://`. Over plain `ldap://` without it the bind password crosses the network in the clear, so use `ldaps://` or `tls = true`. |
+
+```toml
+[ldap]
+url = "ldaps://ldap.example.org"
+bind_dn = "cn=epistle,ou=services,dc=example,dc=org"
+bind_password = "${LDAP_BIND_PASSWORD}"
+base_dn = "ou=people,dc=example,dc=org"
+user_filter = "(uid=%s)"
+```
+
 ### `[[accounts]]`
 A mail account. An account with no `password_hash` is receive-only.
 
@@ -1827,8 +1847,9 @@ Addresses and domains here are used in lowercase (`config-check` names any writt
 | `quota_bytes` | Per-account mailbox quota (bytes). Overrides the domain/server default. `0` means no limit. |
 | `forward` | External addresses this account's mail is also forwarded to (SRS-rewritten; bounces and looping mail are never forwarded). Empty disables forwarding. Each target needs a domain with at least one dot. |
 | `forward_keep_local` | Keep the local copy when forwarding (default `true`). Set `false` for pure forwarding. |
+| `allowed_protocols` | Protocols this account may sign in through, from `smtp`, `submission`, `submissions`, `api`, `imap`, `imaps`, `pop3s`, `manage-sieve`, `web-dav`. Absent means every protocol; with a list, any other password-based sign-in is refused like an unknown login. |
 | `display_name` | The person's name used as sender name, kept as written (at most 128 characters, no line breaks). |
-| `save_sent` | Whether the server saves a copy of every message the account submits into its `Sent` folder. Absent or unset means "on" (the default); `true` enables the save explicitly, `false` opts the account out. Per-request overrides (`POST /api/v1/send`'s `save_sent` field, JMAP `EmailSubmission/saveSent`) and per-credential overrides (an app password's `save_sent`) win over this setting. |
+| `save_sent` | Dynamic accounts only (`epistle account save-sent`); a `[[accounts]]` block in the file does not take it and the file is refused with it. Whether the server saves a copy of every message the account submits into its `Sent` folder. Absent or unset means "on" (the default); `true` enables the save explicitly, `false` opts the account out. Per-request overrides (`POST /api/v1/send`'s `save_sent` field, JMAP `EmailSubmission/saveSent`) and per-credential overrides (an app password's `save_sent`) win over this setting. |
 
 ### `[[alias]]`
 A multi-target alias: one address that delivers to several local accounts.
@@ -1895,7 +1916,6 @@ Outbound queue settings. Absent keeps the secure defaults.
 |---|---|
 | `outbound_tls` | STARTTLS certificate authentication for a hop that is **not** otherwise mandated or DANE-protected. `strict` (the default) verifies the certificate against the public trust anchors and the MX hostname, exactly like a browser — a self-signed/expired certificate with no DANE/MTA-STS defers the message. `opportunistic` completes the handshake with any certificate (encryption without authentication): it stops passive eavesdropping but not an active man-in-the-middle, and is the historical SMTP norm. |
 | `tlsrpt_reports` | Send TLS-RPT reports (RFC 8460) about our outbound TLS, default `true`. Each direct delivery to a recipient MX records its TLS outcome (success, or the failure type: `starttls-not-supported`, `certificate-expired`, `certificate-host-mismatch`, `certificate-not-trusted`, `tlsa-invalid`, `sts-policy-invalid`, `validation-failure`) under `data_dir/reports/tlsrpt-outbound/`. Once a UTC day is over, every domain with sessions that publishes a `_smtp._tls` TXT record gets one report per `rua=`: `mailto:` as a message from `postmaster@<hostname>` with the gzip report attached, queued and DKIM-signed like other mail; `https:` as a POST with `Content-Type: application/tlsrpt+gzip` (30 s timeout, no redirects, at most 1 MiB). Domains without the record get nothing, and the day's sessions are deleted once reported. Mail through a `[[transport]]` relay is not recorded. `false` records and sends nothing. |
-
 | `concurrency` | Outbound SMTP conversations running at once, all destinations together, default `8`, between 1 and 1024. A slow or silent destination holds its own conversations and no others. Read and change it with `epistle limits show` and `epistle limits set queue-concurrency N`. |
 | `per_domain_concurrency` | Outbound conversations running at once with any one recipient domain, default `2`, between 1 and `concurrency`. The cap covers every exchanger of the domain together. `epistle limits set queue-per-domain-concurrency N`. |
 | `backoff_steps` | How long a destination that asks to slow down is held off, in seconds, one step per deferral in a row with the last repeating: default `[60, 300, 900, 3600]` (1, 5, 15 and 60 minutes), 1 to 16 steps of 1 to 86400 seconds each. `epistle limits set queue-backoff 1m,5m,15m,1h`. |
@@ -2201,12 +2221,12 @@ queue_give_up_secs = 432000   # 5 days (the default)
 greylist_delay_secs = 60
 
 [tls]
-cert_file = "/etc/glyndor/epistle/tls/fullchain.pem"
-key_file  = "/etc/glyndor/epistle/tls/privkey.pem"
+cert_file = "/etc/epistle/tls/fullchain.pem"
+key_file  = "/etc/epistle/tls/privkey.pem"
 
 [dkim]
 selector = "ed1"
-key_file = "/etc/glyndor/epistle/dkim/ed1.pem"
+key_file = "/etc/epistle/dkim/ed1.pem"
 
 [privileges]
 user  = "glyndor-epistle"
