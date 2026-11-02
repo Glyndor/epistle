@@ -618,7 +618,10 @@ instead. A different existing destination is refused.
 
 For a generated stack, the command removes the old token environment entry and
 the read-only mount of a token file the configuration no longer names, adds the
-mount of the new source only to `mail`, and recreates `mail`. A container that
+mount of the new source only to `mail`, and recreates `mail`. A stack that runs
+the certificates container (`epistle stack certs enable`) gets the credential
+in `certs` instead, which is recreated, and `mail` never mounts it; the ACME
+`dns-01` challenge and the TLSA record are then published from `certs`. A container that
 keeps the mount of a credential you took away still has that credential, so the
 mount leaves with the setting that named it. Without a stack, restart the server
 yourself. Remove the old environment variable from your shell, service
