@@ -406,7 +406,7 @@ impl DnsProvider for PorkbunProvider {
 		}))
 	}
 	/// Strict by value: this provider's delete removes a value-bearing TXT
-	/// only when [`same_txt_value`](crate::dns::txt::same_txt_value) matches.
+	/// only when `same_txt_value` matches.
 	fn delete_exact(&self, _zone: &str, record: DnsRecord) -> Op<'_> {
 		if record.kind != RecordKind::Txt || record.value.is_empty() {
 			return Box::pin(async { Err(ProviderError::Unsupported) });
