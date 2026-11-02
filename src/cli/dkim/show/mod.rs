@@ -34,6 +34,21 @@ pub(super) struct DomainView {
 	rsa_key_file: Option<PathBuf>,
 }
 
+/// The key one hosted domain signs with, and who else signs with it. A
+/// domain on the `[dkim]` default shares that key with every other domain
+/// that has no `[[dkim.domain]]` entry.
+#[derive(Debug, Serialize)]
+pub(super) struct KeyView {
+	domain: String,
+	/// `dkim.domain` for a key of its own, `dkim` for the shared default.
+	source: &'static str,
+	selector: String,
+	rsa_selector: Option<String>,
+	/// The other domains that sign with this same key; empty for a key of
+	/// the domain's own.
+	shared_with: Vec<String>,
+}
+
 /// A rotation the server began and has not committed or withdrawn yet.
 #[derive(Debug, Serialize)]
 pub(super) struct InProgressView {
@@ -85,7 +100,48 @@ pub(super) struct DkimView {
 	/// Per-domain overrides as the configuration names them: every
 	/// domain in this list signs with its own key, not the default.
 	overrides: Vec<DomainView>,
+	/// The key of every hosted domain, so a key several domains share is
+	/// visible.
+	keys: Vec<KeyView>,
+	/// Records of the shared `[dkim]` key still published at a domain that
+	/// has a key of its own: the split is not finished while any is listed.
+	stale_records: Vec<String>,
+	/// Records whose state could not be read, so the split cannot be called
+	/// finished: a failure is never read as "gone".
+	stale_unchecked: Vec<String>,
 	records: Vec<RecordView>,
+}
+
+/// The key each signing domain uses and the domains it shares it with.
+fn key_views(
+	config: &Config,
+	dkim: &crate::config::Dkim,
+	default: (&str, Option<&str>),
+) -> Vec<KeyView> {
+	let on_default = dkim.domains_on_default(&config.domains, &config.domain_aliases);
+	signing_domains(config)
+		.into_iter()
+		.map(|domain| match dkim.override_for(&domain) {
+			Some(entry) => KeyView {
+				source: "dkim.domain",
+				selector: entry.selector.clone(),
+				rsa_selector: entry.rsa_selector.clone(),
+				shared_with: Vec::new(),
+				domain,
+			},
+			None => KeyView {
+				source: "dkim",
+				selector: default.0.to_string(),
+				rsa_selector: default.1.map(str::to_string),
+				shared_with: on_default
+					.iter()
+					.filter(|d| **d != domain)
+					.cloned()
+					.collect(),
+				domain,
+			},
+		})
+		.collect()
 }
 
 /// Every domain the relay signs for, lowercase and sorted.
@@ -202,6 +258,31 @@ pub(super) async fn build(
 			}
 		}
 	}
+	let keys = key_views(
+		config,
+		dkim,
+		(
+			&active.selector,
+			rsa.as_ref().map(|rsa| rsa.selector.as_str()),
+		),
+	);
+	let (stale_records, stale_unchecked) = match dns {
+		Some(dns) => match crate::dkim::stale::names(config) {
+			Ok(candidates) => {
+				let found = crate::dkim::stale::survey(dns, candidates).await;
+				(
+					found.shared.into_iter().map(|f| f.stale.name).collect(),
+					found
+						.unknown
+						.into_iter()
+						.map(|(r, why)| format!("{}: {why}", r.name))
+						.collect(),
+				)
+			}
+			Err(why) => (Vec::new(), vec![format!("cannot list the records: {why}")]),
+		},
+		None => (Vec::new(), Vec::new()),
+	};
 	let automatic = !config.dns.is_empty();
 	let rotated_at = state.as_ref().map(|s| s.rotated_at);
 	Ok(DkimView {
@@ -250,6 +331,9 @@ pub(super) async fn build(
 				rsa_key_file: entry.rsa_key_file.clone(),
 			})
 			.collect(),
+		keys,
+		stale_records,
+		stale_unchecked,
 		records,
 	})
 }
@@ -354,6 +438,33 @@ fn render_text(view: &DkimView, out: &mut impl std::io::Write) -> std::io::Resul
 			entry.selector,
 			rsa,
 			entry.key_file.display()
+		)?;
+	}
+	for key in &view.keys {
+		let who = if key.shared_with.is_empty() {
+			"its own key".to_string()
+		} else {
+			format!("shared with {}", key.shared_with.join(", "))
+		};
+		writeln!(
+			out,
+			"key {}: {} ({who})",
+			key.domain,
+			pair(&key.selector, key.rsa_selector.as_deref())
+		)?;
+	}
+	if !view.stale_records.is_empty() {
+		writeln!(
+			out,
+			"split incomplete: the shared key is still published at {}; `epistle dkim split --finish` retires it",
+			view.stale_records.join(", ")
+		)?;
+	}
+	if !view.stale_unchecked.is_empty() {
+		writeln!(
+			out,
+			"split: could not check whether the shared key is still published ({})",
+			view.stale_unchecked.join("; ")
 		)?;
 	}
 	for record in &view.records {

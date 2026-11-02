@@ -351,7 +351,7 @@ With `rsa_selector` and `rsa_key_file` set (dual signing), each rotation also re
 | `rotate_overlap_days` | **Deprecated.** Ignored. Same backward-compatibility note as `rotate_days`. |
 
 #### `[[dkim.domain]]`
-Optional per-domain keys. A domain listed here signs with its own key instead of the `[dkim]` default, so one domain's key can be replaced, or kept from another server, without touching the others; every other domain keeps the default. The signer picks the key of the signature's `d=` domain and never another domain's. `epistle dns-records`, `verify-dns`, `status` and `dkim show` show each domain's own selector and record.
+Per-domain keys. A domain listed here signs with its own key instead of the `[dkim]` default, so one domain's key can be replaced, or kept from another server, without touching the others; every other domain keeps the default. `epistle init` (for every domain after the first) and `epistle domain add` write these entries themselves, with the key files under `<data_dir>/keys/dkim/<domain>/`, so a new install has one key per domain; an install made before that has the entries it had, and none are added to it. The signer picks the key of the signature's `d=` domain and never another domain's. `epistle dns-records`, `verify-dns`, `status` and `dkim show` show each domain's own selector and record.
 
 ```toml
 [dkim]
@@ -371,6 +371,8 @@ rsa_key_file = "/etc/epistle/dkim/example.net.rsa.pem"
 | `name` | A domain in `domains` or `domain_aliases`, compared without regard to case. Listing a domain the server does not host, or the same domain twice, is a configuration error. |
 | `selector`, `key_file` | Ed25519 selector and key, as in `[dkim]`. |
 | `rsa_selector`, `rsa_key_file` | Optional RSA pair, set together, as in `[dkim]`. |
+
+**Two domains never share a key.** An entry that names a key file another entry or `[dkim]` already names is a configuration error, and the message names both owners. When the server starts, and in `epistle config-check` and `epistle status`, the public keys inside the files are compared as well, so a copy of one key under two names, or a link to it, is refused the same way (`config-check` exits 1, `status` fails the `config` check, and `serve` does not start). The one sharing that is only a warning is the one older installs have: several domains with no entry, all signing with the `[dkim]` key. Nothing changes for them when the server is upgraded; `config-check`, `status`, the log at start and `epistle dkim show` list the domains on that key (`shared with` in `dkim show`), and `epistle dkim split` gives each its own.
 
 The keys are read when the server starts, like the default key: an unreadable or invalid file stops the start, and a changed key or a new entry takes effect after a restart. Per-domain keys are **not rotated**. Automatic rotation covers the `[dkim]` default only, and it neither publishes nor retires records of a domain listed here, so a listed domain outside the `[dns]` zone does not stop it. To replace a per-domain key, generate one (`epistle dkim-keygen`), publish its record under a new selector, point the entry at it and restart; `epistle dkim rotate --domain <name>` refuses and says the same. `epistle dkim cleanup` never offers a listed key or its record for removal.
 

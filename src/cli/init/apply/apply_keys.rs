@@ -266,6 +266,53 @@ pub(super) fn ensure_keys_and_certs(
 	Ok((ed, rsa, cert, key))
 }
 
+/// A key of its own for every domain after the first, which signs with the
+/// `s1`/`s2` pair. Each is `keys/dkim/<domain>/`, reused when it is already
+/// there, and comes back as the `[[dkim.domain]]` entry that names it. The
+/// RSA key is made only when the default pair has one, so every domain signs
+/// with the same set of algorithms.
+pub(super) fn ensure_domain_keys(
+	data_dir: &Path,
+	domains: &[String],
+	dual_signing: bool,
+	report: &mut Report,
+) -> Result<Vec<super::apply_config::DesiredDkimDomain>, ApplyError> {
+	let now = std::time::SystemTime::now()
+		.duration_since(std::time::UNIX_EPOCH)
+		.map_or(0, |elapsed| elapsed.as_secs());
+	let mut entries = Vec::new();
+	for domain in domains.iter().skip(1) {
+		let name = domain.trim().to_ascii_lowercase();
+		let dir = crate::dkim::domain_keys::key_dir(data_dir, &name)
+			.map_err(|error| ApplyError::Rng(format!("DKIM key for {name}: {error}")))?;
+		let (keys, created) = crate::dkim::domain_keys::ensure(
+			data_dir,
+			&name,
+			dual_signing,
+			now,
+			&["s1".to_string(), "s2".to_string()],
+		)
+		.map_err(|error| ApplyError::KeyWrite(dir, std::io::Error::other(error)))?;
+		let mut files = vec![keys.key_file.clone()];
+		files.extend(keys.rsa.iter().map(|(_, file)| file.clone()));
+		for file in files {
+			report.steps.push(if created.contains(&file) {
+				ReportStep::Wrote(file)
+			} else {
+				ReportStep::Reused(file)
+			});
+		}
+		entries.push(super::apply_config::DesiredDkimDomain {
+			name,
+			selector: keys.selector,
+			key_file: keys.key_file.display().to_string(),
+			rsa_selector: keys.rsa.as_ref().map(|(selector, _)| selector.clone()),
+			rsa_key_file: keys.rsa.map(|(_, file)| file.display().to_string()),
+		});
+	}
+	Ok(entries)
+}
+
 /// What `stack update` does to the keys before it renders a compose file
 /// that mounts them: move both out of data_dir, create any that is missing
 /// as `init` would (with `database`, the PostgreSQL admin password too),

@@ -448,6 +448,19 @@ fn warn_externally_referenced(config: &Config, archived: &usize, warnings: &mut 
 		if let Some(rsa) = &dkim.rsa_key_file {
 			entries.push(format!("[dkim] rsa_key_file = {}", rsa.display()));
 		}
+		// A domain's own keys are made under data_dir and are in the archive;
+		// one the operator pointed elsewhere is not.
+		for entry in &dkim.domain {
+			for file in std::iter::once(&entry.key_file).chain(entry.rsa_key_file.as_ref()) {
+				if !file.starts_with(&config.data_dir) {
+					entries.push(format!(
+						"[[dkim.domain]] {} key file = {}",
+						entry.name,
+						file.display()
+					));
+				}
+			}
+		}
 	}
 	if let Some(arc) = &config.arc {
 		entries.push(format!("[arc] key_file = {}", arc.key_file.display()));
