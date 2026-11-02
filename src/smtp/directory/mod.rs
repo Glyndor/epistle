@@ -229,201 +229,11 @@ impl Directory {
 		}
 	}
 
-	/// Attach a live LDAP/AD authenticator, consulted by
-	/// [`Directory::authenticate_with_ip`] only after the local credential path
-	/// fails. Shared behind an `Arc` so directory rebuilds keep one worker thread.
-	pub fn with_ldap(
-		mut self,
-		ldap: Option<std::sync::Arc<crate::directory_store::LdapAuthenticator>>,
-	) -> Self {
-		self.ldap = ldap;
-		self
-	}
-
-	/// Attach the shared metrics handle so every password-based
-	/// authentication attempt bumps `auth_login_succeeded` /
-	/// `auth_login_failed`. The structured tracing event is always emitted
-	/// regardless — the counter is a derived view, the audit log is the
-	/// primary record. Unset in unit tests that do not exercise counters.
-	pub fn with_metrics(mut self, metrics: std::sync::Arc<crate::metrics::Metrics>) -> Self {
-		self.metrics = Some(metrics);
-		self
-	}
-
-	/// Set the runtime password policy. Verification through
-	/// [`Directory::authenticate`] normalises the candidate the same way
-	/// the storage layer did at set-time, so a non-ASCII password typed
-	/// in one decomposition verifies the same as its NFKC canonical form.
-	pub fn with_password_policy(mut self, policy: Policy) -> Self {
-		self.password_policy = policy;
-		self
-	}
-
-	/// Attach per-account app passwords (account name → list). Account keys are
-	/// lowercased to match the authentication lookup.
-	pub fn with_app_passwords(
-		mut self,
-		entries: impl IntoIterator<Item = (String, crate::directory_store::AppPassword)>,
-	) -> Self {
-		for (account, password) in entries {
-			self.app_passwords
-				.entry(account.to_ascii_lowercase())
-				.or_default()
-				.push(password);
-		}
-		self.max_app_passwords = self.app_passwords.values().map(Vec::len).max().unwrap_or(0);
-		self
-	}
-
-	/// Attach enabled masked email addresses (lowercased address → owning
-	/// account). Disabled masks are never inserted here — `resolve` and
-	/// `owns_address` must treat them identically to an unknown user so a
-	/// disabled mask never reveals that one once existed.
-	pub fn with_masked(mut self, entries: impl IntoIterator<Item = (String, String)>) -> Self {
-		self.masked_by_address = entries
-			.into_iter()
-			.map(|(address, account)| (normalize(&address), account))
-			.collect();
-		self
-	}
-
-	/// Attach the masked addresses that are switched off, so a delivery that
-	/// finds one can tell it from an address nobody had.
-	pub fn with_masked_paused(mut self, entries: impl IntoIterator<Item = String>) -> Self {
-		self.masked_paused = entries
-			.into_iter()
-			.map(|address| normalize(&address))
-			.collect();
-		self
-	}
-
-	/// Attach multi-target aliases (alias address → spec).
-	pub fn with_aliases(mut self, aliases: impl IntoIterator<Item = (String, AliasSpec)>) -> Self {
-		self.aliases = aliases
-			.into_iter()
-			.map(|(address, spec)| (normalize(&address), spec))
-			.collect();
-		self
-	}
-
 	/// The member accounts of an alias address, or `None` when the address is
 	/// not an alias or its membership is hidden (privacy).
 	pub fn alias_members(&self, address: &str) -> Option<Vec<String>> {
 		let spec = self.aliases.get(&normalize(address))?;
 		(!spec.hidden).then(|| spec.members.clone())
-	}
-
-	/// Attach TOTP secrets (account name → base32 secret) for two-factor auth.
-	pub fn with_totp(mut self, totp: impl IntoIterator<Item = (String, String)>) -> Self {
-		self.totp = totp
-			.into_iter()
-			.map(|(name, secret)| (name.to_ascii_lowercase(), secret))
-			.collect();
-		self
-	}
-
-	/// Mark a set of accounts as administratively disabled. While disabled,
-	/// the account still owns its mailboxes and is visible to management
-	/// tooling, but authentication rejects every password attempt before any
-	/// hashing. Names are lowercased so the check matches `credentials()`
-	/// (which also lowercases the bare-login path).
-	pub fn with_disabled(mut self, names: impl IntoIterator<Item = String>) -> Self {
-		self.disabled = names.into_iter().map(|n| n.to_ascii_lowercase()).collect();
-		self
-	}
-
-	/// Whether `account` is administratively disabled.
-	pub fn is_disabled(&self, account: &str) -> bool {
-		self.disabled.contains(&account.to_ascii_lowercase())
-	}
-
-	/// Attach the per-account protocol allowlist (account name → set of
-	/// protocols the account may authenticate through). Account names are
-	/// lowercased to match `credentials()`. An absent entry is
-	/// "every protocol authenticates" (the default for accounts that never
-	/// opted into the restriction); an empty set is "no protocol
-	/// authenticates" — the account owns its mailboxes but cannot sign in
-	/// anywhere.
-	pub fn with_allowed_protocols(
-		mut self,
-		entries: impl IntoIterator<Item = (String, Vec<crate::config::Protocol>)>,
-	) -> Self {
-		self.allowed_protocols = entries
-			.into_iter()
-			.map(|(name, protocols)| {
-				(
-					name.to_ascii_lowercase(),
-					protocols.into_iter().collect::<HashSet<_>>(),
-				)
-			})
-			.collect();
-		self
-	}
-
-	/// Whether `account` may authenticate through `protocol`. `None` when
-	/// the account carries no allowlist (every protocol is admitted); a
-	/// stored set decides otherwise.
-	pub fn is_protocol_allowed(&self, account: &str, protocol: crate::config::Protocol) -> bool {
-		self.allowed_protocols
-			.get(&account.to_ascii_lowercase())
-			.is_none_or(|set| set.contains(&protocol))
-	}
-
-	/// Attach per-account storage quotas (account name → bytes).
-	pub fn with_account_quotas(mut self, quotas: impl IntoIterator<Item = (String, u64)>) -> Self {
-		self.account_quotas = quotas
-			.into_iter()
-			.map(|(name, bytes)| (name.to_ascii_lowercase(), bytes))
-			.collect();
-		self
-	}
-
-	/// Attach per-account `save_sent` preferences (account name →
-	/// enabled). `Some(true)` and `Some(false)` are both stored; an
-	/// account absent from the list keeps the default (`None`).
-	pub fn with_save_sent(mut self, entries: impl IntoIterator<Item = (String, bool)>) -> Self {
-		self.account_save_sent = entries
-			.into_iter()
-			.map(|(name, value)| (name.to_ascii_lowercase(), value))
-			.collect();
-		self
-	}
-
-	/// Attach per-domain default storage quotas (domain → bytes).
-	pub fn with_domain_quotas(mut self, quotas: impl IntoIterator<Item = (String, u64)>) -> Self {
-		self.domain_quotas = quotas
-			.into_iter()
-			.map(|(domain, bytes)| (domain.to_ascii_lowercase(), bytes))
-			.collect();
-		self
-	}
-
-	/// Attach per-domain submission rate limits (domain → messages/min). The
-	/// lookup walks the account's own addresses — the same approach
-	/// [`Directory::quota_for`] takes — so the resolved domain is the one the
-	/// address actually lives under, not the first one configured.
-	pub fn with_domain_submission_limits(
-		mut self,
-		limits: impl IntoIterator<Item = (String, u32)>,
-	) -> Self {
-		self.domain_submission_limits = limits
-			.into_iter()
-			.map(|(domain, per_min)| (domain.to_ascii_lowercase(), per_min))
-			.collect();
-		self
-	}
-
-	/// Attach per-account forwarding: account name → (target addresses,
-	/// keep_local).
-	pub fn with_forwards(
-		mut self,
-		forwards: impl IntoIterator<Item = (String, (Vec<String>, bool))>,
-	) -> Self {
-		self.forwards = forwards
-			.into_iter()
-			.map(|(name, spec)| (name.to_ascii_lowercase(), spec))
-			.collect();
-		self
 	}
 
 	/// The forwarding spec for an account: `(targets, keep_local)`.
@@ -445,79 +255,6 @@ impl Directory {
 	pub fn hosts_domain(&self, domain: &str) -> bool {
 		let domain = domain.to_ascii_lowercase();
 		self.domains.contains(&domain) || self.domain_aliases.contains_key(&domain)
-	}
-
-	/// The storage quota for an account: its own quota, else the quota of a
-	/// hosted domain it has an address in, else `None` (use the server default).
-	pub fn quota_for(&self, account: &str) -> Option<u64> {
-		let account = account.to_ascii_lowercase();
-		if let Some(bytes) = self.account_quotas.get(&account) {
-			return Some(*bytes);
-		}
-		if self.domain_quotas.is_empty() {
-			return None;
-		}
-		self.accounts_by_address
-			.iter()
-			.filter(|(_, name)| name.eq_ignore_ascii_case(&account))
-			.filter_map(|(addr, _)| addr.rsplit_once('@').map(|(_, domain)| domain))
-			.find_map(|domain| self.domain_quotas.get(domain).copied())
-	}
-
-	/// The account-wide `save_sent` preference: `Some(true)`/`Some(false)`
-	/// when the account carries an explicit override, `None` when the
-	/// preference is absent (treated as "on" by default). Callers pick the
-	/// default themselves because the per-request and per-app-password
-	/// overrides interact with it; the saver resolves the precedence.
-	pub fn save_sent_for(&self, account: &str) -> Option<bool> {
-		self.account_save_sent
-			.get(&account.to_ascii_lowercase())
-			.copied()
-	}
-
-	/// Whether the SMTP session that authenticated as `account` via
-	/// `app_password` (when the login was a secondary credential rather
-	/// than the primary password) should save a copy of every message
-	/// to Sent. `Some(false)` on the app password disables the save
-	/// unconditionally; `Some(true)` enables it; `None` defers to the
-	/// account-wide preference.
-	pub fn app_password_save_sent(
-		&self,
-		account: &str,
-		app_password: Option<&str>,
-	) -> Option<bool> {
-		let account = account.to_ascii_lowercase();
-		let passwords = self.app_passwords.get(&account)?;
-		let password = app_password?;
-		passwords
-			.iter()
-			.find(|entry| entry.label == password)
-			.and_then(|entry| entry.save_sent)
-	}
-
-	/// The per-domain submission rate limit (messages/minute) for an
-	/// account, derived from the domain of one of the account's own
-	/// addresses. `None` when no per-domain limit covers the account; the
-	/// caller (the SMTP session) is responsible for falling back to the
-	/// server-wide limit, or to no limit at all.
-	///
-	/// Iterates the account's addresses rather than reading `domains[0]`:
-	/// taking the first configured domain would assign every account to
-	/// whichever domain happened to be configured first, and drop all of
-	/// them the day that domain is removed. The address walk matches the
-	/// approach [`Directory::quota_for`] takes for the same reason. An
-	/// account with addresses in several limited domains gets the strictest
-	/// of their limits, whatever order the addresses are stored in.
-	pub fn submission_limit_for(&self, account: &str) -> Option<u32> {
-		if self.domain_submission_limits.is_empty() {
-			return None;
-		}
-		self.accounts_by_address
-			.iter()
-			.filter(|(_, name)| name.eq_ignore_ascii_case(account))
-			.filter_map(|(addr, _)| addr.rsplit_once('@').map(|(_, domain)| domain))
-			.filter_map(|domain| self.domain_submission_limits.get(domain).copied())
-			.min()
 	}
 
 	/// Verify a login with its password, enforcing TOTP when the account has a
@@ -571,48 +308,6 @@ impl Directory {
 				None => metrics.auth_login_failed(),
 			}
 		}
-	}
-
-	/// Attach domain aliases (alias domain → target domain). Both sides are
-	/// lowercased to match resolution.
-	pub fn with_domain_aliases(
-		mut self,
-		aliases: impl IntoIterator<Item = (String, String)>,
-	) -> Self {
-		self.domain_aliases = aliases
-			.into_iter()
-			.map(|(alias, target)| (alias.to_ascii_lowercase(), target.to_ascii_lowercase()))
-			.collect();
-		self
-	}
-
-	/// Attach per-domain catch-all accounts (domain → account name). Domains
-	/// are lowercased to match resolution.
-	pub fn with_catch_all(mut self, catch_all: impl IntoIterator<Item = (String, String)>) -> Self {
-		self.catch_all = catch_all
-			.into_iter()
-			.map(|(domain, account)| (domain.to_ascii_lowercase(), account))
-			.collect();
-		self
-	}
-
-	/// Override the sub-address separators (default `['+']`). An empty list
-	/// disables sub-addressing entirely.
-	pub fn with_subaddress_separators(
-		mut self,
-		separators: impl IntoIterator<Item = char>,
-	) -> Self {
-		self.subaddress_separators = separators.into_iter().collect();
-		self
-	}
-
-	/// Attach password hashes (account name → argon2id PHC string).
-	pub fn with_password_hashes(
-		mut self,
-		hashes: impl IntoIterator<Item = (String, String)>,
-	) -> Self {
-		self.password_hashes = hashes.into_iter().collect();
-		self
 	}
 
 	/// Resolve a login name (account name, or one of its addresses) to
@@ -669,6 +364,11 @@ impl Directory {
 	}
 }
 
+mod access;
+mod builder;
+
+mod limits;
+
 mod resolve;
 
 mod list_fields;
@@ -692,10 +392,8 @@ mod gate;
 pub use gate::{Proof, ScramPlan, ScramRefusal, bearer_proof};
 
 #[cfg(test)]
-pub(crate) mod gate_fixture;
-
+mod fixtures;
 #[cfg(test)]
-mod test_support;
-
+use fixtures::test_support;
 #[cfg(test)]
-pub(crate) mod send_as_fixture;
+pub(crate) use fixtures::{gate_fixture, send_as_fixture};
