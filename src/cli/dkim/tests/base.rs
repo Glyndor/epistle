@@ -171,7 +171,8 @@ fn dry_run_with_dual_signing_names_both_keys() {
 
 /// The refusal `dkim rotate --domain <domain>` prints, without its styled
 /// prefix, for a configuration where `example.org` has an override and
-/// `example.net` signs with the default.
+/// `example.net` signs with the default. Rotating an override is covered in
+/// `cli::dkim::rotate_domain`.
 fn domain_refusal(domain: &str) -> String {
 	let dir = tempfile::tempdir().expect("dir");
 	let mut config = config_with(dir.path(), "['example.org', 'example.net']", DNS);
@@ -192,7 +193,11 @@ fn domain_refusal(domain: &str) -> String {
 		&mut err,
 		&mut out,
 	);
-	assert_eq!(code, ExitCode::FAILURE, "--domain is always refused");
+	assert_eq!(
+		code,
+		ExitCode::FAILURE,
+		"--domain on a domain without a key of its own is refused"
+	);
 	assert!(out.is_empty(), "nothing is printed as done");
 	assert!(
 		!dir.path().join(REQUEST_FILE).exists(),
@@ -204,16 +209,6 @@ fn domain_refusal(domain: &str) -> String {
 		.trim_start_matches(|c: char| c != ' ')
 		.trim()
 		.to_string()
-}
-
-#[test]
-fn rotating_an_override_is_refused_with_what_to_do_instead() {
-	assert_eq!(
-		domain_refusal("example.org"),
-		"dkim rotate --domain example.org: per-domain keys do not rotate; replace the key of \
-		 [[dkim.domain]] example.org in the configuration file, publish its record \
-		 (epistle dns-records) and restart the server"
-	);
 }
 
 #[test]

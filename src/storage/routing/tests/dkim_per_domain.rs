@@ -27,7 +27,7 @@ fn relayed(envelope: &str, from: &str) -> (Vec<u8>, String, String) {
 		ReloadableSigner::new(Arc::new(default)),
 		vec![DomainSigner {
 			domain: "example.org".to_string(),
-			signer: Arc::new(override_signer),
+			signer: ReloadableSigner::new(Arc::new(override_signer)),
 		}],
 	);
 	let directory = DirectoryHandle::new(crate::smtp::directory::Directory::new(

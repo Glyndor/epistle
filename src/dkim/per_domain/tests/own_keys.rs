@@ -21,7 +21,7 @@ fn domains() -> (PerDomainSigner, HashMap<String, Vec<String>>) {
 		);
 		overrides.push(DomainSigner {
 			domain: domain.to_string(),
-			signer,
+			signer: ReloadableSigner::new(signer),
 		});
 	}
 	let default = fresh_signer("s1");

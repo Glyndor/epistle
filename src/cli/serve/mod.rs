@@ -60,6 +60,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	let SplitCompanions {
 		split,
 		dkim_signer,
+		domain_signers,
 		webhook,
 		arc_sealer,
 		mut evidence,
@@ -126,6 +127,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	tasks::spawn_dmarc_flush(&config, Arc::clone(&spf_dns), Arc::clone(&sink))?;
 	tasks::spawn_tlsrpt_reports(&config, Arc::clone(&spf_dns), Arc::clone(&sink))?;
 	tasks::spawn_dkim_rotation(&config, &dkim_signer, webhook.as_ref().map(Arc::clone));
+	tasks::spawn_domain_rotations(&config, &domain_signers, webhook.as_ref().map(Arc::clone));
 	tasks::spawn_alert_engine(
 		&config,
 		Arc::clone(&metrics),

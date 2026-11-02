@@ -1,5 +1,8 @@
 use super::*;
 use std::io::Write;
+use std::sync::Arc;
+
+use crate::dkim::Signer;
 
 pub(super) fn fresh_signer(selector: &str) -> Arc<Signer> {
 	let (pem, _) = crate::dkim::generate_key().expect("key");
@@ -14,7 +17,7 @@ fn picks_the_override_for_a_listed_domain() {
 	let default = ReloadableSigner::new(fresh_signer("default-sel"));
 	let overrides = vec![DomainSigner {
 		domain: "example.org".to_string(),
-		signer: fresh_signer("per-sel"),
+		signer: ReloadableSigner::new(fresh_signer("per-sel")),
 	}];
 	let signer = PerDomainSigner::new(default, overrides);
 	let raw = b"From: a@example.org\r\nSubject: x\r\n\r\nbody\r\n";
@@ -30,7 +33,7 @@ fn falls_back_to_the_default_for_an_unlisted_domain() {
 	let default = ReloadableSigner::new(fresh_signer("default-sel"));
 	let overrides = vec![DomainSigner {
 		domain: "example.org".to_string(),
-		signer: fresh_signer("per-sel"),
+		signer: ReloadableSigner::new(fresh_signer("per-sel")),
 	}];
 	let signer = PerDomainSigner::new(default, overrides);
 	let raw = b"From: a@elsewhere.example\r\nSubject: x\r\n\r\nbody\r\n";
@@ -46,7 +49,7 @@ fn matches_overrides_case_insensitively() {
 	let default = ReloadableSigner::new(fresh_signer("default-sel"));
 	let overrides = vec![DomainSigner {
 		domain: "example.org".to_string(),
-		signer: fresh_signer("per-sel"),
+		signer: ReloadableSigner::new(fresh_signer("per-sel")),
 	}];
 	let signer = PerDomainSigner::new(default, overrides);
 	let raw = b"From: a@example.org\r\nSubject: x\r\n\r\nbody\r\n";
@@ -62,7 +65,7 @@ fn reload_replaces_only_the_default_signer() {
 	let default = ReloadableSigner::new(fresh_signer("default-sel"));
 	let overrides = vec![DomainSigner {
 		domain: "example.org".to_string(),
-		signer: fresh_signer("per-sel"),
+		signer: ReloadableSigner::new(fresh_signer("per-sel")),
 	}];
 	let signer = PerDomainSigner::new(default.clone(), overrides);
 	default.reload(fresh_signer("default-2"));

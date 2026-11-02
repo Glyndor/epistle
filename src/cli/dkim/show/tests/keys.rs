@@ -50,6 +50,54 @@ async fn a_domain_with_its_own_entry_shares_nothing_and_leaves_the_others_alone(
 }
 
 #[tokio::test]
+async fn a_domain_whose_key_rotated_shows_and_checks_the_rotated_key() {
+	let dir = tempfile::tempdir().expect("dir");
+	let (pem, _) = crate::dkim::generate_key().expect("key");
+	let own = dir.path().join("b.key");
+	std::fs::write(&own, pem).expect("write");
+	let key_dir = crate::dkim::domain_rotate::state_dir(dir.path(), "b.example").expect("dir");
+	std::fs::create_dir_all(&key_dir).expect("mkdir");
+	let (pem, rotated_txt) = crate::dkim::generate_key().expect("key");
+	std::fs::write(key_dir.join("own20000.pem"), pem).expect("write rotated");
+	let state = crate::dkim::rotate::RotationState {
+		selector: "own20000".into(),
+		key_file: key_dir.join("own20000.pem"),
+		rotated_at: 20_000 * 86_400,
+		previous: None,
+		pending: None,
+		rsa: None,
+	};
+	std::fs::write(
+		key_dir.join(crate::dkim::domain_rotate::STATE_FILE),
+		serde_json::to_vec(&state).expect("json"),
+	)
+	.expect("state");
+	let overrides =
+		format!("[[dkim.domain]]\nname = 'b.example'\nselector = 'bsel'\nkey_file = {own:?}\n");
+	let dns = crate::dkim::test_support::KeyDns(
+		[(
+			"own20000._domainkey.b.example".to_string(),
+			vec![rotated_txt],
+		)]
+		.into(),
+	);
+	let view = build(&config(dir.path(), &overrides), Some(&dns))
+		.await
+		.expect("view");
+	assert_eq!(key(&view, "b.example").selector, "own20000");
+	let record = view
+		.records
+		.iter()
+		.find(|r| r.domain == "b.example")
+		.expect("b.example is checked");
+	assert_eq!(
+		(record.selector.as_str(), record.status),
+		("own20000", "ok"),
+		"the rotated key is the one checked against DNS"
+	);
+}
+
+#[tokio::test]
 async fn the_text_form_says_who_shares_and_who_does_not() {
 	let dir = tempfile::tempdir().expect("dir");
 	let view = build(&config(dir.path(), ""), None).await.expect("view");
