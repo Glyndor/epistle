@@ -137,7 +137,10 @@ fn an_update_places_the_account_key_only_for_the_split_and_never_back() {
 	let key = std::fs::read(&in_data_dir).unwrap();
 
 	super::prepare_keys_for_update(&data_dir, &config, false, true).unwrap();
-	assert_eq!(std::fs::read(&in_secrets).unwrap(), key);
+	assert!(
+		std::fs::read(&in_secrets).unwrap() == key,
+		"the key in secrets/"
+	);
 	assert!(
 		!in_data_dir.exists(),
 		"a copy mail can read is not left behind"
@@ -148,7 +151,10 @@ fn an_update_places_the_account_key_only_for_the_split_and_never_back() {
 		!in_data_dir.exists(),
 		"an update does not copy the key back"
 	);
-	assert_eq!(std::fs::read(&in_secrets).unwrap(), key);
+	assert!(
+		std::fs::read(&in_secrets).unwrap() == key,
+		"the key in secrets/"
+	);
 }
 
 #[test]

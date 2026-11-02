@@ -13,7 +13,7 @@ pub(super) struct Recorder {
 }
 
 impl Recorder {
-	pub(super) fn with_certs(on: bool) -> Self {
+	pub(super) fn split_layout(on: bool) -> Self {
 		let services = if on {
 			r#"{"mail": {}, "certs": {}}"#
 		} else {
@@ -32,7 +32,7 @@ impl Recorder {
 		match failing {
 			Some(index) => {
 				self.fail.remove(index);
-				Err(format!("{step} failed"))
+				Err(step + " failed")
 			}
 			None => Ok(()),
 		}
@@ -46,7 +46,7 @@ impl SwitchHost for Recorder {
 
 	fn render(&mut self, _existing: &str, on: bool) -> Result<String, String> {
 		self.step(format!("render {on}"))?;
-		Ok(Recorder::with_certs(on).compose)
+		Ok(Recorder::split_layout(on).compose)
 	}
 
 	fn place_keys(&mut self, on: bool) -> Result<Vec<String>, String> {

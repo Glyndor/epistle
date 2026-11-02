@@ -5,7 +5,7 @@
 use super::*;
 
 fn disable_failing(steps: Vec<&'static str>) -> (Recorder, String) {
-	let mut host = Recorder::with_certs(true);
+	let mut host = Recorder::split_layout(true);
 	host.fail = steps;
 	let error = switch(&mut host, false).expect_err("the disable fails");
 	(host, error)
@@ -58,8 +58,7 @@ fn a_failed_restore_after_the_new_layout_ran_names_the_copy_to_delete() {
 	let (host, error) = disable_failing(vec!["ready mail", "write certs=true"]);
 	assert!(
 		!host.steps.contains(&"retire".to_string()),
-		"{:?}",
-		host.steps
+		"the steps say otherwise"
 	);
 	assert!(error.contains("/data/acme/account.key"), "{error}");
 	assert!(error.contains("mail can read it"), "{error}");
@@ -77,11 +76,11 @@ fn stack_up_removes_a_leftover_copy_only_when_certs_runs() {
 	crate::cli::init::host_secrets::acme::place(&data_dir, true).expect("copy");
 	let copy = crate::acme::renew::account_key_path(&data_dir);
 
-	std::fs::write(&compose, Recorder::with_certs(false).compose).expect("whole");
+	std::fs::write(&compose, Recorder::split_layout(false).compose).expect("whole");
 	retire_before_up(&data_dir, &compose).expect("up");
 	assert!(copy.exists(), "mail renews with it without the split");
 
-	std::fs::write(&compose, Recorder::with_certs(true).compose).expect("split");
+	std::fs::write(&compose, Recorder::split_layout(true).compose).expect("split");
 	retire_before_up(&data_dir, &compose).expect("up");
 	assert!(!copy.exists());
 

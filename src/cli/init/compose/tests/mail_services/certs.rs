@@ -38,15 +38,15 @@ fn mail_holds_neither_the_dns_credential_nor_the_account_key() {
 		"{:?}",
 		mounts(&value, "mail")
 	);
-	let secrets: Vec<&str> = mail["secrets"]
+	let sources: Vec<&str> = mail["secrets"]
 		.as_array()
 		.expect("secrets")
 		.iter()
 		.filter_map(|secret| secret["source"].as_str())
 		.collect();
 	assert!(
-		!secrets.contains(&"epistle_acme_account_key"),
-		"{secrets:?}"
+		!sources.contains(&"epistle_acme_account_key"),
+		"mail mounts the account key"
 	);
 }
 

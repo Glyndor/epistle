@@ -26,13 +26,12 @@ fn turning_certs_on_copies_the_key_the_authority_knows() {
 
 	let lines = place(&data_dir, true).expect("place");
 
-	assert_eq!(
-		fs::read(super::acme_account_key(&data_dir)).expect("copied"),
-		key
+	assert!(
+		fs::read(super::acme_account_key(&data_dir)).expect("copied") == key,
+		"the same key"
 	);
-	assert_eq!(
-		fs::read(crate::acme::renew::account_key_path(&data_dir)).expect("still there"),
-		key,
+	assert!(
+		fs::read(crate::acme::renew::account_key_path(&data_dir)).expect("still there") == key,
 		"the copy the old layout reads stays until the new one is verified"
 	);
 	assert!(
@@ -76,9 +75,9 @@ fn two_different_keys_are_never_reconciled() {
 
 	let error = place(&data_dir, true).expect_err("two keys");
 	assert!(error.contains("different ACME account keys"), "{error}");
-	assert_eq!(
-		fs::read(crate::acme::renew::account_key_path(&data_dir)).expect("kept"),
-		key
+	assert!(
+		fs::read(crate::acme::renew::account_key_path(&data_dir)).expect("kept") == key,
+		"the same key"
 	);
 	let error = retire_data_dir_copy(&data_dir).expect_err("two keys");
 	assert!(error.contains("different ACME account keys"), "{error}");
@@ -99,9 +98,9 @@ fn the_data_dir_copy_is_removed_only_once_secrets_holds_the_same_key() {
 	let line = retire_data_dir_copy(&data_dir).expect("retire");
 	assert!(line.is_some_and(|line| line.contains("removed")));
 	assert!(!crate::acme::renew::account_key_path(&data_dir).exists());
-	assert_eq!(
-		fs::read(super::acme_account_key(&data_dir)).expect("kept"),
-		key
+	assert!(
+		fs::read(super::acme_account_key(&data_dir)).expect("kept") == key,
+		"the same key"
 	);
 	assert_eq!(retire_data_dir_copy(&data_dir).expect("again"), None);
 }
@@ -116,13 +115,12 @@ fn turning_certs_off_puts_the_key_back_where_mail_reads_it() {
 
 	let lines = place(&data_dir, false).expect("off");
 
-	assert_eq!(
-		fs::read(crate::acme::renew::account_key_path(&data_dir)).expect("back"),
-		key
+	assert!(
+		fs::read(crate::acme::renew::account_key_path(&data_dir)).expect("back") == key,
+		"the same key"
 	);
-	assert_eq!(
-		fs::read(super::acme_account_key(&data_dir)).expect("kept"),
-		key,
+	assert!(
+		fs::read(super::acme_account_key(&data_dir)).expect("kept") == key,
 		"the secrets copy is kept: it is not mounted in mail"
 	);
 	assert!(
