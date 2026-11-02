@@ -198,6 +198,10 @@ name = "workflow_toolchain_pins"
 path = "tests/workflows/workflow_toolchain_pins.rs"
 
 [[test]]
+name = "workflow_scripts_are_executable"
+path = "tests/workflows/workflow_scripts_are_executable.rs"
+
+[[test]]
 name = "msrv_agrees_with_ci"
 path = "tests/workflows/msrv_agrees_with_ci.rs"
 
