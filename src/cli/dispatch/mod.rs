@@ -445,20 +445,7 @@ impl Cli {
 				config,
 				json,
 				action,
-			} => match Config::load(&config) {
-				Ok(config) => match action {
-					action @ dkim::DkimCli::Rotate { .. } => {
-						live::run("dkim rotate", json, |mut out| {
-							dkim::run(&config, action, json, &mut out)
-						})
-					}
-					action => dkim::run(&config, action, json, &mut std::io::stdout().lock()),
-				},
-				Err(error) => {
-					style::error(error);
-					ExitCode::FAILURE
-				}
-			},
+			} => dkim::dispatch(&config, action, json),
 			Command::Tls {
 				config,
 				json,

@@ -98,7 +98,7 @@ pub fn shared_public_keys(config: &Config) -> Result<Vec<String>, String> {
 				.map(|u| format!("{} ({})", u.owner, u.file.display()))
 				.collect();
 			format!(
-				"{} publish the same {algorithm} public key; every hosted domain needs a key of its own (`epistle dkim-keygen`)",
+				"{} publish the same {algorithm} public key; every hosted domain needs a key of its own (`epistle dkim split`, or `epistle dkim-keygen` for one domain)",
 				list.join(" and ")
 			)
 		})

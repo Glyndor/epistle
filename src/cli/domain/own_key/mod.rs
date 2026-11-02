@@ -39,16 +39,7 @@ pub(super) fn give(
 	} else {
 		domain_keys::ensure(&config.data_dir, &name, dual, now, &reserved)?
 	};
-	let mut fields = vec![
-		("selector", Value::from(keys.selector)),
-		("key_file", Value::from(keys.key_file.display().to_string())),
-	];
-	if let Some((selector, file)) = keys.rsa {
-		fields.push(("rsa_selector", Value::from(selector)));
-		fields.push(("rsa_key_file", Value::from(file.display().to_string())));
-	}
-	if let Err(error) = document.upsert_nested_element(&["dkim"], "domain", "name", &name, &fields)
-	{
+	if let Err(error) = add_entry(document, &name, &keys) {
 		domain_keys::remove(&created);
 		return Err(error);
 	}
@@ -72,6 +63,23 @@ pub(super) fn forget_unused(path: &std::path::Path, domain: &str, created: &[Pat
 	if !persisted {
 		domain_keys::remove(created);
 	}
+}
+
+/// Write the `[[dkim.domain]]` entry that names `keys` as `name`'s.
+pub(in crate::cli) fn add_entry(
+	document: &mut ConfigDocument,
+	name: &str,
+	keys: &domain_keys::DomainKeys,
+) -> Result<(), String> {
+	let mut fields = vec![
+		("selector", Value::from(keys.selector.as_str())),
+		("key_file", Value::from(keys.key_file.display().to_string())),
+	];
+	if let Some((selector, file)) = &keys.rsa {
+		fields.push(("rsa_selector", Value::from(selector.as_str())));
+		fields.push(("rsa_key_file", Value::from(file.display().to_string())));
+	}
+	document.upsert_nested_element(&["dkim"], "domain", "name", name, &fields)
 }
 
 /// Drop `name`'s `[[dkim.domain]]` entry. A domain that is removed, or an

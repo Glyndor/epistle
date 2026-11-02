@@ -41,6 +41,40 @@ pub enum DkimCli {
 		#[arg(long)]
 		domain: Option<String>,
 	},
+	/// Give every domain that shares the `[dkim]` key a key of its own.
+	///
+	/// One domain keeps the `[dkim]` key. Every other domain that signs with
+	/// it gets a key under `keys/dkim/<domain>/` with its own selector. The
+	/// records are published (through `[dns]` when it reaches the domain, by
+	/// hand otherwise) and a domain signs with its new key only after a
+	/// resolver shows the record, so no signature breaks. The entries are then
+	/// written and the server restarted. Running it again continues a run that
+	/// stopped.
+	Split {
+		/// Print the plan; make no key, publish nothing, change nothing.
+		#[arg(long)]
+		dry_run: bool,
+		/// Seconds to wait for the new records to resolve before giving up
+		/// (0 asks once). Nothing is switched until they do.
+		#[arg(long, value_name = "SECONDS", default_value_t = 120)]
+		wait: u64,
+		/// Retire the records of the shared key that are still published at
+		/// the domains that left it, once the overlap window has passed.
+		/// Through `[dns]` where it reaches the domain, listed for removal by
+		/// hand otherwise. Never touches the domain that kept the key.
+		#[arg(long)]
+		finish: bool,
+		/// With `--finish`: retire even when no switch time is recorded or the
+		/// overlap window has not passed. Mail signed before the switch may
+		/// still be queued elsewhere.
+		#[arg(long, requires = "finish")]
+		skip_overlap_check: bool,
+		/// Record that you restarted the server by hand onto the keys a split
+		/// moved. `--finish` waits for this (or for the restart `split` does
+		/// itself) before it retires anything.
+		#[arg(long, conflicts_with_all = ["finish", "dry_run"])]
+		restarted: bool,
+	},
 	/// Remove DKIM keys and TXT records no rotation uses.
 	///
 	/// List the `dkim-ed<day>.key` and `dkim-rsa<day>.key` files and the
@@ -77,6 +111,12 @@ pub(super) fn run(
 			rotate_now(config, dry_run, now_epoch(), domain, json, out)
 		}
 		DkimCli::Cleanup { dry_run, yes } => cleanup::cleanup(config, dry_run, yes, json, out),
+		// `split` edits the configuration file, so the dispatcher gives it the
+		// path (`run_split`); the loaded `Config` alone cannot.
+		DkimCli::Split { .. } => {
+			super::style::error("dkim split needs the configuration file path");
+			ExitCode::FAILURE
+		}
 	}
 }
 
@@ -292,8 +332,68 @@ pub(super) fn rotate_now_with(
 	report.object(result)
 }
 
+/// Run one `dkim` command from its configuration file. `split` and
+/// `split --finish` take the path, because they edit the file; the others
+/// load it.
+pub(super) fn dispatch(path: &std::path::Path, action: DkimCli, json: bool) -> ExitCode {
+	if let DkimCli::Split {
+		dry_run,
+		wait,
+		finish,
+		skip_overlap_check,
+		restarted,
+	} = action
+	{
+		return run_split(
+			path,
+			dry_run,
+			(wait, finish, skip_overlap_check, restarted),
+			json,
+			&mut std::io::stdout().lock(),
+		);
+	}
+	let config = match Config::load(path) {
+		Ok(config) => config,
+		Err(error) => {
+			super::style::error(error);
+			return ExitCode::FAILURE;
+		}
+	};
+	match action {
+		action @ DkimCli::Rotate { .. } => {
+			super::term::live::run("dkim rotate", json, |mut out| {
+				run(&config, action, json, &mut out)
+			})
+		}
+		action => run(&config, action, json, &mut std::io::stdout().lock()),
+	}
+}
+
+/// Run `dkim split` against the configuration file at `path`.
+pub(super) fn run_split(
+	path: &std::path::Path,
+	dry_run: bool,
+	(wait, finish, skip_overlap_check, restarted): (u64, bool, bool, bool),
+	json: bool,
+	out: &mut impl std::io::Write,
+) -> ExitCode {
+	split::run(
+		path,
+		&split::Options {
+			dry_run,
+			wait,
+			finish,
+			skip_overlap_check,
+			restarted,
+		},
+		json,
+		out,
+	)
+}
+
 mod cleanup;
 mod show;
+mod split;
 
 #[cfg(test)]
 mod tests;

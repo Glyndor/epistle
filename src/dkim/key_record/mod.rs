@@ -79,6 +79,17 @@ pub(crate) fn select(texts: &[String], algorithm: Algorithm) -> Option<KeyRecord
 		.find(|record| record.fits(algorithm))
 }
 
+/// Whether `published` is a key record that can verify the signatures the
+/// record `expected` would: the same key of the same type, and no `h=`, `s=`,
+/// repeated tag or revocation that stops it (see [`parse`]). Comparing the
+/// `p=` text alone would accept a record that no verifier can use.
+pub(crate) fn same_usable_key(published: &str, expected: &str) -> bool {
+	match (parse(published), parse(expected)) {
+		(Some(a), Some(b)) => a.key_type == b.key_type && a.public_key == b.public_key,
+		_ => false,
+	}
+}
+
 /// The most tags a key record may carry before it is refused.
 const MAX_TAGS: usize = 64;
 
