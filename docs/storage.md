@@ -80,3 +80,27 @@ spool   ok    sealed: yes, loose: 0
 It only reads: it never changes a mode and never creates the spool. A
 non-zero `loose` count is a warning. The `queue` area reads the envelopes
 with the configured key and counts the ones it cannot read.
+
+## Envelope versions
+
+Every encrypted file (message bodies, blobs, the spool, TOTP secrets) starts
+with one of two magics:
+
+```
+version 1:  EPENC1\0 ‖ nonce(12) ‖ ciphertext ‖ tag(16)
+version 2:  EPENC2\0 ‖ key id(16) ‖ nonce(12) ‖ ciphertext ‖ tag(16)
+```
+
+Version 1 is sealed with the raw server key and names no key; a reader tries
+the current server key and then each key in `retired_key_files`, and the tag
+decides. Version 2 is what a tenant key writes. The key id is HKDF-SHA256 of
+the key under a fixed label, so it names the key without revealing it, and the
+cipher key is expanded from the same key under a different label. The header
+is part of the associated data, so a header moved onto another file fails to
+decrypt. A version 2 file whose key is not loaded fails with the key id in the
+message and is never served as plaintext.
+
+The server writes version 1 for everything on the server key, so a downgrade
+keeps reading it. Only mail and blobs under a tenant key are version 2, and
+`epistle storage tenant-keys migrate --rollback` turns them back into version 1
+before a downgrade.

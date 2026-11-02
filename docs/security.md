@@ -612,7 +612,9 @@ observes the current state.
   new writes, and old plaintext mail still reads correctly.
 - **Backups stay encrypted:** `epistle backup` archives the on-disk bytes
   verbatim, so a backup of an encrypted store remains ciphertext — restore it on
-  a host with the same key. Use `epistle export` for a decrypted copy.
+  a host with the same keys: the server key, every tenant key and every
+  retired key the configuration names, which `epistle backup` lists. Use
+  `epistle export` for a decrypted copy.
 - **TOTP secrets** in `accounts.toml` are encrypted with the same key
   (stored as `enc:v1:<base64>`) when `encrypt_at_rest = true`, and are
   protected only then: without at-rest encryption they are stored in
@@ -621,6 +623,59 @@ observes the current state.
   encrypted the next time the server writes `accounts.toml`. If a stored
   secret cannot be decrypted (key missing or wrong), that account's
   password login fails instead of skipping the second factor.
+
+### Keys per tenant
+
+On a server that hosts several clients, one `[storage]` key means one leaked
+key opens all of them. A `[[tenant]]` can carry its own key
+(`encryption_key_file`, a `0600` file from `epistle storage-keygen`, kept off
+the data disk like the server key), and with `[storage] tenant_keys = true`
+the mail and JMAP blobs of its accounts are sealed with it.
+
+- **What uses which key.** An account whose every address is in one tenant
+  with a key writes under that key. An account in no tenant, in a tenant
+  without a key, with addresses in two tenants, or with one address outside
+  its tenant stays on the server key: the tenant does not own all of its mail.
+  The outbound spool, the evidence store and the TOTP secrets in
+  `accounts.toml` stay on the server key too. `epistle account show` and the
+  `storage_keys` area of `epistle status` say which key protects what.
+- **Independent keys, not derived ones.** A tenant key is its own random key,
+  not one derived from the server key. Deriving it would make the server key
+  open every tenant again, and removing a tenant's key would erase nothing.
+  The server refuses to start when two tenants, or a tenant and the server,
+  are given the same key.
+- **Every file says which key sealed it.** Files sealed with a tenant key use
+  a second envelope version that carries a key id: 16 bytes expanded with
+  HKDF-SHA256 from the key, which names it without revealing anything about
+  it (see [`storage.md`](storage.md#envelope-versions)). Files from before
+  keep the first version, which means the server key, and keep reading
+  without any change. Nothing re-encrypts by itself.
+- **Moving what is already stored** is explicit:
+  `epistle storage tenant-keys migrate` re-encrypts it tenant by tenant,
+  verifies every new copy on disk before it replaces the old one, and resumes
+  after a cut. `--rollback` brings everything back under the server key in the
+  first envelope version, which is what to run before going back to a release
+  without tenant keys: such a release reads a version 2 file as if it were
+  plaintext and serves ciphertext.
+- **Erasure by key.** Deleting a tenant's key file and removing its
+  `encryption_key_file` line makes every file sealed with it unreadable on
+  purpose, including the copies in backups, without having to find them. The
+  same holds by accident: a lost tenant key is a lost mailbox for that tenant,
+  exactly as with the server key. A configured key file that is missing stops
+  the server instead.
+- **What it does not protect.** The server holds every key in memory, so a
+  live compromise of the server reaches every tenant. A process that can write
+  to the data directory could move a tenant's file into another tenant's
+  mailbox and have the server open it there; this is about stolen disks,
+  backups and keys, not about a writer on the disk.
+
+**Rotating the server key.** List the old key file in `[storage]
+retired_key_files`, put the new one in `encryption_key_file`, restart, and run
+`epistle storage tenant-keys migrate` with the stack stopped. A retired key is
+only read, never written with. The run moves every message and blob it sealed,
+and the TOTP secrets, under the new key. Remove the retired entry once the
+queue has drained and the evidence it sealed has aged out; until then
+`epistle status` keeps a warning on it.
 
 ## Logs and account names
 
@@ -688,7 +743,8 @@ clients when replacing a credential, and retain decryption keys for old backups.
 | SCRAM: `accounts.toml`, alongside password hash | Base64 salt, iteration count, StoredKey and ServerKey; PBKDF2-HMAC-SHA256 | `epistle account password N` derives a fresh verifier; older work factors upgrade on successful PLAIN/LOGIN |
 | App passwords: `app_passwords.toml` | Salted argon2id PHC, with label and restrictions | `epistle app-password rotate N LABEL`; distribute the new secret |
 | TOTP: `accounts.toml` | Base32 shared secret; `enc:v1:<base64>` ChaCha20-Poly1305 envelope when storage encryption is enabled | DELETE then POST `/api/v1/accounts/{name}/totp`; scan the new secret in the authenticator |
-| Storage key: `[storage] encryption_key_file` or `encryption_key_env`; init writes beside the data directory in `secrets/` | Base64 32-byte encryption key | `epistle storage-keygen`; decrypt/export existing data under the old key and re-import under the new key, including TOTP; changing only the key loses access |
+| Storage key: `[storage] encryption_key_file` or `encryption_key_env`; init writes beside the data directory in `secrets/` | Base64 32-byte encryption key | `epistle storage-keygen`; move the old file to `[storage] retired_key_files`, point `encryption_key_file` at the new one, restart and run `epistle storage tenant-keys migrate` with the stack stopped (see "Keys per tenant"); changing only the key loses access |
+| Tenant keys: `[[tenant]] encryption_key_file` | Base64 32-byte encryption key, one per tenant | `epistle storage-keygen`; the same retire and migrate steps as the storage key, per tenant, are not available yet: re-encrypt the tenant back to the server key with `--rollback`, change its key, and migrate forward again |
 | DKIM: configured `key_file`, RSA key file, per-domain overrides and rotated `dkim-*.key` files | Ed25519/RSA PKCS#8 PEM | `epistle dkim rotate`; for overrides use `epistle dkim-keygen`, publish the new selector and update configuration |
 | TLS: configured private-key PEM; ACME `acme/account.key` and `acme/key.pem` | Base64 PKCS#8 account key; PEM certificate private key | Replace manual PEM and restart; `epistle tls renew` renews managed certificates; retain the ACME account key or explicitly register a replacement |
 | OAuth issuer: `[oauth] signing_key` or `signing_key_file` | Base64 PKCS#8 ES256 private key | `epistle oauth-keygen`; replace private key and matching public key, restart; issued tokens need renewal |

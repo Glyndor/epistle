@@ -84,6 +84,7 @@ Every change is validated before it is written, keeps the comments in
 | [Webhook and alerts](#webhook-epistle-webhook) | `epistle webhook …`, `epistle alert …` |
 | [SRS secret of each domain](#srs-epistle-srs) | `epistle srs show\|split\|rotate` |
 | [Blob storage (filesystem or S3)](#blob-storage-epistle-storage-blobs) | `epistle storage blobs …` |
+| [Keys per tenant and key rotation](#tenant-keys-epistle-storage-tenant-keys) | `epistle storage tenant-keys migrate` |
 | [Rotate DKIM, renew TLS, rotate an API key](#rotations-epistle-dkim-epistle-tls-epistle-api-key) | `epistle dkim rotate`, `epistle dkim cleanup`, `epistle tls renew`, `epistle api-key rotate` |
 | [Containers: up, logs, update](#stack-epistle-stack) | `epistle stack …` |
 | [Backup and restore](#backup-and-restore) | `epistle backup`, `epistle restore` |
@@ -316,6 +317,7 @@ after 5 s. `--config` defaults to `/etc/epistle/mail.toml`.
 | `queue` | oldest queued message under 4 h | over 4 h | over 24 h |
 | `disk` | 10% or more free on the filesystem holding `data_dir` | under 10% | under 5%, or under 25 MiB free (SMTP then answers 452) |
 | `spool` | no file or directory under `<data_dir>/spool/` is looser than owner-only; the finding also says whether messages are sealed (`encrypt_at_rest`) | a file or directory is looser than owner-only | the spool cannot be scanned, or the storage encryption cannot be set up |
+| `storage_keys` | every key loads; each tenant shows the key that protects it (its own key id, or the server key) | tenant keys are loaded but `tenant_keys` is off, a retired key is still configured, or a `storage tenant-keys migrate` run is unfinished | a key file is missing, unreadable, readable by others, or shared by two owners |
 | `resources` | the `mem_limit` values in `compose.yaml` add up to 85% of the host's `MemTotal` or less, and the message memory budget fits the `mail` container's `mem_limit` | the limits add up to more than 85% of `MemTotal` (the finding names the two largest and the `epistle stack resources set` command that brings the sum under it, never below what the service needs: for `mail` five messages of `max_message_size` and 256 MiB), `/proc/meminfo` is unreadable, or a configured `message_memory_budget` (or one raised to `max_message_size`) would take more than 70% of the `mail` limit when full, at about 3 times its size | |
 | `clock` | the kernel reports the host clock disciplined by a time source (`adjtimex`, with `timedatectl show -p NTPSynchronized` when the syscall is refused), and the external probe is off, or every valid offset is below `warn_seconds` | the clock is not synchronised, or neither probe could tell; the finding gives the fix and nothing is changed; a valid offset reaches `warn_seconds`, or one or two readings are valid below it | no reading is valid, or a valid offset reaches `fail_seconds` |
 | `evidence` | the last verification of the evidence is under an hour old and found nothing to flag | the server has not verified yet, timestamp tokens are pending or failing, timestamps are disabled, a task reported an error, the last verification took half of the time it is given or more, or it is older than an hour | transactional mail is held (clear it with `epistle evidence acknowledge` once understood), or the status cannot be read |
@@ -693,6 +695,34 @@ stay there and stop being served, and the command says so every time the backend
 changes. Moving from `fs` to `s3` is refused while `<data_dir>/blobs/` holds any
 file, unless you pass `--force`. Leaving S3 cannot be checked from here, so it is
 never refused. Supports `--dry-run` and `--config FILE`.
+
+## Tenant keys (`epistle storage tenant-keys`)
+
+```sh
+epistle storage tenant-keys migrate [--dry-run] [--json]
+epistle storage tenant-keys migrate --rollback [--dry-run] [--json]
+```
+
+Re-encrypts what is already stored (mail under `<data_dir>/accounts/` and
+each account's blobs under `<data_dir>/blobs/accounts/`) under the key each
+account should use now: its tenant's key when `[storage] tenant_keys = true`
+and every address of the account is in that tenant, the current server key
+otherwise. `--rollback` moves everything back under the server key, in the
+format a release without tenant keys reads. `--dry-run` only counts.
+
+Each file is rewritten beside the original, read back and opened under the new
+key before a rename puts it in place, keeping its name, mode and date. A run
+cut short (a crash, a power cut) leaves every file readable; run the same
+command again and it continues from `<data_dir>/rekey-journal.json`, which it
+removes when it finishes.
+
+It refuses to start while the server is running (stop the stack first), going
+forward with tenant keys configured but `tenant_keys` off, rolling back with
+`tenant_keys` still on, or while a run in the other direction is unfinished.
+With no tenant key configured a forward run is a server key rotation: it moves
+what a key in `retired_key_files` sealed under the current key and reseals the
+TOTP secrets in `accounts.toml` the same way. Plaintext files are left as they
+are, and blobs in an S3 bucket are not touched. Supports `--config FILE`.
 
 ## Webhook (`epistle webhook`)
 
@@ -1699,7 +1729,7 @@ Only `epistle init` turns one into the other: it derives the name from the addre
 | `epistle account protocols N LIST\|all` | Restrict sign-in to some protocols (`imap,smtp,api,webdav`); `all` clears it. |
 | `epistle account set N --default-class CLASS` | The [mail class](evidence.md) granted to the account's mail when neither the request nor the credential names one: `transactional`, `marketing`, `personal`, or `none` to clear it. |
 | `epistle account save-sent N on\|off` | Save a copy of every message the account sends into its `Sent` folder. Default on; `off` is the per-account opt-out. The app-password override (`app-password create --save-sent`) wins when set. |
-| `epistle account show N [--json]` | Public view: log id, addresses, disabled, quota, protocols. Works for static accounts. Never a secret. |
+| `epistle account show N [--json]` | Public view: log id, addresses, disabled, quota, protocols, and the at-rest key that protects its new mail (owner and key id, with the reason when a tenant account stays on the server key). Works for static accounts. Never a secret. |
 | `epistle account find-log-id acct-…` | Map a log pseudonym back to its account. |
 | `epistle account forward list\|add\|remove N [ADDR]` | Also send the account's mail to `ADDR`. Refuses the account's own addresses, an invalid address, and any forward while neither `srs_secret` nor an `[[srs_domain]]` is set (without SRS the copy fails SPF at the next hop). |
 | `epistle account catch-all list\|add\|remove N [DOMAIN]` | Deliver mail for unknown users of `DOMAIN` to the account. `DOMAIN` must be a configured domain (not an alias) that no other account catches. |
