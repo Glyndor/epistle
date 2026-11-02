@@ -95,3 +95,21 @@ fn a_copy_that_cannot_be_removed_is_named() {
 	assert!(error.contains("could not be removed"), "{error}");
 	assert!(error.contains("/data/acme/account.key"), "{error}");
 }
+
+/// Measured on the Debian 13 machine: a `certs` that exits at start is
+/// "running" again a second later, so one look is not enough.
+#[test]
+fn a_container_that_restarted_between_two_looks_is_not_up() {
+	let at = |state: &str, started: &str| {
+		format!(
+			r#"[{{"Service":"mail","State":"running"}},{{"Service":"certs","State":"{state}","StartedAt":"{started}"}}]"#
+		)
+	};
+	let first = at("running", "2026-11-02T06:30:01Z");
+	assert_eq!(steady(&first, &first, "certs"), Ok(()));
+	let restarted = at("running", "2026-11-02T06:30:13Z");
+	let error = steady(&first, &restarted, "certs").expect_err("restarted");
+	assert!(error.contains("did not stay up"), "{error}");
+	assert!(steady(&first, &at("exited", "2026-11-02T06:30:01Z"), "certs").is_err());
+	assert!(steady(&first, "[]", "certs").is_err());
+}

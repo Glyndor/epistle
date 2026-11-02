@@ -48,6 +48,34 @@ pub(in crate::cli) fn retire_before_up(data_dir: &Path, compose: &Path) -> Resul
 	Ok(())
 }
 
+/// Whether `service` kept running with the same start between two
+/// `podup ps --format json` outputs. A container that restarted in between
+/// (or stopped) is not up, whatever the second look says.
+pub(in crate::cli) fn steady(before: &str, after: &str, service: &str) -> Result<(), String> {
+	let started = |json: &str| -> Result<(String, String), String> {
+		let rows: Vec<serde_json::Value> =
+			serde_json::from_str(json).map_err(|_| "podup ps did not print JSON".to_string())?;
+		let row = rows
+			.iter()
+			.find(|row| row["Service"] == service)
+			.ok_or_else(|| format!("podup lists no {service} container"))?;
+		Ok((
+			row["State"].as_str().unwrap_or_default().to_string(),
+			row["StartedAt"].as_str().unwrap_or_default().to_string(),
+		))
+	};
+	let (first, second) = (started(before)?, started(after)?);
+	if second.0 == "running" && first == second {
+		Ok(())
+	} else {
+		Err(format!(
+			"the {service} container did not stay up (it was {} since {:?}, then {} since {:?}); \
+			 `epistle stack logs {service}` says why",
+			first.0, first.1, second.0, second.1
+		))
+	}
+}
+
 /// What a switch needs from the host; the tests fake it.
 pub(in crate::cli) trait SwitchHost {
 	/// The compose file as it is now.

@@ -11,6 +11,11 @@ use crate::config::Config;
 /// bound `stack update` gives a restart.
 const READY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 
+/// How long `certs` has to keep running, with the same start, before the
+/// switch counts it as up. Its start-up checks (configuration, provider
+/// credential, resolver) end within a second when they fail.
+const STEADY: std::time::Duration = std::time::Duration::from_secs(15);
+
 struct StackHost<'a> {
 	config: &'a Config,
 	compose: &'a Path,
@@ -57,7 +62,24 @@ impl SwitchHost for StackHost<'_> {
 	}
 
 	fn wait_ready(&mut self, service: &str) -> Result<(), String> {
-		crate::cli::stack::health::wait_healthy(self.podup, self.compose, service, READY_TIMEOUT)
+		crate::cli::stack::health::wait_healthy(self.podup, self.compose, service, READY_TIMEOUT)?;
+		if service != "certs" {
+			return Ok(());
+		}
+		// `certs` has no healthcheck, so "running" is all podup reports, and
+		// a container that exits at start is running again a second later
+		// under `restart: unless-stopped`. It is ready once it has kept the
+		// same start for a while.
+		let ps = || {
+			crate::cli::stack::started::ps_json_with(
+				self.podup,
+				self.compose,
+				crate::cli::stack::started::PS_TIMEOUT,
+			)
+		};
+		let before = ps()?;
+		std::thread::sleep(STEADY);
+		super::steady(&before, &ps()?, service)
 	}
 
 	fn retire_data_dir_key(&mut self) -> Result<Option<String>, String> {
