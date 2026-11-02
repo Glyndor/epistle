@@ -417,7 +417,7 @@ impl FsSpool {
 		id: Uuid,
 		bytes: &[u8],
 	) -> std::io::Result<(Envelope, DecodedEnvelope)> {
-		if bytes.starts_with(crate::storage::MAGIC) {
+		if crate::storage::is_envelope(bytes) {
 			let plaintext = self
 				.crypto
 				.decode_with_aad(bytes, id.as_bytes())
@@ -455,7 +455,7 @@ impl FsSpool {
 		let _guard = self.lock()?;
 		let on_disk =
 			crate::util::fs_walk::read(self.entry_file(SpoolDir::New, id, MessageExt::Json)?)?;
-		if on_disk.starts_with(crate::storage::MAGIC) {
+		if crate::storage::is_envelope(&on_disk) {
 			// Another writer migrated it between our decode and our write.
 			return Ok(());
 		}

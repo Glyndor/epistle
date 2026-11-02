@@ -119,7 +119,7 @@ impl Index {
 						"recovery message must be a regular file",
 					));
 				}
-				let limit = body_limit.saturating_add(crate::storage::OVERHEAD);
+				let limit = body_limit.saturating_add(crate::storage::MAX_OVERHEAD);
 				let mut bytes = Vec::new();
 				file.take(limit as u64 + 1).read_to_end(&mut bytes)?;
 				if bytes.len() > limit {

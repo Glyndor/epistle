@@ -21,7 +21,7 @@ pub(super) fn spawn(
 	// Same default and same measure as IMAP QUOTA and SMTP delivery. The
 	// configuration already loaded once at start-up, so a failure here means
 	// the key went away since: the listener then fails closed.
-	let crypto = match crate::storage::MessageCrypto::from_config(config.storage.as_ref()) {
+	let crypto = match crate::storage::MessageCrypto::from_full_config(config) {
 		Ok(crypto) => crypto,
 		Err(error) => return tokio::spawn(async move { Err(std::io::Error::other(error)) }),
 	};

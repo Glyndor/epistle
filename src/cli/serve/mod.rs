@@ -34,8 +34,8 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		return Ok(());
 	}
 	let ldap_auth = tasks::build_ldap_authenticator(&config);
-	let crypto = crate::storage::MessageCrypto::from_config(config.storage.as_ref())
-		.map_err(std::io::Error::other)?;
+	let crypto =
+		crate::storage::MessageCrypto::from_full_config(&config).map_err(std::io::Error::other)?;
 	let mut store = store::open_account_store(&config)?;
 	for collision in store.address_collisions() {
 		tracing::error!("{collision}");
