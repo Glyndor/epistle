@@ -271,7 +271,7 @@ pub(super) async fn build(
 			Ok(candidates) => {
 				let found = crate::dkim::stale::survey(dns, candidates).await;
 				(
-					found.shared.into_iter().map(|(r, _)| r.name).collect(),
+					found.shared.into_iter().map(|f| f.stale.name).collect(),
 					found
 						.unknown
 						.into_iter()

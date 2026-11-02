@@ -14,7 +14,7 @@ const SPLIT: Options = Options {
 	finish: false,
 	skip_overlap_check: false,
 };
-const FINISH: Options = Options {
+pub(super) const FINISH: Options = Options {
 	dry_run: false,
 	wait: 0,
 	finish: true,
@@ -22,7 +22,7 @@ const FINISH: Options = Options {
 };
 
 /// The record the shared key publishes.
-fn shared_value(install: &Install) -> String {
+pub(super) fn shared_value(install: &Install) -> String {
 	crate::dkim::Signer::load("s1", &install.dir.path().join("default.pem"))
 		.expect("loads")
 		.dns_record_value()
@@ -30,7 +30,7 @@ fn shared_value(install: &Install) -> String {
 
 /// A three-domain install that has been split, with the shared key's `s1`
 /// record published at all three domains, as it is after a real split.
-fn split_install() -> (Install, Zone) {
+pub(super) fn split_install() -> (Install, Zone) {
 	let install = Install::new(&["a.example.org", "b.example.org", "c.example.org"], "");
 	let zone = Zone::default();
 	for domain in ["a", "b", "c"] {
@@ -45,7 +45,7 @@ fn split_install() -> (Install, Zone) {
 	(install, zone)
 }
 
-fn services(zone: &Zone) -> (Provider, Resolver) {
+pub(super) fn services(zone: &Zone) -> (Provider, Resolver) {
 	(
 		Provider {
 			zone: zone.clone(),
@@ -59,7 +59,7 @@ fn services(zone: &Zone) -> (Provider, Resolver) {
 }
 
 /// Pretend the split happened `days` days ago.
-fn switched_days_ago(install: &Install, days: u64) {
+pub(super) fn switched_days_ago(install: &Install, days: u64) {
 	let at = crate::cli::dkim::now_epoch() - days * 86_400;
 	std::fs::write(
 		install.data().join("dkim-split.json"),

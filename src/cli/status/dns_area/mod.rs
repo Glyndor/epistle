@@ -107,9 +107,9 @@ async fn evaluate(config: &Config, dns: &dyn DnsLookup) -> AreaReport {
 			(Vec::new(), Vec::new())
 		}
 	};
-	for (record, _) in &stale {
+	for found in &stale {
 		findings.push(Item::new(
-			format!("DKIM split {}", record.name),
+			format!("DKIM split {}", found.stale.name),
 			Level::Warn,
 			"split incomplete: the shared [dkim] key is still published here; `epistle dkim split --finish` retires it after the overlap",
 		));

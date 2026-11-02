@@ -406,6 +406,20 @@ pub trait DnsProvider: Send + Sync {
 	/// - For every other record kind, `delete` removes the whole
 	///   `(name, type)` set.
 	fn delete(&self, zone: &str, record: DnsRecord) -> Op<'_>;
+	/// Remove only the TXT record whose logical value is `record.value`
+	/// ([`crate::dns::txt::same_txt_value`]: whitespace, quoting and 255-octet
+	/// splitting do not count), and nothing else at the name.
+	///
+	/// [`DnsProvider::delete`] matches a tagged value (`v=DKIM1`, `v=spf1`) by
+	/// its tag, so it can take another record with the same tag along. A
+	/// caller that must not touch a record it did not read uses this method.
+	/// A provider that cannot match by value, or that has not been shown to,
+	/// keeps this default and answers [`ProviderError::Unsupported`]; the
+	/// caller then leaves the record for the operator to remove by hand. An
+	/// empty value is refused the same way: it would mean the whole set.
+	fn delete_exact(&self, _zone: &str, _record: DnsRecord) -> Op<'_> {
+		Box::pin(async { Err(ProviderError::Unsupported) })
+	}
 	/// List the records epistle manages in `zone`.
 	fn list(&self, zone: &str) -> ListOp<'_>;
 	/// Whether `zone` is a zone this provider holds.

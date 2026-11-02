@@ -52,7 +52,7 @@ impl DnsProvider for Provider {
 		})
 	}
 
-	fn delete(&self, _zone: &str, record: DnsRecord) -> Op<'_> {
+	fn delete_exact(&self, _zone: &str, record: DnsRecord) -> Op<'_> {
 		let records = Arc::clone(&self.zone.records);
 		let deleted = Arc::clone(&self.zone.deleted);
 		Box::pin(async move {
@@ -68,6 +68,58 @@ impl DnsProvider for Provider {
 					records.remove(&record.name);
 				}
 			}
+			Ok(())
+		})
+	}
+
+	fn delete(&self, _zone: &str, _record: DnsRecord) -> Op<'_> {
+		panic!("dkim split --finish must delete by exact value, not by purpose")
+	}
+
+	fn list(&self, _zone: &str) -> ListOp<'_> {
+		Box::pin(async { Ok(Vec::new()) })
+	}
+}
+
+/// How a provider that is not the strict one behaves.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Flaw {
+	/// Keeps the trait default: it cannot match by value.
+	NoExactDelete,
+	/// Claims an exact delete but wipes every value at the name.
+	Greedy,
+	/// Claims an exact delete and removes nothing.
+	Inert,
+}
+
+/// A provider with one of the [`Flaw`]s.
+pub(super) struct Flawed {
+	pub zone: Zone,
+	pub flaw: Flaw,
+}
+
+impl DnsProvider for Flawed {
+	fn upsert(&self, _zone: &str, _record: DnsRecord) -> Op<'_> {
+		panic!("not used")
+	}
+
+	fn delete(&self, _zone: &str, _record: DnsRecord) -> Op<'_> {
+		panic!("dkim split --finish must delete by exact value, not by purpose")
+	}
+
+	fn delete_exact(&self, _zone: &str, record: DnsRecord) -> Op<'_> {
+		let flaw = self.flaw;
+		let records = Arc::clone(&self.zone.records);
+		let deleted = Arc::clone(&self.zone.deleted);
+		Box::pin(async move {
+			match flaw {
+				Flaw::NoExactDelete => return Err(ProviderError::Unsupported),
+				Flaw::Inert => {}
+				Flaw::Greedy => {
+					records.lock().unwrap().remove(&record.name);
+				}
+			}
+			deleted.lock().unwrap().push((record.name, record.value));
 			Ok(())
 		})
 	}
@@ -206,9 +258,26 @@ pub(super) fn run_as(
 	resolver: &dyn DnsLookup,
 	json: bool,
 ) -> (std::process::ExitCode, String, String, usize) {
+	run_with(
+		install,
+		options,
+		provider.map(|p| Arc::new(p) as Arc<dyn DnsProvider>),
+		resolver,
+		json,
+	)
+}
+
+/// [`run_as`] with any provider.
+pub(super) fn run_with(
+	install: &Install,
+	options: &super::super::Options,
+	provider: Option<Arc<dyn DnsProvider>>,
+	resolver: &dyn DnsLookup,
+	json: bool,
+) -> (std::process::ExitCode, String, String, usize) {
 	let config = install.load();
 	let services = super::super::Services {
-		provider: provider.map(|p| Arc::new(p) as Arc<dyn DnsProvider>),
+		provider,
 		resolver,
 		waits: vec![std::time::Duration::ZERO; 2],
 	};
