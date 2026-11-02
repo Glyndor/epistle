@@ -1,3 +1,5 @@
+//! Where a message goes: local mailboxes or the outbound spool.
+
 use super::*;
 
 impl SplitDelivery {

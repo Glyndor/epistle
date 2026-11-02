@@ -1,3 +1,5 @@
+//! Storing and DKIM-signing the outbound copy.
+
 use super::*;
 
 impl SplitDelivery {

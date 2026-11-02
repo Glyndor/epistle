@@ -1,3 +1,5 @@
+//! ARC sealing and SRS rewriting of forwarded mail.
+
 use super::*;
 
 impl SplitDelivery {

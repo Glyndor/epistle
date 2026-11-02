@@ -1,3 +1,5 @@
+//! The `MessageSink` impl of the routing sink: where mail from elsewhere and server reports enter.
+
 use super::*;
 
 impl MessageSink for SplitDelivery {
