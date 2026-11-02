@@ -494,7 +494,7 @@ pub fn apply(answers: &Answers) -> ApplyOutcome {
 	// supplies Some for `dkim_ed25519_path`, and the (None, _) arm in
 	// `build_config` is now `unreachable!()`. The `.expect` documents
 	// the invariant for the next reader.
-	let desired = apply_config::build_config(
+	let mut desired = apply_config::build_config(
 		answers,
 		std::net::IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED),
 		dkim_ed25519_path.as_deref(),
@@ -503,6 +503,25 @@ pub fn apply(answers: &Answers) -> ApplyOutcome {
 		&key_path,
 	)
 	.expect("build_config always succeeds for the inputs apply supplies");
+	// A configuration `init` creates gives every domain after the first a
+	// key of its own. One that exists keeps the keys it has: re-running
+	// `init` neither adds nor takes away a domain's key.
+	if std::fs::symlink_metadata(&answers.config_path).is_err() {
+		match apply_keys::ensure_domain_keys(
+			&answers.data_dir,
+			&answers.domains,
+			dkim_rsa_path.is_some(),
+			&mut report,
+		) {
+			Ok(entries) => desired.dkim.domain = entries,
+			Err(error) => {
+				return ApplyOutcome {
+					report,
+					error: Some(error),
+				};
+			}
+		}
+	}
 	// `toml::to_string` on a `DesiredConfig` whose fields are all
 	// plain strings, vecs and nested structs cannot fail; the only
 	// way it would is if a future field required custom serialisation

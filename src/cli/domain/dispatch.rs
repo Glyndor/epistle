@@ -14,7 +14,14 @@ use super::{
 	DomainAliasSubcommand, DomainCli, add_alias_map, add_domain, list, open, remove_alias_map,
 	remove_domain, show,
 };
-use super::{set, state};
+use super::{own_key, set, state};
+
+/// Seconds since the epoch, the clock the new key's selector is named after.
+fn now_epoch() -> u64 {
+	std::time::SystemTime::now()
+		.duration_since(std::time::UNIX_EPOCH)
+		.map_or(0, |elapsed| elapsed.as_secs())
+}
 
 /// The discriminated result of [`execute`]. Returning a structured
 /// outcome (rather than `Result<ExitCode, String>`) lets the refusal
@@ -163,7 +170,10 @@ pub(super) fn execute(path: &Path, action: DomainCli, dry_run: bool, json: bool)
 			}
 			Outcome::Code(ExitCode::SUCCESS)
 		}
-		DomainCli::Add { domain } => {
+		DomainCli::Add {
+			domain,
+			shared_dkim_key,
+		} => {
 			let mut document = match open(path) {
 				Ok(document) => document,
 				Err(error) => return Outcome::Error(error),
@@ -171,13 +181,29 @@ pub(super) fn execute(path: &Path, action: DomainCli, dry_run: bool, json: bool)
 			if let Err(error) = add_domain(&config, &mut document, &domain) {
 				return Outcome::Error(error);
 			}
+			// The domain's own key is made after the edit is known to be valid
+			// and before it is committed, so the record printed is the one the
+			// key publishes. A key made for a commit that then fails is removed.
+			let shared = (shared_dkim_key, dry_run);
+			let created = match own_key::give(&config, &mut document, &domain, shared, now_epoch())
+			{
+				Ok(created) => created,
+				Err(error) => return Outcome::Error(error),
+			};
 			let mode = (dry_run, json);
 			match commit(document, add_commit(&domain), mode, &mut out, &mut err) {
 				Ok(code) => Outcome::Code(code),
-				Err(error) => match error {
-					ResourceError::Refusal(message) => Outcome::Refusal(message),
-					ResourceError::Failure(message) => Outcome::Error(message),
-				},
+				Err(error) => {
+					// The keys go only when the entry that names them did not
+					// reach the file: a failure after the commit (a closed pipe
+					// while printing the records) leaves a configuration that
+					// refers to them.
+					own_key::forget_unused(path, &domain, &created);
+					match error {
+						ResourceError::Refusal(message) => Outcome::Refusal(message),
+						ResourceError::Failure(message) => Outcome::Error(message),
+					}
+				}
 			}
 		}
 		DomainCli::Remove { domain, yes } => {

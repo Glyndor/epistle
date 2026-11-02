@@ -24,6 +24,7 @@ use crate::config::Config;
 use super::config_edit::ConfigDocument;
 use super::style;
 
+mod own_key;
 mod set;
 mod state;
 
@@ -54,11 +55,17 @@ pub enum DomainCli {
 	/// Add a domain and print the DNS records to publish.
 	///
 	/// Add a domain to `domains` and print the DNS records the operator now
-	/// needs to publish.
+	/// needs to publish. With `[dkim]` configured the domain gets a DKIM key
+	/// of its own, written under `keys/dkim/<domain>/` and named by a
+	/// `[[dkim.domain]]` entry, so the records include its selector.
 	Add {
 		/// Domain to add (e.g. `example.org`).
 		#[arg(value_name = "DOMAIN")]
 		domain: String,
+		/// Sign this domain with the `[dkim]` key instead of a key of its
+		/// own. The key then signs as every domain that shares it.
+		#[arg(long)]
+		shared_dkim_key: bool,
 	},
 	/// Remove a domain from `domains`.
 	///
@@ -457,6 +464,7 @@ fn remove_domain(
 	document.replace_top_array("domains", new_array)?;
 	// Whatever was set for the domain goes with it, so nothing in the file
 	// names a domain the server no longer hosts.
+	own_key::drop_entry(document, domain)?;
 	if !state::is_enabled(config, domain) {
 		state::set_enabled(config, document, domain, true)?;
 	}
@@ -525,6 +533,7 @@ fn remove_alias_map(
 		})
 		.unwrap_or_else(|| alias.to_string());
 	document.remove_map_entry("domain_aliases", &key)?;
+	own_key::drop_entry(document, alias)?;
 	Ok(())
 }
 

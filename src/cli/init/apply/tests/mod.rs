@@ -5,6 +5,7 @@ mod base;
 mod bind;
 mod config_errors;
 mod config_merge;
+mod domain_keys;
 mod failures;
 mod fifo;
 mod implicit_tls;

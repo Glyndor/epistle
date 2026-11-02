@@ -141,6 +141,7 @@ pub(super) fn build_config(
 			key_file: ed.display().to_string(),
 			rsa_selector: Some("s2".to_string()),
 			rsa_key_file: Some(rsa.display().to_string()),
+			domain: Vec::new(),
 		},
 		// When the RSA key is absent (the key generation failed), omit
 		// both RSA fields entirely so the server configuration does not
@@ -152,6 +153,7 @@ pub(super) fn build_config(
 			key_file: ed.display().to_string(),
 			rsa_selector: None,
 			rsa_key_file: None,
+			domain: Vec::new(),
 		},
 		// The (None, _) arm would have refused to write a config without
 		// an ed25519 key, but `apply` always supplies Some and `plan`
