@@ -160,3 +160,10 @@ path = "fuzz_targets/message/rules_match.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "pop3_session"
+path = "fuzz_targets/mailbox/pop3_session.rs"
+test = false
+doc = false
+bench = false
