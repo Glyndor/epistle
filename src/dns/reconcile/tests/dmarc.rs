@@ -96,6 +96,7 @@ fn a_policy_dns_lockdown_is_ramping_is_left_to_it() {
 			also_ours: &[],
 			lockdown,
 			retire_within: None,
+			incomplete: None,
 		})
 	};
 	assert_eq!(

@@ -31,6 +31,7 @@ pub(crate) fn plan(needed: &[DnsRecord], existing: &[DnsRecord], ledger: &Ledger
 		also_ours: &[],
 		lockdown: &[],
 		retire_within: None,
+		incomplete: None,
 	})
 }
 

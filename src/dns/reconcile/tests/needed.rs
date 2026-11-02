@@ -136,6 +136,7 @@ fn the_tlsa_value_the_certificate_refresh_published_counts_as_epistles_own() {
 			also_ours: also,
 			lockdown: &[],
 			retire_within: None,
+			incomplete: None,
 		})
 	};
 	assert_eq!(

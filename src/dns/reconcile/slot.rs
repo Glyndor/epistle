@@ -53,14 +53,15 @@ impl Owners<'_> {
 	}
 }
 
-/// Whether `name` holds a DKIM key: a label `_domainkey` under the selector.
-/// The DKIM rotation publishes and retires those, so the publisher never
-/// retires one.
-pub(super) fn is_dkim_name(name: &str) -> bool {
-	canonical_name(name)
+/// Whether `record` is a DKIM key: a name with a `_domainkey` label at any
+/// position (a selector may itself contain dots), or a TXT whose value is
+/// tagged `v=DKIM1` whatever its name. The DKIM rotation publishes and
+/// retires those, so the publisher never retires one.
+pub(super) fn is_dkim(record: &DnsRecord) -> bool {
+	canonical_name(&record.name)
 		.split('.')
-		.nth(1)
-		.is_some_and(|label| label == "_domainkey")
+		.any(|label| label == "_domainkey")
+		|| (record.kind == RecordKind::Txt && txt_purpose(&record.value) == Some("v=DKIM1"))
 }
 
 /// The text a plan shows for the values of `records`.

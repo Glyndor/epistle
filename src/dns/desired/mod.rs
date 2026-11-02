@@ -19,10 +19,19 @@ pub struct Desired {
 	/// Every record, in the order [`records::build_records`] emits them.
 	pub records: Vec<PublishRecord>,
 	/// Inputs that could not be read and were left out (a DKIM key file
-	/// that does not load, a certificate that cannot be read). The set is
-	/// still usable; the records those inputs would have produced are
-	/// missing from it.
+	/// that does not load, a certificate that cannot be read or holds no
+	/// certificate). The set can still be printed and its records created,
+	/// but it is incomplete: see [`Desired::incomplete`].
 	pub warnings: Vec<String>,
+}
+
+impl Desired {
+	/// Why the set is incomplete, when an input could not be read. A record
+	/// missing from an incomplete set is not a record the configuration no
+	/// longer needs, so a publisher must not retire anything on its strength.
+	pub fn incomplete(&self) -> Option<String> {
+		(!self.warnings.is_empty()).then(|| self.warnings.join("; "))
+	}
 }
 
 /// Compute the records `config` needs.
@@ -55,7 +64,16 @@ pub fn from_config(config: &Config) -> Result<Desired, Vec<String>> {
 	// otherwise. It is not always the one `[tls]` names.
 	let tlsa = crate::tls::served_tls(config).as_ref().and_then(|served| {
 		match std::fs::read_to_string(&served.tls.cert_file) {
-			Ok(pem) => records::tlsa_full_cert(&pem),
+			// A certificate in service is expected to give a TLSA record:
+			// a file without one is an input that failed, never "no TLSA
+			// needed", or the publisher would retire the record it wrote.
+			Ok(pem) => records::tlsa_full_cert(&pem).or_else(|| {
+				warnings.push(format!(
+					"{} holds no certificate, so the TLSA record cannot be computed",
+					served.tls.cert_file.display()
+				));
+				None
+			}),
 			Err(error) => {
 				warnings.push(format!("cannot read certificate: {error}"));
 				None

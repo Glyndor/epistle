@@ -39,7 +39,7 @@ mod ledger;
 mod slot;
 
 pub use ledger::{Ledger, LedgerEntry};
-use slot::{Owners, is_dkim_name, same_slot, slot_of, values, whole_set};
+use slot::{Owners, is_dkim, same_slot, slot_of, values, whole_set};
 
 /// What a plan does with one record.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -131,6 +131,11 @@ pub struct ZoneInput<'a> {
 	/// Retire only ledger records at or under this domain; `None` retires
 	/// anywhere in the zone.
 	pub retire_within: Option<&'a str>,
+	/// Why the needed set is incomplete this run, when it is: an input that
+	/// could not be read (a DKIM key, the certificate) leaves records out of
+	/// `needed`, and a record left out is not a record no longer needed. With
+	/// a reason here nothing is removed; the plan says why.
+	pub incomplete: Option<&'a str>,
 }
 
 /// Plan `input`. Pure: nothing is read or written outside `input`.
@@ -154,7 +159,17 @@ pub fn plan_zone(input: &ZoneInput<'_>) -> ZonePlan {
 		{
 			continue;
 		}
-		entries.push(retire(record, input.existing, &cuts));
+		let mut entry = retire(record, input.existing, &cuts);
+		if entry.action == Action::Remove
+			&& let Some(why) = input.incomplete
+		{
+			entry.action = Action::Skipped;
+			entry.reason = format!(
+				"{name} {} is not removed this run: the needed set is incomplete ({why})",
+				record.kind.as_str()
+			);
+		}
+		entries.push(entry);
 	}
 	ZonePlan { zone, entries }
 }
@@ -400,7 +415,7 @@ fn retire(record: &DnsRecord, existing: &[DnsRecord], cuts: &Cuts) -> Entry {
 			vec![],
 		);
 	}
-	if is_dkim_name(&name) {
+	if is_dkim(record) {
 		return entry(
 			Action::Skipped,
 			record,

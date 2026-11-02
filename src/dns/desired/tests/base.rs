@@ -53,6 +53,33 @@ fn every_hosted_domain_gets_its_mail_records() {
 }
 
 #[test]
+fn a_certificate_file_without_a_certificate_makes_the_set_incomplete() {
+	// Read as "no TLSA needed", the publisher would retire the TLSA record
+	// it wrote; it is an input that failed.
+	let dir = tempfile::tempdir().expect("directory");
+	let cert = dir.path().join("cert.pem");
+	std::fs::write(&cert, "not a certificate").expect("cert file");
+	let desired = from_config(&config(&format!(
+		"[tls]\ncert_file = {cert:?}\nkey_file = {:?}\n",
+		dir.path().join("key.pem")
+	)))
+	.expect("the set is computed");
+	assert!(
+		!desired
+			.records
+			.iter()
+			.any(|r| r.record.kind == crate::dns::provider::RecordKind::Tlsa)
+	);
+	let why = desired.incomplete().expect("the set is incomplete");
+	assert!(why.contains("TLSA"), "{why}");
+}
+
+#[test]
+fn a_complete_set_says_so() {
+	assert_eq!(from_config(&config("")).expect("set").incomplete(), None);
+}
+
+#[test]
 fn a_rotation_state_that_cannot_be_read_stops_the_set() {
 	let dir = tempfile::tempdir().expect("directory");
 	let (pem, _) = crate::dkim::generate_key().expect("key");

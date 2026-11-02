@@ -72,6 +72,53 @@ fn a_dkim_key_is_left_to_the_rotation() {
 }
 
 #[test]
+fn a_dkim_key_under_a_selector_with_dots_is_left_to_the_rotation() {
+	// No `v=DKIM1` tag (it is optional, RFC 6376 section 3.6.1), so only
+	// the `_domainkey` label marks the record as a key.
+	let key = txt("a.b._domainkey.example.org", "k=ed25519; p=AAAA");
+	let plan = plan(
+		&[],
+		std::slice::from_ref(&key),
+		&ledger_of(std::slice::from_ref(&key)),
+	);
+	assert_eq!(action_for(&plan, &key), Action::Skipped);
+}
+
+#[test]
+fn a_dkim_key_at_an_unexpected_name_is_left_to_the_rotation() {
+	let key = txt("keys.example.org", "v=DKIM1; k=rsa; p=AAAA");
+	let plan = plan(
+		&[],
+		std::slice::from_ref(&key),
+		&ledger_of(std::slice::from_ref(&key)),
+	);
+	assert_eq!(action_for(&plan, &key), Action::Skipped);
+}
+
+#[test]
+fn an_incomplete_set_retires_nothing() {
+	// A key or certificate that could not be read leaves records out of the
+	// needed set; that is not the configuration dropping them.
+	let gone = txt("old.example.org", "v=spf1 mx -all");
+	let ledger = ledger_of(&[pop3(), gone.clone()]);
+	let existing = [pop3()];
+	let plan = plan_zone(&ZoneInput {
+		zone: ZONE,
+		needed: &[],
+		existing: &existing,
+		ledger: &ledger,
+		also_ours: &[],
+		lockdown: &[],
+		retire_within: None,
+		incomplete: Some("cannot read certificate"),
+	});
+	assert_eq!(action_for(&plan, &pop3()), Action::Skipped);
+	assert!(plan.entries.iter().any(|e| e.reason.contains("incomplete")));
+	assert_eq!(action_for(&plan, &gone), Action::Gone);
+	assert_eq!(plan.writes(), 0);
+}
+
+#[test]
 fn a_name_delegated_since_it_was_published_is_left_alone() {
 	let ours = txt("sub.example.org", "v=spf1 mx -all");
 	let existing = [
@@ -95,6 +142,7 @@ fn retiring_is_limited_to_the_domain_the_run_was_asked_for() {
 		also_ours: &[],
 		lockdown: &[],
 		retire_within: Some("other.example.org"),
+		incomplete: None,
 	});
 	assert_eq!(action_for(&plan, &other), Action::Remove);
 	assert!(
