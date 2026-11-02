@@ -9,16 +9,18 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use super::term::live;
-use super::util::{dkim_keygen, message_crypto, oauth_keygen, storage_keygen, token_hash};
+use super::util::{dkim_keygen, oauth_keygen, storage_keygen, token_hash};
 use crate::cli::{
 	Cli, Command, account, alias, antispam, api_keys, app::passwords as app_passwords, archive,
-	attachments, autoconfig, autodiscover, backup, ban, delivery, dkim, dns_records, domain,
-	evidence, export, import, init, learning, local, masked, mobileconfig, probe, queue,
-	report::abuse as report_abuse, reports, serve, srv, stack, status, style, suppression,
-	tls::cli as tls_cli, verify, verify::dns as verify_dns, warmup,
+	attachments, autoconfig, autodiscover, backup, ban, dkim, dns_records, domain, evidence, init,
+	learning, local, mobileconfig, probe, report::abuse as report_abuse, reports, serve, srv,
+	stack, status, style, verify::dns as verify_dns,
 };
 use crate::config::Config;
 
+mod access_ops;
+mod delivery_ops;
+mod mailbox_data;
 mod restore;
 pub(in crate::cli) use restore::dispatch_restore;
 
@@ -80,54 +82,14 @@ impl Cli {
 				config,
 				account,
 				maildir,
-			} => match Config::load(&config) {
-				Ok(config) => match message_crypto(&config) {
-					Ok(crypto) => {
-						live::run(
-							&format!("export {account}"),
-							false,
-							|mut out| match maildir {
-								Some(dir) => {
-									export::run_maildir(&config.data_dir, &account, &crypto, &dir)
-								}
-								None => export::run(&config.data_dir, &account, &crypto, &mut out),
-							},
-						)
-					}
-					Err(code) => code,
-				},
-				Err(error) => {
-					style::error(error);
-					ExitCode::FAILURE
-				}
-			},
+			} => mailbox_data::export(&config, account, maildir),
 			Command::Migrate(args) => super::migrate::run(args),
 			Command::Import {
 				config,
 				account,
 				maildir,
 				json,
-			} => match Config::load(&config) {
-				Ok(config) => match message_crypto(&config) {
-					Ok(crypto) => match maildir {
-						Some(dir) => {
-							import::run_maildir(&config.data_dir, &account, &crypto, &dir, json)
-						}
-						None => import::run(
-							&config.data_dir,
-							&account,
-							&crypto,
-							std::io::stdin().lock(),
-							json,
-						),
-					},
-					Err(code) => code,
-				},
-				Err(error) => {
-					style::error(error);
-					ExitCode::FAILURE
-				}
-			},
+			} => mailbox_data::import(&config, account, maildir, json),
 			Command::Backup { config } => with_config(&config, |config| {
 				backup::run(config, &mut std::io::stdout().lock(), &mut style::stderr())
 			}),
@@ -138,18 +100,7 @@ impl Cli {
 				yes,
 				json,
 			} => dispatch_restore(config, (force, dry_run, yes), json),
-			Command::Verify { config, json } => match Config::load(&config) {
-				Ok(config) => match message_crypto(&config) {
-					Ok(crypto) => live::run("verify", json, |mut out| {
-						verify::run(&config.data_dir, &crypto, json, &mut out)
-					}),
-					Err(code) => code,
-				},
-				Err(error) => {
-					style::error(error);
-					ExitCode::FAILURE
-				}
-			},
+			Command::Verify { config, json } => mailbox_data::verify(&config, json),
 			Command::VerifyDns { config, json } => with_config(&config, |config| {
 				verify_dns::run(config, json, &mut std::io::stdout().lock())
 			}),
@@ -171,28 +122,7 @@ impl Cli {
 				action,
 				remove,
 				account,
-			} => match Config::load(&config) {
-				Ok(config) => match suppression::SuppressionCli::with_json(
-					action,
-					json,
-					remove.clone(),
-					account.clone(),
-				) {
-					Some(action) => {
-						suppression::run(&config, action, &mut std::io::stdout().lock())
-					}
-					None => suppression::run_legacy(
-						&config,
-						remove.as_deref(),
-						account.as_deref(),
-						&mut std::io::stdout().lock(),
-					),
-				},
-				Err(error) => {
-					style::error(error);
-					ExitCode::FAILURE
-				}
-			},
+			} => delivery_ops::suppression(&config, json, action, remove, account),
 			Command::Autodiscover { config, domain } => with_config(&config, |config| {
 				autodiscover::run(config, domain.as_deref(), &mut std::io::stdout().lock())
 			}),
@@ -222,53 +152,9 @@ impl Cli {
 				config,
 				json,
 				action,
-			} => match Config::load(&config) {
-				Ok(config) => {
-					let webhook = queue::webhook_for(&config);
-					queue::run(
-						&config.data_dir,
-						config.storage.as_ref(),
-						config.delivery_log_days(),
-						action,
-						json,
-						queue::now_epoch(),
-						webhook.as_ref(),
-						&mut std::io::stdout().lock(),
-					)
-				}
-				Err(error) => {
-					style::error(error);
-					ExitCode::FAILURE
-				}
-			},
-			Command::Warmup { config, action } => match Config::load(&config) {
-				Ok(config) => warmup::run(
-					&config.data_dir,
-					config.storage.as_ref(),
-					config.delivery_log_days(),
-					&crate::queue::warmup::relay_hosts(&config.transport),
-					action,
-					queue::now_epoch(),
-					&mut std::io::stdout().lock(),
-				),
-				Err(error) => {
-					style::error(error);
-					ExitCode::FAILURE
-				}
-			},
-			Command::Delivery(args) => match Config::load(&args.config) {
-				Ok(config) => delivery::run(
-					&config.data_dir,
-					config.delivery_log_days(),
-					args.into_action(),
-					queue::now_epoch(),
-					&mut std::io::stdout().lock(),
-				),
-				Err(error) => {
-					style::error(error);
-					ExitCode::FAILURE
-				}
-			},
+			} => delivery_ops::queue(&config, json, action),
+			Command::Warmup { config, action } => delivery_ops::warmup(&config, action),
+			Command::Delivery(args) => delivery_ops::delivery(args),
 			Command::Evidence { config, action } => evidence::run(
 				&config,
 				action,
@@ -279,20 +165,7 @@ impl Cli {
 				config,
 				json,
 				action,
-			} => match Config::load(&config) {
-				Ok(config) => ban::run(
-					&config,
-					action,
-					json,
-					ban::now_epoch(),
-					&mut std::io::stdout().lock(),
-					&mut style::stderr(),
-				),
-				Err(error) => {
-					style::error(error);
-					ExitCode::FAILURE
-				}
-			},
+			} => access_ops::ban(&config, json, action),
 			Command::Learning { config, action } => match Config::load(&config) {
 				Ok(config) => learning::run(&config, action, &mut std::io::stdout().lock()),
 				Err(error) => {
@@ -304,20 +177,7 @@ impl Cli {
 				config,
 				json,
 				action,
-			} => match Config::load(&config) {
-				Ok(config) => masked::run(
-					&config,
-					action,
-					json,
-					ban::now_epoch(),
-					&mut std::io::stdout().lock(),
-					&mut style::stderr(),
-				),
-				Err(error) => {
-					style::error(error);
-					ExitCode::FAILURE
-				}
-			},
+			} => access_ops::masked(&config, json, action),
 			Command::DkimKeygen {
 				out,
 				rsa,
@@ -450,20 +310,7 @@ impl Cli {
 				config,
 				json,
 				action,
-			} => match Config::load(&config) {
-				Ok(config) => match action {
-					action @ tls_cli::TlsCli::Renew { .. } => {
-						live::run("tls renew", json, |mut out| {
-							tls_cli::run(&config, action, json, &mut out)
-						})
-					}
-					action => tls_cli::run(&config, action, json, &mut std::io::stdout().lock()),
-				},
-				Err(error) => {
-					style::error(error);
-					ExitCode::FAILURE
-				}
-			},
+			} => access_ops::tls(&config, json, action),
 			Command::ApiKey {
 				config,
 				json,
