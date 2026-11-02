@@ -69,6 +69,19 @@ impl GroupChild {
 	}
 }
 
+impl std::ops::Deref for GroupChild {
+	type Target = Child;
+	fn deref(&self) -> &Child {
+		&self.child
+	}
+}
+
+impl std::ops::DerefMut for GroupChild {
+	fn deref_mut(&mut self) -> &mut Child {
+		&mut self.child
+	}
+}
+
 impl Drop for GroupChild {
 	fn drop(&mut self) {
 		if !self.reaped {

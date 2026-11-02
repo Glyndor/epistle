@@ -12,6 +12,8 @@ use std::time::{Duration, Instant};
 
 #[path = "init_guided/descriptors.rs"]
 mod descriptors;
+#[path = "../../common/reaped_group.rs"]
+mod reaped_group;
 
 /// The whole budget one guided run may take.
 const DEADLINE: Duration = Duration::from_secs(120);
@@ -459,10 +461,9 @@ fn a_gone_child_whose_terminal_stays_open_is_reported_after_the_drain() {
 		assert!(start.elapsed() < Duration::from_secs(10), "never reported");
 		std::thread::sleep(Duration::from_millis(20));
 	}
-	let mut running = Command::new("/bin/sleep")
-		.arg("5")
-		.spawn()
-		.expect("spawn sleep");
+	// Killed with its group if an assertion fails before the kill below.
+	let mut running =
+		reaped_group::GroupChild::spawn(Command::new("/bin/sleep").arg("5")).expect("spawn sleep");
 	let mut since = None;
 	assert!(!orphaned_terminal(&mut running, &mut since, drain));
 	running.kill().expect("kill sleep");
