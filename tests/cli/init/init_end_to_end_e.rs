@@ -8,6 +8,9 @@
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
+#[path = "../../common/executable.rs"]
+mod executable;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -59,9 +62,7 @@ fn init_writes_the_rsa_key_even_when_openssl_on_path_is_broken() {
 			exit 1\n\
 			;;\n\
 		esac\n";
-	std::fs::write(&shim_path, shim_body).expect("write shim");
-	std::fs::set_permissions(&shim_path, std::fs::Permissions::from_mode(0o755))
-		.expect("chmod 0755 on shim");
+	executable::write_executable(&shim_path, shim_body);
 
 	let data_dir = dir.path().join("data");
 	let config_path = dir.path().join("etc").join("mail.toml");

@@ -11,6 +11,9 @@
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+
+#[path = "../../common/executable.rs"]
+pub(crate) mod executable;
 use std::process::{Command, Stdio};
 
 // Each test binary picks a subset of the helpers; the rest are
@@ -46,9 +49,7 @@ pub(crate) fn path_with_shim_first(shim_dir: &Path) -> std::ffi::OsString {
 pub(crate) fn write_podup_shim(shim_dir: &Path, body: &str) -> PathBuf {
 	std::fs::create_dir_all(shim_dir).expect("mkdir shim dir");
 	let path = shim_dir.join("podup");
-	std::fs::write(&path, body).expect("write shim");
-	std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
-		.expect("chmod 0755 on shim");
+	executable::write_executable(&path, body);
 	// `stack update` also asks `podman` which images it left unused. Without
 	// this, a test whose fixture retires an image would reach the Podman of
 	// the machine that runs it and its images.
@@ -63,9 +64,7 @@ pub(crate) fn write_podup_shim(shim_dir: &Path, body: &str) -> PathBuf {
 #[allow(dead_code)]
 pub(crate) fn write_podman_shim(shim_dir: &Path, body: &str) -> PathBuf {
 	let path = shim_dir.join("podman");
-	std::fs::write(&path, body).expect("write podman shim");
-	std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
-		.expect("chmod 0755 on podman shim");
+	executable::write_executable(&path, body);
 	path
 }
 

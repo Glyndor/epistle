@@ -234,13 +234,7 @@ fn missing_podup_does_not_search_the_current_directory() {
 	// fallback kicks in, execvp would pick this shim up and
 	// the test would go red.
 	let sibling_podup = cwd_dir.join("podup");
-	std::fs::write(&sibling_podup, &body).expect("write sibling podup");
-	#[cfg(unix)]
-	{
-		use std::os::unix::fs::PermissionsExt;
-		std::fs::set_permissions(&sibling_podup, std::fs::Permissions::from_mode(0o755))
-			.expect("chmod sibling podup");
-	}
+	helpers::executable::write_executable(&sibling_podup, &body);
 	let data_dir = data_dir_with_compose(dir.path());
 	let cfg = write_config(&data_dir);
 	let mut cmd = Command::new(binary());

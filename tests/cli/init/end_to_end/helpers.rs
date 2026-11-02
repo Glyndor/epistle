@@ -5,6 +5,9 @@
 //! from one place.
 
 use std::path::{Path, PathBuf};
+
+#[path = "../../../common/executable.rs"]
+pub mod executable;
 pub fn binary() -> &'static Path {
 	Path::new(env!("CARGO_BIN_EXE_epistle"))
 }

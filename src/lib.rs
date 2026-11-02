@@ -61,4 +61,9 @@ pub mod webdav;
 pub mod webhook;
 
 #[cfg(test)]
+#[path = "../tests/common/executable.rs"]
+mod test_executable;
+#[cfg(test)]
+mod test_executable_stress;
+#[cfg(test)]
 mod test_fixtures;
