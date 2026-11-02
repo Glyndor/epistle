@@ -1,3 +1,16 @@
+epistle (0.12.6) unstable; urgency=medium
+
+  * The HTTP API no longer needs a static token: without `[api] token_hash` only the labelled keys in `api_keys.toml` authenticate, an absent hash never matches any bearer value, and `init` and `service enable` stop creating one.
+  * A successful login no longer lifts an active ban, and counting a failure and recording a ban happen under one lock per subject, so two failures at once cannot both pass the check.
+  * `[dns]` can be several `[[dns]]` tables, each with its own provider, zone and credential. A call goes to the entry with the longest zone that holds the name and never to another one, and `dns provider set --zone` and `unset --zone` manage the entries.
+  * The TLSA refresh keeps a failed publication and retries it with a growing wait (`tlsa-pending` in `status`), replaces only the values this instance published, and refuses a name that is delegated to other nameservers.
+  * An ACME order that is dropped withdraws the challenges it had published.
+  * A verified upgrade removes the saved rollback state and the container images that no container uses any more.
+  * Commands that run as the service account no longer go through `runuser`, so a signal sent to the process group no longer kills a restore two seconds later.
+  * epistle requires podup 5.15.4 or later.
+
+ -- Glyndor <packages@glyndor.net>  Sun, 01 Nov 2026 23:00:00 +0000
+
 epistle (0.12.5) unstable; urgency=medium
 
   * The DKIM verifier and the ARC chain read the headers as RFC 6376 and RFC 8617 say: a signature that covers only one of several `From` headers is refused, and the chain checks follow the order and the instance numbers the RFC fixes.
