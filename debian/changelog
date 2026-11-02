@@ -4,6 +4,7 @@ epistle (0.12.6) unstable; urgency=medium
   * A successful login no longer lifts an active ban, and counting a failure and recording a ban happen under one lock per subject, so two failures at once cannot both pass the check.
   * `[dns]` can be several `[[dns]]` tables, each with its own provider, zone and credential. A call goes to the entry with the longest zone that holds the name and never to another one, and `dns provider set --zone` and `unset --zone` manage the entries.
   * The TLSA refresh keeps a failed publication and retries it with a growing wait (`tlsa-pending` in `status`), replaces only the values this instance published, and refuses a name that is delegated to other nameservers.
+  * Each hosted domain can sign with a DKIM key of its own: `init` and `domain add` create one, the configuration refuses two domains that share a key, and `dkim split` gives the domains that share the `[dkim]` key one each, publishes the records and waits for the resolver before it switches, then `dkim split --finish` retires the old records once the overlap has passed. An installation with only `[dkim]` signs as before.
   * An ACME order that is dropped withdraws the challenges it had published.
   * A verified upgrade removes the saved rollback state and the container images that no container uses any more.
   * Commands that run as the service account no longer go through `runuser`, so a signal sent to the process group no longer kills a restore two seconds later.
