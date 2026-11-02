@@ -30,7 +30,10 @@ fn account_list_resource_parses() {
 		Command::Account { action, .. } => {
 			assert!(matches!(
 				action,
-				crate::cli::account::Subcommand::List { json: false }
+				crate::cli::account::Subcommand::List {
+					json: false,
+					aliases: false
+				}
 			));
 		}
 		other => panic!("expected Command::Account, got {other:?}"),

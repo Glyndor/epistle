@@ -157,6 +157,7 @@ const CASES: &[(&str, &[&str], Expect)] = &[
 	("suppression import", &["@TMP/sweep-suppression.txt"], Done),
 	("suppression remove", &["gone@example.net"], Done),
 	("account list", &[], Done),
+	("account list", &["--aliases"], Done),
 	(
 		"account add",
 		&["alice", "--address", "alice@example.org"],

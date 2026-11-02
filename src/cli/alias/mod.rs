@@ -17,7 +17,8 @@ use super::config_edit::ConfigDocument;
 use super::style;
 
 use crate::util::address::normalize;
-use helpers::{disabled_set, document_address, find_alias, normalized};
+pub(in crate::cli) use helpers::disabled_set;
+use helpers::{document_address, find_alias, normalized};
 use helpers::{validate_alias_address, validate_member_or_sender};
 use writers::{upsert_alias_members, upsert_alias_senders};
 
