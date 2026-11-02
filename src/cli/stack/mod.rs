@@ -327,6 +327,10 @@ pub(super) fn run(config: &Config, action: StackAction) -> ExitCode {
 		StackAction::RollbackDb => rollback::restore_db(config, &compose, podup),
 		StackAction::Certs { on } => certs::run(config, &compose, podup, on),
 		StackAction::Up => {
+			if let Err(error) = certs::retire_before_up(&config.data_dir, &compose) {
+				super::style::error(error);
+				return ExitCode::FAILURE;
+			}
 			run_sequence(podup, &compose, &[&["up", "-d"], &["autostart", "install"]])
 		}
 		StackAction::Down => {

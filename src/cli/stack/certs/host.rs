@@ -64,6 +64,10 @@ impl SwitchHost for StackHost<'_> {
 		crate::cli::init::host_secrets::acme::retire_data_dir_copy(&self.config.data_dir)
 	}
 
+	fn data_dir_key(&self) -> std::path::PathBuf {
+		crate::acme::renew::account_key_path(&self.config.data_dir)
+	}
+
 	fn log(&mut self, line: &str) {
 		let _ = writeln!(crate::cli::style::stderr(), "epistle: {line}");
 	}

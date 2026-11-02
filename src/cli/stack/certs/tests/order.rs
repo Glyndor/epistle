@@ -9,8 +9,8 @@ fn turning_on_retires_the_data_dir_key_only_after_both_services_are_up() {
 	assert_eq!(
 		host.steps,
 		[
-			"place true",
 			"render true",
+			"place true",
 			"write certs=true",
 			"podup up -d --remove-orphans",
 			"ready mail",
@@ -23,9 +23,9 @@ fn turning_on_retires_the_data_dir_key_only_after_both_services_are_up() {
 #[test]
 fn a_certs_container_that_does_not_come_up_puts_the_stack_back_and_keeps_the_key() {
 	let mut host = Recorder::with_certs(false);
-	host.fail_ready = Some("certs");
+	host.fail = vec!["ready certs"];
 	let error = switch(&mut host, true).expect_err("certs down");
-	assert!(error.contains("certs did not come up"), "{error}");
+	assert!(error.contains("ready certs failed"), "{error}");
 	assert!(error.contains("written back"), "{error}");
 	assert!(
 		!host.steps.contains(&"retire".to_string()),
@@ -42,7 +42,7 @@ fn a_certs_container_that_does_not_come_up_puts_the_stack_back_and_keeps_the_key
 #[test]
 fn a_failed_up_puts_the_previous_file_back() {
 	let mut host = Recorder::with_certs(false);
-	host.fail_podup_once = true;
+	host.fail = vec!["podup"];
 	let error = switch(&mut host, true).expect_err("podup failed");
 	assert!(error.contains("written back"), "{error}");
 	assert_eq!(
@@ -58,8 +58,8 @@ fn turning_off_puts_the_key_back_before_mail_renews_again() {
 	assert_eq!(
 		host.steps,
 		[
-			"place false",
 			"render false",
+			"place false",
 			"write certs=false",
 			"podup up -d --remove-orphans",
 			"ready mail",
@@ -96,7 +96,7 @@ fn runs_certs_reads_the_service_from_the_file_and_fails_closed() {
 #[test]
 fn a_failed_disable_removes_the_key_copy_it_placed_for_mail() {
 	let mut host = Recorder::with_certs(true);
-	host.fail_ready = Some("mail");
+	host.fail = vec!["ready mail"];
 	let error = switch(&mut host, false).expect_err("mail down");
 	assert!(error.contains("removed again"), "{error}");
 	assert_eq!(
@@ -111,7 +111,7 @@ fn a_failed_disable_removes_the_key_copy_it_placed_for_mail() {
 #[test]
 fn a_failed_enable_leaves_the_key_mail_renews_with() {
 	let mut host = Recorder::with_certs(false);
-	host.fail_ready = Some("mail");
+	host.fail = vec!["ready mail"];
 	let error = switch(&mut host, true).expect_err("mail down");
 	assert!(error.contains("left in place"), "{error}");
 	assert!(
