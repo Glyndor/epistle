@@ -30,4 +30,5 @@ py="$work/venv/bin/python"
 for deb in "$dist"/epistle_*.deb; do
 	"$py" "$here/sign.py" "$deb"
 done
+"$py" "$here/sign.py" "$dist/epistle-${tag}.cdx.json"
 "$py" "$here/sign.py" "$dist/SHA256SUMS"
