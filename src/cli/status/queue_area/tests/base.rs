@@ -163,6 +163,7 @@ fn sealed_envelopes_are_read_with_the_configured_key() {
 	let storage = crate::config::Storage {
 		encrypt_at_rest: true,
 		tenant_keys: false,
+		retired_key_files: Vec::new(),
 		encryption_key_env: None,
 		encryption_key_file: Some(key_file),
 		deleted_retention_days: 0,

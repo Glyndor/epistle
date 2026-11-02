@@ -90,6 +90,7 @@ fn from_config_enabled_without_key_fails_closed() {
 	let storage = Storage {
 		encrypt_at_rest: true,
 		tenant_keys: false,
+		retired_key_files: Vec::new(),
 		encryption_key_env: None,
 		encryption_key_file: None,
 		deleted_retention_days: 0,
@@ -109,6 +110,7 @@ fn from_config_loads_key_from_file() {
 	let storage = Storage {
 		encrypt_at_rest: true,
 		tenant_keys: false,
+		retired_key_files: Vec::new(),
 		encryption_key_env: None,
 		encryption_key_file: Some(key_path),
 		deleted_retention_days: 0,
@@ -132,6 +134,7 @@ fn from_config_keeps_key_loaded_when_disabled() {
 	let enabled = Storage {
 		encrypt_at_rest: true,
 		tenant_keys: false,
+		retired_key_files: Vec::new(),
 		encryption_key_env: None,
 		encryption_key_file: Some(key_path.clone()),
 		deleted_retention_days: 0,
@@ -146,6 +149,7 @@ fn from_config_keeps_key_loaded_when_disabled() {
 	let disabled = Storage {
 		encrypt_at_rest: false,
 		tenant_keys: false,
+		retired_key_files: Vec::new(),
 		encryption_key_env: None,
 		encryption_key_file: Some(key_path),
 		deleted_retention_days: 0,
@@ -168,6 +172,7 @@ fn from_config_rejects_malformed_key() {
 	let storage = Storage {
 		encrypt_at_rest: true,
 		tenant_keys: false,
+		retired_key_files: Vec::new(),
 		encryption_key_env: None,
 		encryption_key_file: Some(key_path),
 		deleted_retention_days: 0,

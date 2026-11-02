@@ -65,14 +65,36 @@ pub(in crate::cli) fn run(
 			std::time::SystemTime::now(),
 		),
 	};
-	migrate(
+	let code = migrate(
 		&config.data_dir,
 		&crypto,
 		&options,
 		&mut rekey::NoHooks,
 		out,
 		status,
-	)
+	);
+	if code != ExitCode::SUCCESS || options.dry_run {
+		return code;
+	}
+	match reseal_totp(&config, &crypto) {
+		Ok(0) => code,
+		Ok(count) if options.json => code_after(count, status),
+		Ok(count) => match writeln!(out, "TOTP secrets resealed under the server key: {count}") {
+			Ok(()) => code,
+			Err(_) => ExitCode::FAILURE,
+		},
+		Err(error) => fail(status, format!("cannot reseal TOTP secrets: {error}")),
+	}
+}
+
+/// With `--json` the stdout object is already written; the TOTP count goes
+/// to the status stream instead.
+fn code_after(count: usize, status: &mut impl Write) -> ExitCode {
+	let _ = writeln!(
+		status,
+		"TOTP secrets resealed under the server key: {count}"
+	);
+	ExitCode::SUCCESS
 }
 
 /// What a migrate run was asked to do, and whether the server is up.
@@ -81,6 +103,32 @@ pub(crate) struct Options {
 	pub(crate) dry_run: bool,
 	pub(crate) json: bool,
 	pub(crate) live: bool,
+}
+
+/// Whether any `[[tenant]]` key is loaded.
+fn has_tenant_keys(crypto: &MessageCrypto) -> bool {
+	crypto
+		.key_listing()
+		.iter()
+		.any(|(owner, _)| matches!(owner, KeyOwner::Tenant(_)))
+}
+
+/// Reseal under the current server key every TOTP secret in
+/// `accounts.toml` that only a retired key opens, so the retired key can
+/// go. Returns how many were resealed.
+fn reseal_totp(config: &Config, crypto: &MessageCrypto) -> std::io::Result<usize> {
+	if !config.data_dir.join("accounts.toml").is_file() {
+		return Ok(0);
+	}
+	crate::directory_store::AccountStore::open(
+		&config.data_dir,
+		config.domains.clone(),
+		config.domain_aliases.clone(),
+		config.accounts.clone(),
+	)
+	.map(|store| store.with_crypto(crypto.clone()))
+	.and_then(|store| store.reseal_totp())
+	.map_err(|error| std::io::Error::other(error.to_string()))
 }
 
 fn fail(status: &mut impl Write, error: impl std::fmt::Display) -> ExitCode {
@@ -110,7 +158,7 @@ fn refusal(
 		return None;
 	}
 	match options.direction {
-		Direction::Forward if !crypto.tenant_writes() => Some(
+		Direction::Forward if !crypto.tenant_writes() && has_tenant_keys(crypto) => Some(
 			"set [storage] tenant_keys = true and restart first, or new mail keeps arriving under the server key".into(),
 		),
 		Direction::Rollback if crypto.tenant_writes() => Some(
