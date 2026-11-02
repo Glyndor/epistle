@@ -85,7 +85,7 @@ function name is the stable reference.
 | 4.2.2 State-changing ops protected | Met | All mutating API/JMAP routes sit behind the bearer middleware. |
 | 4.3.1 Admin interfaces require additional protection | Met | Management API is closed by default (Podman-internal); the CLI runs only as the isolated user/sudo. |
 | 4.3.3 Per-account confinement (WebDAV/CalDAV/CardDAV) | Met | `src/webdav/path/mod.rs::resolve` percent-decodes, rejects NUL/`..`/`\`/non-`Normal` components and ends with a `starts_with(root)` guard; the root is derived from the *resolved* account (`src/webdav/auth/mod.rs`, `src/webdav/handler/mod.rs`). |
-| 4.x Sender ownership (MAIL FROM) | Met | An authenticated sender may only use a reverse-path / From it owns (`src/smtp/session/mod.rs` → `src/smtp/directory/mod.rs::owns_address`); relay to foreign domains requires auth. |
+| 4.x Sender ownership (MAIL FROM) | Met | An authenticated sender may only use a reverse-path / From it owns (`src/smtp/session/envelope.rs` → `src/smtp/directory/mod.rs::owns_address`); relay to foreign domains requires auth. |
 
 > RFC 4314 IMAP ACLs are stored and reported (`SETACL`/`GETACL`/`MYRIGHTS`,
 > `src/imap/session/acl.rs`) but no shared-mailbox **read path consults them yet**
@@ -99,7 +99,7 @@ function name is the stable reference.
 | Req (L3) | Status | Evidence |
 |---|---|---|
 | 5.1.x Input validation at the boundary | Met | Addresses validated and length-capped (`src/smtp/address/mod.rs`, 254/64, control chars rejected); SMTPUTF8/EAI handled. |
-| 5.1.4 Bounds on attacker-controlled sizes | Met | SMTP data line 998 (`src/smtp/line/mod.rs`), command line 512 (`src/smtp/command.rs`), message 25 MiB and ≤100 recipients (`src/smtp/session/mod.rs`), inbound trace-hop cap (`src/smtp/trace/mod.rs`), outbound reply 64 KiB (`src/queue/client/mod.rs`), MTA-STS body 64 KiB (`src/mtasts/policy/mod.rs`), bounce header block 4096 (`src/queue/bounce/mod.rs`). |
+| 5.1.4 Bounds on attacker-controlled sizes | Met | SMTP data line 998 (`src/smtp/line/mod.rs`), command line 512 (`src/smtp/command.rs`), message 25 MiB and ≤100 recipients (`src/smtp/session/limits.rs`), inbound trace-hop cap (`src/smtp/trace/mod.rs`), outbound reply 64 KiB (`src/queue/client/mod.rs`), MTA-STS body 64 KiB (`src/mtasts/policy/mod.rs`), bounce header block 4096 (`src/queue/bounce/mod.rs`). |
 | 5.2.x Sanitize unstructured / hostile content | Met (fixed in this sweep) | A remote MTA's reply is sanitized (controls → space, length-capped) before it reaches any DSN header or body (`src/queue/bounce/mod.rs::sanitize_reason`). |
 | 5.3.1 Output encoding / no header (CRLF) injection | Met | Inbound: bare CR/LF/NUL rejected by the decoder (`src/smtp/line/mod.rs`). Outbound: bounce/DSN reason sanitized (above); addresses are validated values. |
 | 5.3.4 Parameterized queries only (SQLi) | Met | Every query is a sqlx **compile-time macro** with bound `$n` params — no string-built SQL anywhere (`src/antispam/corpus/mod.rs`, `src/antispam/reputation/mod.rs`). |
