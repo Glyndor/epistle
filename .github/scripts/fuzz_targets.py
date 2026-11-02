@@ -46,6 +46,7 @@ ALL = [
     "backup_tar",
     "webdav_report_body",
     "arf_report",
+    "attachment_walk",
 ]
 
 # Folder of the source -> the targets that exercise it and nothing else.
@@ -68,7 +69,7 @@ FOLDERS = {
     "src/dkim/": ["dkim_signature", "mime"],
     "src/dmarc/": ["mime"],
     "src/api/jmap/": ["mime"],
-    "src/antispam/attachments/": ["attachment_inspect"],
+    "src/antispam/attachments/": ["attachment_inspect", "attachment_walk"],
     "src/webdav/": ["webdav_filter_rrule", "webdav_report_body"],
     "src/arc/": ["arc_headers"],
     "src/jwt/": ["jwt_decode"],

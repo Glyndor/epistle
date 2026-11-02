@@ -196,6 +196,73 @@ pub fn arf_report(raw: &[u8]) {
 	crate::antispam::arf::fuzzing::report_for_fuzzing(raw);
 }
 
+/// Decoded bytes one walk of [`attachment_walk`] may spend: several times the
+/// input, so nested encodings are followed rather than cut at once.
+const WALK_DECODED: usize = 4 * INPUT_CAP;
+
+/// A whole message through the attachment inspection: the MIME walk the rules
+/// read and the one the text reader takes, the zip and OLE2 directory readers
+/// on every part they hand over and on the bytes themselves, and the complete
+/// inspection that joins them. A walk keeps to its depth and part limits, and
+/// a listing to its entry cap, whatever the message claims.
+pub fn attachment_walk(raw: &[u8]) {
+	use crate::antispam::attachments::{self, walk};
+	let raw = &raw[..raw.len().min(INPUT_CAP)];
+	let limits = walk::Limits {
+		max_depth: attachments::MAX_DEPTH,
+		max_parts: attachments::MAX_PARTS,
+		max_decoded: WALK_DECODED,
+		deadline: None,
+	};
+	let visit = |leaf: walk::Leaf| {
+		// A uuencoded file inside a text part sits one level below it.
+		assert!(
+			leaf.depth <= limits.max_depth + 1,
+			"leaf at depth {}",
+			leaf.depth
+		);
+		directories(&leaf.content);
+		for alternate in &leaf.alternates {
+			directories(alternate);
+		}
+	};
+	for walked in [
+		walk::walk(raw, &limits, visit),
+		walk::walk_text(raw, &limits, visit),
+	] {
+		// The part that goes past the limit is counted, then the walk stops.
+		assert!(
+			walked.parts <= limits.max_parts + 1,
+			"{} parts",
+			walked.parts
+		);
+		if walked.parts > limits.max_parts {
+			assert_eq!(walked.stopped, Some(walk::Stop::TooManyParts));
+		}
+	}
+	directories(raw);
+	let report = attachments::inspect(
+		raw,
+		&attachments::rules::Extensions::default(),
+		attachments::Budget::bytes(WALK_DECODED),
+	);
+	std::hint::black_box(report.reasons());
+}
+
+/// The zip and OLE2 directory readers over one buffer.
+fn directories(bytes: &[u8]) {
+	use crate::antispam::attachments::archive;
+	let listing = archive::list_zip(bytes);
+	assert!(listing.names.len() <= archive::MAX_ENTRIES);
+	std::hint::black_box((
+		archive::has_end_record(bytes),
+		archive::is_ooxml(&listing),
+		archive::ooxml_has_macros(&listing),
+	));
+	let ole = archive::inspect_ole2(bytes);
+	assert_eq!(ole.macros, archive::ole2_has_macros(bytes));
+}
+
 /// The largest index at most `max` that is a character boundary of `text`.
 fn floor_char_boundary(text: &str, max: usize) -> usize {
 	let mut end = max.min(text.len());

@@ -67,7 +67,6 @@ class SelectTests(unittest.TestCase):
 
     def test_the_parsers_of_one_folder_run_their_own_target(self):
         for path, target in (
-            ("src/antispam/attachments/sniff/mod.rs", "attachment_inspect"),
             ("src/arc/signature.rs", "arc_headers"),
             ("src/jwt/mod.rs", "jwt_decode"),
             ("src/queue/client/conn/mod.rs", "smtp_reply"),
@@ -92,6 +91,16 @@ class SelectTests(unittest.TestCase):
         self.assertNotIn(
             "imap_session", ft.select("pull_request", ["src/smtp/session/mod.rs"])
         )
+
+    def test_the_attachment_folder_runs_both_attachment_targets(self):
+        for path in (
+            "src/antispam/attachments/sniff/mod.rs",
+            "src/antispam/attachments/walk/mod.rs",
+            "src/antispam/attachments/archive/mod.rs",
+        ):
+            self.assertEqual(
+                ft.select("pull_request", [path]), ["attachment_inspect", "attachment_walk"]
+            )
 
     def test_two_protocols_run_both(self):
         got = ft.select("pull_request", ["src/pop3/a.rs", "src/dkim/b.rs"])
