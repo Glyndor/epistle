@@ -58,11 +58,11 @@ class SelectTests(unittest.TestCase):
     def test_one_protocol_runs_only_its_targets(self):
         self.assertEqual(
             ft.select("pull_request", ["src/imap/session/mod.rs"]),
-            ["imap_command", "imap_session", "mime", "migrate_imap_response"],
+            ["imap_command", "imap_session", "mime", "migrate_imap_response", "sasl_exchange"],
         )
         self.assertEqual(
             ft.select("pull_request", ["src/smtp/a.rs", "src/smtp/b/c.rs"]),
-            ["smtp_command", "smtp_session", "smtp_line", "smtp_address", "smtp_data"],
+            ["smtp_command", "smtp_session", "smtp_line", "smtp_address", "smtp_data", "sasl_exchange"],
         )
 
     def test_the_parsers_of_one_folder_run_their_own_target(self):

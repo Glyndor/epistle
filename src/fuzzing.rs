@@ -42,6 +42,8 @@ pub fn mime(raw: &[u8]) {
 	));
 }
 
+mod scram_client;
+
 /// The most bytes an input of the targets below is given: they read network
 /// bodies and headers, which the listeners bound well under this.
 const INPUT_CAP: usize = 64 * 1024;
@@ -350,6 +352,87 @@ fn spf_names(spec: &str, sender: &str, helo: &str) {
 			assert_eq!(name.as_deref().ok(), Some(spec));
 		}
 		std::hint::black_box(name.map(|name| name.len()).ok());
+	}
+}
+
+/// The SASL messages a client sends before it is logged in: PLAIN, the
+/// OAUTHBEARER and XOAUTH2 initial response of SMTP and of IMAP, and a
+/// SCRAM-SHA-256 exchange under each channel binding policy. The first line is
+/// the client-first message and the rest the client-final one.
+///
+/// The account is made once per process from random bytes. Besides the
+/// client's own final message, the exchange is finished the way a client that
+/// knows the password would: it must succeed with the nonce the server sent,
+/// and fail with any other nonce or a proof that is off by one bit. A final
+/// message the server accepts must carry the proof only the password gives.
+pub fn sasl_exchange(input: &str) {
+	use crate::smtp::scram::{ChannelBinding, ScramError, ScramServer, username_of};
+	let input = &input[..floor_char_boundary(input, INPUT_CAP)];
+	let _ = crate::smtp::auth::parse_plain(input);
+	std::hint::black_box(crate::smtp::session::parse_bearer(input));
+	std::hint::black_box(crate::imap::session::parse_bearer(input));
+	let (first, last) = input.split_once('\n').unwrap_or((input, ""));
+	let account = scram_client::account();
+	let username = username_of(first);
+	for binding in [
+		ChannelBinding::Unsupported,
+		ChannelBinding::Supported,
+		ChannelBinding::Required(account.end_point.clone()),
+	] {
+		let mut server =
+			ScramServer::new(account.nonce.as_str()).with_channel_binding(binding.clone());
+		let Ok((user, server_first)) = server.first(first, &account.credentials) else {
+			continue;
+		};
+		assert_eq!(Some(user), username, "first and username_of disagree");
+		let flag = first.split(',').next().unwrap_or("");
+		match &binding {
+			ChannelBinding::Supported => assert_eq!(flag, "n"),
+			ChannelBinding::Required(_) => assert_eq!(flag, "p=tls-server-end-point"),
+			ChannelBinding::Unsupported => {}
+		}
+		let exchange = scram_client::Exchange::new(account, first, &server_first, &binding);
+		if let Ok(server_final) = server.finish(last, &account.credentials) {
+			let proof = last.split(',').find_map(|field| field.strip_prefix("p="));
+			let without_proof = last.rsplit_once(",p=").map(|(head, _)| head);
+			let expected = without_proof.map(|head| exchange.proof(head));
+			// The assertions name what failed and print no proof or key.
+			assert!(
+				proof.map(str::to_string) == expected,
+				"a proof nobody signed was accepted"
+			);
+			assert!(
+				server_final == exchange.server_final(without_proof.unwrap_or("")),
+				"the server signature is not the one its key gives"
+			);
+		}
+		let Some(combined) = server_first
+			.strip_prefix("r=")
+			.and_then(|rest| rest.split(',').next())
+		else {
+			panic!("server-first does not open with the nonce");
+		};
+		let honest = exchange.without_proof(combined);
+		assert!(
+			server.finish(&exchange.signed(&honest), &account.credentials)
+				== Ok(exchange.server_final(&honest)),
+			"the password did not open the account",
+		);
+		let tampered = format!("{honest},p={}", exchange.flipped(&honest));
+		assert!(
+			server.finish(&tampered, &account.credentials) == Err(ScramError::AuthenticationFailed),
+			"a proof off by one bit was accepted",
+		);
+		if let Some(echoed) = last.split(',').next()
+			&& echoed != combined
+		{
+			let replayed = exchange.without_proof(echoed);
+			assert!(
+				server.finish(&exchange.signed(&replayed), &account.credentials)
+					== Err(ScramError::Malformed),
+				"a nonce the server did not send was accepted",
+			);
+		}
 	}
 }
 

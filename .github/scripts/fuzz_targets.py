@@ -48,6 +48,7 @@ ALL = [
     "arf_report",
     "attachment_walk",
     "sender_auth_records",
+    "sasl_exchange",
 ]
 
 # Folder of the source -> the targets that exercise it and nothing else.
@@ -61,9 +62,10 @@ FOLDERS = {
         "smtp_address",
         "smtp_data",
         "imap_session",
+        "sasl_exchange",
     ],
-    "src/smtp/": ["smtp_command", "smtp_session", "smtp_line", "smtp_address", "smtp_data"],
-    "src/imap/": ["imap_command", "mime", "migrate_imap_response", "imap_session"],
+    "src/smtp/": ["smtp_command", "smtp_session", "smtp_line", "smtp_address", "smtp_data", "sasl_exchange"],
+    "src/imap/": ["imap_command", "mime", "migrate_imap_response", "imap_session", "sasl_exchange"],
     "src/sieve/": ["sieve_message", "sieve_script", "sieve_run", "sieve_validate"],
     "src/pop3/": ["pop3_command", "pop3_session"],
     "src/managesieve/": ["managesieve_command", "sieve_validate"],

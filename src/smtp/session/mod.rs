@@ -19,6 +19,7 @@ mod finalise;
 mod junk;
 mod login;
 mod oauth;
+pub(crate) use oauth::parse_bearer;
 mod scram;
 mod time;
 use time::unix_now;
