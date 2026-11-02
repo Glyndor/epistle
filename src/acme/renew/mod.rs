@@ -21,6 +21,9 @@ use super::renew_request::{Backoff, Issuer, Outcome, cycle};
 use super::transport::HttpTransport;
 use crate::tls::ReloadableAcceptor;
 
+mod stop;
+pub use stop::{Renewal, StopSignal};
+
 /// How often the loop wakes: often enough to serve an operator's renewal
 /// request promptly; scheduled failures back off for much longer.
 const CHECK_INTERVAL: Duration = Duration::from_secs(60);
@@ -62,7 +65,11 @@ fn write_secret(path: &Path, contents: &[u8]) -> std::io::Result<()> {
 
 /// The same write with the file mode the caller names: the certificate chain
 /// is public and keeps `0644`, the key keeps `0600`.
-fn write_atomic(path: &Path, contents: &[u8], mode: u32) -> std::io::Result<()> {
+pub(in crate::acme) fn write_atomic(
+	path: &Path,
+	contents: &[u8],
+	mode: u32,
+) -> std::io::Result<()> {
 	#[cfg(unix)]
 	{
 		use std::io::Write;
@@ -273,6 +280,10 @@ async fn retry_tlsa(issuer: &AcmeIssuer) {
 /// Renewal loop: wakes every minute and either serves an operator's request or
 /// issues when the certificate is inside its renewal window. Errors are logged
 /// and retried after a back-off; a CA outage never crashes serving.
+///
+/// Challenges an earlier run left published are withdrawn before the first
+/// order. Once `stop` is requested the order in flight is dropped and every
+/// challenge still published is withdrawn before the loop returns.
 #[allow(clippy::too_many_arguments)]
 pub async fn run(
 	directory_url: String,
@@ -283,32 +294,44 @@ pub async fn run(
 	reloadable: ReloadableAcceptor,
 	renew_before_days: u64,
 	tlsa: Option<TlsaPublisher>,
+	mut stop: StopSignal,
 ) {
 	let issuer = AcmeIssuer {
 		directory_url,
 		contacts,
 		domains,
-		responder,
+		responder: responder.clone(),
 		data_dir: data_dir.clone(),
 		reloadable,
 		tlsa,
 	};
-	let mut backoff = Backoff::default();
-	loop {
-		retry_tlsa(&issuer).await;
-		if let Outcome::Failed(error) = cycle(
-			&issuer,
-			&data_dir,
-			renew_before_days,
-			now_secs(),
-			&mut backoff,
-		)
-		.await
-		{
-			tracing::warn!(%error, "ACME renewal failed; will retry");
+	let renewing = async {
+		responder.withdraw_pending().await;
+		let mut backoff = Backoff::default();
+		loop {
+			retry_tlsa(&issuer).await;
+			if let Outcome::Failed(error) = cycle(
+				&issuer,
+				&data_dir,
+				renew_before_days,
+				now_secs(),
+				&mut backoff,
+			)
+			.await
+			{
+				tracing::warn!(%error, "ACME renewal failed; will retry");
+			}
+			tokio::time::sleep(CHECK_INTERVAL).await;
 		}
-		tokio::time::sleep(CHECK_INTERVAL).await;
+	};
+	tokio::select! {
+		_ = renewing => {}
+		() = stop.requested() => {}
 	}
+	// The order in flight went with the loop above. What it had published
+	// is withdrawn here, where `serve` waits for it, rather than on the
+	// detached task its guard spawns, which a stopping runtime never runs.
+	responder.withdraw_pending().await;
 }
 
 #[cfg(test)]

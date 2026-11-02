@@ -5,6 +5,7 @@ pub(super) mod expiry;
 pub(super) mod install;
 pub(super) mod placeholder;
 pub(super) mod request;
+pub(super) mod stop;
 pub(super) mod usability;
 
 /// The issuer the test certificates are signed by. A leaf has to be
