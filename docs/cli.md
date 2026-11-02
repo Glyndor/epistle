@@ -1647,7 +1647,7 @@ Only `epistle init` turns one into the other: it derives the name from the addre
 
 | Command | What it does |
 |---|---|
-| `epistle account list [--json]` | List every account, static and dynamic, with its addresses. |
+| `epistle account list [--aliases] [--json]` | List every account, static and dynamic, with its addresses. `--aliases` also shows, under each account, the address aliases that deliver to it (see below). |
 | `epistle account add N --address a@b [--address …] [--display-name TEXT]` | Create a dynamic account. On a terminal the password is asked twice with echo off; piped, it is read from stdin (one line). |
 | `epistle account set-name N TEXT` | Set the person's name used as sender name (JMAP identity, `/api/v1/send` From), kept as written; `""` clears it. |
 | `epistle account remove N --queue discard\|drain [--yes\|-y]` | Remove the account and everything it owns: mailbox, masked addresses, app passwords, per-account suppression, queued mail (`discard` drops it, `drain` leaves it for delivery). Prints the counts removed. Asks first. |
@@ -1673,6 +1673,18 @@ Only `epistle init` turns one into the other: it derives the name from the addre
 | `epistle api-key create LABEL --scope S [--scope …] [--domain D] [--account N] [--expires-at WHEN \| --expires-in 90d] [--ip-cidr CIDR] [--class CLASS]` | Create a key; prints it once. `--ip-cidr` is an allowlist of one CIDR for the client address. `--class` (`transactional`, `marketing` or `personal`) is the [mail class](evidence.md) `/api/v1/send` grants to mail the request gives none. `WHEN` is an epoch, a date, an RFC 3339 instant or a duration; no key expires unless one is given, and `status` warns about the ones that do not (see [Expiry is opt-in](api.md#expiry-is-opt-in)). Scopes: `read`, `write`, `send`, `scim`. `--domain` confines it to domains. `--account` binds it to one account (static or dynamic): it then reaches only JMAP and `/api/v1/send`, cannot hold `scim`, and takes no `--domain`. |
 | `epistle api-key revoke LABEL [--yes\|-y]` | Revoke a key. Asks first. |
 | `epistle api-key rotate LABEL` | New secret, same scopes; prints it once. |
+
+`account list --aliases` hangs under each account the `[[alias]]` entries (the
+ones `epistle alias list` shows) that have one of the account's addresses as a
+member, as `  alias team@example.org`. An alias with members in several accounts
+appears under each of them, and a disabled one is kept and marked `(disabled)`.
+Members that are not an address of a local account get no row of their own;
+when an alias has no local account among its members at all, the list ends with
+`N aliases deliver to no local account; see them with `epistle alias list``
+instead of dropping them silently. Domain aliases (`domain alias`) are not
+mixed in. With `--json`, each account gains an `aliases` array of
+`{"address", "enabled", "hidden"}` objects (the keys of `alias show --json`);
+without the flag the output, text or JSON, is exactly what it was.
 
 ## Mail in and out
 

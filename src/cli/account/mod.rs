@@ -28,6 +28,7 @@ mod args;
 mod class;
 mod forward_catch_all;
 pub(super) mod json;
+pub(super) mod list_aliases;
 pub(super) mod name;
 pub(super) mod reload;
 mod two_factor;
@@ -62,6 +63,12 @@ pub enum Subcommand {
 		/// Print a JSON array of `{"name", "source", "addresses"}` objects.
 		#[arg(long)]
 		json: bool,
+		/// Show under each account the address aliases that deliver to it.
+		///
+		/// A disabled alias is marked, not hidden. With `--json` each account
+		/// gains an `aliases` array of `{"address", "enabled", "hidden"}`.
+		#[arg(long)]
+		aliases: bool,
 	},
 	/// Create a dynamic account.
 	///
@@ -396,7 +403,10 @@ pub(super) fn run(
 	// reader, while `remove` decides the queue policy before it touches
 	// anything.
 	match subcommand {
-		Subcommand::List { json: leaf } => {
+		Subcommand::List {
+			json: leaf,
+			aliases,
+		} => {
 			let config = match Config::load(config_path) {
 				Ok(config) => config,
 				Err(error) => {
@@ -405,9 +415,9 @@ pub(super) fn run(
 				}
 			};
 			if leaf || json {
-				return crate::cli::account::json::list(&config, out);
+				return crate::cli::account::json::list(&config, aliases, out);
 			}
-			super::accounts::list(&config, out)
+			super::accounts::list_with(&config, aliases, out)
 		}
 		Subcommand::Add {
 			name,

@@ -63,7 +63,13 @@ fn run(config: &tempfile::NamedTempFile, action: Subcommand) -> Value {
 fn account_list_json_is_an_array_sorted_by_name() {
 	let (_dir, config) = setup();
 	assert_eq!(
-		run(&config, Subcommand::List { json: true }),
+		run(
+			&config,
+			Subcommand::List {
+				json: true,
+				aliases: false
+			}
+		),
 		json!([
 			{ "name": "bob", "source": "dynamic", "display_name": null, "addresses": ["bob@example.org"] },
 			{ "name": "postmaster", "source": "static", "display_name": null, "addresses": ["postmaster@example.org"] },

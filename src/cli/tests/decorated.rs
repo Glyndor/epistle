@@ -62,6 +62,24 @@ fn account_list_shows_each_account_enabled_with_its_source() {
 }
 
 #[test]
+fn account_list_with_aliases_puts_them_under_the_account_inside_the_width() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let config = config(dir.path(), ALIASES);
+	let lines = on_terminal(40, |out| {
+		assert_eq!(
+			crate::cli::accounts::list_with(&config, true, out),
+			ExitCode::SUCCESS
+		);
+	});
+	assert_fits(&lines, 40);
+	assert!(visible(&lines[0]).starts_with("NAME"), "{lines:#?}");
+	assert!(visible(&lines[1]).starts_with("alice"), "{lines:#?}");
+	assert!(visible(&lines[2]).contains('…'), "{lines:#?}");
+	assert_eq!(visible(&lines[3]), "  alias team@example.org", "{lines:#?}");
+	assert_eq!(lines.last().map(String::as_str), Some("1 accounts"));
+}
+
+#[test]
 fn alias_list_keeps_the_state_column_aligned_when_the_terminal_is_narrow() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let config = config(dir.path(), ALIASES);
