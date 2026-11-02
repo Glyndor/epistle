@@ -44,15 +44,26 @@ pub(super) fn in_zone(name: &str, zone: &str) -> bool {
 	crate::dkim::Rotator::is_in_zone(name, zone)
 }
 
-/// Upsert `records` into `zone`. Every record is tried; the failures come
+/// The zone whose provider writes `name`: the `[dns]` entry that serves it,
+/// when it is a real provider and the name lies inside its zone. `None` means
+/// the record is the operator's to publish by hand.
+pub(super) fn zone_of(config: &crate::config::Config, name: &str) -> Option<String> {
+	config
+		.dns
+		.entry_for(name)
+		.filter(|dns| !dns.provider.eq_ignore_ascii_case("manual"))
+		.filter(|dns| in_zone(name, &dns.zone))
+		.map(|dns| dns.zone.clone())
+}
+
+/// Upsert each record into its zone. Every record is tried; the failures come
 /// back named, so the operator sees all of them at once.
 pub(super) async fn publish(
 	provider: &dyn DnsProvider,
-	zone: &str,
-	records: &[Record],
+	records: &[(String, Record)],
 ) -> Vec<String> {
 	let mut failed = Vec::new();
-	for record in records {
+	for (zone, record) in records {
 		let txt = DnsRecord {
 			name: record.name.clone(),
 			kind: RecordKind::Txt,

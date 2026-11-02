@@ -102,6 +102,12 @@ impl DnsProvider for ZoneRouter {
 		}
 		self.route(zone).delete(zone, record)
 	}
+	fn delete_exact(&self, zone: &str, record: DnsRecord) -> Op<'_> {
+		if !self.agrees(zone, &record.name) {
+			return Box::pin(async { Err(ProviderError::Unsupported) });
+		}
+		self.route(zone).delete_exact(zone, record)
+	}
 	fn list(&self, zone: &str) -> ListOp<'_> {
 		self.route(zone).list(zone)
 	}

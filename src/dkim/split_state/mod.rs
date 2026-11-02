@@ -71,8 +71,13 @@ fn write(data_dir: &Path, all: &BTreeMap<String, Moved>) -> Result<(), String> {
 }
 
 /// Record that `domain`'s entry was written at `now`, with the shared key's
-/// selectors it leaves behind. A domain recorded before keeps what it had and
-/// gains the selectors that are new.
+/// selectors it leaves behind.
+///
+/// A domain whose earlier write was never confirmed by a restart keeps that
+/// write's time: this is the retry of an interrupted run. A domain that was
+/// already restarted onto an earlier key is a new move: its time is `now` and
+/// its restart is cleared, so the confirmation of the old key can never pass
+/// for the new one. The shared key's selectors from every write are kept.
 pub fn record_written(
 	data_dir: &Path,
 	domain: &str,
@@ -85,6 +90,10 @@ pub fn record_written(
 		restarted: None,
 		stale: Vec::new(),
 	});
+	if moved.restarted.is_some() {
+		moved.written = now;
+		moved.restarted = None;
+	}
 	for add in stale {
 		match moved.stale.iter_mut().find(|s| s.selector == add.selector) {
 			Some(known) => {
@@ -100,22 +109,30 @@ pub fn record_written(
 	write(data_dir, &all)
 }
 
-/// The domains written and not yet restarted onto.
-pub fn pending(data_dir: &Path) -> Result<Vec<String>, String> {
+/// The domains written and not yet restarted onto. Only domains `hosted`
+/// accepts count (those that have a `[[dkim.domain]]` entry in the loaded
+/// configuration): a record of a move whose entry never reached the file is
+/// not a restart to wait for.
+pub fn pending(data_dir: &Path, hosted: impl Fn(&str) -> bool) -> Result<Vec<String>, String> {
 	Ok(read(data_dir)?
 		.into_iter()
-		.filter(|(_, moved)| moved.restarted.is_none())
+		.filter(|(domain, moved)| moved.restarted.is_none() && hosted(domain))
 		.map(|(domain, _)| domain)
 		.collect())
 }
 
-/// Record that the server was restarted onto every pending domain's key at
-/// `now`; returns the domains it settled.
-pub fn mark_restarted(data_dir: &Path, now: u64) -> Result<Vec<String>, String> {
+/// Record that the server was restarted onto the key of every pending domain
+/// `hosted` accepts, at `now`; returns the domains it settled. A record with
+/// no entry behind it is never sealed as restarted.
+pub fn mark_restarted(
+	data_dir: &Path,
+	now: u64,
+	hosted: impl Fn(&str) -> bool,
+) -> Result<Vec<String>, String> {
 	let mut all = read(data_dir)?;
 	let mut settled = Vec::new();
 	for (domain, moved) in &mut all {
-		if moved.restarted.is_none() {
+		if moved.restarted.is_none() && hosted(domain) {
 			moved.restarted = Some(now);
 			settled.push(domain.clone());
 		}
