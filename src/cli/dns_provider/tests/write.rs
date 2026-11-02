@@ -126,6 +126,48 @@ fn a_token_file_is_mounted_into_the_mail_container() {
 	);
 }
 
+/// With the certificates container the credential is mounted in `certs`,
+/// which is recreated, and `mail` is left without it.
+#[test]
+fn with_the_certificates_container_the_token_goes_to_certs_only() {
+	let (_dir, path, compose) = stack();
+	let mut document: serde_json::Value =
+		serde_json::from_str(&std::fs::read_to_string(&compose).unwrap()).unwrap();
+	document["services"]["certs"] =
+		serde_json::json!({"environment": {"TZ": "UTC"}, "volumes": []});
+	std::fs::write(&compose, document.to_string()).unwrap();
+	let (mut out, mut status) = (Vec::new(), Vec::new());
+	let mut reached = None;
+	let result = execute_with(
+		&path,
+		action(&["--token-file", TOKEN]),
+		false,
+		false,
+		&mut out,
+		&mut status,
+		|_, action| {
+			reached = Some(action);
+			ExitCode::SUCCESS
+		},
+	);
+	assert_eq!(result.unwrap(), ExitCode::SUCCESS);
+	assert!(!mounted(&compose, TOKEN), "mail must not get the token");
+	let after: serde_json::Value =
+		serde_json::from_str(&std::fs::read_to_string(&compose).unwrap()).unwrap();
+	assert!(
+		after["services"]["certs"]["volumes"]
+			.as_array()
+			.unwrap()
+			.iter()
+			.any(|mount| mount["source"] == TOKEN && mount["read_only"] == true),
+		"{after}"
+	);
+	assert!(
+		matches!(&reached, Some(StackAction::Recreate { service }) if service == "certs"),
+		"{reached:?}"
+	);
+}
+
 /// The preview has to show the compose change: a dry run that prints nothing
 /// hides the change the command is about to make.
 #[test]

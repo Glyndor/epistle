@@ -1,5 +1,6 @@
 //! The generated compose file, with the DNS credential the configuration
-//! names reachable inside the `mail` container.
+//! names reachable inside the container that writes the zone: `certs` when
+//! the stack runs the certificates container, `mail` otherwise.
 //!
 //! A host path is not visible inside the container unless the generated
 //! compose file mounts it, and the generated compose file is the only place
@@ -15,6 +16,15 @@ use std::path::Path;
 
 use crate::cli::config_edit::Companion;
 use crate::config::Config;
+
+/// The service of the generated stack that holds the DNS credential.
+pub(crate) fn credential_service(document: &serde_json::Value) -> &'static str {
+	if document["services"].get("certs").is_some() {
+		"certs"
+	} else {
+		"mail"
+	}
+}
 
 /// Where the container reads the provider token from.
 #[derive(Debug, Clone, Copy)]
@@ -80,11 +90,14 @@ pub(super) fn with_token(
 		})
 		.collect();
 	let dropped = dropped.as_slice();
+	// With the certificates container the credential goes there, and never
+	// to `mail`, whose mounts this leaves alone.
+	let service = credential_service(&document);
 	let mail = document
 		.get_mut("services")
-		.and_then(|services| services.get_mut("mail"))
+		.and_then(|services| services.get_mut(service))
 		.and_then(serde_json::Value::as_object_mut)
-		.ok_or("compose.yaml has no mail service")?;
+		.ok_or_else(|| format!("compose.yaml has no {service} service"))?;
 	// What the container reads now, before the change: the variable the
 	// compose file forwards and the mount it carries.
 	let forwarded = forwarded(mail, dropped);
