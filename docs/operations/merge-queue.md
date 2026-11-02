@@ -35,9 +35,14 @@ request body count, as the squash commit message is built from it.
 In the `protect-develop` ruleset, add the "Require merge queue" rule with:
 
 - merge method: squash;
-- group size: build 1 and merge at most 1 (the checks are slow and the
-  repository is small, so batching buys little and a failure would drop the
-  whole group);
+- build concurrency 5, minimum group size 1, maximum group size 5, and a
+  wait of 5 minutes to meet the minimum (these are the values set in the
+  ruleset): up to five entries are built at the same time, each on top of the
+  ones ahead of it, so the queue does not add the time of every entry in
+  sequence; an entry that fails is removed and the ones behind it are built
+  again, which costs them another run;
+- require all queue entries to pass the required checks, with a status check
+  timeout of 180 minutes;
 - keep the seven required checks above as they are.
 
 Do not add `merge_group` to any other workflow, `release.yml` in particular.
