@@ -17,6 +17,8 @@
 //!   carries a string only the neighbour's mail holds, unless the client
 //!   typed it itself.
 
+#[path = "../../shared/accounts.rs"]
+mod accounts;
 mod client;
 mod fixture;
 mod reply;
@@ -24,9 +26,10 @@ mod reply;
 use libfuzzer_sys::arbitrary::Unstructured;
 use libfuzzer_sys::fuzz_target;
 
+use accounts::{Account, which};
 use client::{Kind, Step};
 use epistle::imap::session::{Output, Session};
-use fixture::{Account, DataDir, Picture};
+use fixture::{DataDir, Picture};
 
 const MAX_STEPS: usize = 120;
 /// APPENDLIMIT for the run: a literal the client announces is read from the
@@ -43,14 +46,6 @@ struct Model {
 	sasl_user: Option<String>,
 	/// The data directory before sign-in, which nothing may change.
 	before: Picture,
-}
-
-fn which(accounts: &[Account], login: &(String, String)) -> Option<usize> {
-	let (name, pass) = login;
-	accounts.iter().position(|a| {
-		let address = format!("{}@{}", a.name, fixture::DOMAIN);
-		(name == a.name || name.eq_ignore_ascii_case(&address)) && *pass == a.secret
-	})
 }
 
 fn contains(haystack: &[u8], needle: &str) -> bool {
@@ -154,8 +149,8 @@ fn check_signed_in(output: &Output, me: usize, accounts: &[Account], model: &Mod
 
 fn run(data: &[u8]) {
 	let mut u = Unstructured::new(data);
-	let accounts = fixture::accounts();
-	let directory = fixture::directory(&accounts);
+	let accounts = accounts::accounts();
+	let directory = accounts::directory(&accounts);
 	let dir = DataDir::new();
 	fixture::seed(&mut u, &dir.0, &accounts);
 	let quota = match u.int_in_range(0..=3).unwrap_or(0) {

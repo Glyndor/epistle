@@ -4,7 +4,7 @@
 
 use libfuzzer_sys::arbitrary::Unstructured;
 
-use crate::fixture::{Account, DOMAIN};
+use crate::accounts::{Account, DOMAIN, base64, hex};
 
 /// Where a command may run, as far as the checks care.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -36,25 +36,6 @@ fn text(u: &mut Unstructured, max: usize) -> String {
 	String::from_utf8_lossy(u.bytes(len).unwrap_or(&[])).replace(['\r', '\n'], " ")
 }
 
-pub fn base64(input: &[u8]) -> String {
-	const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-	let mut out = String::new();
-	for chunk in input.chunks(3) {
-		let n = chunk
-			.iter()
-			.enumerate()
-			.fold(0u32, |acc, (i, b)| acc | (u32::from(*b) << (16 - 8 * i)));
-		for i in 0..4 {
-			if i <= chunk.len() {
-				out.push(TABLE[((n >> (18 - 6 * i)) & 63) as usize] as char);
-			} else {
-				out.push('=');
-			}
-		}
-	}
-	out
-}
-
 fn pick<'a>(u: &mut Unstructured, from: &[&'a str]) -> &'a str {
 	from[u.choose_index(from.len()).unwrap_or(0)]
 }
@@ -75,7 +56,7 @@ pub fn secret(u: &mut Unstructured, accounts: &[Account]) -> String {
 		0 => accounts[0].secret.clone(),
 		1 => accounts[1].secret.clone(),
 		2 => text(u, 16),
-		_ => crate::fixture::hex(u, 8),
+		_ => hex(u, 8),
 	}
 }
 
