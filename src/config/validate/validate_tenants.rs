@@ -30,6 +30,12 @@ impl Config {
 					"[[tenant]] name \"{name}\" is declared more than once"
 				)));
 			}
+			if tenant.encryption_key_file.is_some() && tenant.name.is_none() {
+				return Err(ConfigError::Invalid(
+					"a [[tenant]] with encryption_key_file needs a name, which the key is known by"
+						.into(),
+				));
+			}
 			if let Some(max) = tenant.max_domains
 				&& (max as usize) < tenant.domains.len()
 			{

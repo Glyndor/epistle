@@ -67,6 +67,7 @@ fn unknown_domain_yields_no_tenant() {
 		max_accounts: Some(1),
 		max_domains: None,
 		submission_rate_limit_per_min: None,
+		encryption_key_file: None,
 	}];
 	let limits = TenantLimits::from_config(&tenants);
 	assert!(!limits.is_empty());
@@ -87,6 +88,7 @@ fn max_accounts_blocks_when_cap_reached() {
 		max_accounts: Some(1),
 		max_domains: None,
 		submission_rate_limit_per_min: None,
+		encryption_key_file: None,
 	}];
 	let limits = TenantLimits::from_config(&tenants);
 	let store = store_with(&["acme.example"], &[("alice", &["alice@acme.example"])]);
@@ -106,6 +108,7 @@ fn max_accounts_admits_when_under_cap() {
 		max_accounts: Some(2),
 		max_domains: None,
 		submission_rate_limit_per_min: None,
+		encryption_key_file: None,
 	}];
 	let limits = TenantLimits::from_config(&tenants);
 	let store = store_with(&["acme.example"], &[("alice", &["alice@acme.example"])]);
@@ -123,6 +126,7 @@ fn aggregate_quota_rejects_when_over_cap() {
 		max_accounts: None,
 		max_domains: None,
 		submission_rate_limit_per_min: None,
+		encryption_key_file: None,
 	}];
 	let limits = TenantLimits::from_config(&tenants);
 	let store = store_with(&["acme.example"], &[("alice", &["alice@acme.example"])]);
@@ -147,6 +151,7 @@ fn aggregate_rate_blocks_after_limit() {
 		max_accounts: None,
 		max_domains: None,
 		submission_rate_limit_per_min: Some(1),
+		encryption_key_file: None,
 	}];
 	let limits = TenantLimits::from_config(&tenants);
 	let addresses = vec!["alice@acme.example".to_string()];
@@ -169,6 +174,7 @@ fn aggregate_rate_charges_every_owning_tenant_or_none() {
 		max_accounts: None,
 		max_domains: None,
 		submission_rate_limit_per_min: Some(per_min),
+		encryption_key_file: None,
 	};
 	let limits = TenantLimits::from_config(&[tenant("a", 5), tenant("b", 1)]);
 	let both = vec!["x@a.example".to_string(), "x@b.example".to_string()];
@@ -195,6 +201,7 @@ fn straddling_account_counts_against_either_tenant() {
 			max_accounts: Some(0),
 			max_domains: None,
 			submission_rate_limit_per_min: None,
+			encryption_key_file: None,
 		},
 		Tenant {
 			name: Some("b".to_string()),
@@ -203,6 +210,7 @@ fn straddling_account_counts_against_either_tenant() {
 			max_accounts: None,
 			max_domains: None,
 			submission_rate_limit_per_min: None,
+			encryption_key_file: None,
 		},
 	];
 	let limits = TenantLimits::from_config(&tenants);

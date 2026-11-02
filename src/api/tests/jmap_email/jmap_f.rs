@@ -125,6 +125,7 @@ fn tenant_state(dir: &std::path::Path, per_min: u32) -> super::ApiState {
 			max_accounts: None,
 			max_domains: None,
 			submission_rate_limit_per_min: Some(per_min),
+			encryption_key_file: None,
 		},
 	]));
 	state = state.with_tenant_limits(Arc::clone(&limits));
@@ -277,6 +278,7 @@ async fn jmap_email_submission_refuses_when_smtp_already_charged() {
 		max_accounts: None,
 		max_domains: None,
 		submission_rate_limit_per_min: Some(1),
+		encryption_key_file: None,
 	}]));
 	let mut state = test_state(dir.path(), 0);
 	state = state.with_tenant_limits(Arc::clone(&limits));

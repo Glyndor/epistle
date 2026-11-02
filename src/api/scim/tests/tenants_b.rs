@@ -130,6 +130,7 @@ fn two_reachable_tenants() -> (tempfile::TempDir, ApiState, Arc<AccountStore>) {
 		max_accounts: cap,
 		max_domains: None,
 		submission_rate_limit_per_min: None,
+		encryption_key_file: None,
 	};
 	let limits = Arc::new(crate::api::TenantLimits::from_config(&[
 		tenant("a", "a.test", Some(2)),
