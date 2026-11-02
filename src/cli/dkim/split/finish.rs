@@ -25,10 +25,7 @@ use std::process::ExitCode;
 use super::{Options, Services, publish, switched};
 use crate::cli::json_out::Report;
 use crate::config::Config;
-use crate::dkim::stale::{self, Stale};
-
-/// A record of the shared key and the exact value that was read.
-type Shared = (Stale, String);
+use crate::dkim::stale::{self, Found};
 
 /// The public keys of a domain's own records, by name, as its entry names them.
 fn own_records(config: &Config, domain: &str) -> Result<Vec<(String, String)>, String> {
@@ -112,7 +109,7 @@ pub(super) async fn finish(
 			),
 		);
 	}
-	let present: Vec<Shared> = found.shared;
+	let present: Vec<Found> = found.shared;
 	let not_ours: Vec<String> = found.not_ours.iter().map(|(r, _)| r.name.clone()).collect();
 	if present.is_empty() {
 		report.line(
@@ -124,7 +121,7 @@ pub(super) async fn finish(
 		}));
 	}
 	// The domain's own record must resolve with its own key before the old one goes.
-	let mut domains: Vec<&str> = present.iter().map(|(r, _)| r.domain.as_str()).collect();
+	let mut domains: Vec<&str> = present.iter().map(|f| f.stale.domain.as_str()).collect();
 	domains.dedup();
 	let mut problems = Vec::new();
 	for domain in domains {
@@ -153,7 +150,8 @@ pub(super) async fn finish(
 	};
 	let overlap = crate::dkim::ROTATE_OVERLAP_DAYS * 86_400;
 	let mut held = Vec::new();
-	for (record, _) in &present {
+	for found in &present {
+		let record = &found.stale;
 		match moments.get(&record.domain) {
 			None => held.push(format!(
 				"{}: no switch time recorded for {}",
@@ -167,10 +165,10 @@ pub(super) async fn finish(
 			Some(_) => {}
 		}
 	}
-	let names: Vec<String> = present.iter().map(|(r, _)| r.name.clone()).collect();
+	let names: Vec<String> = present.iter().map(|f| f.stale.name.clone()).collect();
 	if options.dry_run {
-		for (record, _) in &present {
-			report.line(format_args!("would retire {}", record.name));
+		for found in &present {
+			report.line(format_args!("would retire {}", found.stale.name));
 		}
 		for line in &held {
 			report.line(format_args!("held: {line}"));
@@ -198,38 +196,135 @@ pub(super) async fn finish(
 			),
 		);
 	}
+	retire(config, services, &present, (&mut report, err), not_ours).await
+}
+
+/// The TXT record a provider is asked to remove.
+fn txt(name: &str, value: &str) -> crate::dns::provider::DnsRecord {
+	crate::dns::provider::DnsRecord {
+		name: name.to_string(),
+		kind: crate::dns::provider::RecordKind::Txt,
+		value: value.to_string(),
+		ttl: 300,
+		proxied: None,
+	}
+}
+
+/// Remove the shared key's values, one by one and by exact value, wherever the
+/// provider can do that; list the rest for removal by hand. Then look again:
+/// the shared key must be gone from every name that was handled, and every
+/// record that is not ours must still be there.
+async fn retire(
+	config: &Config,
+	services: &Services<'_>,
+	present: &[Found],
+	(report, err): (&mut Report<'_>, &mut impl Write),
+	not_ours: Vec<String>,
+) -> ExitCode {
 	let zone = config.dns.as_ref().map(|dns| dns.zone.clone());
-	let (automatic, manual): (Vec<&Shared>, Vec<&Shared>) =
-		present.iter().partition(|(record, _)| {
-			services.provider.is_some()
-				&& zone
-					.as_deref()
-					.is_some_and(|zone| publish::in_zone(&record.name, zone))
-		});
-	if let (Some(provider), Some(zone)) = (&services.provider, &zone) {
-		let targets: Vec<(String, String)> = automatic
-			.iter()
-			.map(|(record, value)| (record.name.clone(), value.clone()))
-			.collect();
-		let failed = publish::retire(provider.as_ref(), zone, &targets).await;
-		if !failed.is_empty() {
-			for line in &failed {
-				crate::cli::style::error_to(err, format_args!("cannot remove {line}"));
+	let mut manual: Vec<(String, String)> = Vec::new();
+	let mut handled: Vec<&Found> = Vec::new();
+	let mut failures = Vec::new();
+	for found in present {
+		let name = &found.stale.name;
+		let provider = services
+			.provider
+			.as_ref()
+			.zip(zone.as_deref())
+			.filter(|(_, zone)| publish::in_zone(name, zone));
+		let Some((provider, zone)) = provider else {
+			manual.extend(found.shared.iter().map(|v| (name.clone(), v.clone())));
+			continue;
+		};
+		let mut all = true;
+		for value in &found.shared {
+			match provider.delete_exact(zone, txt(name, value)).await {
+				Ok(()) => {}
+				Err(crate::dns::provider::ProviderError::Unsupported) => {
+					all = false;
+					manual.push((name.clone(), value.clone()));
+				}
+				Err(error) => {
+					all = false;
+					failures.push(format!("{name}: {error}"));
+				}
 			}
-			return ExitCode::FAILURE;
+		}
+		if all {
+			handled.push(found);
 		}
 	}
-	for (record, _) in &automatic {
-		report.line(format_args!("retired TXT {}", record.name));
+	if !failures.is_empty() {
+		for line in &failures {
+			crate::cli::style::error_to(err, format_args!("cannot remove {line}"));
+		}
+		return ExitCode::FAILURE;
 	}
-	for (record, _) in &manual {
-		report.line(format_args!("remove by hand: {}", record.name));
+	if let Err(why) = verify(services, &handled).await {
+		crate::cli::style::error_to(err, format_args!("dkim split --finish failed: {why}"));
+		return ExitCode::FAILURE;
+	}
+	for found in &handled {
+		report.line(format_args!("retired TXT {}", found.stale.name));
+	}
+	for (name, value) in &manual {
+		report.line(format_args!("remove by hand: {name} {value}"));
 	}
 	report.object(serde_json::json!({
 		"result": "retired",
 		"action": "split-finish",
-		"retired": automatic.iter().map(|(r, _)| r.name.clone()).collect::<Vec<_>>(),
-		"manual": manual.iter().map(|(r, _)| r.name.clone()).collect::<Vec<_>>(),
+		"retired": handled.iter().map(|f| f.stale.name.clone()).collect::<Vec<_>>(),
+		"manual": manual.iter().map(|(name, _)| name.clone()).collect::<Vec<_>>(),
 		"not_ours": not_ours,
 	}))
+}
+
+/// After a removal: the shared key's `p=` is gone from every name in `handled`
+/// (the resolver is asked again after each wait), and every value that was
+/// not ours is still there.
+async fn verify(services: &Services<'_>, handled: &[&Found]) -> Result<(), String> {
+	let mut waits = services.waits.iter();
+	loop {
+		let candidates = handled.iter().map(|f| f.stale.clone()).collect();
+		let after = stale::survey(services.resolver, candidates).await;
+		let pending: Vec<&str> = after
+			.shared
+			.iter()
+			.map(|f| f.stale.name.as_str())
+			.chain(after.unknown.iter().map(|(r, _)| r.name.as_str()))
+			.collect();
+		if pending.is_empty() {
+			break;
+		}
+		match waits.next() {
+			Some(wait) => tokio::time::sleep(*wait).await,
+			None => {
+				return Err(format!(
+					"the shared key is still visible, or could not be read, at {} after the removal",
+					pending.join(", ")
+				));
+			}
+		}
+	}
+	for found in handled {
+		let now = services
+			.resolver
+			.txt(&found.stale.name)
+			.await
+			.map_err(|_| {
+				format!(
+					"the lookup of {} failed after the removal",
+					found.stale.name
+				)
+			})?;
+		for other in &found.others {
+			if !now.contains(other) {
+				return Err(format!(
+					"a record that is not ours at {} is gone after the removal",
+					found.stale.name
+				));
+			}
+		}
+	}
+	Ok(())
 }

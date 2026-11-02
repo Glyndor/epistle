@@ -225,6 +225,14 @@ impl DnsProvider for DesecProvider {
 			self.put_rrset(&record, content).await
 		}))
 	}
+	/// Strict by value: this provider's delete removes a value-bearing TXT
+	/// only when [`same_txt_value`](crate::dns::txt::same_txt_value) matches.
+	fn delete_exact(&self, _zone: &str, record: DnsRecord) -> Op<'_> {
+		if record.kind != RecordKind::Txt || record.value.is_empty() {
+			return Box::pin(async { Err(ProviderError::Unsupported) });
+		}
+		self.delete(_zone, record)
+	}
 	fn delete(&self, _zone: &str, record: DnsRecord) -> Op<'_> {
 		let record_value = record.value.clone();
 		Box::pin(crate::dns::providers::within(async move {

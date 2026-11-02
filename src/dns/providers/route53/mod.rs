@@ -418,6 +418,14 @@ impl DnsProvider for Route53Provider {
 			self.change("UPSERT", &record).await
 		}))
 	}
+	/// Strict by value: this provider's delete removes a value-bearing TXT
+	/// only when [`same_txt_value`](crate::dns::txt::same_txt_value) matches.
+	fn delete_exact(&self, _zone: &str, record: DnsRecord) -> Op<'_> {
+		if record.kind != RecordKind::Txt || record.value.is_empty() {
+			return Box::pin(async { Err(ProviderError::Unsupported) });
+		}
+		self.delete(_zone, record)
+	}
 	fn delete(&self, _zone: &str, record: DnsRecord) -> Op<'_> {
 		Box::pin(crate::dns::providers::within(async move {
 			// The TXT matching rule from `src/dns/provider/mod.rs` is

@@ -67,29 +67,6 @@ pub(super) async fn publish(
 	failed
 }
 
-/// Delete the TXT records `(name, exact value)` from `zone`. Every one is
-/// tried; the failures come back named.
-pub(super) async fn retire(
-	provider: &dyn DnsProvider,
-	zone: &str,
-	records: &[(String, String)],
-) -> Vec<String> {
-	let mut failed = Vec::new();
-	for (name, value) in records {
-		let txt = DnsRecord {
-			name: name.clone(),
-			kind: RecordKind::Txt,
-			value: value.clone(),
-			ttl: 300,
-			proxied: None,
-		};
-		if let Err(error) = provider.delete(zone, txt).await {
-			failed.push(format!("{name}: {error}"));
-		}
-	}
-	failed
-}
-
 /// The `p=` tag of a DKIM record, whitespace removed.
 fn key_of(record: &str) -> Option<String> {
 	record.split(';').find_map(|tag| {
