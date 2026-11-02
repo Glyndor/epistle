@@ -319,6 +319,62 @@ provider fails — a timeout, a refused token, a reply that does not parse
 — the search stops and the record is not written anywhere: publishing it
 in the parent zone would put it in a zone the operator did not ask for.
 
+### Publishing the record set
+
+`epistle dns publish [<domain>] [--yes] [--json] [--undo]` (and the `dns`
+flag `--dry-run`) publishes the records `epistle dns-records` prints. Both
+read the same set, computed once from the configuration. The command reads
+every zone through the `[dns]` provider, prints the plan (`--json` prints the
+same plan as JSON), asks, and writes. Without a domain it covers every domain
+in `domains`.
+
+Each record of the plan has one action:
+
+| Action | Meaning |
+|---|---|
+| `create` | The record is missing and is written. |
+| `update` | epistle published the record with another value and rewrites it. |
+| `remove` | epistle published the record and the configuration no longer needs it, for example the SRV locator of a service you turned off. |
+| `present` | epistle published the record and it is there as needed. |
+| `adopted` | The record is there as needed and somebody else wrote it. It is left alone and not claimed. |
+| `kept` | The DMARC record in place is at least as strict as the one epistle needs, or `dns lockdown` is moving it. |
+| `conflict` | A record epistle did not write is in the way. Nothing is written; fix it by hand. |
+| `gone` | A record epistle published is no longer in the zone; the ledger forgets it. |
+| `skipped` | The name is delegated, is not a valid DNS name, or is a DKIM key, which the key rotation retires. |
+
+What epistle wrote is kept in a ledger, one file per zone under
+`<data_dir>/dns-publish/<zone>.json`: the name, type, value, the release that
+wrote it and when. Own versus foreign comes from the ledger alone, never from
+the record description or the Cloudflare tags, which are labels. The TLSA
+values the certificate refresh published count as epistle's own too. So:
+
+- A record somebody else wrote is never replaced or removed. Every provider
+  replaces the whole set of an MX, SRV, CAA, TLSA, A, AAAA or CNAME on a write,
+  so a set that holds a foreign value is a conflict, and so is a second SPF or
+  DMARC record at a name.
+- A DMARC record is never replaced by a weaker one: `p=`, `sp=`, `np=` and
+  the `adkim=s` / `aspf=s` alignment are compared tag by tag.
+- A record that differs only in TTL or description is not rewritten.
+- Names below a delegation (NS records under the zone apex) are left alone,
+  as `dns lockdown` does.
+- A provider that cannot list a zone (`route53`, `rfc2136`) stops the command
+  before it writes anything. A zone whose `[[dns]]` entry is `manual` is
+  listed under "By hand".
+
+Every record enters the ledger before it is written, so a write whose answer
+was lost is still known as epistle's own. The first write that fails stops
+the run; running the command again picks up where it stopped. A second run
+with nothing to do prints `nothing to change`.
+
+`--undo` withdraws what the ledgers list: a record still in the zone exactly
+as written and alone in its place is removed, and anything changed by hand
+since, shared with a foreign record or delegated is reported and left. DKIM
+keys are left too, since they may still sign mail; `epistle dkim cleanup`
+retires keys.
+
+The command takes a lock in `<data_dir>/dns-publish/`, so two runs never
+write at the same time.
+
 ### Checking provider credentials
 
 Run `epistle dns provider check [--json]` to inspect the configured credential

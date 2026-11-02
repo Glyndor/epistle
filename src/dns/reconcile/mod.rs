@@ -34,9 +34,13 @@ use crate::dns::names::{canonical_name, in_domain, is_valid_name};
 use crate::dns::provider::{DnsRecord, RecordKind, txt_purpose};
 use crate::dns::rrset::{Cuts, same_record};
 
+pub mod apply;
 mod dmarc;
 mod ledger;
 mod slot;
+pub mod store;
+pub mod survey;
+pub mod undo;
 
 pub use ledger::{Ledger, LedgerEntry};
 use slot::{Owners, is_dkim, same_slot, slot_of, values, whole_set};

@@ -656,6 +656,24 @@ other nameservers (NS records) are left alone. It asks first; `--yes`
 skips the question. `--undo` removes what earlier runs published. See
 [`docs/dns.md`](dns.md#locking-the-zone-against-spoofing).
 
+## DNS publish (`epistle dns publish`)
+
+```sh
+epistle dns publish [<domain>] [--dry-run] [--yes] [--json]
+epistle dns publish [<domain>] --undo [--dry-run] [--yes] [--json]
+```
+
+Publishes the records `epistle dns-records` prints through the `[dns]`
+provider: it reads every zone, prints the plan (create, update, remove,
+present, adopted, kept, conflict, gone, skipped), asks, and writes. A record
+somebody else wrote is never replaced or removed, a DMARC record is never
+replaced by a weaker one, delegated names are left alone, and a provider that
+cannot list its zone stops the command before it writes anything. What it
+wrote goes into a ledger per zone under `<data_dir>/dns-publish/`, which is
+what `--undo` withdraws. Without a provider it refuses and points at
+`epistle dns-records`. See
+[`docs/dns.md`](dns.md#publishing-the-record-set).
+
 ## Blob storage (`epistle storage blobs`)
 
 ```sh
