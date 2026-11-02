@@ -116,13 +116,13 @@ async fn a_split_stack_reports_the_container_and_the_waiting_dkim_rotation() {
 		r#"[{"Service":"mail","State":"running"},{"Service":"certs","State":"exited"}]"#,
 	);
 	let report = evaluate(&ctx, &FakeDns::default()).await;
-	let certs = report
+	let container = report
 		.items
 		.iter()
 		.find(|item| item.name == "certs")
 		.expect("certs item");
-	assert_eq!(certs.status, Level::Warn, "{report:?}");
-	assert!(certs.detail.contains("40 days left"), "{}", certs.detail);
+	assert_eq!(container.status, Level::Warn);
+	assert!(container.detail.contains("40 days left"));
 	assert!(
 		report.items.iter().any(|item| item.name == "dkim rotation"),
 		"{report:?}"
