@@ -287,7 +287,19 @@ pub(super) fn run_with(
 	resolver: &dyn DnsLookup,
 	json: bool,
 ) -> (std::process::ExitCode, String, String, usize) {
-	drive(install, options, provider, resolver, json, true)
+	drive(install, options, provider, resolver, (json, true), 0)
+}
+
+/// [`run`] where the restart of the server fails with `code`.
+pub(super) fn run_failing_restart(
+	install: &Install,
+	options: &super::super::Options,
+	provider: Option<Provider>,
+	resolver: &dyn DnsLookup,
+	(json, code): (bool, u8),
+) -> (std::process::ExitCode, String, String, usize) {
+	let provider = provider.map(|p| Arc::new(p) as Arc<dyn DnsProvider>);
+	drive(install, options, provider, resolver, (json, true), code)
 }
 
 /// [`run_with`] without the lock of the data directory: what a run does once it
@@ -298,7 +310,7 @@ pub(super) fn run_holding_the_lock(
 	provider: Option<Arc<dyn DnsProvider>>,
 	resolver: &dyn DnsLookup,
 ) -> (std::process::ExitCode, String, String, usize) {
-	drive(install, options, provider, resolver, false, false)
+	drive(install, options, provider, resolver, (false, false), 0)
 }
 
 fn drive(
@@ -306,8 +318,8 @@ fn drive(
 	options: &super::super::Options,
 	provider: Option<Arc<dyn DnsProvider>>,
 	resolver: &dyn DnsLookup,
-	json: bool,
-	locked: bool,
+	(json, locked): (bool, bool),
+	restart_code: u8,
 ) -> (std::process::ExitCode, String, String, usize) {
 	let services = |provider| super::super::Services {
 		provider,
@@ -318,7 +330,7 @@ fn drive(
 	let restarts = std::cell::Cell::new(0usize);
 	let restart = |_: &crate::config::Config, _| {
 		restarts.set(restarts.get() + 1);
-		std::process::ExitCode::SUCCESS
+		std::process::ExitCode::from(restart_code)
 	};
 	let runtime = tokio::runtime::Builder::new_current_thread()
 		.enable_time()

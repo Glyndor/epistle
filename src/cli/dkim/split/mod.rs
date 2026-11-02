@@ -66,6 +66,9 @@ const LOCK_WAIT: Duration = if cfg!(test) {
 	Duration::from_secs(30)
 };
 
+/// How many times a run follows a `data_dir` that changed while it waited.
+const DATA_DIR_RETRIES: u32 = 3;
+
 /// The seconds between queries while waiting for the records.
 const POLL_SECONDS: u64 = 5;
 
@@ -113,27 +116,55 @@ pub(super) async fn run_locked<'a>(
 	restart: impl FnOnce(&Config, crate::cli::stack::StackAction) -> ExitCode,
 ) -> ExitCode {
 	// The lock is named by the data directory, so the configuration is read
-	// once to learn it and again, under the lock, to act on.
-	let data_dir = match Config::load(path) {
+	// once to learn it and again, under the lock, to act on. If a run that
+	// waited finds the directory changed, the lock it holds is the old one's:
+	// it is let go and the new directory's is taken, so the run is always
+	// under the lock of the directory it acts on.
+	let mut data_dir = match Config::load(path) {
 		Ok(config) => config.data_dir,
 		Err(error) => {
 			crate::cli::style::error_to(err, error);
 			return ExitCode::FAILURE;
 		}
 	};
-	let _held = match split_state::lock(&data_dir, LOCK_WAIT) {
-		Ok(held) => held,
-		Err(why) => {
-			crate::cli::style::error_to(err, format_args!("dkim split refused: {why}"));
+	let mut attempts = 0;
+	let (_held, config) = loop {
+		// A dry run only looks: it waits for a run that is changing things
+		// and never creates the lock file.
+		let held = if options.dry_run {
+			split_state::observe(&data_dir, LOCK_WAIT)
+		} else {
+			split_state::lock(&data_dir, LOCK_WAIT).map(Some)
+		};
+		let held = match held {
+			Ok(held) => held,
+			Err(why) => {
+				crate::cli::style::error_to(err, format_args!("dkim split refused: {why}"));
+				return ExitCode::FAILURE;
+			}
+		};
+		let config = match Config::load(path) {
+			Ok(config) => config,
+			Err(error) => {
+				crate::cli::style::error_to(err, error);
+				return ExitCode::FAILURE;
+			}
+		};
+		if config.data_dir == data_dir {
+			break (held, config);
+		}
+		attempts += 1;
+		if attempts >= DATA_DIR_RETRIES {
+			crate::cli::style::error_to(
+				err,
+				format_args!(
+					"dkim split refused: data_dir keeps changing in {}; run it again once it is settled",
+					path.display()
+				),
+			);
 			return ExitCode::FAILURE;
 		}
-	};
-	let config = match Config::load(path) {
-		Ok(config) => config,
-		Err(error) => {
-			crate::cli::style::error_to(err, error);
-			return ExitCode::FAILURE;
-		}
+		data_dir = config.data_dir;
 	};
 	let services = make_services(&config);
 	split(path, &config, options, &services, (json, out, err), restart).await
