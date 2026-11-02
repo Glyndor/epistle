@@ -82,6 +82,7 @@ Every change is validated before it is written, keeps the comments in
 | [Relay through a smarthost](#smarthost-relay-epistle-relay) | `epistle relay …` |
 | [DNS provider for DKIM and TLSA](#dns-provider-epistle-dns-provider) | `epistle dns provider …` |
 | [Webhook and alerts](#webhook-epistle-webhook) | `epistle webhook …`, `epistle alert …` |
+| [SRS secret of each domain](#srs-epistle-srs) | `epistle srs show\|split\|rotate` |
 | [Blob storage (filesystem or S3)](#blob-storage-epistle-storage-blobs) | `epistle storage blobs …` |
 | [Rotate DKIM, renew TLS, rotate an API key](#rotations-epistle-dkim-epistle-tls-epistle-api-key) | `epistle dkim rotate`, `epistle dkim cleanup`, `epistle tls renew`, `epistle api-key rotate` |
 | [Containers: up, logs, update](#stack-epistle-stack) | `epistle stack …` |
@@ -730,6 +731,22 @@ switches a rule off without removing it: it writes `enabled = false`, and after 
 restart the rule takes no samples and never fires. `enable` takes the key out again.
 Both say `unchanged` when the rule is already that way, and refuse an unknown name
 with exit 2. `list` marks a rule that is off, and every JSON row has `enabled`.
+
+## SRS (`epistle srs`)
+
+```sh
+epistle srs show [--json]
+epistle srs split [--dry-run]
+epistle srs rotate example.org [--dry-run]
+```
+
+Each hosted domain signs the sender of the mail it forwards with a secret of its own (`[[srs_domain]]`, see [configuration](configuration.md#srs_domain)), so an address made for one domain is not valid for another.
+
+- `show` lists every domain as `own` (it has an `[[srs_domain]]`), `shared` (it signs with `srs_secret`) or `none`. No secret is printed.
+- `split` writes a new secret for each hosted domain without one. `srs_secret` stays configured and keeps verifying the addresses made before the split; remove it after 14 days. `status` and `config-check` warn while two or more domains still share `srs_secret`.
+- `rotate DOMAIN` replaces that domain's secret and keeps the old one as `previous_secret`, which still verifies the addresses it signed; remove it after 14 days. Refused for a domain with no secret of its own.
+
+`domain add` and a first `init` write the new domain's secret; `domain remove` removes it.
 
 ## Domains (`epistle domain`)
 
@@ -1661,7 +1678,7 @@ Only `epistle init` turns one into the other: it derives the name from the addre
 | `epistle account save-sent N on\|off` | Save a copy of every message the account sends into its `Sent` folder. Default on; `off` is the per-account opt-out. The app-password override (`app-password create --save-sent`) wins when set. |
 | `epistle account show N [--json]` | Public view: log id, addresses, disabled, quota, protocols. Works for static accounts. Never a secret. |
 | `epistle account find-log-id acct-…` | Map a log pseudonym back to its account. |
-| `epistle account forward list\|add\|remove N [ADDR]` | Also send the account's mail to `ADDR`. Refuses the account's own addresses, an invalid address, and any forward while `srs_secret` is unset (without SRS the copy fails SPF at the next hop). |
+| `epistle account forward list\|add\|remove N [ADDR]` | Also send the account's mail to `ADDR`. Refuses the account's own addresses, an invalid address, and any forward while neither `srs_secret` nor an `[[srs_domain]]` is set (without SRS the copy fails SPF at the next hop). |
 | `epistle account catch-all list\|add\|remove N [DOMAIN]` | Deliver mail for unknown users of `DOMAIN` to the account. `DOMAIN` must be a configured domain (not an alias) that no other account catches. |
 | `epistle account 2fa show N [--json]` | Whether a TOTP secret is enrolled (never the secret). |
 | `epistle account 2fa disable N [--yes\|-y]` | Remove the TOTP secret; the password alone signs in again. Asks first. |

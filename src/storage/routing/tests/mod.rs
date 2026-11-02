@@ -7,5 +7,6 @@ pub(super) mod dkim_rotation;
 pub(super) mod forward;
 pub(super) mod report;
 pub(super) mod sign_reply;
+pub(super) mod srs_domains;
 pub(super) mod vacation;
 pub(super) mod warning;

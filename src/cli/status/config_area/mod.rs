@@ -75,6 +75,11 @@ pub(super) async fn check(ctx: &Ctx) -> AreaReport {
 		summary.push_str(&line);
 		items.push(Item::new("bearer sign-in", Level::Warn, line));
 	}
+	for line in config.srs_notices() {
+		let shared = config.srs_domains_on_shared_secret().len();
+		summary.push_str(&format!("; {shared} domains share srs_secret"));
+		items.push(Item::new("SRS secret", Level::Warn, line));
+	}
 	for line in &config.adjusted {
 		summary.push_str("; ");
 		summary.push_str(line);

@@ -6,6 +6,37 @@ use super::{
 use toml_edit::{ArrayOfTables, InlineTable, Item, Table, Value};
 
 impl ConfigDocument {
+	/// The value of `field` in the array-of-tables element whose `match_key`
+	/// is `match_value` (without regard to case), exactly as the file writes
+	/// it: a `${VAR}` reference stays a reference, never the value it expands
+	/// to. A command that moves a value from one key to another copies this,
+	/// so it cannot turn a reference into the secret it points at.
+	pub fn element_field(
+		&self,
+		array: &str,
+		match_key: &str,
+		match_value: &str,
+		field: &str,
+	) -> Option<Value> {
+		let item = self.document.get(array)?;
+		let named =
+			|value: Option<&str>| value.is_some_and(|v| v.eq_ignore_ascii_case(match_value));
+		if let Some(tables) = item.as_array_of_tables() {
+			return tables
+				.iter()
+				.find(|table| named(table.get(match_key).and_then(Item::as_str)))
+				.and_then(|table| table.get(field))
+				.and_then(Item::as_value)
+				.cloned();
+		}
+		item.as_array()?
+			.iter()
+			.filter_map(Value::as_inline_table)
+			.find(|table| named(table.get(match_key).and_then(Value::as_str)))
+			.and_then(|table| table.get(field))
+			.cloned()
+	}
+
 	/// Insert or update fields on the uniquely matched array-of-tables element.
 	/// Multiple matches are rejected so an update cannot silently edit one relay.
 	pub fn upsert_element(

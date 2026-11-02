@@ -430,8 +430,11 @@ fn config_is_identical_to_desired(
 		Some(existing.as_str()),
 		&answers.data_dir,
 	);
-	let desired_value: toml::Value = toml::from_str(&desired_bytes)
+	let mut desired_value: toml::Value = toml::from_str(&desired_bytes)
 		.map_err(|error| ApplyError::ConfigEncode(error.to_string()))?;
+	// What `init` writes only into a new file is not part of the comparison,
+	// as it is not part of the merge the apply phase does into this one.
+	super::apply_config_merge::without_new_install_defaults(&mut desired_value);
 	let existing_value: toml::Value = toml::from_str(existing).map_err(|error| {
 		ApplyError::ConfigRead(
 			config_path.to_path_buf(),

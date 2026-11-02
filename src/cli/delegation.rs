@@ -31,6 +31,7 @@ impl Command {
 			| Command::Relay { .. }
 			| Command::Dns { .. }
 			| Command::Storage { .. }
+			| Command::Srs { .. }
 			| Command::Webhook { .. }
 			| Command::Alert { .. }
 			| Command::Antispam { .. }

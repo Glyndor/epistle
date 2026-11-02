@@ -533,6 +533,21 @@ pub enum Command {
 		#[command(subcommand)]
 		action: crate::cli::storage::blobs::StorageCli,
 	},
+	/// Manage the SRS secret of each hosted domain.
+	Srs {
+		/// Configuration file; accepted before or after the srs action.
+		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
+		config: PathBuf,
+		/// Print the validated diff without writing or restarting.
+		#[arg(long, global = true)]
+		dry_run: bool,
+		/// Print the result as one JSON object on stdout.
+		#[arg(long, global = true)]
+		json: bool,
+		/// SRS secret administration action.
+		#[command(subcommand)]
+		action: crate::cli::srs::SrsCli,
+	},
 	/// Manage the outbound event webhook.
 	Webhook {
 		/// Configuration file; accepted before or after the webhook action.

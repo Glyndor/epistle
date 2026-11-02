@@ -75,6 +75,8 @@ fn warnings(config: &Config) -> Vec<String> {
 	warnings.extend(crate::cli::oauth::advice::advice(config));
 	// A value the file sets below a MUST of an RFC, raised when it loaded.
 	warnings.extend(config.adjusted.iter().cloned());
+	// Domains that still sign their forwarded mail with one shared secret.
+	warnings.extend(config.srs_notices());
 	// Capitals in an address or a domain are accepted (epistle uses the
 	// lowercase form), but named so the file can be fixed.
 	for entry in &config.mixed_case {
