@@ -348,7 +348,7 @@ impl Rotator {
 /// The TXT value for the pending key, writing the key first when no file
 /// that loads exists. A file that loads is the one a killed run wrote and
 /// may already have published, so it is kept.
-fn pending_key(pending: &Pending) -> Result<String, RotateError> {
+pub(crate) fn pending_key(pending: &Pending) -> Result<String, RotateError> {
 	if let Ok(signer) = Signer::load(&pending.selector, &pending.key_file) {
 		return Ok(signer.dns_record_value());
 	}
@@ -359,14 +359,14 @@ fn pending_key(pending: &Pending) -> Result<String, RotateError> {
 
 /// Write a key file `0600` from creation, through a synced temporary file
 /// renamed into place, so a crash leaves either no key or the whole key.
-pub(super) fn write_key(path: &Path, pem: &str) -> std::io::Result<()> {
+pub(crate) fn write_key(path: &Path, pem: &str) -> std::io::Result<()> {
 	crate::storage::write_secret(path, pem.as_bytes())
 }
 
 /// Remove a key file that nothing names any more. Best effort: `NotFound`
 /// is the case an operator caused by hand, and any other failure is logged
 /// rather than allowed to block the rotation forever.
-fn remove_key_file(path: &Path, which: &str) {
+pub(crate) fn remove_key_file(path: &Path, which: &str) {
 	if let Err(error) = std::fs::remove_file(path)
 		&& error.kind() != std::io::ErrorKind::NotFound
 	{
