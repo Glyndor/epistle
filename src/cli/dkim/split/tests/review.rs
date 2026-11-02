@@ -73,7 +73,7 @@ fn a_split_without_a_confirmed_restart_is_pending_and_exits_4() {
 	assert_eq!(restarts, 0);
 	assert!(out.contains("NOT confirmed to run the moved keys"), "{out}");
 	assert_eq!(
-		split_state::pending(&install.data()).unwrap(),
+		split_state::pending(&install.data(), |_| true).unwrap(),
 		["b.example.org"]
 	);
 }
@@ -91,7 +91,11 @@ fn running_it_again_repeats_the_restart_instead_of_saying_nothing_to_split() {
 	assert_eq!(code, ExitCode::SUCCESS, "{out}");
 	assert_eq!(restarts, 1, "the pending restart was made");
 	assert!(out.contains("restarted onto the moved keys"), "{out}");
-	assert!(split_state::pending(&install.data()).unwrap().is_empty());
+	assert!(
+		split_state::pending(&install.data(), |_| true)
+			.unwrap()
+			.is_empty()
+	);
 }
 
 #[test]
@@ -136,7 +140,11 @@ fn recording_a_restart_done_by_hand_lets_the_overlap_start() {
 	};
 	let (code, out, _, _) = run(&install, &options, None, &Resolver { zone, blind: false });
 	assert_eq!(code, ExitCode::SUCCESS, "{out}");
-	assert!(split_state::pending(&install.data()).unwrap().is_empty());
+	assert!(
+		split_state::pending(&install.data(), |_| true)
+			.unwrap()
+			.is_empty()
+	);
 }
 
 // ---- 3: a rotation retired a selector the split recorded
@@ -240,4 +248,54 @@ fn the_json_of_a_pending_restart_says_so() {
 	let result: serde_json::Value = serde_json::from_str(out.trim()).unwrap();
 	assert_eq!(result["result"], "restart-pending");
 	assert_eq!(result["reload"], "restart-needed");
+}
+
+// ---- a second move of a domain that was already restarted
+
+#[test]
+fn a_new_split_of_a_restarted_domain_does_not_inherit_the_old_confirmation() {
+	let (install, zone) = split_install();
+	switched_days_ago(&install, 20);
+	// b.example.org loses its entry and is split again, and this time the
+	// server cannot be restarted.
+	let text = install.text();
+	let kept: Vec<&str> = text
+		.split("[[dkim.domain]]")
+		.filter(|part| !part.contains("name = \"b.example.org\""))
+		.collect();
+	std::fs::write(&install.config, kept.join("[[dkim.domain]]")).unwrap();
+	without_stack(&install);
+	let (provider, resolver) = services(&zone);
+	let (code, out, _, _) = run(&install, &SPLIT, Some(provider), &resolver);
+	assert_eq!(code, ExitCode::from(4), "{out}");
+	let state = split_state::read(&install.data()).unwrap();
+	assert_eq!(
+		state["b.example.org"].restarted, None,
+		"the old confirmation is gone"
+	);
+	let (provider, resolver) = services(&zone);
+	let (code, _, err, _) = run(&install, &FINISH, Some(provider), &resolver);
+	assert_eq!(code, ExitCode::FAILURE);
+	assert!(
+		err.contains("not confirmed to run the new key of b.example.org"),
+		"{err}"
+	);
+}
+
+#[test]
+fn a_restart_confirmation_never_seals_a_move_whose_entry_is_not_in_the_file() {
+	let install = Install::new(&["a.example.org", "b.example.org"], "");
+	without_stack(&install);
+	let zone = Zone::default();
+	let (provider, resolver) = services(&zone);
+	run(&install, &SPLIT, Some(provider), &resolver);
+	split_state::record_written(&install.data(), "ghost.example.org", 5, vec![]).unwrap();
+	let options = Options {
+		restarted: true,
+		..SPLIT
+	};
+	run(&install, &options, None, &Resolver { zone, blind: false });
+	let state = split_state::read(&install.data()).unwrap();
+	assert!(state["b.example.org"].restarted.is_some());
+	assert_eq!(state["ghost.example.org"].restarted, None);
 }

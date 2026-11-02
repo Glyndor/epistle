@@ -242,7 +242,6 @@ async fn retire(
 	(report, err): (&mut Report<'_>, &mut impl Write),
 	not_ours: Vec<String>,
 ) -> ExitCode {
-	let zone = config.dns.as_ref().map(|dns| dns.zone.clone());
 	let mut manual: Vec<(String, String)> = Vec::new();
 	let mut handled: Vec<&Found> = Vec::new();
 	let mut failures = Vec::new();
@@ -251,15 +250,14 @@ async fn retire(
 		let provider = services
 			.provider
 			.as_ref()
-			.zip(zone.as_deref())
-			.filter(|(_, zone)| publish::in_zone(name, zone));
+			.zip(publish::zone_of(config, name));
 		let Some((provider, zone)) = provider else {
 			manual.extend(found.shared.iter().map(|v| (name.clone(), v.clone())));
 			continue;
 		};
 		let mut all = true;
 		for value in &found.shared {
-			match provider.delete_exact(zone, txt(name, value)).await {
+			match provider.delete_exact(&zone, txt(name, value)).await {
 				Ok(()) => {}
 				Err(crate::dns::provider::ProviderError::Unsupported) => {
 					all = false;

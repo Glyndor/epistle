@@ -91,10 +91,7 @@ pub(super) fn run(path: &Path, options: &Options, json: bool, out: &mut impl Wri
 		}
 	};
 	let services = Services {
-		provider: config
-			.dns
-			.as_ref()
-			.and_then(|dns| dns.build_for_host(&config.hostname)),
+		provider: config.dns.build_for_host(&config.hostname),
 		resolver: &resolver,
 		waits: vec![Duration::from_secs(POLL_SECONDS); (options.wait / POLL_SECONDS) as usize],
 	};
@@ -265,15 +262,20 @@ pub(super) async fn split(
 	let records: Vec<publish::Record> = moves.iter().flat_map(|m| m.records.clone()).collect();
 	let mut report = Report::new(out, json);
 	// Publish what the provider can reach; print the rest for the operator.
-	let zone = config.dns.as_ref().map(|dns| dns.zone.clone());
-	let (automatic, manual): (Vec<_>, Vec<_>) = records.iter().cloned().partition(|record| {
-		services.provider.is_some()
-			&& zone
-				.as_deref()
-				.is_some_and(|zone| publish::in_zone(&record.name, zone))
-	});
-	if let (Some(provider), Some(zone)) = (&services.provider, &zone) {
-		let failed = publish::publish(provider.as_ref(), zone, &automatic).await;
+	let mut automatic: Vec<(String, publish::Record)> = Vec::new();
+	let mut manual: Vec<publish::Record> = Vec::new();
+	for record in &records {
+		match services
+			.provider
+			.as_ref()
+			.and(publish::zone_of(config, &record.name))
+		{
+			Some(zone) => automatic.push((zone, record.clone())),
+			None => manual.push(record.clone()),
+		}
+	}
+	if let Some(provider) = &services.provider {
+		let failed = publish::publish(provider.as_ref(), &automatic).await;
 		if !failed.is_empty() {
 			for line in &failed {
 				crate::cli::style::error_to(err, format_args!("cannot publish {line}"));
@@ -285,7 +287,7 @@ pub(super) async fn split(
 			return ExitCode::FAILURE;
 		}
 	}
-	for record in &automatic {
+	for (_, record) in &automatic {
 		report.line(format_args!("published TXT {}", record.name));
 	}
 	for record in &manual {
@@ -345,6 +347,17 @@ pub(super) async fn split(
 	)
 }
 
+/// Whether `config` has a `[[dkim.domain]]` entry for `domain`: a record of a
+/// move with no entry behind it is not a restart to wait for or to confirm.
+fn has_entry(config: &Config) -> impl Fn(&str) -> bool + '_ {
+	move |domain| {
+		config
+			.dkim
+			.as_ref()
+			.is_some_and(|dkim| dkim.override_for(domain).is_some())
+	}
+}
+
 /// `split` found nothing to move. If an earlier run wrote its entries and the
 /// server was never restarted onto them, the restart is repeated: the keys on
 /// disk are not the ones that sign until it happens.
@@ -354,7 +367,7 @@ fn nothing_to_split(
 	restart: impl FnOnce(&Config, crate::cli::stack::StackAction) -> ExitCode,
 ) -> ExitCode {
 	let mut report = Report::new(out, json);
-	let pending = match split_state::pending(&config.data_dir) {
+	let pending = match split_state::pending(&config.data_dir, has_entry(config)) {
 		Ok(pending) => pending,
 		Err(why) => {
 			crate::cli::style::error_to(err, format_args!("dkim split refused: {why}"));
@@ -414,7 +427,9 @@ fn restart_onto(
 		}
 	};
 	let confirmed = reload == crate::cli::json_out::Reload::Restarted;
-	if confirmed && let Err(why) = split_state::mark_restarted(&config.data_dir, super::now_epoch())
+	if confirmed
+		&& let Err(why) =
+			split_state::mark_restarted(&config.data_dir, super::now_epoch(), has_entry(config))
 	{
 		crate::cli::style::error_to(err, format_args!("{why}"));
 		return Err(ExitCode::FAILURE);
@@ -437,7 +452,7 @@ fn confirm_restart(
 	(json, out, err): (bool, &mut impl Write, &mut impl Write),
 ) -> ExitCode {
 	let mut report = Report::new(out, json);
-	match split_state::mark_restarted(&config.data_dir, super::now_epoch()) {
+	match split_state::mark_restarted(&config.data_dir, super::now_epoch(), has_entry(config)) {
 		Ok(settled) if settled.is_empty() => {
 			report.line("nothing pending: no split is waiting for a restart");
 			report.object(serde_json::json!({ "result": "unchanged", "action": "split-restarted" }))
