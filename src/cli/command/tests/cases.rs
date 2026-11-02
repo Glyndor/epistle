@@ -232,6 +232,17 @@ pub(in crate::cli) const CASES: &[(&[&str], bool)] = &[
 	(&["dns", "provider", "unset"], true),
 	(&["dns", "provider", "test"], true),
 	(&["storage", "blobs", "show"], true),
+	(&["storage", "tenant-keys", "migrate"], true),
+	(
+		&[
+			"storage",
+			"tenant-keys",
+			"migrate",
+			"--rollback",
+			"--dry-run",
+		],
+		true,
+	),
 	(&["storage", "blobs", "set", "fs"], true),
 	(
 		&[
