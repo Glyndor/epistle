@@ -10,7 +10,7 @@
 //! enough: a `+tag` sub-address, the catch-all and a domain alias resolve
 //! for delivery but are refused for sending.
 
-use super::{AliasSpec, Directory};
+use crate::smtp::directory::{AliasSpec, Directory};
 
 /// A send-as case: the account, the address it tries to send as, and
 /// whether that is allowed.

@@ -15,8 +15,10 @@
 /// The match is exhaustive on purpose: a new variant added to
 /// `Resolution` breaks this file at compile time, so the next caller cannot
 /// accidentally fall through and print the variant's contents.
-pub(super) fn variant_name(resolution: &super::Resolution) -> &'static str {
-	use super::Resolution;
+pub(in crate::smtp::directory) fn variant_name(
+	resolution: &crate::smtp::directory::Resolution,
+) -> &'static str {
+	use crate::smtp::directory::Resolution;
 	match resolution {
 		Resolution::NotLocal => "NotLocal",
 		Resolution::UnknownUser => "UnknownUser",

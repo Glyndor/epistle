@@ -11,8 +11,8 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64URL;
 use ring::rand::SystemRandom;
 use ring::signature::{ECDSA_P256_SHA256_FIXED_SIGNING, EcdsaKeyPair, KeyPair};
 
-use super::Directory;
 use crate::directory_store::AppPassword;
+use crate::smtp::directory::Directory;
 use crate::smtp::scram::{ScramCredentials, ScramStored};
 use crate::test_fixtures as fixtures;
 

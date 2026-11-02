@@ -123,12 +123,12 @@ const NUMBERS: &[(&str, &[&str], &str)] = &[
 		"argon2 check: {} run at a time, {} may wait",
 	),
 	(
-		"src/smtp/session/mod.rs",
+		"src/smtp/session/limits.rs",
 		&["DEFAULT_MAX_RECIPIENTS"],
 		"Together at most {}",
 	),
 	(
-		"src/smtp/session/mod.rs",
+		"src/smtp/session/limits.rs",
 		&["MAX_MESSAGE_SIZE"],
 		"{MiB} MiB by default",
 	),
