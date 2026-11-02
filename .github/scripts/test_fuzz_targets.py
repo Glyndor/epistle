@@ -1,8 +1,13 @@
+import json
 import os
 import re
+import subprocess
+import sys
+import tempfile
 import unittest
 
 import fuzz_targets as ft
+from version_bump.fixtures import Repo, bump_all
 
 FUZZ_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "fuzz", "fuzz_targets")
 
@@ -173,6 +178,51 @@ class MapAgreesWithTheTargetsTests(unittest.TestCase):
                     ft.select("pull_request", [path]),
                     f"{target} calls {module}, but a change to {path} does not run it",
                 )
+
+
+class VersionBumpTests(unittest.TestCase):
+    """A version bump runs no target, and only the base's judge can say so."""
+
+    def plan(self, judge, change=bump_all):
+        repo = Repo(change, judge=judge)
+        self.addCleanup(repo.close)
+        with tempfile.NamedTemporaryFile("r", suffix=".out") as output:
+            env = {
+                **os.environ,
+                "EVENT_NAME": "pull_request",
+                "BASE_SHA": "base",
+                "HEAD_SHA": "head",
+                "GITHUB_OUTPUT": output.name,
+            }
+            done = subprocess.run(
+                [sys.executable, os.path.abspath(ft.__file__)],
+                cwd=repo.dir,
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(done.returncode, 0, done.stderr)
+            return output.read()
+
+    def test_a_bump_runs_no_target(self):
+        self.assertEqual(self.plan(judge=True), "targets=[]\n")
+
+    def test_a_base_without_the_judge_chooses_as_usual(self):
+        # Cargo.toml is not narrowed, so without the judge everything runs.
+        self.assertEqual(self.plan(judge=False), f"targets={json.dumps(ft.ALL)}\n")
+
+    def test_a_bump_with_a_source_change_is_not_a_bump(self):
+        def change():
+            bump_all()
+            os.makedirs("src/pop3", exist_ok=True)
+            with open("src/pop3/a.rs", "w", encoding="utf-8") as handle:
+                handle.write("// touched\n")
+
+        self.assertEqual(self.plan(judge=True, change=change), f"targets={json.dumps(ft.ALL)}\n")
+
+    def test_an_unreadable_base_is_not_a_bump(self):
+        self.assertFalse(ft.version_bump("deadbeef" * 5, "HEAD"))
 
 
 if __name__ == "__main__":

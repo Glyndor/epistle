@@ -6,13 +6,16 @@ protocol's targets, not all twenty-two: every target is a separate job that
 installs a nightly toolchain and builds the crate. Anything this script does
 not know how to narrow runs every target: a change outside the mapped folders
 (shared code, the manifest, the fuzz crate, this workflow) can reach any of
-them. Scheduled and manual runs always run every target.
+them. A pull request that is only a version bump runs none, and only when the
+copy of the judge in the base commit says so. Scheduled and manual runs
+always run every target.
 """
 
 import json
 import os
 import subprocess
 import sys
+import tempfile
 
 ALL = [
     "smtp_command",
@@ -77,6 +80,9 @@ UNRELATED_FOLDERS = ("docs/", "tests/", "benches/", "examples/", "debian/", ".gi
 # The files of this workflow, which do change what runs.
 OWN = (".github/workflows/fuzz.yml", ".github/scripts/fuzz_targets.py")
 
+# The version bump judge, which `version_bump` reads from the base commit.
+JUDGE = ".github/scripts/version_bump/is_version_bump.py"
+
 
 def unrelated(path):
     """True for a path outside src that no fuzz target builds or runs."""
@@ -115,12 +121,35 @@ def changed_paths(base, head):
     return [path for path in out.decode().split("\0") if path]
 
 
+def version_bump(base, head):
+    """True only when the judge stored in the base commit calls it a bump.
+
+    The judge is not read from this checkout, so a pull request cannot edit
+    it to skip its own targets. A base without the judge, or any failure to
+    read or run it, answers False and the targets are chosen as usual.
+    """
+    try:
+        script = subprocess.run(
+            ["git", "show", f"{base}:{JUDGE}"], capture_output=True, check=True
+        ).stdout
+        with tempfile.NamedTemporaryFile(suffix=".py") as handle:
+            handle.write(script)
+            handle.flush()
+            done = subprocess.run([sys.executable, "-I", handle.name, base, head], check=False)
+    except (OSError, subprocess.CalledProcessError):
+        return False
+    return done.returncode == 0
+
+
 def main():
     event = os.environ.get("EVENT_NAME", "")
-    changed = []
-    if event == "pull_request":
-        changed = changed_paths(os.environ["BASE_SHA"], os.environ["HEAD_SHA"])
-    targets = select(event, changed)
+    if event == "pull_request" and version_bump(os.environ["BASE_SHA"], os.environ["HEAD_SHA"]):
+        targets = []
+    else:
+        changed = []
+        if event == "pull_request":
+            changed = changed_paths(os.environ["BASE_SHA"], os.environ["HEAD_SHA"])
+        targets = select(event, changed)
     line = json.dumps(targets)
     print(line)
     output = os.environ.get("GITHUB_OUTPUT")

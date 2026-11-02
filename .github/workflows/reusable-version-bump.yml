@@ -1,0 +1,70 @@
+name: Version bump
+
+# Answers one question for the workflows that are not required: is this pull
+# request nothing but an epistle version bump? A release bump touches
+# Cargo.toml, both lockfiles, debian/changelog and the image tags in the docs,
+# all of which those workflows watch, and it used to start the database,
+# end-to-end, upgrade, interop, imaptest, LDAP and container jobs (#1549)
+# although the only thing it changes in what they build is the version string.
+#
+# The judge is .github/scripts/version_bump/is_version_bump.py, and this runs
+# the copy stored in the base commit, not the one in the checkout, so a pull
+# request cannot rewrite the judge of its own diff. It fails closed: a base
+# without the judge and any error answer `run=true`, and any other event
+# skips the judge and leaves the output empty. A caller skips its job only on
+# `run == 'false'`, so an empty, failed or skipped answer also runs it.
+#
+# Never gate a required check on it: a job skipped by `if:` reports success,
+# so a required check gated on it would turn "did not run" into "passed".
+#
+# .github/scripts/version_bump/test_is_version_bump.py runs the `judge` step
+# below as written, on throwaway repositories.
+
+on:
+  workflow_call:
+    outputs:
+      run:
+        description: "'false' only for a pull request that is a pure version bump, 'true' otherwise."
+        value: ${{ jobs.judge.outputs.run }}
+
+permissions:
+  contents: read
+
+jobs:
+  judge:
+    name: version bump
+    # Only a pull request can be a version bump. On a push the job does not
+    # take a runner at all: its output is then empty, and the caller runs.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    # A checkout and two git commands, the same shape as fuzz.yml's plan job,
+    # whose slowest of four green runs took 1 min (2026-10-30) and which took
+    # 14 s on run 41423331341 (2026-11-02).
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.judge.outputs.run }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # The merge base of the pull request and the judge in the base
+          # commit both need the history.
+          fetch-depth: 0
+
+      - id: judge
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -u
+          judge="$RUNNER_TEMP/is_version_bump.py"
+          if [ "$EVENT_NAME" = pull_request ] \
+            && git show "$BASE_SHA:.github/scripts/version_bump/is_version_bump.py" > "$judge" \
+            && python3 -I "$judge" "$BASE_SHA" "$HEAD_SHA"; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "a pure version bump: the calling workflow skips its job"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "not a pure version bump on $EVENT_NAME: the calling workflow runs its job"
+          fi

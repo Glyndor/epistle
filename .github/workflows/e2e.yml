@@ -52,7 +52,14 @@ permissions:
   contents: read
 
 jobs:
+  # A pure version bump changes nothing this job builds but the version
+  # string, so the job skips it. See reusable-version-bump.yml.
+  decide:
+    uses: ./.github/workflows/reusable-version-bump.yml
+
   e2e:
+    needs: decide
+    if: ${{ !cancelled() && needs.decide.outputs.run != 'false' }}
     name: full-server e2e (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     # Measured 2026-10-30: the slowest of four green runs took 8 min.
