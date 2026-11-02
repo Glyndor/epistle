@@ -24,11 +24,10 @@ fn the_account_key_is_read_outside_data_dir() {
 	let dir = tempfile::tempdir().expect("directory");
 	let job = job(dir.path());
 	let data_dir = dir.path().join("data");
+	// A failure message is a log: it names the rule, not the path.
 	assert!(
 		!job.account_key.starts_with(&data_dir),
-		"{} is under {}",
-		job.account_key.display(),
-		data_dir.display()
+		"the account key path is under data_dir"
 	);
 	assert_eq!(
 		job.account_key,
