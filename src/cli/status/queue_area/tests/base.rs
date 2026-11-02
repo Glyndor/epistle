@@ -33,6 +33,7 @@ fn enqueue(data_dir: &Path, age: i64, attempts: u32, next_attempt: u64) -> Uuid 
 		recipient_state: Default::default(),
 		account: None,
 		extra: BTreeMap::new(),
+		owner: None,
 		class: Default::default(),
 		evidence: false,
 		retain_days: 0,

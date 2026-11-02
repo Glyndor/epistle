@@ -111,13 +111,16 @@ async fn serve(config: Config, role: ServeRole) -> std::io::Result<()> {
 	} = smtp_state::build_smtp_shared_state(&config, &metrics)?;
 	let mailbox_limits = connection_limits::MailboxLimits::from_config(&config);
 	let http_limits = connection_limits::http_limits(&config);
-	let sink = crate::antispam::submission_scan::ScanningSink::wrap_with_attachments(
+	let sink = crate::antispam::submission_scan::ScanningSink::wrap_resolving(
 		config.antispam.scan_authenticated,
 		Arc::new(split),
 		clamd,
 		attachment_policy.clone(),
-		Some(metrics.clone()),
-		webhook.clone(),
+		(
+			Some(metrics.clone()),
+			webhook.clone(),
+			Some(directory.clone()),
+		),
 	)?;
 	let bayes = tasks::open_bayes(&config, &reputation_pool, &crypto, &metrics)?;
 	tasks::spawn_sql_directory(&config, &reputation_pool, Arc::clone(&account_store)).await?;

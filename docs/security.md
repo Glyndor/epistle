@@ -494,6 +494,22 @@ instead of being read as whichever primitive the verifier happened to use.
   open when clamd cannot be reached, like the inbound one, and `epistle
   status` warns while scans keep failing, so an antivirus that is silently
   not scanning does not go unnoticed.
+- **A webhook per tenant.** Event payloads carry addresses, subjects and
+  remote replies, so a tenant's receiver must not see another tenant's. The
+  hosted domain an event belongs to picks its one webhook, and the server
+  decides that domain (the authenticated account's, the forwarding local
+  recipient's), records it in the queue entry, and never reads it from the
+  envelope sender, which a user can set to another tenant's domain; an entry
+  with no recorded owner uses the default: the tenant's
+  `[tenant.webhook]` when the domain is the tenant's, the default `[webhook]`
+  otherwise, never both and never a fallback when a tenant's is off or fails.
+  Each webhook signs with its own secret (the loader refuses two that share
+  one) and is reached through its own client, built exactly as the default's:
+  a tenant's URL is held to the same destination policy against SSRF (no
+  private, loopback, link-local or translated address unless that webhook says
+  `allow_private_webhooks`, the resolved addresses judged too, no redirect, no
+  proxy of the environment). One webhook allowing private destinations does not
+  allow them for another.
 - **Forwarding loops.** Every copy stored in a mailbox starts with
   `Return-Path` (any one the message arrived with is removed) and the
   `Delivered-To` of the address it was delivered to, and a forwarded copy
@@ -681,7 +697,7 @@ clients when replacing a credential, and retain decryption keys for old backups.
 | LDAP: `[ldap] bind_password`; user passwords at LDAP source | Plaintext service bind password; user passwords verified by LDAP bind | Rotate in LDAP, update bind configuration and restart; replace user passwords in LDAP |
 | DNS: `[dns]` token/access secrets/consumer key, provider files or named environment variables (including service-account credentials and TSIG) | Plaintext provider credentials, provider-specific JSON or base64 key | Rotate at the provider, update the configured source and restart |
 | S3 blobs: `[storage.blobs] secret_access_key_file` or `secret_access_key_env` | Plaintext access secret | Rotate at the S3 provider, update file/environment and restart |
-| Webhook: `[[webhook]] secret` | Plaintext HMAC signing secret | Replace at both sender configuration and receiver, restart |
+| Webhook: `[webhook] secret`, and `[tenant.webhook] secret` of each tenant that has one | Plaintext HMAC signing secrets, one per webhook; no two may be equal | Replace at both sender configuration and receiver, restart; a tenant's secret signs only that tenant's events |
 | LLM scanner: `[antispam.llm] api_key_env` | Plaintext provider key in process environment | Rotate at provider, update service environment and restart |
 | SubjectPass: `subjectpass.key`; log pseudonyms: `log-pseudonym.key` | Raw per-server HMAC keys | Stop the server, securely retire the relevant file and restart to generate a new one; outstanding retry tokens or historical log mappings cease to work |
 | SRS: `[[srs_domain]] secret` per hosted domain, and `srs_secret` in `mail.toml` for the domains without one | Plaintext HMAC secrets | `epistle srs rotate DOMAIN` moves the old secret to `previous_secret`, which keeps verifying the return addresses already out; remove it after 14 days. Replacing `srs_secret` alone stops the older addresses from verifying; `epistle srs split` first, and keep it until they expire |

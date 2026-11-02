@@ -26,6 +26,8 @@ pub struct Webhook {
 	pub allow_private_webhooks: bool,
 }
 
+mod validate;
+
 const fn default_enabled() -> bool {
 	true
 }

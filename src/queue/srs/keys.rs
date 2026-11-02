@@ -86,15 +86,31 @@ impl SrsKeys {
 		now_days: u64,
 		max_age_days: u64,
 	) -> Option<(String, String)> {
+		self.reverse_owned(srs_local, now_days, max_age_days)
+			.map(|(original, _)| original)
+	}
+
+	/// [`reverse`](Self::reverse), also naming the hosted domain whose secret
+	/// verified the address (lowercase), or `None` for the older shape. The
+	/// domain is what the HMAC proved, not what the address claims.
+	pub fn reverse_owned(
+		&self,
+		srs_local: &str,
+		now_days: u64,
+		max_age_days: u64,
+	) -> Option<((String, String), Option<String>)> {
 		let Some((hosted, _)) = split_hosted(srs_local) else {
-			return self
+			let original = self
 				.global
 				.as_ref()?
-				.reverse(srs_local, now_days, max_age_days);
+				.reverse(srs_local, now_days, max_age_days)?;
+			return Some((original, None));
 		};
-		let keys = self.domains.get(&hosted.to_ascii_lowercase())?;
+		let name = hosted.to_ascii_lowercase();
+		let keys = self.domains.get(&name)?;
 		std::iter::once(&keys.current)
 			.chain(keys.previous.as_ref())
 			.find_map(|srs| srs.reverse_for(hosted, srs_local, now_days, max_age_days))
+			.map(|original| (original, Some(name)))
 	}
 }

@@ -30,6 +30,7 @@ fn store(dir: &std::path::Path, recipients: &[&str], evidence: bool) -> FsSpool 
 	};
 	let recorded = |_: &[u8]| Ok(());
 	let options = StoreOptions {
+		owner: None,
 		account: Some("notices"),
 		extra: &BTreeMap::new(),
 		class: MailClass::Transactional,

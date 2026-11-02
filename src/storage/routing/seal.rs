@@ -68,8 +68,10 @@ impl SplitDelivery {
 	}
 
 	/// If `recipient` is a valid SRS-return address at our domain, the original
-	/// sender it should be forwarded back to; otherwise `None`.
-	pub(super) fn srs_return(&self, recipient: &str) -> Option<String> {
+	/// sender it should be forwarded back to and the hosted domain whose
+	/// secret verified the address (`None` for the older shape); otherwise
+	/// `None`.
+	pub(super) fn srs_return(&self, recipient: &str) -> Option<(String, Option<String>)> {
 		let (srs, our_domain) = self.srs.as_ref()?;
 		let (local, domain) = recipient.rsplit_once('@')?;
 		if !domain.eq_ignore_ascii_case(our_domain) {
@@ -79,7 +81,8 @@ impl SplitDelivery {
 			.duration_since(std::time::UNIX_EPOCH)
 			.map(|d| d.as_secs() / 86_400)
 			.unwrap_or(0);
-		let (orig_local, orig_domain) = srs.reverse(local, now_days, SRS_MAX_AGE_DAYS)?;
-		Some(format!("{orig_local}@{orig_domain}"))
+		let ((orig_local, orig_domain), hosted) =
+			srs.reverse_owned(local, now_days, SRS_MAX_AGE_DAYS)?;
+		Some((format!("{orig_local}@{orig_domain}"), hosted))
 	}
 }

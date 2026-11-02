@@ -36,6 +36,9 @@ pub struct ScanningSink {
 	gate: Arc<gate::Gate>,
 	metrics: Option<Arc<Metrics>>,
 	webhook: Option<Arc<Webhook>>,
+	/// Resolves the account that submitted a message to the hosted domain
+	/// whose webhook hears of a detection; without it the server-wide one does.
+	directory: Option<crate::directory_store::DirectoryHandle>,
 	/// The threads scans ran on, so a test can tell how many there were.
 	#[cfg(test)]
 	workers: std::sync::Mutex<std::collections::HashSet<std::thread::ThreadId>>,
@@ -69,6 +72,29 @@ impl ScanningSink {
 		metrics: Option<Arc<Metrics>>,
 		webhook: Option<Arc<Webhook>>,
 	) -> std::io::Result<Arc<dyn MessageSink>> {
+		Self::wrap_resolving(
+			scan_authenticated,
+			inner,
+			clamd,
+			attachments,
+			(metrics, webhook, None),
+		)
+	}
+
+	/// [`ScanningSink::wrap_with_attachments`], resolving the account that
+	/// submitted a refused message through `directory` to the hosted domain
+	/// whose webhook hears of it.
+	pub fn wrap_resolving(
+		scan_authenticated: bool,
+		inner: Arc<dyn MessageSink>,
+		clamd: Option<Arc<ClamdHook>>,
+		attachments: Option<Arc<Policy>>,
+		(metrics, webhook, directory): (
+			Option<Arc<Metrics>>,
+			Option<Arc<Webhook>>,
+			Option<crate::directory_store::DirectoryHandle>,
+		),
+	) -> std::io::Result<Arc<dyn MessageSink>> {
 		let attachments = attachments.filter(|policy| policy.can_refuse());
 		if !scan_authenticated || (clamd.is_none() && attachments.is_none()) {
 			return Ok(inner);
@@ -84,6 +110,7 @@ impl ScanningSink {
 			gate: gate::Gate::with_defaults(),
 			metrics,
 			webhook,
+			directory,
 			#[cfg(test)]
 			workers: Default::default(),
 		}))
@@ -229,7 +256,14 @@ impl ScanningSink {
 			account: account.to_string(),
 			signature: signature.to_string(),
 		};
-		runtime.spawn(async move { webhook.notify(&event).await });
+		// An event of the domain of the account that authenticated, which the
+		// directory resolves: its tenant's webhook gets it, not the others.
+		// The envelope sender is the sender's to write and is not consulted.
+		let domain = self
+			.directory
+			.as_ref()
+			.and_then(|directory| crate::webhook::account_owner(&directory.current(), account));
+		runtime.spawn(async move { webhook.notify_for(domain.as_deref(), &event).await });
 	}
 }
 

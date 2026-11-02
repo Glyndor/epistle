@@ -40,6 +40,7 @@ async fn per_tenant_limit_charges_per_recipient() {
 		max_domains: None,
 		submission_rate_limit_per_min: Some(2),
 		encryption_key_file: None,
+		webhook: None,
 	}]));
 	let (acceptor, cert) = acceptor_and_cert();
 	let server = build_smtp_server(

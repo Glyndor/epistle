@@ -31,6 +31,9 @@ pub struct StoreOptions<'a> {
 	pub account: Option<&'a str>,
 	/// The caller-supplied correlation map.
 	pub extra: &'a BTreeMap<String, String>,
+	/// The hosted domain whose webhook hears about the delivery, decided by
+	/// the server (see [`Envelope::owner`]); `None` for the server-wide one.
+	pub owner: Option<&'a str>,
 	/// The class the server granted.
 	pub class: crate::evidence::MailClass,
 	/// Writes the evidence acceptance record for the queued bytes; `None`
@@ -55,6 +58,9 @@ pub struct SpoolEntry {
 pub struct FsSpool {
 	root: PathBuf,
 	crypto: MessageCrypto,
+	/// Resolves the submitting account to the hosted domain that owns what
+	/// it queues; without it an entry has no owner.
+	owners: Option<crate::directory_store::DirectoryHandle>,
 }
 
 /// The two directories of the spool: `tmp/` while a write is in flight, `new/`
@@ -84,6 +90,17 @@ enum DecodedEnvelope {
 }
 
 impl FsSpool {
+	/// Give the spool the directory that says which hosted domain an
+	/// authenticated account belongs to, so what it queues through
+	/// [`MessageSink::submit`] is owned by that domain's tenant.
+	pub fn with_owner_directory(
+		mut self,
+		directory: crate::directory_store::DirectoryHandle,
+	) -> Self {
+		self.owners = Some(directory);
+		self
+	}
+
 	/// The path of one spooled file. The id is a [`Uuid`] and the extension a
 	/// closed set, so nothing but a plain file name is ever joined onto the root.
 	fn entry_file(&self, dir: SpoolDir, id: Uuid, ext: MessageExt) -> std::io::Result<PathBuf> {
@@ -175,7 +192,11 @@ impl FsSpool {
 	/// the mode was pinned to `0600`/`0700`.
 	pub fn open_with_crypto(data_dir: &Path, crypto: MessageCrypto) -> std::io::Result<Self> {
 		let root = contained(data_dir, &data_dir.join("spool"))?;
-		let spool = FsSpool { root, crypto };
+		let spool = FsSpool {
+			root,
+			crypto,
+			owners: None,
+		};
 		create_spool_dir(&spool.root)?;
 		Ok(spool)
 	}
@@ -220,6 +241,28 @@ impl FsSpool {
 		self.store_as(message, Uuid::now_v7(), account, extra)
 	}
 
+	/// [`FsSpool::store`] for an entry whose delivery events belong to the
+	/// hosted domain `owner`, which the caller has established itself.
+	pub fn store_owned(
+		&self,
+		message: &AcceptedMessage,
+		owner: Option<&str>,
+		extra: &BTreeMap<String, String>,
+	) -> std::io::Result<Uuid> {
+		self.store_with(
+			message,
+			Uuid::now_v7(),
+			&StoreOptions {
+				account: None,
+				extra,
+				owner,
+				class: crate::evidence::MailClass::Personal,
+				evidence: None,
+				retain_days: 0,
+			},
+		)
+	}
+
 	/// [`FsSpool::store`] under an id the caller chose, so a submission can
 	/// name its queue entry before it is routed. The id must be fresh (a
 	/// UUID v7 minted for this message); it is returned unchanged.
@@ -236,6 +279,11 @@ impl FsSpool {
 			&StoreOptions {
 				account,
 				extra,
+				// By design no owner: `store` and `store_as` are for mail the
+				// server or an operator tool writes with no tenant behind it
+				// (an alert e-mail). Whoever has a tenant's domain in hand
+				// uses `store_owned` or `store_with`.
+				owner: None,
 				class: crate::evidence::MailClass::Personal,
 				evidence: None,
 				retain_days: 0,
@@ -276,6 +324,10 @@ impl FsSpool {
 			recipient_state: BTreeMap::new(),
 			account,
 			extra: options.extra.clone(),
+			owner: options
+				.owner
+				.filter(|value| !value.is_empty())
+				.map(str::to_ascii_lowercase),
 			class: options.class,
 			evidence: options.evidence.is_some(),
 			retain_days: options.retain_days,
@@ -621,9 +673,14 @@ impl MessageSink for FsSpool {
 				"the spool keeps no evidence".into(),
 			));
 		}
+		let owner = self
+			.owners
+			.as_ref()
+			.and_then(|directory| crate::webhook::account_owner(&directory.current(), account));
 		let options = StoreOptions {
 			account: Some(account),
 			extra: &submission.extra,
+			owner: owner.as_deref(),
 			class: submission.class,
 			evidence: None,
 			retain_days: 0,

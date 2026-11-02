@@ -4,9 +4,13 @@ use super::*;
 
 impl SplitDelivery {
 	/// Store `message` in the outbound spool.
-	pub(super) fn store_outbound(&self, message: &AcceptedMessage) -> Result<(), SinkError> {
+	pub(super) fn store_outbound(
+		&self,
+		message: &AcceptedMessage,
+		owner: Option<&str>,
+	) -> Result<(), SinkError> {
 		self.outbound
-			.store(message, None, &BTreeMap::new())
+			.store_owned(message, owner, &BTreeMap::new())
 			.map(|_| ())
 			.map_err(|error| SinkError::Unavailable(error.to_string()))
 	}

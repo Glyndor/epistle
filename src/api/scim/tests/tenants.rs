@@ -80,6 +80,7 @@ pub(in super::super) fn tenants() -> (tempfile::TempDir, ApiState, Arc<AccountSt
 			max_domains: None,
 			submission_rate_limit_per_min: None,
 			encryption_key_file: None,
+			webhook: None,
 		},
 	]));
 	let state = ApiState::new(

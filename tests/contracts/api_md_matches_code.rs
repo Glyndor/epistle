@@ -192,7 +192,7 @@ fn every_number_in_the_guide_is_the_one_in_the_code() {
 
 #[test]
 fn the_webhook_timeout_is_the_one_in_the_guide() {
-	assert!(source("src/webhook/mod.rs").contains("timeout(Duration::from_secs(15))"));
+	assert!(source("src/webhook/endpoint.rs").contains("timeout(Duration::from_secs(15))"));
 	assert!(guide().contains("with a 15 second timeout and no retry"));
 }
 
