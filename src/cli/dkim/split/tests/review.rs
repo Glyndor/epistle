@@ -6,7 +6,9 @@
 use std::process::ExitCode;
 
 use super::finish::{FINISH, services, split_install, switched_days_ago};
-use super::harness::{Install, Resolver, Zone, run, run_as, without_stack};
+use super::harness::{
+	Install, Resolver, Zone, run, run_as, run_holding_the_lock, with_stack, without_stack,
+};
 use crate::cli::dkim::split::Options;
 use crate::dkim::split_state;
 
@@ -298,4 +300,89 @@ fn a_restart_confirmation_never_seals_a_move_whose_entry_is_not_in_the_file() {
 	let state = split_state::read(&install.data()).unwrap();
 	assert!(state["b.example.org"].restarted.is_some());
 	assert_eq!(state["ghost.example.org"].restarted, None);
+}
+
+// ---- a dry run only looks
+
+#[test]
+fn a_dry_run_with_a_split_waiting_for_its_restart_restarts_and_records_nothing() {
+	let install = Install::new(&["a.example.org", "b.example.org"], "");
+	without_stack(&install);
+	let zone = Zone::default();
+	let (provider, resolver) = services(&zone);
+	run(&install, &SPLIT, Some(provider), &resolver);
+	// The server can be restarted now; a dry run must not do it.
+	with_stack(&install);
+	let state = std::fs::read(install.data().join("dkim-split.json")).unwrap();
+	let config = std::fs::read(&install.config).unwrap();
+	let options = Options {
+		dry_run: true,
+		..SPLIT
+	};
+	let (provider, resolver) = services(&zone);
+	let (code, out, _, restarts) = run(&install, &options, Some(provider), &resolver);
+	assert_eq!(code, ExitCode::SUCCESS, "{out}");
+	assert_eq!(restarts, 0, "a dry run does not restart the server");
+	assert_eq!(
+		std::fs::read(install.data().join("dkim-split.json")).unwrap(),
+		state
+	);
+	assert_eq!(std::fs::read(&install.config).unwrap(), config);
+	assert!(out.contains("dry run: nothing done"), "{out}");
+	assert_eq!(
+		split_state::pending(&install.data(), |_| true).unwrap(),
+		["b.example.org"],
+		"and it is still pending"
+	);
+}
+
+#[test]
+fn a_dry_run_waits_for_the_lock_like_any_other_run() {
+	let install = Install::new(&["a.example.org", "b.example.org"], "");
+	let _first = split_state::lock(&install.data(), std::time::Duration::from_millis(100)).unwrap();
+	let zone = Zone::default();
+	let (provider, resolver) = services(&zone);
+	let options = Options {
+		dry_run: true,
+		..SPLIT
+	};
+	let (code, _, err, _) = run(&install, &options, Some(provider), &resolver);
+	assert_eq!(code, ExitCode::FAILURE);
+	assert!(err.contains("another dkim split is running"), "{err}");
+}
+
+// ---- the configuration is read under the lock
+
+#[test]
+fn a_run_that_waited_for_the_lock_acts_on_what_the_first_run_left() {
+	let install = Install::new(&["a.example.org", "b.example.org"], "");
+	let zone = Zone::default();
+	let held = split_state::lock(&install.data(), std::time::Duration::from_millis(100)).unwrap();
+	let (second_code, second_out, second_restarts) = std::thread::scope(|scope| {
+		let waiting = scope.spawn(|| {
+			let (provider, resolver) = services(&zone);
+			let (code, out, _, restarts) = run(&install, &SPLIT, Some(provider), &resolver);
+			(code, out, restarts)
+		});
+		// The second run is waiting for the lock; the first one does its work.
+		std::thread::sleep(std::time::Duration::from_millis(300));
+		let (provider, resolver) = services(&zone);
+		let (code, out, _, restarts) = run_holding_the_lock(
+			&install,
+			&SPLIT,
+			Some(std::sync::Arc::new(provider)),
+			&resolver,
+		);
+		assert_eq!((code, restarts), (ExitCode::SUCCESS, 1), "{out}");
+		drop(held);
+		waiting.join().unwrap()
+	});
+	assert_eq!(second_code, ExitCode::SUCCESS, "{second_out}");
+	assert!(second_out.contains("nothing to split"), "{second_out}");
+	assert_eq!(second_restarts, 0, "it had nothing left to restart");
+	let state = split_state::read(&install.data()).unwrap();
+	assert!(
+		state["b.example.org"].restarted.is_some(),
+		"the first run's confirmation survived"
+	);
 }

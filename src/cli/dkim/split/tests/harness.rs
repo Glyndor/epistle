@@ -287,29 +287,62 @@ pub(super) fn run_with(
 	resolver: &dyn DnsLookup,
 	json: bool,
 ) -> (std::process::ExitCode, String, String, usize) {
-	let config = install.load();
-	let services = super::super::Services {
+	drive(install, options, provider, resolver, json, true)
+}
+
+/// [`run_with`] without the lock of the data directory: what a run does once it
+/// holds it. A test that plays one run while it holds the lock itself uses it.
+pub(super) fn run_holding_the_lock(
+	install: &Install,
+	options: &super::super::Options,
+	provider: Option<Arc<dyn DnsProvider>>,
+	resolver: &dyn DnsLookup,
+) -> (std::process::ExitCode, String, String, usize) {
+	drive(install, options, provider, resolver, false, false)
+}
+
+fn drive(
+	install: &Install,
+	options: &super::super::Options,
+	provider: Option<Arc<dyn DnsProvider>>,
+	resolver: &dyn DnsLookup,
+	json: bool,
+	locked: bool,
+) -> (std::process::ExitCode, String, String, usize) {
+	let services = |provider| super::super::Services {
 		provider,
 		resolver,
 		waits: vec![std::time::Duration::ZERO; 2],
 	};
 	let (mut out, mut err) = (Vec::new(), Vec::new());
 	let restarts = std::cell::Cell::new(0usize);
+	let restart = |_: &crate::config::Config, _| {
+		restarts.set(restarts.get() + 1);
+		std::process::ExitCode::SUCCESS
+	};
 	let runtime = tokio::runtime::Builder::new_current_thread()
 		.enable_time()
 		.build()
 		.expect("runtime");
-	let code = runtime.block_on(super::super::split(
-		&install.config,
-		&config,
-		options,
-		&services,
-		(json, &mut out, &mut err),
-		|_, _| {
-			restarts.set(restarts.get() + 1);
-			std::process::ExitCode::SUCCESS
-		},
-	));
+	let code = if locked {
+		runtime.block_on(super::super::run_locked(
+			&install.config,
+			options,
+			|_| services(provider),
+			(json, &mut out, &mut err),
+			restart,
+		))
+	} else {
+		let config = install.load();
+		runtime.block_on(super::super::split(
+			&install.config,
+			&config,
+			options,
+			&services(provider),
+			(json, &mut out, &mut err),
+			restart,
+		))
+	};
 	(
 		code,
 		String::from_utf8_lossy(&out).into_owned(),

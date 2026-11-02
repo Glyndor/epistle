@@ -20,7 +20,6 @@ use std::time::Duration;
 use crate::cli::config_edit::ConfigDocument;
 use crate::cli::domain::own_key::add_entry;
 use crate::cli::json_out::Report;
-use crate::cli::resource::ResourceError;
 use crate::config::Config;
 use crate::dkim::domain_keys::{self, DomainKeys};
 use crate::dkim::split_state;
@@ -28,9 +27,12 @@ use crate::dkim::stale::{self, Stale};
 use crate::dns::provider::DnsProvider;
 use crate::spf::DnsLookup;
 
+use restart::{confirm_restart, nothing_to_split, restart_onto, restart_pending};
+
 mod finish;
 mod plan;
 mod publish;
+mod restart;
 
 /// How the command is asked to run.
 pub(super) struct Options {
@@ -59,7 +61,7 @@ pub(super) struct Services<'a> {
 
 /// How long a run waits for another one on the same data directory.
 const LOCK_WAIT: Duration = if cfg!(test) {
-	Duration::from_millis(300)
+	Duration::from_secs(3)
 } else {
 	Duration::from_secs(30)
 };
@@ -69,13 +71,6 @@ const POLL_SECONDS: u64 = 5;
 
 /// Run `dkim split` against the configuration at `path`.
 pub(super) fn run(path: &Path, options: &Options, json: bool, out: &mut impl Write) -> ExitCode {
-	let config = match Config::load(path) {
-		Ok(config) => config,
-		Err(error) => {
-			crate::cli::style::error(error);
-			return ExitCode::FAILURE;
-		}
-	};
 	let resolver = match crate::spf::SystemDns::uncached_from_system() {
 		Ok(resolver) => resolver,
 		Err(error) => {
@@ -90,20 +85,58 @@ pub(super) fn run(path: &Path, options: &Options, json: bool, out: &mut impl Wri
 			return ExitCode::FAILURE;
 		}
 	};
-	let services = Services {
-		provider: config.dns.build_for_host(&config.hostname),
-		resolver: &resolver,
-		waits: vec![Duration::from_secs(POLL_SECONDS); (options.wait / POLL_SECONDS) as usize],
-	};
+	let waits = vec![Duration::from_secs(POLL_SECONDS); (options.wait / POLL_SECONDS) as usize];
 	let mut err = crate::cli::style::stderr();
-	runtime.block_on(split(
+	runtime.block_on(run_locked(
 		path,
-		&config,
 		options,
-		&services,
+		|config| Services {
+			provider: config.dns.build_for_host(&config.hostname),
+			resolver: &resolver,
+			waits,
+		},
 		(json, out, &mut err),
 		crate::cli::stack::run,
 	))
+}
+
+/// Take the lock of the data directory, then read the configuration and build
+/// the services, then run. One run at a time per data directory, dry runs
+/// included: a plan made from a configuration read before the lock would be
+/// the plan of a state another run has since changed, and a run that waited
+/// would act on it.
+pub(super) async fn run_locked<'a>(
+	path: &Path,
+	options: &Options,
+	make_services: impl FnOnce(&Config) -> Services<'a>,
+	(json, out, err): (bool, &mut impl Write, &mut impl Write),
+	restart: impl FnOnce(&Config, crate::cli::stack::StackAction) -> ExitCode,
+) -> ExitCode {
+	// The lock is named by the data directory, so the configuration is read
+	// once to learn it and again, under the lock, to act on.
+	let data_dir = match Config::load(path) {
+		Ok(config) => config.data_dir,
+		Err(error) => {
+			crate::cli::style::error_to(err, error);
+			return ExitCode::FAILURE;
+		}
+	};
+	let _held = match split_state::lock(&data_dir, LOCK_WAIT) {
+		Ok(held) => held,
+		Err(why) => {
+			crate::cli::style::error_to(err, format_args!("dkim split refused: {why}"));
+			return ExitCode::FAILURE;
+		}
+	};
+	let config = match Config::load(path) {
+		Ok(config) => config,
+		Err(error) => {
+			crate::cli::style::error_to(err, error);
+			return ExitCode::FAILURE;
+		}
+	};
+	let services = make_services(&config);
+	split(path, &config, options, &services, (json, out, err), restart).await
 }
 
 /// The keys a domain moves to, with the records they are published as.
@@ -185,20 +218,6 @@ pub(super) async fn split(
 	restart: impl FnOnce(&Config, crate::cli::stack::StackAction) -> ExitCode,
 ) -> ExitCode {
 	let now = super::now_epoch();
-	// One run at a time on a data directory: two that both found a key
-	// missing, or both published, could end with DNS showing a key the
-	// configuration does not name.
-	let _held = if options.dry_run {
-		None
-	} else {
-		match split_state::lock(&config.data_dir, LOCK_WAIT) {
-			Ok(held) => Some(held),
-			Err(why) => {
-				crate::cli::style::error_to(err, format_args!("dkim split refused: {why}"));
-				return ExitCode::FAILURE;
-			}
-		}
-	};
 	if options.restarted {
 		return confirm_restart(config, (json, out, err));
 	}
@@ -207,7 +226,7 @@ pub(super) async fn split(
 	}
 	let plan = match plan::build(config) {
 		Ok(Some(plan)) => plan,
-		Ok(None) => return nothing_to_split(config, (json, out, err), restart),
+		Ok(None) => return nothing_to_split(config, options, (json, out, err), restart),
 		Err(reason) => {
 			crate::cli::style::error_to(err, format_args!("dkim split refused: {reason}"));
 			return ExitCode::FAILURE;
@@ -345,132 +364,6 @@ pub(super) async fn split(
 		err,
 		restart,
 	)
-}
-
-/// Whether `config` has a `[[dkim.domain]]` entry for `domain`: a record of a
-/// move with no entry behind it is not a restart to wait for or to confirm.
-fn has_entry(config: &Config) -> impl Fn(&str) -> bool + '_ {
-	move |domain| {
-		config
-			.dkim
-			.as_ref()
-			.is_some_and(|dkim| dkim.override_for(domain).is_some())
-	}
-}
-
-/// `split` found nothing to move. If an earlier run wrote its entries and the
-/// server was never restarted onto them, the restart is repeated: the keys on
-/// disk are not the ones that sign until it happens.
-fn nothing_to_split(
-	config: &Config,
-	(json, out, err): (bool, &mut impl Write, &mut impl Write),
-	restart: impl FnOnce(&Config, crate::cli::stack::StackAction) -> ExitCode,
-) -> ExitCode {
-	let mut report = Report::new(out, json);
-	let pending = match split_state::pending(&config.data_dir, has_entry(config)) {
-		Ok(pending) => pending,
-		Err(why) => {
-			crate::cli::style::error_to(err, format_args!("dkim split refused: {why}"));
-			return ExitCode::FAILURE;
-		}
-	};
-	if pending.is_empty() {
-		report.line("nothing to split: every hosted domain has a key of its own");
-		return report.object(serde_json::json!({ "result": "unchanged", "action": "split" }));
-	}
-	report.line(format_args!(
-		"{} signs with the shared key until the server is restarted onto its own: restarting now",
-		pending.join(", ")
-	));
-	let (confirmed, reload) = match restart_onto(
-		config,
-		crate::cli::config_edit::Outcome::Changed,
-		err,
-		restart,
-	) {
-		Ok(done) => done,
-		Err(code) => return code,
-	};
-	let pending_code = (!confirmed).then(|| restart_pending(&mut report));
-	if confirmed {
-		report.line("the server was restarted onto the moved keys");
-	}
-	let code = report.object(serde_json::json!({
-		"result": if confirmed { "restarted" } else { "restart-pending" },
-		"action": "split",
-		"domains": pending,
-		"reload": reload.name(),
-	}));
-	match pending_code {
-		Some(pending) if code == ExitCode::SUCCESS => pending,
-		_ => code,
-	}
-}
-
-/// Restart the server and, when that is confirmed, record that the moved keys
-/// are the ones signing. `Ok((confirmed, reload))`; `Err` carries the exit code
-/// of a restart that failed.
-fn restart_onto(
-	config: &Config,
-	outcome: crate::cli::config_edit::Outcome,
-	err: &mut impl Write,
-	restart: impl FnOnce(&Config, crate::cli::stack::StackAction) -> ExitCode,
-) -> Result<(bool, crate::cli::json_out::Reload), ExitCode> {
-	let reload = match crate::cli::config_edit::after_change_reporting(
-		config, outcome, true, err, restart,
-	) {
-		Ok((ExitCode::SUCCESS, reload)) => reload,
-		Ok((code, _)) => return Err(code),
-		Err(ResourceError::Refusal(message) | ResourceError::Failure(message)) => {
-			crate::cli::style::error_to(err, message);
-			return Err(ExitCode::FAILURE);
-		}
-	};
-	let confirmed = reload == crate::cli::json_out::Reload::Restarted;
-	if confirmed
-		&& let Err(why) =
-			split_state::mark_restarted(&config.data_dir, super::now_epoch(), has_entry(config))
-	{
-		crate::cli::style::error_to(err, format_args!("{why}"));
-		return Err(ExitCode::FAILURE);
-	}
-	Ok((confirmed, reload))
-}
-
-/// What to say, and the exit code, when the server is not confirmed to run the
-/// moved keys: 4, the code of a split that still needs the operator.
-fn restart_pending(report: &mut Report<'_>) -> ExitCode {
-	report.line(
-		"the server is NOT confirmed to run the moved keys: restart it, then run `epistle dkim split --restarted` (or `epistle dkim split` again, which restarts it if it can)",
-	);
-	ExitCode::from(finish::MANUAL_ACTION)
-}
-
-/// `--restarted`: the operator restarted the server by hand.
-fn confirm_restart(
-	config: &Config,
-	(json, out, err): (bool, &mut impl Write, &mut impl Write),
-) -> ExitCode {
-	let mut report = Report::new(out, json);
-	match split_state::mark_restarted(&config.data_dir, super::now_epoch(), has_entry(config)) {
-		Ok(settled) if settled.is_empty() => {
-			report.line("nothing pending: no split is waiting for a restart");
-			report.object(serde_json::json!({ "result": "unchanged", "action": "split-restarted" }))
-		}
-		Ok(settled) => {
-			report.line(format_args!(
-				"recorded that the server runs the moved keys of {}; the overlap before the shared key's records may go counts from now",
-				settled.join(", ")
-			));
-			report.object(serde_json::json!({
-				"result": "restarted", "action": "split-restarted", "domains": settled,
-			}))
-		}
-		Err(why) => {
-			crate::cli::style::error_to(err, format_args!("{why}"));
-			ExitCode::FAILURE
-		}
-	}
 }
 
 /// Write the entries and restart: the one step that changes what signs.

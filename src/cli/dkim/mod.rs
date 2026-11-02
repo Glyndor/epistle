@@ -64,9 +64,9 @@ pub enum DkimCli {
 		/// hand otherwise. Never touches the domain that kept the key.
 		#[arg(long)]
 		finish: bool,
-		/// With `--finish`: retire even when no switch time is recorded or the
-		/// overlap window has not passed. Mail signed before the switch may
-		/// still be queued elsewhere.
+		/// With `--finish`: retire even though the overlap window has not
+		/// passed. A server not confirmed on the new key is never retired for.
+		/// Mail signed before the switch may still be queued elsewhere.
 		#[arg(long, requires = "finish")]
 		skip_overlap_check: bool,
 		/// Record that you restarted the server by hand onto the keys a split
