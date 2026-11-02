@@ -112,7 +112,7 @@ fn stack_update_moves_the_keys_creates_missing_ones_and_repoints_the_config() {
 		"{after}"
 	);
 	assert!(secrets.join("epistle_db_admin_password").is_file());
-	assert_eq!(lines.len(), 5, "{lines:?}");
+	assert_eq!(lines.len(), 5, "one line per key moved or created");
 	assert_eq!(
 		super::prepare_keys_for_update(&data_dir, &config, true, false).unwrap(),
 		Vec::<String>::new(),
