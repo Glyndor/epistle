@@ -51,13 +51,22 @@ fn each_account_names_its_key_and_why() {
 	let alice = describe(&path, &store, "alice");
 	assert!(
 		alice.starts_with("the key of tenant \"acme\", key "),
-		"{alice}"
+		"alice resolves to the acme key"
 	);
 	let frank = describe(&path, &store, "frank");
-	assert!(frank.starts_with("the server key, key "), "{frank}");
-	assert!(frank.contains("outside tenant \"acme\""), "{frank}");
+	assert!(
+		frank.starts_with("the server key, key "),
+		"frank stays on the server key"
+	);
+	assert!(
+		frank.contains("outside tenant \"acme\""),
+		"frank's line says why"
+	);
 	let bob = describe(&path, &store, "bob");
-	assert!(bob.starts_with("the server key, key "), "{bob}");
+	assert!(
+		bob.starts_with("the server key, key "),
+		"bob stays on the server key"
+	);
 	assert_ne!(alice.split(';').next(), bob.split(';').next());
 }
 
