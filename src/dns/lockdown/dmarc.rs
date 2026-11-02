@@ -34,7 +34,9 @@ impl DmarcStep {
 		}
 	}
 
-	fn parse(value: &str) -> Option<Self> {
+	/// The step a tag value names (`none`, `quarantine` or `reject`, in
+	/// any letter case), `None` for anything else.
+	pub fn parse(value: &str) -> Option<Self> {
 		match value.to_ascii_lowercase().as_str() {
 			"none" => Some(DmarcStep::None),
 			"quarantine" => Some(DmarcStep::Quarantine),
@@ -124,7 +126,8 @@ pub struct DmarcTags {
 }
 
 impl DmarcTags {
-	fn get(&self, tag: &str) -> Option<&str> {
+	/// The value of `tag`, matched case-insensitively, as written.
+	pub fn get(&self, tag: &str) -> Option<&str> {
 		self.tags
 			.iter()
 			.find(|(name, _)| name.eq_ignore_ascii_case(tag))

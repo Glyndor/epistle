@@ -3,6 +3,7 @@
 //! so it is safe to run anytime and needs no provider credentials.
 
 pub mod check_host;
+pub mod desired;
 pub mod detect;
 pub mod lockdown;
 pub mod names;
@@ -10,6 +11,7 @@ pub mod provider;
 pub mod providers;
 pub mod proxied_check;
 pub mod publish;
+pub mod reconcile;
 pub mod records;
 pub mod router;
 pub mod rrset;
