@@ -102,14 +102,17 @@ pub(super) fn build_tls(
 					(acme.clone(), config.data_dir.clone(), reloadable.clone());
 				acme_renewal = Some(crate::acme::renew::Renewal::spawn(|stop| {
 					crate::acme::renew::run(
-						acme.directory_url,
-						acme.contacts,
-						acme.domains,
-						responder,
-						data_dir,
-						reloadable,
-						u64::from(acme.renew_before_days),
-						tlsa,
+						crate::acme::renew::RenewalJob {
+							directory_url: acme.directory_url,
+							contacts: acme.contacts,
+							domains: acme.domains,
+							responder,
+							account_key: crate::acme::renew::account_key_path(&data_dir),
+							data_dir,
+							reloadable: Some(reloadable),
+							renew_before_days: u64::from(acme.renew_before_days),
+							tlsa,
+						},
 						stop,
 					)
 				}));
