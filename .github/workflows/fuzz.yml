@@ -18,11 +18,16 @@ on:
       # it, so a broken edit merges without ever having been executed.
       - ".github/workflows/fuzz.yml"
       - ".github/scripts/fuzz_targets.py"
-      # The lockfile, not the manifest: a pull request that only declares a
-      # test target or bumps the crate version edits Cargo.toml and changes
-      # nothing a fuzz target parses, while a dependency change always moves
-      # Cargo.lock.
-      - "Cargo.lock"
+      # Neither root manifest file. The fuzz crate is a workspace of its own
+      # and resolves from fuzz/Cargo.lock (below, under fuzz/**): with the root
+      # Cargo.lock removed, `cargo metadata --locked` on fuzz/Cargo.toml prints
+      # the same resolution, so the root lockfile changes nothing it builds. A
+      # new or raised dependency moves fuzz/Cargo.lock as well, because
+      # ci.yml's lint refuses a stale one. Cargo.toml stays off so that a pull
+      # request that only declares a test target does not pay for this; a
+      # change to a dependency's features there is left to the nightly run.
+      # A version bump moves fuzz/Cargo.lock and runs no target: see
+      # .github/scripts/fuzz_targets.py.
       - "src/smtp/**"
       - "src/imap/**"
       - "src/sieve/**"
@@ -76,9 +81,11 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
 
-      # A pull request runs the targets of the protocols it touches; a
-      # schedule or a manual run, and any change the script cannot narrow,
-      # run all of them. See .github/scripts/fuzz_targets.py.
+      # A pull request runs the targets of the protocols it touches, and a
+      # pure version bump none; a schedule or a manual run, and any change
+      # the script cannot narrow, run all of them. The bump judge is read
+      # from the base commit, which fetch-depth 0 brings. See
+      # .github/scripts/fuzz_targets.py.
       - id: pick
         env:
           EVENT_NAME: ${{ github.event_name }}

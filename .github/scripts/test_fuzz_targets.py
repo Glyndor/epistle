@@ -1,7 +1,13 @@
+import json
 import os
+import re
+import subprocess
+import sys
+import tempfile
 import unittest
 
 import fuzz_targets as ft
+from version_bump.fixtures import Repo, bump_all
 
 FUZZ_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "fuzz", "fuzz_targets")
 
@@ -42,7 +48,6 @@ class SelectTests(unittest.TestCase):
             ("src/jwt/mod.rs", "jwt_decode"),
             ("src/queue/client/conn/mod.rs", "smtp_reply"),
             ("src/mtasts/policy/mod.rs", "dns_security_records"),
-            ("src/reports/dmarc/mod.rs", "report_payload"),
             ("src/rules/mod.rs", "rules_match"),
         ):
             self.assertEqual(ft.select("pull_request", [path]), [target])
@@ -62,17 +67,162 @@ class SelectTests(unittest.TestCase):
             "src/util/header/mod.rs",
             "src/lib.rs",
             "src/fuzzing.rs",
-            "Cargo.lock",
+            "Cargo.toml",
+            "migrations/0009_new.sql",
+            ".sqlx/query-1.json",
+            "deploy/images/Dockerfile",
+            "build.rs",
+            "fuzz/Cargo.lock",
             "fuzz/fuzz_targets/message/mime.rs",
             ".github/workflows/fuzz.yml",
+            ".github/scripts/fuzz_targets.py",
+            "a-file-nobody-has-seen-yet",
         ):
             self.assertEqual(ft.select("pull_request", [path, "src/imap/a.rs"]), ft.ALL)
 
     def test_documentation_alone_runs_nothing(self):
         self.assertEqual(ft.select("pull_request", ["docs/limits.md", "README.md"]), [])
 
+    def test_what_the_fuzz_crate_does_not_build_runs_nothing(self):
+        unrelated = [
+            "Cargo.lock",
+            "tests/smtp/hostile_smtp.rs",
+            "benches/parsers.rs",
+            "examples/profile.rs",
+            "debian/changelog",
+            ".github/workflows/db.yml",
+            ".github/scripts/sign.py",
+        ]
+        self.assertEqual(ft.select("pull_request", unrelated), [])
+        self.assertEqual(
+            ft.select("pull_request", unrelated + ["src/pop3/a.rs"]),
+            ft.select("pull_request", ["src/pop3/a.rs"]),
+        )
+        self.assertNotEqual(ft.select("pull_request", ["src/pop3/a.rs"]), ft.ALL)
+
+    def test_the_folders_that_only_mime_reads_run_mime(self):
+        self.assertEqual(ft.select("pull_request", ["src/dmarc/author/mod.rs"]), ["mime"])
+        self.assertEqual(ft.select("pull_request", ["src/api/jmap/email/mod.rs"]), ["mime"])
+
+    def test_the_store_of_managesieve_runs_the_validator(self):
+        self.assertIn(
+            "sieve_validate", ft.select("pull_request", ["src/managesieve/store/mod.rs"])
+        )
+
+    def test_the_reports_folder_runs_the_payload_and_the_report_walker(self):
+        # `mime` calls reports::mime::find_report_part and reports::Kind, so
+        # the whole folder runs both rather than a split that could miss one.
+        for path in ("src/reports/dmarc/mod.rs", "src/reports/mime/mod.rs"):
+            self.assertEqual(ft.select("pull_request", [path]), ["mime", "report_payload"])
+
     def test_no_changed_paths_runs_everything(self):
         self.assertEqual(ft.select("pull_request", []), ft.ALL)
+
+
+ROOT = os.path.join(os.path.dirname(__file__), "..", "..")
+MODULE = r"((?:[a-z0-9_]+::)*[a-z0-9_]+)"
+
+
+def target_source(target):
+    for folder, _, names in os.walk(FUZZ_DIR):
+        if f"{target}.rs" in names:
+            with open(os.path.join(folder, f"{target}.rs"), encoding="utf-8") as handle:
+                return handle.read()
+    raise AssertionError(f"no source for {target}")
+
+
+def entry_point(name):
+    """The body of `pub fn <name>` in src/fuzzing.rs."""
+    with open(os.path.join(ROOT, "src", "fuzzing.rs"), encoding="utf-8") as handle:
+        text = handle.read()
+    found = re.search(rf"^pub fn {name}\(.*?^}}$", text, re.S | re.M)
+    if not found:
+        raise AssertionError(f"src/fuzzing.rs has no `pub fn {name}`")
+    return found.group(0)
+
+
+def modules_reached(target):
+    """Module paths a target calls directly: `epistle::a::b` in its own file,
+    and `crate::a::b` in the src/fuzzing.rs entry point it goes through."""
+    text = target_source(target)
+    reached = set()
+    for name in re.findall(r"epistle::fuzzing::(\w+)", text):
+        reached |= set(re.findall(rf"crate::{MODULE}", entry_point(name)))
+    for module in re.findall(rf"epistle::{MODULE}", text):
+        if module.split("::")[0] != "fuzzing":
+            reached.add(module)
+    return reached
+
+
+class MapAgreesWithTheTargetsTests(unittest.TestCase):
+    """A change to a module a target calls must select that target.
+
+    The map is written by hand, and it had drifted: `sieve_validate` calls
+    the ManageSieve script store and `mime` calls the report walker, and a
+    pull request in either folder ran neither. This reads the targets and
+    the entry points and asks the selection itself, so a new call that the
+    map misses fails here. It sees direct calls only, not what those
+    modules call in turn.
+    """
+
+    def test_every_target_reaches_something(self):
+        for target in ft.ALL:
+            self.assertTrue(modules_reached(target), f"{target} calls no epistle module")
+
+    def test_a_change_to_a_called_module_selects_the_target(self):
+        for target in ft.ALL:
+            for module in sorted(modules_reached(target)):
+                path = "src/" + module.replace("::", "/") + "/mod.rs"
+                self.assertIn(
+                    target,
+                    ft.select("pull_request", [path]),
+                    f"{target} calls {module}, but a change to {path} does not run it",
+                )
+
+
+class VersionBumpTests(unittest.TestCase):
+    """A version bump runs no target, and only the base's judge can say so."""
+
+    def plan(self, judge, change=bump_all):
+        repo = Repo(change, judge=judge)
+        self.addCleanup(repo.close)
+        with tempfile.NamedTemporaryFile("r", suffix=".out") as output:
+            env = {
+                **os.environ,
+                "EVENT_NAME": "pull_request",
+                "BASE_SHA": "base",
+                "HEAD_SHA": "head",
+                "GITHUB_OUTPUT": output.name,
+            }
+            done = subprocess.run(
+                [sys.executable, os.path.abspath(ft.__file__)],
+                cwd=repo.dir,
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(done.returncode, 0, done.stderr)
+            return output.read()
+
+    def test_a_bump_runs_no_target(self):
+        self.assertEqual(self.plan(judge=True), "targets=[]\n")
+
+    def test_a_base_without_the_judge_chooses_as_usual(self):
+        # Cargo.toml is not narrowed, so without the judge everything runs.
+        self.assertEqual(self.plan(judge=False), f"targets={json.dumps(ft.ALL)}\n")
+
+    def test_a_bump_with_a_source_change_is_not_a_bump(self):
+        def change():
+            bump_all()
+            os.makedirs("src/pop3", exist_ok=True)
+            with open("src/pop3/a.rs", "w", encoding="utf-8") as handle:
+                handle.write("// touched\n")
+
+        self.assertEqual(self.plan(judge=True, change=change), f"targets={json.dumps(ft.ALL)}\n")
+
+    def test_an_unreadable_base_is_not_a_bump(self):
+        self.assertFalse(ft.version_bump("deadbeef" * 5, "HEAD"))
 
 
 if __name__ == "__main__":

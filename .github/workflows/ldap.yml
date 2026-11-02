@@ -55,7 +55,14 @@ permissions:
   contents: read
 
 jobs:
+  # A pure version bump changes nothing this job builds but the version
+  # string, so the job skips it. See reusable-version-bump.yml.
+  decide:
+    uses: ./.github/workflows/reusable-version-bump.yml
+
   ldap-tests:
+    needs: decide
+    if: ${{ !cancelled() && needs.decide.outputs.run != 'false' }}
     # Not `integration tests`: db.yml used to emit a check by that exact name
     # (it is `database integration` now), and a required status check is matched
     # by its name string, so two workflows sharing one would be
