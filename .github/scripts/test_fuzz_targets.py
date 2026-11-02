@@ -49,7 +49,13 @@ class SelectTests(unittest.TestCase):
 
     def test_two_protocols_run_both(self):
         got = ft.select("pull_request", ["src/pop3/a.rs", "src/dkim/b.rs"])
-        self.assertEqual(got, ["pop3_command", "dkim_signature", "mime"])
+        self.assertEqual(got, ["pop3_command", "pop3_session", "dkim_signature", "mime"])
+
+    def test_the_pop3_session_target_runs_with_the_pop3_source(self):
+        self.assertEqual(
+            ft.select("pull_request", ["src/pop3/session/mod.rs"]),
+            ["pop3_command", "pop3_session"],
+        )
 
     def test_anything_unmapped_runs_everything(self):
         for path in (
