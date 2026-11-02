@@ -207,7 +207,7 @@ fn keep_own_keys(merged: &mut toml::map::Map<String, toml::Value>, own_keys: tom
 			entry
 				.get("name")
 				.and_then(toml::Value::as_str)
-				.is_some_and(&hosted)
+				.is_some_and(hosted)
 		})
 		.cloned()
 		.collect();
