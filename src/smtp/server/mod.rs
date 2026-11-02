@@ -29,7 +29,9 @@ mod run_attachments;
 mod run_auth;
 mod run_band;
 mod run_class;
+mod run_deliver;
 mod run_sent;
+mod run_upgrade;
 mod session_time;
 
 /// Read buffer size per connection.

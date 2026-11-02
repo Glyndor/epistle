@@ -209,55 +209,11 @@ impl Server {
 						Some(until) => std::cmp::min(line_deadline, until),
 						None => line_deadline,
 					};
-					let read = loop {
-						let remaining = deadline.saturating_duration_since(Instant::now());
-						let poll = if session.notify_active() {
-							IDLE_POLL.min(remaining)
-						} else {
-							remaining
-						};
-						let reading = stream.read(&mut buffer);
-						let Some(waited) =
-							crate::shutdown::or_drain(self.drain.as_deref(), poll, reading).await
-						else {
-							let _ = response_writer::write_response(
-								&mut *stream,
-								SHUTTING_DOWN,
-								&clock,
-								session.is_authenticated(),
-							)
-							.await;
-							return Ok(());
-						};
-						match waited {
-							Ok(Ok(n)) => break n,
-							Ok(Err(e)) => return Err(e),
-							Err(_) => {
-								if !session.notify_active() || Instant::now() >= deadline {
-									tracing::debug!("IMAP idle timeout, closing connection");
-									let _ = response_writer::write_response(
-										&mut *stream,
-										b"* BYE idle timeout\r\n",
-										&clock,
-										session.is_authenticated(),
-									)
-									.await;
-									return Ok(());
-								}
-								if let Some(notification) = session.check_notify()
-									&& response_writer::write_response(
-										&mut *stream,
-										&notification.bytes,
-										&clock,
-										session.is_authenticated(),
-									)
-									.await
-									.is_err()
-								{
-									return Ok(());
-								}
-							}
-						}
+					let Some(read) = self
+						.read_more(&mut *stream, &mut buffer, &clock, &mut session, deadline)
+						.await?
+					else {
+						return Ok(());
 					};
 					if read == 0 {
 						return Ok(());
@@ -453,27 +409,10 @@ impl Server {
 				if output.collect_auth {
 					// Read one SASL continuation line and feed it back.
 					let deadline = clock.step(session.is_authenticated());
-					let response = loop {
-						match decoder.next_line() {
-							Ok(Some(line)) => break line,
-							Ok(None) => {
-								let read = match tokio::time::timeout_at(
-									deadline,
-									stream.read(&mut buffer),
-								)
-								.await
-								{
-									Ok(Ok(n)) => n,
-									Ok(Err(e)) => return Err(e),
-									Err(_) => return Ok(()),
-								};
-								if read == 0 {
-									return Ok(());
-								}
-								decoder.feed(&buffer[..read]);
-							}
-							Err(_) => return Ok(()),
-						}
+					let Some(response) =
+						read_auth_line(&mut *stream, &mut decoder, &mut buffer, deadline).await?
+					else {
+						return Ok(());
 					};
 					let response = String::from_utf8(response).unwrap_or_default();
 					output = session.auth_response(&response);
@@ -551,5 +490,8 @@ mod discard;
 mod idle;
 
 mod server_literal;
+
+mod read;
+use read::read_auth_line;
 
 mod session_factory;
