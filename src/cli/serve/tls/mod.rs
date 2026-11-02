@@ -15,7 +15,7 @@ use crate::tls::{ReloadableAcceptor, tls_server_end_point};
 
 /// TLS/ACME startup state: listener acceptors share one reloadable certificate
 /// source, plus the SCRAM channel-binding hash. The ACME renewal task is
-/// spawned inside the helper and not returned.
+/// spawned inside the helper and returned so shutdown can stop it.
 pub(super) struct TlsStack {
 	/// The shared TLS acceptor, whose certificate resolver observes renewal
 	/// even when a listener retains its clone for the lifetime of the server.
@@ -25,6 +25,9 @@ pub(super) struct TlsStack {
 	/// SCRAM-SHA-256-PLUS channel binding hash; `None` when ACME is set.
 	/// It follows a static certificate the operator replaces on disk.
 	pub channel_binding: Option<crate::tls::EndPoint>,
+	/// The ACME renewal loop, stopped at shutdown so the challenges it
+	/// still has published are withdrawn before the process exits.
+	pub acme_renewal: Option<crate::acme::renew::Renewal>,
 }
 
 /// Load the TLS acceptor, build the reloadable variant, compute the
@@ -84,6 +87,7 @@ pub(super) fn build_tls(
 
 	// ACME automatic renewal: publish the certificate to every TLS listener.
 	// Requires a [tls] bootstrap certificate to reload into.
+	let mut acme_renewal = None;
 	if let Some(acme) = &config.acme {
 		match &reloadable_tls {
 			Some(reloadable) => {
@@ -94,16 +98,21 @@ pub(super) fn build_tls(
 					.build_for_host(&config.hostname)
 					.map(|provider| (provider, config.hostname.clone()));
 				let responder = responder(config, challenge_store, alpn_store)?;
-				tokio::spawn(crate::acme::renew::run(
-					acme.directory_url.clone(),
-					acme.contacts.clone(),
-					acme.domains.clone(),
-					responder,
-					config.data_dir.clone(),
-					reloadable.clone(),
-					u64::from(acme.renew_before_days),
-					tlsa,
-				));
+				let (acme, data_dir, reloadable) =
+					(acme.clone(), config.data_dir.clone(), reloadable.clone());
+				acme_renewal = Some(crate::acme::renew::Renewal::spawn(|stop| {
+					crate::acme::renew::run(
+						acme.directory_url,
+						acme.contacts,
+						acme.domains,
+						responder,
+						data_dir,
+						reloadable,
+						u64::from(acme.renew_before_days),
+						tlsa,
+						stop,
+					)
+				}));
 			}
 			None => tracing::warn!("[acme] is configured but [tls] is not; skipping ACME renewal"),
 		}
@@ -113,6 +122,7 @@ pub(super) fn build_tls(
 		tls_acceptor,
 		reloadable_tls,
 		channel_binding,
+		acme_renewal,
 	})
 }
 
@@ -141,7 +151,12 @@ fn responder(
 				)
 			})?;
 			let visibility = crate::acme::dns01_authoritative::AuthoritativeTxt::from_system()?;
-			Ok(Arc::new(Dns01::new(provider, Arc::new(visibility))))
+			// The journal lets the next start withdraw a record this run
+			// could not, when it stops before its withdrawal finished.
+			let journal = crate::acme::challenge::journal_path(&config.data_dir);
+			Ok(Arc::new(
+				Dns01::new(provider, Arc::new(visibility)).with_journal(journal),
+			))
 		}
 		_ => Ok(Arc::new(http01)),
 	}

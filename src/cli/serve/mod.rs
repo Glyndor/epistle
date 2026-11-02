@@ -141,6 +141,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		tls_acceptor,
 		reloadable_tls,
 		channel_binding,
+		acme_renewal,
 	} = tls::build_tls(&config, challenge_store.clone())?;
 	let ipv4_any_ports = startup::ipv4_any_ports(&config);
 	let mut tasks = Vec::new();
@@ -387,7 +388,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		}
 	}
 	crate::privdrop::drop_privileges(config.privileges.as_ref())?;
-	let stopped = wait::until_stopped(tasks, &drain).await;
+	let stopped = wait::until_stopped(tasks, &drain, acme_renewal).await;
 	watcher.abort();
 	let _ = watcher.await;
 	crate::directory_store::remove_reload_status(&config.data_dir);
