@@ -821,6 +821,7 @@ dependencies = [
 name = "epistle-fuzz"
 version = "0.0.0"
 dependencies = [
+ "argon2",
  "epistle",
  "libfuzzer-sys",
 ]

@@ -22,6 +22,7 @@ ALL = [
     "smtp_line",
     "smtp_address",
     "imap_command",
+    "imap_session",
     "sieve_message",
     "sieve_script",
     "sieve_run",
@@ -48,8 +49,17 @@ ALL = [
 
 # Folder of the source -> the targets that exercise it and nothing else.
 FOLDERS = {
+    # Before "src/smtp/": the first matching prefix wins, and the IMAP session
+    # signs in through the account directory.
+    "src/smtp/directory/": [
+        "smtp_command",
+        "smtp_line",
+        "smtp_address",
+        "smtp_data",
+        "imap_session",
+    ],
     "src/smtp/": ["smtp_command", "smtp_line", "smtp_address", "smtp_data"],
-    "src/imap/": ["imap_command", "mime", "migrate_imap_response"],
+    "src/imap/": ["imap_command", "mime", "migrate_imap_response", "imap_session"],
     "src/sieve/": ["sieve_message", "sieve_script", "sieve_run", "sieve_validate"],
     "src/pop3/": ["pop3_command", "pop3_session"],
     "src/managesieve/": ["managesieve_command", "sieve_validate"],

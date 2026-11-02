@@ -4,23 +4,47 @@ import re
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
 
 import fuzz_targets as ft
 from version_bump.fixtures import Repo, bump_all
 
-FUZZ_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "fuzz", "fuzz_targets")
+FUZZ_CRATE = os.path.join(os.path.dirname(__file__), "..", "..", "fuzz")
+FUZZ_DIR = os.path.join(FUZZ_CRATE, "fuzz_targets")
+
+
+def declared_targets():
+    """The [[bin]] entries of the fuzz crate: a target can span several
+    files, so the manifest is the list, not the files on disk."""
+    with open(os.path.join(FUZZ_CRATE, "Cargo.toml"), "rb") as manifest:
+        return tomllib.load(manifest)["bin"]
 
 
 class SelectTests(unittest.TestCase):
     def test_every_target_in_the_fuzz_crate_is_listed(self):
-        on_disk = sorted(
-            n[:-3]
-            for _, _, names in os.walk(FUZZ_DIR)
-            for n in names
-            if n.endswith(".rs")
-        )
-        self.assertEqual(sorted(ft.ALL), on_disk)
+        declared = sorted(b["name"] for b in declared_targets())
+        self.assertEqual(sorted(ft.ALL), declared)
+
+    def test_every_declared_target_has_its_source(self):
+        for target in declared_targets():
+            with self.subTest(target=target["name"]):
+                path = os.path.join(FUZZ_CRATE, target["path"])
+                self.assertTrue(os.path.isfile(path), path)
+
+    def test_every_target_source_is_declared(self):
+        # A file that starts a target and is missing from the manifest is
+        # never built; a module of a target does not start one.
+        declared = {os.path.normpath(b["path"]) for b in declared_targets()}
+        root = os.path.join(FUZZ_CRATE, "fuzz_targets")
+        for folder, _, names in os.walk(root):
+            for name in names:
+                path = os.path.join(folder, name)
+                with open(path, encoding="utf-8") as source:
+                    if "fuzz_target!" not in source.read():
+                        continue
+                relative = os.path.normpath(os.path.relpath(path, FUZZ_CRATE))
+                self.assertIn(relative, declared)
 
     def test_every_mapped_target_exists(self):
         for targets in ft.FOLDERS.values():
@@ -34,7 +58,7 @@ class SelectTests(unittest.TestCase):
     def test_one_protocol_runs_only_its_targets(self):
         self.assertEqual(
             ft.select("pull_request", ["src/imap/session/mod.rs"]),
-            ["imap_command", "mime", "migrate_imap_response"],
+            ["imap_command", "imap_session", "mime", "migrate_imap_response"],
         )
         self.assertEqual(
             ft.select("pull_request", ["src/smtp/a.rs", "src/smtp/b/c.rs"]),
@@ -59,6 +83,14 @@ class SelectTests(unittest.TestCase):
         self.assertEqual(
             ft.select("pull_request", ["src/webdav/rrule/mod.rs"]),
             ["webdav_filter_rrule", "webdav_report_body"],
+        )
+
+    def test_the_account_directory_runs_the_imap_session(self):
+        got = ft.select("pull_request", ["src/smtp/directory/bans.rs"])
+        self.assertIn("imap_session", got)
+        self.assertIn("smtp_command", got)
+        self.assertNotIn(
+            "imap_session", ft.select("pull_request", ["src/smtp/session/mod.rs"])
         )
 
     def test_two_protocols_run_both(self):
@@ -133,10 +165,26 @@ MODULE = r"((?:[a-z0-9_]+::)*[a-z0-9_]+)"
 
 
 def target_source(target):
-    for folder, _, names in os.walk(FUZZ_DIR):
-        if f"{target}.rs" in names:
-            with open(os.path.join(folder, f"{target}.rs"), encoding="utf-8") as handle:
-                return handle.read()
+    """The source of a target: its file, or every file of its folder when the
+    manifest points at a main.rs."""
+    for entry in declared_targets():
+        if entry["name"] != target:
+            continue
+        path = os.path.join(FUZZ_CRATE, entry["path"])
+        if os.path.basename(path) == "main.rs":
+            files = sorted(
+                os.path.join(folder, name)
+                for folder, _, names in os.walk(os.path.dirname(path))
+                for name in names
+                if name.endswith(".rs")
+            )
+        else:
+            files = [path]
+        text = []
+        for name in files:
+            with open(name, encoding="utf-8") as handle:
+                text.append(handle.read())
+        return "\n".join(text)
     raise AssertionError(f"no source for {target}")
 
 
