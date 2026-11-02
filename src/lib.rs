@@ -67,3 +67,8 @@ mod test_executable;
 mod test_executable_stress;
 #[cfg(test)]
 mod test_fixtures;
+#[cfg(test)]
+#[path = "../tests/common/reaped_group.rs"]
+mod test_reaped_group;
+#[cfg(test)]
+mod test_reaped_group_check;

@@ -8,7 +8,8 @@
 //! wrong ends the child and fails the parent, not the whole test binary.
 
 use super::*;
-use std::os::unix::process::{CommandExt, ExitStatusExt};
+use crate::test_reaped_group::{GroupChild, bounded_loop};
+use std::os::unix::process::ExitStatusExt;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -45,10 +46,10 @@ fn relay_child() {
 			// three seconds to close, longer than the two after which
 			// `runuser` killed it.
 			let mut command = shell(&format!(
-				"trap 'sleep 3; echo clean > {clean}; exit 0' TERM; echo up > {ready}; \
-				 while :; do sleep 0.1; done",
+				"trap 'sleep 3; echo clean > {clean}; exit 0' TERM; echo up > {ready}; {idle}",
 				clean = clean.display(),
 				ready = ready.display(),
+				idle = bounded_loop(),
 			));
 			run(&mut command).is_ok_and(|status| status.success()) && clean.exists()
 		}
@@ -85,9 +86,11 @@ fn relay_child() {
 	std::process::exit(if ok { 0 } else { 1 });
 }
 
-/// Start the scenario `mode` in a child process of its own group.
-fn start(mode: &str, dir: &Path) -> std::process::Child {
-	Command::new(std::env::current_exe().expect("test binary"))
+/// Start the scenario `mode` in a child process of its own group. The group is
+/// killed when the returned value is dropped, so a failed test leaves nothing.
+fn start(mode: &str, dir: &Path) -> GroupChild {
+	let mut command = Command::new(std::env::current_exe().expect("test binary"));
+	command
 		.args([
 			"--exact",
 			"cli::rootless::forward::tests::signals::relay_child",
@@ -95,11 +98,9 @@ fn start(mode: &str, dir: &Path) -> std::process::Child {
 		])
 		.env(MODE, mode)
 		.env(DIR, dir)
-		.process_group(0)
 		.stdout(std::process::Stdio::null())
-		.stderr(std::process::Stdio::null())
-		.spawn()
-		.expect("start the scenario")
+		.stderr(std::process::Stdio::null());
+	GroupChild::spawn(&mut command).expect("start the scenario")
 }
 
 /// Wait, with a bound, until `path` exists.
@@ -123,9 +124,9 @@ fn a_command_that_needs_longer_than_runuser_allowed_finishes_cleanly() {
 		"the command never started"
 	);
 	let started = Instant::now();
-	// SAFETY: kill sends a signal to the group of the child just started,
-	// which holds the scenario and the shell it waits for, and not this test.
-	unsafe { libc::kill(-(child.id() as libc::pid_t), libc::SIGTERM) };
+	// The group of the child just started holds the scenario and the shell it
+	// waits for, and not this test.
+	child.signal_group(libc::SIGTERM);
 	let status = child.wait().unwrap();
 	assert!(
 		status.success(),
