@@ -257,7 +257,7 @@ impl fmt::Display for PlanStep {
 			}
 			PlanStep::Dns { provider, zone } => write!(
 				f,
-				"dns: publish records through {provider} for zone {zone} (not implemented in this build)"
+				"dns: publish the records the configuration needs through {provider} for zone {zone}, as `epistle dns publish` does"
 			),
 			PlanStep::ConfigDir { path } => {
 				write!(f, "config dir: create {} (mode 0750)", path.display())

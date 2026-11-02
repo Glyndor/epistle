@@ -37,6 +37,7 @@ use crate::dns::rrset::{Cuts, same_record};
 pub mod apply;
 mod dmarc;
 mod ledger;
+pub mod once;
 mod slot;
 pub mod store;
 pub mod survey;

@@ -42,14 +42,14 @@ fn plan_step_config_identical_renders() {
 }
 
 #[test]
-fn plan_step_dns_says_not_implemented() {
+fn plan_step_dns_says_what_it_publishes() {
 	let step = PlanStep::Dns {
 		provider: "cloudflare".to_string(),
 		zone: "example.org".to_string(),
 	};
 	let rendered = step.to_string();
 	assert!(
-		rendered.contains("not implemented in this build"),
+		rendered.contains("epistle dns publish") && rendered.contains("example.org"),
 		"got {rendered}"
 	);
 }

@@ -1473,8 +1473,15 @@ again, and confirmation is always asked again. Passwords are requested after
 confirmation, never written into the draft or printed, and must be entered again
 when resuming. Guided automatic mode accepts a DNS credential file or environment
 variable reference instead of an inline token. Credential references are requested
-again after interruption and are not saved in the draft. DNS publishing is still not
-implemented in this build.
+again after interruption and are not saved in the draft.
+
+In automatic mode the last step publishes the records the written configuration
+needs through the `[dns]` provider, with the same run as `epistle dns publish
+--yes`: missing records are created, records somebody else wrote are left and
+listed as conflicts, and the ledger is started under `<data_dir>/dns-publish/`.
+A step that cannot publish (a credential that cannot be read yet, a zone the
+provider cannot list) does not undo the install: the report says why, and
+`epistle dns publish` publishes later.
 
 Without `--answers`, only a run whose stdin and stderr are both terminals and that
 carries no `--json` gets the guided steps. Every other run, a pipe, a redirected
@@ -1598,9 +1605,6 @@ failure of the disk or the process itself can stop a run after the keys.
 What this build does **not** do (other parts of `init`, deliberately out of
 scope here):
 
-- DNS publishing for automatic mode: the plan still lists the `dns` step, but
-  the step renders `not implemented in this build`. The operator follows it by
-  hand or waits for the next part of `init` to land;
 - a management-API credential: `services.api = true` writes an API listener and
   an empty `[api]` section. Create labelled keys with `epistle api-key create`.
   Operators who want a static token may set `token_hash` themselves using
