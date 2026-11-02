@@ -19,6 +19,7 @@ import tempfile
 
 ALL = [
     "smtp_command",
+    "smtp_session",
     "smtp_line",
     "smtp_address",
     "imap_command",
@@ -53,12 +54,13 @@ FOLDERS = {
     # signs in through the account directory.
     "src/smtp/directory/": [
         "smtp_command",
+        "smtp_session",
         "smtp_line",
         "smtp_address",
         "smtp_data",
         "imap_session",
     ],
-    "src/smtp/": ["smtp_command", "smtp_line", "smtp_address", "smtp_data"],
+    "src/smtp/": ["smtp_command", "smtp_session", "smtp_line", "smtp_address", "smtp_data"],
     "src/imap/": ["imap_command", "mime", "migrate_imap_response", "imap_session"],
     "src/sieve/": ["sieve_message", "sieve_script", "sieve_run", "sieve_validate"],
     "src/pop3/": ["pop3_command", "pop3_session"],

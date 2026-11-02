@@ -62,7 +62,7 @@ class SelectTests(unittest.TestCase):
         )
         self.assertEqual(
             ft.select("pull_request", ["src/smtp/a.rs", "src/smtp/b/c.rs"]),
-            ["smtp_command", "smtp_line", "smtp_address", "smtp_data"],
+            ["smtp_command", "smtp_session", "smtp_line", "smtp_address", "smtp_data"],
         )
 
     def test_the_parsers_of_one_folder_run_their_own_target(self):

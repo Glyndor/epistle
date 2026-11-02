@@ -203,3 +203,10 @@ path = "fuzz_targets/mailbox/imap_session/main.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "smtp_session"
+path = "fuzz_targets/smtp/smtp_session/main.rs"
+test = false
+doc = false
+bench = false
