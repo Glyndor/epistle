@@ -312,7 +312,11 @@ fn without_a_provider_finish_lists_the_records_to_remove_by_hand() {
 	let before = zone.published();
 	let (_, resolver) = services(&zone);
 	let (code, out, _, _) = run(&install, &FINISH, None, &resolver);
-	assert_eq!(code, ExitCode::SUCCESS);
+	assert_eq!(
+		code,
+		ExitCode::from(4),
+		"manual removal leaves the split unfinished"
+	);
 	assert!(
 		out.contains("remove by hand: s1._domainkey.b.example.org"),
 		"{out}"
