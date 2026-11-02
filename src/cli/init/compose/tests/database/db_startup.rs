@@ -3,8 +3,8 @@ use super::{render, stack_answers};
 #[cfg(unix)]
 #[test]
 fn db_healthcheck_rejects_temporary_server_and_requires_query() {
+	use crate::test_executable::write_executable;
 	use std::fs;
-	use std::os::unix::fs::PermissionsExt;
 	use std::process::Command;
 
 	let value = render(&stack_answers(), true);
@@ -19,15 +19,16 @@ fn db_healthcheck_rejects_temporary_server_and_requires_query() {
 	] {
 		let marker = dir.path().join("queried");
 		let _ = fs::remove_file(&marker);
-		fs::write(dir.path().join("cat"), format!("#!/bin/sh\nif [ \"$1\" = /proc/1/comm ]; then printf '%s\\n' '{comm}'; else printf 'fixture'; fi\n")).unwrap();
-		fs::write(
-			dir.path().join("psql"),
+		write_executable(
+			&dir.path().join("cat"),
+			format!(
+				"#!/bin/sh\nif [ \"$1\" = /proc/1/comm ]; then printf '%s\\n' '{comm}'; else printf 'fixture'; fi\n"
+			),
+		);
+		write_executable(
+			&dir.path().join("psql"),
 			format!("#!/bin/sh\nprintf 'query' > \"$QUERY_MARKER\"\nexit {query_status}\n"),
-		)
-		.unwrap();
-		for name in ["cat", "psql"] {
-			fs::set_permissions(dir.path().join(name), fs::Permissions::from_mode(0o755)).unwrap();
-		}
+		);
 		let output = Command::new("/bin/sh")
 			.args(["-c", cmd])
 			.env("PATH", dir.path())

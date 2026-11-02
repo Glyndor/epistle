@@ -1,11 +1,10 @@
 //! `db status`: one read-only query run in the stack's database container.
 
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use serde_json::json;
 
-use crate::harness::{Env, env, epistle_in, json};
+use crate::harness::{Env, env, epistle_in, executable, json};
 
 const DATABASE: &str =
 	"[database]\nurl = \"postgres://epistle@localhost/epistle\"\ntls = \"insecure\"\n";
@@ -19,15 +18,13 @@ fn stub(env: &Env, row: &str, exit: i32, stderr: &str) -> PathBuf {
 	std::fs::write(bin.join("exit.txt"), exit.to_string()).expect("exit");
 	std::fs::write(bin.join("stderr.txt"), stderr).expect("stderr");
 	let shim = bin.join("podup");
-	std::fs::write(
+	executable::write_executable(
 		&shim,
 		"#!/bin/sh\nd=\"$(dirname \"$0\")\"\n\
 		 if [ \"$1\" = \"--version\" ]; then echo 'podup version v5.15.4'; exit 0; fi\n\
 		 printf '%s\\n' \"$*\" >> \"$d/calls.txt\"\n\
 		 cat \"$d/row.txt\"\ncat \"$d/stderr.txt\" >&2\nexit \"$(cat \"$d/exit.txt\")\"\n",
-	)
-	.expect("shim");
-	std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+	);
 	let compose = env.data_dir().join("compose/compose.yaml");
 	std::fs::create_dir_all(compose.parent().expect("parent")).expect("compose dir");
 	std::fs::write(&compose, b"# compose fixture\n").expect("compose");
