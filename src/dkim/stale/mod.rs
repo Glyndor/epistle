@@ -173,16 +173,50 @@ pub fn names_for(config: &Config, domain: &str, own: &[String]) -> Result<Vec<St
 		.collect())
 }
 
-/// The default key's records at every domain that has a key of its own.
+/// The default key's records at every domain that has a key of its own: the
+/// selectors it is published under now, and the ones a split recorded when the
+/// domain moved, which a rotation may have retired from the configuration
+/// since (their records stay in DNS until something removes them).
 pub fn names(config: &Config) -> Result<Vec<Stale>, String> {
 	let Some(dkim) = &config.dkim else {
 		return Ok(Vec::new());
 	};
-	let mut all = Vec::new();
+	let recorded = super::split_state::read(&config.data_dir)?;
+	let mut all: Vec<Stale> = Vec::new();
 	for entry in &dkim.domain {
 		let mut own = vec![entry.selector.clone()];
 		own.extend(entry.rsa_selector.clone());
-		all.extend(names_for(config, &entry.name, &own)?);
+		let mut found = names_for(config, &entry.name, &own)?;
+		let moved = recorded.get(&entry.name.to_ascii_lowercase());
+		for old in moved.iter().flat_map(|moved| &moved.stale) {
+			if own.iter().any(|o| o.eq_ignore_ascii_case(&old.selector)) {
+				continue;
+			}
+			match found
+				.iter_mut()
+				.find(|s| s.selector.eq_ignore_ascii_case(&old.selector))
+			{
+				Some(known) => {
+					for p in &old.expected {
+						if !known.expected.contains(p) {
+							known.expected.push(p.clone());
+						}
+					}
+				}
+				None => found.push(Stale {
+					domain: entry.name.to_ascii_lowercase(),
+					selector: old.selector.clone(),
+					name: format!(
+						"{}._domainkey.{}",
+						old.selector,
+						entry.name.to_ascii_lowercase()
+					),
+					expected: old.expected.clone(),
+					unreadable: None,
+				}),
+			}
+		}
+		all.extend(found);
 	}
 	Ok(all)
 }

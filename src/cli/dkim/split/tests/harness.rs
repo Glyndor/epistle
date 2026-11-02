@@ -14,12 +14,18 @@ use crate::spf::{DnsFailure, DnsLookup};
 type Op<'a> = Pin<Box<dyn Future<Output = Result<(), ProviderError>> + Send + 'a>>;
 type ListOp<'a> = Pin<Box<dyn Future<Output = Result<Vec<DnsRecord>, ProviderError>> + Send + 'a>>;
 
+/// A rewrite applied to every value published.
+pub(super) type Tamper = fn(&str) -> String;
+
 /// The published TXT records, by name.
 #[derive(Clone, Default)]
 pub(super) struct Zone {
 	pub records: Arc<Mutex<HashMap<String, Vec<String>>>>,
 	/// The `(name, value)` of every delete the provider was asked for.
 	pub deleted: Arc<Mutex<Vec<(String, String)>>>,
+	/// Rewrites every value the provider publishes, like a template that
+	/// changes a record on the way in.
+	pub tamper: Arc<Mutex<Option<Tamper>>>,
 }
 
 impl Zone {
@@ -40,14 +46,13 @@ impl DnsProvider for Provider {
 	fn upsert(&self, _zone: &str, record: DnsRecord) -> Op<'_> {
 		let refuses = self.refuses;
 		let records = Arc::clone(&self.zone.records);
+		let tamper = *self.zone.tamper.lock().unwrap();
 		Box::pin(async move {
 			if refuses {
 				return Err(ProviderError::Unsupported);
 			}
-			records
-				.lock()
-				.unwrap()
-				.insert(record.name, vec![record.value]);
+			let value = tamper.map_or_else(|| record.value.clone(), |f| f(&record.value));
+			records.lock().unwrap().insert(record.name, vec![value]);
 			Ok(())
 		})
 	}
@@ -204,6 +209,11 @@ pub(super) struct Install {
 impl Install {
 	/// `domains` all sign with the `[dkim]` key; `extra` is appended.
 	pub(super) fn new(domains: &[&str], extra: &str) -> Install {
+		Install::with_selector(domains, extra, "s1")
+	}
+
+	/// [`Install::new`] with the selector the shared key is published under.
+	pub(super) fn with_selector(domains: &[&str], extra: &str, selector: &str) -> Install {
 		let dir = tempfile::tempdir().expect("dir");
 		let data = dir.path().canonicalize().expect("path").join("data");
 		std::fs::create_dir_all(&data).expect("data");
@@ -217,13 +227,15 @@ impl Install {
 			file,
 			"hostname = \"mail.example.org\"\ndata_dir = {data:?}\ndomains = [{}]\n\
 			 [dns]\nprovider = \"cloudflare\"\nzone = \"example.org\"\ntoken = \"t\"\n\
-			 [dkim]\nselector = \"s1\"\nkey_file = {key:?}\n{extra}",
+			 [dkim]\nselector = \"{selector}\"\nkey_file = {key:?}\n{extra}",
 			list.join(", ")
 		)
 		.expect("write config");
 		std::fs::set_permissions(&config, std::os::unix::fs::PermissionsExt::from_mode(0o600))
 			.expect("chmod");
-		Install { dir, config }
+		let install = Install { dir, config };
+		with_stack(&install);
+		install
 	}
 
 	pub(super) fn text(&self) -> String {
@@ -318,4 +330,10 @@ pub(super) fn public(file: &Path) -> String {
 	crate::dkim::Signer::load("x", file)
 		.expect("loads")
 		.dns_record_value()
+}
+
+/// Take the compose file away again: the server cannot be restarted from here.
+pub(super) fn without_stack(install: &Install) {
+	let compose = crate::cli::init::compose_file_path(&install.data());
+	std::fs::remove_file(compose).expect("compose file");
 }

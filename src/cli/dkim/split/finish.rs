@@ -22,12 +22,14 @@
 use std::io::Write;
 use std::process::ExitCode;
 
-use super::{Options, Services, publish, switched};
+use super::{Options, Services, publish};
 use crate::cli::json_out::Report;
 use crate::config::Config;
+use crate::dkim::split_state;
 use crate::dkim::stale::{self, Found};
 
-/// The public keys of a domain's own records, by name, as its entry names them.
+/// A domain's own records, as its entry names them: the name and the record
+/// that publishes the key.
 fn own_records(config: &Config, domain: &str) -> Result<Vec<(String, String)>, String> {
 	let entry = config
 		.dkim
@@ -37,30 +39,31 @@ fn own_records(config: &Config, domain: &str) -> Result<Vec<(String, String)>, S
 	let mut found = Vec::new();
 	let ed = crate::dkim::Signer::load(&entry.selector, &entry.key_file)
 		.map_err(|error| format!("{} does not load: {error}", entry.key_file.display()))?;
-	let p = stale::public_part(&ed.dns_record_value()).unwrap_or_default();
-	found.push((format!("{}._domainkey.{domain}", entry.selector), p));
+	found.push((
+		format!("{}._domainkey.{domain}", entry.selector),
+		ed.dns_record_value(),
+	));
 	if let (Some(selector), Some(file)) = (&entry.rsa_selector, &entry.rsa_key_file) {
 		let record = crate::dkim::rsa_record_value(file)
 			.map_err(|error| format!("{} does not load: {error}", file.display()))?;
-		let p = stale::public_part(&record).unwrap_or_default();
-		found.push((format!("{selector}._domainkey.{domain}"), p));
+		found.push((format!("{selector}._domainkey.{domain}"), record));
 	}
 	Ok(found)
 }
 
-/// The names of `domain`'s own records that a resolver does not show with the
-/// right key, or why they could not be checked.
+/// The names of `domain`'s own records that a resolver does not show as a
+/// record that can verify its key, or why they could not be checked.
 async fn own_missing(
 	config: &Config,
 	services: &Services<'_>,
 	domain: &str,
 ) -> Result<Vec<String>, String> {
 	let mut missing = Vec::new();
-	for (name, p) in own_records(config, domain)? {
+	for (name, expected) in own_records(config, domain)? {
 		let seen = match services.resolver.txt(&name).await {
 			Ok(values) => values
 				.iter()
-				.any(|value| stale::public_part(value).as_deref() == Some(p.as_str())),
+				.any(|value| crate::dkim::key_record::same_usable_key(value, &expected)),
 			Err(_) => return Err(format!("the lookup of {name} failed")),
 		};
 		if !seen {
@@ -143,26 +146,35 @@ pub(super) async fn finish(
 			),
 		);
 	}
-	// The overlap runs from the switch; no recorded switch fails closed.
-	let moments = match switched::read(&config.data_dir) {
+	// The overlap runs from the moment the server was restarted onto the new
+	// key. A domain with no recorded move, or one whose restart was never
+	// confirmed, is refused, and `--skip-overlap-check` does not lift that: a
+	// server that still signs with the shared key needs its record.
+	let moments = match split_state::read(&config.data_dir) {
 		Ok(moments) => moments,
 		Err(why) => return fail(err, why),
 	};
 	let overlap = crate::dkim::ROTATE_OVERLAP_DAYS * 86_400;
-	let mut held = Vec::new();
+	let (mut unconfirmed, mut held) = (Vec::new(), Vec::new());
 	for found in &present {
 		let record = &found.stale;
 		match moments.get(&record.domain) {
-			None => held.push(format!(
-				"{}: no switch time recorded for {}",
+			None => unconfirmed.push(format!(
+				"{}: no split recorded for {}",
 				record.name, record.domain
 			)),
-			Some(at) if at.saturating_add(overlap) > now => held.push(format!(
-				"{}: not before {}",
-				record.name,
-				crate::clock::rfc3339_or_epoch(at.saturating_add(overlap))
-			)),
-			Some(_) => {}
+			Some(moved) => match moved.restarted {
+				None => unconfirmed.push(format!(
+					"{}: the server is not confirmed to run the new key of {} (`epistle dkim split` repeats the restart, `epistle dkim split --restarted` records one done by hand)",
+					record.name, record.domain
+				)),
+				Some(at) if at.saturating_add(overlap) > now => held.push(format!(
+					"{}: not before {}",
+					record.name,
+					crate::clock::rfc3339_or_epoch(at.saturating_add(overlap))
+				)),
+				Some(_) => {}
+			},
 		}
 	}
 	let names: Vec<String> = present.iter().map(|f| f.stale.name.clone()).collect();
@@ -170,13 +182,22 @@ pub(super) async fn finish(
 		for found in &present {
 			report.line(format_args!("would retire {}", found.stale.name));
 		}
-		for line in &held {
+		for line in unconfirmed.iter().chain(&held) {
 			report.line(format_args!("held: {line}"));
 		}
 		return report.object(serde_json::json!({
 			"result": "dry-run", "action": "split-finish",
 			"stale_records": names, "held": held, "not_ours": not_ours,
 		}));
+	}
+	if !unconfirmed.is_empty() {
+		return fail(
+			err,
+			format_args!(
+				"the new keys are not confirmed in service ({})",
+				unconfirmed.join("; ")
+			),
+		);
 	}
 	if !held.is_empty() {
 		if !options.skip_overlap_check {

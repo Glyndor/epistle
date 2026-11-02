@@ -13,12 +13,14 @@ const SPLIT: Options = Options {
 	wait: 0,
 	finish: false,
 	skip_overlap_check: false,
+	restarted: false,
 };
 pub(super) const FINISH: Options = Options {
 	dry_run: false,
 	wait: 0,
 	finish: true,
 	skip_overlap_check: false,
+	restarted: false,
 };
 
 /// The record the shared key publishes.
@@ -58,14 +60,18 @@ pub(super) fn services(zone: &Zone) -> (Provider, Resolver) {
 	)
 }
 
-/// Pretend the split happened `days` days ago.
+/// Pretend the split happened, and the server was restarted onto it, `days`
+/// days ago.
 pub(super) fn switched_days_ago(install: &Install, days: u64) {
 	let at = crate::cli::dkim::now_epoch() - days * 86_400;
-	std::fs::write(
-		install.data().join("dkim-split.json"),
-		serde_json::json!({ "b.example.org": at, "c.example.org": at }).to_string(),
-	)
-	.expect("write");
+	let file = install.data().join("dkim-split.json");
+	let mut state: serde_json::Value =
+		serde_json::from_str(&std::fs::read_to_string(&file).expect("state")).expect("json");
+	for moved in state.as_object_mut().expect("object").values_mut() {
+		moved["written"] = at.into();
+		moved["restarted"] = at.into();
+	}
+	std::fs::write(file, state.to_string()).expect("write");
 }
 
 #[test]
@@ -104,12 +110,20 @@ fn the_text_report_names_each_stale_record_in_full() {
 }
 
 #[test]
-fn the_split_records_the_moment_it_switched() {
+fn the_split_records_when_it_wrote_and_when_the_server_was_restarted() {
 	let (install, _) = split_install();
 	let text = std::fs::read_to_string(install.data().join("dkim-split.json")).unwrap();
 	let moments: serde_json::Value = serde_json::from_str(&text).unwrap();
-	assert!(moments["b.example.org"].as_u64().is_some());
-	assert!(moments["c.example.org"].as_u64().is_some());
+	for domain in ["b.example.org", "c.example.org"] {
+		assert!(moments[domain]["written"].as_u64().is_some());
+		assert!(moments[domain]["restarted"].as_u64().is_some());
+		assert!(
+			moments[domain]["stale"]
+				.as_array()
+				.is_some_and(|stale| !stale.is_empty()),
+			"the shared key's selectors are kept for --finish"
+		);
+	}
 	assert!(moments.get("a.example.org").is_none());
 }
 
@@ -162,7 +176,7 @@ fn a_domain_with_no_recorded_switch_is_refused_not_assumed_old() {
 	let (code, _, err, _) = run(&install, &FINISH, Some(provider), &resolver);
 	assert_eq!(code, ExitCode::FAILURE);
 	assert!(
-		err.contains("s1._domainkey.b.example.org: no switch time recorded for b.example.org"),
+		err.contains("s1._domainkey.b.example.org: no split recorded for b.example.org"),
 		"{err}"
 	);
 	assert!(zone.deleted.lock().unwrap().is_empty());
@@ -171,7 +185,8 @@ fn a_domain_with_no_recorded_switch_is_refused_not_assumed_old() {
 #[test]
 fn skipping_the_overlap_check_is_explicit_and_warned() {
 	let (install, zone) = split_install();
-	std::fs::remove_file(install.data().join("dkim-split.json")).expect("remove");
+	// Restarted yesterday: inside the window.
+	switched_days_ago(&install, 1);
 	let (provider, resolver) = services(&zone);
 	let options = Options {
 		skip_overlap_check: true,

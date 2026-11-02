@@ -10,6 +10,7 @@ const NOW: Options = Options {
 	wait: 0,
 	finish: false,
 	skip_overlap_check: false,
+	restarted: false,
 };
 
 fn world(blind: bool, refuses: bool) -> (Zone, Provider, Resolver) {
@@ -190,6 +191,7 @@ fn a_dry_run_changes_nothing() {
 		wait: 0,
 		finish: false,
 		skip_overlap_check: false,
+		restarted: false,
 	};
 	let (code, out, _, restarts) = run(&install, &options, Some(provider), &resolver);
 	assert_eq!(code, ExitCode::SUCCESS);

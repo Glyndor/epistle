@@ -67,14 +67,6 @@ pub(super) async fn publish(
 	failed
 }
 
-/// The `p=` tag of a DKIM record, whitespace removed.
-fn key_of(record: &str) -> Option<String> {
-	record.split(';').find_map(|tag| {
-		let (name, value) = tag.split_once('=')?;
-		(name.trim() == "p").then(|| value.chars().filter(|c| !c.is_whitespace()).collect())
-	})
-}
-
 /// The records `resolver` does not show with the right key, after one query
 /// and one more after each of `waits`. Empty when every record is visible.
 pub(super) async fn missing(
@@ -86,9 +78,10 @@ pub(super) async fn missing(
 	loop {
 		let mut absent = Vec::new();
 		for record in records {
-			let want = key_of(&record.value);
 			let seen = match resolver.txt(&record.name).await {
-				Ok(values) => values.iter().any(|value| key_of(value) == want),
+				Ok(values) => values
+					.iter()
+					.any(|value| crate::dkim::key_record::same_usable_key(value, &record.value)),
 				Err(_) => false,
 			};
 			if !seen {
