@@ -322,6 +322,7 @@ pub(crate) fn prepare_keys_for_update(
 	data_dir: &Path,
 	config_path: &Path,
 	database: bool,
+	certs: bool,
 ) -> Result<Vec<String>, String> {
 	use super::super::host_secrets;
 	let mut lines: Vec<String> = host_secrets::move_legacy_keys(data_dir)?
@@ -343,6 +344,9 @@ pub(crate) fn prepare_keys_for_update(
 		super::super::compose::ensure_db_admin_password(data_dir, &mut report)
 			.map_err(|error| error.to_string())?;
 	}
+	// The certificates container mounts its account key from secrets/; the
+	// stack without it reads the key under data_dir.
+	lines.extend(host_secrets::acme::place(data_dir, certs)?);
 	lines.extend(report.steps.iter().filter_map(|step| match step {
 		ReportStep::Wrote(path) => Some(format!("created {}", path.display())),
 		_ => None,

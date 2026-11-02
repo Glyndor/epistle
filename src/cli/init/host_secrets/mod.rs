@@ -192,5 +192,7 @@ pub(crate) fn repoint_config(text: &str, data_dir: &Path) -> Result<Option<Strin
 	Ok(changed.then(|| document.to_string()))
 }
 
+pub(crate) mod acme;
+
 #[cfg(test)]
 mod tests;

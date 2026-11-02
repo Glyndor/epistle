@@ -94,7 +94,7 @@ fn stack_update_moves_the_keys_creates_missing_ones_and_repoints_the_config() {
 	);
 	std::fs::write(&config, &text).unwrap();
 	std::fs::set_permissions(&config, std::os::unix::fs::PermissionsExt::from_mode(0o600)).unwrap();
-	let lines = super::prepare_keys_for_update(&data_dir, &config, true).unwrap();
+	let lines = super::prepare_keys_for_update(&data_dir, &config, true, false).unwrap();
 	let secrets = root.path().join("secrets");
 	assert_eq!(
 		std::fs::read(secrets.join("storage.key")).unwrap(),
@@ -114,7 +114,7 @@ fn stack_update_moves_the_keys_creates_missing_ones_and_repoints_the_config() {
 	assert!(secrets.join("epistle_db_admin_password").is_file());
 	assert_eq!(lines.len(), 5, "{lines:?}");
 	assert_eq!(
-		super::prepare_keys_for_update(&data_dir, &config, true).unwrap(),
+		super::prepare_keys_for_update(&data_dir, &config, true, false).unwrap(),
 		Vec::<String>::new(),
 		"a second update changes nothing"
 	);
@@ -162,7 +162,7 @@ fn stack_update_creates_the_keys_directory_when_an_install_has_none() {
 	let config = root.path().join("mail.toml");
 	std::fs::write(&config, "hostname = \"h\"\n").unwrap();
 	std::fs::set_permissions(&config, std::os::unix::fs::PermissionsExt::from_mode(0o600)).unwrap();
-	super::prepare_keys_for_update(&data_dir, &config, false).unwrap();
+	super::prepare_keys_for_update(&data_dir, &config, false, false).unwrap();
 	assert!(data_dir.join("keys/oauth_public.key").is_file());
 }
 
@@ -192,7 +192,7 @@ fn a_fifo_at_the_served_configuration_is_refused_instead_of_waited_on() {
 		let (data, served) = (data_dir.clone(), config.clone());
 		let preparing = std::thread::spawn(move || {
 			sender
-				.send(super::prepare_keys_for_update(&data, &served, false))
+				.send(super::prepare_keys_for_update(&data, &served, false, false))
 				.ok();
 		});
 		let value = receiver.recv_timeout(Duration::from_secs(5));
