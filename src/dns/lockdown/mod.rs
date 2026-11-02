@@ -24,8 +24,8 @@ mod reports;
 
 pub use apply::{PublishFailure, UndoChanged, UndoFailure, UndoReport, publish_plan, undo_journal};
 pub use dmarc::{
-	DmarcAction, DmarcInputs, DmarcPlan, DmarcStep, FailingSource, parse_dmarc, plan_dmarc,
-	rewrite_dmarc,
+	DmarcAction, DmarcInputs, DmarcPlan, DmarcStep, DmarcTags, FailingSource, parse_dmarc,
+	plan_dmarc, rewrite_dmarc,
 };
 pub use reports::{REPORT_WINDOW_DAYS, recent_dmarc_failures};
 
