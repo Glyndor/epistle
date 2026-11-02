@@ -45,8 +45,10 @@ FOLDERS = {
     "src/imap/": ["imap_command", "mime"],
     "src/sieve/": ["sieve_message", "sieve_script", "sieve_run", "sieve_validate"],
     "src/pop3/": ["pop3_command", "pop3_session"],
-    "src/managesieve/": ["managesieve_command"],
+    "src/managesieve/": ["managesieve_command", "sieve_validate"],
     "src/dkim/": ["dkim_signature", "mime"],
+    "src/dmarc/": ["mime"],
+    "src/api/jmap/": ["mime"],
     "src/antispam/attachments/": ["attachment_inspect"],
     "src/webdav/": ["webdav_filter_rrule"],
     "src/arc/": ["arc_headers"],
@@ -55,12 +57,36 @@ FOLDERS = {
     "src/mtasts/": ["dns_security_records"],
     "src/tlsrpt/": ["dns_security_records", "report_payload"],
     "src/dane/": ["dns_security_records"],
-    "src/reports/": ["report_payload"],
+    "src/reports/": ["report_payload", "mime"],
     "src/rules/": ["rules_match"],
 }
 
 # Files under src that the fuzz entry points go through directly.
 SHARED = ("src/fuzzing.rs",)
+
+# Paths outside src that cannot change what a target builds or runs. The fuzz
+# crate is a workspace of its own with its own lockfile (fuzz/Cargo.lock), so
+# the root Cargo.lock never reaches it, and it links the library only: the
+# integration tests, benches, examples, packaging and the other workflows are
+# not part of it. Cargo.toml is not here, because its features and dependency
+# requirements do reach the library; nor are migrations/, .sqlx/ and deploy/,
+# which the library embeds at build time.
+UNRELATED_FILES = ("Cargo.lock",)
+UNRELATED_FOLDERS = ("docs/", "tests/", "benches/", "examples/", "debian/", ".github/")
+
+# The files of this workflow, which do change what runs.
+OWN = (".github/workflows/fuzz.yml", ".github/scripts/fuzz_targets.py")
+
+
+def unrelated(path):
+    """True for a path outside src that no fuzz target builds or runs."""
+    if path in OWN:
+        return False
+    return (
+        path in UNRELATED_FILES
+        or path.endswith(".md")
+        or path.startswith(UNRELATED_FOLDERS)
+    )
 
 
 def select(event, changed):
@@ -69,9 +95,9 @@ def select(event, changed):
         return list(ALL)
     chosen = set()
     for path in changed:
+        if unrelated(path):
+            continue
         if path in SHARED or not path.startswith("src/"):
-            if path.startswith("docs/") or path.endswith(".md"):
-                continue
             return list(ALL)
         for folder, targets in FOLDERS.items():
             if path.startswith(folder):
