@@ -23,6 +23,7 @@ use crate::cli::json_out::Report;
 use crate::cli::resource::ResourceError;
 use crate::config::Config;
 use crate::dkim::domain_keys::{self, DomainKeys};
+use crate::dkim::split_state;
 use crate::dkim::stale::{self, Stale};
 use crate::dns::provider::DnsProvider;
 use crate::spf::DnsLookup;
@@ -30,7 +31,6 @@ use crate::spf::DnsLookup;
 mod finish;
 mod plan;
 mod publish;
-mod switched;
 
 /// How the command is asked to run.
 pub(super) struct Options {
@@ -42,6 +42,8 @@ pub(super) struct Options {
 	pub finish: bool,
 	/// With `finish`: retire even when the overlap window is not confirmed.
 	pub skip_overlap_check: bool,
+	/// Record that the server was restarted by hand onto the moved keys.
+	pub restarted: bool,
 }
 
 /// What the command talks to besides the file system, so a test can supply
@@ -54,6 +56,13 @@ pub(super) struct Services<'a> {
 	/// The pauses between the queries that look for the records.
 	pub waits: Vec<Duration>,
 }
+
+/// How long a run waits for another one on the same data directory.
+const LOCK_WAIT: Duration = if cfg!(test) {
+	Duration::from_millis(300)
+} else {
+	Duration::from_secs(30)
+};
 
 /// The seconds between queries while waiting for the records.
 const POLL_SECONDS: u64 = 5;
@@ -110,10 +119,14 @@ struct Move {
 /// Make the keys of the domains that move, reusing the ones a run that
 /// stopped left. A key that exists must load; one that does not is an error.
 fn make_keys(config: &Config, plan: &plan::Plan, now: u64) -> Result<Vec<Move>, String> {
+	// A new key never takes a selector the shared key is published under:
+	// the record would replace the one the server still signs with.
+	let reserved = domain_keys::reserved_selectors(config)?;
 	plan.moves
 		.iter()
 		.map(|domain| {
-			let (keys, _) = domain_keys::ensure(&config.data_dir, domain, plan.dual_signing, now)?;
+			let (keys, _) =
+				domain_keys::ensure(&config.data_dir, domain, plan.dual_signing, now, &reserved)?;
 			let records = publish::records(domain, &keys)?;
 			Ok(Move {
 				domain: domain.clone(),
@@ -175,26 +188,40 @@ pub(super) async fn split(
 	restart: impl FnOnce(&Config, crate::cli::stack::StackAction) -> ExitCode,
 ) -> ExitCode {
 	let now = super::now_epoch();
+	// One run at a time on a data directory: two that both found a key
+	// missing, or both published, could end with DNS showing a key the
+	// configuration does not name.
+	let _held = if options.dry_run {
+		None
+	} else {
+		match split_state::lock(&config.data_dir, LOCK_WAIT) {
+			Ok(held) => Some(held),
+			Err(why) => {
+				crate::cli::style::error_to(err, format_args!("dkim split refused: {why}"));
+				return ExitCode::FAILURE;
+			}
+		}
+	};
+	if options.restarted {
+		return confirm_restart(config, (json, out, err));
+	}
 	if options.finish {
 		return finish::finish(config, options, services, (json, out, err), now).await;
 	}
 	let plan = match plan::build(config) {
 		Ok(Some(plan)) => plan,
-		Ok(None) => {
-			let mut report = Report::new(out, json);
-			report.line("nothing to split: every hosted domain has a key of its own");
-			return report.object(serde_json::json!({ "result": "unchanged", "action": "split" }));
-		}
+		Ok(None) => return nothing_to_split(config, (json, out, err), restart),
 		Err(reason) => {
 			crate::cli::style::error_to(err, format_args!("dkim split refused: {reason}"));
 			return ExitCode::FAILURE;
 		}
 	};
 	let planned = |plan: &plan::Plan| -> Result<Vec<(String, DomainKeys)>, String> {
+		let reserved = domain_keys::reserved_selectors(config)?;
 		plan.moves
 			.iter()
 			.map(|domain| {
-				domain_keys::planned(&config.data_dir, domain, plan.dual_signing, now)
+				domain_keys::planned(&config.data_dir, domain, plan.dual_signing, now, &reserved)
 					.map(|keys| (domain.clone(), keys))
 			})
 			.collect()
@@ -310,23 +337,157 @@ pub(super) async fn split(
 	};
 	switch(
 		path,
+		config,
 		(&plan, &moves, &stale),
-		now,
 		&mut report,
 		err,
 		restart,
 	)
 }
 
+/// `split` found nothing to move. If an earlier run wrote its entries and the
+/// server was never restarted onto them, the restart is repeated: the keys on
+/// disk are not the ones that sign until it happens.
+fn nothing_to_split(
+	config: &Config,
+	(json, out, err): (bool, &mut impl Write, &mut impl Write),
+	restart: impl FnOnce(&Config, crate::cli::stack::StackAction) -> ExitCode,
+) -> ExitCode {
+	let mut report = Report::new(out, json);
+	let pending = match split_state::pending(&config.data_dir) {
+		Ok(pending) => pending,
+		Err(why) => {
+			crate::cli::style::error_to(err, format_args!("dkim split refused: {why}"));
+			return ExitCode::FAILURE;
+		}
+	};
+	if pending.is_empty() {
+		report.line("nothing to split: every hosted domain has a key of its own");
+		return report.object(serde_json::json!({ "result": "unchanged", "action": "split" }));
+	}
+	report.line(format_args!(
+		"{} signs with the shared key until the server is restarted onto its own: restarting now",
+		pending.join(", ")
+	));
+	let (confirmed, reload) = match restart_onto(
+		config,
+		crate::cli::config_edit::Outcome::Changed,
+		err,
+		restart,
+	) {
+		Ok(done) => done,
+		Err(code) => return code,
+	};
+	let pending_code = (!confirmed).then(|| restart_pending(&mut report));
+	if confirmed {
+		report.line("the server was restarted onto the moved keys");
+	}
+	let code = report.object(serde_json::json!({
+		"result": if confirmed { "restarted" } else { "restart-pending" },
+		"action": "split",
+		"domains": pending,
+		"reload": reload.name(),
+	}));
+	match pending_code {
+		Some(pending) if code == ExitCode::SUCCESS => pending,
+		_ => code,
+	}
+}
+
+/// Restart the server and, when that is confirmed, record that the moved keys
+/// are the ones signing. `Ok((confirmed, reload))`; `Err` carries the exit code
+/// of a restart that failed.
+fn restart_onto(
+	config: &Config,
+	outcome: crate::cli::config_edit::Outcome,
+	err: &mut impl Write,
+	restart: impl FnOnce(&Config, crate::cli::stack::StackAction) -> ExitCode,
+) -> Result<(bool, crate::cli::json_out::Reload), ExitCode> {
+	let reload = match crate::cli::config_edit::after_change_reporting(
+		config, outcome, true, err, restart,
+	) {
+		Ok((ExitCode::SUCCESS, reload)) => reload,
+		Ok((code, _)) => return Err(code),
+		Err(ResourceError::Refusal(message) | ResourceError::Failure(message)) => {
+			crate::cli::style::error_to(err, message);
+			return Err(ExitCode::FAILURE);
+		}
+	};
+	let confirmed = reload == crate::cli::json_out::Reload::Restarted;
+	if confirmed && let Err(why) = split_state::mark_restarted(&config.data_dir, super::now_epoch())
+	{
+		crate::cli::style::error_to(err, format_args!("{why}"));
+		return Err(ExitCode::FAILURE);
+	}
+	Ok((confirmed, reload))
+}
+
+/// What to say, and the exit code, when the server is not confirmed to run the
+/// moved keys: 4, the code of a split that still needs the operator.
+fn restart_pending(report: &mut Report<'_>) -> ExitCode {
+	report.line(
+		"the server is NOT confirmed to run the moved keys: restart it, then run `epistle dkim split --restarted` (or `epistle dkim split` again, which restarts it if it can)",
+	);
+	ExitCode::from(finish::MANUAL_ACTION)
+}
+
+/// `--restarted`: the operator restarted the server by hand.
+fn confirm_restart(
+	config: &Config,
+	(json, out, err): (bool, &mut impl Write, &mut impl Write),
+) -> ExitCode {
+	let mut report = Report::new(out, json);
+	match split_state::mark_restarted(&config.data_dir, super::now_epoch()) {
+		Ok(settled) if settled.is_empty() => {
+			report.line("nothing pending: no split is waiting for a restart");
+			report.object(serde_json::json!({ "result": "unchanged", "action": "split-restarted" }))
+		}
+		Ok(settled) => {
+			report.line(format_args!(
+				"recorded that the server runs the moved keys of {}; the overlap before the shared key's records may go counts from now",
+				settled.join(", ")
+			));
+			report.object(serde_json::json!({
+				"result": "restarted", "action": "split-restarted", "domains": settled,
+			}))
+		}
+		Err(why) => {
+			crate::cli::style::error_to(err, format_args!("{why}"));
+			ExitCode::FAILURE
+		}
+	}
+}
+
 /// Write the entries and restart: the one step that changes what signs.
 fn switch(
 	path: &Path,
+	config: &Config,
 	(plan, moves, stale): (&plan::Plan, &[Move], &[Stale]),
-	now: u64,
 	report: &mut Report<'_>,
 	err: &mut impl Write,
 	restart: impl FnOnce(&Config, crate::cli::stack::StackAction) -> ExitCode,
 ) -> ExitCode {
+	// What a later run needs is written first: the moved domains and the shared
+	// key's selectors they leave behind. A run that dies after this and before
+	// the entries are saved leaves a record of a move that did not happen,
+	// which a retry settles; the other order could leave entries nobody
+	// remembers.
+	for m in moves {
+		let selectors = stale
+			.iter()
+			.filter(|record| record.domain == m.domain)
+			.map(|record| split_state::StaleSelector {
+				selector: record.selector.clone(),
+				expected: record.expected.clone(),
+			})
+			.collect();
+		if let Err(why) =
+			split_state::record_written(&config.data_dir, &m.domain, super::now_epoch(), selectors)
+		{
+			crate::cli::style::error_to(err, format_args!("dkim split refused: {why}"));
+			return ExitCode::FAILURE;
+		}
+	}
 	let mut document = match ConfigDocument::open(path) {
 		Ok(document) => document,
 		Err(error) => {
@@ -354,48 +515,41 @@ fn switch(
 			return ExitCode::FAILURE;
 		}
 	};
-	// The overlap before the shared key's records may go runs from here.
-	let moved: Vec<String> = moves.iter().map(|m| m.domain.clone()).collect();
-	if let Err(why) = switched::record(&edited.data_dir, &moved, now) {
-		crate::cli::style::warn_to(
-			err,
-			format_args!(
-				"{why}; `dkim split --finish` will refuse until --skip-overlap-check says otherwise"
-			),
-		);
-	}
 	for m in moves {
 		report.line(format_args!(
 			"{} signs with {} from the next start",
 			m.domain, m.keys.selector
 		));
 	}
-	let (code, reload) =
-		match crate::cli::config_edit::after_change_reporting(&edited, outcome, true, err, restart)
-		{
-			Ok(done) => done,
-			Err(ResourceError::Refusal(message) | ResourceError::Failure(message)) => {
-				crate::cli::style::error_to(err, message);
-				return ExitCode::FAILURE;
-			}
-		};
+	// Only a restart that is confirmed makes the new keys the ones signing;
+	// until then the domains are pending and `--finish` retires nothing.
+	let (confirmed, reload) = match restart_onto(&edited, outcome, err, restart) {
+		Ok(done) => done,
+		Err(code) => return code,
+	};
 	report.line(format_args!(
 		"{} keeps the [dkim] key; the shared key is still published at the domains that left it",
 		plan.keeps
 	));
+	let pending_code = (!confirmed).then(|| restart_pending(report));
 	let shown: Vec<_> = moves
 		.iter()
 		.map(|m| (m.domain.clone(), m.keys.clone()))
 		.collect();
 	let mut result = describe(plan, &shown);
 	report_stale(report, &mut result, stale);
-	result["result"] = "split".into();
+	result["result"] = if confirmed {
+		"split"
+	} else {
+		"restart-pending"
+	}
+	.into();
 	result["action"] = "split".into();
 	result["reload"] = reload.name().into();
-	if code == ExitCode::SUCCESS {
-		report.object(result)
-	} else {
-		code
+	let code = report.object(result);
+	match pending_code {
+		Some(pending) if code == ExitCode::SUCCESS => pending,
+		_ => code,
 	}
 }
 

@@ -33,6 +33,7 @@ fn a_dry_run_names_who_keeps_and_who_moves() {
 		wait: 0,
 		finish: false,
 		skip_overlap_check: false,
+		restarted: false,
 	};
 	let (code, out, _, _) = run_as(&install(), &options, Some(provider), &resolver, true);
 	assert_eq!(code, ExitCode::SUCCESS);
@@ -57,6 +58,7 @@ fn waiting_lists_the_records_that_do_not_resolve() {
 		wait: 0,
 		finish: false,
 		skip_overlap_check: false,
+		restarted: false,
 	};
 	let (code, out, _, _) = run_as(&install(), &options, Some(provider), &resolver, true);
 	assert_eq!(code, ExitCode::FAILURE);
@@ -66,7 +68,7 @@ fn waiting_lists_the_records_that_do_not_resolve() {
 }
 
 #[test]
-fn a_finished_split_says_how_the_server_picked_it_up() {
+fn a_finished_split_says_the_server_was_restarted() {
 	let install = install();
 	let (provider, resolver) = world(false);
 	let options = Options {
@@ -74,10 +76,11 @@ fn a_finished_split_says_how_the_server_picked_it_up() {
 		wait: 0,
 		finish: false,
 		skip_overlap_check: false,
+		restarted: false,
 	};
 	let (code, out, _, _) = run_as(&install, &options, Some(provider), &resolver, true);
 	assert_eq!(code, ExitCode::SUCCESS);
 	let result = object(&out);
 	assert_eq!(result["result"], "split");
-	assert_eq!(result["reload"], "restart-needed");
+	assert_eq!(result["reload"], "restarted");
 }

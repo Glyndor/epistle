@@ -69,6 +69,11 @@ pub enum DkimCli {
 		/// still be queued elsewhere.
 		#[arg(long, requires = "finish")]
 		skip_overlap_check: bool,
+		/// Record that you restarted the server by hand onto the keys a split
+		/// moved. `--finish` waits for this (or for the restart `split` does
+		/// itself) before it retires anything.
+		#[arg(long, conflicts_with_all = ["finish", "dry_run"])]
+		restarted: bool,
 	},
 	/// Remove DKIM keys and TXT records no rotation uses.
 	///
@@ -336,12 +341,13 @@ pub(super) fn dispatch(path: &std::path::Path, action: DkimCli, json: bool) -> E
 		wait,
 		finish,
 		skip_overlap_check,
+		restarted,
 	} = action
 	{
 		return run_split(
 			path,
 			dry_run,
-			(wait, finish, skip_overlap_check),
+			(wait, finish, skip_overlap_check, restarted),
 			json,
 			&mut std::io::stdout().lock(),
 		);
@@ -367,7 +373,7 @@ pub(super) fn dispatch(path: &std::path::Path, action: DkimCli, json: bool) -> E
 pub(super) fn run_split(
 	path: &std::path::Path,
 	dry_run: bool,
-	(wait, finish, skip_overlap_check): (u64, bool, bool),
+	(wait, finish, skip_overlap_check, restarted): (u64, bool, bool, bool),
 	json: bool,
 	out: &mut impl std::io::Write,
 ) -> ExitCode {
@@ -378,6 +384,7 @@ pub(super) fn run_split(
 			wait,
 			finish,
 			skip_overlap_check,
+			restarted,
 		},
 		json,
 		out,
