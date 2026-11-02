@@ -5,6 +5,7 @@ pub(crate) mod key_record;
 mod per_domain;
 pub mod rotate;
 mod rsa_keygen;
+pub mod sharing;
 mod sign;
 pub(crate) mod signature;
 mod spki;

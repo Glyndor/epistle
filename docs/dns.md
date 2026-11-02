@@ -102,6 +102,16 @@ a startup warning is logged before that whenever the pair is missing).
 A single message is then signed with both keys (RFC 8463); receivers
 that understand Ed25519 use that signature, the rest fall back to RSA.
 
+Give each hosted domain a key of its own. A key that signs several
+domains lets whoever holds it sign as every one of them until all of
+them are replaced, and the receivers rate the signing domain (`d=`), not
+the key, so sharing one buys no reputation. A domain's own key goes in a
+`[[dkim.domain]]` entry (see [configuration](configuration.md#dkimdomain))
+and is published at `<selector>._domainkey.<that domain>`. Two domains
+that name one key, or whose key files hold the same public key, are
+refused; several domains on the `[dkim]` key still work and are reported
+by `config-check`, `status` and `dkim show`.
+
 Multiple selectors at different names are normal (the Ed25519 + RSA
 pair), but two at the same selector name is the same configuration
 mistake the SPF, DMARC, and MTA-STS lanes flag and collapse; a

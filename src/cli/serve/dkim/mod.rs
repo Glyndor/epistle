@@ -55,6 +55,22 @@ fn load_per_domain_signers(
 	Ok(loaded)
 }
 
+/// Stop the start when two signing owners publish one public key. The
+/// `[dkim]` default shared by several domains is not an error here: that is
+/// how an install made before per-domain keys works until the operator runs
+/// `epistle dkim split`.
+fn refuse_shared_keys(config: &Config) -> std::io::Result<()> {
+	let shared = crate::dkim::sharing::shared_public_keys(config)
+		.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+	if shared.is_empty() {
+		return Ok(());
+	}
+	Err(std::io::Error::new(
+		std::io::ErrorKind::InvalidData,
+		shared.join("; "),
+	))
+}
+
 /// Build [`SplitDelivery`] and attach the DKIM signer, SRS, webhook, and
 /// ARC sealer. Keep this order, because it is the order in which a bad
 /// configuration stops the start: a missing `[dkim]` key before SRS, the
@@ -79,6 +95,13 @@ pub(in crate::cli) fn build_split_with_companions(
 		.with_metrics(metrics.clone());
 	let mut dkim_signer: Option<crate::dkim::ReloadableSigner> = None;
 	if let Some(dkim) = &config.dkim {
+		// Two domains that publish one public key are refused before any
+		// listener binds, the way a key that does not load is.
+		refuse_shared_keys(config)?;
+		if let Some(warning) = dkim.shared_default_warning(&config.domains, &config.domain_aliases)
+		{
+			tracing::warn!("{warning}");
+		}
 		let active = crate::dkim::rotate::active_ed25519(dkim, &config.data_dir)
 			.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
 		let mut signer = crate::dkim::Signer::load(&active.selector, &active.key_file)

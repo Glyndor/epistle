@@ -28,7 +28,8 @@ impl Dkim {
 				));
 			}
 		}
-		validate_dkim_overrides(self, domains, domain_aliases)
+		validate_dkim_overrides(self, domains, domain_aliases)?;
+		self.check_key_files_are_not_shared()
 	}
 }
 
@@ -36,7 +37,10 @@ impl Dkim {
 /// and aliases. Case-insensitive so `Example.org` and `example.org`
 /// resolve to the same key, the same way the routing layer compares
 /// them at delivery time.
-fn hosted_set(domains: &[String], domain_aliases: &HashMap<String, String>) -> HashSet<String> {
+pub(super) fn hosted_set(
+	domains: &[String],
+	domain_aliases: &HashMap<String, String>,
+) -> HashSet<String> {
 	let mut all = HashSet::new();
 	for domain in domains {
 		all.insert(domain.to_ascii_lowercase());
