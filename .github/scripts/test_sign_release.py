@@ -34,6 +34,17 @@ class SignReleaseTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as dist:
             self.assertNotEqual(run(dist).returncode, 0)
 
+    def test_every_published_file_gets_a_signature(self):
+        # The publish job refuses a file with no `.sig`, and the build job
+        # makes the binary, the SBOM, SHA256SUMS and the packages. A file that
+        # the signer skips only fails once the real release reaches publish.
+        root = os.path.join(os.path.dirname(__file__), "..", "..")
+        script = open(SCRIPT).read()
+        workflow = open(os.path.join(root, ".github", "workflows", "release.yml")).read()
+        for name in ('epistle-${tag}-x86_64-linux"', 'epistle-${tag}.cdx.json"', "SHA256SUMS", "epistle_*.deb"):
+            self.assertIn(name, script, f"sign_release.sh does not sign {name}")
+        self.assertIn('"epistle-${TAG}.cdx.json.sig"', workflow)
+
 
 if __name__ == "__main__":
     unittest.main()

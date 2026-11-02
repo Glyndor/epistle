@@ -494,7 +494,7 @@ jobs:
             case "$f" in
               "epistle-${TAG}-x86_64-linux"|"epistle-${TAG}.cdx.json"|SHA256SUMS) ;;
               epistle_*_amd64.deb|epistle_*_arm64.deb) ;;
-              "epistle-${TAG}-x86_64-linux.sig"|SHA256SUMS.sig) ;;
+              "epistle-${TAG}-x86_64-linux.sig"|"epistle-${TAG}.cdx.json.sig"|SHA256SUMS.sig) ;;
               epistle_*_amd64.deb.sig|epistle_*_arm64.deb.sig) ;;
               *) echo "::error::unexpected file in the release: $f"; exit 1 ;;
             esac
