@@ -2,7 +2,7 @@
 """Pick the cargo-fuzz targets a pull request has to run.
 
 A pull request that only touches the source of one protocol needs that
-protocol's targets, not all twenty-one: every target is a separate job that
+protocol's targets, not all twenty-two: every target is a separate job that
 installs a nightly toolchain and builds the crate. Anything this script does
 not know how to narrow runs every target: a change outside the mapped folders
 (shared code, the manifest, the fuzz crate, this workflow) can reach any of
@@ -24,6 +24,7 @@ ALL = [
     "sieve_run",
     "sieve_validate",
     "pop3_command",
+    "pop3_session",
     "managesieve_command",
     "smtp_data",
     "dkim_signature",
@@ -43,7 +44,7 @@ FOLDERS = {
     "src/smtp/": ["smtp_command", "smtp_line", "smtp_address", "smtp_data"],
     "src/imap/": ["imap_command", "mime"],
     "src/sieve/": ["sieve_message", "sieve_script", "sieve_run", "sieve_validate"],
-    "src/pop3/": ["pop3_command"],
+    "src/pop3/": ["pop3_command", "pop3_session"],
     "src/managesieve/": ["managesieve_command"],
     "src/dkim/": ["dkim_signature", "mime"],
     "src/antispam/attachments/": ["attachment_inspect"],
