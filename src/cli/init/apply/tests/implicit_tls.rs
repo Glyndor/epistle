@@ -59,6 +59,7 @@ fn build_config_writes_imap_and_imaps_when_imap_is_on() {
 		webdav: false,
 		api: false,
 		database: false,
+		certs: false,
 	};
 	let (cert, key, ed) = cert_key_ed();
 	let mail_addr: IpAddr = Ipv6Addr::UNSPECIFIED.into();
@@ -127,6 +128,7 @@ fn build_config_writes_submission_and_submissions_when_submission_is_on() {
 		webdav: false,
 		api: false,
 		database: false,
+		certs: false,
 	};
 	let (cert, key, ed) = cert_key_ed();
 	let mail_addr: IpAddr = Ipv6Addr::UNSPECIFIED.into();
@@ -183,6 +185,7 @@ fn build_config_omits_imap_and_imaps_when_imap_is_off() {
 		webdav: false,
 		api: false,
 		database: false,
+		certs: false,
 	};
 	let (cert, key, ed) = cert_key_ed();
 	let mail_addr: IpAddr = Ipv6Addr::UNSPECIFIED.into();
@@ -214,6 +217,7 @@ fn build_config_omits_submission_and_submissions_when_submission_is_off() {
 		webdav: false,
 		api: false,
 		database: false,
+		certs: false,
 	};
 	let (cert, key, ed) = cert_key_ed();
 	let mail_addr: IpAddr = Ipv6Addr::UNSPECIFIED.into();

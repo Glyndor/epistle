@@ -100,6 +100,7 @@ fn apply_does_not_regenerate_the_self_signed_cert_pair() {
 		webdav: false,
 		api: false,
 		database: false,
+		certs: false,
 	};
 	answers.mode = crate::cli::init::answers::Mode::Manual;
 	let outcome = apply(&answers);

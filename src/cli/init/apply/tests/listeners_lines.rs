@@ -51,6 +51,7 @@ fn plan_listeners_render_one_per_line_with_padded_kind() {
 		webdav: false,
 		api: false,
 		database: false,
+		certs: false,
 	});
 	let plan = plan(&answers).expect("plan");
 	let mut rendered = String::new();
@@ -178,6 +179,7 @@ fn plan_listeners_step_has_one_line_per_listener() {
 		webdav: true,
 		api: true,
 		database: false,
+		certs: false,
 	});
 	let plan = plan(&answers).expect("plan");
 	let mut rendered = String::new();
@@ -259,6 +261,7 @@ fn listener_entries_match_schema_default_ports() {
 		webdav: true,
 		api: true,
 		database: false,
+		certs: false,
 	}))
 	.expect("plan");
 	let entries: Vec<&ListenerEntry> = plan

@@ -108,6 +108,14 @@ pub struct Services {
 	/// (left out below 4 GiB) or keep what an existing stack runs.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub antivirus: Option<bool>,
+	/// The certificates container: ACME renewal and the TLSA refresh run in
+	/// `certs`, which alone mounts the DNS credential and the ACME account
+	/// key, and `mail` reads its certificate from disk. Off unless the stack
+	/// already runs it; not an answers-file key, since turning it on moves
+	/// a key and needs `[acme] challenge = "dns-01"`
+	/// (`docs/operations/container-split.md`).
+	#[serde(skip)]
+	pub certs: bool,
 }
 
 const fn default_true() -> bool {
@@ -132,6 +140,7 @@ impl Default for Services {
 			webdav: false,
 			api: false,
 			database: false,
+			certs: false,
 		}
 	}
 }

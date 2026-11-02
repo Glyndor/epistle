@@ -177,18 +177,12 @@ impl ComposeService {
 		}
 		let mut environment = BTreeMap::new();
 		environment.insert("TZ".to_string(), "UTC".to_string());
-		let mut token_files = Vec::new();
-		for (token_env, token_file) in super::dns_credentials::of(answers) {
-			if let Some(name) = &token_env {
-				environment.insert(name.clone(), format!("${{{name}}}"));
-			}
-			if let Some(path) = token_file {
-				// Two zones may read one file; it is mounted once.
-				if !token_files.contains(&path) {
-					volumes.push(VolumeMount::bind(&path, &path, true));
-					token_files.push(path);
-				}
-			}
+		// With the certificates container the DNS credential is mounted
+		// there and nowhere else, and the pair it writes is read-only here.
+		if answers.services.certs {
+			volumes.push(certs::pair_read_only(data_dir));
+		} else {
+			add_dns_credentials(answers, &mut volumes, &mut environment);
 		}
 		// The host-binary default: bind-mount the system-supplied
 		// `/usr/bin/epistle` read-only into the digest-pinned
@@ -214,11 +208,10 @@ impl ComposeService {
 			} else {
 				None
 			},
-			command: Some(vec![
-				"serve".to_string(),
-				"--config".to_string(),
-				config_path.display().to_string(),
-			]),
+			command: Some(serve_command(
+				config_path,
+				answers.services.certs.then_some("mail"),
+			)),
 			network_mode: Some("pasta".to_string()),
 			user: Some("65532:65532".to_string()),
 			userns_mode: Some("keep-id:uid=65532,gid=65532".to_string()),
@@ -417,6 +410,46 @@ impl ComposeService {
 		}
 	}
 }
+
+/// `serve --config <path>`, with `--role <role>` when the process runs one
+/// half of a split stack.
+fn serve_command(config_path: &Path, role: Option<&str>) -> Vec<String> {
+	let mut command = vec![
+		"serve".to_string(),
+		"--config".to_string(),
+		config_path.display().to_string(),
+	];
+	if let Some(role) = role {
+		command.extend(["--role".to_string(), role.to_string()]);
+	}
+	command
+}
+
+/// Hand the DNS credential of every `[dns]` entry to a service: the token
+/// variable passed through as `${NAME}`, the token file bound read-only at
+/// its own path.
+fn add_dns_credentials(
+	answers: &Answers,
+	volumes: &mut Vec<VolumeMount>,
+	environment: &mut BTreeMap<String, String>,
+) {
+	let mut token_files = Vec::new();
+	for (token_env, token_file) in super::dns_credentials::of(answers) {
+		if let Some(name) = &token_env {
+			environment.insert(name.clone(), format!("${{{name}}}"));
+		}
+		if let Some(path) = token_file {
+			// Two zones may read one file; it is mounted once.
+			if !token_files.contains(&path) {
+				volumes.push(VolumeMount::bind(&path, &path, true));
+				token_files.push(path);
+			}
+		}
+	}
+}
+
+mod certs;
+pub(super) use certs::ACME_ACCOUNT_SECRET;
 
 /// Every capability: each service starts from none and `cap_add` names
 /// what it was measured to need.

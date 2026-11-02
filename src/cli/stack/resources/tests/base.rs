@@ -159,7 +159,7 @@ fn set_refuses_what_init_refuses_and_writes_nothing() {
 			"web",
 			Some("1g"),
 			None,
-			"resources.web is not a service of the stack; use one of mail, db, clamav, freshclam",
+			"resources.web is not a service of the stack; use one of mail, db, clamav, freshclam, certs",
 		),
 		("clamav", None, None, "give --memory, --pids or both"),
 		(

@@ -205,6 +205,7 @@ fn disabling_both_imap_and_submission_warns() {
 		webdav: false,
 		api: false,
 		database: false,
+		certs: false,
 	};
 	let warnings = answers.validate().expect("must warn, not error");
 	assert!(

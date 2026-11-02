@@ -31,13 +31,17 @@ const CHECK_INTERVAL: Duration = Duration::from_secs(60);
 /// Where the account key lives when the process that serves mail also
 /// renews: next to the certificate under `<data_dir>/acme`.
 pub(crate) fn account_key_path(data_dir: &Path) -> PathBuf {
-	data_dir.join("acme").join("account.key")
+	pair_dir(data_dir).join("account.key")
+}
+/// The directory the issued pair and the renewal request files live in.
+pub(crate) fn pair_dir(data_dir: &Path) -> PathBuf {
+	data_dir.join("acme")
 }
 pub(crate) fn cert_path(data_dir: &Path) -> PathBuf {
-	data_dir.join("acme").join("cert.pem")
+	pair_dir(data_dir).join("cert.pem")
 }
 pub(crate) fn key_path(data_dir: &Path) -> PathBuf {
-	data_dir.join("acme").join("key.pem")
+	pair_dir(data_dir).join("key.pem")
 }
 
 /// Load the persisted account key, or generate and persist a new one.
