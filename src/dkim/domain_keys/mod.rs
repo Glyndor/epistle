@@ -110,22 +110,52 @@ pub fn reserved_selectors(config: &crate::config::Config) -> Result<Vec<String>,
 	Ok(found)
 }
 
+/// Make the directory entries of `dir` durable: the file system may keep a new
+/// or removed name in memory until something syncs the directory, and a
+/// configuration that names the key must not outlive the key's name.
+fn sync_dir(dir: &Path) -> std::io::Result<()> {
+	std::fs::File::open(dir)?.sync_all()
+}
+
 /// Write `pem` to `path` only if nothing is there: the key is installed with a
 /// hard link, which refuses to replace a file, so two runs that both found the
 /// path empty cannot swap one another's key. `Ok(false)` when a key was already
-/// there; it is then the one to use.
+/// there; it is then the one to use. The directory is synced after the link and
+/// after the staged name is removed, before the key counts as installed.
 fn install_new(path: &Path, pem: &str) -> Result<bool, String> {
+	install_new_with(path, pem, sync_dir)
+}
+
+/// [`install_new`] with the directory sync supplied, so a test can see when it
+/// is asked for.
+fn install_new_with(
+	path: &Path,
+	pem: &str,
+	sync: impl Fn(&Path) -> std::io::Result<()>,
+) -> Result<bool, String> {
 	let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("key");
 	let staged = path.with_file_name(format!(".{name}.{}.new", uuid::Uuid::now_v7()));
+	let dir = path.parent().unwrap_or(Path::new("."));
 	crate::storage::write_secret(&staged, pem.as_bytes())
 		.map_err(|error| format!("cannot write {}: {error}", path.display()))?;
 	let linked = std::fs::hard_link(&staged, path);
-	let _ = std::fs::remove_file(&staged);
-	match linked {
-		Ok(()) => Ok(true),
-		Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
-		Err(error) => Err(format!("cannot write {}: {error}", path.display())),
+	let removed = std::fs::remove_file(&staged);
+	let installed = match linked {
+		Ok(()) => true,
+		Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => false,
+		Err(error) => return Err(format!("cannot write {}: {error}", path.display())),
+	};
+	if installed {
+		sync(dir).map_err(|error| format!("cannot sync {}: {error}", dir.display()))?;
+	} else if removed.is_ok() {
+		let _ = sync(dir);
 	}
+	if installed && let Err(error) = removed {
+		// The key is in place under its name; a staged copy that could not be
+		// removed is only a stray file.
+		tracing::warn!(%error, "cannot remove a staged DKIM key copy");
+	}
+	Ok(installed)
 }
 
 /// Create `dir` readable by its owner only.

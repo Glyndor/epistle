@@ -149,3 +149,32 @@ fn an_installed_key_is_never_replaced_by_a_run_that_found_the_path_empty() {
 	let leftovers = std::fs::read_dir(dir.path()).expect("dir").count();
 	assert_eq!(leftovers, 1, "no staged copy is left behind");
 }
+
+#[test]
+fn the_directory_is_synced_after_the_link_and_the_removal_before_the_key_counts_as_installed() {
+	let dir = tempfile::tempdir().expect("dir");
+	let path = dir.path().join("ed25519.pem");
+	let synced = std::cell::RefCell::new(Vec::new());
+	let outcome = install_new_with(&path, "pem", |d| {
+		// By the time the directory is synced the final name exists and the
+		// staged one is gone: the sync covers both operations.
+		let names: Vec<_> = std::fs::read_dir(d)
+			.unwrap()
+			.map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+			.collect();
+		synced.borrow_mut().push(names);
+		Ok(())
+	});
+	assert_eq!(outcome, Ok(true));
+	let synced = synced.into_inner();
+	assert_eq!(synced.len(), 1, "one sync of the key directory");
+	assert_eq!(synced[0], ["ed25519.pem"], "after the link and the removal");
+}
+
+#[test]
+fn a_directory_that_cannot_be_synced_means_the_key_is_not_reported_installed() {
+	let dir = tempfile::tempdir().expect("dir");
+	let path = dir.path().join("ed25519.pem");
+	let outcome = install_new_with(&path, "pem", |_| Err(std::io::Error::other("no")));
+	assert!(outcome.is_err(), "{outcome:?}");
+}
