@@ -6,8 +6,10 @@ use serde::Deserialize;
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Api {
-	/// argon2id PHC hash of the bearer token.
-	pub token_hash: String,
+	/// Optional static bearer hash: SHA-256 or legacy argon2id PHC.
+	/// Absent means only labelled API keys can pass bearer authentication.
+	#[serde(default)]
+	pub token_hash: Option<String>,
 	/// Account names allowed to authenticate to the admin panel. An account
 	/// that authenticates but is not listed is a valid user, not an admin;
 	/// empty (the default) means no account is a panel admin.

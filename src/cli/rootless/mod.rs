@@ -7,10 +7,25 @@ use std::process::{Command, ExitCode, ExitStatus};
 
 use super::staging::Stage;
 
+mod forward;
+pub(super) mod identity;
+
+/// The name of the persistent service account.
+const ACCOUNT: &str = "glyndor-epistle";
+
 pub(super) struct ServiceUser {
 	pub(super) uid: u32,
 	pub(super) gid: u32,
+	/// The groups the system lists for the account, its own gid included.
+	pub(super) groups: Vec<u32>,
 	pub(super) home: PathBuf,
+}
+
+impl ServiceUser {
+	/// The identity a child process takes to run as the account.
+	pub(super) fn identity(&self) -> identity::Identity {
+		identity::Identity::new(self.uid, self.gid, self.groups.clone())
+	}
 }
 
 /// Run as root, re-execute as the service account with the paths the
@@ -39,11 +54,9 @@ fn delegate(
 		)));
 	}
 	let stage = stage(args, &user)?;
-	let mut command = Command::new("runuser");
-	command
-		.args(["-u", "glyndor-epistle", "--"])
-		.arg(exe)
-		.args(stage.args());
+	let mut command = Command::new(exe);
+	command.args(stage.args());
+	identity::run_as(&mut command, user.identity());
 	if let Some(shown) = stage.shown_env() {
 		command.env(super::staging::SHOWN_ENV, shown);
 	}
@@ -53,20 +66,24 @@ fn delegate(
 		format!("unix:path={}/bus", runtime.display()),
 	);
 	command.env("HOME", &user.home).current_dir(&user.home);
-	let status = spawn(&mut command)?;
+	let status = spawn(&mut command).map_err(|error| {
+		io::Error::new(
+			error.kind(),
+			format!("cannot run {} as {ACCOUNT}: {error}", exe.display()),
+		)
+	})?;
 	stage.finish(status.success())?;
-	Ok(Some(ExitCode::from(status.code().unwrap_or(1) as u8)))
+	Ok(Some(ExitCode::from(forward::exit_code(status))))
 }
 
-/// `runuser -u glyndor-epistle -- <program>`, with the runtime directory,
+/// `<program>` run as the service account, with the runtime directory,
 /// session bus and home the account's user manager and rootless Podman
 /// expect, for a root command that does part of its work as the account.
 pub(super) fn account_command(user: &ServiceUser, program: impl AsRef<std::ffi::OsStr>) -> Command {
 	let runtime = PathBuf::from(format!("/run/user/{}", user.uid));
-	let mut command = Command::new("runuser");
+	let mut command = Command::new(program);
+	identity::run_as(&mut command, user.identity());
 	command
-		.args(["-u", "glyndor-epistle", "--"])
-		.arg(program)
 		.env(
 			"DBUS_SESSION_BUS_ADDRESS",
 			format!("unix:path={}/bus", runtime.display()),
@@ -93,7 +110,7 @@ pub(super) fn reexecute() -> io::Result<Option<ExitCode>> {
 					std::os::unix::fs::fchown(file, Some(user.uid), Some(user.gid))
 				})
 			},
-			|command| command.status(),
+			forward::run,
 		)
 	}
 	#[cfg(not(unix))]
@@ -137,6 +154,7 @@ pub(super) fn lookup_user() -> io::Result<Option<ServiceUser>> {
 		return Ok(Some(ServiceUser {
 			uid: passwd.pw_uid,
 			gid: passwd.pw_gid,
+			groups: identity::groups_of(ACCOUNT, passwd.pw_gid)?,
 			home: PathBuf::from(std::ffi::OsStr::from_bytes(home.to_bytes())),
 		}));
 	}

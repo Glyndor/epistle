@@ -33,8 +33,6 @@ pub(super) async fn check(ctx: &Ctx) -> AreaReport {
 		items.push(Item::new("greylist", Level::Ok, "deferring first attempts"));
 		on_count += 1;
 	}
-	// SABOTAGE: when [database] is configured, flip the bayes item to Warn
-	// instead of Ok so the four-feature surface test fires red.
 	if database_on {
 		items.push(Item::new(
 			"bayes",

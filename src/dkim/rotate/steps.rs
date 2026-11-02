@@ -146,7 +146,7 @@ impl Rotator {
 			for selector in pending_selectors(&pending) {
 				self.provider
 					.delete(
-						&self.zone,
+						self.zone_for(domain),
 						txt_record(&Self::record_name(selector, domain), ""),
 					)
 					.await
@@ -162,7 +162,7 @@ impl Rotator {
 				let name = Self::record_name(selector, domain);
 				if let Err(error) = self
 					.provider
-					.upsert(&self.zone, txt_record(&name, value))
+					.upsert(self.zone_for(domain), txt_record(&name, value))
 					.await
 				{
 					let reason = format!("publish {name}: {error}");
@@ -250,7 +250,7 @@ impl Rotator {
 				let name = Self::record_name(selector, domain);
 				if let Err(error) = self
 					.provider
-					.delete(&self.zone, txt_record(&name, ""))
+					.delete(self.zone_for(domain), txt_record(&name, ""))
 					.await
 				{
 					failed = Some(format!("delete {name}: {error}"));
@@ -301,7 +301,7 @@ impl Rotator {
 				let name = Self::record_name(selector, domain);
 				if let Err(error) = self
 					.provider
-					.delete(&self.zone, txt_record(&name, ""))
+					.delete(self.zone_for(domain), txt_record(&name, ""))
 					.await
 				{
 					last_error = Some(format!("delete {name}: {error}"));

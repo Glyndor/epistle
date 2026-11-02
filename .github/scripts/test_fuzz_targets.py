@@ -8,7 +8,12 @@ FUZZ_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "fuzz", "fuzz_tar
 
 class SelectTests(unittest.TestCase):
     def test_every_target_in_the_fuzz_crate_is_listed(self):
-        on_disk = sorted(n[:-3] for n in os.listdir(FUZZ_DIR) if n.endswith(".rs"))
+        on_disk = sorted(
+            n[:-3]
+            for _, _, names in os.walk(FUZZ_DIR)
+            for n in names
+            if n.endswith(".rs")
+        )
         self.assertEqual(sorted(ft.ALL), on_disk)
 
     def test_every_mapped_target_exists(self):
@@ -52,7 +57,7 @@ class SelectTests(unittest.TestCase):
             "src/lib.rs",
             "src/fuzzing.rs",
             "Cargo.lock",
-            "fuzz/fuzz_targets/mime.rs",
+            "fuzz/fuzz_targets/message/mime.rs",
             ".github/workflows/fuzz.yml",
         ):
             self.assertEqual(ft.select("pull_request", [path, "src/imap/a.rs"]), ft.ALL)

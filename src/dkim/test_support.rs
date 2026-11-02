@@ -118,3 +118,29 @@ pub(crate) fn rsa_verifies(line: &str, record: &str, raw: &[u8]) -> bool {
 	.verify(input.as_bytes(), &signature.signature)
 	.is_ok()
 }
+
+/// A resolver whose every TXT lookup fails.
+pub(crate) struct FailingDns;
+
+impl DnsLookup for FailingDns {
+	fn txt(
+		&self,
+		_name: &str,
+	) -> Pin<Box<dyn Future<Output = Result<Vec<String>, DnsFailure>> + Send + '_>> {
+		Box::pin(async { Err(DnsFailure::Temporary) })
+	}
+
+	fn addresses(
+		&self,
+		_name: &str,
+	) -> Pin<Box<dyn Future<Output = Result<Vec<IpAddr>, DnsFailure>> + Send + '_>> {
+		Box::pin(async { Ok(Vec::new()) })
+	}
+
+	fn mx(
+		&self,
+		_name: &str,
+	) -> Pin<Box<dyn Future<Output = Result<Vec<String>, DnsFailure>> + Send + '_>> {
+		Box::pin(async { Ok(Vec::new()) })
+	}
+}

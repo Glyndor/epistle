@@ -2,7 +2,9 @@
 //! undo without them: `stack update` before the new server migrates the
 //! schema, `db upgrade` before the new major takes over. They live under
 //! `data_dir/backups` as `<name>-<UTC timestamp>.sql.gz`, mode 0600 (a dump
-//! holds password hashes and keys), and only the newest few are kept.
+//! holds password hashes and keys), and only the newest few are kept. A
+//! `stack update` that came back healthy removes the dumps it took, since
+//! nothing is left to roll back to.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -42,6 +44,27 @@ pub(super) fn prune(dir: &Path, keep: usize) -> std::io::Result<()> {
 		std::fs::remove_file(dumps.remove(0))?;
 	}
 	Ok(())
+}
+
+/// Delete the dumps `stack update` took, named `pre-<version>-<timestamp>`,
+/// and report how many went. The dumps `db upgrade` takes
+/// (`pre-db-upgrade-*`) stay: their version is not digits and dots.
+pub(super) fn remove_update(data_dir: &Path) -> std::io::Result<usize> {
+	let dir = dir(data_dir);
+	let mut removed = 0;
+	for path in listed(&dir, "pre-")? {
+		let version = path
+			.file_name()
+			.and_then(|name| name.to_str())
+			.and_then(|name| name.strip_prefix("pre-"))
+			.and_then(|rest| rest.split('-').next())
+			.unwrap_or_default();
+		if !version.is_empty() && version.chars().all(|c| c.is_ascii_digit() || c == '.') {
+			std::fs::remove_file(&path)?;
+			removed += 1;
+		}
+	}
+	Ok(removed)
 }
 
 /// The `.sql.gz` files in `dir` whose name starts with `prefix`, oldest

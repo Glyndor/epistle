@@ -19,6 +19,22 @@ pub(in crate::cli) fn run(
 ) -> ExitCode {
 	match Config::load(config) {
 		Ok(config) => {
+			// Two domains on one public key are refused at start, so the
+			// check says so now. A key that does not load is the signer's
+			// finding and is not repeated here.
+			match crate::dkim::sharing::shared_public_keys(&config) {
+				Ok(shared) if shared.is_empty() => {}
+				Ok(shared) => {
+					for line in shared {
+						crate::cli::style::error_to(err, line);
+					}
+					return ExitCode::FAILURE;
+				}
+				Err(error) => {
+					crate::cli::style::error_to(err, error);
+					return ExitCode::FAILURE;
+				}
+			}
 			// Every advisory goes to stderr even when the file is otherwise
 			// valid, and into the `--json` result. The exit code stays
 			// SUCCESS: a warning is not a failure.
@@ -46,6 +62,15 @@ fn warnings(config: &Config) -> Vec<String> {
 	// The single-signature DKIM advisory.
 	if let Some(warning) = crate::cli::serve::tasks::single_signature_dkim_warning(config) {
 		warnings.push(warning.to_string());
+	}
+	// One `[dkim]` key signing several domains: the install predates
+	// per-domain keys, and nothing changes until the operator splits it.
+	if let Some(warning) = config
+		.dkim
+		.as_ref()
+		.and_then(|dkim| dkim.shared_default_warning(&config.domains, &config.domain_aliases))
+	{
+		warnings.push(warning);
 	}
 	warnings.extend(crate::cli::oauth::advice::advice(config));
 	// A value the file sets below a MUST of an RFC, raised when it loaded.

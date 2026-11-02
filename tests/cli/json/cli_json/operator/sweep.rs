@@ -105,6 +105,7 @@ const SKIPPED: &[(&str, &str)] = &[
 	("dkim show", "checks the published records through DNS"),
 	("dkim rotate", "tests/cli/json/cli_json/delivery/dkim.rs"),
 	("dkim cleanup", "src/cli/dkim/cleanup/tests/base.rs"),
+	("dkim split", "src/cli/dkim/split/tests/json.rs"),
 	("tls renew", "src/cli/tls/cli/tests/base.rs"),
 	("db upgrade", "needs the stack and the database"),
 	(

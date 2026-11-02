@@ -6,6 +6,7 @@ mod edits;
 mod elements;
 mod file;
 mod lookup;
+mod promote;
 mod restart;
 mod rules;
 mod sweep;

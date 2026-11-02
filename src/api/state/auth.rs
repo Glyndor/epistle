@@ -106,10 +106,13 @@ impl ApiState {
 	#[cfg(test)]
 	pub(super) fn bearer_is_configured(&self, token: &str) -> bool {
 		super::CONFIGURED_HASH_CHECKS.with(|checks| checks.set(checks.get() + 1));
-		if self.inner.token_hash.starts_with("sha256:") {
+		let Some(hash) = self.inner.token_hash.as_deref() else {
+			return false;
+		};
+		if hash.starts_with("sha256:") {
 			self.configured_by_digest(token)
 		} else {
-			crate::smtp::auth::verify_password(&self.inner.token_hash, token)
+			crate::smtp::auth::verify_password(hash, token)
 		}
 	}
 }
@@ -136,7 +139,10 @@ impl ApiState {
 	) -> Result<bool, ArgonBusy> {
 		#[cfg(test)]
 		super::CONFIGURED_HASH_CHECKS.with(|checks| checks.set(checks.get() + 1));
-		if self.inner.token_hash.starts_with("sha256:") {
+		let Some(hash) = self.inner.token_hash.as_deref() else {
+			return Ok(false);
+		};
+		if hash.starts_with("sha256:") {
 			return Ok(self.configured_by_digest(token));
 		}
 		let digest = ring::digest::digest(&ring::digest::SHA256, token.as_bytes());
@@ -171,7 +177,11 @@ impl ApiState {
 			let _permit = permit;
 			#[cfg(test)]
 			state.argon2_run_started();
-			let verified = crate::smtp::auth::verify_password(&state.inner.token_hash, &bearer);
+			let verified = state
+				.inner
+				.token_hash
+				.as_deref()
+				.is_some_and(|hash| crate::smtp::auth::verify_password(hash, &bearer));
 			#[cfg(test)]
 			state.argon2_run_ended();
 			if verified {
@@ -186,7 +196,12 @@ impl ApiState {
 
 	/// The `sha256:` hash form: one digest comparison.
 	fn configured_by_digest(&self, token: &str) -> bool {
-		let Some(expected_hex) = self.inner.token_hash.strip_prefix("sha256:") else {
+		let Some(expected_hex) = self
+			.inner
+			.token_hash
+			.as_deref()
+			.and_then(|hash| hash.strip_prefix("sha256:"))
+		else {
 			return false;
 		};
 		let digest = ring::digest::digest(&ring::digest::SHA256, token.as_bytes());

@@ -237,8 +237,6 @@ pub use end_point::{EndPoint, end_point_of};
 
 pub mod watch;
 
-pub mod watch_tlsa;
-
 fn load_certs(path: &Path) -> Result<Vec<CertificateDer<'static>>, TlsError> {
 	let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_file_iter(path)
 		.map_err(|source| TlsError::Read {

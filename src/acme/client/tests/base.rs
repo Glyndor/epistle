@@ -173,7 +173,11 @@ async fn obtain_certificate_runs_the_full_flow() {
 
 	let store = crate::acme::http01::ChallengeStore::new();
 	let (chain, key_pem) = client
-		.obtain_certificate(&["mail.example.org".to_string()], &store, 3)
+		.obtain_certificate(
+			&["mail.example.org".to_string()],
+			std::sync::Arc::new(store.clone()),
+			3,
+		)
 		.await
 		.expect("obtain");
 	assert!(chain.starts_with("-----BEGIN CERTIFICATE-----"));
@@ -326,7 +330,11 @@ async fn obtain_fails_when_authorization_invalid() {
 	let client = registered_client(order_posts(authz)).await;
 	let store = crate::acme::http01::ChallengeStore::new();
 	let result = client
-		.obtain_certificate(&["mail.example.org".to_string()], &store, 3)
+		.obtain_certificate(
+			&["mail.example.org".to_string()],
+			std::sync::Arc::new(store.clone()),
+			3,
+		)
 		.await;
 	assert!(result.is_err(), "invalid authorization must abort");
 }
@@ -338,7 +346,11 @@ async fn obtain_times_out_when_authorization_never_valid() {
 	let client = registered_client(order_posts(authz)).await;
 	let store = crate::acme::http01::ChallengeStore::new();
 	let result = client
-		.obtain_certificate(&["mail.example.org".to_string()], &store, 2)
+		.obtain_certificate(
+			&["mail.example.org".to_string()],
+			std::sync::Arc::new(store.clone()),
+			2,
+		)
 		.await;
 	assert!(result.is_err(), "perpetual pending must time out");
 }
@@ -466,7 +478,11 @@ async fn obtain_certificate_dns01_publishes_and_cleans_up() {
 	let responder =
 		crate::acme::challenge::Dns01::new(provider.clone(), std::sync::Arc::new(AlwaysVisible));
 	let (chain, key_pem) = client
-		.obtain_certificate(&["mail.example.org".to_string()], &responder, 3)
+		.obtain_certificate(
+			&["mail.example.org".to_string()],
+			std::sync::Arc::new(responder),
+			3,
+		)
 		.await
 		.expect("obtain");
 	assert!(chain.starts_with("-----BEGIN CERTIFICATE-----"));

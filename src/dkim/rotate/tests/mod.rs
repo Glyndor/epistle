@@ -6,6 +6,7 @@ pub(super) mod crash;
 pub(super) mod crash_rsa;
 pub(super) mod empty_state;
 pub(super) mod multidomain;
+pub(super) mod multizone;
 pub(super) mod orphans;
 pub(super) mod publication;
 pub(super) mod request;

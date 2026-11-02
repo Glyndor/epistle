@@ -35,12 +35,18 @@ updates:
       - "/tests/fixtures/ldap"
     schedule:
       interval: "weekly"
+      day: "monday"
     labels: ["type:deps"]
     open-pull-requests-limit: 5
     target-branch: "develop"
+    cooldown:
+      default-days: 3
+    commit-message:
+      prefix: "chore(deps)"
     groups:
       images:
         patterns: ["*"]
+        update-types: ["minor", "patch"]
     ignore:
       - dependency-name: "*postgres*"
         update-types: ["version-update:semver-major"]
@@ -94,9 +100,11 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
-    labels: ["type:deps", "type:security"]
+    labels: ["type:deps"]
     open-pull-requests-limit: 5
     target-branch: "develop"
+    cooldown:
+      default-days: 3
     groups:
       signing-tooling:
         patterns: ["*"]

@@ -167,6 +167,27 @@ async fn a_certificate_with_another_key_is_refused() {
 }
 
 #[tokio::test]
+async fn a_refused_pair_on_disk_is_never_the_chain_in_service() {
+	// The TLSA retry publishes the chain in service. The file on disk that
+	// the watcher refused (a certificate without its key) must not be it,
+	// whether the poll reports the refusal or, later, Unchanged.
+	let (first, second, third) = (pair(), pair(), pair());
+	let mut lab = Lab::new(&first);
+	assert_eq!(lab.watcher.served_chain(), Some(first.cert.as_str()));
+	lab.replace(&second.cert, &third.key);
+	assert!(refused(&lab.watcher.poll()));
+	assert_eq!(lab.watcher.poll(), Polled::Unchanged);
+	assert_eq!(
+		lab.watcher.served_chain(),
+		Some(first.cert.as_str()),
+		"the first certificate is still the one in service"
+	);
+	lab.replace(&second.cert, &second.key);
+	assert!(matches!(lab.watcher.poll(), Polled::Reloaded { .. }));
+	assert_eq!(lab.watcher.served_chain(), Some(second.cert.as_str()));
+}
+
+#[tokio::test]
 async fn a_chain_with_a_certificate_that_does_not_parse_is_refused() {
 	use base64::Engine;
 	let (first, second) = (pair(), pair());

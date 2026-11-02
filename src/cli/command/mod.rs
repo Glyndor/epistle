@@ -705,10 +705,12 @@ pub enum Command {
 		#[command(subcommand)]
 		action: db_upgrade::DbCli,
 	},
-	/// Show the DKIM key in service, rotate it or clean up old keys.
+	/// Show the DKIM key in service, rotate it or split a shared key.
 	///
 	/// Rotation and cleanup are queued for the running server, which stays
-	/// the only writer of keys and DNS records.
+	/// the only writer of keys and DNS records. `split` gives each domain that
+	/// shares the `[dkim]` key a key of its own and switches signing only after
+	/// the new records resolve.
 	Dkim {
 		/// Configuration file; accepted before or after the action.
 		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
@@ -716,7 +718,7 @@ pub enum Command {
 		/// Print the result as one JSON object on stdout.
 		#[arg(long, global = true)]
 		json: bool,
-		/// DKIM action (`show`, `rotate`, `cleanup`).
+		/// DKIM action (`show`, `rotate`, `cleanup`, `split`).
 		#[command(subcommand)]
 		action: dkim::DkimCli,
 	},

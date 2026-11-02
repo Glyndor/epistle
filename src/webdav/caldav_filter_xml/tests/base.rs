@@ -89,3 +89,14 @@ fn matching_close_still_pairs_nested_and_self_closed_elements() {
 fn matching_close_refuses_a_tag_opened_inside_a_tag() {
 	assert!(matching_close("<a <b>></a>", 0, "a").is_none());
 }
+
+#[test]
+fn a_closing_tag_with_a_long_multibyte_prefix_does_not_panic() {
+	// The local name leaves the prefix out, so an index worked out from its
+	// length fell inside the multibyte prefix. The fuzzer found it.
+	let body = "<C:comp-filter name=\"VEVENT\"></ƽƽƽƽƽƽƽƽƽƽƽƽ:comp-filter>tail";
+	let open = first_open(body, "comp-filter").expect("open tag");
+	let (start, end) = matching_close(body, open + 1, "comp-filter").expect("close tag");
+	assert_eq!(&body[start..end], "</ƽƽƽƽƽƽƽƽƽƽƽƽ:comp-filter>");
+	assert_eq!(&body[end..], "tail");
+}

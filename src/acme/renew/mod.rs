@@ -188,7 +188,7 @@ async fn issue(
 	directory_url: &str,
 	contacts: &[String],
 	domains: &[String],
-	responder: &dyn ChallengeResponder,
+	responder: std::sync::Arc<dyn ChallengeResponder>,
 	data_dir: &Path,
 	reloadable: &ReloadableAcceptor,
 	tlsa: Option<&TlsaPublisher>,
@@ -199,16 +199,23 @@ async fn issue(
 	client.register(contacts).await?;
 	let (chain, key_pem) = client.obtain_certificate(domains, responder, 10).await?;
 
+	// The certificate being replaced: its TLSA value is one this server served.
+	let previous = fs::read_to_string(cert_path(data_dir)).ok();
 	install(data_dir, &chain, &key_pem, reloadable)?;
 	tracing::info!(?domains, "ACME certificate issued and TLS reloaded");
 
-	// Refresh the DANE TLSA record for the new certificate (best-effort: a DNS
-	// failure must not fail an otherwise-successful issuance).
-	if let Some((provider, hostname)) = tlsa
-		&& let Err(error) =
-			crate::dns::records::publish_tlsa(provider.as_ref(), hostname, &chain).await
-	{
-		tracing::warn!(%error, "TLSA refresh after cert rotation failed");
+	// Refresh the DANE TLSA record for the new certificate. A DNS failure must
+	// not fail an otherwise-successful issuance, and it is not dropped either:
+	// the publication is kept and the renewal loop retries it.
+	if let Some((provider, hostname)) = tlsa {
+		let target = crate::dns::tlsa::Target {
+			provider: Some(provider.as_ref()),
+			hostname,
+			data_dir,
+		};
+		let outcome =
+			crate::dns::tlsa::refresh(&target, &chain, previous.as_deref(), now_secs()).await;
+		crate::dns::tlsa::log_outcome(&outcome, hostname);
 	}
 	Ok(())
 }
@@ -230,11 +237,36 @@ impl Issuer for AcmeIssuer {
 			&self.directory_url,
 			&self.contacts,
 			&self.domains,
-			self.responder.as_ref(),
+			self.responder.clone(),
 			&self.data_dir,
 			&self.reloadable,
 			self.tlsa.as_ref(),
 		))
+	}
+}
+
+/// Publish again a TLSA record whose last attempt failed, once its wait is
+/// over, for the certificate in service.
+async fn retry_tlsa(issuer: &AcmeIssuer) {
+	let Some((provider, hostname)) = &issuer.tlsa else {
+		return;
+	};
+	let target = crate::dns::tlsa::Target {
+		provider: Some(provider.as_ref()),
+		hostname,
+		data_dir: &issuer.data_dir,
+	};
+	// Only a pair that works together is in service; anything else on disk
+	// is not published.
+	let (cert, key) = (cert_path(&issuer.data_dir), key_path(&issuer.data_dir));
+	if !crate::tls::usable_pair(&cert, &key) {
+		return;
+	}
+	let Ok(chain) = fs::read_to_string(&cert) else {
+		return;
+	};
+	if let Some(outcome) = crate::dns::tlsa::retry_due(&target, &chain, now_secs()).await {
+		crate::dns::tlsa::log_outcome(&outcome, hostname);
 	}
 }
 
@@ -263,6 +295,7 @@ pub async fn run(
 	};
 	let mut backoff = Backoff::default();
 	loop {
+		retry_tlsa(&issuer).await;
 		if let Outcome::Failed(error) = cycle(
 			&issuer,
 			&data_dir,

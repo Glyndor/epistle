@@ -15,15 +15,15 @@ name: Debian package
 # repository keeps its code in src/, and a filter that silently stops matching is
 # how a gate stops being a gate.
 
-# Push is scoped to develop only, not main. The repo's flow keeps main
-# reachable only via pull request (topic -> develop -> main, the path
-# main-guard enforces), so a direct push to main never arrives here.
-# Push to develop is the integration checkpoint where the Debian
-# build needs to keep passing.
+# Push is scoped to main only. A pull request into develop runs this on the
+# pull_request event and again in the merge queue (merge_group) on the commit
+# that becomes develop, so a push to develop would be a third run of the same
+# commit. main is reached by the release pull request, which the queue also
+# runs, and the push there is the check of what was actually published.
 
 on:
   push:
-    branches: ["develop"]
+    branches: ["main"]
   pull_request:
     branches: ["main", "develop"]
   # Required check `debian / dpkg-buildpackage`.

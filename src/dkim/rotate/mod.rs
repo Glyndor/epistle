@@ -351,6 +351,10 @@ pub struct Rotator {
 	signer: ReloadableSigner,
 	provider: Arc<dyn DnsProvider>,
 	zone: String,
+	/// The other zones the provider holds, when the configuration has one
+	/// entry per zone. A domain is published in the longest zone that
+	/// contains it; see [`Rotator::zone_for`].
+	more_zones: Vec<String>,
 	signing_domains: Vec<String>,
 	interval: u64,
 	overlap: u64,
@@ -400,6 +404,7 @@ impl Rotator {
 			signer,
 			provider,
 			zone,
+			more_zones: Vec::new(),
 			signing_domains,
 			interval,
 			overlap,
@@ -411,6 +416,34 @@ impl Rotator {
 			#[cfg(test)]
 			crash_at: None,
 		}
+	}
+
+	/// Publish in several zones: a domain goes to the longest zone, among
+	/// `zone` and `more`, that contains it.
+	pub fn with_zones(mut self, more: Vec<String>) -> Self {
+		self.more_zones = more;
+		self
+	}
+
+	/// Every zone this rotator publishes in, the first being the main one.
+	pub fn zones(&self) -> Vec<String> {
+		let mut zones = vec![self.zone.clone()];
+		for zone in &self.more_zones {
+			if !zones.iter().any(|known| known.eq_ignore_ascii_case(zone)) {
+				zones.push(zone.clone());
+			}
+		}
+		zones
+	}
+
+	/// The zone that holds `name`: the longest of the rotator's zones that
+	/// contains it, and the main zone when none does.
+	pub(super) fn zone_for(&self, name: &str) -> &str {
+		std::iter::once(&self.zone)
+			.chain(&self.more_zones)
+			.filter(|zone| Self::is_in_zone(name, zone))
+			.max_by_key(|zone| zone.len())
+			.unwrap_or(&self.zone)
 	}
 
 	/// Confirm through `resolver` that a new selector's TXT is visible,

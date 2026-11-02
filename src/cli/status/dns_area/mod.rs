@@ -91,11 +91,43 @@ async fn evaluate(config: &Config, dns: &dyn DnsLookup) -> AreaReport {
 			}
 		}
 	}
+	// A split that is not finished: the shared key is still published at a
+	// domain that has a key of its own.
+	let (stale, unchecked) = match crate::dkim::stale::names(config) {
+		Ok(candidates) => {
+			let found = crate::dkim::stale::survey(dns, candidates).await;
+			(found.shared, found.unknown)
+		}
+		Err(why) => {
+			findings.push(Item::new(
+				"DKIM split",
+				Level::Warn,
+				format!("could not check whether the split is finished: {why}"),
+			));
+			(Vec::new(), Vec::new())
+		}
+	};
+	for found in &stale {
+		findings.push(Item::new(
+			format!("DKIM split {}", found.stale.name),
+			Level::Warn,
+			"split incomplete: the shared [dkim] key is still published here; `epistle dkim split --finish` retires it after the overlap",
+		));
+	}
+	for (record, why) in &unchecked {
+		findings.push(Item::new(
+			format!("DKIM split {}", record.name),
+			Level::Warn,
+			format!("could not check whether the shared key is still published here: {why}"),
+		));
+	}
 	let mut summary = format!("{ok} records ok");
 	for (count, what) in [
 		(missing, "missing"),
 		(inconclusive, "inconclusive"),
 		(mismatches, "DKIM key mismatch"),
+		(stale.len(), "shared DKIM key still published"),
+		(unchecked.len(), "split state not checkable"),
 		(
 			usize::from(signing_key_failed),
 			"DKIM signing key unreadable",
@@ -144,18 +176,27 @@ fn proxy_provider(config: &Config) -> Result<Option<Arc<dyn DnsProvider>>, ()> {
 	if !dns::proxied_check::proxy_aware_provider(config) {
 		return Ok(None);
 	}
+	// An entry whose credentials cannot be read must not look like a zone
+	// with no proxied names: the router would answer it as a manual zone.
+	let unreadable = config
+		.dns
+		.iter()
+		.filter(|dns| dns.provider.eq_ignore_ascii_case("cloudflare"))
+		.any(|dns| dns.build_for_host(&config.hostname).is_none());
+	if unreadable {
+		return Err(());
+	}
 	config
 		.dns
-		.as_ref()
-		.and_then(|dns| dns.build_for_host(&config.hostname))
+		.build_for_host(&config.hostname)
 		.map(Some)
 		.ok_or(())
 }
 
 /// The Cloudflare orange-cloud check: one `Fail` per proxied mail name, so
 /// `epistle status` exits 1 until the operator sets them to DNS only. The
-/// zone is the one `[dns]` names; a list that fails or times out is a
-/// warning, because the proxy state is then unknown.
+/// zones are the ones the Cloudflare `[dns]` entries name; a list that fails
+/// or times out is a warning, because the proxy state is then unknown.
 pub(super) async fn proxied_items(
 	config: &Config,
 	provider: Result<Option<Arc<dyn DnsProvider>>, ()>,
@@ -172,15 +213,23 @@ pub(super) async fn proxied_items(
 			)];
 		}
 	};
-	let Some(zone) = config.dns.as_ref().map(|dns| dns.zone.as_str()) else {
-		return Vec::new();
-	};
-	let check = dns::proxied_check::proxied_check(
-		provider.as_ref(),
-		zone,
-		&config.domains,
-		&config.hostname,
-	);
+	let mut items = Vec::new();
+	for zone in config
+		.dns
+		.iter()
+		.filter(|dns| dns.provider.eq_ignore_ascii_case("cloudflare"))
+		.map(|dns| dns.zone.as_str())
+	{
+		items.extend(zone_items(config, provider.as_ref(), zone).await);
+	}
+	items
+}
+
+/// The orange-cloud findings of one Cloudflare zone.
+async fn zone_items(config: &Config, provider: &dyn DnsProvider, zone: &str) -> Vec<Item> {
+	const LABEL: &str = "Cloudflare proxy";
+	let check =
+		dns::proxied_check::proxied_check(provider, zone, &config.domains, &config.hostname);
 	match tokio::time::timeout(NET_TIMEOUT, check).await {
 		Ok(Ok(names)) => names
 			.iter()

@@ -12,11 +12,15 @@ use crate::dns::provider::ScopedSecret;
 
 /// The token to store: the one the command was given, or the one the
 /// configuration carried.
-pub(super) fn token(config: &Config, args: &super::ProviderArgs) -> Result<String, String> {
+pub(super) fn token(
+	config: &Config,
+	args: &super::ProviderArgs,
+	zone: &str,
+) -> Result<String, String> {
 	if args.token_env.is_some() && args.token_file.is_some() {
 		return Err("choose one of --token-env and --token-file".into());
 	}
-	let dns = config.dns.as_ref();
+	let dns = config.dns.for_zone(zone);
 	let (inline, env, file) = if args.token_env.is_some() || args.token_file.is_some() {
 		(
 			None,

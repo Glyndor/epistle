@@ -130,6 +130,35 @@ fn validate_rejects_empty_strings() {
 }
 
 #[test]
+fn validation_errors_name_the_top_level_section() {
+	// The section is `[antispam_llm]`, not a sub-table of `[antispam]`: an
+	// operator searching the file for the name in the message must find it.
+	let breakers: [fn(&mut Llm); 8] = [
+		|llm| llm.uncertain_low = 1.5,
+		|llm| llm.uncertain_high = -0.1,
+		|llm| {
+			llm.uncertain_low = 0.7;
+			llm.uncertain_high = 0.3;
+		},
+		|llm| llm.timeout_secs = 0,
+		|llm| llm.max_body_bytes = 0,
+		|llm| llm.endpoint = String::new(),
+		|llm| llm.api_key_env = String::new(),
+		|llm| llm.model = String::new(),
+	];
+	for breaker in breakers {
+		let mut llm = sample();
+		breaker(&mut llm);
+		let error = llm.validate().expect_err("the broken setting must fail");
+		assert!(
+			format!("{error}").contains("[antispam_llm] "),
+			"wrong section in: {error}"
+		);
+		assert!(!format!("{error}").contains("[antispam.llm]"), "{error}");
+	}
+}
+
+#[test]
 fn debug_redacts_nothing_but_omits_key_value() {
 	// The API key is read from the environment, not stored on the struct;
 	// the only secret-ish field visible in Debug is `api_key_env` (the

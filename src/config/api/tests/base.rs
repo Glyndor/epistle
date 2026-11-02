@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn parses_api_section() {
 	let api: Api = toml::from_str(r#"token_hash = "$argon2id$x""#).expect("parse");
-	assert_eq!(api.token_hash, "$argon2id$x");
+	assert_eq!(api.token_hash.as_deref(), Some("$argon2id$x"));
 	assert!(api.admins.is_empty());
 	assert!(api.trusted_proxies.is_empty());
 }
@@ -149,6 +149,29 @@ fn a_refused_trusted_proxy_names_the_value_the_rule_and_a_network_to_write() {
 			err.contains("for example \"10.0.0.0/8\"")
 				|| err.contains("for example \"203.0.113.0/24\""),
 			"{err}"
+		);
+	}
+}
+
+#[test]
+fn optional_static_token_loads_but_listener_still_requires_api_section() {
+	let api: Api = toml::from_str("").expect("no static credential required");
+	assert!(api.token_hash.is_none());
+	let base =
+		"hostname = 'mail.example.org'\ndata_dir = '/var/lib/mail'\ndomains = ['example.org']\n";
+	let listener = "[[listeners]]\nkind = 'api'\naddr = '127.0.0.1'\n";
+	let file = tempfile::NamedTempFile::new().unwrap();
+	assert!(
+		crate::config::Config::parse_text(&format!("{base}{listener}[api]\n"), file.path()).is_ok()
+	);
+	assert!(crate::config::Config::parse_text(&format!("{base}{listener}"), file.path()).is_err());
+	for invalid in ["", "sha256:", "plaintext"] {
+		assert!(
+			crate::config::Config::parse_text(
+				&format!("{base}{listener}[api]\ntoken_hash = {invalid:?}\n"),
+				file.path()
+			)
+			.is_err()
 		);
 	}
 }

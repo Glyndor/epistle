@@ -187,3 +187,27 @@ fn service_inline_listener_array_keeps_comments_and_exact_text() {
 		"inline listener removal must restore exact original text"
 	);
 }
+
+#[test]
+fn enabling_api_creates_a_section_without_a_static_token() {
+	let file = fixture("");
+	let text = fs::read_to_string(file.path()).unwrap();
+	let start = text.find("[api]").unwrap();
+	let end = text[start..].find("[[listeners]]").unwrap() + start;
+	fs::write(file.path(), format!("{}{}", &text[..start], &text[end..])).unwrap();
+	assert!(set_listener_enabled(file.path(), ListenerKind::Api, true).unwrap());
+	let config = Config::load(file.path()).unwrap();
+	assert!(config.api.unwrap().token_hash.is_none());
+	assert!(
+		config
+			.listeners
+			.iter()
+			.any(|listener| listener.kind == ListenerKind::Api)
+	);
+	assert!(
+		!fs::read_to_string(file.path())
+			.unwrap()
+			.contains("token_hash")
+	);
+	assert!(!set_listener_enabled(file.path(), ListenerKind::Api, true).unwrap());
+}

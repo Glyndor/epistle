@@ -66,6 +66,11 @@ pub(super) async fn evaluate(ctx: &Ctx, dns: &dyn crate::spf::DnsLookup) -> Area
 		renewal_item(config.acme.is_some(), remaining),
 	];
 	items.extend(super::tls_tlsa::tlsa_item(&config.hostname, &leaf.chain, dns).await);
+	items.extend(super::tls_tlsa::pending_item(
+		&config.data_dir,
+		&config.hostname,
+		epoch(ctx.now),
+	));
 	// Reversed so the first item wins a tie: the expiry reads best first.
 	let worst = items
 		.iter()

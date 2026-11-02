@@ -12,6 +12,7 @@ fn root_delegation_builds_exact_command_and_rootless_environment() {
 			Ok(Some(ServiceUser {
 				uid: 987,
 				gid: 987,
+				groups: vec![987],
 				home: "/var/lib/glyndor/epistle".into(),
 			}))
 		},
@@ -25,19 +26,14 @@ fn root_delegation_builds_exact_command_and_rootless_environment() {
 		},
 		|command| {
 			spawned = true;
-			assert_eq!(command.get_program(), "runuser");
+			assert_eq!(
+				command.get_program(),
+				"/usr/bin/epistle",
+				"the account's command is a direct child, with no runuser between"
+			);
 			assert_eq!(
 				command.get_args().collect::<Vec<_>>(),
-				[
-					"-u",
-					"glyndor-epistle",
-					"--",
-					"/usr/bin/epistle",
-					"stack",
-					"logs",
-					"--follow",
-					"mail"
-				],
+				["stack", "logs", "--follow", "mail"],
 				"delegation must preserve the executable and every argument"
 			);
 			let env: std::collections::BTreeMap<_, _> = command.get_envs().collect();
@@ -62,7 +58,7 @@ fn root_delegation_builds_exact_command_and_rootless_environment() {
 	.unwrap();
 	assert!(
 		spawned,
-		"root init and stack must spawn runuser for the service account"
+		"root init and stack must spawn the command for the service account"
 	);
 	assert_eq!(
 		result,
@@ -79,6 +75,7 @@ fn missing_runtime_names_the_linger_repair() {
 			Ok(Some(ServiceUser {
 				uid: 987,
 				gid: 987,
+				groups: vec![987],
 				home: "/var/lib/glyndor/epistle".into(),
 			}))
 		},
@@ -126,6 +123,7 @@ fn root_run(
 			Ok(Some(ServiceUser {
 				uid: 987,
 				gid: 986,
+				groups: vec![986],
 				home: home.to_path_buf(),
 			}))
 		},
@@ -143,7 +141,7 @@ fn root_run(
 			})
 		},
 		|command| {
-			let argv: Vec<_> = command.get_args().skip(4).collect();
+			let argv: Vec<_> = command.get_args().collect();
 			Ok(ExitStatus::from_raw(child(&argv) << 8))
 		},
 	)

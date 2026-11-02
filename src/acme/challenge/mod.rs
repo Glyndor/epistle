@@ -184,11 +184,17 @@ impl Dns01 {
 			.insert((domain.to_string(), token.to_string()), zone.to_string());
 	}
 
-	/// The zone a challenge was published in, taken out of the record so a
-	/// second withdrawal does not try to remove it again.
-	fn forget(&self, domain: &str, token: &str) -> Option<String> {
+	/// The zone a challenge was published in, left in the record.
+	fn zone_of(&self, domain: &str, token: &str) -> Option<String> {
 		self.published_zones()
-			.remove(&(domain.to_string(), token.to_string()))
+			.get(&(domain.to_string(), token.to_string()))
+			.cloned()
+	}
+
+	/// Drop the record of a challenge once its withdrawal has returned.
+	fn forget(&self, domain: &str, token: &str) {
+		self.published_zones()
+			.remove(&(domain.to_string(), token.to_string()));
 	}
 }
 
@@ -231,7 +237,7 @@ impl ChallengeResponder for Dns01 {
 			// publish used, and the provider is not asked again: a
 			// lookup that fails now would send the removal to a zone
 			// that does not hold the record, and the record would stay.
-			let Some(zone) = self.forget(domain, token) else {
+			let Some(zone) = self.zone_of(domain, token) else {
 				// The zone is not known: the challenge was never
 				// published, or it was published by another run. The
 				// record is left where it is rather than removed from a
@@ -245,6 +251,9 @@ impl ChallengeResponder for Dns01 {
 			if let Err(error) = self.provider.delete(&zone, record).await {
 				tracing::warn!(%error, %domain, "dns-01: challenge record not removed");
 			}
+			// Forgotten only now: a withdrawal cancelled before the delete
+			// returned finds its zone again when it is run a second time.
+			self.forget(domain, token);
 		})
 	}
 }

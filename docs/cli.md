@@ -91,7 +91,7 @@ Every change is validated before it is written, keeps the comments in
 
 Every `epistle` subcommand splits its output into two streams by purpose:
 
-- **stdout** carries command data or listings. The four data commands below
+- **stdout** carries command data or listings. The five data commands below
   never carry an ANSI escape sequence there, no matter the terminal, no matter
   `NO_COLOR`, no matter `CLICOLOR_FORCE`; the property is pinned by
   `tests/cli/cli_stdout_clean.rs`. `clap`'s `--help` and `--version` also write to
@@ -113,7 +113,7 @@ is not a terminal (for the pick, stdin and stderr), when `NO_COLOR` is set, when
 one scripts read, byte for byte, and a missing argument is a usage error with
 exit code 2. `CLICOLOR_FORCE` never turns any of this on in a pipe.
 
-Four commands produce binary or quoted data on stdout and would silently break if
+Five commands produce binary or quoted data on stdout and would silently break if
 an escape sequence or spinner frame were ever written there, so they are pinned by
 `tests/cli/cli_stdout_clean.rs`:
 
@@ -216,8 +216,8 @@ and so does `set` asked for the socket the listener already has.
 `set NAME [--bind ADDRESS] [--port PORT]` moves a listener that is already
 enabled, so `enable` is what adds one. It refuses a port another enabled
 listener answers on, a port 0, and an address the parser does not read; a value
-of `--port 70000` is a usage error. The API keeps the token requirement the loader
-enforces. API, WebDAV and
+of `--port 70000` is a usage error. Enabling the API creates `[api]` if absent, without asking for or generating
+a static token. Labelled keys work independently of `token_hash`. API, WebDAV and
 plain HTTP autoconfig have no TLS transport, so `set` refuses an address outside
 loopback for these listeners, even when mail certificates are configured in
 `[tls]`. I keep them behind a TLS reverse proxy on loopback.
@@ -311,11 +311,15 @@ after 5 s. `--config` defaults to `/etc/epistle/mail.toml`.
 | `db` | `[database]` connects and answers `SELECT 1` (or is not configured) | | cannot connect within 5 s |
 | `api_keys` | every key has a distant expiry and a narrow reach, and each `scim` key has an associated domain | a key has no expiry, expires within 14 days or has expired, holds every scope (a legacy key), holds `write` or `send` with no domain, account or usable `--ip-cidr`, or is a `scim` key with no domain; findings identify the label and scopes. The store has no creation or last-use timestamps | |
 | `antivirus` | clamd answers `PING` with `PONG` and reports its signature age (or is not configured) | `VERSION` fails | no `PONG` |
+| `antispam` | something is wired in: greylisting, or the `[database]` features (Bayes, reputation, persistent bans, greylist persistence), or the clamd scanner; each feature is listed | no `[database]`: those four features are off and the finding says so; with nothing at all wired in the summary says antispam is off | |
 | `queue` | oldest queued message under 4 h | over 4 h | over 24 h |
 | `disk` | 10% or more free on the filesystem holding `data_dir` | under 10% | under 5%, or under 25 MiB free (SMTP then answers 452) |
+| `spool` | no file or directory under `<data_dir>/spool/` is looser than owner-only; the finding also says whether messages are sealed (`encrypt_at_rest`) | a file or directory is looser than owner-only | the spool cannot be scanned, or the storage encryption cannot be set up |
 | `resources` | the `mem_limit` values in `compose.yaml` add up to 85% of the host's `MemTotal` or less, and the message memory budget fits the `mail` container's `mem_limit` | the limits add up to more than 85% of `MemTotal` (the finding names the two largest and the `epistle stack resources set` command that brings the sum under it, never below what the service needs: for `mail` five messages of `max_message_size` and 256 MiB), `/proc/meminfo` is unreadable, or a configured `message_memory_budget` (or one raised to `max_message_size`) would take more than 70% of the `mail` limit when full, at about 3 times its size | |
 | `clock` | the kernel reports the host clock disciplined by a time source (`adjtimex`, with `timedatectl show -p NTPSynchronized` when the syscall is refused), and the external probe is off, or every valid offset is below `warn_seconds` | the clock is not synchronised, or neither probe could tell; the finding gives the fix and nothing is changed; a valid offset reaches `warn_seconds`, or one or two readings are valid below it | no reading is valid, or a valid offset reaches `fail_seconds` |
+| `evidence` | the last verification of the evidence is under an hour old and found nothing to flag | the server has not verified yet, timestamp tokens are pending or failing, timestamps are disabled, a task reported an error, the last verification took half of the time it is given or more, or it is older than an hour | transactional mail is held (clear it with `epistle evidence acknowledge` once understood), or the status cannot be read |
 | `subid` | the ranges `glyndor-epistle` holds in `/etc/subuid` and `/etc/subgid` overlap no other account's | `glyndor-epistle` has no range in a table | a range overlaps another account's; the finding names that account and the shared interval (see [Moving an overlapping range](#moving-an-overlapping-subordinate-id-range)) |
+| `warmup` | one finding per receiver group (cap, sent today, deferred and bounced share, verdict, next cap, waiting); also `off` when the warm-up is not running | a group's verdict is `very_bad`; the warm-up is off while the address looks new and 200 or more recipients went out today or are queued (see [warm-up](operations/warmup.md)); the warm-up files cannot be read | |
 
 The `clock` area adds two read-only probes. The host probe asks the
 kernel via `adjtimex`, with `timedatectl show -p NTPSynchronized` when
@@ -502,9 +506,12 @@ stack.
 | `inbound-rate-per-ip` | Inbound messages per minute per client IP, default disabled. |
 | `inbound-rate-per-sender` | Inbound messages per minute per envelope sender, default disabled. |
 | `max-connections-per-listener` | Concurrent connections, default depends on the protocol. |
+| `max-recipients` | Recipients one message may name, on SMTP, REST send and JMAP submission, default 100. Not below 100 (RFC 5321 §4.5.3.1.8), and `limits set` refuses less. |
 | `max-message-size` | Per-instance cap, default 25 MiB. Applied to SMTP, JMAP `Email/set` create, JMAP upload body limit, REST `POST /api/v1/send`. Refused above `message-memory-budget`. |
 | `max-connections-per-ip` | Concurrent connections per client IP (IPv6: per /64) on each SMTP listener, default 20. Extra connections get `421 4.7.0` and are closed. |
 | `message-memory-budget` | Shared byte budget every SMTP `DATA` / `BDAT` reservation draws from, by default a fifth of the `mail` container's memory limit (at least `max-message-size`, at most 1 GiB); one client may hold a quarter of it. Refused below `max-message-size`. `0` disables the cap. |
+| `max-connections-per-account-per-ip` | Authenticated connections one account may hold from one client IP on the IMAP, POP3 and JMAP listeners together, default 10. Extra ones get `NO [LIMIT]`, `-ERR [IN-USE]` or `429` and are closed. |
+| `max-connections-per-account-total` | Authenticated connections one account may hold across every client IP on the same listeners, default 50. |
 | `min-data-rate` | Minimum average rate of one inbound message, in bytes per second (`K`/`M`/`G` suffixes), default 10240 (a 25 MiB message has about 43 minutes). Measured over the whole `DATA` or `BDAT` transaction, time between chunks included; below it the client gets `421 4.4.2` and is disconnected. `0` turns it off and shows as `disabled`. |
 | `data-rate-grace` | Time from the start of a message before `min-data-rate` applies, once per transaction, default 120 seconds, between 1 second and 1 hour. |
 | `junk-command-limit` | Commands without progress (`NOOP`, `RSET`, `VRFY`, unknown commands, a repeated `EHLO`, an empty `BDAT` chunk, `AUTH` response lines) one SMTP session may send before `421 4.7.0` and a disconnect, default 100, never reset during the session; refused commands count against the same limit since the last accepted message. `0` turns it off and shows as `disabled`; otherwise between 10 and 10000. |
@@ -514,6 +521,7 @@ stack.
 | `max-http-connections` | Concurrent connections each plain-HTTP listener (API and JMAP, WebDAV, autoconfig without TLS, ACME, metrics) serves, default 1024. Extra ones get `503` and are closed. `0` is the default, not "no limit", and `limits set` says so. |
 | `max-http-connections-per-ip` | Concurrent connections one client (IPv6: per /64) may hold on each plain-HTTP listener, default 256, over the same `503`. `0` is the default, not "no limit", and `limits set` says so. |
 | `masked-addresses-max` | Masked addresses per account, default 100. |
+| `known-network-window` | Time a successful sign-in keeps a network on the list that lets a banned account in from it, default 30 days (`known_network_window_secs`); see [Authentication bans](#authentication-bans). |
 | `first-time-sender-delay` | First-time sender delay, default 0 seconds. |
 | `greylist-delay` | Greylist deferral window, default 0 seconds. |
 | `queue-concurrency` | Outbound SMTP conversations at once, default 8, between 1 and 1024 (`[queue] concurrency`). |
@@ -583,11 +591,24 @@ epistle dns provider set route53 --zone example.org --access-key AKIA... \
   --secret-key-env AWS_SECRET --hosted-zone-id Z123
 epistle dns provider set manual --zone example.org
 epistle dns provider unset
+epistle dns provider unset --zone client.example
 epistle dns provider test
 ```
 
-`set` rewrites the whole `[dns]` section, so switching provider never leaves an old
-credential behind. The provider name and the settings it needs are checked the way
+`set` rewrites the entry for its `--zone`, so switching provider never leaves an old
+credential behind. A zone that has no entry yet is added: the first extra zone turns
+the single `[dns]` table into `[[dns]]` tables (see
+[`configuration.md`](configuration.md) §`[dns]`), and every other entry, its token
+and its mount in the generated compose file are left as they are. A token file that
+two entries share is mounted once and stays mounted while one of them reads it.
+`--store-token` keeps `secrets/dns_provider_token` for a configuration with one zone and
+uses `secrets/dns_provider_token_<zone>` (dots as underscores) once there are several, so
+replacing one token never overwrites another. `unset` removes every entry; `unset --zone`
+removes the one for that zone, takes its token file mount and its variable out of the
+generated compose file unless another entry still reads them, and refuses a zone that has none. `show`, `check` and `test`
+report every entry: `show --json` prints a list when there are several entries, and
+`check` prints each line with the zone in front (its `--json` is a list of
+`{zone, provider, report}`). The provider name and the settings it needs are checked the way
 the loader builds the provider; a setting the provider does not use is refused.
 Secrets are never passed on the command line: name an environment variable
 (`--token-env`, `--secret-key-env`, `--consumer-key-env`) or a 0600 file
@@ -773,6 +794,19 @@ refuses when the domain is already configured, when it collides with
 a `domain_aliases` source or target, or when the loader rejects the
 final document.
 
+With `[dkim]` configured, `add` also gives the new domain a DKIM key of its
+own: the Ed25519 key (and the RSA key, when `[dkim]` signs with one) is written
+`0600` under `<data_dir>/keys/dkim/<domain>/`, and a `[[dkim.domain]]` entry
+names it with the selectors `own<day>` and `ownrsa<day>`, which are not the
+ones `[dkim]` publishes, so the new record never replaces the one the default
+key is still published under. The records `add` prints are that key's. A key
+of the domain's own means a leaked key signs only as that domain.
+`--shared-dkim-key` keeps the old behaviour (the domain signs with the
+`[dkim]` key, which `config-check` and `status` then report). `--dry-run`
+shows the entry and writes no key. `remove` and `alias remove` take the
+domain's `[[dkim.domain]]` entry out with it and leave the key files, which are
+yours to delete once the record is gone from DNS.
+
 `remove` walks every account (static `[accounts]` plus `<data_dir>/accounts.toml`),
 every `[alias]` and its members and senders, every `domain_aliases`
 entry and every masked address on disk. If any of those still uses the
@@ -848,6 +882,12 @@ epistle antispam set clamd-socket /run/clamav/clamd.sock
 epistle antispam set clamd-on-found reject
 epistle antispam set clamd-on-error defer
 epistle antispam set scan-authenticated off
+epistle antispam set first-time-sender-delay 1m
+epistle antispam set clamd-timeout 30
+epistle antispam set clamd-max-size 26M
+epistle antispam set subjectpass on
+epistle antispam set llm-uncertain-low 0.3
+epistle antispam set llm-uncertain-high 0.9
 epistle antispam unset greylist-delay
 epistle antispam add dnsbl-zones zen.spamhaus.org
 epistle antispam remove dnsbl-zones zen.spamhaus.org
@@ -860,6 +900,14 @@ keys (`dnsbl-zones`, `dnsbl-domain-zones`, `dnsbl-url-zones`) print as
 The LLM block fields (`llm-endpoint`, `llm-model`, `llm-api-key-env`)
 print as `set`/`unset` only, the values are secrets and never appear
 on stdout.
+
+Besides the DNSBL lists, the keys are `greylist-delay` and
+`first-time-sender-delay` (durations such as `5m`; whole seconds also work), `clamd-socket`,
+`clamd-on-found` (`quarantine` or `reject`), `clamd-on-error` (`accept` or
+`defer`), `clamd-timeout` (whole seconds, default 30), `clamd-max-size` (bytes or a
+`K`, `M`, `G`, `T` suffix), `scan-authenticated` and `subjectpass` (`on` or `off`),
+the LLM block (`llm-endpoint`, `llm-model`, `llm-api-key-env`) and the band
+`llm-uncertain-low` and `llm-uncertain-high` (numbers from 0.0 to 1.0, low below high).
 
 `set <key> <value>` writes one key. For list keys the value replaces
 the whole list; for every other key exactly one value is accepted.
@@ -968,7 +1016,7 @@ than 5% free. An output that is a link, a hard link, or not owned by
 for the server to read, so those files must be readable by the account where
 they are.
 
-Stack requires podup 5.14.0 or newer. A failed podup command stops the
+Stack requires podup 5.15.4 or newer. A failed podup command stops the
 sequence and its exit code becomes epistle's exit code.
 
 | Command | What it does |
@@ -979,7 +1027,7 @@ sequence and its exit code becomes epistle's exit code.
 | `sudo epistle stack logs [--follow] [SERVICE]` | Streams service logs. |
 | `sudo epistle stack restart [SERVICE]` | Restarts the stack or one service. |
 | `sudo epistle stack stop [SERVICE]` / `sudo epistle stack start [SERVICE]` | Stop or start the whole stack, or one service, without removing containers or the autostart unit. `stack stop mail` is how to take the mail server down for `epistle restore` while the database stays up to receive the dump. |
-| `sudo epistle stack update` | Renders `compose.yaml` again with this release's code, shows what changed and replaces it, then runs `podup up -d` so only changed services are recreated. In default mode it also restarts `mail` when its definition did not change, so it runs the host binary the new .deb installed; in custom image mode it runs `podup pull` first. Before any of that it dumps the stack's database to `<data_dir>/backups/pre-<version>-<timestamp>.sql.gz` (mode 0600, the newest three `pre-*` dumps kept), because the new server migrates the schema when it starts; a failed dump stops the update before anything changes. Afterwards it waits up to five minutes for `mail` to report healthy and runs the `config`, `ports` and `db` checks of `epistle status`; a failure names the area and exits non-zero, and the apt upgrade prints it framed with the rollback command. Data and volumes are kept. Before it writes the new file it moves the storage and OAuth signing keys out of data_dir, and once `db` runs it takes SUPERUSER away from an `epistle` role an older release created (see [the container stack](operations/container.md#the-database-roles)). |
+| `sudo epistle stack update` | Renders `compose.yaml` again with this release's code, shows what changed and replaces it, then runs `podup up -d` so only changed services are recreated. In default mode it also restarts `mail` when its definition did not change, so it runs the host binary the new .deb installed; in custom image mode it runs `podup pull` first. Before any of that it dumps the stack's database to `<data_dir>/backups/pre-<version>-<timestamp>.sql.gz` (mode 0600, the newest three `pre-*` dumps kept while the update runs), because the new server migrates the schema when it starts; a failed dump stops the update before anything changes. Afterwards it waits up to five minutes for `mail` to report healthy and runs the `config`, `ports` and `db` checks of `epistle status`; a failure names the area and exits non-zero, and the apt upgrade prints it framed with the rollback command. When all of that passes, it deletes the `pre-<version>-*` dumps it took (a dump `db upgrade` took stays) and the images the previous compose file named and the new one does not, such as an older ClamAV digest or the version-tagged epistle image of a stack created by an earlier release. An image is removed only when no container of the service account uses it, so one that is still in use, or that carries another name, stays and the update says so; a failed update keeps the dumps and the images. Data and volumes are kept. Before it writes the new file it moves the storage and OAuth signing keys out of data_dir, and once `db` runs it takes SUPERUSER away from an `epistle` role an older release created (see [the container stack](operations/container.md#the-database-roles)). |
 | `sudo epistle stack resources [--json]` | Lists each service's `mem_limit` and `pids_limit` from `compose.yaml`, and their sum. Does not run `podup`. |
 | `sudo epistle stack resources set SERVICE [--memory SIZE] [--pids N] [--json]` | Changes the limit of `mail`, `db`, `clamav` or `freshclam` (`SIZE` is a whole number with `k`, `m` or `g`) in `compose.yaml`; `mail` is refused less than five messages of `max_message_size` and 256 MiB (381 MiB at the default 25 MiB), so the budget derived from its limit holds one message, where `init` records answered limits, so `stack update` keeps it. The running container keeps its old limit until `sudo epistle stack update` recreates it. `set` and `stack update` take the same lock on `compose.yaml` (`.compose.yaml.lock` beside it), so one waits for the other and neither loses the other's change. |
 | `sudo epistle stack rollback [--to VERSION] [--yes]` | Asks before it changes anything (`--yes` skips the question; without a terminal and without `--yes` it exits 2). Puts back the binary the last upgrade replaced (the preinst keeps the two newest under `/var/lib/epistle-rollback`, root:root mode 0700) and, when the new release already migrated the schema, restores the dump `stack update` took before the restart. See [Rolling back an upgrade](#rolling-back-an-upgrade). |
@@ -1082,7 +1130,14 @@ The package creates the store on install or configure and saves the replaced
 `/usr/bin/epistle` on upgrade as one directory per version holding the binary
 and its digest. It stages that pair in an exclusive random temporary directory,
 checks it, and moves it into the store with a single rename, so a copy that
-fails never replaces the one already saved. It keeps the two newest versions.
+fails never replaces the one already saved. It keeps the two newest versions
+until the upgrade is verified: when `stack update` succeeds inside the
+postinst, the postinst removes the saved generations and any staging directory
+left in the store, leaving files it did not create alone, and says so on stderr.
+An upgrade whose stack update failed, was skipped or found the stack switched
+off keeps its copies, so a failed upgrade can still go back. A problem that
+shows up after a verified upgrade has no rollback left; the dumps are gone with
+it.
 The version it saves has to be digits and dots, the only shape `stack rollback`
 can select, so a name carrying a Debian revision, a tilde or a colon is
 refused with a warning instead of taking a slot no listing can choose; so is
@@ -1098,9 +1153,12 @@ changes Debian metadata): no new copy is saved and the line is the only trace.
 Copies from the old `/var/lib/glyndor/epistle/rollback/` layout are ignored and
 never installed, including when owned by root. If only legacy copies exist,
 rollback remains unavailable until an upgrade saves a trusted copy in the new
-store. The package warns when it finds legacy copies. Purging the package
-removes the new store. Database dumps remain under `<data_dir>/backups`, where
-`stack update` can write them as the service account.
+store. The package warns when it finds legacy copies, and removes them together
+with the new store's generations once a stack update has verified the upgrade.
+Purging the package removes
+the new store. Database dumps live under `<data_dir>/backups`, where
+`stack update` can write them as the service account, and it deletes them
+itself once the update is verified.
 
 Limits:
 
@@ -1224,8 +1282,8 @@ known whether the dump was committed and points at `epistle db status`. If the
 files fail after the database loaded, the message says so, and running the
 restore again with `--force` finishes the job.
 
-`podup exec` does not forward stdin (measured against `podup 5.10.13` and
-`5.14.0`), which is why the restore path uses `podup cp` to land the SQL file
+`podup exec` did not forward stdin before 5.15.0 (measured against `podup 5.10.13`
+and `5.14.0`), which is why the restore path uses `podup cp` to land the SQL file
 inside the `db` container rather than `psql < archive.sql`. The temp
 file on the host is created in `$TMPDIR` at `0644`, inside a directory
 created at `0700`, under a name unique to that restore, and a guard removes
@@ -1407,7 +1465,11 @@ What this build does:
   `secrets/` beside data_dir instead (see [the container
   stack](operations/container.md#what-each-container-may-do)); a key that already exists
   is reused, never regenerated, whatever the answers say, and one an older
-  release left under `keys/` is moved;
+  release left under `keys/` is moved; with more than one domain, the first
+  signs with `s1.pem`/`s2.pem` and every other domain gets a key of its own
+  under `keys/dkim/<domain>/`, named by a `[[dkim.domain]]` entry (only in a
+  configuration `init` creates: running it again on one that exists keeps the
+  `[[dkim.domain]]` entries the file has and adds none);
 - writes the configuration file at `config_path` (also `0600`) through a
   staging path that `Config::load`s the candidate before renaming, so a config
   that does not validate never reaches its destination;
@@ -1503,12 +1565,22 @@ scope here):
 - DNS publishing for automatic mode: the plan still lists the `dns` step, but
   the step renders `not implemented in this build`. The operator follows it by
   hand or waits for the next part of `init` to land;
-- a management-API credential: setting `services.api = true` in the answers is
-  refused with a validation error. The api listener needs a bearer token whose
-  hash lives in `[api] token_hash`, and `init` does not generate one. To enable
-  the api service, leave `services.api` at its default (`false`) in the answers,
-  run `epistle init`, and then add the `[api]` section by hand (or with
-  `epistle token-hash` followed by an editor pass) before `epistle serve`.
+- a management-API credential: `services.api = true` writes an API listener and
+  an empty `[api]` section. Create labelled keys with `epistle api-key create`.
+  Operators who want a static token may set `token_hash` themselves using
+  `epistle token-hash`. `epistle status` treats "no static token configured"
+  as a good state. No current SCIM or OAuth route needs the static token;
+  see [the API guide](api.md#turn-it-on).
+
+## DNS records and listener probes
+
+| Command | What it does |
+|---|---|
+| `epistle dns-records [--json]` | Print the DNS records this deployment should publish: SPF, DKIM, DMARC, MTA-STS, MX, and a DANE TLSA record when a certificate is present. Reads the configuration only; nothing is queried or changed. |
+| `epistle verify-dns [--json]` | Look the same records up in DNS and report drift. Read-only. Exits 1 when a record is missing or differs. See [DNS](dns.md). |
+| `epistle probe [--json]` | Dial each enabled listener on loopback and read its greeting. Exits 0 when every listener answers and 1 when one is down or greets wrongly. It is the container healthcheck, and the `ports` area of `status` runs the same check. |
+
+All three take `--config FILE`.
 
 ## Keys and tokens
 
@@ -1517,6 +1589,7 @@ scope here):
 | `epistle dkim-keygen --out F` | Generate an Ed25519 DKIM key and print the DNS record value. |
 | `epistle dkim-keygen --rsa [--bits 2048\|4096] --out F` | Generate an RSA DKIM key (in process, no external program) and print the `k=rsa` record. The RSA `p=` value is large enough to need 255-octet TXT splitting; the printed record is already in the form a zone file accepts. |
 | `epistle storage-keygen` | Print a fresh base64 32-byte key for at-rest message encryption (`[storage]`). |
+| `epistle oauth-keygen --out F` | Generate the ES256 key pair for the built-in OAuth server: the base64 PKCS#8 private key for `[oauth] signing_key` and the matching public point for `[oauth] public_key`, written to `F` (mode 0600, an existing file is refused). The private key is never printed. |
 | `epistle token-hash` | Read a bearer token on stdin, print the `sha256:<hex>` for `[api] token_hash`. |
 
 The API keys made with `epistle api-key` open the HTTP API, described in the [HTTP API guide](api.md).
@@ -1525,8 +1598,9 @@ The API keys made with `epistle api-key` open the HTTP API, described in the [HT
 
 | Command | What it does |
 |---|---|
-| `epistle dkim show [--json]` | The DKIM key in service (selector, key file, rotation time, next scheduled rotation, previous selector and when it retires, the RSA selector in service, from `state` or `config`, with the RSA selector a rotation retires or moves to) and whether the published TXT of each signing domain matches it. A domain with a `[[dkim.domain]]` key is listed under `overrides` and checked against that key. Reads the same rotation state as `serve`, `dns-records` and `verify-dns`; an unreadable state file is an error, never a silent fallback to the configured key. A rotation the server began and has not finished is listed with its selector (`in_progress` in JSON), or with the reason it is being withdrawn. Every time it prints (when the key rotated, when the next rotation is due, when the previous selector retires, when the rotation began, when it was requested) is an RFC 3339 UTC instant such as `2026-12-31T23:59:59Z`; `--json` keeps the epoch seconds. |
-| `epistle dkim rotate [--dry-run]` | Rotate the Ed25519 key now, and with dual signing the RSA key in the same step (new selector `rsa<day>`). Refuses what the server refuses: no `[dkim]` or `[dns]`, a signing domain outside the `[dns]` zone, a provider that cannot be built, a second rotation on the same UTC day. Domains with a `[[dkim.domain]]` key are not signing domains of the default key. `--dry-run` prints the selectors and the TXT names and changes nothing. `--domain D` is always refused: a `[[dkim.domain]]` key does not rotate, and the refusal says how to replace it (or that `D` signs with the default). |
+| `epistle dkim show [--json]` | The DKIM key in service (selector, key file, rotation time, next scheduled rotation, previous selector and when it retires, the RSA selector in service, from `state` or `config`, with the RSA selector a rotation retires or moves to) and whether the published TXT of each signing domain matches it. A domain with a `[[dkim.domain]]` key is listed under `overrides` and checked against that key. `stale_records` lists the records of the shared key still published at a domain that has a key of its own (an unfinished `dkim split`; the text form says `split incomplete`). `keys` (one `key <domain>: ...` line per hosted domain in the text form) names the selector each domain signs with and, for a domain on the `[dkim]` default, the other domains that sign with the same key (`shared_with`), so a shared key is visible. Reads the same rotation state as `serve`, `dns-records` and `verify-dns`; an unreadable state file is an error, never a silent fallback to the configured key. A rotation the server began and has not finished is listed with its selector (`in_progress` in JSON), or with the reason it is being withdrawn. Every time it prints (when the key rotated, when the next rotation is due, when the previous selector retires, when the rotation began, when it was requested) is an RFC 3339 UTC instant such as `2026-12-31T23:59:59Z`; `--json` keeps the epoch seconds. |
+| `epistle dkim rotate [--dry-run]` | Rotate the Ed25519 key now, and with dual signing the RSA key in the same step (new selector `rsa<day>`). Refuses what the server refuses: no `[dkim]` or `[dns]`, a signing domain outside every `[dns]` zone, a provider that cannot be built, a second rotation on the same UTC day. Domains with a `[[dkim.domain]]` key are not signing domains of the default key. `--dry-run` prints the selectors and the TXT names and changes nothing. `--domain D` is always refused: a `[[dkim.domain]]` key does not rotate, and the refusal says how to replace it (or that `D` signs with the default). |
+| `epistle dkim split [--dry-run] [--wait SECONDS] [--restarted] [--finish [--skip-overlap-check]]` | Give every domain that signs with the `[dkim]` key a key of its own, for installs made before each domain had one. One domain keeps `[dkim]` (the first in `domains` that signs with it); each other gets an Ed25519 key (and an RSA one when `[dkim]` signs with both) under `<data_dir>/keys/dkim/<domain>/`, with the selectors `own<day>` and `ownrsa<day>` (`...x2`, `x3` when the shared key is published under that very name: a new record never replaces one a key that is still signing is published under). The records are published through `[dns]` for the domains inside its zone and printed for the rest (`publish by hand: ...`); the command then asks a resolver (about every 5 seconds, `--wait` seconds in all, default 120, `0` asks once) until every record shows the right key. Only then does it write the `[[dkim.domain]]` entries (after recording the move, and the shared key's selectors, in `<data_dir>/dkim-split.json`) and restart the server, so no message is ever signed with a key receivers cannot look up, a published record counts only if a verifier could use it (the same key and type, no `h=`/`s=` that excludes it, no repeated tag), one run at a time per data directory (a lock file beside the state; a second one is refused), and a run that stops before that changes nothing about signing: running it again reuses the keys. `--dry-run` prints the plan and makes no key, publishes nothing and writes nothing. Refused while a rotation is in progress. The shared key is still published at the domains that left it, so whoever holds it can still sign as them: the report lists those records with their full names (`stale after the switch: s1._domainkey.b.example.org ...`, and `stale_records` in `--json`; it covers the configured pair, the selector in service and the one a rotation is retiring), and `dkim show`, `status` and `check` warn `split incomplete` while any is published, and say so when they could not check (`stale_unchecked` in `dkim show --json`). `--finish` is the follow-up, and it removes nothing it has not shown to be the shared key's. A record counts as the shared key's only when its `p=` is the public key of a key this host knows is the shared one (the configured pair, the selector in service, the one a rotation retires); any other record at the name is printed as `not ours, left alone` and kept, and a record is deleted with the exact value that was read. A lookup that fails, or a record with no `p=` to compare, makes the command fail (exit 1) before it removes anything: "could not read" is never taken for "gone". The domain's own record must resolve with its own key first. The server must be confirmed to run the new key: `split` records that only when the restart it makes succeeds. Without a stack, or if the restart failed, it says `NOT confirmed` and exits 4, running `epistle dkim split` again repeats the restart, and `epistle dkim split --restarted` records one you made by hand; until then `--finish` retires nothing, and `--skip-overlap-check` does not lift that. A domain that is split again starts over (the earlier restart does not count for the new key), and a record of a move with no `[[dkim.domain]]` entry in the file is never confirmed. With several `[[dns]]` zones each record goes through the entry that serves its name, and the other names are printed. The 14-day overlap runs from that confirmed restart (`dkim-split.json`); a domain with no recorded move, or one whose overlap has not passed, is refused with an error that names the record (and the date), unless `--skip-overlap-check` is given, which retires them anyway and warns. `--finish` also retires the shared key's selectors that the split recorded and a later rotation has since dropped from the rotation state. Every value of the shared key at a name is removed, one by one and by exact value (`delete_exact`), and then the resolver is asked again (every 5 seconds for `--wait` seconds): the command fails (exit 1) if the shared `p=` is still visible, or if a record that is not ours at that name is gone. Only Google Cloud DNS (a change whose deletions must match exactly) and RFC 2136 (an UPDATE that names the RDATA) remove a TXT by its value without being able to take another record with it. deSEC and Route 53 rewrite the record set from what they read, DigitalOcean and Porkbun delete by id, and Namecheap rewrites the zone, so a record added or changed between their read and their write would be lost; Bunny, Cloudflare and OVH match by purpose; DNSimple, GoDaddy and Spaceship have not been shown to match by value. For all of those, and for a domain outside every `[[dns]]` zone, the records are printed as `remove by hand: NAME VALUE` and nothing is deleted. A record whose shared key's file is missing from this host cannot be told from somebody else's, so it makes the command fail rather than count as "not ours". It only ever looks at domains that have a `[[dkim.domain]]` entry, so the domain that kept the `[dkim]` key never loses its record; `--dry-run` lists what it would remove and what is held. `--json` gives `keeps`, `moves` and `stale_records` with `result` `split`, `waiting` (with `missing`) or `dry-run`, and for `--finish` `retired` and `manual` with `result` `retired`. |
 | `epistle dkim cleanup [--dry-run] [--yes]` | List the `dkim-ed<day>.key` and `dkim-rsa<day>.key` files and `ed<day>._domainkey` and `rsa<day>._domainkey` TXT records of the signing domains that neither the active, the previous, a pending nor a configured selector (`[dkim]` or `[[dkim.domain]]`) uses (left by crashes in older releases), ask for confirmation and queue their removal. `--dry-run` only lists; `--yes` skips the question. Refused when the rotation state cannot be read, and nothing is queued when the server does not rotate keys for this configuration. |
 | `epistle tls show [--json]` | The certificate the server presents (the ACME pair when `[acme]` is set and `<data_dir>/acme/{cert,key}.pem` is usable, otherwise the pair the `[tls]` section names, otherwise the bootstrap pair `init` wrote in `<data_dir>/keys/`): subject, names, issuer, expiry as an RFC 3339 UTC date (for example `2026-12-31T23:59:59Z`), days left, and `acme` or `static` as the source. JSON adds `not_after_utc` and keeps the epoch-second `not_after` field. The time a renewal was requested for is an RFC 3339 UTC instant as well. `serve`, `probe` and this command resolve it the same way. |
 | `epistle tls renew [--force]` | Ask the server to renew the ACME certificate. Without `--force` nothing is queued while the ACME pair is usable, its certificate is issued by an authority, and it is outside its `renew_before_days` window. An unusable pair or a self-issued certificate is due regardless of that window. |
@@ -1582,6 +1656,7 @@ Only `epistle init` turns one into the other: it derives the name from the addre
 | `epistle account address add\|remove N a@b` | Add or remove a delivery address. The last address cannot be removed. |
 | `epistle account quota N SIZE\|none` | Storage quota (`500M`, `10G`, `1T`); `none` falls back to the domain, then the server default. |
 | `epistle account protocols N LIST\|all` | Restrict sign-in to some protocols (`imap,smtp,api,webdav`); `all` clears it. |
+| `epistle account set N --default-class CLASS` | The [mail class](evidence.md) granted to the account's mail when neither the request nor the credential names one: `transactional`, `marketing`, `personal`, or `none` to clear it. |
 | `epistle account save-sent N on\|off` | Save a copy of every message the account sends into its `Sent` folder. Default on; `off` is the per-account opt-out. The app-password override (`app-password create --save-sent`) wins when set. |
 | `epistle account show N [--json]` | Public view: log id, addresses, disabled, quota, protocols. Works for static accounts. Never a secret. |
 | `epistle account find-log-id acct-…` | Map a log pseudonym back to its account. |
@@ -1590,12 +1665,12 @@ Only `epistle init` turns one into the other: it derives the name from the addre
 | `epistle account 2fa show N [--json]` | Whether a TOTP secret is enrolled (never the secret). |
 | `epistle account 2fa disable N [--yes\|-y]` | Remove the TOTP secret; the password alone signs in again. Asks first. |
 | `epistle app-password list [--account N] [--json]` | App passwords (label, expiry as an RFC 3339 UTC instant, IP restriction), never the secret. `--json` keeps the epoch second. |
-| `epistle app-password create N LABEL [--expires-at EPOCH] [--ip-cidr CIDR] [--save-sent on\|off]` | Create an IMAP/SMTP app password; prints it once. The label is 1 to 64 characters without control characters. `--save-sent` overrides the account-wide setting for this credential (`on` opts the credential in even if the account is off; `off` opts it out even if the account is on). Dynamic accounts only. |
+| `epistle app-password create N LABEL [--expires-at EPOCH] [--ip-cidr CIDR] [--save-sent on\|off] [--class CLASS]` | Create an IMAP/SMTP app password; prints it once. The label is 1 to 64 characters without control characters. `--class` (`transactional`, `marketing` or `personal`) is the [mail class](evidence.md) granted to mail sent with this credential. `--save-sent` overrides the account-wide setting for this credential (`on` opts the credential in even if the account is off; `off` opts it out even if the account is on). Dynamic accounts only. |
 | `epistle app-password rotate N LABEL [--yes\|-y] [--dry-run]` | Replace the secret and print the new one once. The label, expiry, address range and `save-sent` setting stay; the old secret stops working in the same write, and the running server picks the change up from the file within a few seconds (`reload` says `loaded`, `no-server` or `timed-out`). Asks first, because every client using the old secret stops working. `--dry-run` checks that the credential exists and prints no secret. |
 | `epistle app-password rename N LABEL NEW_LABEL [--dry-run]` | Give the credential a new label; the secret and the settings stay, so clients keep working. Refuses a label that is taken (exit 2). `previous_label` in the JSON result holds the old one. |
 | `epistle app-password revoke N LABEL [--yes\|-y]` | Revoke it. Asks first. |
 | `epistle api-key list [--json]` | API keys: label, expiry (RFC 3339, `--json` keeps the epoch), CIDR, scopes, domains, bound account. Never the key. |
-| `epistle api-key create LABEL --scope S [--scope …] [--domain D] [--account N] [--expires-at WHEN \| --expires-in 90d]` | Create a key; prints it once. `WHEN` is an epoch, a date, an RFC 3339 instant or a duration; no key expires unless one is given, and `status` warns about the ones that do not (see [Expiry is opt-in](api.md#expiry-is-opt-in)). Scopes: `read`, `write`, `send`, `scim`. `--domain` confines it to domains. `--account` binds it to one account (static or dynamic): it then reaches only JMAP and `/api/v1/send`, cannot hold `scim`, and takes no `--domain`. |
+| `epistle api-key create LABEL --scope S [--scope …] [--domain D] [--account N] [--expires-at WHEN \| --expires-in 90d] [--ip-cidr CIDR] [--class CLASS]` | Create a key; prints it once. `--ip-cidr` is an allowlist of one CIDR for the client address. `--class` (`transactional`, `marketing` or `personal`) is the [mail class](evidence.md) `/api/v1/send` grants to mail the request gives none. `WHEN` is an epoch, a date, an RFC 3339 instant or a duration; no key expires unless one is given, and `status` warns about the ones that do not (see [Expiry is opt-in](api.md#expiry-is-opt-in)). Scopes: `read`, `write`, `send`, `scim`. `--domain` confines it to domains. `--account` binds it to one account (static or dynamic): it then reaches only JMAP and `/api/v1/send`, cannot hold `scim`, and takes no `--domain`. |
 | `epistle api-key revoke LABEL [--yes\|-y]` | Revoke a key. Asks first. |
 | `epistle api-key rotate LABEL` | New secret, same scopes; prints it once. |
 
@@ -1606,7 +1681,7 @@ Only `epistle init` turns one into the other: it derives the name from the addre
 | `epistle export --account N [--maildir DIR]` | Export an account's mailboxes as an mbox stream on stdout, or as a Maildir tree where `Work/Project` is the Maildir++ folder `.Work.Project`. |
 | `epistle import --account N [--maildir DIR]` | Import an mbox stream from stdin, or a Maildir tree. Maildir++ folders become nested folders: `.Work.Project` is `Work/Project`. |
 | `epistle migrate imap --account N --host H --user U` | Copy a remote IMAP account, resumably. See [migration](operations/migration.md). |
-| `epistle migrate mox --from DIR` / `migrate stalwart --from FILE` | Import domains, accounts, aliases and DKIM keys. |
+| `epistle migrate mox --from DIR` / `migrate stalwart --from FILE` | Import domains, accounts, aliases and DKIM keys. Needs `--passwords-out FILE` (a new file, mode 0600, one `account<TAB>password` line per new account) or `--password-reset`, except with `--dry-run`. `--merge` keeps what already exists and adds the rest; `--json` prints the plan and the changes. |
 | `epistle queue` | List the outbound delivery queue (same as `queue list`). See [Outbound queue](#outbound-queue). |
 | `epistle delivery list [--recipient ADDR] [--account NAME] [--since WHEN] [--until WHEN] [--status S] [--limit N] [--json]` | Read the per-recipient delivery log: one record per delivered, failed, suppressed or canceled recipient, and one per deferred recipient for each distinct reply, at most eight per recipient (a retry deferred for the same reason adds none), newest day first, at most `N` records (default 100, at most 100000; a larger value is a usage error). The log is read a line at a time, so memory does not grow with the size of a day's file, and days outside `--since`/`--until` are not opened. `--since` and `--until` take an RFC 3339 time or a duration such as `24h` or `7d` counted back from now; `--since` after `--until` is refused, and so is a filter given empty (`--account ""`): it is a usage error (exit 2), never "no filter". `--status` (also `--outcome`) is `delivered`, `deferred`, `failed`, `suppressed` or `canceled`. Metadata only, never a subject or body. The time of each record is an RFC 3339 UTC instant; `--json` keeps the epoch second. `epistle delivery` alone is `delivery list`. Needs `[storage] delivery_log_days` above 0. |
 | `epistle delivery show ID [--json]` | Every record of one message, oldest first. `ID` is the spool id of the `SPOOL` column of `delivery list`. The time of each record is an RFC 3339 UTC instant; `--json` keeps the epoch second. The remote host and its reply are escaped for the terminal. Exits 2 for an id that is not a UUID or that has no record. |

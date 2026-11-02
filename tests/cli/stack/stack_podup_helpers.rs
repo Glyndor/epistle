@@ -11,6 +11,9 @@
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+
+#[path = "../../common/executable.rs"]
+pub(crate) mod executable;
 use std::process::{Command, Stdio};
 
 // Each test binary picks a subset of the helpers; the rest are
@@ -46,9 +49,22 @@ pub(crate) fn path_with_shim_first(shim_dir: &Path) -> std::ffi::OsString {
 pub(crate) fn write_podup_shim(shim_dir: &Path, body: &str) -> PathBuf {
 	std::fs::create_dir_all(shim_dir).expect("mkdir shim dir");
 	let path = shim_dir.join("podup");
-	std::fs::write(&path, body).expect("write shim");
-	std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
-		.expect("chmod 0755 on shim");
+	executable::write_executable(&path, body);
+	// `stack update` also asks `podman` which images it left unused. Without
+	// this, a test whose fixture retires an image would reach the Podman of
+	// the machine that runs it and its images.
+	let podman = shim_dir.join("podman");
+	if !podman.exists() {
+		write_podman_shim(shim_dir, "#!/bin/sh\nexit 125\n");
+	}
+	path
+}
+
+/// Write `body` to `<shim_dir>/podman` and mark it executable.
+#[allow(dead_code)]
+pub(crate) fn write_podman_shim(shim_dir: &Path, body: &str) -> PathBuf {
+	let path = shim_dir.join("podman");
+	executable::write_executable(&path, body);
 	path
 }
 
@@ -137,7 +153,7 @@ pub(crate) fn ps_shim(argv_log: &Path, canned_path: &Path) -> String {
 		"#!/bin/sh\n\
 		 printf '%s\\n' \"$@\" >> {argv_log}\n\
 		 if [ \"$1\" = \"--version\" ]; then\n\
-		 \tprintf '\\npodup version v5.14.0\\n\\n'\n\
+		 \tprintf '\\npodup version v5.15.4\\n\\n'\n\
 		 \texit 0\n\
 		 fi\n\
 		 for arg in \"$@\"; do\n\
@@ -196,7 +212,7 @@ pub(crate) fn write_ps_fixture(dir: &Path) -> PathBuf {
 }
 
 /// A podup shim that only records argv, prints the canonical
-/// `v5.14.0` banner, and exits 0 for every other command. Used
+/// `v5.15.4` banner, and exits 0 for every other command. Used
 /// by the streaming subcommand tests (`up`, `down`, `logs`,
 /// `restart`).
 #[allow(dead_code)]
@@ -205,7 +221,7 @@ pub(crate) fn recorder_shim(argv_log: &Path) -> String {
 		"#!/bin/sh\n\
 		 printf '%s\\n' \"$@\" >> {argv_log}\n\
 		 if [ \"$1\" = \"--version\" ]; then\n\
-		 \tprintf '\\npodup version v5.14.0\\n\\n'\n\
+		 \tprintf '\\npodup version v5.15.4\\n\\n'\n\
 		 \texit 0\n\
 		 fi\n\
 		 exit 0\n",

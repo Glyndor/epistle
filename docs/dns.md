@@ -82,14 +82,14 @@ collapses them.
 Sign outbound mail. Generate the key and record:
 
 ```sh
-epistle dkim-keygen --out /etc/glyndor/epistle/dkim/ed1.pem
+epistle dkim-keygen --out /etc/epistle/dkim/ed1.pem
 ```
 
 The default is an Ed25519 key (44-byte `p=`, always fits in one TXT
 string). For receivers without Ed25519 support, add an RSA selector:
 
 ```sh
-epistle dkim-keygen --rsa --out /etc/glyndor/epistle/dkim/rsa1.pem
+epistle dkim-keygen --rsa --out /etc/epistle/dkim/rsa1.pem
 ```
 
 `--rsa` makes the key in process, so nothing has to be on `PATH`.
@@ -101,6 +101,18 @@ configure `[dkim] selector` / `key_file`. Add `rsa_selector` /
 a startup warning is logged before that whenever the pair is missing).
 A single message is then signed with both keys (RFC 8463); receivers
 that understand Ed25519 use that signature, the rest fall back to RSA.
+
+Give each hosted domain a key of its own. A key that signs several
+domains lets whoever holds it sign as every one of them until all of
+them are replaced, and the receivers rate the signing domain (`d=`), not
+the key, so sharing one buys no reputation. A domain's own key goes in a
+`[[dkim.domain]]` entry (see [configuration](configuration.md#dkimdomain))
+and is published at `<selector>._domainkey.<that domain>`. Two domains
+that name one key, or whose key files hold the same public key, are
+refused; several domains on the `[dkim]` key still work and are reported
+by `config-check`, `status` and `dkim show`, and `epistle dkim split` moves
+them to keys of their own without a signature failing in between (it
+publishes the new records, waits until they resolve, and only then switches); `epistle dkim split --finish` then retires the shared key's records at the moved domains once the overlap has passed, and `status` warns until it has, and also when it cannot tell.
 
 Multiple selectors at different names are normal (the Ed25519 + RSA
 pair), but two at the same selector name is the same configuration
@@ -238,6 +250,27 @@ envelope target, the JSONL store lives at
 If the zone is DNSSEC-signed, publish a `TLSA` record for `mail.example.org:25`
 so senders authenticate your TLS certificate without relying on a public CA.
 
+With a `[dns]` provider, epistle refreshes that record after every certificate
+change (ACME renewal or a replaced `[tls]` pair):
+
+- **Retry.** A refresh the provider refuses is not forgotten. It is kept in
+  `data_dir/dns-tlsa/state.json` and retried every minute tick with a growing
+  wait (one minute, doubling, at most one hour) until it succeeds, always for
+  the certificate that is in service at that moment. `epistle status` shows it
+  as a `tlsa-pending` item with the reason and the value to publish by hand.
+- **Ownership.** Only TLSA values this instance published (or the association
+  of the certificate it just replaced) are replaced. A record of somebody else
+  at `_25._tcp.<hostname>`, such as the certificate of a second SMTP node, is
+  never removed. A provider that applies guarded changes keeps those records
+  and leaves the previous value next to the new one until the next rotation. A
+  provider that can only replace the whole set does not write while foreign
+  records are there: the refresh stays pending and `status` names them.
+  Replacing everything needs you to remove them or publish by hand.
+- **Zone.** The zone the credential sees is not assumed to serve the name. If
+  the zone lists an NS delegation at or above `_25._tcp.<hostname>` the write
+  is refused. Providers that cannot list their zone (`route53`, `rfc2136`)
+  cannot be checked and keep writing into the zone you configured.
+
 ## Client autodiscovery
 
 So users configure a client from just their address and password:
@@ -274,6 +307,12 @@ inside `example.org`) is published in `example.org`, and the dns-01
 challenge of an ACME order for such a hostname is published in the same
 zone and withdrawn from it.
 
+With several `[[dns]]` entries (see [`configuration.md`](configuration.md)
+§`[dns]`) the zone also picks the credential: every write goes to the entry
+whose zone contains the name, never to another one, and a name outside all of
+them is left to you as in manual mode. A signing domain in any configured zone is
+rotated, in its own zone.
+
 A zone the provider does not hold is not a zone it could not answer
 about: the search goes on to the parent only in the first case. When the
 provider fails — a timeout, a refused token, a reply that does not parse
@@ -282,7 +321,8 @@ in the parent zone would put it in a zone the operator did not ask for.
 
 ### Checking provider credentials
 
-Run `epistle dns provider check [--json]` to inspect the configured credential.
+Run `epistle dns provider check [--json]` to inspect the configured credential
+(each credential, with several `[[dns]]` entries, labelled with its zone).
 This command only reports findings. It never changes records or settings,
 restarts the server, or prevents another command from running. Findings use
 `verified`, `not verifiable with this provider` (`not_verifiable` in JSON),

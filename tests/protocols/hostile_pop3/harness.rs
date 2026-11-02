@@ -106,3 +106,13 @@ pub async fn quit(client: &mut Tls) {
 	expect(client, "+OK bye\r\n").await;
 	closed(client).await;
 }
+
+/// Leave without QUIT and return only once the server has ended the session.
+/// The server reads the end of the stream, returns from its protocol loop
+/// (dropping the session) and only then drops the socket, so the end of the
+/// stream seen here is the signal that nothing more will be committed.
+pub async fn abandon(client: &mut Tls) {
+	use tokio::io::AsyncWriteExt;
+	client.shutdown().await.expect("send close_notify");
+	closed(client).await;
+}

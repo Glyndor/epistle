@@ -5,6 +5,9 @@
 //! from one place.
 
 use std::path::{Path, PathBuf};
+
+#[path = "../../../common/executable.rs"]
+pub mod executable;
 pub fn binary() -> &'static Path {
 	Path::new(env!("CARGO_BIN_EXE_epistle"))
 }
@@ -20,7 +23,7 @@ pub fn make_answers_body(data_dir: &Path, config_path: &Path) -> String {
 	// custom-image mode so the host-binary validation does not
 	// run against the test runner's `/usr/bin/epistle`; the
 	// integration tests do not exercise the host-binary shape
-	// itself (`src/cli/init/compose/tests/host_binary_validation.rs` covers that),
+	// itself (`src/cli/init/compose/tests/binary_tests/host_binary_validation.rs` covers that),
 	// they exercise the rest of the apply pipeline.
 	format!(
 		"mode = \"manual\"\n\

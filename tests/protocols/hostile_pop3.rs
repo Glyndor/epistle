@@ -10,5 +10,7 @@ mod framing;
 mod harness;
 #[path = "hostile_pop3/messages.rs"]
 mod messages;
+#[path = "hostile_pop3/overlap.rs"]
+mod overlap;
 #[path = "hostile_pop3/wire.rs"]
 mod wire;

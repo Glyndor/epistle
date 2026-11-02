@@ -20,6 +20,8 @@ struct Journal {
 	zones: Vec<String>,
 	/// When set, the zone lookup fails instead of answering.
 	lookup_fails: AtomicBool,
+	/// When set, a delete is recorded and then never returns.
+	delete_stalls: AtomicBool,
 }
 
 impl Journal {
@@ -28,6 +30,7 @@ impl Journal {
 			calls: Mutex::new(Vec::new()),
 			zones: zones.iter().map(|zone| zone.to_string()).collect(),
 			lookup_fails: AtomicBool::new(false),
+			delete_stalls: AtomicBool::new(false),
 		}
 	}
 }
@@ -50,6 +53,9 @@ impl DnsProvider for Journal {
 			.lock()
 			.expect("calls")
 			.push(format!("delete {zone} {}", record.name));
+		if self.delete_stalls.load(Ordering::Relaxed) {
+			return Box::pin(std::future::pending());
+		}
 		Box::pin(async { Ok(()) })
 	}
 
@@ -160,6 +166,36 @@ async fn each_challenge_is_withdrawn_from_its_own_zone() {
 			"upsert example.net _acme-challenge.mail.example.net".to_string(),
 			"delete example.org _acme-challenge.mail.example.org".to_string(),
 			"delete example.net _acme-challenge.mail.example.net".to_string(),
+		]
+	);
+}
+
+#[tokio::test]
+async fn a_withdrawal_cancelled_before_the_delete_returned_can_be_run_again() {
+	// The first withdrawal is dropped while the provider is deleting. The
+	// zone is still known, so the second one removes the record from it.
+	let (provider, responder) = responder();
+	let key = key();
+	responder
+		.publish("mail.example.org", TOKEN, &key)
+		.await
+		.expect("publish");
+	provider.delete_stalls.store(true, Ordering::Relaxed);
+	let cancelled = tokio::time::timeout(
+		Duration::from_millis(50),
+		responder.withdraw("mail.example.org", TOKEN, &key),
+	)
+	.await;
+	assert!(cancelled.is_err(), "the delete was meant to stall");
+	provider.delete_stalls.store(false, Ordering::Relaxed);
+	provider.lookup_fails.store(true, Ordering::Relaxed);
+	responder.withdraw("mail.example.org", TOKEN, &key).await;
+	assert_eq!(
+		provider.calls.lock().expect("calls").as_slice(),
+		&[
+			"upsert example.org _acme-challenge.mail.example.org".to_string(),
+			"delete example.org _acme-challenge.mail.example.org".to_string(),
+			"delete example.org _acme-challenge.mail.example.org".to_string(),
 		]
 	);
 }

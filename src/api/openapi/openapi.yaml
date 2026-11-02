@@ -22,12 +22,16 @@ info:
     their own listeners, see their `servers` entries.
 
     **Authentication.** Every route of the API listener except `/healthz` and
-    `/oauth/*` needs `Authorization: Bearer <token>`: the token whose hash is
+    `/oauth/*` needs `Authorization: Bearer <token>`: the optional static token whose hash is
     `[api] token_hash`, or an API key made with `epistle api-key create`.
     A key carries scopes (`read`, `write`, `send`, `scim`); a request the
     scopes do not cover is answered `401 unauthenticated`, the same as an
     unknown token, not `403`. `x-epistle-scope` on each operation names the
-    scope it needs.
+    scope it needs. Without `token_hash`, only labelled keys in `api_keys.toml`
+    authenticate bearer-protected routes. No current route becomes unreachable:
+    SCIM accepts `scim` keys, and OAuth uses account credentials or grant codes.
+    A static-only route without a per-key scope must refuse keys with `403`,
+    even all-scope keys. An absent hash never matches any bearer.
 
     **Errors.** A failure the API itself decides is JSON,
     `{"error": {"code": "...", "message": "..."}}` (see `ApiError`). A body,
@@ -2160,7 +2164,8 @@ components:
       type: http
       scheme: bearer
       description: |-
-        The static token whose `sha256:` hash is `[api] token_hash`, or an
+        The optional static token whose SHA-256 or legacy argon2id hash is
+        `[api] token_hash`, or an
         API key from `epistle api-key create` (52 lowercase base32
         characters, shown once). The header is exactly
         `Authorization: Bearer <token>`; a token over 1024 bytes is not

@@ -43,14 +43,29 @@ pub(super) async fn check(ctx: &Ctx) -> AreaReport {
 	}
 	let mut items: Vec<_> = std::iter::once(restart).chain(addresses).collect();
 	if config
-		.dns
+		.api
 		.as_ref()
-		.is_some_and(|dns| dns.token.is_some() || dns.token_env.is_some())
+		.is_some_and(|api| api.token_hash.is_none())
+	{
+		let detail = "no static token configured";
+		summary.push_str("; ");
+		summary.push_str(detail);
+		items.push(Item::new("API token", Level::Ok, detail));
+	}
+	if config
+		.dns
+		.iter()
+		.any(|dns| dns.token.is_some() || dns.token_env.is_some())
 	{
 		let detail = "DNS token is inline or supplied through the environment; move it with `epistle dns provider set <provider> --zone <zone> --store-token`, including the provider's other required settings";
 		summary.push_str("; ");
 		summary.push_str(detail);
 		items.push(Item::new("DNS token", Level::Warn, detail));
+	}
+	for (level, line) in dkim_sharing(config) {
+		summary.push_str("; ");
+		summary.push_str(&line);
+		items.push(Item::new("DKIM keys", level, line));
 	}
 	if let Some(line) = crate::cli::oauth::advice::notice(config) {
 		items.push(Item::new("bearer sign-in", Level::Ok, line));
@@ -66,6 +81,25 @@ pub(super) async fn check(ctx: &Ctx) -> AreaReport {
 		items.push(Item::new("adjusted value", Level::Warn, line.clone()));
 	}
 	AreaReport::from_items(items, summary)
+}
+
+/// The DKIM keys that more than one domain signs with. Two owners that
+/// publish one public key fail: the server does not start with them. The
+/// `[dkim]` key signing several domains is a warning, the state of an
+/// install made before each domain had a key of its own.
+fn dkim_sharing(config: &crate::config::Config) -> Vec<(Level, String)> {
+	let Some(dkim) = &config.dkim else {
+		return Vec::new();
+	};
+	let mut found = Vec::new();
+	match crate::dkim::sharing::shared_public_keys(config) {
+		Ok(shared) => found.extend(shared.into_iter().map(|line| (Level::Fail, line))),
+		Err(error) => found.push((Level::Fail, error)),
+	}
+	if let Some(line) = dkim.shared_default_warning(&config.domains, &config.domain_aliases) {
+		found.push((Level::Warn, line));
+	}
+	found
 }
 
 /// One warning per address two owners claim, the lines the server logs at

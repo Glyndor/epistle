@@ -1,0 +1,8 @@
+# The public test values the frozen stores in this folder were made with.
+# They protect nothing: they sit here, in data, so no secret-looking literal
+# sits in the Rust source.
+password = "Upgrade-contract-password-0125!"
+app = "Upgrade-contract-app-0125!"
+token = "Upgrade-contract-api-0125!"
+wrong = "Upgrade-contract-wrong-0125!"
+totp = "upgrade-contract-totp"

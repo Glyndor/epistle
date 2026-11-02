@@ -1,20 +1,15 @@
 name: Benchmarks
 
-# Compile the criterion benchmarks on every change so they never bit-rot
-# (a deterministic gate — no timing in CI), and offer an on-demand full run
+# Compile the criterion benchmarks on every push to develop or main so they
+# never bit-rot (a deterministic gate — no timing in CI), and offer an on-demand full run
 # that publishes the criterion report as an artifact for manual regression
 # tracking. We keep timing comparisons off the PR gate because runner timing
 # is too noisy to fail a build on.
+# No pull_request trigger: clippy --all-targets in ci.yml already compiles
+# every bench on a pull request.
 on:
   push:
     branches: [develop, main]
-    paths:
-      - ".github/workflows/bench.yml"
-      - "benches/**"
-      - "src/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-  pull_request:
     paths:
       - ".github/workflows/bench.yml"
       - "benches/**"
@@ -40,6 +35,8 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install toolchain
         run: |
@@ -67,6 +64,8 @@ jobs:
     if: github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install toolchain
         run: |

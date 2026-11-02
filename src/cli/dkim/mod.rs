@@ -41,6 +41,40 @@ pub enum DkimCli {
 		#[arg(long)]
 		domain: Option<String>,
 	},
+	/// Give every domain that shares the `[dkim]` key a key of its own.
+	///
+	/// One domain keeps the `[dkim]` key. Every other domain that signs with
+	/// it gets a key under `keys/dkim/<domain>/` with its own selector. The
+	/// records are published (through `[dns]` when it reaches the domain, by
+	/// hand otherwise) and a domain signs with its new key only after a
+	/// resolver shows the record, so no signature breaks. The entries are then
+	/// written and the server restarted. Running it again continues a run that
+	/// stopped.
+	Split {
+		/// Print the plan; make no key, publish nothing, change nothing.
+		#[arg(long)]
+		dry_run: bool,
+		/// Seconds to wait for the new records to resolve before giving up
+		/// (0 asks once). Nothing is switched until they do.
+		#[arg(long, value_name = "SECONDS", default_value_t = 120)]
+		wait: u64,
+		/// Retire the records of the shared key that are still published at
+		/// the domains that left it, once the overlap window has passed.
+		/// Through `[dns]` where it reaches the domain, listed for removal by
+		/// hand otherwise. Never touches the domain that kept the key.
+		#[arg(long)]
+		finish: bool,
+		/// With `--finish`: retire even though the overlap window has not
+		/// passed. A server not confirmed on the new key is never retired for.
+		/// Mail signed before the switch may still be queued elsewhere.
+		#[arg(long, requires = "finish")]
+		skip_overlap_check: bool,
+		/// Record that you restarted the server by hand onto the keys a split
+		/// moved. `--finish` waits for this (or for the restart `split` does
+		/// itself) before it retires anything.
+		#[arg(long, conflicts_with_all = ["finish", "dry_run"])]
+		restarted: bool,
+	},
 	/// Remove DKIM keys and TXT records no rotation uses.
 	///
 	/// List the `dkim-ed<day>.key` and `dkim-rsa<day>.key` files and the
@@ -77,6 +111,12 @@ pub(super) fn run(
 			rotate_now(config, dry_run, now_epoch(), domain, json, out)
 		}
 		DkimCli::Cleanup { dry_run, yes } => cleanup::cleanup(config, dry_run, yes, json, out),
+		// `split` edits the configuration file, so the dispatcher gives it the
+		// path (`run_split`); the loaded `Config` alone cannot.
+		DkimCli::Split { .. } => {
+			super::style::error("dkim split needs the configuration file path");
+			ExitCode::FAILURE
+		}
 	}
 }
 
@@ -128,10 +168,9 @@ pub(super) struct Plan {
 /// operator hears a refusal now instead of finding it in the server log.
 pub(super) fn preflight(config: &Config, now: u64) -> Result<Plan, String> {
 	let dkim = config.dkim.as_ref().ok_or("[dkim] is not configured")?;
-	let dns = config
-		.dns
-		.as_ref()
-		.ok_or("[dns] is not configured: the new key could not be published")?;
+	if config.dns.is_empty() {
+		return Err("[dns] is not configured: the new key could not be published".into());
+	}
 	let DkimRotationPlan::Run {
 		signing_domains,
 		out_of_zone,
@@ -142,18 +181,26 @@ pub(super) fn preflight(config: &Config, now: u64) -> Result<Plan, String> {
 	};
 	if !out_of_zone.is_empty() {
 		return Err(format!(
-			"signing domain(s) {} lie outside the [dns] zone {}: their TXT records cannot be kept in sync",
+			"signing domain(s) {} lie outside the [dns] zone {}, or in a zone whose entry cannot publish: their TXT records cannot be kept in sync",
 			out_of_zone.join(", "),
-			dns.zone
+			config.dns.zones().join(", ")
 		));
 	}
 	if signing_domains.is_empty() {
 		return Err("no signing domain is configured, so nothing could be published".to_string());
 	}
-	if dns.build().is_none() {
-		return Err(
-			"the [dns] provider cannot be built (missing or empty credentials)".to_string(),
-		);
+	// Every signing domain is published through the entry of its own zone,
+	// so each of those entries has to build.
+	for domain in &signing_domains {
+		let buildable = config
+			.dns
+			.entry_for(domain)
+			.is_some_and(|dns| dns.build().is_some());
+		if !buildable {
+			return Err(
+				"the [dns] provider cannot be built (missing or empty credentials)".to_string(),
+			);
+		}
 	}
 	let active = rotate::active_ed25519(dkim, &config.data_dir).map_err(|e| e.to_string())?;
 	let next = selector_for(now);
@@ -285,8 +332,68 @@ pub(super) fn rotate_now_with(
 	report.object(result)
 }
 
+/// Run one `dkim` command from its configuration file. `split` and
+/// `split --finish` take the path, because they edit the file; the others
+/// load it.
+pub(super) fn dispatch(path: &std::path::Path, action: DkimCli, json: bool) -> ExitCode {
+	if let DkimCli::Split {
+		dry_run,
+		wait,
+		finish,
+		skip_overlap_check,
+		restarted,
+	} = action
+	{
+		return run_split(
+			path,
+			dry_run,
+			(wait, finish, skip_overlap_check, restarted),
+			json,
+			&mut std::io::stdout().lock(),
+		);
+	}
+	let config = match Config::load(path) {
+		Ok(config) => config,
+		Err(error) => {
+			super::style::error(error);
+			return ExitCode::FAILURE;
+		}
+	};
+	match action {
+		action @ DkimCli::Rotate { .. } => {
+			super::term::live::run("dkim rotate", json, |mut out| {
+				run(&config, action, json, &mut out)
+			})
+		}
+		action => run(&config, action, json, &mut std::io::stdout().lock()),
+	}
+}
+
+/// Run `dkim split` against the configuration file at `path`.
+pub(super) fn run_split(
+	path: &std::path::Path,
+	dry_run: bool,
+	(wait, finish, skip_overlap_check, restarted): (u64, bool, bool, bool),
+	json: bool,
+	out: &mut impl std::io::Write,
+) -> ExitCode {
+	split::run(
+		path,
+		&split::Options {
+			dry_run,
+			wait,
+			finish,
+			skip_overlap_check,
+			restarted,
+		},
+		json,
+		out,
+	)
+}
+
 mod cleanup;
 mod show;
+mod split;
 
 #[cfg(test)]
 mod tests;

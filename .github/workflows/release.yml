@@ -19,6 +19,11 @@ on:
         required: false
         type: boolean
         default: false
+      dry-run:
+        description: Rehearsal. Build, sign and check everything, then stop before the GitHub release and the container images are published
+        required: false
+        type: boolean
+        default: false
 
 permissions: {}
 
@@ -142,7 +147,9 @@ jobs:
         # that is already published, so this gate is the full release path
         # only. It used to run for both, which made images-only unusable:
         # verify failed, image-build needs verify to succeed, and nothing ran.
-        if: ${{ !inputs.images-only }}
+        # A rehearsal publishes nothing, so it may run on a tag that is already
+        # released: that is the safest tag to rehearse on.
+        if: ${{ !inputs.images-only && !inputs.dry-run }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -274,13 +281,25 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
+  # The release is made in three jobs so that nothing that runs a dependency
+  # ever sees the signing key, and the job that holds the key never runs
+  # anything it did not take from the verified commit:
+  #
+  #   build    compiles and attests; `contents: read`, no secret.
+  #   sign     clean runner, only downloads the files, checks them and signs
+  #            them; the key is given to the signing step alone.
+  #   publish  attaches the files to the release; `contents: write`, no secret.
+  #
+  # A rehearsal (`dry-run`) goes through build and sign and stops there.
   build:
-    name: Build and publish
+    name: Build
     needs: [verify, build-deb]
     if: ${{ !inputs.images-only }}
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
+      # The provenance attestation has to be made in the job that produced
+      # the artifact, and it needs the OIDC token and this permission.
       id-token: write
       attestations: write
     env:
@@ -290,6 +309,7 @@ jobs:
         with:
           # The commit `verify` resolved, not the tag name again.
           ref: ${{ needs.verify.outputs.commit }}
+          persist-credentials: false
 
       - name: Install toolchain
         run: |
@@ -307,7 +327,9 @@ jobs:
 
       - name: Generate CycloneDX SBOM
         run: |
-          command -v cargo-cyclonedx >/dev/null || cargo install --locked cargo-cyclonedx --version "^0.5"
+          # An exact version: a range here ran whatever the registry served that
+          # day, in the job that builds the release.
+          command -v cargo-cyclonedx >/dev/null || cargo install --locked cargo-cyclonedx --version "=0.5.9"
           cargo cyclonedx --format json --all-features
 
       - name: Collect the Debian packages
@@ -334,44 +356,171 @@ jobs:
           cd dist
           # SHA256SUMS is computed last so it covers the .debs too. The .sig
           # files do not exist yet, which is why they are not in it.
-          sha256sum * > SHA256SUMS
-
-      - name: Sign artifacts with the org Ed25519 key
-        env:
-          GLYNDOR_RELEASE_ED25519_KEY: ${{ secrets.GLYNDOR_RELEASE_ED25519_KEY }}
-        run: |
-          set -euo pipefail
-          # Fail closed: never publish unsigned artifacts. Verifiers and the
-          # apt archive trust this org Ed25519 signature.
-          if [ -z "${GLYNDOR_RELEASE_ED25519_KEY:-}" ]; then
-            echo "::error::GLYNDOR_RELEASE_ED25519_KEY secret is not configured; refusing to release unsigned artifacts."
-            exit 1
-          fi
-          # Install the signing dependencies into an isolated, hash-pinned
-          # virtualenv so a system-managed cryptography cannot break the pin.
-          python3 -m venv "$RUNNER_TEMP/signvenv"
-          venv_py="$RUNNER_TEMP/signvenv/bin/python"
-          "$venv_py" -m pip install --quiet --require-hashes -r .github/scripts/sign-requirements.txt
-          # The key is read from GLYNDOR_RELEASE_ED25519_KEY in the environment, not argv.
-          "$venv_py" .github/scripts/sign.py "dist/epistle-${TAG}-x86_64-linux"
-          # Each .deb gets its own detached signature: the apt archive verifies
-          # every package against <deb>.sig before admitting it, and refuses to
-          # re-sign with its own GPG key anything it did not verify first.
-          for deb in dist/epistle_*.deb; do
-            "$venv_py" .github/scripts/sign.py "$deb"
-          done
-          "$venv_py" .github/scripts/sign.py dist/SHA256SUMS
+          sha256sum -- * > SHA256SUMS
 
       - name: Attest build provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: dist/epistle-*-x86_64-linux
 
+      - name: Hand the files to the next job
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-dist
+          path: dist/*
+          retention-days: 1
+          if-no-files-found: error
+
+  sign:
+    name: Sign
+    needs: [verify, build]
+    if: ${{ !inputs.images-only }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The signing script and its requirements come from the verified
+          # commit, never from the artifact.
+          ref: ${{ needs.verify.outputs.commit }}
+          persist-credentials: false
+
+      - name: Receive the files
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-dist
+          path: dist
+
+      - name: Check what arrived
+        run: |
+          set -euo pipefail
+          cd dist
+          # Only the files the build job makes, with the names it gives them, as
+          # plain files. Anything else is refused before a key is near it.
+          if find . -mindepth 1 \( -type l -o ! -type f \) -print -quit | grep -q .; then
+            echo "::error::the artifact holds something that is not a plain file"; exit 1
+          fi
+          for f in *; do
+            case "$f" in
+              "epistle-${TAG}-x86_64-linux"|"epistle-${TAG}.cdx.json"|SHA256SUMS) ;;
+              epistle_*_amd64.deb|epistle_*_arm64.deb) ;;
+              *) echo "::error::unexpected file in the artifact: $f"; exit 1 ;;
+            esac
+          done
+          for want in "epistle-${TAG}-x86_64-linux" "epistle-${TAG}.cdx.json" SHA256SUMS; do
+            [ -f "$want" ] || { echo "::error::missing from the artifact: $want"; exit 1; }
+          done
+          ls epistle_*_amd64.deb epistle_*_arm64.deb >/dev/null
+          # The hashes the build job wrote must still match the bytes received.
+          sha256sum --check --strict SHA256SUMS
+
+      # A rehearsal never touches the org key: it signs with a key made on the
+      # spot, so it exercises the same script and leaves nothing that anyone
+      # could trust. Two steps with their own `if`, not one expression, because
+      # `a && '' || b` falls through to `b` when `a` is true.
+      - name: Make a throwaway key for the rehearsal
+        if: ${{ inputs.dry-run }}
+        run: |
+          key=$(python3 -c 'import base64, os; print(base64.b64encode(os.urandom(32)).decode())')
+          echo "::add-mask::$key"
+          echo "REHEARSAL_KEY=$key" >> "$GITHUB_ENV"
+
+      - name: Sign artifacts with the org Ed25519 key
+        if: ${{ !inputs.dry-run }}
+        env:
+          GLYNDOR_RELEASE_ED25519_KEY: ${{ secrets.GLYNDOR_RELEASE_ED25519_KEY }}
+        run: .github/scripts/sign_release.sh dist "$TAG"
+
+      # A rehearsal may name a tag older than the signing script, so the script
+      # comes from the commit that launched the dispatch. Nothing signed here is
+      # published: the key is the throwaway one and the job after this is skipped.
+      - name: Take the signing script from the dispatch commit (rehearsal)
+        if: ${{ inputs.dry-run }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: rehearsal-tools
+          persist-credentials: false
+
+      - name: Sign artifacts with the throwaway key (rehearsal)
+        if: ${{ inputs.dry-run }}
+        env:
+          GLYNDOR_RELEASE_ED25519_KEY: ${{ env.REHEARSAL_KEY }}
+        run: rehearsal-tools/.github/scripts/sign_release.sh dist "$TAG"
+
+      - name: Hand the signatures to the next job
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-signatures
+          path: dist/*.sig
+          retention-days: 1
+          if-no-files-found: error
+
+  publish:
+    name: Publish release
+    needs: [verify, build, sign]
+    # A rehearsal stops before this job.
+    if: ${{ !inputs.images-only && !inputs.dry-run }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+    steps:
+      - name: Receive the files
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-dist
+          path: dist
+
+      - name: Receive the signatures
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-signatures
+          path: dist
+
+      - name: Check what is going to be published
+        run: |
+          set -euo pipefail
+          cd dist
+          if find . -mindepth 1 \( -type l -o ! -type f \) -print -quit | grep -q .; then
+            echo "::error::the release files hold something that is not a plain file"; exit 1
+          fi
+          # The same allowlist the signing job applied, plus the signatures.
+          for f in *; do
+            case "$f" in
+              "epistle-${TAG}-x86_64-linux"|"epistle-${TAG}.cdx.json"|SHA256SUMS) ;;
+              epistle_*_amd64.deb|epistle_*_arm64.deb) ;;
+              "epistle-${TAG}-x86_64-linux.sig"|SHA256SUMS.sig) ;;
+              epistle_*_amd64.deb.sig|epistle_*_arm64.deb.sig) ;;
+              *) echo "::error::unexpected file in the release: $f"; exit 1 ;;
+            esac
+          done
+          # Every file but the signatures is signed, and every signature has
+          # content.
+          for f in *; do
+            case "$f" in *.sig) [ -s "$f" ] || { echo "::error::empty signature $f"; exit 1; } ;; *) [ -f "$f.sig" ] || { echo "::error::no signature for $f"; exit 1; } ;; esac
+          done
+          # SHA256SUMS names exactly the files that are being published, no more
+          # and no fewer, and their hashes match.
+          published=$(for f in *; do case "$f" in *.sig|SHA256SUMS) ;; *) echo "$f" ;; esac; done | sort)
+          listed=$(sed -E 's/^[0-9a-f]{64}[ *]+//' SHA256SUMS | sort)
+          if [ "$published" != "$listed" ]; then
+            echo "::error::SHA256SUMS does not name exactly the published files"
+            printf 'files:\n%s\nlisted:\n%s\n' "$published" "$listed"
+            exit 1
+          fi
+          sha256sum --check --strict SHA256SUMS
+
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
             --generate-notes \
             --verify-tag \
             dist/*
@@ -380,9 +529,10 @@ jobs:
   # release publishes the image next to the .deb.
   image-build:
     name: Build and push image (${{ matrix.arch }})
-    needs: [verify, build]
-    # An images-only dispatch skips build; the image still needs verify.
-    if: ${{ always() && needs.verify.result == 'success' && (needs.build.result == 'success' || inputs.images-only) }}
+    needs: [verify, publish]
+    # An images-only dispatch skips publish; the image still needs verify. A
+    # rehearsal skips it too and builds nothing.
+    if: ${{ always() && !inputs.dry-run && needs.verify.result == 'success' && (needs.publish.result == 'success' || inputs.images-only) }}
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read

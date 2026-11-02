@@ -18,6 +18,7 @@ mod set;
 mod show;
 #[cfg(test)]
 mod tests;
+mod unset;
 mod write;
 
 pub use set::ProviderArgs;
@@ -58,8 +59,12 @@ pub enum ProviderCli {
 		#[command(flatten)]
 		args: Box<ProviderArgs>,
 	},
-	/// Remove the provider and return to manual DNS.
-	Unset,
+	/// Remove the provider, or only the entry of one zone with --zone.
+	Unset {
+		/// The zone whose entry is removed.
+		#[arg(long)]
+		zone: Option<String>,
+	},
 	/// List the zone's records through the provider (read only).
 	Test,
 }
@@ -133,7 +138,12 @@ fn execute_with(
 				restart,
 			);
 		}
-		ProviderCli::Unset => {
+		// One zone's entry leaves with its credential: the generated compose
+		// file stops mounting its token, so this writes both files.
+		ProviderCli::Unset { zone: Some(zone) } => {
+			return unset::run(path, &zone, dry_run, json, out, status, restart);
+		}
+		ProviderCli::Unset { zone: None } => {
 			let change: resource::Change = Box::new(|document, _| {
 				document
 					.remove_table(&["dns"])

@@ -23,21 +23,42 @@ pub fn print_domain_records(
 	// when it has one, the `[dkim]` default otherwise) is the only one.
 	let mut dkim_owned: Vec<(String, String)> = Vec::new();
 	if let Some(dkim) = &config.dkim {
-		let (selector, key_file, rsa) = match dkim.override_for(domain) {
-			Some(entry) => (
-				&entry.selector,
-				&entry.key_file,
-				entry.rsa_selector.as_ref().zip(entry.rsa_key_file.as_ref()),
-			),
-			None => (&dkim.selector, &dkim.key_file, None),
+		// The key the server signs this domain with: its own entry, or the
+		// `[dkim]` key in service, which is the one a rotation moved to and
+		// not the file the configuration still names.
+		let keys: Result<_, String> = match dkim.override_for(domain) {
+			Some(entry) => Ok((
+				entry.selector.clone(),
+				entry.key_file.clone(),
+				entry.rsa_selector.clone().zip(entry.rsa_key_file.clone()),
+			)),
+			None => crate::dkim::rotate::active_ed25519(dkim, &config.data_dir)
+				.and_then(|ed| {
+					crate::dkim::rotate::active_rsa(dkim, &config.data_dir).map(|rsa| {
+						(
+							ed.selector,
+							ed.key_file,
+							rsa.map(|r| (r.selector, r.key_file)),
+						)
+					})
+				})
+				.map_err(|error| error.to_string()),
 		};
-		if let Ok(signer) = crate::dkim::Signer::load(selector, key_file) {
-			dkim_owned.push((selector.clone(), signer.dns_record_value()));
-		}
-		if let Some((rsa_selector, rsa_key_file)) = rsa
-			&& let Ok(value) = crate::dkim::rsa_record_value(rsa_key_file)
-		{
-			dkim_owned.push((rsa_selector.clone(), value));
+		match keys {
+			Ok((selector, key_file, rsa)) => {
+				if let Ok(signer) = crate::dkim::Signer::load(&selector, &key_file) {
+					dkim_owned.push((selector.clone(), signer.dns_record_value()));
+				}
+				if let Some((rsa_selector, rsa_key_file)) = rsa
+					&& let Ok(value) = crate::dkim::rsa_record_value(&rsa_key_file)
+				{
+					dkim_owned.push((rsa_selector, value));
+				}
+			}
+			Err(why) => writeln!(
+				out,
+				"\nThe DKIM records are not listed: the key in service cannot be read ({why})."
+			)?,
 		}
 	}
 	// The TLSA association names the certificate in service: the pair

@@ -16,11 +16,12 @@ use crate::config::Config;
 use crate::dns::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind};
 use crate::dns::{
 	lockdown, lockdown::DmarcInputs, lockdown::DmarcStep, lockdown::Journal, lockdown::Plan,
-	lockdown::PlanInput, lockdown::ServedNames, lockdown::canonical_name,
+	lockdown::PlanInput, lockdown::ServedNames,
 };
 use crate::spf::DnsLookup;
 
 pub(super) mod render;
+mod target;
 mod undo;
 
 /// How long one provider read may take.
@@ -167,32 +168,19 @@ struct Prepared {
 /// or written to the zone.
 fn prepare(path: &Path, args: &LockdownArgs, deps: &Deps<'_>) -> Result<Prepared, String> {
 	let config = Config::load(path).map_err(|error| error.to_string())?;
-	let zone = config.dns.as_ref().map(|dns| canonical_name(&dns.zone));
-	let domain = match &args.domain {
-		Some(raw) => crate::domain::normalize(raw.trim().trim_end_matches('.'))
-			.map_err(|_| format!("{raw} is not a valid domain name"))?,
-		None => zone
-			.clone()
-			.or_else(|| config.domains.first().map(|d| canonical_name(d)))
-			.ok_or(
-				"no domain given and none configured; name one: epistle dns lockdown <DOMAIN>",
-			)?,
-	};
-	if let Some(zone) = &zone
-		&& !lockdown::in_domain(&domain, zone)
-	{
-		return Err(format!(
-			"{domain} is not in the {zone} zone the [dns] provider manages"
-		));
-	}
+	let settled = target::settle(&config, args.domain.as_deref())?;
+	let (domain, zone) = (settled.domain, settled.zone);
 	let journal_path = config
 		.data_dir
 		.join("dns-lockdown")
 		.join(format!("{domain}.json"));
 	let journal = load_journal(&journal_path, &domain)?;
 	let provider = (deps.provider)(&config)?;
+	// An entry set to `manual` leaves its zone to the operator even when
+	// another zone has a provider.
+	let provider = provider.filter(|_| !settled.manual_zone);
 	Ok(Prepared {
-		zone: zone.unwrap_or_else(|| domain.clone()),
+		zone,
 		config,
 		domain,
 		journal_path,
@@ -203,13 +191,21 @@ fn prepare(path: &Path, args: &LockdownArgs, deps: &Deps<'_>) -> Result<Prepared
 
 /// The provider `[dns]` configures; `None` without one or for `manual`.
 fn configured_provider(config: &Config) -> Built {
-	let Some(dns) = &config.dns else {
+	let Some(dns) = config.dns.first() else {
 		return Ok(None);
 	};
-	if dns.provider.eq_ignore_ascii_case("manual") {
+	if config
+		.dns
+		.iter()
+		.all(|dns| dns.provider.eq_ignore_ascii_case("manual"))
+	{
 		return Ok(None);
 	}
-	dns.build_for_host(&config.hostname).map(Some).ok_or_else(|| {
+	config
+		.dns
+		.build_for_host(&config.hostname)
+		.map(Some)
+		.ok_or_else(|| {
 		format!(
 			"the {} credentials in [dns] could not be read; check that the token file or environment variable is available to this user",
 			dns.provider

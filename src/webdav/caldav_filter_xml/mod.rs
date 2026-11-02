@@ -59,8 +59,9 @@ pub fn matching_close(body: &str, start: usize, tag: &str) -> Option<(usize, usi
 			if local_close.as_deref() == Some(tag) {
 				depth -= 1;
 				if depth == 0 {
-					let end = at + 2 + local_close.as_ref().unwrap().len();
-					let close_idx = body[end..].find('>')? + end;
+					// The name may carry a prefix that `local_name` leaves out,
+					// so the end of the tag is found from where the name starts.
+					let close_idx = at + 2 + after.find('>')?;
 					return Some((at, close_idx + 1));
 				}
 			}

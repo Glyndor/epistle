@@ -169,7 +169,7 @@ fn migrate(source: &str, dry_run: bool, stack: bool) {
 		0o600
 	);
 	let config = Config::load(&path).unwrap();
-	let dns = config.dns.unwrap();
+	let dns = config.dns.first().unwrap();
 	assert_eq!(dns.token_file.as_ref(), Some(&secret));
 	assert!(dns.token.is_none() && dns.token_env.is_none());
 	assert!(dns.build().is_some());

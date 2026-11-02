@@ -49,3 +49,28 @@ pub(super) async fn tlsa_item(
 		),
 	))
 }
+
+/// The TLSA publication the server owes the zone, when a DNS failure left
+/// one: since when, how many attempts failed, why, and that it is retried.
+/// `None` when nothing is owed.
+pub(super) fn pending_item(data_dir: &std::path::Path, hostname: &str, now: i64) -> Option<Item> {
+	let pending = crate::dns::tlsa::State::load(data_dir, hostname).pending?;
+	let since = i64::try_from(pending.since).unwrap_or(i64::MAX);
+	let hours = (now - since).max(0) / 3600;
+	let wait = i64::try_from(pending.next_attempt).unwrap_or(i64::MAX) - now;
+	let retry = if wait > 0 {
+		format!("the next attempt is in {wait} s")
+	} else {
+		"the next attempt is due".to_string()
+	};
+	Some(Item::new(
+		"tlsa-pending",
+		Level::Warn,
+		format!(
+			"the TLSA record for _25._tcp.{hostname} is not published since {hours} h; {} attempts failed ({}); {retry}; the value is {}",
+			pending.attempts,
+			crate::cli::term::sanitize(&pending.reason),
+			pending.value,
+		),
+	))
+}

@@ -105,7 +105,7 @@ async fn disconnected_dele_is_not_committed() {
 	let mut client = server.login("tester", 1).await;
 	send(&mut client, b"DELE 1\r\n").await;
 	expect(&mut client, "+OK message 1 deleted\r\n").await;
-	drop(client);
+	abandon(&mut client).await;
 	let mut control = server.login("tester", 1).await;
 	assert_eq!(std::fs::read(path).expect("uncommitted message"), MESSAGE);
 	quit(&mut control).await;

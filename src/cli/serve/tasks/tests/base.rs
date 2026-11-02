@@ -135,7 +135,7 @@ zone = \"example.org\"
 token = \"abc\"
 "
 	));
-	assert!(config.dns.is_some(), "test fixture must include [dns]");
+	assert!(!config.dns.is_empty(), "test fixture must include [dns]");
 
 	let events = run_with_capture(|| {
 		super::spawn_dkim_rotation(&config, &None, None);

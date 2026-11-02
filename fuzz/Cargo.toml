@@ -13,91 +13,91 @@ epistle = { path = ".." }
 
 [[bin]]
 name = "smtp_command"
-path = "fuzz_targets/smtp_command.rs"
+path = "fuzz_targets/smtp/smtp_command.rs"
 test = false
 doc = false
 bench = false
 
 [[bin]]
 name = "smtp_line"
-path = "fuzz_targets/smtp_line.rs"
+path = "fuzz_targets/smtp/smtp_line.rs"
 test = false
 doc = false
 bench = false
 
 [[bin]]
 name = "smtp_address"
-path = "fuzz_targets/smtp_address.rs"
+path = "fuzz_targets/smtp/smtp_address.rs"
 test = false
 doc = false
 bench = false
 
 [[bin]]
 name = "imap_command"
-path = "fuzz_targets/imap_command.rs"
+path = "fuzz_targets/mailbox/imap_command.rs"
 test = false
 doc = false
 bench = false
 
 [[bin]]
 name = "sieve_message"
-path = "fuzz_targets/sieve_message.rs"
+path = "fuzz_targets/sieve/sieve_message.rs"
 test = false
 doc = false
 bench = false
 
 [[bin]]
 name = "sieve_script"
-path = "fuzz_targets/sieve_script.rs"
+path = "fuzz_targets/sieve/sieve_script.rs"
 test = false
 doc = false
 bench = false
 
 [[bin]]
 name = "sieve_run"
-path = "fuzz_targets/sieve_run.rs"
+path = "fuzz_targets/sieve/sieve_run.rs"
 test = false
 doc = false
 bench = false
 
 [[bin]]
 name = "sieve_validate"
-path = "fuzz_targets/sieve_validate.rs"
+path = "fuzz_targets/sieve/sieve_validate.rs"
 test = false
 doc = false
 bench = false
 
 [[bin]]
 name = "pop3_command"
-path = "fuzz_targets/pop3_command.rs"
+path = "fuzz_targets/mailbox/pop3_command.rs"
 test = false
 doc = false
 bench = false
 
 [[bin]]
 name = "managesieve_command"
-path = "fuzz_targets/managesieve_command.rs"
+path = "fuzz_targets/sieve/managesieve_command.rs"
 test = false
 doc = false
 bench = false
 
 [[bin]]
 name = "smtp_data"
-path = "fuzz_targets/smtp_data.rs"
+path = "fuzz_targets/smtp/smtp_data.rs"
 test = false
 doc = false
 bench = false
 
 [[bin]]
 name = "dkim_signature"
-path = "fuzz_targets/dkim_signature.rs"
+path = "fuzz_targets/message/dkim_signature.rs"
 test = false
 doc = false
 bench = false
 
 [[bin]]
 name = "mime"
-path = "fuzz_targets/mime.rs"
+path = "fuzz_targets/message/mime.rs"
 test = false
 doc = false
 bench = false
@@ -107,56 +107,56 @@ bench = false
 
 [[bin]]
 name = "attachment_inspect"
-path = "fuzz_targets/attachment_inspect.rs"
+path = "fuzz_targets/message/attachment_inspect.rs"
 test = false
 doc = false
 bench = false
 
 [[bin]]
 name = "webdav_filter_rrule"
-path = "fuzz_targets/webdav_filter_rrule.rs"
+path = "fuzz_targets/web/webdav_filter_rrule.rs"
 test = false
 doc = false
 bench = false
 
 [[bin]]
 name = "arc_headers"
-path = "fuzz_targets/arc_headers.rs"
+path = "fuzz_targets/message/arc_headers.rs"
 test = false
 doc = false
 bench = false
 
 [[bin]]
 name = "jwt_decode"
-path = "fuzz_targets/jwt_decode.rs"
+path = "fuzz_targets/web/jwt_decode.rs"
 test = false
 doc = false
 bench = false
 
 [[bin]]
 name = "smtp_reply"
-path = "fuzz_targets/smtp_reply.rs"
+path = "fuzz_targets/smtp/smtp_reply.rs"
 test = false
 doc = false
 bench = false
 
 [[bin]]
 name = "dns_security_records"
-path = "fuzz_targets/dns_security_records.rs"
+path = "fuzz_targets/dns/dns_security_records.rs"
 test = false
 doc = false
 bench = false
 
 [[bin]]
 name = "report_payload"
-path = "fuzz_targets/report_payload.rs"
+path = "fuzz_targets/dns/report_payload.rs"
 test = false
 doc = false
 bench = false
 
 [[bin]]
 name = "rules_match"
-path = "fuzz_targets/rules_match.rs"
+path = "fuzz_targets/message/rules_match.rs"
 test = false
 doc = false
 bench = false

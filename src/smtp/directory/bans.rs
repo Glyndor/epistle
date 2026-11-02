@@ -497,8 +497,8 @@ impl Directory {
 			// account, which is not the real account name).
 			if let Some(account) = account {
 				if !bypassed {
-					block_on_async(store.clear_success(&bans::subject_pair(account, ip)));
-					block_on_async(store.clear_success(&bans::subject_account(account)));
+					block_on_async(store.clear_success(&bans::subject_pair(account, ip), now_secs));
+					block_on_async(store.clear_success(&bans::subject_account(account), now_secs));
 				}
 				if let Some(ip) = ip {
 					block_on_async(store.record_known_network(account, ip, now_secs));

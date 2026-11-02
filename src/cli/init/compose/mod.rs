@@ -31,6 +31,7 @@ use super::answers::Answers;
 use super::apply::{ApplyError, Report, ReportStep, listeners_to_write};
 use super::compose_publish;
 
+mod dns_credentials;
 mod host_binary;
 
 #[cfg(not(test))]

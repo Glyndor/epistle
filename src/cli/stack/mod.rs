@@ -19,10 +19,10 @@ use serde::{Deserialize, Serialize};
 use crate::config::Config;
 
 /// The `podup` version this build requires at minimum. Mirrors the
-/// `podup (>= 5.14.0)` dependency in `debian/control`; a test reads
+/// `podup (>= 5.15.4)` dependency in `debian/control`; a test reads
 /// the control file and asserts the two are equal so the floor cannot
 /// drift away from the package relationship.
-const PODUP_FLOOR: &str = "5.14.0";
+const PODUP_FLOOR: &str = "5.15.4";
 
 /// Path of the compose file `epistle init` writes, relative to
 /// `data_dir`. Kept in one place so the operator-facing error names
@@ -199,6 +199,7 @@ pub(crate) enum StackAction {
 
 pub(super) mod dumps;
 pub(super) mod health;
+mod images;
 pub(super) mod resources;
 mod retry;
 pub(super) mod rollback;

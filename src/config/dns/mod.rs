@@ -6,6 +6,9 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 
+mod providers;
+pub use providers::DnsProviders;
+
 use crate::dns::provider::{DnsProvider, ScopedSecret};
 use crate::dns::providers::bunny::BunnyProvider;
 use crate::dns::providers::cloudflare::CloudflareProvider;

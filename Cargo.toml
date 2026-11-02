@@ -1,6 +1,6 @@
 [package]
 name = "epistle"
-version = "0.12.5"
+version = "0.12.6"
 edition = "2024"
 # The floor CI builds on, and the one `epistle` claims to support. It now comes
 # from mail-parser 1.0's own `rust-version` (1.98), so it is a derived floor rather
@@ -212,6 +212,10 @@ path = "tests/db/core/database_bans.rs"
 [[test]]
 name = "database_bans_admin"
 path = "tests/db/core/database_bans_admin.rs"
+
+[[test]]
+name = "database_bans_atomicity"
+path = "tests/db/core/database_bans_atomicity.rs"
 
 [[test]]
 name = "database_bans_cli"
@@ -472,3 +476,11 @@ path = "tests/dkim/dkim_rfc_conformance.rs"
 [[test]]
 name = "concurrency_suite"
 path = "tests/concurrency/suite.rs"
+
+[[test]]
+name = "credentials_survive_upgrade"
+path = "tests/contracts/credentials_survive_upgrade.rs"
+
+[[test]]
+name = "api_without_static_token"
+path = "tests/http/api_without_static_token.rs"

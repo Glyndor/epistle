@@ -39,6 +39,10 @@ pub(super) struct TokenUpdate {
 /// The credential the configuration carried before leaves the container with
 /// it: a container that keeps the old token mounted still exposes it.
 ///
+/// `zone` is the entry being set. The credential of every other entry stays
+/// where it is: a mount or a variable another entry still reads is never
+/// taken away, and one file shared by two entries is mounted once.
+///
 /// `dropped` names the environment variables that are not read any more: the
 /// one the configuration carried and the one the command was given.
 ///
@@ -47,6 +51,7 @@ pub(super) struct TokenUpdate {
 /// is not a change.
 pub(super) fn with_token(
 	config: &Config,
+	zone: &str,
 	source: Option<TokenSource<'_>>,
 	dropped: &[&str],
 ) -> Result<Option<TokenUpdate>, String> {
@@ -59,6 +64,22 @@ pub(super) fn with_token(
 	};
 	let mut document: serde_json::Value = serde_json::from_slice(&bytes)
 		.map_err(|_| "compose.yaml must be generated Compose JSON")?;
+	let previous = config.dns.for_zone(zone);
+	let others: Vec<&crate::config::Dns> = config
+		.dns
+		.iter()
+		.filter(|dns| previous.is_none_or(|own| !std::ptr::eq(*dns, own)))
+		.collect();
+	let dropped: Vec<&str> = dropped
+		.iter()
+		.copied()
+		.filter(|name| {
+			!others
+				.iter()
+				.any(|dns| dns.token_env.as_deref() == Some(*name))
+		})
+		.collect();
+	let dropped = dropped.as_slice();
 	let mail = document
 		.get_mut("services")
 		.and_then(|services| services.get_mut("mail"))
@@ -67,11 +88,18 @@ pub(super) fn with_token(
 	// What the container reads now, before the change: the variable the
 	// compose file forwards and the mount it carries.
 	let forwarded = forwarded(mail, dropped);
-	let previous_file = config
-		.dns
-		.as_ref()
-		.and_then(|dns| dns.token_file.as_deref());
+	let previous_file = previous
+		.and_then(|dns| dns.token_file.as_deref())
+		.filter(|file| {
+			!others
+				.iter()
+				.any(|dns| dns.token_file.as_deref() == Some(*file))
+		});
 	let mounted = previous_file.and_then(|path| mount_index(mail, path));
+	let already = match source {
+		Some(TokenSource::File(file)) => mount_index(mail, file),
+		_ => None,
+	};
 	// The mount the compose file carries is the one the change replaces. A
 	// configuration that names a file the compose file does not mount has
 	// nothing to replace, and nothing to take away.
@@ -107,9 +135,13 @@ pub(super) fn with_token(
 				"type": "bind", "source": file, "target": file,
 				"read_only": true, "bind": {"selinux": "Z"}
 			});
-			match mounted {
-				Some(index) => volumes[index] = mount,
-				None => volumes.push(mount),
+			match (mounted, already) {
+				(Some(index), Some(other)) if index != other => {
+					volumes.remove(index);
+				}
+				(Some(index), _) => volumes[index] = mount,
+				(None, Some(_)) => {}
+				(None, None) => volumes.push(mount),
 			}
 		}
 		None => {
@@ -147,13 +179,15 @@ pub(super) fn with_token(
 /// The index of the mount of `path` in the `mail` service, when it carries
 /// one: a read-only bind at the same path it has on the host.
 fn mount_index(mail: &serde_json::Map<String, serde_json::Value>, path: &Path) -> Option<usize> {
-	mail["volumes"].as_array().and_then(|volumes| {
-		volumes.iter().position(|mount| {
-			mount["source"].as_str().map(Path::new) == Some(path)
-				&& mount["target"].as_str().map(Path::new) == Some(path)
-				&& mount["read_only"].as_bool() == Some(true)
+	mail.get("volumes")
+		.and_then(serde_json::Value::as_array)
+		.and_then(|volumes| {
+			volumes.iter().position(|mount| {
+				mount["source"].as_str().map(Path::new) == Some(path)
+					&& mount["target"].as_str().map(Path::new) == Some(path)
+					&& mount["read_only"].as_bool() == Some(true)
+			})
 		})
-	})
 }
 
 /// The variable the `mail` service forwards to the container, out of the ones

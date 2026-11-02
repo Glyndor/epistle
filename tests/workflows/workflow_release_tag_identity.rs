@@ -205,7 +205,13 @@ fn verify_resolves_the_tag_once_and_every_build_checks_out_that_commit() {
 		 jobs check out. The job body was:\n{outputs}"
 	);
 
-	for id in ["build-deb", "build", "image-build", "image-manifest"] {
+	for id in [
+		"build-deb",
+		"build",
+		"sign",
+		"image-build",
+		"image-manifest",
+	] {
 		let build_steps = steps(job(&jobs, id));
 		let checkout = build_steps
 			.iter()
@@ -276,12 +282,14 @@ fn images_only_needs_a_published_release_instead_of_forbidding_one() {
 		.iter()
 		.find(|step| step.name().contains("no published release yet"))
 		.unwrap_or_else(|| panic!("the gate against re-publishing an existing release is gone"));
+	// A rehearsal publishes nothing, so it may also run on a tag that is already
+	// released; that is the safest tag to rehearse on.
 	assert_eq!(
 		refusal.guard(),
-		Some("${{ !inputs.images-only }}"),
+		Some("${{ !inputs.images-only && !inputs.dry-run }}"),
 		"this gate refuses to touch a tag that already has a release, which is exactly what an \
 		 images-only dispatch is for. It has to be skipped for images-only, or verify fails and \
-		 image-build, which needs verify to succeed, never starts."
+		 image-build, which needs verify to succeed, never starts. A dry run is skipped too."
 	);
 	let required = steps
 		.iter()

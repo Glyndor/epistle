@@ -56,7 +56,7 @@ control, its test and the residual risks, see the [threat model](threat-model.md
   and POP clients mangle non-ASCII credentials in AUTH PLAIN/LOGIN on
   the wire — the operator opts in knowing their clients need to normalise
   consistently, which SCRAM-SHA-256's standard preparation already does.
-  See [the configuration reference](configuration.md#auth-unicode-passwords).
+  See [the configuration reference](configuration.md#auth-unicode_passwords-auth-unicode_passwords--true).
 - **SCRAM-SHA-256** authenticates without the password crossing the wire, and
   **SCRAM-SHA-256-PLUS** adds TLS channel binding (`tls-server-end-point`) with
   downgrade rejection (RFC 5802 §6). `-PLUS` is offered when a static `[tls]`
@@ -163,6 +163,22 @@ control, its test and the residual risks, see the [threat model](threat-model.md
     one), so its resident size stays well above that.
 
 ## Authorization
+
+The static API token is optional. With `[api]` and a listener but no
+`token_hash`, bearer authentication accepts only labelled keys from
+`api_keys.toml`; an absent hash cannot match an empty bearer, `sha256:`, or
+any other value. An explicitly empty or malformed hash is rejected by config
+validation. Init and service enable never generate a static token.
+Every currently protected route has a per-key scope, including SCIM (`scim`);
+OAuth grants authenticate account credentials or codes separately. No route
+becomes unreachable solely by omitting the hash. Any static-only route without
+a per-key scope must refuse keys with `403`, even keys holding every scope.
+
+The unconfigured static path returns a miss without hashing or entering the
+argon2 queue. It is faster than a configured SHA-256 miss, and much faster than
+an uncached legacy argon2id miss. This can disclose whether static authentication
+is enabled, which is configuration state; it cannot disclose a missing secret.
+Configured SHA-256 comparisons and legacy argon2id verification are unchanged.
 
 - An authenticated sender may only use a `MAIL FROM` it owns — no spoofing, no
   null reverse-path from an authenticated session.
@@ -629,3 +645,52 @@ pseudonyms and nothing else:
 Please report security issues privately via GitHub Security Advisories on this
 repository rather than opening a public issue. Include reproduction steps and
 the affected version; we will acknowledge and coordinate a fix and disclosure.
+
+## Stored secrets and upgrade compatibility
+
+A release changing any stored credential form **must keep accepting the previous
+release's form** and re-store it in the new form on first successful use. When
+that use cannot supply the material needed to rewrite it (for example a SCRAM
+proof), provide an explicit migration command. Never silently invalidate an
+installed credential. An unavoidable invalidation must be announced in release
+notes and by `epistle status` before the upgrade. Preserve format prefixes and
+parameters so readers can distinguish versions; do not guess from new defaults.
+The frozen [v0.12.5 contract fixtures](../tests/contracts/testdata/credentials-v0.12.5/README.md)
+exercise this promise with current authentication code; do not regenerate them
+with the current release.
+
+Paths below are relative to `data_dir` unless configured otherwise. Files use
+restricted permissions; encoding a secret as base64 does not encrypt it. Update
+clients when replacing a credential, and retain decryption keys for old backups.
+
+| Secret and location | Stored form | Replacement |
+| --- | --- | --- |
+| API keys: `api_keys.toml` | `sha256:<hex>` digest; plaintext shown once | `epistle api-key rotate LABEL`; distribute the new key |
+| Static API token: `[api] token_hash` in `mail.toml` | `sha256:<hex>`; legacy argon2id PHC also accepted | Generate a new token, run `epistle token-hash`, replace the hash and restart; update clients |
+| Dynamic account password: `accounts.toml` | Salted argon2id PHC with parameters | `epistle account password N` |
+| Static account password: `[[accounts]] password_hash` in `mail.toml`; SQL directory `password_hash` | Argon2id PHC | Replace the configured argon2id PHC hash and restart; update SQL at its source (the account CLI manages dynamic accounts only) |
+| SCRAM: `accounts.toml`, alongside password hash | Base64 salt, iteration count, StoredKey and ServerKey; PBKDF2-HMAC-SHA256 | `epistle account password N` derives a fresh verifier; older work factors upgrade on successful PLAIN/LOGIN |
+| App passwords: `app_passwords.toml` | Salted argon2id PHC, with label and restrictions | `epistle app-password rotate N LABEL`; distribute the new secret |
+| TOTP: `accounts.toml` | Base32 shared secret; `enc:v1:<base64>` ChaCha20-Poly1305 envelope when storage encryption is enabled | DELETE then POST `/api/v1/accounts/{name}/totp`; scan the new secret in the authenticator |
+| Storage key: `[storage] encryption_key_file` or `encryption_key_env`; init writes beside the data directory in `secrets/` | Base64 32-byte encryption key | `epistle storage-keygen`; decrypt/export existing data under the old key and re-import under the new key, including TOTP; changing only the key loses access |
+| DKIM: configured `key_file`, RSA key file, per-domain overrides and rotated `dkim-*.key` files | Ed25519/RSA PKCS#8 PEM | `epistle dkim rotate`; for overrides use `epistle dkim-keygen`, publish the new selector and update configuration |
+| TLS: configured private-key PEM; ACME `acme/account.key` and `acme/key.pem` | Base64 PKCS#8 account key; PEM certificate private key | Replace manual PEM and restart; `epistle tls renew` renews managed certificates; retain the ACME account key or explicitly register a replacement |
+| OAuth issuer: `[oauth] signing_key` or `signing_key_file` | Base64 PKCS#8 ES256 private key | `epistle oauth-keygen`; replace private key and matching public key, restart; issued tokens need renewal |
+| Relay: `[[transport]] password` in `mail.toml` | Plaintext SMTP AUTH password | Rotate at the relay, update configuration and restart |
+| PostgreSQL: `[database] url` or `password_file` | Plaintext connection password in URL or separate file | Rotate in PostgreSQL, update the configured source and restart |
+| LDAP: `[ldap] bind_password`; user passwords at LDAP source | Plaintext service bind password; user passwords verified by LDAP bind | Rotate in LDAP, update bind configuration and restart; replace user passwords in LDAP |
+| DNS: `[dns]` token/access secrets/consumer key, provider files or named environment variables (including service-account credentials and TSIG) | Plaintext provider credentials, provider-specific JSON or base64 key | Rotate at the provider, update the configured source and restart |
+| S3 blobs: `[storage.blobs] secret_access_key_file` or `secret_access_key_env` | Plaintext access secret | Rotate at the S3 provider, update file/environment and restart |
+| Webhook: `[[webhook]] secret` | Plaintext HMAC signing secret | Replace at both sender configuration and receiver, restart |
+| LLM scanner: `[antispam.llm] api_key_env` | Plaintext provider key in process environment | Rotate at provider, update service environment and restart |
+| SubjectPass: `subjectpass.key`; log pseudonyms: `log-pseudonym.key` | Raw per-server HMAC keys | Stop the server, securely retire the relevant file and restart to generate a new one; outstanding retry tokens or historical log mappings cease to work |
+| SRS: `srs_secret` in `mail.toml` | Plaintext HMAC secret | Replace configuration and restart; outstanding forwarded return addresses stop verifying |
+| Bayesian corpus: `bayes-corpus.key` | Raw HMAC key for token pseudonyms | Preserve with the corpus; to replace, reset/retrain the corpus under a new key while stopped, then restart |
+| Evidence: `<evidence>/key.pk8`, staged `key.next.pk8` | Ed25519 PKCS#8 private keys | `epistle evidence key rotate`; retain public keys and signed hand-over records so historical evidence verifies |
+| Timestamp authority: `token_file` referenced by `<evidence>/timestamp.json` | Plaintext bearer token in an owner-only file | Rotate at the authority and replace the file; it is read on each request |
+| Operator inputs: init answers (`--answers`), service environment/secret mounts, migration `--password-file` | Plaintext supplied credentials or references; init persists runtime credentials in the stores above | Replace at the credential's source, update mounts/environment; securely delete transient input files after use |
+
+Backups copy stored credentials and ciphertext verbatim: apply the same access
+controls and retire obsolete backups after planned credential replacement.
+External OAuth bearer tokens and pending authorization grants are held in memory;
+they are not durable credential stores and must be renewed after expiry/restart.

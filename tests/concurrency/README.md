@@ -15,8 +15,7 @@ new dependency is needed.
   quota admission. A bounded rendezvous after their protocol checks makes all
   three reach the sink before storage starts; it does not serialise the writes.
 - A login in progress cannot succeed after password replacement or account
-  disable returns. This case is neutrally ignored pending lifecycle review.
-  Run it explicitly with `cargo test --locked --test concurrency_suite credentials:: -- --ignored --nocapture`.
+  disable returns.
 - SIGKILL during outbound spool and mailbox publication, followed by a real
   child restart: every final 250 survives, and every published message is whole.
 

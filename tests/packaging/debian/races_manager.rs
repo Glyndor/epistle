@@ -200,3 +200,117 @@ fn a_stack_that_does_not_come_back_leaves_the_package_configured() {
 		run.stderr
 	);
 }
+
+/// Put two saved generations, a staging leftover and a file the operator
+/// left into the host's rollback store.
+fn fill_store(host: &Host) -> std::path::PathBuf {
+	let store = host.root().join("rollback");
+	for generation in ["epistle-0.12.2", "epistle-0.12.3", ".stage-AbCdEfGhIj"] {
+		std::fs::create_dir_all(store.join(generation)).unwrap();
+		std::fs::write(store.join(generation).join("epistle"), "binary").unwrap();
+	}
+	std::fs::write(store.join("notes.txt"), "operator's").unwrap();
+	store
+}
+
+fn left_in(store: &std::path::Path) -> Vec<String> {
+	let mut names: Vec<String> = std::fs::read_dir(store)
+		.unwrap()
+		.map(|entry| entry.unwrap().file_name().into_string().unwrap())
+		.collect();
+	names.sort();
+	names
+}
+
+#[test]
+fn a_stack_that_came_back_healthy_drops_the_saved_binaries() {
+	let host = upgrade_host("echo \"$*\" >> \"$STUB_STATE/sleep.log\"".into());
+	let store = fill_store(&host);
+	std::fs::write(host.root().join("stub-state/up"), "").unwrap();
+	let legacy = host.root().join("state/rollback");
+	std::fs::create_dir_all(legacy.join("epistle-0.12.1")).unwrap();
+	let run = host.configure(Some("0.12.3"));
+	assert_eq!(run.code, Some(0), "{}", run.stderr);
+	assert_eq!(left_in(&store), ["notes.txt"], "{}", run.stderr);
+	assert!(
+		!legacy.exists(),
+		"the old layout copies stay: {}",
+		run.stderr
+	);
+	assert!(
+		run.stderr.contains("nothing to go back to"),
+		"the operator is told rollback is gone: {}",
+		run.stderr
+	);
+}
+
+#[test]
+fn a_stack_that_does_not_come_back_keeps_the_saved_binaries() {
+	let host = Host::new(Setup {
+		unit: true,
+		stubs: vec![(
+			"runuser",
+			"case \"$*\" in *'stack update'*) exit 1 ;; esac".into(),
+		)],
+		..Setup::default()
+	});
+	let store = fill_store(&host);
+	let legacy = host.root().join("state/rollback");
+	std::fs::create_dir_all(&legacy).unwrap();
+	let run = host.configure(Some("0.12.3"));
+	assert_eq!(run.code, Some(0), "{}", run.stderr);
+	assert!(legacy.is_dir(), "{}", run.stderr);
+	assert_eq!(
+		left_in(&store),
+		[
+			".stage-AbCdEfGhIj",
+			"epistle-0.12.2",
+			"epistle-0.12.3",
+			"notes.txt"
+		],
+		"{}",
+		run.stderr
+	);
+	assert!(
+		run.stderr.contains("sudo epistle stack rollback"),
+		"{}",
+		run.stderr
+	);
+}
+
+#[test]
+fn a_stack_that_is_switched_off_keeps_the_saved_binaries() {
+	let host = Host::new(Setup::default());
+	let store = fill_store(&host);
+	let run = host.configure(Some("0.12.3"));
+	assert_eq!(run.code, Some(0), "{}", run.stderr);
+	assert_eq!(left_in(&store).len(), 4, "{}", run.stderr);
+}
+
+#[test]
+fn a_store_that_is_a_link_is_not_entered() {
+	let host = Host::new(Setup {
+		unit: true,
+		..Setup::default()
+	});
+	let elsewhere = host.root().join("elsewhere");
+	std::fs::create_dir_all(elsewhere.join("epistle-0.12.2")).unwrap();
+	let store = host.root().join("rollback");
+	std::fs::remove_dir(&store).unwrap();
+	std::os::unix::fs::symlink(&elsewhere, &store).unwrap();
+	let run = host.configure(Some("0.12.3"));
+	assert_eq!(run.code, Some(0), "{}", run.stderr);
+	assert!(elsewhere.join("epistle-0.12.2").is_dir(), "{}", run.stderr);
+}
+
+#[test]
+fn old_layout_copies_that_are_a_link_are_not_followed() {
+	let host = upgrade_host("echo \"$*\" >> \"$STUB_STATE/sleep.log\"".into());
+	std::fs::write(host.root().join("stub-state/up"), "").unwrap();
+	let elsewhere = host.root().join("elsewhere");
+	std::fs::create_dir_all(elsewhere.join("keep")).unwrap();
+	std::os::unix::fs::symlink(&elsewhere, host.root().join("state/rollback")).unwrap();
+	let run = host.configure(Some("0.12.3"));
+	assert_eq!(run.code, Some(0), "{}", run.stderr);
+	assert!(elsewhere.join("keep").is_dir(), "{}", run.stderr);
+}

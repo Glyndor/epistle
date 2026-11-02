@@ -63,8 +63,8 @@ fn db_sh_spec(compose: &Path, script: String, root: bool) -> Result<CommandSpec,
 }
 
 /// The container-side `psql` invocation. `podup exec` does not forward
-/// stdin (measured against `podup 5.10.13` and still true of 5.14.0, where a
-/// script's non-terminal stdin is never attached), so the SQL is copied in
+/// stdin before 5.15.0 (measured against `podup 5.10.13` and still true of
+/// 5.14.0, where a script's non-terminal stdin is never attached), so the SQL is copied in
 /// first through `podup cp <host> <svc>:<in_container_path>`, and then a
 /// shell reads the secret into `PGPASSWORD` and execs `psql -1 -f` against
 /// that path. It runs as the container user, because the password is mounted

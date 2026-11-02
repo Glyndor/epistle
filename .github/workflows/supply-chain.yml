@@ -2,7 +2,7 @@ name: Supply chain
 
 on:
   push:
-    branches: [develop, main]
+    branches: [main]
   pull_request:
   # Required check `sbom-and-licenses / SBOM and license attribution`.
   # `paths:` and `branches:` filters do not apply to merge_group, so the
