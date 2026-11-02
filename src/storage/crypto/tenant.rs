@@ -27,29 +27,37 @@ impl AccountAddresses for crate::directory_store::DirectoryHandle {
 pub enum TenantChoice {
 	/// No address of the account is in a tenant domain.
 	None,
-	/// Every tenant address of the account is in this one tenant.
+	/// Every address of the account is in this one tenant.
 	One(String),
+	/// Some addresses are in this tenant and others are in no tenant. Its
+	/// mail stays on the server key: the tenant does not own all of it, so
+	/// its key must not be the only thing that protects it.
+	Partly(String),
 	/// The account has addresses in more than one tenant. Its mail stays on
 	/// the server key: picking one tenant would hand that tenant's key the
 	/// mail of the other, and the account can still be split by address.
 	Several(Vec<String>),
 }
 
-/// Resolve `addresses` against the domain to tenant map of `keys`.
+/// Resolve `addresses` against the domain to tenant map of `keys`. Only an
+/// account whose every address is in one tenant resolves to
+/// [`TenantChoice::One`].
 pub(super) fn choose(keys: &Keyring, addresses: &[String]) -> TenantChoice {
 	let mut found: Vec<String> = Vec::new();
+	let mut outside = false;
 	for address in addresses {
-		let Some((_, domain)) = address.rsplit_once('@') else {
-			continue;
-		};
-		if let Some(tenant) = keys.domains.get(&domain.to_ascii_lowercase())
-			&& !found.contains(tenant)
-		{
-			found.push(tenant.clone());
+		let tenant = address
+			.rsplit_once('@')
+			.and_then(|(_, domain)| keys.domains.get(&domain.to_ascii_lowercase()));
+		match tenant {
+			Some(tenant) if !found.contains(tenant) => found.push(tenant.clone()),
+			Some(_) => {}
+			None => outside = true,
 		}
 	}
 	match found.len() {
 		0 => TenantChoice::None,
+		1 if outside => TenantChoice::Partly(found.remove(0)),
 		1 => TenantChoice::One(found.remove(0)),
 		_ => {
 			found.sort();

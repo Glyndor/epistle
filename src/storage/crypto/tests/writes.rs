@@ -14,6 +14,7 @@ impl AccountAddresses for Table {
 			"alice" => vec!["alice@acme.test".into(), "a@acme-mail.test".into()],
 			"carol" => vec!["c@acme.test".into(), "c@globex.test".into()],
 			"dave" => vec!["dave@globex.test".into()],
+			"frank" => vec!["frank@acme.test".into(), "frank@elsewhere.test".into()],
 			_ => Vec::new(),
 		}
 	}
@@ -120,6 +121,22 @@ fn with_encryption_off_a_write_is_plaintext_whatever_the_tenant() {
 		crypto.encode_for_account("alice", b"x").expect("plain"),
 		b"x"
 	);
+}
+
+#[test]
+fn an_account_with_an_address_outside_its_tenant_stays_on_the_server_key() {
+	let (_dir, crypto) = crypto(true, true);
+	crypto.attach_accounts(Arc::new(Table));
+	assert_eq!(
+		crypto.tenant_of_account("frank"),
+		TenantChoice::Partly("acme".into())
+	);
+	assert_eq!(
+		crypto.write_owner_for_account("frank"),
+		Some(KeyOwner::Server)
+	);
+	let sealed = crypto.encode_for_account("frank", b"x").expect("seal");
+	assert_eq!(kind(&sealed), EnvelopeKind::V1);
 }
 
 #[test]
