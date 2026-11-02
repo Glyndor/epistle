@@ -30,12 +30,30 @@ pub(in crate::cli::init) fn tlsa_state_dir(data_dir: &Path) -> PathBuf {
 	state.parent().map_or(state.clone(), Path::to_path_buf)
 }
 
-/// `mail`'s view of the pair: the same directory, read-only, mounted over
-/// the read-write data_dir so the process that takes SMTP cannot replace
-/// the certificate or leave a renewal request.
-pub(super) fn pair_read_only(data_dir: &Path) -> VolumeMount {
-	let dir = pair_dir(data_dir);
-	VolumeMount::bind(&dir, &dir, true)
+/// What `mail` sees read-only, mounted over its read-write data_dir: every
+/// directory under data_dir that `certs` reads or that decides what `certs`
+/// does. `certs` acts on nothing the process that takes SMTP can write.
+///
+/// - the pair and the renewal request files (`<data_dir>/acme`), so `mail`
+///   can neither replace the certificate nor ask for an order;
+/// - the TLSA retry state, which `certs` publishes and withdraws from;
+/// - the generated compose file, which says which container holds the DNS
+///   credential and the account key and which `stack update` renders again.
+pub(super) fn read_only_in_mail(data_dir: &Path) -> Vec<VolumeMount> {
+	[
+		pair_dir(data_dir),
+		tlsa_state_dir(data_dir),
+		compose_dir(data_dir),
+	]
+	.iter()
+	.map(|dir| VolumeMount::bind(dir, dir, true))
+	.collect()
+}
+
+/// The directory of the generated compose file.
+pub(in crate::cli::init) fn compose_dir(data_dir: &Path) -> PathBuf {
+	let compose = crate::cli::init::compose_file_path(data_dir);
+	compose.parent().map_or(compose.clone(), Path::to_path_buf)
 }
 
 impl ComposeService {

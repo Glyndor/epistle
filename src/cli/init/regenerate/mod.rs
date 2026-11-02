@@ -185,6 +185,10 @@ fn dns_forwarding(service: &Value, config_dir: &Path, data_dir: &Path) -> Option
 			.parent()
 			.map(Path::to_path_buf)
 			.unwrap_or_default(),
+		crate::cli::init::compose_file_path(data_dir)
+			.parent()
+			.map(Path::to_path_buf)
+			.unwrap_or_default(),
 	];
 	let token_env = mail["environment"].as_object().and_then(|environment| {
 		environment

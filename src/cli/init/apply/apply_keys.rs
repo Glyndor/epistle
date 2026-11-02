@@ -344,9 +344,13 @@ pub(crate) fn prepare_keys_for_update(
 		super::super::compose::ensure_db_admin_password(data_dir, &mut report)
 			.map_err(|error| error.to_string())?;
 	}
-	// The certificates container mounts its account key from secrets/; the
-	// stack without it reads the key under data_dir.
-	lines.extend(host_secrets::acme::place(data_dir, certs)?);
+	// The certificates container mounts its account key from secrets/, and a
+	// copy left under data_dir is one `mail` can read. Without it nothing is
+	// moved here: only an explicit `stack certs disable` copies the key back.
+	if certs {
+		lines.extend(host_secrets::acme::place(data_dir, true)?);
+		lines.extend(host_secrets::acme::retire_data_dir_copy(data_dir)?);
+	}
 	lines.extend(report.steps.iter().filter_map(|step| match step {
 		ReportStep::Wrote(path) => Some(format!("created {}", path.display())),
 		_ => None,

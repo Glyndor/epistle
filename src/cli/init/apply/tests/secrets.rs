@@ -120,6 +120,37 @@ fn stack_update_moves_the_keys_creates_missing_ones_and_repoints_the_config() {
 	);
 }
 
+/// `stack update` of a split stack keeps the account key only where `certs`
+/// reads it; without the split it never copies a key back under data_dir,
+/// which only an explicit `stack certs disable` does.
+#[test]
+fn an_update_places_the_account_key_only_for_the_split_and_never_back() {
+	let root = tempfile::tempdir().unwrap();
+	let data_dir = root.path().join("data");
+	std::fs::create_dir_all(&data_dir).unwrap();
+	let config = root.path().join("mail.toml");
+	std::fs::write(&config, "").unwrap();
+	std::fs::set_permissions(&config, std::os::unix::fs::PermissionsExt::from_mode(0o600)).unwrap();
+	crate::acme::renew::load_or_create_account_key(&data_dir).unwrap();
+	let in_data_dir = crate::acme::renew::account_key_path(&data_dir);
+	let in_secrets = crate::cli::init::host_secrets::acme_account_key(&data_dir);
+	let key = std::fs::read(&in_data_dir).unwrap();
+
+	super::prepare_keys_for_update(&data_dir, &config, false, true).unwrap();
+	assert_eq!(std::fs::read(&in_secrets).unwrap(), key);
+	assert!(
+		!in_data_dir.exists(),
+		"a copy mail can read is not left behind"
+	);
+
+	super::prepare_keys_for_update(&data_dir, &config, false, false).unwrap();
+	assert!(
+		!in_data_dir.exists(),
+		"an update does not copy the key back"
+	);
+	assert_eq!(std::fs::read(&in_secrets).unwrap(), key);
+}
+
 #[test]
 fn the_admin_password_is_minted_once_and_kept() {
 	let root = tempfile::tempdir().unwrap();

@@ -59,10 +59,10 @@ pub(crate) fn after_credential_change_reporting(
 	run: impl FnOnce(&Config, stack::StackAction) -> ExitCode,
 ) -> Result<(ExitCode, Reload), ResourceError> {
 	let compose = init::compose_file_path(&config.data_dir);
-	let service = if stack::certs::runs_certs(&compose) {
-		"certs"
-	} else {
-		"mail"
+	let service = match stack::certs::runs_certs(&compose) {
+		Ok(true) => "certs",
+		Ok(false) => "mail",
+		Err(error) => return Err(ResourceError::from(error)),
 	};
 	let action = stack::StackAction::Recreate {
 		service: service.into(),

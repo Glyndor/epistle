@@ -53,7 +53,16 @@ fn mail_holds_neither_the_dns_credential_nor_the_account_key() {
 #[test]
 fn mail_reads_the_pair_read_only_and_runs_the_mail_role() {
 	let value = render(&split_answers("/secure/dns/token"), true);
-	assert!(mounts(&value, "mail").contains(&bind("/var/lib/epistle/acme", true)));
+	for dir in [
+		"/var/lib/epistle/acme",
+		"/var/lib/epistle/dns-tlsa",
+		"/var/lib/epistle/compose",
+	] {
+		assert!(
+			mounts(&value, "mail").contains(&bind(dir, true)),
+			"{dir} must be read-only in mail: certs acts on it"
+		);
+	}
 	assert_eq!(
 		value["services"]["mail"]["command"],
 		json!([

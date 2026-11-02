@@ -18,12 +18,22 @@
 use std::path::Path;
 
 /// Whether the compose file at `compose` runs the certificates container.
-/// A file that cannot be read or parsed counts as not running it.
-pub(in crate::cli) fn runs_certs(compose: &Path) -> bool {
-	crate::cli::regular::read::read(compose)
-		.ok()
-		.and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
-		.is_some_and(|document| document["services"].get("certs").is_some())
+/// `Ok(false)` when there is no compose file (a host install). A file that
+/// cannot be read or is not the JSON `init` writes is an error, never a
+/// "no": the answer decides where the DNS credential and the account key
+/// go, and a guess would hand them to `mail`.
+pub(in crate::cli) fn runs_certs(compose: &Path) -> Result<bool, String> {
+	let Some(bytes) = crate::cli::init::compose_read::read(compose)? else {
+		return Ok(false);
+	};
+	let document: serde_json::Value = serde_json::from_slice(&bytes).map_err(|error| {
+		format!(
+			"{} is not the JSON epistle init writes ({error}); it decides which container \
+			 holds the DNS credential, so nothing was changed",
+			compose.display()
+		)
+	})?;
+	Ok(document["services"].get("certs").is_some())
 }
 
 /// What a switch needs from the host; the tests fake it.
@@ -81,7 +91,7 @@ pub(in crate::cli) fn switch(host: &mut impl SwitchHost, on: bool) -> Result<Swi
 		.and_then(|()| host.wait_ready("mail"))
 		.and_then(|()| if on { host.wait_ready("certs") } else { Ok(()) });
 	if let Err(error) = brought_up {
-		return Err(put_back(host, &existing, &error));
+		return Err(put_back(host, &existing, &error, !on));
 	}
 	if on {
 		retire(host)?;
@@ -100,12 +110,25 @@ fn retire(host: &mut impl SwitchHost) -> Result<(), String> {
 }
 
 /// Write `existing` back and bring the stack up as it was; the message
-/// names the failure and whether the stack came back.
-fn put_back(host: &mut impl SwitchHost, existing: &str, error: &str) -> String {
+/// names the failure and whether the stack came back. When the layout put
+/// back runs `certs` (a failed `disable`), the copy of the account key the
+/// switch placed under data_dir is removed again, since `mail` mounts it.
+fn put_back(host: &mut impl SwitchHost, existing: &str, error: &str, split: bool) -> String {
 	let restored = host
 		.write_compose(existing)
 		.and_then(|()| host.podup(&["up", "-d", "--remove-orphans"]));
 	match restored {
+		Ok(()) if split => match host.retire_data_dir_key() {
+			Ok(_) => format!(
+				"{error}; the previous compose.yaml was written back, the stack brought up as it \
+				 was, and the copy of the ACME account key placed under data_dir removed again"
+			),
+			Err(again) => format!(
+				"{error}; the previous compose.yaml was written back and the stack brought up as \
+				 it was, but the copy of the ACME account key under data_dir could not be removed \
+				 ({again}): delete it by hand, mail can read it"
+			),
+		},
 		Ok(()) => format!(
 			"{error}; the previous compose.yaml was written back and the stack brought up as it \
 			 was, and the ACME account key under data_dir was left in place"

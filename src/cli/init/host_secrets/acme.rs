@@ -63,8 +63,8 @@ fn copy_key(from: &Path, to: &Path) -> Result<Option<String>, String> {
 	}
 }
 
-/// The directories `certs` mounts from data_dir, which a bind mount needs to
-/// exist before the container starts.
+/// The directories a split stack binds from data_dir on their own, which a
+/// bind mount needs to exist before the container starts.
 pub(crate) fn split_dirs(data_dir: &Path) -> [PathBuf; 2] {
 	let tlsa = crate::dns::tlsa::state_path(data_dir);
 	[

@@ -180,7 +180,7 @@ impl ComposeService {
 		// With the certificates container the DNS credential is mounted
 		// there and nowhere else, and the pair it writes is read-only here.
 		if answers.services.certs {
-			volumes.push(certs::pair_read_only(data_dir));
+			volumes.extend(certs::read_only_in_mail(data_dir));
 		} else {
 			add_dns_credentials(answers, &mut volumes, &mut environment);
 		}

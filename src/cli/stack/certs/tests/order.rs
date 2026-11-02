@@ -78,12 +78,45 @@ fn asking_for_the_layout_that_runs_checks_the_keys_and_changes_nothing() {
 }
 
 #[test]
-fn runs_certs_reads_the_service_from_the_file() {
+fn runs_certs_reads_the_service_from_the_file_and_fails_closed() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let path = dir.path().join("compose.yaml");
-	assert!(!runs_certs(&path), "no file");
+	assert_eq!(runs_certs(&path), Ok(false), "a host install has no file");
 	std::fs::write(&path, Recorder::with_certs(true).compose).expect("write");
-	assert!(runs_certs(&path));
+	assert_eq!(runs_certs(&path), Ok(true));
 	std::fs::write(&path, Recorder::with_certs(false).compose).expect("write");
-	assert!(!runs_certs(&path));
+	assert_eq!(runs_certs(&path), Ok(false));
+	std::fs::write(&path, "services: [certs").expect("write");
+	let error = runs_certs(&path).expect_err("not the JSON init writes");
+	assert!(error.contains("nothing was changed"), "{error}");
+}
+
+/// A failed `disable` puts the split back: the copy of the key it placed
+/// under data_dir, where `mail` reads, goes again.
+#[test]
+fn a_failed_disable_removes_the_key_copy_it_placed_for_mail() {
+	let mut host = Recorder::with_certs(true);
+	host.fail_ready = Some("mail");
+	let error = switch(&mut host, false).expect_err("mail down");
+	assert!(error.contains("removed again"), "{error}");
+	assert_eq!(
+		&host.steps[host.steps.len() - 3..],
+		["write certs=true", "podup up -d --remove-orphans", "retire"]
+	);
+	assert!(host.compose.contains("certs"), "{}", host.compose);
+}
+
+/// A failed `enable` puts the whole layout back, where `mail` renews and
+/// reads the key under data_dir: that copy stays.
+#[test]
+fn a_failed_enable_leaves_the_key_mail_renews_with() {
+	let mut host = Recorder::with_certs(false);
+	host.fail_ready = Some("mail");
+	let error = switch(&mut host, true).expect_err("mail down");
+	assert!(error.contains("left in place"), "{error}");
+	assert!(
+		!host.steps.contains(&"retire".to_string()),
+		"{:?}",
+		host.steps
+	);
 }

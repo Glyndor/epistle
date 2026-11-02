@@ -86,7 +86,7 @@ fn as_root(config_path: &Path, to: Option<&str>, yes: bool) -> Result<String, St
 		std::env::current_exe().map_err(|error| format!("cannot find this binary: {error}"))?;
 	// An older binary may not know `serve --role`, so the layout goes back
 	// first, with this binary, while it still can.
-	if crate::cli::stack::certs::runs_certs(&compose) {
+	if crate::cli::stack::certs::runs_certs(&compose)? {
 		eprintln!(
 			"epistle: turning the certificates container off first, since {version} may not know it"
 		);
