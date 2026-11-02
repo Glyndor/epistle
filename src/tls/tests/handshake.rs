@@ -130,12 +130,10 @@ async fn pop3_implicit_tls() {
 		directory(),
 		acceptor,
 	));
-	let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-		.await
-		.expect("bind");
-	let addr = listener.local_addr().expect("addr");
-	tokio::spawn(server.serve(listener));
-	let mut client = tokio::net::TcpStream::connect(addr).await.expect("connect");
+	// In-memory connection: no real socket I/O, so paused time cannot jump
+	// past the handshake deadline before the server has even accepted.
+	let (accept, mut client) = crate::net::accept::tests::scripted::failing_then_connecting(&[]);
+	tokio::spawn(server.serve_on(accept));
 	let mut byte = [0u8; 1];
 	let closed = tokio::time::timeout(PATIENCE, client.read(&mut byte)).await;
 	assert!(
