@@ -89,13 +89,20 @@ pub(super) fn build_tls_for(
 		if let Some(end_point) = &channel_binding {
 			watcher = watcher.with_end_point(end_point.clone());
 		}
-		let provider = config.dns.build_for_host(&config.hostname);
-		tokio::spawn(crate::tls::watch::run(
-			watcher,
-			provider,
-			config.hostname.clone(),
-			config.data_dir.clone(),
-		));
+		if publishes_tlsa(role) {
+			let provider = config.dns.build_for_host(&config.hostname);
+			tokio::spawn(crate::tls::watch::run(
+				watcher,
+				provider,
+				config.hostname.clone(),
+				config.data_dir.clone(),
+			));
+		} else {
+			// The mail role neither publishes TLSA nor writes the TLSA state
+			// in data_dir: the certificates container reads that state, and
+			// it must not act on anything this process could have written.
+			tokio::spawn(crate::tls::watch::follow(watcher));
+		}
 	}
 
 	let mut acme_renewal = None;
@@ -164,6 +171,13 @@ pub(super) fn build_tls_for(
 /// replacing the files.
 pub(super) fn watches_files(config: &Config) -> bool {
 	config.tls.is_some() && config.acme.is_none()
+}
+
+/// Whether a reloaded static pair has its TLSA record published, and the
+/// TLSA state in data_dir written, by this process. Never by the mail role:
+/// the certificates container acts on that state.
+pub(super) fn publishes_tlsa(role: ServeRole) -> bool {
+	role.writes_dns()
 }
 
 /// Whether this process reloads the ACME pair another process writes: the

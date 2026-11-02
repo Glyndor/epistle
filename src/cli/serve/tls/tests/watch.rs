@@ -53,3 +53,12 @@ fn the_roles_that_hold_the_dns_credential() {
 		["all", "mail", "certs"]
 	);
 }
+
+/// The TLSA state the certificates container reads is never written by the
+/// process that takes SMTP from the internet.
+#[test]
+fn the_mail_role_never_publishes_tlsa() {
+	use crate::cli::serve::ServeRole;
+	assert!(!publishes_tlsa(ServeRole::Mail));
+	assert!(publishes_tlsa(ServeRole::All));
+}
