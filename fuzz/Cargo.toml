@@ -217,3 +217,10 @@ path = "fuzz_targets/message/attachment_walk.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "sender_auth_records"
+path = "fuzz_targets/dns/sender_auth_records.rs"
+test = false
+doc = false
+bench = false

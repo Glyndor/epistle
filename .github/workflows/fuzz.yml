@@ -35,6 +35,7 @@ on:
       - "src/managesieve/**"
       - "src/dkim/**"
       - "src/dmarc/**"
+      - "src/spf/**"
       - "src/reports/**"
       - "src/api/jmap/**"
       - "src/antispam/attachments/**"
