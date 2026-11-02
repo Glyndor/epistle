@@ -60,6 +60,74 @@ fn day(now: u64) -> u64 {
 	now / 86_400
 }
 
+/// The first selector `<prefix><day>` that is not in `reserved`
+/// (`<prefix><day>x2`, `x3`, ... after it). A selector a key is still
+/// published under must not be the name of a new key's record: publishing it
+/// would replace the TXT of the key that is signing.
+fn free_selector(prefix: &str, day: u64, reserved: &[String]) -> String {
+	let taken = |name: &str| reserved.iter().any(|r| r.eq_ignore_ascii_case(name));
+	let mut candidate = format!("{prefix}{day}");
+	let mut n = 2;
+	while taken(&candidate) {
+		candidate = format!("{prefix}{day}x{n}");
+		n += 1;
+	}
+	candidate
+}
+
+/// Every selector the `[dkim]` key is published under or is being moved
+/// to: the configured pair, the one in service, and the ones a rotation has
+/// pending or is retiring. A new key never takes one of these names.
+pub fn reserved_selectors(config: &crate::config::Config) -> Result<Vec<String>, String> {
+	let Some(dkim) = &config.dkim else {
+		return Ok(Vec::new());
+	};
+	let mut found = vec![dkim.selector.clone()];
+	found.extend(dkim.rsa_selector.clone());
+	let active =
+		super::rotate::active_ed25519(dkim, &config.data_dir).map_err(|error| error.to_string())?;
+	found.push(active.selector);
+	if let Some(rsa) =
+		super::rotate::active_rsa(dkim, &config.data_dir).map_err(|error| error.to_string())?
+	{
+		found.push(rsa.selector);
+	}
+	if let Some(state) =
+		super::rotate::read_state(&config.data_dir).map_err(|error| error.to_string())?
+	{
+		for named in [state.previous.as_ref().map(|p| (&p.selector, &p.rsa))]
+			.into_iter()
+			.flatten()
+		{
+			found.push(named.0.clone());
+			found.extend(named.1.iter().map(|rsa| rsa.selector.clone()));
+		}
+		if let Some(pending) = &state.pending {
+			found.push(pending.selector.clone());
+			found.extend(pending.rsa.iter().map(|rsa| rsa.selector.clone()));
+		}
+	}
+	Ok(found)
+}
+
+/// Write `pem` to `path` only if nothing is there: the key is installed with a
+/// hard link, which refuses to replace a file, so two runs that both found the
+/// path empty cannot swap one another's key. `Ok(false)` when a key was already
+/// there; it is then the one to use.
+fn install_new(path: &Path, pem: &str) -> Result<bool, String> {
+	let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("key");
+	let staged = path.with_file_name(format!(".{name}.{}.new", uuid::Uuid::now_v7()));
+	crate::storage::write_secret(&staged, pem.as_bytes())
+		.map_err(|error| format!("cannot write {}: {error}", path.display()))?;
+	let linked = std::fs::hard_link(&staged, path);
+	let _ = std::fs::remove_file(&staged);
+	match linked {
+		Ok(()) => Ok(true),
+		Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+		Err(error) => Err(format!("cannot write {}: {error}", path.display())),
+	}
+}
+
 /// Create `dir` readable by its owner only.
 fn private_dir(dir: &Path) -> std::io::Result<()> {
 	let mut builder = std::fs::DirBuilder::new();
@@ -79,12 +147,18 @@ pub fn planned(
 	domain: &str,
 	dual_signing: bool,
 	now: u64,
+	reserved: &[String],
 ) -> Result<DomainKeys, String> {
 	let dir = key_dir(data_dir, domain)?;
 	Ok(DomainKeys {
-		selector: format!("own{}", day(now)),
+		selector: free_selector("own", day(now), reserved),
 		key_file: dir.join("ed25519.pem"),
-		rsa: dual_signing.then(|| (format!("ownrsa{}", day(now)), dir.join("rsa.pem"))),
+		rsa: dual_signing.then(|| {
+			(
+				free_selector("ownrsa", day(now), reserved),
+				dir.join("rsa.pem"),
+			)
+		}),
 	})
 }
 
@@ -98,37 +172,40 @@ pub fn ensure(
 	domain: &str,
 	dual_signing: bool,
 	now: u64,
+	reserved: &[String],
 ) -> Result<(DomainKeys, Vec<PathBuf>), String> {
 	let dir = key_dir(data_dir, domain)?;
 	private_dir(&dir).map_err(|error| format!("cannot create {}: {error}", dir.display()))?;
 	let mut created = Vec::new();
 	let ed_file = dir.join("ed25519.pem");
-	if ed_file.exists() {
-		Signer::load("check", &ed_file)
-			.map_err(|error| format!("{} does not load: {error}", ed_file.display()))?;
-	} else {
+	if !ed_file.exists() {
 		let (pem, _) = generate_key().map_err(|error| error.to_string())?;
-		crate::storage::write_secret(&ed_file, pem.as_bytes())
-			.map_err(|error| format!("cannot write {}: {error}", ed_file.display()))?;
-		created.push(ed_file.clone());
+		if install_new(&ed_file, &pem)? {
+			created.push(ed_file.clone());
+		}
 	}
+	// A key that is there, made by this run or by another, must load.
+	Signer::load("check", &ed_file)
+		.map_err(|error| format!("{} does not load: {error}", ed_file.display()))?;
 	// Read back from the file, so the first run and every later one agree.
-	let selector = format!("own{}", made_on(&ed_file).unwrap_or(day(now)));
+	let selector = free_selector("own", made_on(&ed_file).unwrap_or(day(now)), reserved);
 	let rsa = if dual_signing {
 		let rsa_file = dir.join("rsa.pem");
-		if rsa_file.exists() {
-			super::rsa_record_value(&rsa_file)
-				.map_err(|error| format!("{} does not load: {error}", rsa_file.display()))?;
-		} else {
+		if !rsa_file.exists() {
 			let (pem, _) = generate_rsa_key(2048).map_err(|error| error.to_string())?;
-			if let Err(error) = crate::storage::write_secret(&rsa_file, pem.as_bytes()) {
-				remove(&created);
-				return Err(format!("cannot write {}: {error}", rsa_file.display()));
+			match install_new(&rsa_file, &pem) {
+				Ok(true) => created.push(rsa_file.clone()),
+				Ok(false) => {}
+				Err(error) => {
+					remove(&created);
+					return Err(error);
+				}
 			}
-			created.push(rsa_file.clone());
 		}
+		super::rsa_record_value(&rsa_file)
+			.map_err(|error| format!("{} does not load: {error}", rsa_file.display()))?;
 		let rsa_day = made_on(&rsa_file).unwrap_or(day(now));
-		Some((format!("ownrsa{rsa_day}"), rsa_file))
+		Some((free_selector("ownrsa", rsa_day, reserved), rsa_file))
 	} else {
 		None
 	};

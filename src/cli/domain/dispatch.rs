@@ -194,7 +194,11 @@ pub(super) fn execute(path: &Path, action: DomainCli, dry_run: bool, json: bool)
 			match commit(document, add_commit(&domain), mode, &mut out, &mut err) {
 				Ok(code) => Outcome::Code(code),
 				Err(error) => {
-					crate::dkim::domain_keys::remove(&created);
+					// The keys go only when the entry that names them did not
+					// reach the file: a failure after the commit (a closed pipe
+					// while printing the records) leaves a configuration that
+					// refers to them.
+					own_key::forget_unused(path, &domain, &created);
 					match error {
 						ResourceError::Refusal(message) => Outcome::Refusal(message),
 						ResourceError::Failure(message) => Outcome::Error(message),

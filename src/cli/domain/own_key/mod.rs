@@ -30,13 +30,14 @@ pub(super) fn give(
 	};
 	let name = domain.trim().to_ascii_lowercase();
 	let dual = dkim.rsa_selector.is_some() && dkim.rsa_key_file.is_some();
+	let reserved = domain_keys::reserved_selectors(config)?;
 	let (keys, created) = if dry_run {
 		(
-			domain_keys::planned(&config.data_dir, &name, dual, now)?,
+			domain_keys::planned(&config.data_dir, &name, dual, now, &reserved)?,
 			Vec::new(),
 		)
 	} else {
-		domain_keys::ensure(&config.data_dir, &name, dual, now)?
+		domain_keys::ensure(&config.data_dir, &name, dual, now, &reserved)?
 	};
 	let mut fields = vec![
 		("selector", Value::from(keys.selector)),
@@ -52,6 +53,25 @@ pub(super) fn give(
 		return Err(error);
 	}
 	Ok(created)
+}
+
+/// Remove the key files `created` made for `domain` when the configuration at
+/// `path` does not name them: the edit failed before it was saved. When it
+/// does (the failure came after the save, while printing or restarting) the
+/// keys are the ones the server will load and stay. A configuration that
+/// cannot be read keeps them too: deleting a key that may be in use is the
+/// worse mistake.
+pub(super) fn forget_unused(path: &std::path::Path, domain: &str, created: &[PathBuf]) {
+	let persisted = match Config::load(path) {
+		Ok(config) => config
+			.dkim
+			.as_ref()
+			.is_some_and(|dkim| dkim.override_for(domain).is_some()),
+		Err(_) => true,
+	};
+	if !persisted {
+		domain_keys::remove(created);
+	}
 }
 
 /// Drop `name`'s `[[dkim.domain]]` entry. A domain that is removed, or an

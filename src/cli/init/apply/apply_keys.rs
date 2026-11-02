@@ -285,8 +285,14 @@ pub(super) fn ensure_domain_keys(
 		let name = domain.trim().to_ascii_lowercase();
 		let dir = crate::dkim::domain_keys::key_dir(data_dir, &name)
 			.map_err(|error| ApplyError::Rng(format!("DKIM key for {name}: {error}")))?;
-		let (keys, created) = crate::dkim::domain_keys::ensure(data_dir, &name, dual_signing, now)
-			.map_err(|error| ApplyError::KeyWrite(dir, std::io::Error::other(error)))?;
+		let (keys, created) = crate::dkim::domain_keys::ensure(
+			data_dir,
+			&name,
+			dual_signing,
+			now,
+			&["s1".to_string(), "s2".to_string()],
+		)
+		.map_err(|error| ApplyError::KeyWrite(dir, std::io::Error::other(error)))?;
 		let mut files = vec![keys.key_file.clone()];
 		files.extend(keys.rsa.iter().map(|(_, file)| file.clone()));
 		for file in files {
