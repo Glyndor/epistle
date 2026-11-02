@@ -29,6 +29,7 @@ impl Config {
 		self.validate_domains()?;
 		self.validate_disabled_domains()?;
 		self.dns.validate()?;
+		self.dns_publish.validate()?;
 		self.validate_accounts()?;
 		self.validate_srs()?;
 		self.validate_api()?;

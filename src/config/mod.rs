@@ -16,6 +16,7 @@ mod auth;
 mod database;
 mod dkim;
 mod dns;
+mod dns_publish;
 mod ldap;
 mod listener;
 mod mta_sts;
@@ -55,6 +56,7 @@ pub use database::{Database, DatabaseTls};
 pub use dkim::{DKIM_RSA_REQUIRED_FROM, Dkim, DkimDomain};
 pub use dns::{Dns, DnsProviders};
 pub(crate) use dns::{SUPPORTED_PROVIDERS, is_supported_provider};
+pub use dns_publish::{DEFAULT_INTERVAL_SECS as DNS_PUBLISH_DEFAULT_INTERVAL_SECS, DnsPublish};
 pub use ldap::Ldap;
 pub use listener::{Listener, ListenerKind, Protocol};
 pub use mta_sts::{MtaSts, MtaStsMode};
@@ -294,6 +296,10 @@ pub struct Config {
 	/// with its own credential.
 	#[serde(default)]
 	pub dns: DnsProviders,
+	/// How automatic mode keeps the DNS records true: the interval of the
+	/// server's reconcile loop. See [`DnsPublish`].
+	#[serde(default)]
+	pub dns_publish: DnsPublish,
 	/// Default storage quota (bytes) per domain, applied to accounts in that
 	/// domain that have no quota of their own.
 	#[serde(default)]

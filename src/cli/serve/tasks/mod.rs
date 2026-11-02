@@ -54,6 +54,8 @@ mod bind;
 
 mod dkim_rotation;
 
+pub(crate) mod dns_reconcile;
+
 mod domain_rotation;
 
 pub(super) use domain_rotation::spawn_domain_rotations;

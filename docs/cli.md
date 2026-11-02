@@ -1481,7 +1481,8 @@ needs through the `[dns]` provider, with the same run as `epistle dns publish
 listed as conflicts, and the ledger is started under `<data_dir>/dns-publish/`.
 A step that cannot publish (a credential that cannot be read yet, a zone the
 provider cannot list) does not undo the install: the report says why, and
-`epistle dns publish` publishes later.
+`epistle dns publish` or the server's reconcile loop (`[dns_publish]`)
+publishes later.
 
 Without `--answers`, only a run whose stdin and stderr are both terminals and that
 carries no `--json` gets the guided steps. Every other run, a pipe, a redirected

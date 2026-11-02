@@ -150,6 +150,7 @@ async fn serve(config: Config, role: ServeRole) -> std::io::Result<()> {
 	if role.writes_dns() {
 		tasks::spawn_dkim_rotation(&config, &dkim_signer, webhook.as_ref().map(Arc::clone));
 		tasks::spawn_domain_rotations(&config, &domain_signers, webhook.as_ref().map(Arc::clone));
+		tasks::dns_reconcile::spawn(&config);
 	} else if config.dkim.is_some() {
 		// Both rotations, of the `[dkim]` key and of each domain's own key,
 		// publish selectors through [dns], and the certificates container

@@ -1918,6 +1918,28 @@ secret_key_env = "EPISTLE_SPACESHIP_SECRET"
 - **Supported record kinds:** A, AAAA, TXT, CNAME, TLSA. MX and SRV are
   rejected (`Unsupported`) for the same reason as the other providers.
 
+### `[dns_publish]`
+
+How automatic mode keeps the DNS records true. With a `[dns]` provider other
+than `manual`, `epistle serve` compares the zones with the configuration every
+`interval_secs` and applies the difference with the same run as
+`epistle dns publish --yes`: it creates what is missing, repairs and retires
+only what epistle published (the ledger in `<data_dir>/dns-publish/`), and logs
+every record somebody else wrote that is in the way. In manual mode nothing
+runs. The first run is two minutes after the start.
+
+```toml
+[dns_publish]
+interval_secs = 21600   # six hours, the default; 0 turns the loop off
+```
+
+| Key | Default | Meaning |
+|---|---|---|
+| `interval_secs` | `21600` | Seconds between two runs. `0` turns the loop off; otherwise from `600` (ten minutes) to `604800` (one week). |
+
+A run that finds the ledger locked by `epistle dns publish` is skipped and the
+next one tries again. See [`dns.md`](dns.md#publishing-the-record-set).
+
 ### `[ldap]`
 LDAP or Active Directory backend. A login that no local or SQL account claims is checked with a bind against the directory, and its users are loaded for recipient resolution. Absent disables it. A malformed section aborts startup. The login is escaped (RFC 4515) before it goes into `user_filter`, and an unknown user and a wrong password get the same refusal.
 
