@@ -57,6 +57,8 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		.with_crypto(crypto.clone())
 		.into_shared();
 	let directory = account_store.handle();
+	// A write picks its tenant key from the account's addresses.
+	crypto.attach_accounts(Arc::new(directory.clone()));
 	let SplitCompanions {
 		split,
 		dkim_signer,

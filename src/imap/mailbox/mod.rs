@@ -260,7 +260,7 @@ pub fn append_dated(
 
 	let id = Uuid::now_v7();
 	let tmp = message_file(&tmp_dir, id, MessageExt::Eml)?;
-	std::fs::write(&tmp, &crypto.encode(data)?)?;
+	std::fs::write(&tmp, &crypto.encode_for_account(account.as_str(), data)?)?;
 	if let Some(date) = date {
 		std::fs::File::options()
 			.write(true)

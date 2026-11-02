@@ -186,7 +186,10 @@ impl LocalDelivery {
 		fs::create_dir_all(&new_dir)?;
 
 		let tmp_path = message_file(&tmp_dir, id, MessageExt::Eml)?;
-		write_sync(&tmp_path, &self.crypto.encode(data)?)?;
+		write_sync(
+			&tmp_path,
+			&self.crypto.encode_for_account(account.as_str(), data)?,
+		)?;
 		fs::rename(&tmp_path, message_file(&new_dir, id, MessageExt::Eml)?)?;
 		// imap4flags: persist the Sieve-assigned flags as the IMAP sidecar.
 		io::write_flag_sidecar(&new_dir, id, flags);

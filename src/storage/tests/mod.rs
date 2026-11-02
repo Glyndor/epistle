@@ -6,3 +6,4 @@ pub(super) mod locked;
 #[cfg(all(test, unix))]
 pub(super) mod secret_write;
 pub(super) mod secret_write_concurrency;
+pub(super) mod tenant_writes;

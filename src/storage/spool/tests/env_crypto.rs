@@ -147,6 +147,7 @@ fn turning_encryption_off_keeps_reading_already_encrypted_envelopes() {
 	// First, write with encryption on.
 	let enabled = Storage {
 		encrypt_at_rest: true,
+		tenant_keys: false,
 		encryption_key_env: None,
 		encryption_key_file: Some(on_key.clone()),
 		deleted_retention_days: 0,
@@ -170,6 +171,7 @@ fn turning_encryption_off_keeps_reading_already_encrypted_envelopes() {
 	// decrypt path remains available).
 	let disabled = Storage {
 		encrypt_at_rest: false,
+		tenant_keys: false,
 		encryption_key_env: None,
 		encryption_key_file: Some(on_key),
 		deleted_retention_days: 0,
