@@ -5,7 +5,7 @@ use std::path::Path;
 
 fn config_path(command: &Command) -> Option<&Path> {
 	match command {
-		Command::Serve { config }
+		Command::Serve { config, .. }
 		| Command::ConfigCheck { config, .. }
 		| Command::Probe { config, .. }
 		| Command::Export { config, .. }

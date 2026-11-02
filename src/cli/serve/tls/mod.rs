@@ -7,6 +7,7 @@ use tokio_rustls::TlsAcceptor;
 
 use std::sync::Arc;
 
+use super::role::ServeRole;
 use crate::acme::challenge::{ChallengeResponder, Dns01};
 use crate::acme::http01::ChallengeStore;
 use crate::acme::tlsalpn::AlpnChallengeStore;
@@ -34,9 +35,21 @@ pub(super) struct TlsStack {
 /// SCRAM channel-binding hash, and spawn the ACME renewal task when one
 /// is configured. Failures propagate through `?` so a missing or
 /// malformed `[tls]` section stops the start.
+#[cfg(test)]
 pub(super) fn build_tls(
 	config: &Config,
 	challenge_store: ChallengeStore,
+) -> std::io::Result<TlsStack> {
+	build_tls_for(config, challenge_store, ServeRole::All)
+}
+
+/// [`build_tls`] for a process running `role`. With [`ServeRole::Mail`] the
+/// certificates container renews: this process reloads the ACME pair when
+/// its files change, and neither places an order nor touches DNS.
+pub(super) fn build_tls_for(
+	config: &Config,
+	challenge_store: ChallengeStore,
+	role: ServeRole,
 ) -> std::io::Result<TlsStack> {
 	// TLS is loaded once and shared; failure to load is fatal (fail closed).
 	// The certificate comes from the shared resolver: after a restart the
@@ -50,7 +63,7 @@ pub(super) fn build_tls(
 	let alpn_store = config
 		.acme
 		.as_ref()
-		.filter(|acme| acme.challenge == AcmeChallenge::TlsAlpn01)
+		.filter(|acme| acme.challenge == AcmeChallenge::TlsAlpn01 && role.renews_certificates())
 		.map(|_| Arc::new(AlpnChallengeStore::new()));
 	let reloadable_tls = tls_acceptor.map(|acceptor| match &alpn_store {
 		Some(store) => ReloadableAcceptor::with_acme_alpn(acceptor, store.clone()),
@@ -85,10 +98,27 @@ pub(super) fn build_tls(
 		));
 	}
 
-	// ACME automatic renewal: publish the certificate to every TLS listener.
-	// Requires a [tls] bootstrap certificate to reload into.
 	let mut acme_renewal = None;
-	if let Some(acme) = &config.acme {
+	// The certificates container renews and writes the ACME pair; this
+	// process presents whatever valid pair those files hold.
+	if follows_acme_files(config, role) {
+		match &reloadable_tls {
+			Some(reloadable) => {
+				let acme = crate::config::Tls {
+					cert_file: crate::acme::renew::cert_path(&config.data_dir),
+					key_file: crate::acme::renew::key_path(&config.data_dir),
+					client_ca: config.tls.as_ref().and_then(|tls| tls.client_ca.clone()),
+				};
+				let watcher = crate::tls::watch::CertWatcher::new(acme, reloadable.clone());
+				tokio::spawn(crate::tls::watch::follow(watcher));
+			}
+			None => tracing::warn!(
+				"[acme] is configured but no certificate is in service; nothing to reload until one is"
+			),
+		}
+	} else if let Some(acme) = &config.acme {
+		// ACME automatic renewal: publish the certificate to every TLS
+		// listener. Requires a [tls] bootstrap certificate to reload into.
 		match &reloadable_tls {
 			Some(reloadable) => {
 				// When a DNS provider is configured, refresh the TLSA record on
@@ -134,6 +164,12 @@ pub(super) fn build_tls(
 /// replacing the files.
 pub(super) fn watches_files(config: &Config) -> bool {
 	config.tls.is_some() && config.acme.is_none()
+}
+
+/// Whether this process reloads the ACME pair another process writes: the
+/// listeners of a stack whose certificates container renews.
+pub(super) fn follows_acme_files(config: &Config, role: ServeRole) -> bool {
+	config.acme.is_some() && role == ServeRole::Mail
 }
 
 /// The responder for the configured `[acme] challenge`. Validation already

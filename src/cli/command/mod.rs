@@ -30,6 +30,11 @@ pub enum Command {
 		/// Path to the configuration file.
 		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
+		/// The part of the server this process runs: `all` (the default),
+		/// `mail` (listeners, certificate read from disk) or `certs`
+		/// (certificate renewal only, no listener).
+		#[arg(long, value_enum, default_value_t = serve::ServeRole::All)]
+		role: serve::ServeRole,
 	},
 	/// Validate a configuration file and report problems.
 	ConfigCheck {

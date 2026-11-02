@@ -67,7 +67,7 @@ fn the_commands_that_act_on_the_data_read_it_strictly() {
 		.expect("the backup arm");
 	assert!(backup.contains("with_config(&config"), "{backup}");
 	let serve = dispatch
-		.split("Command::Serve { config }")
+		.split("Command::Serve { config, role }")
 		.nth(1)
 		.and_then(|rest| rest.lines().next())
 		.expect("the serve arm");
