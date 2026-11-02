@@ -172,6 +172,16 @@ fn workflow_texts() -> Vec<(String, String)> {
 
 #[test]
 fn scripts_a_workflow_runs_directly_are_mode_100755() {
+	// A source package (dpkg-buildpackage) unpacks without `.git` and without
+	// `.github`, so there is no index to read and no workflow to check. In a
+	// checkout of the repository both exist and the test runs in full.
+	if !root().join(".git").exists() || !root().join(".github/workflows").is_dir() {
+		eprintln!(
+			"SKIPPED: no .git or no .github/workflows next to Cargo.toml; \
+			 script modes can only be checked in a git checkout"
+		);
+		return;
+	}
 	let tracked = index();
 	let mut seen = BTreeSet::new();
 	let mut wrong = Vec::new();
