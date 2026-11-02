@@ -490,7 +490,8 @@ differ. Backups do not carry these keys: save `secrets/` separately.
 I keep the DNS provider token in `secrets/dns_provider_token` beside `data_dir`,
 with mode `0600`. `epistle dns provider set <provider> --zone <zone> --store-token`
 moves an existing inline or environment token there, updates the generated
-Compose file to mount it read-only only in `mail`, and recreates that service.
+Compose file to mount it read-only only in `mail` (in `certs` when the stack
+runs the certificates container), and recreates that service.
 Supply any other settings required by your provider. For `init`, point
 `dns.token_file` in the answers at this file. See [DNS token storage](../dns.md#dns-provider-token-storage).
 
@@ -508,6 +509,33 @@ in the mounted configuration file. A token file mount exposes its path in
 container metadata rather than its contents. Remove old environment entries
 from Compose overrides and service configuration after migration, and save
 `secrets/` separately from data backups.
+
+### The certificates container
+
+Off by default. `sudo epistle stack certs enable` moves the ACME renewal, the
+TLSA refresh and the DNS credential out of `mail` into a `certs` service, so
+the process that takes SMTP from the internet can no longer rewrite the zone
+or sign an ACME order. It needs `[acme] challenge = "dns-01"` and a `[dns]`
+provider; `sudo epistle stack certs disable` returns to one `mail`.
+
+| | `certs` | `mail` |
+|---|---|---|
+| command | `epistle serve --role certs` | `epistle serve --role mail` |
+| DNS credential | read-only | not mounted |
+| ACME account key (`secrets/acme_account.key`) | read-only secret | not mounted |
+| `<data_dir>/acme` (certificate, key, renewal request) | read-write | read-only |
+| `<data_dir>/dns-tlsa` (TLSA retry state) | read-write | read-only |
+| `<data_dir>/compose` | not mounted | read-only |
+| rest of data_dir | not mounted | read-write |
+| ports | none | as before |
+
+`mail` picks a new certificate up from disk within a minute, without a
+restart. If `certs` stops, `mail` keeps serving the certificate it has until it
+expires; `epistle status` reports the container in its `tls` area with the
+days left. DKIM keys do not rotate while the split is on: rotation publishes
+through the credential `mail` no longer holds, and moves to its own service in
+a later step. The design and what is left are in
+[the split plan](container-split.md).
 
 ### The database roles
 
