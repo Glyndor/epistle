@@ -76,6 +76,17 @@ pub(in crate::cli) fn steady(before: &str, after: &str, service: &str) -> Result
 	}
 }
 
+/// `stack up`: remove a leftover key copy on a split stack, then `podup up
+/// -d` and the autostart unit. A layout that cannot be read is reported and
+/// `up` goes on: starting the stack is what `up` is for, and the copy is
+/// only removed when the file says the split runs.
+pub(in crate::cli) fn up(data_dir: &Path, compose: &Path, podup: &str) -> std::process::ExitCode {
+	if let Err(error) = retire_before_up(data_dir, compose) {
+		crate::cli::style::warn(format!("no leftover ACME account key was removed: {error}"));
+	}
+	crate::cli::stack::run_sequence(podup, compose, &[&["up", "-d"], &["autostart", "install"]])
+}
+
 /// What a switch needs from the host; the tests fake it.
 pub(in crate::cli) trait SwitchHost {
 	/// The compose file as it is now.
@@ -234,6 +245,8 @@ fn put_back(
 	}
 }
 
+mod cli;
+pub use cli::CertsCli;
 mod host;
 pub(in crate::cli) use host::run;
 
