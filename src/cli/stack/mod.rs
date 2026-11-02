@@ -91,6 +91,14 @@ pub enum StackCli {
 	/// The database half of `rollback`, run as the service account.
 	#[command(hide = true)]
 	RollbackDb,
+	/// Turn the certificates container on or off (see
+	/// docs/operations/container-split.md).
+	#[command(hide = true)]
+	Certs {
+		/// `enable` or `disable`.
+		#[command(subcommand)]
+		action: CertsCli,
+	},
 	/// List each service's memory and process limits, or change one with `set`.
 	Resources {
 		/// Print JSON instead of a table.
@@ -100,6 +108,16 @@ pub enum StackCli {
 		#[command(subcommand)]
 		action: Option<resources::ResourcesCli>,
 	},
+}
+
+/// The two directions of `stack certs`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Subcommand)]
+pub enum CertsCli {
+	/// Move the ACME renewal, the TLSA refresh and the DNS credential into
+	/// a `certs` container.
+	Enable,
+	/// Put them back in `mail`.
+	Disable,
 }
 
 impl From<StackCli> for StackAction {
@@ -121,6 +139,9 @@ impl From<StackCli> for StackAction {
 			},
 			StackCli::Rollback { .. } => StackAction::Rollback,
 			StackCli::RollbackDb => StackAction::RollbackDb,
+			StackCli::Certs { action } => StackAction::Certs {
+				on: action == CertsCli::Enable,
+			},
 			StackCli::Resources { json, action } => StackAction::Resources { action, json },
 		}
 	}
@@ -174,6 +195,11 @@ pub(crate) enum StackAction {
 	Rollback,
 	/// Stop mail and restore the pre-update dump if the schema moved.
 	RollbackDb,
+	/// Turn the certificates container on or off.
+	Certs {
+		/// `true` to run it.
+		on: bool,
+	},
 	/// Show or change the limits in the compose file; podup is not run.
 	Resources {
 		/// `set`, or `None` to list.
@@ -190,6 +216,7 @@ pub(crate) enum StackAction {
 	},
 }
 
+pub(super) mod certs;
 pub(super) mod dumps;
 pub(super) mod health;
 mod images;
@@ -238,7 +265,8 @@ pub(super) fn run_reporting(config: &Config, cli: StackCli, json: bool) -> ExitC
 		StackCli::Logs { .. }
 		| StackCli::Resources { .. }
 		| StackCli::Rollback { .. }
-		| StackCli::RollbackDb => return run(config, cli.into()),
+		| StackCli::RollbackDb
+		| StackCli::Certs { .. } => return run(config, cli.into()),
 	};
 	let code = run(config, cli.into());
 	if !json || code != ExitCode::SUCCESS {
@@ -297,6 +325,7 @@ pub(super) fn run(config: &Config, action: StackAction) -> ExitCode {
 			ExitCode::FAILURE
 		}
 		StackAction::RollbackDb => rollback::restore_db(config, &compose, podup),
+		StackAction::Certs { on } => certs::run(config, &compose, podup, on),
 		StackAction::Up => {
 			run_sequence(podup, &compose, &[&["up", "-d"], &["autostart", "install"]])
 		}
