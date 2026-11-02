@@ -140,7 +140,7 @@ impl MailboxBackend {
 		let path = mailbox_dir(&self.data_dir, account, "INBOX")?.join(format!("{uid}.eml"));
 		let size = std::fs::symlink_metadata(&path).ok()?.len();
 		let envelope = if self.crypto.enabled() {
-			crate::storage::OVERHEAD
+			crate::storage::MAX_OVERHEAD
 		} else {
 			0
 		};

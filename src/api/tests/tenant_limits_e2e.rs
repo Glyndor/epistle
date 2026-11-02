@@ -72,6 +72,7 @@ fn capped_state(dir: &std::path::Path, max_accounts: u64) -> ApiState {
 			max_accounts: Some(max_accounts),
 			max_domains: None,
 			submission_rate_limit_per_min: None,
+			encryption_key_file: None,
 		},
 	]));
 	let mut key_store = crate::api::ApiKeyStore::open(dir).expect("open key store");
@@ -223,6 +224,7 @@ async fn aggregate_quota_blocks_an_over_cap_upload() {
 			max_accounts: None,
 			max_domains: None,
 			submission_rate_limit_per_min: None,
+			encryption_key_file: None,
 		},
 	]));
 	let dir = tempfile::tempdir().expect("tempdir");
@@ -297,6 +299,7 @@ async fn aggregate_rate_blocks_a_second_send_within_the_window() {
 			max_accounts: None,
 			max_domains: None,
 			submission_rate_limit_per_min: Some(1),
+			encryption_key_file: None,
 		},
 	]));
 	let dir = tempfile::tempdir().expect("tempdir");
@@ -382,6 +385,7 @@ async fn aggregate_rate_charges_per_recipient() {
 			max_accounts: None,
 			max_domains: None,
 			submission_rate_limit_per_min: Some(2),
+			encryption_key_file: None,
 		},
 	]));
 	let dir = tempfile::tempdir().expect("tempdir");

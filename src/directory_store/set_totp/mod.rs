@@ -31,7 +31,7 @@ fn seal(crypto: &MessageCrypto, secret: &str) -> Result<String, super::StoreErro
 		return Ok(secret.to_string());
 	}
 	let envelope = crypto.encode(secret.as_bytes())?;
-	if !envelope.starts_with(crate::storage::MAGIC) {
+	if !crate::storage::is_envelope(&envelope) {
 		// Encryption is off: `encode` handed the cleartext back.
 		return Ok(secret.to_string());
 	}
@@ -49,7 +49,7 @@ pub(super) fn open(crypto: &MessageCrypto, stored: &str) -> String {
 		.ok()
 		// A sealed value must carry the envelope; without it `decode` would
 		// hand back the bytes unchanged as if they were cleartext.
-		.filter(|envelope| envelope.starts_with(crate::storage::MAGIC))
+		.filter(|envelope| crate::storage::is_envelope(envelope))
 		.and_then(|envelope| crypto.decode(&envelope).ok())
 		.and_then(|plain| String::from_utf8(plain).ok());
 	opened.unwrap_or_else(|| {

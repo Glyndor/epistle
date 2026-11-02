@@ -100,7 +100,7 @@ pub(super) fn token_hash_from(reader: impl std::io::BufRead, json: bool) -> Exit
 pub(super) fn message_crypto(
 	config: &crate::config::Config,
 ) -> Result<crate::storage::MessageCrypto, ExitCode> {
-	crate::storage::MessageCrypto::from_config(config.storage.as_ref()).map_err(|error| {
+	crate::storage::MessageCrypto::from_full_config(config).map_err(|error| {
 		super::style::error(error);
 		ExitCode::FAILURE
 	})

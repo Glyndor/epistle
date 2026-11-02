@@ -43,6 +43,7 @@ async fn tenant_submission_limit_is_shared_between_smtp_and_jmap() {
 		max_accounts: None,
 		max_domains: None,
 		submission_rate_limit_per_min: Some(2),
+		encryption_key_file: None,
 	}]));
 	let plain = auth_plain("alice", crate::smtp::auth::tests::base::fixture_password());
 	let (acceptor, cert) = acceptor_and_cert();
