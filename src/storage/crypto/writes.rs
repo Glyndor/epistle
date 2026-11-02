@@ -48,6 +48,21 @@ impl MessageCrypto {
 		}
 	}
 
+	/// Open `stored` and say which key opened it. Re-encryption uses the
+	/// owner to decide whether a file is already where it should be.
+	///
+	/// # Errors
+	/// [`CryptoAuthError::NotEncrypted`](super::CryptoAuthError::NotEncrypted)
+	/// for a buffer with no envelope, and the usual fail-closed errors for
+	/// one that cannot be opened.
+	pub fn open_owned(&self, stored: &[u8]) -> Result<(Vec<u8>, KeyOwner), super::CryptoAuthError> {
+		match envelope::open(&self.inner.keys, stored, &[]) {
+			Ok(Some(opened)) => Ok(opened),
+			Ok(None) => Err(super::CryptoAuthError::NotEncrypted),
+			Err(error) => Err(error.into()),
+		}
+	}
+
 	/// Seal `plaintext` under the key `owner` holds, whatever the enabled
 	/// flag says: version 1 for the server key, which is what a release
 	/// without tenant keys reads, and version 2 for a tenant key.

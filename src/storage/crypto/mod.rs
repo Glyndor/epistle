@@ -325,7 +325,7 @@ impl MessageCrypto {
 	/// were plaintext.
 	pub fn decode(&self, stored: &[u8]) -> std::io::Result<Vec<u8>> {
 		match envelope::open(&self.inner.keys, stored, &[]) {
-			Ok(Some(plain)) => Ok(plain),
+			Ok(Some((plain, _))) => Ok(plain),
 			Ok(None) => Ok(stored.to_vec()),
 			Err(error) => Err(std::io::Error::other(error.to_string())),
 		}
@@ -395,7 +395,7 @@ impl MessageCrypto {
 	/// key the envelope needs is not loaded.
 	pub fn decode_with_aad(&self, stored: &[u8], aad: &[u8]) -> Result<Vec<u8>, CryptoAuthError> {
 		match envelope::open(&self.inner.keys, stored, aad) {
-			Ok(Some(plain)) => Ok(plain),
+			Ok(Some((plain, _))) => Ok(plain),
 			Ok(None) => Err(CryptoAuthError::NotEncrypted),
 			Err(error) => Err(error.into()),
 		}
