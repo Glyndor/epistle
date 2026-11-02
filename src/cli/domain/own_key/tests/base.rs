@@ -65,7 +65,7 @@ fn a_new_domain_gets_a_key_of_its_own_and_an_entry_that_names_it() {
 	let (dir, file) = fixture(DKIM);
 	let (config, mut document) = document(file.path());
 	let created = add(&config, &mut document, "New.Example.org", (false, false));
-	assert_eq!(created.len(), 1, "{created:?}");
+	assert_eq!(created.len(), 1, "one key file is made");
 	let dkim = document
 		.config()
 		.expect("the edit validates")

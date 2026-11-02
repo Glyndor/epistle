@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use super::finish::{FINISH, shared_value, split_install, switched_days_ago};
 use super::harness::{Flaw, Flawed, Provider, Resolver, run, run_with};
+use crate::cli::dkim::split::finish::MANUAL_ACTION;
 use crate::dns::provider::DnsProvider;
 
 fn flawed(zone: &super::harness::Zone, flaw: Flaw) -> Option<Arc<dyn DnsProvider>> {
@@ -34,7 +35,8 @@ fn a_provider_that_cannot_match_by_value_is_not_asked_to_delete_and_the_record_i
 		&resolver(&zone),
 		false,
 	);
-	assert_eq!(code, ExitCode::SUCCESS, "{out}");
+	assert_eq!(code, ExitCode::from(MANUAL_ACTION), "{out}");
+	assert!(out.contains("NOT finished: 2 record(s)"), "{out}");
 	assert!(zone.deleted.lock().unwrap().is_empty());
 	assert_eq!(zone.published(), before);
 	assert!(
@@ -143,4 +145,36 @@ fn a_record_at_a_name_whose_shared_key_is_not_on_this_host_is_unknown_not_ours()
 	assert_eq!(code, ExitCode::FAILURE);
 	assert!(err.contains("is not on this host"), "{err}");
 	assert!(zone.deleted.lock().unwrap().is_empty());
+}
+
+#[test]
+fn the_json_of_a_partial_retirement_carries_each_name_and_exact_value() {
+	let (install, zone) = split_install();
+	switched_days_ago(&install, 20);
+	let (code, out, _, _) = run_with(
+		&install,
+		&FINISH,
+		flawed(&zone, Flaw::NoExactDelete),
+		&resolver(&zone),
+		true,
+	);
+	assert_eq!(code, ExitCode::from(MANUAL_ACTION));
+	let result: serde_json::Value = serde_json::from_str(out.trim()).expect("json");
+	assert_eq!(result["result"], "manual-action-required");
+	let manual = result["manual"].as_array().expect("manual");
+	assert_eq!(manual.len(), 2);
+	assert_eq!(manual[0]["name"], "s1._domainkey.b.example.org");
+	assert_eq!(manual[0]["value"], shared_value(&install));
+}
+
+#[test]
+fn a_full_retirement_is_retired_and_exits_zero() {
+	let (install, zone) = split_install();
+	switched_days_ago(&install, 20);
+	let (provider, resolver) = super::finish::services(&zone);
+	let (code, out, _, _) = run_with(&install, &FINISH, Some(Arc::new(provider)), &resolver, true);
+	assert_eq!(code, ExitCode::SUCCESS);
+	let result: serde_json::Value = serde_json::from_str(out.trim()).expect("json");
+	assert_eq!(result["result"], "retired");
+	assert!(result["manual"].as_array().expect("manual").is_empty());
 }

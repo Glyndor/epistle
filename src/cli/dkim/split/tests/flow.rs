@@ -56,7 +56,10 @@ fn a_split_publishes_first_and_switches_after() {
 	for entry in &dkim.domain {
 		let name = format!("{}._domainkey.{}", entry.selector, entry.name);
 		let value = zone.records.lock().unwrap()[&name][0].clone();
-		assert_eq!(value, public(&entry.key_file), "{name}");
+		assert!(
+			value == public(&entry.key_file),
+			"{name} does not publish the key that signs"
+		);
 	}
 	assert!(out.contains("a.example.org keeps the [dkim] key"), "{out}");
 }

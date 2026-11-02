@@ -270,14 +270,33 @@ async fn retire(
 	for (name, value) in &manual {
 		report.line(format_args!("remove by hand: {name} {value}"));
 	}
-	report.object(serde_json::json!({
-		"result": "retired",
+	let finished = manual.is_empty();
+	if !finished {
+		report.line(format_args!(
+			"NOT finished: {} record(s) of the shared key are still published and must be removed by hand; `epistle dkim show` and `status` keep warning until they are gone",
+			manual.len()
+		));
+	}
+	let code = report.object(serde_json::json!({
+		"result": if finished { "retired" } else { "manual-action-required" },
 		"action": "split-finish",
 		"retired": handled.iter().map(|f| f.stale.name.clone()).collect::<Vec<_>>(),
-		"manual": manual.iter().map(|(name, _)| name.clone()).collect::<Vec<_>>(),
+		"manual": manual
+			.iter()
+			.map(|(name, value)| serde_json::json!({ "name": name, "value": value }))
+			.collect::<Vec<_>>(),
 		"not_ours": not_ours,
-	}))
+	}));
+	if finished || code != ExitCode::SUCCESS {
+		code
+	} else {
+		ExitCode::from(MANUAL_ACTION)
+	}
 }
+
+/// Exit code of `--finish` when records are left for the operator to remove by
+/// hand: the command did what it could and the split is not finished.
+pub(in crate::cli) const MANUAL_ACTION: u8 = 4;
 
 /// After a removal: the shared key's `p=` is gone from every name in `handled`
 /// (the resolver is asked again after each wait), and every value that was
