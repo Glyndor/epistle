@@ -80,6 +80,30 @@ async fn the_certificates_role_refuses_to_start_without_the_dns_credential() {
 	assert!(error.to_string().contains("could not be built"), "{error}");
 }
 
+/// The certificates container does not mount the database password; its
+/// configuration loads without `[database]`, and the listeners' does not.
+#[test]
+fn the_certificates_role_loads_without_the_database_password_file() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let path = dir.path().join("mail.toml");
+	std::fs::write(
+		&path,
+		format!(
+			"hostname = 'mail.example.org'\ndata_dir = '{}'\n\
+			 [database]\nurl = 'postgres://epistle@%2Frun%2Fpostgresql/epistle'\npassword_file = '{}'\n",
+			dir.path().join("data").display(),
+			dir.path().join("not-mounted-here").display(),
+		),
+	)
+	.expect("config");
+	use std::os::unix::fs::PermissionsExt;
+	std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("mode");
+	let config = super::super::load(&path, ServeRole::Certs).expect("certs loads");
+	assert!(config.database.is_none());
+	let error = super::super::load(&path, ServeRole::Mail).expect_err("mail needs it");
+	assert!(error.to_string().contains("password_file"), "{error}");
+}
+
 #[tokio::test]
 async fn the_certificates_role_refuses_to_start_without_acme() {
 	let dir = tempfile::tempdir().expect("tempdir");

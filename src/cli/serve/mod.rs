@@ -23,6 +23,22 @@ use smtp_state::SmtpSharedState;
 use tls::TlsStack;
 mod run;
 pub use run::run;
+
+/// The tables of the configuration the certificates role never reads. Their
+/// validation opens files that container does not mount (the `[database]`
+/// password), and giving it those files would hand it a credential it does
+/// not use.
+const NOT_FOR_CERTS: [&str; 1] = ["database"];
+
+/// Load the configuration `role` runs with: strictly, as every command that
+/// acts on the data does, and for the certificates role without the tables
+/// it never reads.
+pub fn load(path: &std::path::Path, role: ServeRole) -> Result<Config, crate::config::ConfigError> {
+	match role {
+		ServeRole::Certs => Config::load_without(path, &NOT_FOR_CERTS),
+		ServeRole::All | ServeRole::Mail => Config::load(path),
+	}
+}
 async fn serve(config: Config, role: ServeRole) -> std::io::Result<()> {
 	crate::log_id::init(&config.data_dir)?;
 	crate::mtasts::publish::write_policy(&config)?;

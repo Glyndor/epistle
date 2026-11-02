@@ -66,7 +66,7 @@ impl Cli {
 				key,
 				listen,
 			} => crate::cli::mta::sts_serve::run(policy_dir, cert, key, listen),
-			Command::Serve { config, role } => match Config::load(&config) {
+			Command::Serve { config, role } => match serve::load(&config, role) {
 				Ok(config) => serve::run(config, role),
 				Err(error) => {
 					style::error(error);

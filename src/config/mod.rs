@@ -711,6 +711,31 @@ impl Config {
 		Self::parse_text(&raw, path)
 	}
 
+	/// [`load`](Self::load) with the named top-level tables taken out before
+	/// the file is parsed and validated, for a process that never uses them
+	/// and does not mount the files their validation reads: the
+	/// certificates container has no `[database]` password file. Every other
+	/// rule applies as in `load`; a file that does not parse as TOML fails
+	/// the same way.
+	pub(crate) fn load_without(path: &Path, tables: &[&str]) -> Result<Self, ConfigError> {
+		check_permissions(path, "config file")?;
+		let raw = std::fs::read_to_string(path).map_err(|source| ConfigError::Read {
+			path: path.to_path_buf(),
+			source,
+			kind: "config file",
+		})?;
+		let text = match raw.parse::<toml_edit::DocumentMut>() {
+			Ok(mut document) => {
+				for table in tables {
+					document.remove(table);
+				}
+				document.to_string()
+			}
+			Err(_) => raw,
+		};
+		Self::parse_text(&text, path)
+	}
+
 	/// [`load`](Self::load) for `epistle status` alone: it reports on an
 	/// installation, so a file the validation refuses is still read and the
 	/// reason is kept in [`Config::validation_error`] for the `config` area.
