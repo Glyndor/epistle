@@ -181,6 +181,14 @@ pub fn backup_tar(raw: &[u8]) {
 	crate::cli::backup::fuzzing::archive_for_fuzzing(raw);
 }
 
+/// A CalDAV or CardDAV request body outside the filters: the hrefs of a
+/// multiget, the discovery and data checks, and a `sync-collection` request
+/// with its level, its token and the change log the token is checked against.
+pub fn webdav_report_body(input: &str) {
+	let input = &input[..floor_char_boundary(input, INPUT_CAP)];
+	crate::webdav::fuzzing::report_body_for_fuzzing(input);
+}
+
 /// The largest index at most `max` that is a character boundary of `text`.
 fn floor_char_boundary(text: &str, max: usize) -> usize {
 	let mut end = max.min(text.len());

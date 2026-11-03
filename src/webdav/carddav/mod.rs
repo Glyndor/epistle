@@ -256,7 +256,7 @@ async fn collect_cards_filtered(
 /// namespace prefix is irrelevant, so we match on the local name `href`. Values
 /// are returned in document order, untrimmed of surrounding whitespace beyond a
 /// trim of the captured text.
-fn hrefs(body: &str) -> Vec<String> {
+pub(super) fn hrefs(body: &str) -> Vec<String> {
 	let mut out = Vec::new();
 	let mut rest = body;
 	while let Some(start) = find_open(rest, "href") {

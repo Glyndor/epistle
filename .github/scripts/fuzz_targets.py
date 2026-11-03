@@ -42,6 +42,7 @@ ALL = [
     "rules_match",
     "migrate_imap_response",
     "backup_tar",
+    "webdav_report_body",
 ]
 
 # Folder of the source -> the targets that exercise it and nothing else.
@@ -55,7 +56,7 @@ FOLDERS = {
     "src/dmarc/": ["mime"],
     "src/api/jmap/": ["mime"],
     "src/antispam/attachments/": ["attachment_inspect"],
-    "src/webdav/": ["webdav_filter_rrule"],
+    "src/webdav/": ["webdav_filter_rrule", "webdav_report_body"],
     "src/arc/": ["arc_headers"],
     "src/jwt/": ["jwt_decode"],
     "src/queue/client/": ["smtp_reply"],

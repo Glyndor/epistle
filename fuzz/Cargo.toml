@@ -181,3 +181,10 @@ path = "fuzz_targets/backup/backup_tar.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "webdav_report_body"
+path = "fuzz_targets/web/webdav_report_body.rs"
+test = false
+doc = false
+bench = false
