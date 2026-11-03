@@ -47,6 +47,7 @@ on:
       - "src/dane/**"
       - "src/rules/**"
       - "src/migrate/imap/**"
+      - "src/cli/backup/**"
       - "src/fuzzing.rs"
       - "fuzz/**"
       # Files that only exist under #[cfg(test)] cannot change what this job

@@ -107,7 +107,7 @@ fn forget_jmap_epoch(data_dir: &Path, journal: &Path) -> io::Result<()> {
 	}
 }
 
-fn relative_path(name: &str) -> io::Result<&Path> {
+pub(super) fn relative_path(name: &str) -> io::Result<&Path> {
 	let relative = name
 		.strip_prefix("data/")
 		.ok_or_else(|| io::Error::other("unsupported archive entry name"))?;

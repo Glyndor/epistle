@@ -174,3 +174,10 @@ path = "fuzz_targets/migrate/migrate_imap_response.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "backup_tar"
+path = "fuzz_targets/backup/backup_tar.rs"
+test = false
+doc = false
+bench = false

@@ -41,6 +41,7 @@ ALL = [
     "report_payload",
     "rules_match",
     "migrate_imap_response",
+    "backup_tar",
 ]
 
 # Folder of the source -> the targets that exercise it and nothing else.
@@ -64,6 +65,7 @@ FOLDERS = {
     "src/reports/": ["report_payload", "mime"],
     "src/rules/": ["rules_match"],
     "src/migrate/imap/": ["migrate_imap_response"],
+    "src/cli/backup/": ["backup_tar"],
 }
 
 # Files under src that the fuzz entry points go through directly.

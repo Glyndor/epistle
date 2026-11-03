@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use super::db_dump::{self, DATABASE_SQL_NAME, load_dump_with, output_ends_with_pg_dump_complete};
+use super::gunzip::gunzip_archive;
 use super::restore_files::{check_files, lay_files, load_failure_state};
 use super::{keys_note, restore_signals, tar_format};
 use crate::cli::term::live::{Steps, quiet};
@@ -327,15 +328,4 @@ fn mail_service_is_running(data_dir: &Path) -> bool {
 		.ok()
 		.flatten()
 		.is_some()
-}
-
-/// Gunzip an archive and return its raw tar bytes. Tiny wrapper over
-/// `flate2::read::GzDecoder` so the call site in `run_restore` surfaces
-/// any decode error with a real `io::Error` rather than a panic.
-fn gunzip_archive(data: &[u8]) -> std::io::Result<Vec<u8>> {
-	use std::io::Read;
-	let mut decoder = flate2::read::GzDecoder::new(data);
-	let mut out = Vec::new();
-	decoder.read_to_end(&mut out)?;
-	Ok(out)
 }

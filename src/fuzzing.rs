@@ -173,6 +173,14 @@ pub fn migrate_imap_response(raw: &[u8]) {
 	crate::migrate::imap::fuzzing::responses_for_fuzzing(raw);
 }
 
+/// A backup archive as `epistle restore` reads it from an operator: the
+/// bounded gunzip, the tar reader and the check that decides where each
+/// member is written, plus a write and read back of what was read.
+pub fn backup_tar(raw: &[u8]) {
+	let raw = &raw[..raw.len().min(INPUT_CAP)];
+	crate::cli::backup::fuzzing::archive_for_fuzzing(raw);
+}
+
 /// The largest index at most `max` that is a character boundary of `text`.
 fn floor_char_boundary(text: &str, max: usize) -> usize {
 	let mut end = max.min(text.len());
