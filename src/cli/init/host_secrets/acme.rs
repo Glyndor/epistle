@@ -36,6 +36,26 @@ fn private_dir(path: &Path) -> Result<(), String> {
 		.map_err(|error| format!("cannot prepare {}: {error}", path.display()))
 }
 
+/// A directory `certs` binds out of data_dir: it must be a directory of its
+/// own, not a symlink. `mail` writes data_dir, so a link it left there
+/// would bind `certs` to whatever the link names, a directory `mail` may
+/// still be able to write; a link is refused, not followed.
+fn split_dir(path: &Path) -> Result<(), String> {
+	match fs::symlink_metadata(path) {
+		Ok(metadata) if metadata.file_type().is_dir() => {}
+		Ok(_) => {
+			return Err(format!(
+				"{} is not a directory (a symlink or a file is there); the certificates \
+				 container binds it, so remove it and run this again",
+				path.display()
+			));
+		}
+		Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+		Err(error) => return Err(format!("cannot inspect {}: {error}", path.display())),
+	}
+	private_dir(path)
+}
+
 /// Copy the key from `from` to `to` unless `to` already holds it. Two
 /// different keys are refused by name.
 fn copy_key(from: &Path, to: &Path) -> Result<Option<String>, String> {
@@ -84,7 +104,7 @@ pub(crate) fn place(data_dir: &Path, certs: bool) -> Result<Vec<String>, String>
 	let mut lines = Vec::new();
 	if certs {
 		for dir in split_dirs(data_dir) {
-			private_dir(&dir)?;
+			split_dir(&dir)?;
 		}
 		lines.extend(copy_key(&in_data_dir, &in_secrets)?);
 		if read_key(&in_secrets)?.is_none() {

@@ -139,3 +139,31 @@ fn a_key_path_that_is_not_a_file_is_refused() {
 	let error = place(&data_dir, true).expect_err("not a file");
 	assert!(error.contains("not a regular file"), "{error}");
 }
+
+#[test]
+fn a_bound_directory_that_is_a_symlink_is_refused_before_anything_is_placed() {
+	for index in 0..2 {
+		let root = tempfile::tempdir().expect("tempdir");
+		let data_dir = data_dir(root.path());
+		// A directory mail writes, and a link to it where certs binds from.
+		let elsewhere = data_dir.join("spool");
+		fs::create_dir_all(&elsewhere).expect("spool");
+		let dir = split_dirs(&data_dir)[index].clone();
+		std::os::unix::fs::symlink(&elsewhere, &dir).expect("link");
+
+		let error = place(&data_dir, true).expect_err("a link");
+
+		assert!(error.contains("is not a directory"), "{error}");
+		assert!(
+			fs::symlink_metadata(&dir)
+				.expect("still there")
+				.file_type()
+				.is_symlink(),
+			"left for the operator"
+		);
+		assert!(
+			!super::acme_account_key(&data_dir).exists(),
+			"no key placed for a layout that cannot run"
+		);
+	}
+}
