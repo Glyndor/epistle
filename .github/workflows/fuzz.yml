@@ -48,6 +48,7 @@ on:
       - "src/rules/**"
       - "src/migrate/imap/**"
       - "src/cli/backup/**"
+      - "src/antispam/arf/**"
       - "src/fuzzing.rs"
       - "fuzz/**"
       # Files that only exist under #[cfg(test)] cannot change what this job

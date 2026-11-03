@@ -189,6 +189,13 @@ pub fn webdav_report_body(input: &str) {
 	crate::webdav::fuzzing::report_body_for_fuzzing(input);
 }
 
+/// An ARF feedback report as a remote feedback loop sends it, and the report
+/// built from the sender and source IP such a complaint carries.
+pub fn arf_report(raw: &[u8]) {
+	let raw = &raw[..raw.len().min(INPUT_CAP)];
+	crate::antispam::arf::fuzzing::report_for_fuzzing(raw);
+}
+
 /// The largest index at most `max` that is a character boundary of `text`.
 fn floor_char_boundary(text: &str, max: usize) -> usize {
 	let mut end = max.min(text.len());

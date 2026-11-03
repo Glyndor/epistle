@@ -5,6 +5,8 @@
 //! part, a machine-readable `message/feedback-report` part, and the reported
 //! message itself.
 
+pub(crate) mod fuzzing;
+
 use crate::clock;
 use crate::smtp::session::AcceptedMessage;
 use crate::util::header::sanitize_header_value;

@@ -188,3 +188,10 @@ path = "fuzz_targets/web/webdav_report_body.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "arf_report"
+path = "fuzz_targets/message/arf_report.rs"
+test = false
+doc = false
+bench = false

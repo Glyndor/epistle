@@ -43,6 +43,7 @@ ALL = [
     "migrate_imap_response",
     "backup_tar",
     "webdav_report_body",
+    "arf_report",
 ]
 
 # Folder of the source -> the targets that exercise it and nothing else.
@@ -67,6 +68,7 @@ FOLDERS = {
     "src/rules/": ["rules_match"],
     "src/migrate/imap/": ["migrate_imap_response"],
     "src/cli/backup/": ["backup_tar"],
+    "src/antispam/arf/": ["arf_report"],
 }
 
 # Files under src that the fuzz entry points go through directly.

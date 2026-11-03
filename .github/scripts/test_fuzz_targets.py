@@ -51,6 +51,7 @@ class SelectTests(unittest.TestCase):
             ("src/rules/mod.rs", "rules_match"),
             ("src/migrate/imap/parse/mod.rs", "migrate_imap_response"),
             ("src/cli/backup/tar_format/mod.rs", "backup_tar"),
+            ("src/antispam/arf/mod.rs", "arf_report"),
         ):
             self.assertEqual(ft.select("pull_request", [path]), [target])
 
