@@ -23,7 +23,23 @@ use smtp_state::SmtpSharedState;
 use tls::TlsStack;
 mod run;
 pub use run::run;
-async fn serve(config: Config) -> std::io::Result<()> {
+
+/// The tables of the configuration the certificates role never reads. Their
+/// validation opens files that container does not mount (the `[database]`
+/// password), and giving it those files would hand it a credential it does
+/// not use.
+const NOT_FOR_CERTS: [&str; 1] = ["database"];
+
+/// Load the configuration `role` runs with: strictly, as every command that
+/// acts on the data does, and for the certificates role without the tables
+/// it never reads.
+pub fn load(path: &std::path::Path, role: ServeRole) -> Result<Config, crate::config::ConfigError> {
+	match role {
+		ServeRole::Certs => Config::load_without(path, &NOT_FOR_CERTS),
+		ServeRole::All | ServeRole::Mail => Config::load(path),
+	}
+}
+async fn serve(config: Config, role: ServeRole) -> std::io::Result<()> {
 	crate::log_id::init(&config.data_dir)?;
 	crate::mtasts::publish::write_policy(&config)?;
 	tasks::log_single_signature_dkim_warning(&config);
@@ -126,8 +142,17 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	)?;
 	tasks::spawn_dmarc_flush(&config, Arc::clone(&spf_dns), Arc::clone(&sink))?;
 	tasks::spawn_tlsrpt_reports(&config, Arc::clone(&spf_dns), Arc::clone(&sink))?;
-	tasks::spawn_dkim_rotation(&config, &dkim_signer, webhook.as_ref().map(Arc::clone));
-	tasks::spawn_domain_rotations(&config, &domain_signers, webhook.as_ref().map(Arc::clone));
+	if role.writes_dns() {
+		tasks::spawn_dkim_rotation(&config, &dkim_signer, webhook.as_ref().map(Arc::clone));
+		tasks::spawn_domain_rotations(&config, &domain_signers, webhook.as_ref().map(Arc::clone));
+	} else if config.dkim.is_some() {
+		// Both rotations, of the `[dkim]` key and of each domain's own key,
+		// publish selectors through [dns], and the certificates container
+		// holds that credential now: the keys in use keep signing.
+		tracing::info!(
+			"[dkim] rotation waits: with the certificates container this process holds no DNS credential"
+		);
+	}
 	tasks::spawn_alert_engine(
 		&config,
 		Arc::clone(&metrics),
@@ -144,7 +169,7 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		reloadable_tls,
 		channel_binding,
 		acme_renewal,
-	} = tls::build_tls(&config, challenge_store.clone())?;
+	} = tls::build_tls_for(&config, challenge_store.clone(), role)?;
 	let ipv4_any_ports = startup::ipv4_any_ports(&config);
 	let mut tasks = Vec::new();
 	let drain = crate::shutdown::Drain::new();
@@ -397,6 +422,9 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	stopped
 }
 mod ban_policy;
+mod certs;
+mod role;
+pub use role::ServeRole;
 #[cfg(test)]
 mod tests;
 mod wait;

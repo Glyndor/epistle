@@ -432,6 +432,7 @@ sudo epistle check subid
 | Command | What it does |
 |---|---|
 | `epistle serve` | Bind the configured listeners and run. |
+| `epistle serve --role mail\|certs` | Run one half of a stack whose certificate work has its own container (see [the split plan](operations/container-split.md)). `mail` binds the listeners, renews nothing and reloads the ACME pair from `<data_dir>/acme` when it changes; `certs` binds nothing and runs only the ACME renewal with `dns-01` through `[dns]` and the TLSA refresh, with the account key read from `secrets/acme_account.key` beside data_dir. `certs` refuses to start without `[acme] challenge = "dns-01"` and a `[dns]` provider. The default, `all`, is both in one process. |
 | `epistle mta-sts-serve --policy-dir DIR --cert FILE --key FILE [--listen ADDR]` | Serve the public MTA-STS policy over HTTPS. |
 | `epistle config-check` | Validate the configuration and exit. Values an older release accepted that the current rules refuse (`public_ipv4`, `public_ipv6`, an alias `list_id`) are ignored with a warning rather than failing; any other validation error fails, and so it does for `backup`, `restore`, `stack rollback` and `serve`. `status` alone still reads such a file and reports the reason in its `config` area. |
 | `epistle verify` | Check on-disk data integrity (run before an upgrade). |

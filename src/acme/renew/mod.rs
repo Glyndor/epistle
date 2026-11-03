@@ -28,7 +28,9 @@ pub use stop::{Renewal, StopSignal};
 /// request promptly; scheduled failures back off for much longer.
 const CHECK_INTERVAL: Duration = Duration::from_secs(60);
 
-fn account_key_path(data_dir: &Path) -> PathBuf {
+/// Where the account key lives when the process that serves mail also
+/// renews: next to the certificate under `<data_dir>/acme`.
+pub(crate) fn account_key_path(data_dir: &Path) -> PathBuf {
 	data_dir.join("acme").join("account.key")
 }
 pub(crate) fn cert_path(data_dir: &Path) -> PathBuf {
@@ -40,7 +42,14 @@ pub(crate) fn key_path(data_dir: &Path) -> PathBuf {
 
 /// Load the persisted account key, or generate and persist a new one.
 pub fn load_or_create_account_key(data_dir: &Path) -> Result<AccountKey, AcmeError> {
-	let path = account_key_path(data_dir);
+	load_or_create_account_key_at(&account_key_path(data_dir))
+}
+
+/// [`load_or_create_account_key`] for a key kept at `path`. The certificates
+/// container reads its key from a read-only mount outside data_dir, where a
+/// missing key cannot be created and the write fails instead.
+pub fn load_or_create_account_key_at(path: &Path) -> Result<AccountKey, AcmeError> {
+	let path = path.to_path_buf();
 	if let Ok(encoded) = fs::read_to_string(&path) {
 		let der = B64
 			.decode(encoded.trim())
@@ -162,12 +171,14 @@ fn now_secs() -> u64 {
 /// that does not parse, is refused while the files on disk and the acceptor
 /// in use are still the previous good pair. Only then are the two files
 /// replaced, each through a temporary file and a rename, and the acceptor
-/// swapped.
+/// swapped. Without an acceptor (the certificates container serves nothing)
+/// the files are the whole result: the server that presents them picks them
+/// up from disk.
 fn install(
 	data_dir: &Path,
 	chain: &str,
 	key_pem: &str,
-	reloadable: &ReloadableAcceptor,
+	reloadable: Option<&ReloadableAcceptor>,
 ) -> Result<(), AcmeError> {
 	let acceptor = crate::tls::acceptor_from_pem(chain.as_bytes(), key_pem.as_bytes())
 		.map_err(|e| AcmeError::Protocol(e.to_string()))?;
@@ -176,45 +187,66 @@ fn install(
 		.map_err(|e| AcmeError::Transport(e.to_string()))?;
 	write_secret(&key_path(data_dir), key_pem.as_bytes())
 		.map_err(|e| AcmeError::Transport(e.to_string()))?;
-	reloadable.reload(acceptor);
+	if let Some(reloadable) = reloadable {
+		reloadable.reload(acceptor);
+	}
 	Ok(())
 }
 
 /// A DNS provider plus the mail hostname, used to refresh the DANE TLSA record
 /// when the certificate rotates.
-type TlsaPublisher = (
+pub type TlsaPublisher = (
 	std::sync::Arc<dyn crate::dns::provider::DnsProvider>,
 	String,
 );
 
+/// Everything the renewal loop needs: the order it places, where the pair
+/// and the account key live, and who learns about a new certificate.
+pub struct RenewalJob {
+	/// The CA's ACME directory URL.
+	pub directory_url: String,
+	/// Account contact addresses.
+	pub contacts: Vec<String>,
+	/// Names the certificate covers.
+	pub domains: Vec<String>,
+	/// Answers the CA's challenge.
+	pub responder: std::sync::Arc<dyn ChallengeResponder>,
+	/// The directory whose `acme/` holds the pair and the request files.
+	pub data_dir: PathBuf,
+	/// The account key file, created when absent and writable.
+	pub account_key: PathBuf,
+	/// The acceptor a new pair is swapped into, `None` when the process
+	/// presents no certificate itself.
+	pub reloadable: Option<ReloadableAcceptor>,
+	/// Days before expiry to renew.
+	pub renew_before_days: u64,
+	/// Where the TLSA record of a new certificate is published.
+	pub tlsa: Option<TlsaPublisher>,
+}
+
 /// Run one issuance: register, obtain a certificate through the configured
-/// challenge, persist it,
-/// hot-reload the acceptor, and (when a DNS provider is configured) refresh the
-/// TLSA record for the new certificate.
-async fn issue(
-	directory_url: &str,
-	contacts: &[String],
-	domains: &[String],
-	responder: std::sync::Arc<dyn ChallengeResponder>,
-	data_dir: &Path,
-	reloadable: &ReloadableAcceptor,
-	tlsa: Option<&TlsaPublisher>,
-) -> Result<(), AcmeError> {
+/// challenge, persist it, hot-reload the acceptor when there is one, and
+/// (when a DNS provider is configured) refresh the TLSA record for the new
+/// certificate.
+async fn issue(renewal: &RenewalJob) -> Result<(), AcmeError> {
+	let data_dir = renewal.data_dir.as_path();
 	let transport = HttpTransport::new()?;
-	let key = load_or_create_account_key(data_dir)?;
-	let client = AcmeClient::connect(transport, key, directory_url).await?;
-	client.register(contacts).await?;
-	let (chain, key_pem) = client.obtain_certificate(domains, responder, 10).await?;
+	let key = load_or_create_account_key_at(&renewal.account_key)?;
+	let client = AcmeClient::connect(transport, key, &renewal.directory_url).await?;
+	client.register(&renewal.contacts).await?;
+	let (chain, key_pem) = client
+		.obtain_certificate(&renewal.domains, renewal.responder.clone(), 10)
+		.await?;
 
 	// The certificate being replaced: its TLSA value is one this server served.
 	let previous = fs::read_to_string(cert_path(data_dir)).ok();
-	install(data_dir, &chain, &key_pem, reloadable)?;
-	tracing::info!(?domains, "ACME certificate issued and TLS reloaded");
+	install(data_dir, &chain, &key_pem, renewal.reloadable.as_ref())?;
+	tracing::info!(domains = ?renewal.domains, "ACME certificate issued and installed");
 
 	// Refresh the DANE TLSA record for the new certificate. A DNS failure must
 	// not fail an otherwise-successful issuance, and it is not dropped either:
 	// the publication is kept and the renewal loop retries it.
-	if let Some((provider, hostname)) = tlsa {
+	if let Some((provider, hostname)) = &renewal.tlsa {
 		let target = crate::dns::tlsa::Target {
 			provider: Some(provider.as_ref()),
 			hostname,
@@ -228,44 +260,26 @@ async fn issue(
 }
 
 /// The production [`Issuer`]: one ACME order, then install the result.
-struct AcmeIssuer {
-	directory_url: String,
-	contacts: Vec<String>,
-	domains: Vec<String>,
-	responder: std::sync::Arc<dyn ChallengeResponder>,
-	data_dir: PathBuf,
-	reloadable: ReloadableAcceptor,
-	tlsa: Option<TlsaPublisher>,
-}
-
-impl Issuer for AcmeIssuer {
+impl Issuer for RenewalJob {
 	fn issue(&self) -> Pin<Box<dyn Future<Output = Result<(), AcmeError>> + Send + '_>> {
-		Box::pin(issue(
-			&self.directory_url,
-			&self.contacts,
-			&self.domains,
-			self.responder.clone(),
-			&self.data_dir,
-			&self.reloadable,
-			self.tlsa.as_ref(),
-		))
+		Box::pin(issue(self))
 	}
 }
 
 /// Publish again a TLSA record whose last attempt failed, once its wait is
 /// over, for the certificate in service.
-async fn retry_tlsa(issuer: &AcmeIssuer) {
-	let Some((provider, hostname)) = &issuer.tlsa else {
+async fn retry_tlsa(renewal: &RenewalJob) {
+	let Some((provider, hostname)) = &renewal.tlsa else {
 		return;
 	};
 	let target = crate::dns::tlsa::Target {
 		provider: Some(provider.as_ref()),
 		hostname,
-		data_dir: &issuer.data_dir,
+		data_dir: &renewal.data_dir,
 	};
 	// Only a pair that works together is in service; anything else on disk
 	// is not published.
-	let (cert, key) = (cert_path(&issuer.data_dir), key_path(&issuer.data_dir));
+	let (cert, key) = (cert_path(&renewal.data_dir), key_path(&renewal.data_dir));
 	if !crate::tls::usable_pair(&cert, &key) {
 		return;
 	}
@@ -284,36 +298,17 @@ async fn retry_tlsa(issuer: &AcmeIssuer) {
 /// Challenges an earlier run left published are withdrawn before the first
 /// order. Once `stop` is requested the order in flight is dropped and every
 /// challenge still published is withdrawn before the loop returns.
-#[allow(clippy::too_many_arguments)]
-pub async fn run(
-	directory_url: String,
-	contacts: Vec<String>,
-	domains: Vec<String>,
-	responder: std::sync::Arc<dyn ChallengeResponder>,
-	data_dir: PathBuf,
-	reloadable: ReloadableAcceptor,
-	renew_before_days: u64,
-	tlsa: Option<TlsaPublisher>,
-	mut stop: StopSignal,
-) {
-	let issuer = AcmeIssuer {
-		directory_url,
-		contacts,
-		domains,
-		responder: responder.clone(),
-		data_dir: data_dir.clone(),
-		reloadable,
-		tlsa,
-	};
+pub async fn run(renewal: RenewalJob, mut stop: StopSignal) {
+	let responder = renewal.responder.clone();
 	let renewing = async {
 		responder.withdraw_pending().await;
 		let mut backoff = Backoff::default();
 		loop {
-			retry_tlsa(&issuer).await;
+			retry_tlsa(&renewal).await;
 			if let Outcome::Failed(error) = cycle(
-				&issuer,
-				&data_dir,
-				renew_before_days,
+				&renewal,
+				&renewal.data_dir,
+				renewal.renew_before_days,
 				now_secs(),
 				&mut backoff,
 			)

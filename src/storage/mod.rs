@@ -16,6 +16,7 @@ pub(crate) mod locked;
 mod routing;
 pub(crate) mod save_sent;
 mod spool;
+pub(crate) mod unshared;
 pub(crate) mod vacation_markers;
 pub mod vacation_store;
 

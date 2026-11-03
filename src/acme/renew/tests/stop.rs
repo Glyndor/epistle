@@ -71,14 +71,17 @@ fn spawn(
 	let dir = dir.to_path_buf();
 	Renewal::spawn(|stop| {
 		run(
-			"https://acme.invalid/directory".into(),
-			Vec::new(),
-			vec![DOMAIN.into()],
-			responder,
-			dir,
-			reloadable,
-			30,
-			None,
+			RenewalJob {
+				directory_url: "https://acme.invalid/directory".into(),
+				contacts: Vec::new(),
+				domains: vec![DOMAIN.into()],
+				responder,
+				account_key: account_key_path(&dir),
+				data_dir: dir,
+				reloadable: Some(reloadable),
+				renew_before_days: 30,
+				tlsa: None,
+			},
 			stop,
 		)
 	})

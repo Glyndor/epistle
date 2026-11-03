@@ -67,11 +67,16 @@ fn the_commands_that_act_on_the_data_read_it_strictly() {
 		.expect("the backup arm");
 	assert!(backup.contains("with_config(&config"), "{backup}");
 	let serve = dispatch
-		.split("Command::Serve { config }")
+		.split("Command::Serve { config, role }")
 		.nth(1)
 		.and_then(|rest| rest.lines().next())
 		.expect("the serve arm");
-	assert!(serve.contains("Config::load(&config)"), "{serve}");
+	assert!(serve.contains("serve::load(&config, role)"), "{serve}");
+	let roles = source("cli/serve/mod.rs");
+	assert!(
+		roles.contains("ServeRole::All | ServeRole::Mail => Config::load(path)"),
+		"the listeners read the configuration strictly"
+	);
 	assert!(source("cli/dispatch/restore/mod.rs").contains("Config::load(&config)"));
 	assert!(source("cli/stack/rollback/run.rs").contains("Config::load(config_path)"));
 }

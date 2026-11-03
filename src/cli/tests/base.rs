@@ -18,6 +18,24 @@ fn parses_serve_command() {
 }
 
 #[test]
+fn serve_runs_everything_unless_a_role_is_named() {
+	let role = |args: &[&str]| match Cli::try_parse_from(args).expect("serve parses").command {
+		Command::Serve { role, .. } => role,
+		other => panic!("not serve: {other:?}"),
+	};
+	assert_eq!(role(&["epistle", "serve"]), serve::ServeRole::All);
+	assert_eq!(
+		role(&["epistle", "serve", "--role", "mail"]),
+		serve::ServeRole::Mail
+	);
+	assert_eq!(
+		role(&["epistle", "serve", "--role", "certs"]),
+		serve::ServeRole::Certs
+	);
+	assert!(Cli::try_parse_from(["epistle", "serve", "--role", "dkim"]).is_err());
+}
+
+#[test]
 fn parses_config_check_command() {
 	let cli = Cli::try_parse_from(["epistle", "config-check", "--config", "/etc/mail.toml"])
 		.expect("config-check parses");

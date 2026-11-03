@@ -66,8 +66,8 @@ impl Cli {
 				key,
 				listen,
 			} => crate::cli::mta::sts_serve::run(policy_dir, cert, key, listen),
-			Command::Serve { config } => match Config::load(&config) {
-				Ok(config) => serve::run(config),
+			Command::Serve { config, role } => match serve::load(&config, role) {
+				Ok(config) => serve::run(config, role),
 				Err(error) => {
 					style::error(error);
 					ExitCode::FAILURE
