@@ -39,6 +39,7 @@ mod caldav_filter_xml;
 mod caldav_hrefs;
 pub mod carddav;
 pub mod carddav_filter;
+pub(crate) mod fuzzing;
 pub mod handler;
 mod href;
 mod if_match;

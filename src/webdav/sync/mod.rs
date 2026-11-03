@@ -172,6 +172,39 @@ impl Log {
 	}
 }
 
+/// The change log read from `text` and a client's sync `token`, for the
+/// WebDAV fuzz target (see `crate::fuzzing`).
+///
+/// # Panics
+///
+/// When a log does not read back the same after it is written, or a token
+/// names a position the log no longer keeps.
+pub(crate) fn log_and_token_for_fuzzing(text: &str, token: &str) {
+	if let Some(log) = Log::parse(text) {
+		assert_eq!(
+			Log::parse(&log.render()),
+			Some(log),
+			"log after a round trip"
+		);
+	}
+	let log = Log {
+		epoch: "0123456789abcdef".into(),
+		base: 3,
+		changes: (4..=6)
+			.map(|sequence| Change {
+				sequence,
+				name: format!("m{sequence}.ics"),
+				deleted: false,
+			})
+			.collect(),
+	};
+	if let Some(position) = log.position_of(token) {
+		assert!((3..=6).contains(&position), "token names a dropped change");
+		assert_eq!(log.position_of(&log.token_at(position)), Some(position));
+		assert!(log.changed_since(position).len() <= 6 - position as usize);
+	}
+}
+
 /// Read the log of `collection`, creating an empty one when there is none
 /// yet (a collection made before the log existed, or never written to).
 /// `None` only when the log cannot be read or written.

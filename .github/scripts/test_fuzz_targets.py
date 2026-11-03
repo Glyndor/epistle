@@ -33,7 +33,8 @@ class SelectTests(unittest.TestCase):
 
     def test_one_protocol_runs_only_its_targets(self):
         self.assertEqual(
-            ft.select("pull_request", ["src/imap/session/mod.rs"]), ["imap_command", "mime"]
+            ft.select("pull_request", ["src/imap/session/mod.rs"]),
+            ["imap_command", "mime", "migrate_imap_response"],
         )
         self.assertEqual(
             ft.select("pull_request", ["src/smtp/a.rs", "src/smtp/b/c.rs"]),
@@ -43,14 +44,22 @@ class SelectTests(unittest.TestCase):
     def test_the_parsers_of_one_folder_run_their_own_target(self):
         for path, target in (
             ("src/antispam/attachments/sniff/mod.rs", "attachment_inspect"),
-            ("src/webdav/rrule/mod.rs", "webdav_filter_rrule"),
             ("src/arc/signature.rs", "arc_headers"),
             ("src/jwt/mod.rs", "jwt_decode"),
             ("src/queue/client/conn/mod.rs", "smtp_reply"),
             ("src/mtasts/policy/mod.rs", "dns_security_records"),
             ("src/rules/mod.rs", "rules_match"),
+            ("src/migrate/imap/parse/mod.rs", "migrate_imap_response"),
+            ("src/cli/backup/tar_format/mod.rs", "backup_tar"),
+            ("src/antispam/arf/mod.rs", "arf_report"),
         ):
             self.assertEqual(ft.select("pull_request", [path]), [target])
+
+    def test_the_webdav_folder_runs_both_webdav_targets(self):
+        self.assertEqual(
+            ft.select("pull_request", ["src/webdav/rrule/mod.rs"]),
+            ["webdav_filter_rrule", "webdav_report_body"],
+        )
 
     def test_two_protocols_run_both(self):
         got = ft.select("pull_request", ["src/pop3/a.rs", "src/dkim/b.rs"])

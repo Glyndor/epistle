@@ -164,6 +164,38 @@ pub fn rules_match(raw: &[u8]) {
 	std::hint::black_box(crate::rules::evaluate(&rules, raw, Some("example.org")));
 }
 
+/// The responses a source server sends to `migrate imap`, read with the
+/// bounded reader and handed to every parser the client calls: status lines
+/// and response codes, CAPABILITY, LIST, NAMESPACE and FETCH. The source may
+/// be compromised, or impersonated when the run skips certificate checks.
+pub fn migrate_imap_response(raw: &[u8]) {
+	let raw = &raw[..raw.len().min(INPUT_CAP)];
+	crate::migrate::imap::fuzzing::responses_for_fuzzing(raw);
+}
+
+/// A backup archive as `epistle restore` reads it from an operator: the
+/// bounded gunzip, the tar reader and the check that decides where each
+/// member is written, plus a write and read back of what was read.
+pub fn backup_tar(raw: &[u8]) {
+	let raw = &raw[..raw.len().min(INPUT_CAP)];
+	crate::cli::backup::fuzzing::archive_for_fuzzing(raw);
+}
+
+/// A CalDAV or CardDAV request body outside the filters: the hrefs of a
+/// multiget, the discovery and data checks, and a `sync-collection` request
+/// with its level, its token and the change log the token is checked against.
+pub fn webdav_report_body(input: &str) {
+	let input = &input[..floor_char_boundary(input, INPUT_CAP)];
+	crate::webdav::fuzzing::report_body_for_fuzzing(input);
+}
+
+/// An ARF feedback report as a remote feedback loop sends it, and the report
+/// built from the sender and source IP such a complaint carries.
+pub fn arf_report(raw: &[u8]) {
+	let raw = &raw[..raw.len().min(INPUT_CAP)];
+	crate::antispam::arf::fuzzing::report_for_fuzzing(raw);
+}
+
 /// The largest index at most `max` that is a character boundary of `text`.
 fn floor_char_boundary(text: &str, max: usize) -> usize {
 	let mut end = max.min(text.len());

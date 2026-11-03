@@ -4,6 +4,7 @@ pub(super) mod base;
 pub(super) mod container;
 pub(super) mod db_sql;
 pub(super) mod dkim_keys;
+pub(super) mod gunzip_cap;
 pub(super) mod helpers;
 pub(super) mod long_paths;
 pub(super) mod paths;

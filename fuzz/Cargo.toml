@@ -167,3 +167,31 @@ path = "fuzz_targets/mailbox/pop3_session.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "migrate_imap_response"
+path = "fuzz_targets/migrate/migrate_imap_response.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "backup_tar"
+path = "fuzz_targets/backup/backup_tar.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "webdav_report_body"
+path = "fuzz_targets/web/webdav_report_body.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "arf_report"
+path = "fuzz_targets/message/arf_report.rs"
+test = false
+doc = false
+bench = false

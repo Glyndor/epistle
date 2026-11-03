@@ -2,7 +2,7 @@
 """Pick the cargo-fuzz targets a pull request has to run.
 
 A pull request that only touches the source of one protocol needs that
-protocol's targets, not all twenty-two: every target is a separate job that
+protocol's targets, not every one of them: every target is a separate job that
 installs a nightly toolchain and builds the crate. Anything this script does
 not know how to narrow runs every target: a change outside the mapped folders
 (shared code, the manifest, the fuzz crate, this workflow) can reach any of
@@ -40,12 +40,16 @@ ALL = [
     "dns_security_records",
     "report_payload",
     "rules_match",
+    "migrate_imap_response",
+    "backup_tar",
+    "webdav_report_body",
+    "arf_report",
 ]
 
 # Folder of the source -> the targets that exercise it and nothing else.
 FOLDERS = {
     "src/smtp/": ["smtp_command", "smtp_line", "smtp_address", "smtp_data"],
-    "src/imap/": ["imap_command", "mime"],
+    "src/imap/": ["imap_command", "mime", "migrate_imap_response"],
     "src/sieve/": ["sieve_message", "sieve_script", "sieve_run", "sieve_validate"],
     "src/pop3/": ["pop3_command", "pop3_session"],
     "src/managesieve/": ["managesieve_command", "sieve_validate"],
@@ -53,7 +57,7 @@ FOLDERS = {
     "src/dmarc/": ["mime"],
     "src/api/jmap/": ["mime"],
     "src/antispam/attachments/": ["attachment_inspect"],
-    "src/webdav/": ["webdav_filter_rrule"],
+    "src/webdav/": ["webdav_filter_rrule", "webdav_report_body"],
     "src/arc/": ["arc_headers"],
     "src/jwt/": ["jwt_decode"],
     "src/queue/client/": ["smtp_reply"],
@@ -62,6 +66,9 @@ FOLDERS = {
     "src/dane/": ["dns_security_records"],
     "src/reports/": ["report_payload", "mime"],
     "src/rules/": ["rules_match"],
+    "src/migrate/imap/": ["migrate_imap_response"],
+    "src/cli/backup/": ["backup_tar"],
+    "src/antispam/arf/": ["arf_report"],
 }
 
 # Files under src that the fuzz entry points go through directly.

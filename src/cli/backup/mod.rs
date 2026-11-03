@@ -9,6 +9,8 @@
 mod collect;
 mod create;
 mod db_dump;
+pub(crate) mod fuzzing;
+mod gunzip;
 mod keys_note;
 mod restore;
 mod restore_files;
