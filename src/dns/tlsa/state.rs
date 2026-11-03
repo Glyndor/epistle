@@ -57,6 +57,30 @@ pub fn path(data_dir: &Path) -> PathBuf {
 	data_dir.join("dns-tlsa").join("state.json")
 }
 
+/// The text of the state file, opened without following a symlink and only
+/// when it is a regular file. The certificates container trusts nothing
+/// the mail container can write; before a stack splits, `mail` could write
+/// `dns-tlsa/`, and a link left there to a file it still writes would keep
+/// handing `certs` the values a refresh may remove from the zone.
+fn read_regular(path: &Path) -> Option<String> {
+	use std::io::Read;
+	let mut options = std::fs::OpenOptions::new();
+	options.read(true);
+	#[cfg(unix)]
+	{
+		use std::os::unix::fs::OpenOptionsExt;
+		options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+	}
+	let mut file = options.open(path).ok()?;
+	// `fstat` on the descriptor: what was opened is what is checked.
+	if !file.metadata().ok()?.is_file() {
+		return None;
+	}
+	let mut text = String::new();
+	file.read_to_string(&mut text).ok()?;
+	Some(text)
+}
+
 /// The wait after the `attempts`-th failed attempt: a minute, doubling,
 /// never more than an hour.
 pub fn wait_after(attempts: u32) -> Duration {
@@ -66,11 +90,11 @@ pub fn wait_after(attempts: u32) -> Duration {
 
 impl State {
 	/// The state stored for `hostname`. A missing file, one that does not
-	/// parse and one written for another host all give an empty state: the
-	/// next refresh publishes again, which is the safe direction.
+	/// parse, one that is not a regular file reached without a symlink and
+	/// one written for another host all give an empty state: the next
+	/// refresh publishes again, which is the safe direction.
 	pub fn load(data_dir: &Path, hostname: &str) -> State {
-		let stored = std::fs::read_to_string(path(data_dir))
-			.ok()
+		let stored = read_regular(&path(data_dir))
 			.and_then(|text| serde_json::from_str::<State>(&text).ok())
 			.filter(|state| state.hostname.eq_ignore_ascii_case(hostname));
 		stored.unwrap_or_else(|| State {
@@ -80,14 +104,25 @@ impl State {
 	}
 
 	/// Store the state through a temporary file and a rename, so a crash
-	/// never leaves half a state.
+	/// never leaves half a state. The temporary file is created anew, so an
+	/// entry already at its name (a symlink included) is replaced, never
+	/// written through.
 	pub fn save(&self, data_dir: &Path) -> std::io::Result<()> {
+		use std::io::Write;
 		let target = path(data_dir);
 		let parent = target.parent().unwrap_or(Path::new("."));
 		std::fs::create_dir_all(parent)?;
 		let text = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
 		let staging = target.with_extension("json.new");
-		std::fs::write(&staging, text)?;
+		match std::fs::remove_file(&staging) {
+			Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error),
+			_ => {}
+		}
+		std::fs::OpenOptions::new()
+			.write(true)
+			.create_new(true)
+			.open(&staging)?
+			.write_all(text.as_bytes())?;
 		std::fs::rename(&staging, &target)
 	}
 
