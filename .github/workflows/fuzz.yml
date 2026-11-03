@@ -46,6 +46,7 @@ on:
       - "src/tlsrpt/**"
       - "src/dane/**"
       - "src/rules/**"
+      - "src/migrate/imap/**"
       - "src/fuzzing.rs"
       - "fuzz/**"
       # Files that only exist under #[cfg(test)] cannot change what this job

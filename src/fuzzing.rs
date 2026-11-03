@@ -164,6 +164,15 @@ pub fn rules_match(raw: &[u8]) {
 	std::hint::black_box(crate::rules::evaluate(&rules, raw, Some("example.org")));
 }
 
+/// The responses a source server sends to `migrate imap`, read with the
+/// bounded reader and handed to every parser the client calls: status lines
+/// and response codes, CAPABILITY, LIST, NAMESPACE and FETCH. The source may
+/// be compromised, or impersonated when the run skips certificate checks.
+pub fn migrate_imap_response(raw: &[u8]) {
+	let raw = &raw[..raw.len().min(INPUT_CAP)];
+	crate::migrate::imap::fuzzing::responses_for_fuzzing(raw);
+}
+
 /// The largest index at most `max` that is a character boundary of `text`.
 fn floor_char_boundary(text: &str, max: usize) -> usize {
 	let mut end = max.min(text.len());

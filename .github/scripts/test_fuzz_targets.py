@@ -33,7 +33,8 @@ class SelectTests(unittest.TestCase):
 
     def test_one_protocol_runs_only_its_targets(self):
         self.assertEqual(
-            ft.select("pull_request", ["src/imap/session/mod.rs"]), ["imap_command", "mime"]
+            ft.select("pull_request", ["src/imap/session/mod.rs"]),
+            ["imap_command", "mime", "migrate_imap_response"],
         )
         self.assertEqual(
             ft.select("pull_request", ["src/smtp/a.rs", "src/smtp/b/c.rs"]),
@@ -49,6 +50,7 @@ class SelectTests(unittest.TestCase):
             ("src/queue/client/conn/mod.rs", "smtp_reply"),
             ("src/mtasts/policy/mod.rs", "dns_security_records"),
             ("src/rules/mod.rs", "rules_match"),
+            ("src/migrate/imap/parse/mod.rs", "migrate_imap_response"),
         ):
             self.assertEqual(ft.select("pull_request", [path]), [target])
 

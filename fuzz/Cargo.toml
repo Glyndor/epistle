@@ -167,3 +167,10 @@ path = "fuzz_targets/mailbox/pop3_session.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "migrate_imap_response"
+path = "fuzz_targets/migrate/migrate_imap_response.rs"
+test = false
+doc = false
+bench = false
