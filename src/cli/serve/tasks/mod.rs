@@ -54,5 +54,10 @@ mod bind;
 
 mod dkim_rotation;
 
+mod domain_rotation;
+
+pub(super) use domain_rotation::spawn_domain_rotations;
+pub(in crate::cli) use domain_rotation::{decide_domain_rotation, dns_publishes_for};
+
 pub(super) use dkim_rotation::spawn_dkim_rotation;
 pub(in crate::cli) use dkim_rotation::{DkimRotationPlan, decide_dkim_rotation};

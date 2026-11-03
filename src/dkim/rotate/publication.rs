@@ -84,7 +84,7 @@ impl Rotator {
 
 /// The `p=` value of a DKIM key record, whitespace removed, so a record
 /// split into several strings or spaced differently still compares equal.
-fn key_of(record: &str) -> Option<String> {
+pub(crate) fn key_of(record: &str) -> Option<String> {
 	record.split(';').find_map(|tag| {
 		let (name, value) = tag.split_once('=')?;
 		(name.trim() == "p").then(|| value.chars().filter(|c| !c.is_whitespace()).collect())

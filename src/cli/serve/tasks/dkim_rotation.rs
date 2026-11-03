@@ -72,17 +72,7 @@ pub fn decide_dkim_rotation(config: &Config) -> DkimRotationPlan {
 		// zone, or one whose credential cannot be read, holds the rotation
 		// back like a zone nobody configured. A lone `[dns]` keeps the old
 		// rule, and its credential is checked when the task starts.
-		let covered = if config.dns.scoped() {
-			config.dns.entry_for(&domain).is_some_and(|dns| {
-				crate::dkim::Rotator::is_in_zone(&domain, &dns.zone)
-					&& dns.build_for_host(&config.hostname).is_some()
-			})
-		} else {
-			config
-				.dns
-				.iter()
-				.any(|dns| crate::dkim::Rotator::is_in_zone(&domain, &dns.zone))
-		};
+		let covered = super::dns_publishes_for(config, &domain);
 		if covered {
 			signing_domains.push(domain);
 		} else {
