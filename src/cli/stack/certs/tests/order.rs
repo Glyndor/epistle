@@ -10,12 +10,33 @@ fn turning_on_retires_the_data_dir_key_only_after_both_services_are_up() {
 		host.steps,
 		[
 			"render true",
+			"podup stop mail",
 			"place true",
 			"write certs=true",
 			"podup up -d --remove-orphans",
 			"ready mail",
 			"ready certs",
 			"retire",
+		]
+	);
+}
+
+/// `mail` writes data_dir until it runs with the split mounts: it is
+/// stopped before the directories `certs` binds are checked, and a stop
+/// that fails leaves the keys alone and brings the stack up as it was.
+#[test]
+fn turning_on_stops_mail_before_the_bound_directories_are_checked() {
+	let mut host = Recorder::split_layout(false);
+	host.fail = vec!["podup stop mail"];
+	let error = switch(&mut host, true).expect_err("stop failed");
+	assert!(error.contains("written back"), "{error}");
+	assert_eq!(
+		host.steps,
+		[
+			"render true",
+			"podup stop mail",
+			"write certs=false",
+			"podup up -d --remove-orphans",
 		]
 	);
 }
@@ -44,7 +65,7 @@ fn a_certs_container_that_does_not_come_up_puts_the_stack_back_and_keeps_the_key
 #[test]
 fn a_failed_up_puts_the_previous_file_back() {
 	let mut host = Recorder::split_layout(false);
-	host.fail = vec!["podup"];
+	host.fail = vec!["podup up"];
 	let error = switch(&mut host, true).expect_err("podup failed");
 	assert!(error.contains("written back"), "{error}");
 	assert_eq!(

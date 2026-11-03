@@ -141,6 +141,35 @@ fn a_key_path_that_is_not_a_file_is_refused() {
 }
 
 #[test]
+fn a_key_with_a_second_name_or_behind_a_symlink_is_not_copied() {
+	for link in [
+		|from: &Path, to: &Path| fs::hard_link(from, to),
+		|from: &Path, to: &Path| std::os::unix::fs::symlink(from, to),
+	] {
+		let root = tempfile::tempdir().expect("tempdir");
+		let data_dir = data_dir(root.path());
+		// A key somewhere mail writes, linked in where the key goes.
+		let elsewhere = data_dir.join("spool");
+		fs::create_dir_all(&elsewhere).expect("spool");
+		renewing_key(&elsewhere);
+		let path = crate::acme::renew::account_key_path(&data_dir);
+		fs::create_dir_all(path.parent().expect("acme")).expect("acme");
+		link(&crate::acme::renew::account_key_path(&elsewhere), &path).expect("link");
+
+		let error = place(&data_dir, true).expect_err("a linked key");
+
+		assert!(
+			error.contains("not a regular file with one name"),
+			"{error}"
+		);
+		assert!(
+			!super::acme_account_key(&data_dir).exists(),
+			"nothing copied"
+		);
+	}
+}
+
+#[test]
 fn a_bound_directory_that_is_a_symlink_is_refused_before_anything_is_placed() {
 	for index in 0..2 {
 		let root = tempfile::tempdir().expect("tempdir");

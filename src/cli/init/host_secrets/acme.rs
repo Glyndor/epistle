@@ -13,20 +13,19 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-/// Read a key file, `None` when there is nothing at `path`. Anything there
-/// that is not a regular file is refused rather than followed.
+/// Read a key file, `None` when there is nothing at `path`. It is read
+/// through the descriptor it was opened with, without following a symlink,
+/// and only when it is a regular file with one name
+/// ([`read_unshared`](crate::storage::unshared::read_unshared)); anything
+/// else is refused rather than followed.
 fn read_key(path: &Path) -> Result<Option<Vec<u8>>, String> {
-	match fs::symlink_metadata(path) {
-		Ok(metadata) if metadata.file_type().is_file() => fs::read(path)
-			.map(Some)
-			.map_err(|error| format!("cannot read {}: {error}", path.display())),
-		Ok(_) => Err(format!(
-			"{} is not a regular file; put the ACME account key there by hand",
+	crate::storage::unshared::read_unshared(path).map_err(|error| {
+		format!(
+			"{} is not a regular file with one name ({error}); put the ACME account key \
+			 there by hand",
 			path.display()
-		)),
-		Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-		Err(error) => Err(format!("cannot read {}: {error}", path.display())),
-	}
+		)
+	})
 }
 
 /// Owner-only directory, created when missing.

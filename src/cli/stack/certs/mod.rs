@@ -3,8 +3,10 @@
 //! The order is what keeps the certificate in service and the ACME account
 //! key through a switch that fails halfway:
 //!
-//! - on: copy the key to `secrets/` (the copy under data_dir stays), write
-//!   the compose file with `certs`, `podup up -d`, wait for `mail` and for
+//! - on: stop `mail`, which can write all of data_dir until it runs with the
+//!   split mounts, then check the directories `certs` binds and copy the
+//!   key to `secrets/` (the copy under data_dir stays), write the compose
+//!   file with `certs`, `podup up -d`, wait for `mail` and for
 //!   `certs`, and only then remove the copy under data_dir, which `mail`
 //!   could otherwise read. A failure before that writes the previous
 //!   compose file back and brings the stack up as it was.
@@ -170,6 +172,14 @@ fn bring_up(
 	on: bool,
 	reached: &mut Reached,
 ) -> Result<(), String> {
+	if on {
+		// The running `mail` writes all of data_dir until it is recreated
+		// with the split mounts, so it stops before the directories `certs`
+		// binds are checked and the key moves: nothing can put a symlink in
+		// their place between the check and the bind. A failure from here
+		// on brings the previous layout up again, `mail` with it.
+		host.podup(&["stop", "mail"])?;
+	}
 	for line in host.place_keys(on)? {
 		host.log(&line);
 	}
