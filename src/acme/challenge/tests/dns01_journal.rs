@@ -120,6 +120,53 @@ async fn a_journal_that_cannot_be_written_stops_the_publish_before_the_provider(
 	assert!(provider.calls().is_empty(), "calls: {:?}", provider.calls());
 }
 
+/// A journal with a pending record, written at `elsewhere` (a directory the
+/// mail container writes, say).
+async fn journal_elsewhere(elsewhere: &std::path::Path) -> std::path::PathBuf {
+	let path = journal_path(elsewhere);
+	dns01(&FakeZone::new(&["example.org"]))
+		.with_journal(path.clone())
+		.publish(DOMAIN, TOKEN, &key())
+		.await
+		.expect("publish");
+	path
+}
+
+#[tokio::test]
+async fn a_journal_with_a_second_name_or_reached_by_a_symlink_is_not_acted_on() {
+	let elsewhere = tempfile::tempdir().expect("directory");
+	let planted = journal_elsewhere(elsewhere.path()).await;
+	let dir = tempfile::tempdir().expect("directory");
+	let path = journal_path(dir.path());
+	std::fs::create_dir_all(path.parent().expect("acme")).expect("acme");
+
+	std::os::unix::fs::symlink(&planted, &path).expect("symlink");
+	let provider = FakeZone::new(&["example.org"]);
+	dns01(&provider)
+		.with_journal(path.clone())
+		.withdraw_pending()
+		.await;
+	assert!(provider.calls().is_empty(), "calls: {:?}", provider.calls());
+
+	std::fs::remove_file(&path).expect("unlink");
+	std::fs::hard_link(&planted, &path).expect("hard link");
+	let provider = FakeZone::new(&["example.org"]);
+	dns01(&provider)
+		.with_journal(path.clone())
+		.withdraw_pending()
+		.await;
+	assert!(provider.calls().is_empty(), "calls: {:?}", provider.calls());
+
+	// The premise: once the file has only this name, the start acts on it.
+	std::fs::remove_file(&planted).expect("unlink the other name");
+	let provider = FakeZone::new(&["example.org"]);
+	dns01(&provider)
+		.with_journal(path.clone())
+		.withdraw_pending()
+		.await;
+	assert_eq!(provider.deletes().len(), 1, "calls: {:?}", provider.calls());
+}
+
 #[tokio::test]
 async fn with_nothing_pending_the_start_asks_the_provider_nothing() {
 	let dir = tempfile::tempdir().expect("directory");

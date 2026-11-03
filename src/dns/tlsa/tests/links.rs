@@ -1,7 +1,8 @@
 //! The state lists the values a refresh may remove from the zone, so it is
-//! read only from a regular file at its own name: a symlink there, which
-//! the mail container could leave before a stack splits, is not followed,
-//! and saving never writes through a link left at the temporary name.
+//! read only from a regular file with one name: a symlink or a hard link
+//! there, which the mail container could leave before a stack splits, is
+//! not trusted, and saving never writes through a link left at the
+//! temporary name.
 
 use super::support::HOST;
 use super::*;
@@ -30,6 +31,21 @@ fn a_state_reached_through_a_symlink_is_not_trusted() {
 	let state = State::load(dir.path(), HOST);
 	assert!(state.managed.is_empty(), "followed the link");
 	assert_eq!(state.pending, None);
+}
+
+#[test]
+fn a_state_with_a_second_name_is_not_trusted() {
+	let elsewhere = tempfile::tempdir().expect("dir");
+	planted().save(elsewhere.path()).expect("save");
+	let dir = tempfile::tempdir().expect("dir");
+	std::fs::create_dir_all(dir.path().join("dns-tlsa")).expect("dns-tlsa");
+	std::fs::hard_link(state_path(elsewhere.path()), state_path(dir.path())).expect("hard link");
+
+	assert!(State::load(dir.path(), HOST).managed.is_empty());
+
+	// The premise: once the file has only this name, it is read.
+	std::fs::remove_file(state_path(elsewhere.path())).expect("unlink the other name");
+	assert_eq!(State::load(dir.path(), HOST).managed, [PLANTED]);
 }
 
 #[test]

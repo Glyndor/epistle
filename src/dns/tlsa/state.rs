@@ -57,28 +57,20 @@ pub fn path(data_dir: &Path) -> PathBuf {
 	data_dir.join("dns-tlsa").join("state.json")
 }
 
-/// The text of the state file, opened without following a symlink and only
-/// when it is a regular file. The certificates container trusts nothing
-/// the mail container can write; before a stack splits, `mail` could write
-/// `dns-tlsa/`, and a link left there to a file it still writes would keep
-/// handing `certs` the values a refresh may remove from the zone.
+/// The text of the state file, read only from a regular file with one name
+/// ([`read_unshared`](crate::storage::unshared::read_unshared)). The
+/// certificates container trusts nothing the mail container can write;
+/// before a stack splits, `mail` could write `dns-tlsa/`, and a symlink or a
+/// hard link left there to a file it still writes would keep handing
+/// `certs` the values a refresh may remove from the zone.
 fn read_regular(path: &Path) -> Option<String> {
-	use std::io::Read;
-	let mut options = std::fs::OpenOptions::new();
-	options.read(true);
-	#[cfg(unix)]
-	{
-		use std::os::unix::fs::OpenOptionsExt;
-		options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+	match crate::storage::unshared::read_unshared(path) {
+		Ok(bytes) => String::from_utf8(bytes?).ok(),
+		Err(error) => {
+			tracing::warn!(%error, path = %path.display(), "the TLSA state is not read");
+			None
+		}
 	}
-	let mut file = options.open(path).ok()?;
-	// `fstat` on the descriptor: what was opened is what is checked.
-	if !file.metadata().ok()?.is_file() {
-		return None;
-	}
-	let mut text = String::new();
-	file.read_to_string(&mut text).ok()?;
-	Some(text)
 }
 
 /// The wait after the `attempts`-th failed attempt: a minute, doubling,
@@ -90,9 +82,9 @@ pub fn wait_after(attempts: u32) -> Duration {
 
 impl State {
 	/// The state stored for `hostname`. A missing file, one that does not
-	/// parse, one that is not a regular file reached without a symlink and
-	/// one written for another host all give an empty state: the next
-	/// refresh publishes again, which is the safe direction.
+	/// parse, one that is not a regular file with one name reached without
+	/// a symlink and one written for another host all give an empty state:
+	/// the next refresh publishes again, which is the safe direction.
 	pub fn load(data_dir: &Path, hostname: &str) -> State {
 		let stored = read_regular(&path(data_dir))
 			.and_then(|text| serde_json::from_str::<State>(&text).ok())

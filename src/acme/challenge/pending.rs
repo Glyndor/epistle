@@ -51,14 +51,18 @@ impl Pending {
 
 	/// Kept in `path` as well, starting from what an earlier run left there.
 	/// A file that cannot be read is logged and treated as empty: it is
-	/// replaced by the next write.
+	/// replaced by the next write. Every entry is a record the start deletes
+	/// at the provider, so the journal is read only from a regular file with
+	/// one name ([`read_unshared`](crate::storage::unshared::read_unshared)):
+	/// a symlink or a hard link the mail container left there before a split
+	/// would let it keep choosing what `certs` deletes.
 	pub(super) fn with_journal(path: PathBuf) -> Self {
-		let entries = match std::fs::read(&path) {
-			Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_else(|error| {
+		let entries = match crate::storage::unshared::read_unshared(&path) {
+			Ok(Some(bytes)) => serde_json::from_slice(&bytes).unwrap_or_else(|error| {
 				tracing::warn!(%error, path = %path.display(), "dns-01: the pending challenge journal is unreadable; starting empty");
 				Vec::new()
 			}),
-			Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+			Ok(None) => Vec::new(),
 			Err(error) => {
 				tracing::warn!(%error, path = %path.display(), "dns-01: the pending challenge journal cannot be read; starting empty");
 				Vec::new()
