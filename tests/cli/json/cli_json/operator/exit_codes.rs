@@ -67,7 +67,7 @@ fn rules_the_server_enforces_are_refused_by_policy() {
 				"bob",
 				"out@example.com",
 			],
-			"error: account bob forward: set `srs_secret` in the config first; without SRS a forwarded copy fails SPF at the next hop\n",
+			"error: account bob forward: set `srs_secret` or an `[[srs_domain]]` in the config first; without SRS a forwarded copy fails SPF at the next hop\n",
 		),
 		(
 			vec![

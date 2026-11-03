@@ -11,6 +11,11 @@ use crate::smtp::sink::SinkError;
 use super::SplitDelivery;
 use crate::storage::delivery::{Redirect, forwarded_copy};
 
+/// The domain of an address, or the empty string for one without `@`.
+fn domain_of(address: &str) -> &str {
+	address.rsplit_once('@').map_or("", |(_, domain)| domain)
+}
+
 impl SplitDelivery {
 	/// Queue every redirect of `message`, preserving the (non-null)
 	/// original sender behind SRS when it is on. Each copy names the
@@ -28,7 +33,8 @@ impl SplitDelivery {
 				None => data,
 			};
 			let forwarded = AcceptedMessage {
-				reverse_path: self.forward_sender(&message.reverse_path),
+				reverse_path: self
+					.forward_sender(&message.reverse_path, domain_of(&redirect.delivered_to)),
 				recipients: vec![redirect.to],
 				data,
 				require_tls: false,

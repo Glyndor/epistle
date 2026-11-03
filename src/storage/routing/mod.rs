@@ -13,9 +13,6 @@ use super::crypto::MessageCrypto;
 use super::delivery::LocalDelivery;
 use super::spool::FsSpool;
 
-/// How long an SRS-return address stays valid (RFC-less convention).
-const SRS_MAX_AGE_DAYS: u64 = 14;
-
 /// Splits an accepted message between local mailbox delivery and the
 /// outbound spool, according to the directory.
 pub struct SplitDelivery {
@@ -25,7 +22,7 @@ pub struct SplitDelivery {
 	signer: Option<crate::dkim::PerDomainSigner>,
 	rules: Vec<crate::rules::Rule>,
 	/// SRS rewriter and our domain, for forwarded (redirected) mail.
-	srs: Option<(crate::queue::srs::Srs, String)>,
+	srs: Option<(crate::queue::srs::SrsKeys, String)>,
 	/// ARC sealer for forwarded mail, so the next hop can trust our assessment
 	/// even when forwarding breaks SPF/DKIM (RFC 8617). Optional and our domain,
 	/// used to skip re-sealing a chain we already sealed at inbound accept.
@@ -120,8 +117,18 @@ impl SplitDelivery {
 
 	/// Rewrite the sender of forwarded mail via SRS at `our_domain`, so it
 	/// passes SPF at the next hop.
-	pub fn with_srs(mut self, srs: crate::queue::srs::Srs, our_domain: impl Into<String>) -> Self {
-		self.srs = Some((srs, our_domain.into()));
+	pub fn with_srs(self, srs: crate::queue::srs::Srs, our_domain: impl Into<String>) -> Self {
+		self.with_srs_keys(crate::queue::srs::SrsKeys::global_only(srs), our_domain)
+	}
+
+	/// [`with_srs`](Self::with_srs) with a secret per hosted domain next to
+	/// (or instead of) the server-wide one.
+	pub fn with_srs_keys(
+		mut self,
+		keys: crate::queue::srs::SrsKeys,
+		our_domain: impl Into<String>,
+	) -> Self {
+		self.srs = Some((keys, our_domain.into()));
 		self
 	}
 

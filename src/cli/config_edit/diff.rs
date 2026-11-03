@@ -30,6 +30,7 @@ const SECRET_KEYS: &[&str] = &[
 	"signing_key",
 	"bind_password",
 	"srs_secret",
+	"previous_secret",
 	"secret_access_key",
 	"secret_key",
 	"public_key",

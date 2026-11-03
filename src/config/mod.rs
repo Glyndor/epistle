@@ -25,6 +25,7 @@ mod otel;
 mod privileges;
 mod queue;
 mod scanner;
+mod srs;
 mod storage;
 mod tenant;
 mod tls;
@@ -62,6 +63,7 @@ pub use otel::Otel;
 pub use privileges::Privileges;
 pub use queue::{OutboundTls, Queue};
 pub use scanner::{Antispam, ClamdOnError, ClamdOnFound};
+pub use srs::SrsDomain;
 pub use storage::{BlobBackendConfig, S3BlobConfig, Storage};
 pub use tenant::Tenant;
 pub use tls::Tls;
@@ -222,6 +224,11 @@ pub struct Config {
 	/// redirected/forwarded mail's envelope sender is rewritten so it passes
 	/// SPF at the next hop. Absent disables SRS (the default).
 	pub srs_secret: Option<String>,
+	/// A secret of its own for a hosted domain's forwarded mail, one
+	/// `[[srs_domain]]` per domain. A domain with no entry keeps using
+	/// `srs_secret`; two domains may not share a secret.
+	#[serde(default)]
+	pub srs_domain: Vec<SrsDomain>,
 	/// Per-account IMAP storage quota in bytes (RFC 9208). Absent uses the
 	/// built-in default (5 GiB).
 	pub quota_bytes: Option<u64>,
@@ -596,6 +603,7 @@ impl std::fmt::Debug for Config {
 			)
 			.field("greylist_delay_secs", &self.greylist_delay_secs)
 			.field("srs_secret", &self.srs_secret.as_ref().map(|_| "***"))
+			.field("srs_domain", &self.srs_domain)
 			.field("quota_bytes", &self.quota_bytes)
 			.field("queue_give_up_secs", &self.queue_give_up_secs)
 			.field("queue_retry_base_secs", &self.queue_retry_base_secs)

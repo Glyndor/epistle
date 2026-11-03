@@ -50,7 +50,7 @@ a connection URL.
 | `dnsbl_url_zones` | list | `[]` | URI blocklist zones queried with the host of every URL found in the body (RFC 5782 §2.3). Empty disables the URL-host screen. |
 | `first_time_sender_delay_secs` | int | `0` | Delay a first-time (no-reputation) unauthenticated sender before accepting. Requires `[database]`. `0` disables. |
 | `greylist_delay_secs` | int | `0` | Seconds an unseen (client, sender, recipient) triplet is greylisted (451) before a retry is accepted. `0` disables. |
-| `srs_secret` | string | unset | Secret for Sender Rewriting Scheme on forwarded mail (SPF survives the next hop). Absent disables SRS. |
+| `srs_secret` | string | unset | Server-wide secret for Sender Rewriting Scheme on forwarded mail (SPF survives the next hop). Signs every domain that has no `[[srs_domain]]` of its own, and keeps verifying the addresses it signed. Absent disables SRS for those domains. See [`[[srs_domain]]`](#srs_domain). |
 | `quota_bytes` | int | 5 GiB | Default per-account mailbox quota (RFC 9208), used when an account has no per-account or per-domain quota. Absent means 5 GiB; `0` means no limit, here and in `domain_quotas` or an account's own `quota_bytes`. IMAP QUOTA, JMAP `Quota/get` and `epistle limits show` report the same limit (none when it is `0`). Enforced on every path, measured as IMAP QUOTA reports it (archived mail included): IMAP APPEND answers `NO [OVERQUOTA]`; SMTP refuses a full mailbox at `RCPT TO` with `452 4.2.2` for that recipient only, and a message that would overfill one is accepted for the other recipients with a DSN to the sender, or refused with `552 5.2.2` when it fits none; `POST /api/v1/send` answers `507 mailbox_full` and JMAP `EmailSubmission/set` `overQuota`, with nothing queued. |
 | `domain_quotas` | table | `{}` | `domain → bytes`: default mailbox quota for accounts in a domain (overridden by a per-account `quota_bytes`). `0` means no limit. |
 | `submission_rate_limit_per_min` | int | unset | Recipients an authenticated account may submit per minute, on SMTP, `POST /api/v1/send` and JMAP `EmailSubmission/set` together: one budget per account whatever the protocol, app password or sender address. A message costs one unit per recipient: on SMTP every `RCPT TO` the server accepted, on the API every `to`, `cc` and `bcc` address, on JMAP the envelope `rcptTo` or, without an envelope, the deduplicated `To`, `Cc` and `Bcc` (RFC 8621). It is charged once, when the message is accepted, all of it or none: a transaction ended by `RSET`, a message over the limit and one refused on the way out cost nothing. Over the limit: SMTP `450 4.7.1 sending rate limit exceeded; retry later` (at `MAIL FROM` once the budget is spent, at the end of the data when the message has more recipients than are left), REST `429` `rate_limited` with the message `sending rate limit exceeded; retry later`, JMAP `SetError` `rateLimit` with the same description. Absent disables it (the default); `epistle limits` refuses `0`, which the server reads as no limit. Changes apply when the server restarts. |
@@ -1945,6 +1945,40 @@ Rules:
 - `max_accounts` is enforced on `POST /api/v1/accounts` as `409 Conflict` (not `429`): waiting will not lift it, the cap lifts when an account is deleted or the operator raises it.
 - `quota_bytes` is enforced on `POST /jmap/upload` alongside the per-account quota, with the JMAP limit problem type (`urn:ietf:params:jmap:error:limit`, `limit: "tenant_storage"`, HTTP `507`).
 - `submission_rate_limit_per_min` is enforced on SMTP submission, `POST /api/v1/send` and JMAP `EmailSubmission/set` with one counter per tenant shared by the three, counted and charged like the per-account limit (one unit per recipient, once, when the message is accepted, together with the per-account limit or not at all). An account with addresses in two tenants is charged by both. The refusal is the one the per-account limit gives and does not name the tenant.
+
+### `[[srs_domain]]`
+<a id="srs_domain"></a>
+A hosted domain's own Sender Rewriting Scheme secret. One `srs_secret` for the whole server means an address made for one domain is valid for all of them, and replacing it breaks the return of every bounce in flight at once. A domain with an entry signs the sender of the mail it forwards with that secret and verifies the bounce with the same secret and no other.
+
+```toml
+srs_secret = "…"          # optional once every domain has its own; see the rules below
+
+[[srs_domain]]
+name = "a.example"
+secret = "…"
+# previous_secret = "…"   # only while a rotation is in flight
+
+[[srs_domain]]
+name = "b.example"
+secret = "…"
+```
+
+| Key | Meaning |
+|---|---|
+| `name` | A domain in `domains`, once. |
+| `secret` | At least 16 characters. `epistle` writes 43 (32 random bytes, URL-safe base64). |
+| `previous_secret` | The secret `secret` replaced. It only verifies, so a bounce for mail forwarded just before a rotation still returns. Remove it after 14 days, the lifetime of a return address. |
+
+Rules:
+
+- An installation with only `srs_secret` behaves exactly as before: the same sender, signed the same way (`SRS0=<hash>=<ts>=<domain>=<local>@<hostname>`).
+- A domain with an entry puts its own name in the address, `SRS0.<hosted>=<hash>=<ts>=<domain>=<local>@<hostname>`, and the name is part of what is signed. The bounce selects the domain's secret by that name, then its `previous_secret`, and nothing else: another domain's secret and `srs_secret` never verify it. A domain's address retagged as another's does not verify, even under identical secrets.
+- An address in the first shape, made before a domain got its secret, verifies with `srs_secret` alone. Keep `srs_secret` for 14 days after `epistle srs split` so the bounces of mail forwarded before the split still return, then remove it. Removing it earlier drops those bounces; the sender is not told.
+- Two domains that share a secret fail to load, and so does a domain whose secret is `srs_secret` or another domain's `previous_secret`. The message names both.
+- While two or more hosted domains still sign with `srs_secret`, `epistle status` and `epistle config-check` warn about it.
+- An account that forwards needs `srs_secret` or an entry for each of its domains; without either the file fails to load.
+- `epistle domain add` writes the new domain's entry, `epistle domain remove` removes it, and a new `epistle init` writes one per domain. An existing installation moves with `epistle srs split` (every hosted domain without an entry) and `epistle srs rotate DOMAIN`.
+- Naming the hosted domain makes the return address longer. RFC 5321 limits a local part to 64 octets, and a receiver that enforces it refuses a longer sender, as it would refuse a long SRS address without the name.
 
 ### `[[transport]]`
 Outbound routing rules. Each rule matches by sender `account` (the envelope sender's local part) **or** recipient `domain`; a rule with neither is the catch-all. The most specific match wins (account > domain > catch-all). With no rule, mail is delivered directly via MX. Empty `[[transport]]` keeps that default.

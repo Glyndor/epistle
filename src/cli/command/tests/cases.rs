@@ -252,6 +252,9 @@ pub(in crate::cli) const CASES: &[(&[&str], bool)] = &[
 		],
 		true,
 	),
+	(&["srs", "show"], true),
+	(&["srs", "split"], true),
+	(&["srs", "rotate", "example.org"], true),
 	(&["webhook", "show"], true),
 	(
 		&[

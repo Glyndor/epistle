@@ -50,6 +50,7 @@ fn config_path(command: &Command) -> Option<&Path> {
 		| Command::Relay { config, .. }
 		| Command::Dns { config, .. }
 		| Command::Storage { config, .. }
+		| Command::Srs { config, .. }
 		| Command::Webhook { config, .. }
 		| Command::Alert { config, .. }
 		| Command::Antispam { config, .. }

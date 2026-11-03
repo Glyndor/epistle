@@ -31,13 +31,13 @@ pub(in crate::cli::account) fn dispatch_forward(
 		ForwardSubcommand::List { name, .. } => forward_list(&store, &name, out),
 		ForwardSubcommand::Add { name, address } => {
 			// Delivery rewrites a forwarded envelope sender with SRS only
-			// when `srs_secret` is set; without it the next hop checks SPF
+			// when `srs_secret` or an `[[srs_domain]]` is set; without it the next hop checks SPF
 			// against the original sender's domain and a `-all` domain
 			// rejects the copy. The config loader refuses a static forward
 			// for the same reason.
-			if Config::load(config_path).is_ok_and(|config| config.srs_secret.is_none()) {
+			if Config::load(config_path).is_ok_and(|config| !config.srs_enabled()) {
 				return crate::cli::exit::policy(format_args!(
-					"account {name} forward: set `srs_secret` in the config first; \
+					"account {name} forward: set `srs_secret` or an `[[srs_domain]]` in the config first; \
 					 without SRS a forwarded copy fails SPF at the next hop"
 				));
 			}

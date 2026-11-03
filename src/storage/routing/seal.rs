@@ -2,6 +2,9 @@
 
 use super::*;
 
+/// How long an SRS-return address stays valid (RFC-less convention).
+const SRS_MAX_AGE_DAYS: u64 = 14;
+
 impl SplitDelivery {
 	/// ARC headers to prepend to a forwarded copy of `data`, or `None` when no
 	/// sealer is configured, when our domain already sealed the latest instance
@@ -43,9 +46,10 @@ impl SplitDelivery {
 		sealer.seal(data, &auth_results, &prior, cv)
 	}
 
-	/// The envelope sender to use for mail forwarded to `redirect`: an SRS
-	/// rewrite of the original sender when SRS is enabled, else the original.
-	pub(super) fn forward_sender(&self, original: &str) -> String {
+	/// The envelope sender to use for mail that an account of
+	/// `forwarding_domain` forwards: an SRS rewrite of the original sender
+	/// signed with that domain's secret when SRS is enabled, else the original.
+	pub(super) fn forward_sender(&self, original: &str, forwarding_domain: &str) -> String {
 		if original.is_empty() {
 			return String::new();
 		}
@@ -59,7 +63,8 @@ impl SplitDelivery {
 			.duration_since(std::time::UNIX_EPOCH)
 			.map(|d| d.as_secs() / 86_400)
 			.unwrap_or(0);
-		srs.forward(local, domain, our_domain, now_days)
+		srs.forward(forwarding_domain, (local, domain), our_domain, now_days)
+			.unwrap_or_else(|| original.to_string())
 	}
 
 	/// If `recipient` is a valid SRS-return address at our domain, the original

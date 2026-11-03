@@ -236,6 +236,12 @@ impl Cli {
 				dry_run,
 				json,
 			} => crate::cli::storage::blobs::run(&config, action, dry_run, json),
+			Command::Srs {
+				config,
+				action,
+				dry_run,
+				json,
+			} => crate::cli::srs::run(&config, action, dry_run, json),
 			Command::Webhook {
 				config,
 				action,

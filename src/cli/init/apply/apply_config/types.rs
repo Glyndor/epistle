@@ -18,6 +18,10 @@ pub(in crate::cli::init::apply) struct DesiredConfig {
 	pub(in crate::cli::init::apply) data_dir: String,
 	pub(in crate::cli::init::apply) domains: Vec<String>,
 	pub(in crate::cli::init::apply) listeners: Vec<DesiredListener>,
+	/// A secret of its own for each domain, for the mail it forwards.
+	/// Written only into a new configuration: see [`NEW_INSTALL_ONLY`].
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	pub(in crate::cli::init::apply) srs_domain: Vec<DesiredSrsDomain>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub(in crate::cli::init::apply) api: Option<std::collections::BTreeMap<String, String>>,
 	pub(in crate::cli::init::apply) dkim: DesiredDkim,
@@ -45,7 +49,15 @@ pub(in crate::cli::init::apply) const NEW_INSTALL_ONLY: &[(&str, Option<&str>)] 
 	("attachments", None),
 	("antispam", Some("clamd_on_error")),
 	("dkim", Some("domain")),
+	("srs_domain", None),
 ];
+
+/// One `[[srs_domain]]` entry `init` writes for a domain of a new install.
+#[derive(Debug, Serialize)]
+pub(in crate::cli::init::apply) struct DesiredSrsDomain {
+	pub(super) name: String,
+	pub(super) secret: String,
+}
 
 /// The `[attachments]` section for a new install: quarantine disguised
 /// files and macros, flag encrypted archives.

@@ -79,7 +79,7 @@ pub(crate) fn merge_with_read_config(
 
 /// Drop what `init` writes only into a new configuration, so merging into
 /// an existing one leaves those settings as the operator has them.
-fn without_new_install_defaults(desired: &mut toml::Value) {
+pub(super) fn without_new_install_defaults(desired: &mut toml::Value) {
 	let Some(root) = desired.as_table_mut() else {
 		return;
 	};

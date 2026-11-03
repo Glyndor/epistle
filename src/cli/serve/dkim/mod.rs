@@ -126,9 +126,8 @@ pub(in crate::cli) fn build_split_with_companions(
 		split = split.with_signer(per_domain);
 		dkim_signer = Some(reloadable);
 	}
-	if let Some(secret) = &config.srs_secret {
-		let srs = crate::queue::srs::Srs::new(secret.as_bytes());
-		split = split.with_srs(srs, config.hostname.clone());
+	if config.srs_enabled() {
+		split = split.with_srs_keys(config.srs_keys(), config.hostname.clone());
 	}
 	// A destination the webhook client refuses leaves the server without a
 	// webhook and says so: the webhook is advisory, and a configuration that

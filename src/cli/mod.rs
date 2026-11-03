@@ -119,6 +119,7 @@ mod storage;
 
 mod tls;
 
+mod srs;
 mod webhook;
 
 mod dns_lockdown;
