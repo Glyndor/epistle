@@ -160,8 +160,11 @@ fn a_field_that_only_starts_like_our_namespace_is_the_clients() {
 		"a field that merely starts like ours was dropped: {:?}",
 		values(&message, "x-epistle2")
 	);
-	assert!(
-		values(&message, "x-epistle").is_empty(),
+	// The marker is on by default, so the one field there is the server's own
+	// fixed value; the client's `9` is gone.
+	assert_eq!(
+		values(&message, "x-epistle"),
+		vec![X_EPISTLE_VALUE.to_string()],
 		"the client's own marker survived: {:?}",
 		values(&message, "x-epistle")
 	);
