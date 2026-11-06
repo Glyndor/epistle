@@ -61,6 +61,14 @@ fn header_lookup_is_case_insensitive() {
 	assert_eq!(header(msg, "missing"), None);
 }
 
+#[test]
+fn a_header_line_cut_inside_a_multibyte_character_is_skipped_not_a_panic() {
+	// "From:" is five bytes; the two byte character at bytes 4..6 puts the cut inside it.
+	let msg = "Fro\u{e9}: x\r\nFrom: a@b.example\r\n\r\nbody";
+	assert_eq!(header(msg, "From").as_deref(), Some("a@b.example"));
+	assert_eq!(header("Fro\u{e9}", "From"), None);
+}
+
 /// The reported message is hostile input by definition. A CRLF in
 /// `Return-Path:` would, if interpolated raw into the ARF report,
 /// terminate the `Original-Mail-From:` line and let the spammers forge

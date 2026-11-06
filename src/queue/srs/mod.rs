@@ -188,7 +188,10 @@ pub(crate) fn split_hosted(srs_local: &str) -> Option<(&str, &str)> {
 }
 
 fn strip_prefix_ci<'a>(text: &'a str, prefix: &str) -> Option<&'a str> {
-	(text.len() >= prefix.len() && text[..prefix.len()].eq_ignore_ascii_case(prefix))
+	// `get` answers `None` when the cut falls inside a multibyte character, where slicing
+	// would panic on an address chosen by whoever sent the mail.
+	let head = text.get(..prefix.len())?;
+	head.eq_ignore_ascii_case(prefix)
 		.then(|| &text[prefix.len()..])
 }
 
