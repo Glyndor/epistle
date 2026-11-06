@@ -118,7 +118,13 @@ pub(crate) fn regenerate_with(
 	// file is the only place it lives. Regenerating without it would put
 	// that listener back on every host address of the machine.
 	let narrow = hosts(&document);
-	let published_ports = published(listeners, &narrow, None);
+	// The configuration the stack serves decides whether port 80 is
+	// published: only the HTTP-01 challenge is answered there, so a
+	// configuration that renews with `dns-01` or `tls-alpn-01` does not
+	// publish it. The file is the one the apply phase wrote, so it already
+	// carries the section init adds.
+	let challenge = super::compose::challenge::in_config(&answers.config_path);
+	let published_ports = published(listeners, &narrow, None, challenge);
 	let composed = ComposeFile::build(&answers, published_ports.clone(), database);
 	let mut text = render_document(&composed).map_err(|error| error.to_string())?;
 	let mut notes = Vec::new();

@@ -198,6 +198,7 @@ pub(super) fn run(
 			&candidate.data_dir,
 			&candidate.listeners,
 			Some((kind, published_host)),
+			candidate.acme.as_ref().map(|acme| acme.challenge),
 		)
 		.map_err(|error| ResourceError::Failure(error.to_string()))?;
 		if json {
@@ -231,6 +232,7 @@ pub(super) fn run(
 		&config.data_dir,
 		&config.listeners,
 		Some((kind, published_host)),
+		config.acme.as_ref().map(|acme| acme.challenge),
 	)
 	.map_err(text)?;
 	let narrowed = prepared.narrowed;

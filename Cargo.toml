@@ -398,6 +398,10 @@ name = "stack_podup_errors"
 path = "tests/cli/stack/stack_podup_errors.rs"
 
 [[test]]
+name = "stack_port_warnings"
+path = "tests/cli/stack/stack_port_warnings.rs"
+
+[[test]]
 name = "debian_control_depends_on_the_keyring"
 path = "tests/packaging/debian_control_depends_on_the_keyring.rs"
 

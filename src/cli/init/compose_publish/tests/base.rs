@@ -97,6 +97,7 @@ fn a_second_change_keeps_the_host_address_the_first_one_fixed() {
 			]),
 			&narrow,
 			None,
+			None,
 		),
 		["25:25", "127.0.0.1:143:143", "127.0.0.1:8090:8090"],
 		"a mapping nobody narrowed keeps the form init writes"
@@ -228,7 +229,7 @@ fn the_map_is_staged_only_when_it_moves() {
 		(ListenerKind::Imap, "0.0.0.0", None),
 	]);
 	let narrow = Some((ListenerKind::Imap, Some(IpAddr::V4(Ipv4Addr::LOCALHOST))));
-	let staged = prepare(dir.path(), &rows, narrow).expect("a readable generated file");
+	let staged = prepare(dir.path(), &rows, narrow, None).expect("a readable generated file");
 	let candidate = staged
 		.companion
 		.as_ref()
@@ -251,7 +252,7 @@ fn the_map_is_staged_only_when_it_moves() {
 	);
 	std::fs::write(&path, &candidate).unwrap();
 	assert!(
-		prepare(dir.path(), &rows, narrow)
+		prepare(dir.path(), &rows, narrow, None)
 			.expect("a readable generated file")
 			.companion
 			.is_none(),
@@ -264,7 +265,7 @@ fn the_map_is_staged_only_when_it_moves() {
 		(ListenerKind::Smtp, "::", None),
 		(ListenerKind::Imap, "0.0.0.0", Some(1143)),
 	]);
-	let staged = prepare(dir.path(), &moved, narrow).expect("a readable generated file");
+	let staged = prepare(dir.path(), &moved, narrow, None).expect("a readable generated file");
 	let written: serde_json::Value =
 		serde_json::from_slice(&staged.companion.expect("the map moves").candidate).unwrap();
 	assert_eq!(
@@ -272,7 +273,7 @@ fn the_map_is_staged_only_when_it_moves() {
 		serde_json::json!(["25:25", "127.0.0.1:1143:1143"])
 	);
 	assert!(
-		prepare(&dir.path().join("absent"), &rows, None)
+		prepare(&dir.path().join("absent"), &rows, None, None)
 			.expect("an absent stack is not an error")
 			.companion
 			.is_none(),
@@ -286,14 +287,15 @@ fn a_loopback_listener_stays_out_of_the_map() {
 		(ListenerKind::Api, "127.0.0.1", None),
 		(ListenerKind::Smtp, "::", None),
 	]);
-	assert_eq!(published(&rows, &BTreeMap::new(), None), ["25:25"]);
+	assert_eq!(published(&rows, &BTreeMap::new(), None, None), ["25:25"]);
 	// Even pinned to a host address, a loopback bind answers nothing through
 	// the pasta mapping, so the mapping would publish a port that refuses.
 	assert_eq!(
 		published(
 			&rows,
 			&BTreeMap::new(),
-			Some((ListenerKind::Api, Some("127.0.0.1".parse().unwrap())))
+			Some((ListenerKind::Api, Some("127.0.0.1".parse().unwrap()))),
+			None,
 		),
 		["25:25"]
 	);
@@ -301,7 +303,8 @@ fn a_loopback_listener_stays_out_of_the_map() {
 		published(
 			&listeners(&[(ListenerKind::Api, "0.0.0.0", None)]),
 			&BTreeMap::new(),
-			Some((ListenerKind::Api, Some("10.0.0.5".parse().unwrap())))
+			Some((ListenerKind::Api, Some("10.0.0.5".parse().unwrap()))),
+			None,
 		),
 		["10.0.0.5:8025:8025"],
 		"a listener the container binds on every address is published on the host one"
@@ -342,10 +345,11 @@ fn an_explicit_wildcard_renders_as_the_form_the_engine_accepts() {
 			&rows,
 			&BTreeMap::new(),
 			Some((ListenerKind::Imaps, Some(address))),
+			None,
 		);
 		assert_eq!(rendered, ["993:993"]);
 		let recovered = hosts(&compose(&["993:993"]));
-		assert_eq!(published(&rows, &recovered, None), ["993:993"]);
+		assert_eq!(published(&rows, &recovered, None, None), ["993:993"]);
 	}
 }
 

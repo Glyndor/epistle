@@ -243,9 +243,14 @@ fn build_config_honours_explicit_acme_contact() {
 /// the ACME HTTP-01 challenge responder; without the publish, the
 /// challenge never reaches the container and certificate issuance
 /// silently fails.
+///
+/// The publish follows the configuration and not the answers: only
+/// the HTTP-01 challenge is answered on port 80, so the section the
+/// configuration carries has to name it.
 #[test]
-fn compose_publishes_acme_port_80_when_acme_is_on() {
+fn compose_publishes_acme_port_80_when_the_configuration_answers_http_01() {
 	use crate::cli::init::compose::{render, stack_answers};
+	let dir = tempfile::tempdir().expect("tempdir");
 	let mut answers = stack_answers();
 	// The stack helper already names a public-ish hostname; force
 	// acme on so the test does not depend on the heuristic.
@@ -253,6 +258,12 @@ fn compose_publishes_acme_port_80_when_acme_is_on() {
 		enabled: Some(true),
 		contact: None,
 	});
+	answers.config_path = dir.path().join("mail.toml");
+	std::fs::write(
+		&answers.config_path,
+		"hostname = \"mail.example.org\"\ndata_dir = \"/var/lib/epistle\"\ndomains = [\"example.org\"]\n\n[acme]\nchallenge = \"http-01\"\n",
+	)
+	.expect("write config");
 	let value: Value = render(&answers, true);
 	let ports: Vec<String> = value["services"]["mail"]["ports"]
 		.as_array()
@@ -262,7 +273,7 @@ fn compose_publishes_acme_port_80_when_acme_is_on() {
 		.collect();
 	assert!(
 		ports.contains(&"80:80".to_string()),
-		"port 80 must be published when ACME is on so the HTTP-01 challenge can reach the responder; got {ports:?}"
+		"port 80 must be published when the configuration answers the HTTP-01 challenge so it can reach the responder; got {ports:?}"
 	);
 }
 
@@ -364,5 +375,38 @@ fn compose_does_not_publish_acme_port_80_when_acme_is_off() {
 	assert!(
 		!ports.contains(&"80:80".to_string()),
 		"port 80 must not be published when ACME is off; got {ports:?}"
+	);
+}
+
+/// The compose file the apply phase writes publishes port 80 when the
+/// configuration it wrote answers the HTTP-01 challenge. The config
+/// comes first, so the `[acme]` section is already on disk when the
+/// publish list is derived from it.
+#[test]
+fn the_compose_the_apply_phase_writes_publishes_port_80_for_http_01() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut answers = answers_minimal();
+	answers.data_dir = dir.path().join("data");
+	answers.config_path = dir.path().join("mail.toml");
+	// A public hostname: init writes the `[acme]` section, and the
+	// challenge it leaves unset is the HTTP-01 one.
+	let outcome = apply(&answers);
+	assert!(
+		outcome.error.is_none(),
+		"apply must succeed with ACME auto-enabled; got {:?}",
+		outcome.error
+	);
+	let compose = std::fs::read_to_string(answers.data_dir.join("compose/compose.yaml"))
+		.expect("read compose");
+	let document: Value = serde_json::from_str(&compose).expect("parse compose");
+	let ports: Vec<String> = document["services"]["mail"]["ports"]
+		.as_array()
+		.expect("ports is an array")
+		.iter()
+		.map(|p| p.as_str().expect("port is a string").to_string())
+		.collect();
+	assert!(
+		ports.contains(&"80:80".to_string()),
+		"the HTTP-01 challenge is answered on port 80, so the compose file must publish it; got {ports:?}"
 	);
 }

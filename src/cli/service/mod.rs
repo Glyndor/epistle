@@ -355,8 +355,13 @@ fn execute_with(
 	// Both files are staged and validated before either is replaced, the same
 	// way `set` does it: a generated file that does not parse must not leave a
 	// listener enabled in `mail.toml` and a port published nowhere.
-	let prepared = super::init::prepare_published_ports(&config.data_dir, &config.listeners, None)
-		.map_err(|error| super::resource::ResourceError::Failure(error.to_string()))?;
+	let prepared = super::init::prepare_published_ports(
+		&config.data_dir,
+		&config.listeners,
+		None,
+		config.acme.as_ref().map(|acme| acme.challenge),
+	)
+	.map_err(|error| super::resource::ResourceError::Failure(error.to_string()))?;
 	let narrowed = prepared.narrowed;
 	let outcome = super::config_edit::commit_pair(document, prepared.companion)?;
 	let state = if enabled { "enabled" } else { "disabled" };
