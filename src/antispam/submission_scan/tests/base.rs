@@ -231,6 +231,7 @@ fn concrete(socket: &std::path::Path) -> ScanningSink {
 		gate: gate::Gate::new(4, 1),
 		metrics: None,
 		webhook: None,
+		directory: None,
 		workers: Default::default(),
 	}
 }

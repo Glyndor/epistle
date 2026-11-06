@@ -1064,6 +1064,64 @@ it and otherwise ignore it:
 {"event":"test","message":"epistle webhook test: connectivity check, no mail activity"}
 ```
 
+#### A webhook per tenant: `[tenant.webhook]`
+
+The `[webhook]` above is the default for every domain. A `[[tenant]]` can carry
+a `[tenant.webhook]` of its own, with the same four keys (`url`, `secret`,
+`enabled`, `allow_private_webhooks`), so each tenant's receiver gets the events
+of the tenant's domains and signs them with the tenant's secret:
+
+```toml
+[webhook]                          # the default, and the server's own events
+url = "https://ops.example/hook"
+secret = "…"
+
+[[tenant]]
+name = "acme"
+domains = ["acme.example"]
+
+[tenant.webhook]
+url = "https://acme.example/epistle-events"
+secret = "…"                       # signs only acme's events
+```
+
+- An event belongs to a hosted domain that the server decides, never the
+  envelope sender (`MAIL FROM`), which the sender writes and could set to
+  another tenant's domain. `message_received` belongs to the domain of the
+  local recipient. A queued message belongs to the domain of the account that
+  authenticated to send it; mail a local address forwards, and the bounces,
+  reports and vacation replies a local delivery produces, belong to the
+  domain of the local recipient. The owner is recorded in the queue entry
+  when it is queued; `delivered`, `delayed`, `delivery_failed`, `suppressed`,
+  `canceled` and `outbound_virus` follow it. An account whose addresses sit
+  in more than one domain, an entry queued before the owner was recorded, and
+  mail relayed for others have no owner and use the `[webhook]`. A domain
+  alias is its target's.
+- An event of a tenant's domain is posted to that tenant's webhook and to no
+  other, signed with that webhook's secret. It is never also posted to the
+  default.
+- A domain of no tenant, a tenant without a `[tenant.webhook]`, and the events
+  that belong to the server (`metric_alert`, `dkim_rotation_failed`, the warm-up
+  events, `test`, forwarded mail and bounces, whose sender is the null address or
+  the server's) use the `[webhook]`. An alert with `webhook = true` posts to it,
+  not to a tenant's.
+- A tenant whose webhook has `enabled = false`, or whose URL the client refuses,
+  posts nothing: its events do not fall back to the default or to another
+  tenant. A failed delivery is logged and dropped for that webhook alone.
+- Without `[webhook]`, the tenants that have one still post, and the other
+  domains' events go nowhere.
+- A tenant's URL passes the same checks as the default's: `https://` (or a
+  loopback `http://`), no redirect followed, no proxy of the environment, the
+  addresses its name resolves to judged too, and a private destination only
+  with that webhook's own `allow_private_webhooks = true` (it does not carry
+  over to the other webhooks).
+- The file is refused when a tenant webhook has no `domains` to receive for, when
+  two webhooks (a tenant's and another's, or the default) share a `secret`, or
+  when its URL breaks the rules above.
+- Each event is posted once, with no retry and no queue, so nothing is shared
+  between webhooks that one tenant's slow or failing receiver could hold up
+  for another.
+
 ### `[antispam_llm]`
 LLM-assisted screening for the **uncertain band** — the slice of mail where the
 local Bayesian classifier is not confident in either direction. Outside the band
@@ -1937,6 +1995,7 @@ submission_rate_limit_per_min = 200   # recipients per minute for the whole tena
 | `max_accounts` | Maximum number of accounts (static + dynamic) this tenant may hold. Absent means no cap. |
 | `max_domains` | Maximum number of domains this tenant may declare. Absent means no cap. The cap cannot be lower than `domains.len()` because that would make the tenant unloadable. |
 | `submission_rate_limit_per_min` | Aggregate submission rate ceiling for the tenant: recipients per minute, summed across every authenticated sender in every domain of the tenant. Applies on top of the per-account `submission_rate_limit_per_min`, not in place of it. |
+| `webhook` | A `[tenant.webhook]` table: where the events of the tenant's domains go, instead of the `[webhook]` default. See [a webhook per tenant](#a-webhook-per-tenant-tenantwebhook). |
 
 Rules:
 

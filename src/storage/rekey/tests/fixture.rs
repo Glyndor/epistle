@@ -72,6 +72,7 @@ impl Fixture {
 				max_domains: None,
 				submission_rate_limit_per_min: None,
 				encryption_key_file: Some(self.keys[*key].clone()),
+				webhook: None,
 			})
 			.collect();
 		let crypto = MessageCrypto::from_parts(Some(&storage), &tenants).expect("crypto");

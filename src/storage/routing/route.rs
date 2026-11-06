@@ -41,11 +41,16 @@ impl SplitDelivery {
 		let mut local = Vec::new();
 		let mut remote = Vec::new();
 		let mut srs_returns = Vec::new();
+		// Whose webhook hears about what this delivery queues: the account
+		// that authenticated, which the server resolved, never the envelope
+		// sender, which the sender wrote.
+		let owner =
+			account.and_then(|name| crate::webhook::account_owner(&self.directory.current(), name));
 		for recipient in &message.recipients {
 			// An SRS-return address forwards the (bounce) message back to the
 			// original sender it encodes.
-			if let Some(original) = self.srs_return(recipient) {
-				srs_returns.push(original);
+			if let Some((original, hosted)) = self.srs_return(recipient) {
+				srs_returns.push((original, hosted));
 				continue;
 			}
 			let address = Address::parse(recipient).map_err(|_| {
@@ -76,6 +81,19 @@ impl SplitDelivery {
 				recipients: local,
 				..message.clone()
 			};
+			// What the local delivery itself queues (a refusal, a full-mailbox
+			// report, a vacation reply) belongs to the domain of the local
+			// recipients the server resolved.
+			let local_owner =
+				crate::webhook::single_domain(local_message.recipients.iter().map(String::as_str));
+			// What the local delivery queues carries the sender's attribution
+			// and correlation map only when the sender and the local recipients
+			// are one owner. Otherwise the owner of the recipients' webhook
+			// would be handed another tenant's application ids and metadata.
+			let no_extra = BTreeMap::new();
+			let same_owner = owner == local_owner;
+			let inherited_account = if same_owner { account } else { None };
+			let inherited_extra = if same_owner { extra } else { &no_extra };
 			let delivered = match self
 				.local
 				.deliver_routed(&local_message, mailbox.as_deref())
@@ -135,7 +153,18 @@ impl SplitDelivery {
 					.flatten()
 				{
 					self.outbound
-						.store(&bounce, account, extra)
+						.store_with(
+							&bounce,
+							uuid::Uuid::now_v7(),
+							&crate::storage::spool::StoreOptions {
+								account: inherited_account,
+								extra: inherited_extra,
+								owner: local_owner.as_deref(),
+								class: crate::evidence::MailClass::Personal,
+								evidence: None,
+								retain_days: 0,
+							},
+						)
 						.map_err(|error| SinkError::Unavailable(error.to_string()))?;
 				}
 			}
@@ -173,7 +202,7 @@ impl SplitDelivery {
 					self.identification.system_auto_submitted,
 				) {
 				// A report failure does not repeat copies already delivered.
-				if let Err(error) = self.store_outbound(&report) {
+				if let Err(error) = self.store_outbound(&report, local_owner.as_deref()) {
 					tracing::warn!(%error, "mailbox-full report not queued");
 				}
 			}
@@ -182,7 +211,18 @@ impl SplitDelivery {
 			for mut reply in delivered.replies {
 				self.sign_reply(&mut reply);
 				self.outbound
-					.store(&reply, account, extra)
+					.store_with(
+						&reply,
+						uuid::Uuid::now_v7(),
+						&crate::storage::spool::StoreOptions {
+							account: inherited_account,
+							extra: inherited_extra,
+							owner: local_owner.as_deref(),
+							class: crate::evidence::MailClass::Personal,
+							evidence: None,
+							retain_days: 0,
+						},
+					)
 					.map_err(|error| SinkError::Unavailable(error.to_string()))?;
 				if let Some(metrics) = &self.metrics {
 					metrics.vacation_sent();
@@ -190,7 +230,7 @@ impl SplitDelivery {
 			}
 		}
 		// Forward SRS-return (bounce) messages back to the original senders.
-		for original in srs_returns {
+		for (original, hosted) in srs_returns {
 			let returned = AcceptedMessage {
 				reverse_path: message.reverse_path.clone(),
 				recipients: vec![original],
@@ -201,8 +241,25 @@ impl SplitDelivery {
 				sender_verified: false,
 				no_dsn: Vec::new(),
 			};
+			// Owned by the authenticated account's domain when there is one,
+			// else by the hosted domain whose secret verified the address.
+			let returned_owner = owner.clone().or(hosted);
+			// The account and the correlation map of the submission go with it
+			// only when its owner is the entry's owner: a hosted domain that
+			// took over an ownerless submission is not handed another
+			// account's attribution or application ids.
+			let no_extra = BTreeMap::new();
+			let same_owner = owner == returned_owner;
+			let options = crate::storage::spool::StoreOptions {
+				account: if same_owner { account } else { None },
+				extra: if same_owner { extra } else { &no_extra },
+				owner: returned_owner.as_deref(),
+				class: crate::evidence::MailClass::Personal,
+				evidence: None,
+				retain_days: 0,
+			};
 			self.outbound
-				.store(&returned, account, extra)
+				.store_with(&returned, uuid::Uuid::now_v7(), &options)
 				.map_err(|error| SinkError::Unavailable(error.to_string()))?;
 		}
 		if !remote.is_empty() {
@@ -222,6 +279,7 @@ impl SplitDelivery {
 			let options = crate::storage::spool::StoreOptions {
 				account,
 				extra,
+				owner: owner.as_deref(),
 				class,
 				evidence: evidence.map(|_| &recorded as &dyn Fn(&[u8]) -> std::io::Result<()>),
 				retain_days: evidence.unwrap_or(0),

@@ -35,6 +35,7 @@ fn tenant(name: &str, domain: &str, key: Option<PathBuf>) -> Tenant {
 		max_domains: None,
 		submission_rate_limit_per_min: None,
 		encryption_key_file: key,
+		webhook: None,
 	}
 }
 

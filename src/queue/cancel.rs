@@ -42,6 +42,7 @@ pub fn remove(
 			if let Some(webhook) = webhook {
 				notify(
 					webhook,
+					envelope.owner.clone(),
 					crate::webhook::WebhookEvent::Canceled {
 						spool_id: id,
 						recipient: recipient.clone(),
@@ -54,10 +55,14 @@ pub fn remove(
 	Ok(envelope)
 }
 
-fn notify(webhook: &Arc<crate::webhook::Webhook>, event: crate::webhook::WebhookEvent) {
+fn notify(
+	webhook: &Arc<crate::webhook::Webhook>,
+	domain: Option<String>,
+	event: crate::webhook::WebhookEvent,
+) {
 	let webhook = Arc::clone(webhook);
 	if let Ok(handle) = tokio::runtime::Handle::try_current() {
-		handle.spawn(async move { webhook.notify(&event).await });
+		handle.spawn(async move { webhook.notify_for(domain.as_deref(), &event).await });
 		return;
 	}
 	match tokio::runtime::Builder::new_current_thread()
@@ -66,7 +71,7 @@ fn notify(webhook: &Arc<crate::webhook::Webhook>, event: crate::webhook::Webhook
 	{
 		Ok(runtime) => runtime.block_on(async {
 			let wait = std::time::Duration::from_secs(10);
-			let _ = tokio::time::timeout(wait, webhook.notify(&event)).await;
+			let _ = tokio::time::timeout(wait, webhook.notify_for(domain.as_deref(), &event)).await;
 		}),
 		Err(error) => tracing::warn!(%error, "no runtime to post the webhook event"),
 	}

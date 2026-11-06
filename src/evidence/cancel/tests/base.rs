@@ -25,6 +25,7 @@ fn two_recipients(dir: &Path) -> (FsSpool, uuid::Uuid) {
 			},
 			id,
 			&StoreOptions {
+				owner: None,
 				account: Some("notices"),
 				extra: &BTreeMap::new(),
 				class: MailClass::Transactional,

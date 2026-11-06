@@ -144,9 +144,11 @@ impl SplitDelivery {
 			}
 			recorded
 		};
+		let owner = crate::webhook::account_owner(&self.directory.current(), account);
 		let options = StoreOptions {
 			account: Some(account),
 			extra: &submission.extra,
+			owner: owner.as_deref(),
 			class,
 			evidence: Some(&record),
 			retain_days: retention.days,

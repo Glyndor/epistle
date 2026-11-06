@@ -40,6 +40,7 @@ fn sink_with_gate(gate: Arc<gate::Gate>, mode: AttachmentMode) -> (ScanningSink,
 		gate,
 		metrics: None,
 		webhook: None,
+		directory: None,
 		workers: Default::default(),
 	};
 	(sink, inner)

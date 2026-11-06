@@ -551,6 +551,11 @@ The only other headers are `Content-Type: application/json`. There is no
 timestamp, event id or nonce, so a replay is yours to detect: the pair
 `event` and `spool_id` with `recipient` identifies a delivery event.
 
+**Per tenant.** A tenant with a `[tenant.webhook]` receives the events of its
+domains, signed with its own secret, and no other tenant's; every other domain
+uses `[webhook]`. See [a webhook per
+tenant](configuration.md#a-webhook-per-tenant-tenantwebhook).
+
 **Delivery.** Each event is posted once, with a 15 second timeout and no
 retry. A redirect is not followed and counts as a failure. Any other answer,
 a `500` included, counts as sent, and a failure to connect is logged and

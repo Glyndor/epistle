@@ -164,6 +164,8 @@ fn dispatch(
 	}
 	if !rule.email.is_empty() {
 		let message = build_email(rule, &ctx.hostname, delta, now_unix, ctx.auto_submitted)?;
+		// An alert is the operator's own mail: no tenant owns it, so it has no
+		// owner and its events use the server-wide webhook.
 		ctx.spool
 			.store(&message, None, &std::collections::BTreeMap::new())?;
 	}

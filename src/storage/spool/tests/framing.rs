@@ -68,6 +68,7 @@ fn the_evidence_record_sees_the_bytes_that_are_queued() {
 			&message(b"Subject: s\r\n\r\na\nb\r\n"),
 			Uuid::now_v7(),
 			&StoreOptions {
+				owner: None,
 				account: None,
 				extra: &extra,
 				class: crate::evidence::MailClass::Personal,

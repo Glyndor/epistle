@@ -129,17 +129,12 @@ pub(in crate::cli) fn build_split_with_companions(
 	if config.srs_enabled() {
 		split = split.with_srs_keys(config.srs_keys(), config.hostname.clone());
 	}
-	// A destination the webhook client refuses leaves the server without a
-	// webhook and says so: the webhook is advisory, and a configuration that
-	// loaded before the destination policy must still start the server.
-	let webhook = match config.active_webhook().map(crate::webhook::poster) {
-		Some(Ok(webhook)) => Some(Arc::new(webhook.with_metrics(metrics.clone()))),
-		Some(Err(error)) => {
-			tracing::warn!(%error, "the webhook cannot be used and no event will be sent");
-			None
-		}
-		None => None,
-	};
+	// A destination the webhook client refuses leaves that webhook without a
+	// poster and says so (`webhook::from_config`): the webhook is advisory,
+	// and a configuration that loaded before the destination policy must
+	// still start the server.
+	let webhook = crate::webhook::from_config(config)
+		.map(|webhook| Arc::new(webhook.with_metrics(metrics.clone())));
 	if let Some(webhook) = &webhook {
 		split = split.with_webhook(Arc::clone(webhook));
 	}

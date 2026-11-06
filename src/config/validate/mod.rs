@@ -35,6 +35,7 @@ impl Config {
 		self.validate_listeners()?;
 		self.validate_acme()?;
 		self.validate_webhook()?;
+		self.validate_tenant_webhooks()?;
 		self.validate_retry_schedule()?;
 		self.validate_privileges()?;
 		self.validate_transport()?;
@@ -138,39 +139,9 @@ impl Config {
 	}
 
 	fn validate_webhook(&self) -> Result<(), ConfigError> {
-		let Some(webhook) = &self.webhook else {
-			return Ok(());
-		};
-		// Event payloads carry message metadata, so require TLS, except for a
-		// loopback endpoint, which never leaves the host. The host is compared
-		// after parsing: a name that only starts like `localhost` or
-		// `127.0.0.1` can point anywhere.
-		let refused = || {
-			ConfigError::Invalid("[webhook] url must be https (or a loopback http endpoint)".into())
-		};
-		let url = url::Url::parse(&webhook.url).map_err(|_| refused())?;
-		let loopback = match url.host() {
-			Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
-			Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
-			Some(url::Host::Domain(name)) => name.eq_ignore_ascii_case("localhost"),
-			None => false,
-		};
-		// A private destination needs the operator to say so: the webhook
-		// client refuses those destinations, so a section that names one
-		// without the option never delivers. The file still loads, because a
-		// webhook is advisory and a configuration that worked before must not
-		// stop the server from starting after an upgrade.
-		let private = crate::webhook::destination::names_private(&webhook.url);
-		if private && !webhook.allow_private_webhooks {
-			tracing::warn!(
-				"[webhook] url names a private address and no webhook will be delivered; set allow_private_webhooks = true to reach it"
-			);
-		}
-		match url.scheme() {
-			"https" => Ok(()),
-			"http" if loopback => Ok(()),
-			"http" if private && webhook.allow_private_webhooks => Ok(()),
-			_ => Err(refused()),
+		match &self.webhook {
+			Some(webhook) => webhook.validate_as("[webhook]"),
+			None => Ok(()),
 		}
 	}
 
