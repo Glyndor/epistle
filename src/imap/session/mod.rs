@@ -9,6 +9,7 @@ use crate::smtp::directory::hash_gate::Verdict;
 mod acl;
 mod auth;
 mod auth_oauth;
+pub(crate) use auth_oauth::parse_bearer;
 mod base_subject;
 mod codes;
 mod commands;

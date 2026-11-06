@@ -46,6 +46,9 @@ ALL = [
     "backup_tar",
     "webdav_report_body",
     "arf_report",
+    "attachment_walk",
+    "sender_auth_records",
+    "sasl_exchange",
 ]
 
 # Folder of the source -> the targets that exercise it and nothing else.
@@ -59,16 +62,17 @@ FOLDERS = {
         "smtp_address",
         "smtp_data",
         "imap_session",
+        "sasl_exchange",
     ],
-    "src/smtp/": ["smtp_command", "smtp_session", "smtp_line", "smtp_address", "smtp_data"],
-    "src/imap/": ["imap_command", "mime", "migrate_imap_response", "imap_session"],
+    "src/smtp/": ["smtp_command", "smtp_session", "smtp_line", "smtp_address", "smtp_data", "sasl_exchange"],
+    "src/imap/": ["imap_command", "mime", "migrate_imap_response", "imap_session", "sasl_exchange"],
     "src/sieve/": ["sieve_message", "sieve_script", "sieve_run", "sieve_validate"],
     "src/pop3/": ["pop3_command", "pop3_session"],
     "src/managesieve/": ["managesieve_command", "sieve_validate"],
-    "src/dkim/": ["dkim_signature", "mime"],
-    "src/dmarc/": ["mime"],
+    "src/dkim/": ["dkim_signature", "mime", "sender_auth_records"],
+    "src/dmarc/": ["mime", "sender_auth_records"],
     "src/api/jmap/": ["mime"],
-    "src/antispam/attachments/": ["attachment_inspect"],
+    "src/antispam/attachments/": ["attachment_inspect", "attachment_walk"],
     "src/webdav/": ["webdav_filter_rrule", "webdav_report_body"],
     "src/arc/": ["arc_headers"],
     "src/jwt/": ["jwt_decode"],
@@ -81,6 +85,7 @@ FOLDERS = {
     "src/migrate/imap/": ["migrate_imap_response"],
     "src/cli/backup/": ["backup_tar"],
     "src/antispam/arf/": ["arf_report"],
+    "src/spf/": ["sender_auth_records"],
 }
 
 # Files under src that the fuzz entry points go through directly.

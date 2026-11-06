@@ -210,3 +210,24 @@ path = "fuzz_targets/smtp/smtp_session/main.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "attachment_walk"
+path = "fuzz_targets/message/attachment_walk.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sender_auth_records"
+path = "fuzz_targets/dns/sender_auth_records.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sasl_exchange"
+path = "fuzz_targets/smtp/sasl_exchange.rs"
+test = false
+doc = false
+bench = false

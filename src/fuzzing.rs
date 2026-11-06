@@ -42,6 +42,8 @@ pub fn mime(raw: &[u8]) {
 	));
 }
 
+mod scram_client;
+
 /// The most bytes an input of the targets below is given: they read network
 /// bodies and headers, which the listeners bound well under this.
 const INPUT_CAP: usize = 64 * 1024;
@@ -194,6 +196,244 @@ pub fn webdav_report_body(input: &str) {
 pub fn arf_report(raw: &[u8]) {
 	let raw = &raw[..raw.len().min(INPUT_CAP)];
 	crate::antispam::arf::fuzzing::report_for_fuzzing(raw);
+}
+
+/// Decoded bytes one walk of [`attachment_walk`] may spend: several times the
+/// input, so nested encodings are followed rather than cut at once.
+const WALK_DECODED: usize = 4 * INPUT_CAP;
+
+/// A whole message through the attachment inspection: the MIME walk the rules
+/// read and the one the text reader takes, the zip and OLE2 directory readers
+/// on every part they hand over and on the bytes themselves, and the complete
+/// inspection that joins them. A walk keeps to its depth and part limits, and
+/// a listing to its entry cap, whatever the message claims.
+pub fn attachment_walk(raw: &[u8]) {
+	use crate::antispam::attachments::{self, walk};
+	let raw = &raw[..raw.len().min(INPUT_CAP)];
+	let limits = walk::Limits {
+		max_depth: attachments::MAX_DEPTH,
+		max_parts: attachments::MAX_PARTS,
+		max_decoded: WALK_DECODED,
+		deadline: None,
+	};
+	let visit = |leaf: walk::Leaf| {
+		// A uuencoded file inside a text part sits one level below it.
+		assert!(
+			leaf.depth <= limits.max_depth + 1,
+			"leaf at depth {}",
+			leaf.depth
+		);
+		directories(&leaf.content);
+		for alternate in &leaf.alternates {
+			directories(alternate);
+		}
+	};
+	for walked in [
+		walk::walk(raw, &limits, visit),
+		walk::walk_text(raw, &limits, visit),
+	] {
+		// The part that goes past the limit is counted, then the walk stops.
+		assert!(
+			walked.parts <= limits.max_parts + 1,
+			"{} parts",
+			walked.parts
+		);
+		if walked.parts > limits.max_parts {
+			assert_eq!(walked.stopped, Some(walk::Stop::TooManyParts));
+		}
+	}
+	directories(raw);
+	let report = attachments::inspect(
+		raw,
+		&attachments::rules::Extensions::default(),
+		attachments::Budget::bytes(WALK_DECODED),
+	);
+	std::hint::black_box(report.reasons());
+}
+
+/// The zip and OLE2 directory readers over one buffer.
+fn directories(bytes: &[u8]) {
+	use crate::antispam::attachments::archive;
+	let listing = archive::list_zip(bytes);
+	assert!(listing.names.len() <= archive::MAX_ENTRIES);
+	std::hint::black_box((
+		archive::has_end_record(bytes),
+		archive::is_ooxml(&listing),
+		archive::ooxml_has_macros(&listing),
+	));
+	let ole = archive::inspect_ole2(bytes);
+	assert_eq!(ole.macros, archive::ole2_has_macros(bytes));
+}
+
+/// The records a sender publishes for the checks on inbound mail: an SPF
+/// record, a DMARC record and a DKIM key record, read from the same text.
+/// The first line is the envelope sender and the second the HELO name, cut to
+/// an SMTP command line: the SPF macros expand both, so the local part is the
+/// attacker's too. Every domain an SPF record names is expanded, as the
+/// evaluator does before it looks the name up.
+pub fn sender_auth_records(input: &str) {
+	let input = &input[..floor_char_boundary(input, INPUT_CAP)];
+	let mut lines = input.splitn(3, '\n');
+	let sender = smtp_line(lines.next().unwrap_or(""));
+	let helo = smtp_line(lines.next().unwrap_or(""));
+	let record = lines.next().unwrap_or("");
+	if let Ok(spf) = crate::spf::record::parse(record) {
+		for (_, mechanism) in &spf.directives {
+			use crate::spf::record::Mechanism;
+			match mechanism {
+				Mechanism::Ip4 { prefix, .. } => assert!(*prefix <= 32, "ip4 prefix /{prefix}"),
+				Mechanism::Ip6 { prefix, .. } => assert!(*prefix <= 128, "ip6 prefix /{prefix}"),
+				Mechanism::A {
+					domain,
+					prefix4,
+					prefix6,
+				}
+				| Mechanism::Mx {
+					domain,
+					prefix4,
+					prefix6,
+				} => {
+					assert!(*prefix4 <= 32 && *prefix6 <= 128, "/{prefix4} //{prefix6}");
+					spf_names(domain.as_deref().unwrap_or(SENDER_DOMAIN), sender, helo);
+				}
+				Mechanism::Include { domain } | Mechanism::Exists { domain } => {
+					spf_names(domain, sender, helo);
+				}
+				Mechanism::Ptr { domain } => {
+					spf_names(domain.as_deref().unwrap_or(SENDER_DOMAIN), sender, helo);
+				}
+				Mechanism::All => {}
+			}
+		}
+		if let Some(redirect) = &spf.redirect {
+			spf_names(redirect, sender, helo);
+		}
+	}
+	spf_names(record, sender, helo);
+	if let Some(Ok(dmarc)) = crate::dmarc::record::parse(record) {
+		assert!(dmarc.pct <= 100, "pct={}", dmarc.pct);
+		assert!(dmarc.rua.iter().all(|uri| !uri.is_empty()));
+	}
+	if let Some(key) = crate::dkim::key_record::parse(record) {
+		use crate::dkim::key_record::KeyType;
+		match key.key_type {
+			KeyType::Ed25519 => assert_eq!(key.public_key.len(), 32),
+			KeyType::Rsa => assert_eq!(key.public_key.first(), Some(&0x30)),
+		}
+		std::hint::black_box(key.accepts_identity(Some(sender), SENDER_DOMAIN));
+		assert!(crate::dkim::key_record::same_usable_key(record, record));
+	}
+	for algorithm in [
+		crate::dkim::signature::Algorithm::RsaSha256,
+		crate::dkim::signature::Algorithm::Ed25519Sha256,
+	] {
+		let found = crate::dkim::key_record::select(&[record.to_string()], algorithm);
+		assert!(found.is_none_or(|key| key.fits(algorithm)));
+	}
+}
+
+/// The domain the SPF and DKIM checks of [`sender_auth_records`] run for.
+const SENDER_DOMAIN: &str = "example.org";
+
+/// `line` cut where an SMTP command line ends.
+fn smtp_line(line: &str) -> &str {
+	&line[..floor_char_boundary(line, crate::smtp::command::MAX_COMMAND_LINE)]
+}
+
+/// The name an SPF domain spec expands to for a client on each address
+/// family. A spec without a macro expands to itself.
+fn spf_names(spec: &str, sender: &str, helo: &str) {
+	for ip in [
+		std::net::IpAddr::V4(std::net::Ipv4Addr::new(192, 0, 2, 1)),
+		std::net::IpAddr::V6(std::net::Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1)),
+	] {
+		let name = crate::spf::expand_macro(spec, ip, SENDER_DOMAIN, sender, helo);
+		if !spec.contains('%') {
+			assert_eq!(name.as_deref().ok(), Some(spec));
+		}
+		std::hint::black_box(name.map(|name| name.len()).ok());
+	}
+}
+
+/// The SASL messages a client sends before it is logged in: PLAIN, the
+/// OAUTHBEARER and XOAUTH2 initial response of SMTP and of IMAP, and a
+/// SCRAM-SHA-256 exchange under each channel binding policy. The first line is
+/// the client-first message and the rest the client-final one.
+///
+/// The account is made once per process from random bytes. Besides the
+/// client's own final message, the exchange is finished the way a client that
+/// knows the password would: it must succeed with the nonce the server sent,
+/// and fail with any other nonce or a proof that is off by one bit. A final
+/// message the server accepts must carry the proof only the password gives.
+pub fn sasl_exchange(input: &str) {
+	use crate::smtp::scram::{ChannelBinding, ScramError, ScramServer, username_of};
+	let input = &input[..floor_char_boundary(input, INPUT_CAP)];
+	let _ = crate::smtp::auth::parse_plain(input);
+	std::hint::black_box(crate::smtp::session::parse_bearer(input));
+	std::hint::black_box(crate::imap::session::parse_bearer(input));
+	let (first, last) = input.split_once('\n').unwrap_or((input, ""));
+	let account = scram_client::account();
+	let username = username_of(first);
+	for binding in [
+		ChannelBinding::Unsupported,
+		ChannelBinding::Supported,
+		ChannelBinding::Required(account.end_point.clone()),
+	] {
+		let mut server =
+			ScramServer::new(account.nonce.as_str()).with_channel_binding(binding.clone());
+		let Ok((user, server_first)) = server.first(first, &account.credentials) else {
+			continue;
+		};
+		assert_eq!(Some(user), username, "first and username_of disagree");
+		let flag = first.split(',').next().unwrap_or("");
+		match &binding {
+			ChannelBinding::Supported => assert_eq!(flag, "n"),
+			ChannelBinding::Required(_) => assert_eq!(flag, "p=tls-server-end-point"),
+			ChannelBinding::Unsupported => {}
+		}
+		let exchange = scram_client::Exchange::new(account, first, &server_first, &binding);
+		if let Ok(server_final) = server.finish(last, &account.credentials) {
+			let proof = last.split(',').find_map(|field| field.strip_prefix("p="));
+			let without_proof = last.rsplit_once(",p=").map(|(head, _)| head);
+			let expected = without_proof.map(|head| exchange.proof(head));
+			// The assertions name what failed and print no proof or key.
+			assert!(
+				proof.map(str::to_string) == expected,
+				"a proof nobody signed was accepted"
+			);
+			assert!(
+				server_final == exchange.server_final(without_proof.unwrap_or("")),
+				"the server signature is not the one its key gives"
+			);
+		}
+		let Some(combined) = server_first
+			.strip_prefix("r=")
+			.and_then(|rest| rest.split(',').next())
+		else {
+			panic!("server-first does not open with the nonce");
+		};
+		let honest = exchange.without_proof(combined);
+		assert!(
+			server.finish(&exchange.signed(&honest), &account.credentials)
+				== Ok(exchange.server_final(&honest)),
+			"the password did not open the account",
+		);
+		let tampered = format!("{honest},p={}", exchange.flipped(&honest));
+		assert!(
+			server.finish(&tampered, &account.credentials) == Err(ScramError::AuthenticationFailed),
+			"a proof off by one bit was accepted",
+		);
+		if let Some(echoed) = last.split(',').next()
+			&& echoed != combined
+		{
+			let replayed = exchange.without_proof(echoed);
+			assert!(
+				server.finish(&exchange.signed(&replayed), &account.credentials)
+					== Err(ScramError::Malformed),
+				"a nonce the server did not send was accepted",
+			);
+		}
+	}
 }
 
 /// The largest index at most `max` that is a character boundary of `text`.

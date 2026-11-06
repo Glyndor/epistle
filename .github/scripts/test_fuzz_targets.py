@@ -58,16 +58,15 @@ class SelectTests(unittest.TestCase):
     def test_one_protocol_runs_only_its_targets(self):
         self.assertEqual(
             ft.select("pull_request", ["src/imap/session/mod.rs"]),
-            ["imap_command", "imap_session", "mime", "migrate_imap_response"],
+            ["imap_command", "imap_session", "mime", "migrate_imap_response", "sasl_exchange"],
         )
         self.assertEqual(
             ft.select("pull_request", ["src/smtp/a.rs", "src/smtp/b/c.rs"]),
-            ["smtp_command", "smtp_session", "smtp_line", "smtp_address", "smtp_data"],
+            ["smtp_command", "smtp_session", "smtp_line", "smtp_address", "smtp_data", "sasl_exchange"],
         )
 
     def test_the_parsers_of_one_folder_run_their_own_target(self):
         for path, target in (
-            ("src/antispam/attachments/sniff/mod.rs", "attachment_inspect"),
             ("src/arc/signature.rs", "arc_headers"),
             ("src/jwt/mod.rs", "jwt_decode"),
             ("src/queue/client/conn/mod.rs", "smtp_reply"),
@@ -76,6 +75,7 @@ class SelectTests(unittest.TestCase):
             ("src/migrate/imap/parse/mod.rs", "migrate_imap_response"),
             ("src/cli/backup/tar_format/mod.rs", "backup_tar"),
             ("src/antispam/arf/mod.rs", "arf_report"),
+            ("src/spf/record/mod.rs", "sender_auth_records"),
         ):
             self.assertEqual(ft.select("pull_request", [path]), [target])
 
@@ -93,15 +93,29 @@ class SelectTests(unittest.TestCase):
             "imap_session", ft.select("pull_request", ["src/smtp/session/mod.rs"])
         )
 
+    def test_the_attachment_folder_runs_both_attachment_targets(self):
+        for path in (
+            "src/antispam/attachments/sniff/mod.rs",
+            "src/antispam/attachments/walk/mod.rs",
+            "src/antispam/attachments/archive/mod.rs",
+        ):
+            self.assertEqual(
+                ft.select("pull_request", [path]), ["attachment_inspect", "attachment_walk"]
+            )
+
     def test_two_protocols_run_both(self):
         got = ft.select("pull_request", ["src/pop3/a.rs", "src/dkim/b.rs"])
-        self.assertEqual(got, ["pop3_command", "pop3_session", "dkim_signature", "mime"])
+        self.assertEqual(got, ["pop3_command", "pop3_session", "dkim_signature", "mime", "sender_auth_records"])
 
     def test_the_pop3_session_target_runs_with_the_pop3_source(self):
         self.assertEqual(
             ft.select("pull_request", ["src/pop3/session/mod.rs"]),
             ["pop3_command", "pop3_session"],
         )
+
+    def test_the_dmarc_folder_runs_the_record_and_the_author_reader(self):
+        for path in ("src/dmarc/record/mod.rs", "src/dmarc/author/mod.rs"):
+            self.assertEqual(ft.select("pull_request", [path]), ["mime", "sender_auth_records"])
 
     def test_anything_unmapped_runs_everything(self):
         for path in (
@@ -142,7 +156,6 @@ class SelectTests(unittest.TestCase):
         self.assertNotEqual(ft.select("pull_request", ["src/pop3/a.rs"]), ft.ALL)
 
     def test_the_folders_that_only_mime_reads_run_mime(self):
-        self.assertEqual(ft.select("pull_request", ["src/dmarc/author/mod.rs"]), ["mime"])
         self.assertEqual(ft.select("pull_request", ["src/api/jmap/email/mod.rs"]), ["mime"])
 
     def test_the_store_of_managesieve_runs_the_validator(self):

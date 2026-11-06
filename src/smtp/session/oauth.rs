@@ -99,7 +99,7 @@ impl Session {
 
 /// Extract the bearer token from a base64 OAUTHBEARER/XOAUTH2 initial response.
 /// Both encode `...auth=Bearer <token>\x01...`.
-fn parse_bearer(encoded: &str) -> Option<String> {
+pub(crate) fn parse_bearer(encoded: &str) -> Option<String> {
 	let decoded = BASE64.decode(encoded).ok()?;
 	let text = String::from_utf8(decoded).ok()?;
 	let rest = text.split("auth=Bearer ").nth(1)?;
