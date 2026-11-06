@@ -226,7 +226,20 @@ runs it renders and runs exactly as before.
 - `epistle stack up` puts the account key where `certs` reads it before the
   stack comes up, waits for `certs` with the same rule the switch uses, and
   only then removes the copy under data_dir, so a `stack up` after a reboot
-  cannot report a stack that renews nothing.
+  cannot report a stack that renews nothing. It comes up with
+  `--remove-orphans`, the way the switch brings it up, so a container the
+  compose file no longer names does not keep running with the credential.
+- `epistle stack certs enable` checks what the container needs before it
+  touches the stack: a configuration that answers `dns-01`, a DNS credential
+  it can read and an ACME account key that exists. Each of them stops the
+  container at start, so each of them is refused while the stack is still
+  whole.
+- The ACME account key is never created by a command. A key that is nowhere
+  is refused, with the two places it can be, because a new key is a new
+  account with the authority: the authorities rate limit new registrations
+  and the operator cannot recover the old identity. The copy under data_dir
+  is what `mail` renews with; the copy in `secrets/` is what `certs` renews
+  with; one of them has to exist before the split is turned on.
 - `epistle status` reports the container in its `tls` area with the days the
   certificate has left, warns while it is down and fails when fewer than seven
   days are left. It judges the container the way `stack certs` does: two
@@ -235,7 +248,10 @@ runs it renders and runs exactly as before.
   reported as renewing. It reads the renewal's own traces too: the reason the
   last attempt gave under `<data_dir>/acme/renew.error`, and a pair on disk
   older than the window in which it had to be renewed, which is what a failed
-  scheduled renewal leaves behind.
+  scheduled renewal leaves behind. The `renewal` item names the container that
+  renews the certificate, so it is not reported as renewed while that
+  container is down, and a container the compose file does not name but that
+  runs is reported: it may still hold the DNS credential and the account key.
 - `epistle stack update` waits for `certs` after it brings the stack up, with
   the same rule, and fails the update (with the rollback command) when the
   container does not settle. On a split stack it also judges the `tls` area of

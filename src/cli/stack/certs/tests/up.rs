@@ -87,7 +87,7 @@ fn up_stops_when_the_account_key_cannot_be_placed() {
 	.expect_err("the account key is nowhere");
 	assert!(error.contains("there is no ACME account key"), "{error}");
 	assert!(
-		!argv(dir.path()).contains("up -d"),
+		!argv(dir.path()).contains("up -d --remove-orphans"),
 		"the stack must not come up with a container that cannot renew: {}",
 		argv(dir.path())
 	);
@@ -173,8 +173,38 @@ fn up_stops_when_the_compose_file_cannot_be_read() {
 		"{error}"
 	);
 	assert!(
-		!argv(dir.path()).contains("up -d"),
+		!argv(dir.path()).contains("up -d --remove-orphans"),
 		"the stack must not come up on a guess about the layout: {}",
+		argv(dir.path())
+	);
+}
+
+/// A container the compose file no longer names is an orphan that still
+/// holds the credential: `up` removes it, the same way the switch does.
+#[test]
+fn up_removes_the_containers_the_compose_file_no_longer_names() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let data_dir = dir.path().join("data");
+	std::fs::create_dir_all(&data_dir).expect("data_dir");
+	// The compose file lost the certificates container: what runs is an
+	// orphan that still holds the DNS credential and the account key.
+	let compose = dir.path().join("compose.yaml");
+	std::fs::write(&compose, Recorder::split_layout(false).compose).expect("compose");
+	let podup = podup_stub(dir.path(), &rows("running", "2026-11-02T06:30:01Z"), "[]");
+
+	let code = up_with(
+		&data_dir,
+		&compose,
+		&podup,
+		std::time::Duration::ZERO,
+		&mut inherited(&podup, &compose),
+	)
+	.expect("up");
+
+	assert_eq!(code, ExitCode::SUCCESS);
+	assert!(
+		argv(dir.path()).contains("up -d --remove-orphans"),
+		"an orphan that holds the credential has to go: {}",
 		argv(dir.path())
 	);
 }

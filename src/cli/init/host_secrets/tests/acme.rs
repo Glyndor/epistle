@@ -38,30 +38,32 @@ fn turning_certs_on_copies_the_key_the_authority_knows() {
 		lines.iter().any(|line| line.contains("copied")),
 		"{lines:?}"
 	);
+	use std::os::unix::fs::PermissionsExt;
+	let mode = fs::metadata(super::acme_account_key(&data_dir))
+		.expect("metadata")
+		.permissions()
+		.mode();
+	assert_eq!(mode & 0o077, 0, "{mode:o}");
 	for dir in split_dirs(&data_dir) {
 		assert!(dir.is_dir(), "{} for the bind mounts", dir.display());
 	}
 }
 
+/// A key that is nowhere is refused, not created: a new key is a new ACME
+/// account, which the authority rate limits and the operator cannot
+/// recover. The same rule `stack up` applies.
 #[test]
-fn turning_certs_on_without_any_key_creates_one_the_container_can_read() {
+fn turning_certs_on_without_any_key_refuses_instead_of_creating_one() {
 	let root = tempfile::tempdir().expect("tempdir");
 	let data_dir = data_dir(root.path());
 
-	let lines = place(&data_dir, true).expect("place");
+	let error = place(&data_dir, true).expect_err("no key anywhere");
 
-	let created = super::acme_account_key(&data_dir);
-	crate::acme::renew::load_or_create_account_key_at(&created).expect("a usable key");
+	assert!(error.contains("there is no ACME account key"), "{error}");
 	assert!(
-		lines.iter().any(|line| line.contains("created")),
-		"{lines:?}"
+		!super::acme_account_key(&data_dir).exists(),
+		"no key is created behind the operator's back"
 	);
-	use std::os::unix::fs::PermissionsExt;
-	let mode = fs::metadata(&created)
-		.expect("metadata")
-		.permissions()
-		.mode();
-	assert_eq!(mode & 0o077, 0, "{mode:o}");
 }
 
 #[test]
