@@ -11,6 +11,8 @@ use crate::dkim::Signer;
 use crate::dkim::rotate::{self, ROTATE_INTERVAL_DAYS};
 use crate::spf::DnsLookup;
 
+mod rotation_error;
+
 /// The previous selector still published during its overlap window.
 #[derive(Debug, Serialize)]
 pub(super) struct PreviousView {
@@ -334,7 +336,10 @@ pub(super) async fn build(
 		rsa_key_file: rsa.as_ref().map(|rsa| rsa.key_file.clone()),
 		rsa_selector: rsa.map(|rsa| rsa.selector),
 		rotation_requested_at: rotate::pending_request(&config.data_dir).map(|r| r.requested_at),
-		last_request_error: rotate::last_error(&config.data_dir),
+		last_request_error: rotation_error::current(
+			rotate::last_error(&config.data_dir),
+			rotated_at,
+		),
 		overrides: dkim
 			.domain
 			.iter()
