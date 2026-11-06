@@ -442,3 +442,40 @@ fn the_dry_run_does_not_print_a_multiline_token() {
 		"the dry run printed the token: {printed}"
 	);
 }
+
+/// The generated compose file is rewritten under the lock that guards it,
+/// the same one `stack update`, `stack resources set` and `stack certs`
+/// take: the command waits for it, and a rewrite that lands meanwhile is
+/// not lost.
+#[test]
+fn the_compose_file_is_rewritten_under_the_lock_that_guards_it() {
+	let (_dir, path, compose) = stack();
+	let held =
+		crate::storage::lock::FileLock::acquire(&crate::storage::locked::lock_path(&compose))
+			.expect("lock");
+	let running = std::thread::spawn(move || {
+		let (mut out, mut status) = (Vec::new(), Vec::new());
+		execute_with(
+			&path,
+			action(&["--token-file", TOKEN]),
+			false,
+			false,
+			&mut out,
+			&mut status,
+			|_, _| ExitCode::SUCCESS,
+		)
+	});
+	std::thread::sleep(std::time::Duration::from_millis(500));
+	assert!(
+		!mounted(&compose, TOKEN),
+		"the compose file was rewritten while the lock was held elsewhere"
+	);
+	drop(held);
+	let result = running.join().expect("set");
+	assert_eq!(result.unwrap(), ExitCode::SUCCESS);
+	assert!(
+		mounted(&compose, TOKEN),
+		"the token mount is not on disk: {}",
+		std::fs::read_to_string(&compose).unwrap()
+	);
+}

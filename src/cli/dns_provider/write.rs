@@ -74,6 +74,15 @@ pub(super) fn run(
 		.into_iter()
 		.chain(args.token_env.as_deref())
 		.collect();
+	// The generated compose file is rewritten through the companion, so it
+	// is read and written under the lock that guards it. The common lock
+	// above was taken first and this one after it, in every command that
+	// takes both, so no two commands wait for each other.
+	let compose_lock = if dry_run {
+		None
+	} else {
+		super::compose::lock_compose(&current)?
+	};
 	let plan = super::compose::with_token(&current, &zone, source, &dropped)?;
 	// The variable the token lives in has to be visible where the container
 	// reads it. This command knows its name, so a variable it does not see
@@ -108,6 +117,10 @@ pub(super) fn run(
 	let outcome =
 		crate::cli::config_edit::commit_pair(document, compose.map(|update| update.companion))
 			.map_err(ResourceError::from)?;
+	// The generated file is written, so the lock that guarded it is free
+	// again: a command that waits for it does not wait for the container
+	// this one recreates.
+	drop(compose_lock);
 	let changed = outcome == Outcome::Changed;
 	writeln!(
 		status,
