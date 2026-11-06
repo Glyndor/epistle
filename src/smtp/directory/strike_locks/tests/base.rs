@@ -55,7 +55,7 @@ fn a_full_line_turns_the_sign_in_away_without_waiting() {
 		let locks = locks.clone();
 		std::thread::spawn(move || locks.hold(&subjects(&["account:a"])).is_ok())
 	};
-	while locks.stripes[0].waiting.load(Ordering::SeqCst) == 0 {
+	while locks.waiting.load(Ordering::SeqCst) == 0 {
 		std::thread::yield_now();
 	}
 	assert!(
@@ -67,4 +67,41 @@ fn a_full_line_turns_the_sign_in_away_without_waiting() {
 		waiter.join().expect("thread"),
 		"the waiter is admitted in turn"
 	);
+}
+
+#[test]
+fn waiters_on_different_stripes_count_against_one_line() {
+	// Two stripes, a line of one: a second waiter on the other stripe must be
+	// turned away too, or the bound would be per stripe and an attacker could
+	// park a worker thread per stripe.
+	let locks = Arc::new(StrikeLocks::new(64, 1));
+	let names: Vec<String> = (0..64).map(|n| format!("account:{n}")).collect();
+	let mut taken = Vec::new();
+	let mut by_stripe = std::collections::HashMap::new();
+	for name in &names {
+		by_stripe
+			.entry(locks.stripe_of(name))
+			.or_insert_with(|| name.clone());
+	}
+	let mut subjects_of: Vec<String> = by_stripe.into_values().collect();
+	let (a, b) = (
+		subjects_of.pop().expect("stripe"),
+		subjects_of.pop().expect("stripe"),
+	);
+	taken.push(locks.hold(&[a.clone()]).expect("free"));
+	taken.push(locks.hold(&[b.clone()]).expect("free"));
+	let waiter = {
+		let locks = locks.clone();
+		let a = a.clone();
+		std::thread::spawn(move || locks.hold(&[a]).is_ok())
+	};
+	while locks.waiting.load(Ordering::SeqCst) == 0 {
+		std::thread::yield_now();
+	}
+	assert!(
+		locks.hold(&[b]).is_err(),
+		"the line is global: one is already waiting on another stripe"
+	);
+	drop(taken);
+	assert!(waiter.join().expect("thread"));
 }

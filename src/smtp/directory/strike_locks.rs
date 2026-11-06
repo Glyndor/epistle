@@ -31,9 +31,12 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 /// How many stripes there are. A power of two so the hash maps with a mask.
 const STRIPES: usize = 1024;
 
-/// How many sign-ins may wait on one stripe before the next is turned away.
-/// A stripe is held for the length of one password check, so a line this long
-/// is seconds of queue, which is as far as the password gate's own line goes.
+/// How many sign-ins may wait on any stripe at once, in the whole process,
+/// before the next is turned away. A stripe is held for the length of one
+/// password check, so a line this long is seconds of queue, which is as far as
+/// the password gate's own line goes. The bound is global, not per stripe: a
+/// bound per stripe would let an attacker who spreads guesses over many
+/// subjects park as many worker threads as stripes times the bound.
 const MAX_WAITING: usize = 256;
 
 /// Too many sign-ins are already waiting for a subject of this one.
@@ -43,7 +46,6 @@ pub(crate) struct Crowded;
 #[derive(Debug, Default)]
 struct Stripe {
 	lock: Mutex<()>,
-	waiting: AtomicUsize,
 }
 
 /// A set of striped locks keyed by ban subject.
@@ -51,6 +53,7 @@ struct Stripe {
 pub(crate) struct StrikeLocks {
 	stripes: Box<[Stripe]>,
 	seed: RandomState,
+	waiting: AtomicUsize,
 	max_waiting: usize,
 }
 
@@ -92,6 +95,7 @@ impl StrikeLocks {
 		Self {
 			stripes: (0..stripes.max(1)).map(|_| Stripe::default()).collect(),
 			seed: RandomState::new(),
+			waiting: AtomicUsize::new(0),
 			max_waiting,
 		}
 	}
@@ -120,12 +124,12 @@ impl StrikeLocks {
 		if let Ok(guard) = stripe.lock.try_lock() {
 			return Ok(guard);
 		}
-		if stripe.waiting.fetch_add(1, Ordering::SeqCst) >= self.max_waiting {
-			stripe.waiting.fetch_sub(1, Ordering::SeqCst);
+		if self.waiting.fetch_add(1, Ordering::SeqCst) >= self.max_waiting {
+			self.waiting.fetch_sub(1, Ordering::SeqCst);
 			return Err(Crowded);
 		}
 		let guard = stripe.lock.lock().unwrap_or_else(|p| p.into_inner());
-		stripe.waiting.fetch_sub(1, Ordering::SeqCst);
+		self.waiting.fetch_sub(1, Ordering::SeqCst);
 		Ok(guard)
 	}
 }
