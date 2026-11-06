@@ -27,6 +27,7 @@ fn ctx_for(dir: &std::path::Path, extra: &str) -> Ctx {
 		now: SystemTime::now(),
 		podup: "sh".to_string(),
 		meminfo: dir.join("meminfo"),
+		steady: std::time::Duration::ZERO,
 	}
 }
 
