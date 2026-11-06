@@ -83,6 +83,47 @@ pub struct FileLock {
 }
 
 impl FileLock {
+	/// Hold shared store access for the lifetime of a server or offline writer.
+	/// Migration takes the exclusive counterpart before reading its journal.
+	pub(crate) fn store_shared(data_dir: &Path) -> std::io::Result<Self> {
+		Self::store(data_dir, libc::LOCK_SH)
+	}
+
+	/// Exclude every server, offline writer and competing migration.
+	pub(crate) fn store_exclusive(data_dir: &Path) -> std::io::Result<Self> {
+		Self::store(data_dir, libc::LOCK_EX)
+	}
+
+	fn store(data_dir: &Path, mode: libc::c_int) -> std::io::Result<Self> {
+		use std::os::unix::fs::OpenOptionsExt;
+		std::fs::create_dir_all(data_dir)?;
+		// Never unlink or replace this file: the inode is the exclusion boundary.
+		let file = OpenOptions::new()
+			.create(true)
+			.truncate(false)
+			.read(true)
+			.write(true)
+			.mode(0o600)
+			.custom_flags(libc::O_NOFOLLOW)
+			.open(data_dir.join(".store.lock"))?;
+		loop {
+			if unsafe { libc::flock(file.as_raw_fd(), mode | libc::LOCK_NB) } == 0 {
+				return Ok(Self { file });
+			}
+			let error = std::io::Error::last_os_error();
+			match error.kind() {
+				std::io::ErrorKind::Interrupted => continue,
+				std::io::ErrorKind::WouldBlock => {
+					return Err(std::io::Error::new(
+						std::io::ErrorKind::WouldBlock,
+						"store is in use; stop the server and wait for other storage operations before migrating; retry startup or offline writes after migration finishes",
+					));
+				}
+				_ => return Err(error),
+			}
+		}
+	}
+
 	/// Acquire an exclusive lock on `path`, creating the file if absent.
 	/// Blocks until the kernel grants the lock.
 	pub fn acquire(path: &Path) -> std::io::Result<Self> {

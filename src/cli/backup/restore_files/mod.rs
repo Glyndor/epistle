@@ -91,7 +91,8 @@ pub(super) fn load_failure_state(error: &super::db_dump::BackupError, data_dir: 
 /// without its header the next JMAP request starts a new epoch, so every
 /// client resyncs once instead of trusting positions that were rewound.
 fn lays_down(name: &str) -> bool {
-	name != super::DATABASE_SQL_NAME
+	name != "data/.store.lock"
+		&& name != super::DATABASE_SQL_NAME
 		&& Path::new(name).file_name() != Some(OsStr::new(StateFile::JmapState.name()))
 }
 

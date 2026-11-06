@@ -653,10 +653,23 @@ the mail and JMAP blobs of its accounts are sealed with it.
 - **Moving what is already stored** is explicit:
   `epistle storage tenant-keys migrate` re-encrypts it tenant by tenant,
   verifies every new copy on disk before it replaces the old one, and resumes
-  after a cut. `--rollback` brings everything back under the server key in the
+  after a cut by re-scanning every account against the current keys and files.
+  It includes blob-only owners and both legacy shared blob layouts; encrypted
+  shared blobs need valid `.owner` sidecars. The offline command loads static
+  accounts and `accounts.toml` and refuses owners it cannot resolve, including
+  SQL/LDAP-only accounts, until an authoritative account snapshot is supplied.
+  An exclusive store-wide lock excludes server startup and offline mail writers
+  for the entire migration. `--rollback` brings everything back under the server key in the
   first envelope version, which is what to run before going back to a release
   without tenant keys: such a release reads a version 2 file as if it were
   plaintext and serves ciphertext.
+- **Filesystem blobs only.** Configuration refuses `tenant_keys = true`
+  with S3 until a backend-aware migration exists. Migration, rollback and dry
+  runs also refuse S3 before touching local data. Server-key-only S3 writes
+  remain supported. For S3 objects written by an earlier configuration, keep
+  every required key and a release that reads their envelopes; do not discard
+  retired keys or downgrade based on a local-file migration. Disabling tenant
+  writes does not convert existing remote objects.
 - **Erasure by key.** Deleting a tenant's key file and removing its
   `encryption_key_file` line makes every file sealed with it unreadable on
   purpose, including the copies in backups, without having to find them. The
@@ -669,7 +682,7 @@ the mail and JMAP blobs of its accounts are sealed with it.
   mailbox and have the server open it there; this is about stolen disks,
   backups and keys, not about a writer on the disk.
 
-**Rotating the server key.** List the old key file in `[storage]
+**Rotating the server key with filesystem blobs.** List the old key file in `[storage]
 retired_key_files`, put the new one in `encryption_key_file`, restart, and run
 `epistle storage tenant-keys migrate` with the stack stopped. A retired key is
 only read, never written with. The run moves every message and blob it sealed,
@@ -743,8 +756,8 @@ clients when replacing a credential, and retain decryption keys for old backups.
 | SCRAM: `accounts.toml`, alongside password hash | Base64 salt, iteration count, StoredKey and ServerKey; PBKDF2-HMAC-SHA256 | `epistle account password N` derives a fresh verifier; older work factors upgrade on successful PLAIN/LOGIN |
 | App passwords: `app_passwords.toml` | Salted argon2id PHC, with label and restrictions | `epistle app-password rotate N LABEL`; distribute the new secret |
 | TOTP: `accounts.toml` | Base32 shared secret; `enc:v1:<base64>` ChaCha20-Poly1305 envelope when storage encryption is enabled | DELETE then POST `/api/v1/accounts/{name}/totp`; scan the new secret in the authenticator |
-| Storage key: `[storage] encryption_key_file` or `encryption_key_env`; init writes beside the data directory in `secrets/` | Base64 32-byte encryption key | `epistle storage-keygen`; move the old file to `[storage] retired_key_files`, point `encryption_key_file` at the new one, restart and run `epistle storage tenant-keys migrate` with the stack stopped (see "Keys per tenant"); changing only the key loses access |
-| Tenant keys: `[[tenant]] encryption_key_file` | Base64 32-byte encryption key, one per tenant | `epistle storage-keygen`; the same retire and migrate steps as the storage key, per tenant, are not available yet: re-encrypt the tenant back to the server key with `--rollback`, change its key, and migrate forward again |
+| Storage key: `[storage] encryption_key_file` or `encryption_key_env`; init writes beside the data directory in `secrets/` | Base64 32-byte encryption key | `epistle storage-keygen`; move the old file to `[storage] retired_key_files`, point `encryption_key_file` at the new one, restart and run `epistle storage tenant-keys migrate` with the stack stopped (see "Keys per tenant"); changing only the key loses access. With S3 blobs, migration is refused: retain all required keys until a backend-aware migration exists |
+| Tenant keys: `[[tenant]] encryption_key_file` | Base64 32-byte encryption key, one per tenant | `epistle storage-keygen`; the same retire and migrate steps as the storage key, per tenant, are not available yet: re-encrypt the tenant back to the server key with `--rollback`, change its key, and migrate forward again. This requires filesystem blobs; S3 tenant writes and migration are refused |
 | DKIM: configured `key_file`, RSA key file, per-domain overrides and rotated `dkim-*.key` files | Ed25519/RSA PKCS#8 PEM | `epistle dkim rotate`; for overrides use `epistle dkim-keygen`, publish the new selector and update configuration |
 | TLS: configured private-key PEM; ACME `acme/account.key` and `acme/key.pem` | Base64 PKCS#8 account key; PEM certificate private key | Replace manual PEM and restart; `epistle tls renew` renews managed certificates; retain the ACME account key or explicitly register a replacement |
 | OAuth issuer: `[oauth] signing_key` or `signing_key_file` | Base64 PKCS#8 ES256 private key | `epistle oauth-keygen`; replace private key and matching public key, restart; issued tokens need renewal |

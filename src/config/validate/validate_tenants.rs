@@ -17,6 +17,16 @@ impl Config {
 				"[storage] tenant_keys = true needs encrypt_at_rest = true".into(),
 			));
 		}
+		if let Some(storage) = &self.storage
+			&& storage.tenant_keys
+			&& matches!(
+				storage.blobs.as_ref(),
+				Some(crate::config::BlobBackendConfig::S3(_))
+			) {
+			return Err(ConfigError::Invalid(
+				"[storage] tenant_keys = true is not supported with S3 blobs; use filesystem blobs until a backend-aware migration exists".into(),
+			));
+		}
 		if self.tenants.is_empty() {
 			return Ok(());
 		}
