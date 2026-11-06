@@ -248,6 +248,12 @@ impl DnsProvider for CloudflareProvider {
 			self.delete_inner(&zone, record).await
 		}))
 	}
+	fn delete_exact(&self, zone: &str, record: DnsRecord) -> Op<'_> {
+		let zone = zone.to_string();
+		Box::pin(crate::dns::providers::within(async move {
+			self.delete_exact_inner(&zone, record).await
+		}))
+	}
 	fn list(&self, zone: &str) -> ListOp<'_> {
 		let zone = zone.to_string();
 		let zone_name = zone.to_string();
@@ -304,6 +310,8 @@ async fn decode_ok(response: reqwest::Response) -> Result<(), ProviderError> {
 
 mod record;
 mod write;
+
+mod exact;
 
 #[cfg(test)]
 mod tests;

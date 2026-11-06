@@ -463,3 +463,5 @@ async fn mx_upsert_sends_the_null_mx_with_the_root_target() {
 	assert!(body.contains("\"preference\":0"), "{body}");
 	assert!(body.contains("\"exchange\":\".\""), "{body}");
 }
+
+mod exact;

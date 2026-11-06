@@ -235,3 +235,5 @@ fn hex_lower(bytes: &[u8]) -> String {
 mod delete_and_list;
 mod signing;
 mod upsert;
+
+mod exact;
