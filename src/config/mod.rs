@@ -325,9 +325,11 @@ pub struct Config {
 	/// the field out of that mail.
 	#[serde(default = "default_yes")]
 	pub system_auto_submitted: bool,
-	/// Write `X-Epistle: 1` on every submission. Off by default: the field
-	/// says nothing a receiver acts on, and no version rides in it.
-	#[serde(default)]
+	/// Write `X-Epistle: 1` on every submission. On by default: it names the
+	/// software the message left, with no version, and a receiver ignores it.
+	/// The value is fixed and a client cannot write or change it. `false`
+	/// leaves the field out.
+	#[serde(default = "default_yes")]
 	pub x_epistle_header: bool,
 	/// Write `Organization` on a submission whose domain has an entry in
 	/// `domain_organization`. `false` leaves the field out.

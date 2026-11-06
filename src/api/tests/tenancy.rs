@@ -209,3 +209,32 @@ async fn the_message_id_of_a_send_names_the_senders_domain_not_the_first_hosted_
 		.expect("a Message-ID header");
 	assert!(line.ends_with("@b.example>"), "{line}");
 }
+
+/// With nothing configured, a message sent through the API carries the fixed `X-Epistle: 1`
+/// marker, once, and no version.
+#[tokio::test]
+async fn a_send_carries_the_vendor_marker_by_default() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let app = router(scoped_state(dir.path()));
+	let (status, body) = request_with_body(
+		&app,
+		"POST",
+		"/api/v1/send",
+		Some(TOKEN.as_str()),
+		Some(serde_json::json!({
+			"from": "bob@b.example",
+			"to": ["someone@elsewhere.example"],
+			"text": "x",
+			"headers": {"X-Epistle": "forged"},
+		})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	let (_, raw) = super::send::send_rich::queued(dir.path());
+	let text = String::from_utf8_lossy(&raw);
+	let markers: Vec<&str> = text
+		.lines()
+		.filter(|line| line.to_ascii_lowercase().starts_with("x-epistle:"))
+		.collect();
+	assert_eq!(markers, ["X-Epistle: 1"], "{text}");
+}
