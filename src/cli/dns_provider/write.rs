@@ -15,7 +15,7 @@ use std::process::ExitCode;
 use toml_edit::TableLike;
 
 use super::super::config_edit::{
-	ConfigDocument, FieldChange, Outcome, after_ports_change_reporting,
+	ConfigDocument, FieldChange, Outcome, after_credential_change_reporting,
 };
 use super::super::resource::{self, ResourceError};
 use super::super::stack::StackAction;
@@ -104,7 +104,7 @@ pub(super) fn run(
 		if changed { "saved" } else { "unchanged" }
 	)
 	.map_err(|error| error.to_string())?;
-	let (code, reload) = after_ports_change_reporting(&config, outcome, status, restart)?;
+	let (code, reload) = after_credential_change_reporting(&config, outcome, status, restart)?;
 	if json {
 		let object =
 			super::super::json_out::change_object(edit.action, changed, edit.fields, Some(reload));

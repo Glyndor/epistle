@@ -287,6 +287,7 @@ impl execute::UpdateHost for Live<'_> {
 			&self.config.data_dir,
 			self.config_path,
 			self.has_database(),
+			super::certs::runs_certs(self.compose)?,
 		)
 	}
 

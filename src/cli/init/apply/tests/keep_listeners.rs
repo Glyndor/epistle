@@ -100,6 +100,7 @@ fn apply_keeps_operator_listeners_when_existing_config_has_them() {
 		webdav: false,
 		api: false,
 		database: false,
+		certs: false,
 	};
 
 	let outcome = apply(&answers);
@@ -198,6 +199,7 @@ fn plan_renders_kept_listeners_when_existing_config_has_them() {
 		webdav: false,
 		api: false,
 		database: false,
+		certs: false,
 	};
 	let plan = crate::cli::init::apply::plan(&answers).expect("plan");
 

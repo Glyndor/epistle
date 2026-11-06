@@ -39,6 +39,17 @@ pub(crate) fn regenerate(
 	listeners: &[Listener],
 	existing: &str,
 ) -> Result<Regenerated, String> {
+	regenerate_with(data_dir, listeners, existing, None)
+}
+
+/// [`regenerate`], with the certificates container turned on or off when
+/// `certs` says so instead of kept as the existing file has it.
+pub(crate) fn regenerate_with(
+	data_dir: &Path,
+	listeners: &[Listener],
+	existing: &str,
+	certs: Option<bool>,
+) -> Result<Regenerated, String> {
 	let document: Value = serde_json::from_str(existing)
 		.map_err(|error| format!("compose.yaml is not the JSON epistle init writes: {error}"))?;
 	let mail = document
@@ -67,6 +78,12 @@ pub(crate) fn regenerate(
 		None => Default::default(),
 	};
 	let config_dir = config_path.parent().unwrap_or(Path::new("/")).to_path_buf();
+	// The DNS credential is mounted where the zone is written from: `certs`
+	// when the stack runs it, `mail` otherwise.
+	let running_certs = document["services"]
+		.get("certs")
+		.filter(|certs| certs.is_object());
+	let forwarding = dns_forwarding(running_certs.unwrap_or(mail), &config_dir, data_dir);
 	let answers = Answers {
 		mode: Mode::Manual,
 		hostname: String::new(),
@@ -76,7 +93,7 @@ pub(crate) fn regenerate(
 		data_dir: data_dir.to_path_buf(),
 		config_path,
 		acme: None,
-		dns: dns_forwarding(mail, &config_dir),
+		dns: forwarding,
 		services: Services {
 			imap: false,
 			submission: false,
@@ -85,6 +102,7 @@ pub(crate) fn regenerate(
 			webdav: false,
 			api: false,
 			database,
+			certs: certs.unwrap_or(running_certs.is_some()),
 			// A stack that runs no clamav on purpose keeps running none.
 			antivirus: document
 				.get("x-epistle-antivirus")
@@ -153,10 +171,25 @@ fn served_config(mail: &Value) -> Result<PathBuf, String> {
 		.ok_or_else(|| "the `mail` service in compose.yaml has no `--config` in its command".into())
 }
 
-/// The DNS token the existing `mail` service forwards: an environment
-/// variable passed through as `${NAME}`, or a file bound read-only at its
-/// own path that is neither the config directory nor the host binary.
-fn dns_forwarding(mail: &Value, config_dir: &Path) -> Option<DnsAnswers> {
+/// The DNS token the existing `service` forwards: an environment variable
+/// passed through as `${NAME}`, or a file bound read-only at its own path
+/// that is neither the config directory, the host binary nor a directory a
+/// split stack shares.
+fn dns_forwarding(service: &Value, config_dir: &Path, data_dir: &Path) -> Option<DnsAnswers> {
+	let mail = service;
+	// The directories `certs` shares with `mail` and owns are bound at their
+	// own path too; they are not a token.
+	let shared = [
+		crate::acme::renew::pair_dir(data_dir),
+		crate::dns::tlsa::state_path(data_dir)
+			.parent()
+			.map(Path::to_path_buf)
+			.unwrap_or_default(),
+		crate::cli::init::compose_file_path(data_dir)
+			.parent()
+			.map(Path::to_path_buf)
+			.unwrap_or_default(),
+	];
 	let token_env = mail["environment"].as_object().and_then(|environment| {
 		environment
 			.iter()
@@ -170,8 +203,9 @@ fn dns_forwarding(mail: &Value, config_dir: &Path) -> Option<DnsAnswers> {
 			let read_only = volume["read_only"].as_bool() == Some(true);
 			(relabelled
 				&& read_only && volume["target"].as_str() == Some(source)
-				&& Path::new(source) != config_dir)
-				.then(|| PathBuf::from(source))
+				&& Path::new(source) != config_dir
+				&& !shared.iter().any(|dir| dir == Path::new(source)))
+			.then(|| PathBuf::from(source))
 		})
 	});
 	(token_env.is_some() || token_file.is_some()).then(|| DnsAnswers {

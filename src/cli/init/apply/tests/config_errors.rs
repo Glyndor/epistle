@@ -236,6 +236,7 @@ fn answers_with_dns_and_extra_services() -> Answers {
 			webdav: true,
 			api: false,
 			database: false,
+			certs: false,
 		},
 		image: Some("localhost/epistle:dev".to_string()),
 		acme: None,

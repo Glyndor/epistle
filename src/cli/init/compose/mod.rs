@@ -149,6 +149,16 @@ pub(super) fn write_compose_step_with_host_binary(
 	{
 		return Err(ApplyError::HostBinaryInvalid(message));
 	}
+	// The certificates container mounts its account key and two directories
+	// of data_dir; podup refuses a bind or a secret whose source is missing.
+	if answers.services.certs {
+		super::host_secrets::acme::place(&answers.data_dir, true).map_err(|error| {
+			ApplyError::KeyWrite(
+				super::host_secrets::acme_account_key(&answers.data_dir),
+				std::io::Error::other(error),
+			)
+		})?;
+	}
 	ensure_compose_file(answers, answers.services.database, report)?;
 	Ok(())
 }
@@ -378,6 +388,12 @@ impl ComposeFile {
 			"mail".to_string(),
 			ComposeService::new_mail(&image, answers, database, published_ports, nofile),
 		);
+		if answers.services.certs {
+			services.insert(
+				"certs".to_string(),
+				ComposeService::new_certs(&image, answers),
+			);
+		}
 		// Off only when the answers or the host's memory said so.
 		let antivirus = answers.services.antivirus != Some(false);
 		if antivirus {
@@ -396,6 +412,16 @@ impl ComposeFile {
 				name.to_string(),
 				TopLevelSecret {
 					file: path(&answers.data_dir).display().to_string(),
+				},
+			);
+		}
+		if answers.services.certs {
+			secrets.insert(
+				services::ACME_ACCOUNT_SECRET.to_string(),
+				TopLevelSecret {
+					file: super::host_secrets::acme_account_key(&answers.data_dir)
+						.display()
+						.to_string(),
 				},
 			);
 		}
@@ -476,6 +502,7 @@ pub(super) fn minimal_answers() -> crate::cli::init::Answers {
 			webdav: false,
 			api: false,
 			database: false,
+			certs: false,
 		},
 		image: None,
 		resources: Default::default(),

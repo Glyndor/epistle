@@ -163,6 +163,7 @@ fn apply_does_not_rewrite_keys_when_every_answer_changes() {
 		webdav: false,
 		api: false,
 		database: false,
+		certs: false,
 	};
 	answers.mode = crate::cli::init::answers::Mode::Manual;
 	let outcome = apply(&answers);

@@ -40,9 +40,9 @@ pub(crate) use compose_publish::{
 	plain_http as serves_plain_http, prepare as prepare_published_ports,
 	preview as preview_published_ports,
 };
-pub(crate) use regenerate::regenerate;
 #[cfg(test)]
 pub(crate) use regenerate::rendered_for_tests;
+pub(crate) use regenerate::{regenerate, regenerate_with};
 
 use std::io::Write;
 use std::path::PathBuf;

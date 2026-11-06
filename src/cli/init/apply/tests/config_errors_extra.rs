@@ -81,6 +81,7 @@ fn build_config_includes_the_api_listener_when_services_request_it() {
 		webdav: false,
 		api: true,
 		database: false,
+		certs: false,
 	};
 	let cert = std::path::PathBuf::from("/var/lib/epistle/keys/cert.pem");
 	let key = std::path::PathBuf::from("/var/lib/epistle/keys/key.pem");

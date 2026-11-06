@@ -49,6 +49,27 @@ pub(crate) fn after_ports_change_reporting(
 	apply(config, outcome, true, status, run, action)
 }
 
+/// Like [`after_ports_change_reporting`] for a change to the DNS credential:
+/// the container that mounts it is recreated, `certs` when the stack runs
+/// the certificates container and `mail` otherwise.
+pub(crate) fn after_credential_change_reporting(
+	config: &Config,
+	outcome: Outcome,
+	status: &mut impl Write,
+	run: impl FnOnce(&Config, stack::StackAction) -> ExitCode,
+) -> Result<(ExitCode, Reload), ResourceError> {
+	let compose = init::compose_file_path(&config.data_dir);
+	let service = match stack::certs::runs_certs(&compose) {
+		Ok(true) => "certs",
+		Ok(false) => "mail",
+		Err(error) => return Err(ResourceError::from(error)),
+	};
+	let action = stack::StackAction::Recreate {
+		service: service.into(),
+	};
+	apply(config, outcome, true, status, run, action)
+}
+
 fn apply(
 	config: &Config,
 	outcome: Outcome,

@@ -29,6 +29,7 @@ fn answers_with_image(image: Option<&str>) -> Answers {
 			webdav: false,
 			api: false,
 			database: false,
+			certs: false,
 		},
 		image: image.map(str::to_string),
 		resources: Default::default(),
