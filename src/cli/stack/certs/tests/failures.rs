@@ -64,30 +64,6 @@ fn a_failed_restore_after_the_new_layout_ran_names_the_copy_to_delete() {
 	assert!(error.contains("mail can read it"), "{error}");
 }
 
-/// `stack up` of a split stack removes a copy left under data_dir, and only
-/// on a split stack.
-#[test]
-fn stack_up_removes_a_leftover_copy_only_when_certs_runs() {
-	let dir = tempfile::tempdir().expect("tempdir");
-	let data_dir = dir.path().join("data");
-	std::fs::create_dir_all(&data_dir).expect("data_dir");
-	let compose = dir.path().join("compose.yaml");
-	crate::acme::renew::load_or_create_account_key(&data_dir).expect("key");
-	crate::cli::init::host_secrets::acme::place(&data_dir, true).expect("copy");
-	let copy = crate::acme::renew::account_key_path(&data_dir);
-
-	std::fs::write(&compose, Recorder::split_layout(false).compose).expect("whole");
-	retire_before_up(&data_dir, &compose).expect("up");
-	assert!(copy.exists(), "mail renews with it without the split");
-
-	std::fs::write(&compose, Recorder::split_layout(true).compose).expect("split");
-	retire_before_up(&data_dir, &compose).expect("up");
-	assert!(!copy.exists());
-
-	std::fs::write(&compose, "not json").expect("garbage");
-	assert!(retire_before_up(&data_dir, &compose).is_err());
-}
-
 #[test]
 fn a_copy_that_cannot_be_removed_is_named() {
 	let (_, error) = disable_failing(vec!["ready mail", "retire"]);

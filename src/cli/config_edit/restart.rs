@@ -52,11 +52,17 @@ pub(crate) fn after_ports_change_reporting(
 /// Like [`after_ports_change_reporting`] for a change to the DNS credential:
 /// the container that mounts it is recreated, `certs` when the stack runs
 /// the certificates container and `mail` otherwise.
+///
+/// `also` names the services whose definition the change touched besides
+/// that one: with the certificates container running, `mail` loses the
+/// credential when it still carried it, and a container that keeps the
+/// mount it had still has the token.
 pub(crate) fn after_credential_change_reporting(
 	config: &Config,
 	outcome: Outcome,
 	status: &mut impl Write,
 	run: impl FnOnce(&Config, stack::StackAction) -> ExitCode,
+	also: &[&str],
 ) -> Result<(ExitCode, Reload), ResourceError> {
 	let compose = init::compose_file_path(&config.data_dir);
 	let service = match stack::certs::runs_certs(&compose) {
@@ -64,8 +70,18 @@ pub(crate) fn after_credential_change_reporting(
 		Ok(false) => "mail",
 		Err(error) => return Err(ResourceError::from(error)),
 	};
-	let action = stack::StackAction::Recreate {
-		service: service.into(),
+	let mut services = vec![service.to_string()];
+	for one in also {
+		if !services.iter().any(|have| have == one) {
+			services.push((*one).to_string());
+		}
+	}
+	let action = if services.len() == 1 {
+		stack::StackAction::Recreate {
+			service: services.remove(0),
+		}
+	} else {
+		stack::StackAction::RecreateServices { services }
 	};
 	apply(config, outcome, true, status, run, action)
 }

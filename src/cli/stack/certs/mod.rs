@@ -17,6 +17,13 @@
 //! `stack rollback` turns it off before it puts an older binary back, since
 //! that binary may not know `serve --role`.
 //!
+//! `stack up` is the command an operator runs after a reboot, so it judges
+//! the same way the switch does: on a split stack the account key has to be
+//! where the certificates container reads it before the stack comes up, and
+//! the container has to be up when `up` returns. The copy under data_dir
+//! goes last, the order the switch uses, so a `mail` that is still running
+//! with the old layout never finds the key missing.
+//!
 //! The compose file is rewritten under the lock that guards it, the same one
 //! `stack update`, `stack resources set` and `dns provider set` take, so a
 //! rewrite that lands while the switch waits for the lock is read again under
@@ -24,11 +31,12 @@
 //!
 //! This module also owns the rule that says whether the container is up: a
 //! `certs` that exits at start is "running" again a second later under
-//! `restart: unless-stopped`, so one look is not enough. The switch, `status`
-//! and `stack update` all take the same two looks and the same window, so
-//! none of them claims more than the others about the container.
+//! `restart: unless-stopped`, so one look is not enough. The switch, `status`,
+//! `stack update` and `stack up` all take the same two looks and the same
+//! window, so none of them claims more than the others about the container.
 
 use std::path::Path;
+use std::process::ExitCode;
 use std::time::Duration;
 
 /// How long `certs` has to keep running, with the same start, before it
@@ -36,8 +44,9 @@ use std::time::Duration;
 /// resolver) end within a second when they fail, and the restart policy
 /// brings it back within another one.
 ///
-/// The window is shared: the switch, `status` and `stack update` all judge
-/// the container with it, so none of them claims more than the others.
+/// The window is shared: the switch, `status`, `stack update` and `stack up`
+/// all judge the container with it, so none of them claims more than the
+/// others.
 pub(in crate::cli) const STEADY: Duration = Duration::from_secs(15);
 
 /// Whether the compose file at `compose` runs the certificates container.
@@ -59,13 +68,20 @@ pub(in crate::cli) fn runs_certs(compose: &Path) -> Result<bool, String> {
 	Ok(document["services"].get("certs").is_some())
 }
 
-/// Before `stack up` of a split stack: a copy of the account key left under
-/// data_dir, where `mail` reads, is removed (only when `secrets/` holds the
-/// same key). A compose file that cannot be read stops `up`.
-pub(in crate::cli) fn retire_before_up(data_dir: &Path, compose: &Path) -> Result<(), String> {
-	if runs_certs(compose)?
-		&& let Some(line) = crate::cli::init::host_secrets::acme::retire_data_dir_copy(data_dir)?
-	{
+/// Before `stack up` of a split stack: the account key has to be where the
+/// certificates container reads it, since the container mounts it read-only
+/// and cannot create it.
+fn place_account_key(data_dir: &Path) -> Result<(), String> {
+	if let Some(line) = crate::cli::init::host_secrets::acme::place_for_certs(data_dir)? {
+		eprintln!("epistle: {line}");
+	}
+	Ok(())
+}
+
+/// Once the certificates container is up: the copy of the account key under
+/// data_dir, where `mail` reads, goes.
+fn retire_account_key(data_dir: &Path) -> Result<(), String> {
+	if let Some(line) = crate::cli::init::host_secrets::acme::retire_data_dir_copy(data_dir)? {
 		eprintln!("epistle: {line}");
 	}
 	Ok(())
@@ -145,7 +161,8 @@ impl Upness {
 /// A container that exits at start is "running" again a second later under
 /// `restart: unless-stopped`, so one look is not enough. Everything that
 /// asks whether the container is up takes this window and this rule, so the
-/// switch, `status` and `stack update` cannot disagree about it.
+/// switch, `status`, `stack update` and `stack up` cannot disagree about
+/// it.
 pub(in crate::cli) fn upness(
 	podup: &str,
 	compose: &Path,
@@ -188,10 +205,15 @@ pub(in crate::cli) fn upness(
 	}
 }
 
-/// `stack up`: remove a leftover key copy on a split stack, then `podup up
-/// -d` and the autostart unit. A layout that cannot be read is reported and
-/// `up` goes on: starting the stack is what `up` is for, and the copy is
-/// only removed when the file says the split runs.
+/// `stack up`: bring the stack up, and on a split stack make sure the
+/// certificates container is really there.
+///
+/// The order is the switch's: the account key goes where the certificates
+/// container reads it before the stack comes up, the container is judged
+/// with the same two looks and the same window once it is up, and the copy
+/// under data_dir, where `mail` reads, goes last. A layout that cannot be
+/// read stops `up`: the stack is not brought up on a guess about which
+/// layout runs.
 ///
 /// The steps run with podup's stderr captured, so the warnings about the
 /// ports the stack publishes on purpose can be replaced by one note.
@@ -200,16 +222,62 @@ pub(in crate::cli) fn up(
 	compose: &Path,
 	podup: &str,
 	published: &mut super::port_warnings::Published,
-) -> std::process::ExitCode {
-	if let Err(error) = retire_before_up(data_dir, compose) {
-		crate::cli::style::warn(format!("no leftover ACME account key was removed: {error}"));
+) -> ExitCode {
+	let mut run =
+		|steps: &[&[&str]]| super::port_warnings::run_steps(podup, compose, steps, published);
+	match up_with(data_dir, compose, podup, STEADY, &mut run) {
+		Ok(code) => code,
+		Err(error) => {
+			crate::cli::style::error(format_args!("stack up: {error}"));
+			ExitCode::FAILURE
+		}
 	}
-	super::port_warnings::run_steps(
-		podup,
-		compose,
-		&[&["up", "-d"], &["autostart", "install"]],
-		published,
-	)
+}
+
+/// [`up`], with the window the two looks are apart.
+///
+/// The switch, `status` and `stack update` take [`STEADY`]; the tests take
+/// none, so they do not wait fifteen seconds to say the same thing.
+pub(in crate::cli) fn up_with(
+	data_dir: &Path,
+	compose: &Path,
+	podup: &str,
+	window: Duration,
+	run: &mut dyn FnMut(&[&[&str]]) -> ExitCode,
+) -> Result<ExitCode, String> {
+	// Which layout runs decides where the account key lives and whether a
+	// certificates container has to come up. A compose file that cannot be
+	// read stops `up`: the stack is not brought up on a guess.
+	let split = runs_certs(compose)?;
+	if split {
+		// The account key has to be where the certificates container reads
+		// it before the stack comes up: the mount is read-only, so the
+		// container cannot create the key it needs, and a container that
+		// cannot read it exits at start.
+		place_account_key(data_dir)?;
+	}
+	let code = run(&[&["up", "-d"], &["autostart", "install"]]);
+	if code != ExitCode::SUCCESS {
+		// podup named the argv and the status it answered with.
+		return Ok(code);
+	}
+	if !split {
+		return Ok(ExitCode::SUCCESS);
+	}
+	// The certificates container has no healthcheck, so "running" is all
+	// podup reports, and a container that exits at start is running again a
+	// second later under `restart: unless-stopped`. It is up once it has
+	// kept the same start for the window, judged the way the switch,
+	// `status` and `stack update` judge it.
+	let state = upness(podup, compose, "certs", window);
+	if !state.is_up() {
+		return Err(state.why("certs"));
+	}
+	// The copy under data_dir, where `mail` reads, goes once the container
+	// that holds the key is up: the order the switch uses, so a `mail`
+	// still running with the old layout never finds the key missing.
+	retire_account_key(data_dir)?;
+	Ok(ExitCode::SUCCESS)
 }
 
 /// What a switch needs from the host; the tests fake it.

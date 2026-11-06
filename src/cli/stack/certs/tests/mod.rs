@@ -4,6 +4,7 @@ mod command;
 mod failures;
 mod lock;
 mod order;
+mod up;
 
 /// A host that records every step and fails, once each, the steps named in
 /// `fail` (`render`, `place`, `write certs=true`, `podup`, `ready mail`...).
