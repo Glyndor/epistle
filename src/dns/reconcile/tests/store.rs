@@ -4,6 +4,7 @@
 use std::os::unix::fs::PermissionsExt;
 use std::time::Duration;
 
+use super::run::block;
 use super::support::rec;
 use super::*;
 use crate::dns::provider::RecordKind;
@@ -116,10 +117,96 @@ fn a_symlink_at_the_old_staging_name_is_not_written_through() {
 #[test]
 fn the_lock_file_is_readable_by_its_owner_only() {
 	let dir = tempfile::tempdir().expect("directory");
-	let _lock = store::lock(dir.path(), Duration::ZERO)
+	let _lock = store::lock(dir.path()).expect("lock").expect("free");
+	assert_eq!(mode_of(&store::dir(dir.path()).join(".lock")), 0o600);
+}
+
+/// The lock of the ledger is the lock the rest of the code takes: a
+/// publisher of another process and the reconcile loop cannot write at the
+/// same time.
+#[test]
+fn the_ledger_lock_is_the_lock_the_rest_of_the_code_takes() {
+	let dir = tempfile::tempdir().expect("directory");
+	std::fs::create_dir_all(store::dir(dir.path())).expect("the directory");
+	let path = store::dir(dir.path()).join(".lock");
+	let held = crate::storage::lock::FileLock::try_acquire(&path)
 		.expect("lock")
 		.expect("free");
-	assert_eq!(mode_of(&store::dir(dir.path()).join(".lock")), 0o600);
+	assert!(
+		store::lock(dir.path()).expect("lock").is_none(),
+		"the lock of the rest of the code keeps the ledger out of reach"
+	);
+	drop(held);
+	assert!(
+		store::lock(dir.path()).expect("lock").is_some(),
+		"the lock is free again"
+	);
+}
+
+/// The wait for the lock does not stop the runtime: the caller waits
+/// between two tries, so the server keeps answering while a publish holds
+/// the ledger.
+#[test]
+fn waiting_for_the_lock_does_not_stop_the_runtime() {
+	let dir = tempfile::tempdir().expect("directory");
+	let _held = store::lock(dir.path()).expect("lock").expect("free");
+	let ran = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+	let flag = std::sync::Arc::clone(&ran);
+	let data_dir = dir.path().to_path_buf();
+	block(async move {
+		tokio::spawn(async move {
+			tokio::time::sleep(Duration::from_millis(50)).await;
+			flag.store(true, std::sync::atomic::Ordering::SeqCst);
+		});
+		let taken = store::lock_wait(&data_dir, Duration::from_millis(200))
+			.await
+			.expect("lock");
+		assert!(taken.is_none(), "the lock is held by somebody else");
+	});
+	assert!(
+		ran.load(std::sync::atomic::Ordering::SeqCst),
+		"the runtime kept running while the lock was waited for"
+	);
+}
+
+/// A ledger that belongs to another zone is refused: the ledger of a zone
+/// says what epistle published there, and the ledger of another zone would
+/// turn every record in it foreign.
+#[test]
+fn a_ledger_for_another_zone_is_refused() {
+	let dir = tempfile::tempdir().expect("directory");
+	let path = store::path(dir.path(), "example.org").expect("path");
+	std::fs::create_dir_all(path.parent().expect("the parent")).expect("the directory");
+	let mut other = Ledger::new("other.net");
+	other.remember(
+		&rec("other.net", RecordKind::Txt, "v=spf1 mx -all"),
+		None,
+		1_800_000_000,
+	);
+	std::fs::write(&path, serde_json::to_string(&other).expect("json"))
+		.expect("the file is written");
+	let error = store::load(dir.path(), "example.org").expect_err("the ledger is for another zone");
+	assert!(error.contains("other.net"), "{error}");
+	assert!(error.contains("example.org"), "{error}");
+}
+
+/// The files of the directory that are not ledgers are not zones: the
+/// staging file of a write and the lock file are not a zone epistle
+/// published in.
+#[test]
+fn the_staging_and_the_lock_file_are_not_zones() {
+	let dir = tempfile::tempdir().expect("directory");
+	store::store(dir.path(), &ledger()).expect("the ledger is written");
+	let staging = store::path(dir.path(), "example.org")
+		.expect("path")
+		.with_extension("json.new");
+	std::fs::write(&staging, "{}").expect("the staging file is written");
+	std::fs::write(store::dir(dir.path()).join(".lock"), "").expect("the lock file is written");
+	assert_eq!(
+		store::zones(dir.path()).expect("zones"),
+		vec!["example.org".to_string()],
+		"only a ledger is a zone"
+	);
 }
 
 #[test]

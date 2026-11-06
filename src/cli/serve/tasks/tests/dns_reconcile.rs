@@ -143,7 +143,7 @@ async fn a_tick_while_a_publish_holds_the_ledger_writes_nothing() {
 	let dir = tempfile::tempdir().expect("directory");
 	let config = config(dir.path(), CLOUDFLARE);
 	let zone = Arc::new(Zone::default());
-	let _held = crate::dns::reconcile::store::lock(&config.data_dir, Duration::ZERO)
+	let _held = crate::dns::reconcile::store::lock(&config.data_dir)
 		.expect("lock")
 		.expect("free");
 	tick(&config, zone.as_ref()).await;
