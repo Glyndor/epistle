@@ -133,11 +133,12 @@ fn message(u: &mut Unstructured) -> Vec<u8> {
 	body
 }
 
+/// What `command` builds: the command line, its kind, and the two optional
+/// parts the checks need.
+type Built = (String, Kind, Option<(String, String)>, Option<Vec<u8>>);
+
 /// The verb and arguments of a command, with what the checks need to know.
-fn command(
-	u: &mut Unstructured,
-	accounts: &[Account],
-) -> (String, Kind, Option<(String, String)>, Option<Vec<u8>>) {
+fn command(u: &mut Unstructured, accounts: &[Account]) -> Built {
 	use Kind::{AnyState, Mailbox, SignIn};
 	let mb = |u: &mut Unstructured| quoted(&mailbox(u, accounts));
 	let uid = |u: &mut Unstructured| {
