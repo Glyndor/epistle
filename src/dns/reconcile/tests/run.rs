@@ -23,7 +23,22 @@ pub(crate) fn harness() -> Harness {
 	let dir = tempfile::tempdir().expect("directory");
 	let config: Config = toml::from_str(&format!(
 		"hostname = 'mail.example.org'\ndata_dir = {:?}\ndomains = ['example.org']\n\
-		 [dns]\nprovider = 'cloudflare'\nzone = 'example.org'\ntoken_env = 'EPISTLE_TEST_UNSET_TOKEN'\n",
+		 [dns]\nprovider = 'cloudflare'\nzone = 'example.org'\ntoken = 'inline-token'\n",
+		dir.path()
+	))
+	.expect("config");
+	Harness { _dir: dir, config }
+}
+
+/// A configuration with two `[[dns]]` entries: one whose credential is
+/// there and one whose `token_env` names a variable that is not set. The
+/// entry without a credential is the one the provider cannot use.
+pub(crate) fn harness_two_zones() -> Harness {
+	let dir = tempfile::tempdir().expect("directory");
+	let config: Config = toml::from_str(&format!(
+		"hostname = 'mail.example.org'\ndata_dir = {:?}\ndomains = ['example.org', 'other.net']\n\
+		 [[dns]]\nprovider = 'cloudflare'\nzone = 'example.org'\ntoken = 'inline-token'\n\
+		 [[dns]]\nprovider = 'cloudflare'\nzone = 'other.net'\ntoken_env = 'EPISTLE_TEST_UNSET_TOKEN'\n",
 		dir.path()
 	))
 	.expect("config");
@@ -68,6 +83,23 @@ pub(crate) fn read_with(
 		domain,
 		timeout: Duration::from_secs(5),
 		incomplete,
+	};
+	block(survey(&ctx))
+}
+
+/// Read the zones of a survey whose records name their own zone.
+pub(crate) fn read_zones(
+	h: &Harness,
+	provider: &dyn DnsProvider,
+	wanted: &[PublishRecord],
+) -> Result<Survey, String> {
+	let ctx = Context {
+		config: &h.config,
+		provider,
+		needed: wanted,
+		domain: None,
+		timeout: Duration::from_secs(5),
+		incomplete: None,
 	};
 	block(survey(&ctx))
 }
@@ -166,7 +198,7 @@ fn a_service_turned_off_loses_only_the_locator_epistle_published() {
 }
 
 #[test]
-fn a_provider_that_cannot_list_stops_before_writing() {
+fn a_provider_that_cannot_list_leaves_the_zone_alone() {
 	struct Blind(Zone);
 	impl DnsProvider for Blind {
 		fn upsert(&self, zone: &str, record: DnsRecord) -> crate::dns::provider::Op<'_> {
@@ -181,9 +213,87 @@ fn a_provider_that_cannot_list_stops_before_writing() {
 	}
 	let h = harness();
 	let blind = Blind(Zone::default());
-	let refused = read_scoped(&h, &blind, &[spf()], None).expect_err("must refuse");
-	assert!(refused.contains("cannot list"), "{refused}");
+	let read = read_scoped(&h, &blind, &[spf()], None).expect("the zone is left alone");
+	assert_eq!(read.failures.len(), 1, "{:#?}", read.failures);
+	assert!(
+		read.failures[0].reason.contains("cannot list"),
+		"{:#?}",
+		read.failures
+	);
+	assert!(
+		read.zones.is_empty(),
+		"a zone that cannot be listed is not planned"
+	);
 	assert_eq!(*blind.0.writes.lock().unwrap(), 0);
+}
+
+/// A zone whose provider cannot be used is left alone and the other zones
+/// are published: one entry with a broken credential must not stop every
+/// other domain from being published, and the reason must name the
+/// credential that is missing instead of the provider's capability.
+#[test]
+fn a_zone_whose_credential_is_missing_does_not_stop_the_other_zones() {
+	/// A provider that works for every zone but one.
+	struct OneZone {
+		inner: Zone,
+		blind: String,
+	}
+	impl DnsProvider for OneZone {
+		fn upsert(&self, zone: &str, record: DnsRecord) -> crate::dns::provider::Op<'_> {
+			self.inner.upsert(zone, record)
+		}
+		fn delete(&self, zone: &str, record: DnsRecord) -> crate::dns::provider::Op<'_> {
+			self.inner.delete(zone, record)
+		}
+		fn list(&self, zone: &str) -> crate::dns::provider::ListOp<'_> {
+			self.inner.list(zone)
+		}
+		fn publish_snapshot<'a>(
+			&'a self,
+			zone: &'a str,
+		) -> crate::dns::publish::provider::SnapshotOp<'a> {
+			if zone == self.blind {
+				return Box::pin(async { Err(crate::dns::provider::ProviderError::Unsupported) });
+			}
+			self.inner.publish_snapshot(zone)
+		}
+	}
+	let h = harness_two_zones();
+	let provider = OneZone {
+		inner: Zone::default(),
+		blind: "other.net".to_string(),
+	};
+	let wanted = vec![
+		PublishRecord {
+			zone: "example.org".into(),
+			record: spf(),
+		},
+		PublishRecord {
+			zone: "other.net".into(),
+			record: txt("other.net", "v=spf1 mx -all"),
+		},
+	];
+	let survey = read_zones(&h, &provider, &wanted).expect("the healthy zone is read");
+	assert_eq!(survey.failures.len(), 1, "{:#?}", survey.failures);
+	let failure = &survey.failures[0];
+	assert_eq!(failure.zone, "other.net");
+	assert!(
+		failure.reason.contains("EPISTLE_TEST_UNSET_TOKEN"),
+		"the reason names the credential that is missing: {}",
+		failure.reason
+	);
+	assert!(
+		!failure.reason.contains("cannot list"),
+		"the reason is not the provider's capability: {}",
+		failure.reason
+	);
+	assert_eq!(survey.zones.len(), 1, "the other zone is planned");
+	assert_eq!(survey.zones[0].plan.zone, "example.org");
+	// The healthy zone is published all the same.
+	let report = publish(&h, &provider, survey);
+	assert!(report.failure.is_none(), "{:?}", report.failure);
+	assert_eq!(report.applied.len(), 1);
+	assert!(holds(&provider.inner.snapshot(), &spf()));
 }
 
 #[test]

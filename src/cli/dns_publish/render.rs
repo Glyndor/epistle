@@ -24,8 +24,8 @@ fn record_line(record: &DnsRecord) -> String {
 	)
 }
 
-/// The plan as text: one block per zone, then the records left to the
-/// operator.
+/// The plan as text: one block per zone, then the zones left alone, then
+/// the records left to the operator.
 pub(super) fn plan_text(survey: &Survey) -> String {
 	let mut text = String::new();
 	for zone in &survey.zones {
@@ -47,6 +47,14 @@ pub(super) fn plan_text(survey: &Survey) -> String {
 		}
 		text.push('\n');
 	}
+	if !survey.failures.is_empty() {
+		text.push_str("Left alone (the zone could not be read):\n");
+		for failure in &survey.failures {
+			let _ = writeln!(text, "  {}", sanitize(&failure.zone));
+			let _ = writeln!(text, "           {}", sanitize(&failure.reason));
+		}
+		text.push('\n');
+	}
 	if !survey.by_hand.is_empty() {
 		text.push_str("By hand (no [dns] entry writes these):\n");
 		for item in &survey.by_hand {
@@ -61,7 +69,11 @@ pub(super) fn plan_text(survey: &Survey) -> String {
 pub(super) fn plan_json(survey: &Survey) -> serde_json::Value {
 	let zones: Vec<&crate::dns::reconcile::ZonePlan> =
 		survey.zones.iter().map(|z| &z.plan).collect();
-	serde_json::json!({ "zones": zones, "by_hand": survey.by_hand })
+	serde_json::json!({
+		"zones": zones,
+		"by_hand": survey.by_hand,
+		"failures": survey.failures,
+	})
 }
 
 /// The undo report, as text or JSON.
