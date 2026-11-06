@@ -38,6 +38,7 @@ pub mod apply;
 mod dmarc;
 mod ledger;
 pub mod once;
+mod remove;
 mod slot;
 pub mod store;
 pub mod survey;
@@ -200,6 +201,16 @@ fn entry(action: Action, record: &DnsRecord, reason: String, current: Vec<String
 	}
 }
 
+/// A text read from a zone, escaped before it reaches a terminal, a message
+/// or the server log.
+///
+/// The value of a record in a zone is text from outside: a control
+/// character in it could move the cursor, repaint the terminal or add a
+/// line to the log the operator reads.
+pub(super) fn from_zone(text: &str) -> String {
+	crate::cli::term::sanitize(text)
+}
+
 /// Plan the needed records of one slot.
 fn plan_slot(
 	group: &[&DnsRecord],
@@ -229,7 +240,10 @@ fn plan_slot(
 	if let Some(cut) = cuts.above(&name) {
 		entries.extend(all(
 			Action::Skipped,
-			format!("{cut} is delegated to other nameservers; nothing is written under it"),
+			format!(
+				"{} is delegated to other nameservers; nothing is written under it",
+				from_zone(cut)
+			),
 			vec![],
 		));
 		return;
@@ -323,7 +337,11 @@ fn plan_slot(
 			first,
 			format!(
 				"{name} holds {kind} records epistle did not publish ({}); left as is",
-				values(&foreign).join("; ")
+				values(&foreign)
+					.iter()
+					.map(|value| from_zone(value))
+					.collect::<Vec<_>>()
+					.join("; ")
 			),
 			current,
 		));
@@ -357,7 +375,7 @@ fn cname_clash(needed: &DnsRecord, name: &str, existing: &[DnsRecord]) -> Option
 		.map(|cname| {
 			format!(
 				"{name} is a CNAME to {} and no other record may sit next to it; left as is",
-				cname.value
+				from_zone(&cname.value)
 			)
 		})
 }
@@ -380,7 +398,10 @@ fn plan_dmarc(
 		dmarc::Strength::Unreadable(why) => entry(
 			Action::Conflict,
 			needed,
-			format!("{name} has a DMARC record that cannot be read ({why}); left as is"),
+			format!(
+				"{name} has a DMARC record that cannot be read ({}); left as is",
+				from_zone(&why)
+			),
 			current,
 		),
 		dmarc::Strength::Weaker(why) if owners.owns(in_place) => entry(
@@ -416,7 +437,10 @@ fn retire(record: &DnsRecord, existing: &[DnsRecord], cuts: &Cuts) -> Entry {
 		return entry(
 			Action::Skipped,
 			record,
-			format!("{cut} is delegated to other nameservers now; left as is"),
+			format!(
+				"{} is delegated to other nameservers now; left as is",
+				from_zone(cut)
+			),
 			vec![],
 		);
 	}

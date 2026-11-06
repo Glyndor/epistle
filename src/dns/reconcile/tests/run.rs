@@ -4,7 +4,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::support::{rec, txt};
+use super::support::{holds, rec, txt};
 use super::*;
 use crate::config::Config;
 use crate::dns::lockdown::tests::support::Zone;
@@ -137,11 +137,6 @@ fn pop3() -> DnsRecord {
 		RecordKind::Srv,
 		"0 1 995 mail.example.org.",
 	)
-}
-
-fn holds(zone: &[DnsRecord], record: &DnsRecord) -> bool {
-	zone.iter()
-		.any(|r| crate::dns::rrset::same_record(r, record))
 }
 
 #[test]
@@ -311,7 +306,7 @@ fn a_delegated_name_gets_nothing() {
 }
 
 #[test]
-fn a_failed_write_stops_the_run_and_the_ledger_keeps_the_intent() {
+fn a_failed_write_stops_the_run_and_the_ledger_claims_nothing() {
 	let h = harness();
 	let zone = Zone {
 		fail_on: Some(1),
@@ -321,8 +316,8 @@ fn a_failed_write_stops_the_run_and_the_ledger_keeps_the_intent() {
 	assert!(report.failure.is_some());
 	assert!(report.applied.is_empty());
 	assert!(zone.snapshot().is_empty());
-	// The intent was written first, and the zone does not hold it: the next
-	// run creates the record again and forgets nothing it did write.
+	// The write failed, so the ledger does not claim the record: the next
+	// run creates it again, and forgets nothing epistle did write.
 	let next = read(&h, &zone, &[spf(), mx()]);
 	assert_eq!(next.writes(), 2);
 }

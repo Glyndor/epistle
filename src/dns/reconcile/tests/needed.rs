@@ -44,6 +44,34 @@ fn a_foreign_spf_with_another_value_is_a_conflict_and_is_not_written() {
 	assert_eq!(plan.writes(), 0);
 }
 
+/// The reason of a conflict carries a value read from the zone, and it
+/// reaches the server log: a control character in it must not repaint the
+/// terminal of the operator nor add a line to the log.
+#[test]
+fn the_reason_of_a_conflict_escapes_the_value_read_from_the_zone() {
+	let needed = [txt(ZONE, "v=spf1 mx -all")];
+	let theirs = txt(ZONE, "v=spf1 \u{1b}[31mred\u{1b}[0m -all\ninjected line");
+	let plan = plan(&needed, std::slice::from_ref(&theirs), &Ledger::new(ZONE));
+	assert_eq!(action_for(&plan, &needed[0]), Action::Conflict);
+	let reason = &plan.entries[0].reason;
+	assert!(
+		!reason.contains('\n'),
+		"a value from the zone cannot add a line to the log: {reason:?}"
+	);
+	assert!(
+		!reason.contains('\u{1b}'),
+		"a value from the zone cannot repaint the terminal: {reason:?}"
+	);
+	assert!(
+		reason.contains("\\u{1b}"),
+		"the escape is shown escaped: {reason:?}"
+	);
+	assert!(
+		reason.contains("\\n"),
+		"the newline is shown escaped: {reason:?}"
+	);
+}
+
 #[test]
 fn epistles_own_spf_with_another_value_is_updated() {
 	let needed = [txt(ZONE, "v=spf1 mx -all")];
