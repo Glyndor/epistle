@@ -177,23 +177,22 @@ where
 	};
 	let mut failures = 0u32;
 	let mut delay = FIRST_RUN_AFTER;
-	// The provider of the last build that worked. A build that fails
-	// drops it: no credential, no writes.
-	let mut provider: Option<Arc<dyn DnsProvider>> = None;
 	loop {
 		if !wait(delay).await {
 			return;
 		}
-		match build(config) {
-			Ok(fresh) => provider = Some(fresh),
+		// A build that fails leaves no provider for this run: no credential,
+		// no writes.
+		let provider: Option<Arc<dyn DnsProvider>> = match build(config) {
+			Ok(fresh) => Some(fresh),
 			Err(reason) => {
 				tracing::warn!(
 					%reason,
 					"the DNS provider could not be built: the reconcile loop writes nothing until it can; run `epistle dns provider check`"
 				);
-				provider = None;
+				None
 			}
-		}
+		};
 		match provider.as_ref() {
 			Some(provider) => match tick(config, provider.as_ref()).await {
 				// A run that went through resets the wait: the next one is
