@@ -47,6 +47,7 @@ fn crypto(keys: &std::path::Path, tenant_keys: bool) -> MessageCrypto {
 		max_domains: None,
 		submission_rate_limit_per_min: None,
 		encryption_key_file: Some(key_file(keys, "acme.key")),
+		webhook: None,
 	}];
 	let crypto = MessageCrypto::from_parts(Some(&storage), &tenants).expect("crypto");
 	crypto.attach_accounts(Arc::new(directory()));
