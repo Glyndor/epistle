@@ -100,7 +100,12 @@ fn header(message: &str, name: &str) -> Option<String> {
 		if line.is_empty() {
 			break;
 		}
-		if line.len() >= prefix.len() && line[..prefix.len()].eq_ignore_ascii_case(&prefix) {
+		// `get` is `None` when the cut falls inside a multibyte character: the line is
+		// the reported message's own text, so slicing there would panic.
+		if line
+			.get(..prefix.len())
+			.is_some_and(|head| head.eq_ignore_ascii_case(&prefix))
+		{
 			return Some(line[prefix.len()..].trim().to_string());
 		}
 	}
