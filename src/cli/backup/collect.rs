@@ -145,6 +145,11 @@ pub(super) fn collect_files(root: &Path) -> std::io::Result<Vec<(String, u32, Ve
 			} else if entry.file_type()?.is_file()
 				&& let Ok(relative) = path.strip_prefix(root)
 			{
+				// The lease file a running command holds is not data: the restore would skip
+				// it anyway, and a copy records nothing but who was running.
+				if relative == Path::new(".store.lock") {
+					continue;
+				}
 				let name = format!("data/{}", relative.to_string_lossy());
 				let metadata = entry.metadata()?;
 				let mode = metadata.permissions().mode();
