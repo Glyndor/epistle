@@ -167,6 +167,9 @@ pub struct Directory {
 	password_policy: Policy,
 	/// Bounds how many password checks run at once (see `hash_gate/mod.rs`).
 	hash_gate: std::sync::Arc<hash_gate::HashGate>,
+	/// Keeps the ban check and the strike of one sign-in together (see
+	/// `strike_locks.rs`).
+	strike_locks: std::sync::Arc<strike_locks::StrikeLocks>,
 	/// Test-only SCRAM credential-lookup counter. The ban tests inject
 	/// a fresh `Arc<AtomicUsize>` per test via
 	/// `with_scram_lookup_counter` so the delta they assert is
@@ -222,6 +225,7 @@ impl Directory {
 			scram_upgrader: None,
 			password_policy: Policy::ASCII_ONLY,
 			hash_gate: hash_gate::HashGate::shared(),
+			strike_locks: strike_locks::StrikeLocks::shared(),
 			#[cfg(test)]
 			scram_lookup_counter: None,
 			#[cfg(test)]
@@ -387,6 +391,8 @@ mod credential;
 mod local;
 
 pub(crate) mod hash_gate;
+
+pub(crate) mod strike_locks;
 
 mod gate;
 pub use gate::{Proof, ScramPlan, ScramRefusal, bearer_proof};
