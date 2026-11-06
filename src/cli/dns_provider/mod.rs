@@ -18,6 +18,7 @@ mod set;
 mod show;
 #[cfg(test)]
 mod tests;
+mod token_env;
 mod unset;
 mod write;
 

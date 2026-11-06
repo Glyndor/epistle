@@ -25,6 +25,42 @@ pub(in super::super) fn no_restart(_: &Config, _: StackAction) -> ExitCode {
 	panic!("a test host has no compose file, so nothing may be restarted")
 }
 
+/// An environment variable set for one test and removed when the guard
+/// drops, also when the test fails before its end.
+///
+/// The environment is process-global, so the name is unique to the test
+/// that creates the guard and no other test reads or writes it. The
+/// arrangement is the one `EnvVar` in `src/cli/init/tests/first_account.rs`
+/// uses.
+pub(in super::super) struct EnvVar(&'static str);
+
+impl EnvVar {
+	/// A guard for a variable that holds `value` while the test runs.
+	pub(in super::super) fn set(name: &'static str, value: &str) -> Self {
+		// SAFETY: `name` is unique to the one test that creates this guard, so
+		// no other test reads or writes it.
+		unsafe { std::env::set_var(name, value) };
+		EnvVar(name)
+	}
+
+	/// A guard for a variable that must not be set: the guard removes it
+	/// before the test runs, so a variable left behind by an earlier run
+	/// cannot decide the outcome.
+	pub(in super::super) fn unset(name: &'static str) -> Self {
+		// SAFETY: `name` is unique to the one test that creates this guard, so
+		// no other test reads or writes it.
+		unsafe { std::env::remove_var(name) };
+		EnvVar(name)
+	}
+}
+
+impl Drop for EnvVar {
+	fn drop(&mut self) {
+		// SAFETY: the same uniquely-named variable the guard set.
+		unsafe { std::env::remove_var(self.0) };
+	}
+}
+
 pub(in super::super) struct Run {
 	pub result: Result<ExitCode, super::super::super::resource::ResourceError>,
 	pub out: String,

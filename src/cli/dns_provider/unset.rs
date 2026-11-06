@@ -45,7 +45,7 @@ pub(super) fn run(
 		.collect();
 	remove(&mut document, &zone)?;
 	let config = document.config()?;
-	let compose = super::compose::with_token(&current, &zone, None, &dropped)?;
+	let compose = super::compose::with_token(&current, &zone, None, &dropped)?.update;
 	let edit = resource::Edit {
 		label: "dns provider",
 		action: "provider unset",

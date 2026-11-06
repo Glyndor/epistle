@@ -74,7 +74,18 @@ pub(super) fn run(
 		.into_iter()
 		.chain(args.token_env.as_deref())
 		.collect();
-	let compose = super::compose::with_token(&current, &zone, source, &dropped)?;
+	let plan = super::compose::with_token(&current, &zone, source, &dropped)?;
+	// The variable the token lives in has to be visible where the container
+	// reads it. This command knows its name, so a variable it does not see
+	// is reported here, where the operator is still watching, instead of
+	// later in `dns provider test`. The configuration is written either
+	// way: the operator may set the variable afterwards.
+	if let Some(TokenSource::Env(name)) = source
+		&& !super::token_env::is_set(name)
+	{
+		crate::cli::style::warn_to(status, super::token_env::warning(name, plan.service));
+	}
+	let compose = plan.update;
 	let edit = resource::Edit {
 		label: "dns provider",
 		action: "provider set",
