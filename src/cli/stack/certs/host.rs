@@ -23,6 +23,10 @@ struct StackHost<'a> {
 }
 
 impl SwitchHost for StackHost<'_> {
+	fn compose_path(&self) -> &Path {
+		self.compose
+	}
+
 	fn compose_text(&mut self) -> Result<String, String> {
 		let bytes = crate::cli::init::compose_read::read(self.compose)?.ok_or_else(|| {
 			format!(
