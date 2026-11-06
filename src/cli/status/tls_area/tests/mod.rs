@@ -2,5 +2,6 @@
 pub use super::*;
 
 mod base;
+mod certs;
 mod pending;
 mod renewal;
