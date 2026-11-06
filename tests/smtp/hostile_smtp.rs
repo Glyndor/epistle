@@ -10,6 +10,8 @@ mod common;
 
 #[path = "hostile_smtp/abuse.rs"]
 mod abuse;
+#[path = "hostile_smtp/bdat.rs"]
+mod bdat;
 #[path = "hostile_smtp/framing.rs"]
 mod framing;
 #[path = "hostile_smtp/harness.rs"]
