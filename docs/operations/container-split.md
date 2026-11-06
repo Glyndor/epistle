@@ -102,9 +102,44 @@ file, which mounts the token in `mail` again.
 ### Egress
 
 `certs` reaches the DNS provider and the CA, and `mail` no longer needs either.
-The Compose file cannot filter by destination under rootless Podman, so this
-phase narrows what each container holds and leaves the network policy as a
-documented step for the operator, with the hosts `certs` needs listed.
+The Compose file cannot filter by destination under rootless Podman, so what
+this phase narrows is what each container holds and the routes each one has
+out of the host.
+
+The `certs` service runs on a network of its own: its own pasta instance, with
+`network_mode: "pasta:--no-map-gw,--map-guest-addr,none"`. `--no-map-gw` keeps
+pasta from remapping the host's gateway address to the host, and
+`--map-guest-addr none` closes the alias podman adds for
+`host.containers.internal`, which maps to the host's own address: that alias
+was the route from `certs` to the host and, through it, to every port the stack
+publishes. What `certs` can reach is DNS, the ACME CA and the API of the DNS
+provider. What it cannot reach is the management API, the published listeners
+of `mail`, and the `db` and `clamav` containers, each of which lives in its own
+namespace. The addresses the host owns that are not its own global address (a
+tailnet address, a second interface) are still routable from the container:
+rootless Podman has no per-service filter by destination, and the only network
+without a route out is `internal: true`, which would take the internet from
+`certs` as well.
+
+This was measured on Podman 5.7.0 rootless, but it is a property of the engine
+and of the host, so it needs a check on the machine the stack runs on. The
+check joins the network namespace of the running `certs` container and probes
+the host from there; run it as the account the stack runs under:
+
+```sh
+sudo -u glyndor-epistle podman run --rm --network container:epistle-certs-1 \
+  docker.io/library/alpine:3 sh -c '
+  nc -w 3 169.254.1.2 8025 < /dev/null && echo "api REACHED" || echo "api BLOCKED"
+  nc -w 3 169.254.1.2 25 < /dev/null && echo "published port REACHED" || echo "published port BLOCKED"
+  nc -w 5 acme-v02.api.letsencrypt.org 443 < /dev/null && echo "ca REACHED" || echo "ca BLOCKED"'
+```
+
+`169.254.1.2` is the address podman maps to the host's own address for a
+container, `8025` is the management API and `25` is SMTP, which the stack
+publishes on every address the host has. The API is published on the host's
+loopback, so it never answered from another container; the published mail port
+is the one that did, and it is the one to watch. `BLOCKED` on the first two
+and `REACHED` on the last is the state this phase wants.
 
 ### Tests
 
@@ -124,4 +159,6 @@ documented step for the operator, with the hosts `certs` needs listed.
 - Whether the DKIM key files should be created by `certs` as above or by the
   signing service of phase 2 from the start, which would remove one move.
 - How the Compose generator expresses a per-container egress rule on rootless
-  Podman, if it can at all.
+  Podman, if it can at all: it expresses the routes of `certs` out of the host,
+  but it has no filter by destination, so the addresses the host owns that are
+  not its global one stay routable from the container.
