@@ -8,6 +8,11 @@
 //! new one is verified ([`retire_data_dir_copy`]), so an account key is
 //! never lost to a switch that fails halfway. Two copies that differ are
 //! never reconciled here; the operator keeps the one the CA knows.
+//!
+//! A key that is nowhere is refused, never created: the container mounts
+//! the key through a mount it cannot write, and a new key is a new ACME
+//! account, which the authority rate limits and the operator cannot
+//! recover. The same rule answers for `stack up` and for the switch.
 
 use std::fs;
 use std::io;
@@ -93,10 +98,16 @@ pub(crate) fn split_dirs(data_dir: &Path) -> [PathBuf; 2] {
 }
 
 /// Put the account key where the layout reads it: with `certs`, in
-/// `secrets/` (copied from data_dir, or created when there is none
-/// anywhere, since the container mounts it read-only and cannot create it),
-/// plus the directories `certs` mounts; without, back under data_dir when
-/// only `secrets/` holds it. One line per thing done.
+/// `secrets/` (copied from data_dir, where `mail` reads it, or refused when
+/// there is none anywhere), plus the directories `certs` mounts; without,
+/// back under data_dir when only `secrets/` holds it. One line per thing
+/// done.
+///
+/// A key that is nowhere is refused, not created: the container mounts the
+/// key through a mount it cannot write, so a key has to be placed by the
+/// host, and a new key is a new ACME account, which the authority rate
+/// limits and the operator cannot recover. This is the same rule
+/// `place_for_certs` applies, so `stack up` and the switch agree.
 pub(crate) fn place(data_dir: &Path, certs: bool) -> Result<Vec<String>, String> {
 	let in_data_dir = crate::acme::renew::account_key_path(data_dir);
 	let in_secrets = super::acme_account_key(data_dir);
@@ -105,20 +116,37 @@ pub(crate) fn place(data_dir: &Path, certs: bool) -> Result<Vec<String>, String>
 		for dir in split_dirs(data_dir) {
 			split_dir(&dir)?;
 		}
-		lines.extend(copy_key(&in_data_dir, &in_secrets)?);
-		if read_key(&in_secrets)?.is_none() {
-			private_dir(&super::dir(data_dir))?;
-			crate::acme::renew::load_or_create_account_key_at(&in_secrets)
-				.map_err(|error| format!("cannot create {}: {error}", in_secrets.display()))?;
-			lines.push(format!(
-				"created the ACME account key {}",
-				in_secrets.display()
-			));
+		if let Some(line) = place_for_certs(data_dir)? {
+			lines.push(line);
 		}
 	} else {
 		lines.extend(copy_key(&in_secrets, &in_data_dir)?);
 	}
 	Ok(lines)
+}
+
+/// Whether an ACME account key survives anywhere: under data_dir, where
+/// `mail` reads it, or in `secrets/`, where the certificates container reads
+/// it.
+pub(crate) fn account_key_survives(data_dir: &Path) -> Result<bool, String> {
+	let in_data_dir = crate::acme::renew::account_key_path(data_dir);
+	let in_secrets = super::acme_account_key(data_dir);
+	Ok(read_key(&in_data_dir)?.is_some() || read_key(&in_secrets)?.is_some())
+}
+
+/// Why a stack cannot run without an account key: the key is nowhere, and
+/// the certificates container reads it from a mount it cannot write.
+pub(crate) fn no_account_key(data_dir: &Path) -> String {
+	let in_data_dir = crate::acme::renew::account_key_path(data_dir);
+	let in_secrets = super::acme_account_key(data_dir);
+	format!(
+		"there is no ACME account key: {} and {} hold none, and the certificates container \
+		 reads {}; put the key there by hand, because a new key registers a new account with \
+		 the authority",
+		in_data_dir.display(),
+		in_secrets.display(),
+		in_secrets.display()
+	)
 }
 
 /// Put the account key where the certificates container reads it, without
@@ -137,13 +165,7 @@ pub(crate) fn place_for_certs(data_dir: &Path) -> Result<Option<String>, String>
 	let in_data_dir = crate::acme::renew::account_key_path(data_dir);
 	let in_secrets = super::acme_account_key(data_dir);
 	match (read_key(&in_data_dir)?, read_key(&in_secrets)?) {
-		(None, None) => Err(format!(
-			"there is no ACME account key: {} and {} hold none, and the certificates \
-			 container reads {}; put the key there by hand",
-			in_data_dir.display(),
-			in_secrets.display(),
-			in_secrets.display()
-		)),
+		(None, None) => Err(no_account_key(data_dir)),
 		(Some(left), Some(right)) if left != right => Err(format!(
 			"{} and {} hold different ACME account keys; keep the one the authority knows \
 			 and delete the other",

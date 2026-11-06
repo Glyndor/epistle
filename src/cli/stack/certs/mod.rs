@@ -89,7 +89,7 @@ fn retire_account_key(data_dir: &Path) -> Result<(), String> {
 
 /// The state and the start podup reports for `service`, `None` when podup
 /// lists no such container.
-fn row(json: &str, service: &str) -> Result<Option<(String, String)>, String> {
+pub(in crate::cli) fn row(json: &str, service: &str) -> Result<Option<(String, String)>, String> {
 	let rows: Vec<serde_json::Value> =
 		serde_json::from_str(json).map_err(|_| "podup ps did not print JSON".to_string())?;
 	Ok(rows
@@ -215,6 +215,10 @@ pub(in crate::cli) fn upness(
 /// read stops `up`: the stack is not brought up on a guess about which
 /// layout runs.
 ///
+/// The stack comes up with `--remove-orphans`, the way the switch brings it
+/// up: a container the compose file no longer names still holds the DNS
+/// credential and the account key, and nothing else removes it.
+///
 /// The steps run with podup's stderr captured, so the warnings about the
 /// ports the stack publishes on purpose can be replaced by one note.
 pub(in crate::cli) fn up(
@@ -256,7 +260,7 @@ pub(in crate::cli) fn up_with(
 		// cannot read it exits at start.
 		place_account_key(data_dir)?;
 	}
-	let code = run(&[&["up", "-d"], &["autostart", "install"]]);
+	let code = run(&[&["up", "-d", "--remove-orphans"], &["autostart", "install"]]);
 	if code != ExitCode::SUCCESS {
 		// podup named the argv and the status it answered with.
 		return Ok(code);
@@ -471,6 +475,8 @@ fn put_back(
 mod cli;
 pub use cli::CertsCli;
 mod host;
+#[cfg(test)]
+pub(in crate::cli) use host::preflight;
 pub(in crate::cli) use host::run;
 
 #[cfg(test)]

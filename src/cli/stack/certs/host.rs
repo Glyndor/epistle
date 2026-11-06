@@ -102,7 +102,7 @@ pub(in crate::cli) fn run(
 	on: bool,
 	yes: bool,
 ) -> ExitCode {
-	if on && let Err(reason) = crate::cli::serve::certs_requirements(config) {
+	if on && let Err(reason) = preflight(config) {
 		crate::cli::style::error(format_args!("stack certs enable: {reason}"));
 		return ExitCode::FAILURE;
 	}
@@ -142,4 +142,56 @@ pub(in crate::cli) fn run(
 			ExitCode::FAILURE
 		}
 	}
+}
+
+/// What the stack needs before it is touched: a configuration the
+/// certificates container can renew with, a DNS credential it can read and
+/// an ACME account key that exists.
+///
+/// Each of the three is checked here, before the question and before the
+/// stack is touched, because each of them stops the container at start:
+/// after `mail` was stopped and the compose file rewritten, a container
+/// that cannot renew is a failed switch and a stack that has to be put
+/// back.
+pub(in crate::cli) fn preflight(config: &Config) -> Result<(), String> {
+	// The `[acme]` section the container renews with.
+	let _acme = crate::cli::serve::certs_requirements(config)?;
+	dns_credential(config)?;
+	account_key(config)?;
+	Ok(())
+}
+
+/// Whether the DNS credential the configuration names can be read: the
+/// certificates container publishes the dns-01 challenge and the TLSA record
+/// through it, and a credential it cannot read is a container that exits at
+/// start.
+fn dns_credential(config: &Config) -> Result<(), String> {
+	let Some(dns) = config.dns.entry_for(&config.hostname) else {
+		return Err(format!(
+			"the [dns] configuration has no entry for {}, and the certificates container \
+			 publishes the dns-01 challenge through it",
+			config.hostname
+		));
+	};
+	if dns.build_for_host(&config.hostname).is_none() {
+		return Err(format!(
+			"the [dns] credential for {} cannot be read (provider {:?}), and the certificates \
+			 container publishes the dns-01 challenge and the TLSA record through it",
+			dns.zone, dns.provider
+		));
+	}
+	Ok(())
+}
+
+/// Whether an ACME account key exists: the certificates container reads it
+/// from a mount it cannot write, and a key that is nowhere is a new account
+/// with the authority, which the switch does not register behind the
+/// operator's back.
+fn account_key(config: &Config) -> Result<(), String> {
+	if crate::cli::init::host_secrets::acme::account_key_survives(&config.data_dir)? {
+		return Ok(());
+	}
+	Err(crate::cli::init::host_secrets::acme::no_account_key(
+		&config.data_dir,
+	))
 }
