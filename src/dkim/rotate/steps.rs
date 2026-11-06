@@ -143,33 +143,47 @@ impl Rotator {
 			.iter()
 			.filter(|d| !self.signing_domains.contains(d))
 		{
+			let zone = self.zone_for(domain);
+			// The lock of the zone: the reconcile loop publishes in the
+			// same zone, and the two must not write it at the same time.
+			let _lock = crate::dns::zone_lock::lock(zone).await;
 			for selector in pending_selectors(&pending) {
 				self.provider
-					.delete(
-						self.zone_for(domain),
-						txt_record(&Self::record_name(selector, domain), ""),
-					)
+					.delete(zone, txt_record(&Self::record_name(selector, domain), ""))
 					.await
 					.map_err(|error| RotateError(format!("withdraw from {domain}: {error}")))?;
 			}
 		}
+		// A publish that failed takes the rotation back, and the take-back
+		// writes in the same zones: the locks of this loop are released
+		// before it runs, so it can take them again.
+		let mut refused: Option<String> = None;
 		for (index, domain) in self.signing_domains.iter().enumerate() {
+			let zone = self.zone_for(domain);
 			let mut records = vec![(&pending.selector, &txt, Step::Published(index))];
 			if let (Some(rsa), Some(rsa_txt)) = (&pending.rsa, &rsa_txt) {
 				records.push((&rsa.selector, rsa_txt, Step::RsaPublished(index)));
 			}
-			for (selector, value, step) in records {
-				let name = Self::record_name(selector, domain);
-				if let Err(error) = self
-					.provider
-					.upsert(self.zone_for(domain), txt_record(&name, value))
-					.await
-				{
-					let reason = format!("publish {name}: {error}");
-					return self.withdraw(state, &pending, &reason, now).await;
+			{
+				// The lock of the zone: the reconcile loop publishes in
+				// the same zone, and the two must not write it at the
+				// same time.
+				let _lock = crate::dns::zone_lock::lock(zone).await;
+				for (selector, value, step) in records {
+					let name = Self::record_name(selector, domain);
+					if let Err(error) = self.provider.upsert(zone, txt_record(&name, value)).await {
+						refused = Some(format!("publish {name}: {error}"));
+						break;
+					}
+					self.checkpoint(step)?;
 				}
-				self.checkpoint(step)?;
 			}
+			if refused.is_some() {
+				break;
+			}
+		}
+		if let Some(reason) = refused {
+			return self.withdraw(state, &pending, &reason, now).await;
 		}
 		if let Err(reason) = self.confirm_published(&pending.selector, &txt).await? {
 			return self.withdraw(state, &pending, &reason, now).await;
@@ -246,14 +260,17 @@ impl Rotator {
 		);
 		let mut failed = None;
 		for (index, domain) in domains.iter().enumerate() {
-			for selector in pending_selectors(pending) {
-				let name = Self::record_name(selector, domain);
-				if let Err(error) = self
-					.provider
-					.delete(self.zone_for(domain), txt_record(&name, ""))
-					.await
-				{
-					failed = Some(format!("delete {name}: {error}"));
+			let zone = self.zone_for(domain);
+			{
+				// The lock of the zone: the reconcile loop publishes in
+				// the same zone, and the two must not write it at the
+				// same time.
+				let _lock = crate::dns::zone_lock::lock(zone).await;
+				for selector in pending_selectors(pending) {
+					let name = Self::record_name(selector, domain);
+					if let Err(error) = self.provider.delete(zone, txt_record(&name, "")).await {
+						failed = Some(format!("delete {name}: {error}"));
+					}
 				}
 			}
 			self.checkpoint(Step::WithdrawnRecord(index))?;
@@ -297,14 +314,17 @@ impl Rotator {
 		selectors.extend(retired_rsa.as_ref().map(|rsa| rsa.selector.as_str()));
 		let mut last_error: Option<String> = None;
 		for (index, domain) in self.signing_domains.iter().enumerate() {
-			for selector in &selectors {
-				let name = Self::record_name(selector, domain);
-				if let Err(error) = self
-					.provider
-					.delete(self.zone_for(domain), txt_record(&name, ""))
-					.await
-				{
-					last_error = Some(format!("delete {name}: {error}"));
+			let zone = self.zone_for(domain);
+			{
+				// The lock of the zone: the reconcile loop publishes in
+				// the same zone, and the two must not write it at the
+				// same time.
+				let _lock = crate::dns::zone_lock::lock(zone).await;
+				for selector in &selectors {
+					let name = Self::record_name(selector, domain);
+					if let Err(error) = self.provider.delete(zone, txt_record(&name, "")).await {
+						last_error = Some(format!("delete {name}: {error}"));
+					}
 				}
 			}
 			self.checkpoint(Step::RetiredRecord(index))?;

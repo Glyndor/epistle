@@ -231,11 +231,11 @@ impl Rotator {
 			failed.push(format!("the TXT records were not checked: {reason}"));
 		}
 		for name in &orphans.records {
-			if let Err(error) = self
-				.provider
-				.delete(self.zone_for(name), txt_record(name, ""))
-				.await
-			{
+			let zone = self.zone_for(name);
+			// The lock of the zone: the reconcile loop publishes in the
+			// same zone, and the two must not write it at the same time.
+			let _lock = crate::dns::zone_lock::lock(zone).await;
+			if let Err(error) = self.provider.delete(zone, txt_record(name, "")).await {
 				failed.push(format!("delete {name}: {error}"));
 			}
 		}

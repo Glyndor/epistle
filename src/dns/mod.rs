@@ -23,6 +23,7 @@ mod tests;
 pub mod tlsa;
 pub mod txt;
 pub mod zone;
+pub mod zone_lock;
 
 use crate::dns::provider::txt_purpose;
 use crate::spf::DnsLookup;

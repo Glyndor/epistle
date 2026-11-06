@@ -14,6 +14,11 @@
 //! type, applied only if the zone still holds what was read. Every other
 //! provider gets the ordinary upsert or delete, which the plan only asks for
 //! when nothing in the slot belongs to somebody else.
+//!
+//! The lock of the zone is held while the plan goes out (see
+//! [`crate::dns::zone_lock`]): the plan was made against a listing nobody
+//! else could change in the meantime, and the rotation that publishes in
+//! the same zone waits.
 
 use std::path::Path;
 use std::time::Duration;
@@ -74,6 +79,10 @@ struct Writer<'a> {
 
 async fn apply_zone(target: &Target<'_>, run: ZoneRun, report: &mut Report) -> Result<(), String> {
 	let mut ledger = run.ledger;
+	// The lock of the zone is held until this function returns: the plan
+	// was made against the listing the lock protected, and nobody else
+	// writes the zone while the difference goes out.
+	let _lock = run.lock;
 	let mut writer = Writer {
 		target,
 		zone: run.plan.zone.clone(),
