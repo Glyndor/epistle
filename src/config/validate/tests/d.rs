@@ -170,6 +170,22 @@ encryption_key_file = "/etc/glyndor/epistle/secrets/acme.key"
 }
 
 #[test]
+fn tenant_keys_without_encryption_at_rest_is_rejected() {
+	let result = config_from(
+		r#"
+hostname = "mail.example.org"
+data_dir = "/var/lib/mail"
+domains = ["acme.example"]
+
+[storage]
+tenant_keys = true
+"#,
+	);
+	let message = result.expect_err("tenant keys need encryption").to_string();
+	assert!(message.contains("needs encrypt_at_rest"), "{message}");
+}
+
+#[test]
 fn a_named_tenant_may_reference_its_own_key_file() {
 	let result = config_from(
 		r#"

@@ -437,6 +437,7 @@ fn queue_commands_read_sealed_envelopes_with_the_configured_key() {
 	.expect("key file");
 	let storage = crate::config::Storage {
 		encrypt_at_rest: true,
+		tenant_keys: false,
 		encryption_key_env: None,
 		encryption_key_file: Some(key_file),
 		deleted_retention_days: 0,

@@ -44,6 +44,7 @@ use zeroize::Zeroizing;
 mod envelope;
 pub mod keyring;
 mod tenant;
+mod writes;
 
 pub use envelope::{EnvelopeKind, MAGIC_V2, MAX_OVERHEAD, OVERHEAD_V2, is_envelope, kind};
 pub use keyring::{KeyId, KeyOwner};
@@ -170,6 +171,9 @@ struct Inner {
 	rng: SystemRandom,
 	/// Account to address lookup, attached once the directory exists.
 	accounts: RwLock<Option<Arc<dyn AccountAddresses>>>,
+	/// Whether an account in a keyed tenant writes under its tenant key
+	/// (`[storage] tenant_keys`). Only ever true with `enabled`.
+	tenant_writes: bool,
 }
 
 impl std::fmt::Debug for MessageCrypto {
@@ -184,11 +188,12 @@ impl std::fmt::Debug for MessageCrypto {
 }
 
 impl MessageCrypto {
-	fn build(keys: Keyring, enabled: bool) -> Self {
+	fn build(keys: Keyring, enabled: bool, tenant_writes: bool) -> Self {
 		MessageCrypto {
 			inner: Arc::new(Inner {
 				keys,
 				enabled,
+				tenant_writes: enabled && tenant_writes,
 				rng: SystemRandom::new(),
 				accounts: RwLock::new(None),
 			}),
@@ -200,7 +205,7 @@ impl MessageCrypto {
 	/// A file that nonetheless carries an envelope cannot be read (no key) and
 	/// fails closed rather than returning ciphertext.
 	pub fn disabled() -> Self {
-		Self::build(Keyring::default(), false)
+		Self::build(Keyring::default(), false, false)
 	}
 
 	/// Build the crypto from the optional `[storage]` configuration alone,
@@ -247,7 +252,11 @@ impl MessageCrypto {
 			None => {}
 		}
 		tenant::load(&mut keys, tenants)?;
-		Ok(Self::build(keys, storage.encrypt_at_rest))
+		Ok(Self::build(
+			keys,
+			storage.encrypt_at_rest,
+			storage.tenant_keys,
+		))
 	}
 
 	/// Build a crypto from raw key bytes with encryption enabled. For tests.
@@ -256,7 +265,7 @@ impl MessageCrypto {
 		let mut keys = Keyring::default();
 		keys.insert(StoredKey::new(key, KeyOwner::Server).expect("valid test key"))
 			.expect("one key");
-		Self::build(keys, true)
+		Self::build(keys, true, false)
 	}
 
 	/// Whether new writes are encrypted.

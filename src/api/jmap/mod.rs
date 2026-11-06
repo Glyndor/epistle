@@ -499,7 +499,7 @@ pub async fn upload(
 	let blob_id = uuid::Uuid::now_v7();
 	// Encrypt the blob payload at rest like stored mail; the `.type` and
 	// `.owner` sidecars stay plaintext metadata.
-	let stored = match state.crypto().encode(&body) {
+	let stored = match state.crypto().encode_for_account(&account, &body) {
 		Ok(stored) => stored,
 		Err(_) => {
 			return jmap_error(

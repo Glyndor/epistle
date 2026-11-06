@@ -100,10 +100,44 @@ pub(super) fn token_hash_from(reader: impl std::io::BufRead, json: bool) -> Exit
 pub(super) fn message_crypto(
 	config: &crate::config::Config,
 ) -> Result<crate::storage::MessageCrypto, ExitCode> {
-	crate::storage::MessageCrypto::from_full_config(config).map_err(|error| {
+	let crypto = crate::storage::MessageCrypto::from_full_config(config).map_err(|error| {
 		super::style::error(error);
 		ExitCode::FAILURE
-	})
+	})?;
+	attach_config_accounts(&crypto, config).map_err(|error| {
+		super::style::error(format!(
+			"cannot read the accounts to pick tenant keys: {error}"
+		));
+		ExitCode::FAILURE
+	})?;
+	Ok(crypto)
+}
+
+/// Give `crypto` the account to address map of the configuration and
+/// `accounts.toml`, so a write from the CLI picks the same tenant key the
+/// server would. Nothing to do when no tenant has a key. Accounts that
+/// only an SQL or LDAP directory knows resolve to no tenant here and stay
+/// on the server key.
+pub(crate) fn attach_config_accounts(
+	crypto: &crate::storage::MessageCrypto,
+	config: &crate::config::Config,
+) -> std::io::Result<()> {
+	if !config
+		.tenants
+		.iter()
+		.any(|tenant| tenant.encryption_key_file.is_some())
+	{
+		return Ok(());
+	}
+	let store = crate::directory_store::AccountStore::open(
+		&config.data_dir,
+		config.domains.clone(),
+		config.domain_aliases.clone(),
+		config.accounts.clone(),
+	)
+	.map_err(|error| std::io::Error::other(error.to_string()))?;
+	crypto.attach_accounts(std::sync::Arc::new(store.handle()));
+	Ok(())
 }
 
 /// `epistle storage-keygen`: print a fresh base64 32-byte at-rest encryption key
