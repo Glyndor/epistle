@@ -65,7 +65,7 @@ pub fn load(data_dir: &Path, zone: &str) -> Result<Ledger, String> {
 /// Store `ledger` through a temporary file and a rename, so a crash never
 /// leaves half a ledger.
 ///
-/// The write goes through [`crate::storage::write_secret`], the shape the
+/// The write goes through `crate::storage::write_secret`, the shape the
 /// rest of the code uses for the files that hold state: the temporary
 /// file is created anew (`O_EXCL`) with mode `0600`, so an entry already
 /// at its name — a symlink included — is replaced, never written through;
