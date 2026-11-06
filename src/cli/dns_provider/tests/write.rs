@@ -13,7 +13,7 @@ use std::os::unix::fs::PermissionsExt;
 pub(super) const TOKEN: &str = "/etc/epistle/secrets/dns.token";
 
 /// A stack install whose generated compose file carries no token mount.
-fn stack() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
+pub(super) fn stack() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
 	stack_with("hostname = 'mail.example.org'\ndata_dir = {data:?}\n", &[])
 }
 
@@ -48,7 +48,7 @@ pub(super) fn stack_with(
 }
 
 /// The `set` command with the given token flags, ready to run.
-fn action(token_flags: &[&str]) -> DnsCli {
+pub(super) fn action(token_flags: &[&str]) -> DnsCli {
 	action_of("cloudflare", token_flags)
 }
 

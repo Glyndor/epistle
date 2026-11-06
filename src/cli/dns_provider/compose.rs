@@ -44,6 +44,16 @@ pub(super) struct TokenUpdate {
 	pub(super) lines: Vec<String>,
 }
 
+/// What the generated compose file says about the credential: the file to
+/// write, and the service that holds it.
+pub(super) struct TokenPlan {
+	/// The file to write beside the configuration, when it changes.
+	pub(super) update: Option<TokenUpdate>,
+	/// The service of the generated stack that holds the credential, when
+	/// the install has a generated compose file.
+	pub(super) service: Option<&'static str>,
+}
+
 /// The generated compose file with `source` reachable inside `mail`.
 ///
 /// The credential the configuration carried before leaves the container with
@@ -56,21 +66,24 @@ pub(super) struct TokenUpdate {
 /// `dropped` names the environment variables that are not read any more: the
 /// one the configuration carried and the one the command was given.
 ///
-/// `None` when the install has no generated compose file, and `None` when the
-/// file already carries the source: a candidate identical to the file on disk
-/// is not a change.
+/// The plan carries the update only when the file changes, and the service
+/// that holds the credential when the install has a generated compose file
+/// at all.
 pub(super) fn with_token(
 	config: &Config,
 	zone: &str,
 	source: Option<TokenSource<'_>>,
 	dropped: &[&str],
-) -> Result<Option<TokenUpdate>, String> {
+) -> Result<TokenPlan, String> {
 	let path = crate::cli::init::compose_file_path(&config.data_dir);
 	// The read happens with the common lock in hand, so it goes through the
 	// reader that refuses a fifo instead of waiting for a writer that may
 	// never come and holding the lock while it does.
 	let Some(bytes) = crate::cli::init::compose_read::read(&path)? else {
-		return Ok(None);
+		return Ok(TokenPlan {
+			update: None,
+			service: None,
+		});
 	};
 	let mut document: serde_json::Value = serde_json::from_slice(&bytes)
 		.map_err(|_| "compose.yaml must be generated Compose JSON")?;
@@ -176,17 +189,23 @@ pub(super) fn with_token(
 		serde_json::to_vec_pretty(&document).map_err(|_| "cannot encode compose.yaml")?;
 	updated.push(b'\n');
 	if bytes == updated {
-		return Ok(None);
+		return Ok(TokenPlan {
+			update: None,
+			service: Some(service),
+		});
 	}
 	let lines = lines(&path, carried, forwarded, source);
-	Ok(Some(TokenUpdate {
-		companion: Companion {
-			path,
-			original: bytes,
-			candidate: updated,
-		},
-		lines,
-	}))
+	Ok(TokenPlan {
+		update: Some(TokenUpdate {
+			companion: Companion {
+				path,
+				original: bytes,
+				candidate: updated,
+			},
+			lines,
+		}),
+		service: Some(service),
+	})
 }
 
 /// The index of the mount of `path` in the `mail` service, when it carries

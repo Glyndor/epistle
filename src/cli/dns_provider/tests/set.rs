@@ -1,9 +1,11 @@
-use super::base::{DNS, run};
+use super::base::{DNS, EnvVar, run};
 use super::*;
 use crate::config::{Dns, SUPPORTED_PROVIDERS};
 
 #[test]
 fn set_writes_a_new_section_with_only_the_needed_keys() {
+	// The variable is set, so the command has nothing to report about it.
+	let _env = EnvVar::set("CF_TOKEN", "synthetic-test-token");
 	let run = run(
 		"",
 		&[
