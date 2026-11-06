@@ -9,6 +9,7 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
+argon2 = "0.6.0"
 epistle = { path = ".." }
 
 [[bin]]
@@ -192,6 +193,20 @@ bench = false
 [[bin]]
 name = "arf_report"
 path = "fuzz_targets/message/arf_report.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "imap_session"
+path = "fuzz_targets/mailbox/imap_session/main.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "smtp_session"
+path = "fuzz_targets/smtp/smtp_session/main.rs"
 test = false
 doc = false
 bench = false
