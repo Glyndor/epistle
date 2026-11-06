@@ -62,7 +62,15 @@ class SelectTests(unittest.TestCase):
         )
         self.assertEqual(
             ft.select("pull_request", ["src/smtp/a.rs", "src/smtp/b/c.rs"]),
-            ["smtp_command", "smtp_session", "smtp_line", "smtp_address", "smtp_data", "sasl_exchange"],
+            [
+                "smtp_command",
+                "smtp_session",
+                "smtp_bdat",
+                "smtp_line",
+                "smtp_address",
+                "smtp_data",
+                "sasl_exchange",
+            ],
         )
 
     def test_the_parsers_of_one_folder_run_their_own_target(self):
@@ -70,6 +78,7 @@ class SelectTests(unittest.TestCase):
             ("src/arc/signature.rs", "arc_headers"),
             ("src/jwt/mod.rs", "jwt_decode"),
             ("src/queue/client/conn/mod.rs", "smtp_reply"),
+            ("src/queue/srs/mod.rs", "srs_reverse"),
             ("src/mtasts/policy/mod.rs", "dns_security_records"),
             ("src/rules/mod.rs", "rules_match"),
             ("src/migrate/imap/parse/mod.rs", "migrate_imap_response"),
@@ -102,6 +111,17 @@ class SelectTests(unittest.TestCase):
             self.assertEqual(
                 ft.select("pull_request", [path]), ["attachment_inspect", "attachment_walk"]
             )
+
+    def test_the_bdat_target_runs_with_the_smtp_source(self):
+        got = ft.select("pull_request", ["src/smtp/session/bdat.rs"])
+        self.assertIn("smtp_bdat", got)
+        self.assertIn("smtp_session", got)
+        self.assertIn("smtp_bdat", ft.select("pull_request", ["src/smtp/directory/mod.rs"]))
+
+    def test_the_srs_folder_runs_only_the_srs_target(self):
+        got = ft.select("pull_request", ["src/queue/srs/keys.rs"])
+        self.assertEqual(got, ["srs_reverse"])
+        self.assertNotIn("srs_reverse", ft.select("pull_request", ["src/queue/client/x.rs"]))
 
     def test_two_protocols_run_both(self):
         got = ft.select("pull_request", ["src/pop3/a.rs", "src/dkim/b.rs"])
