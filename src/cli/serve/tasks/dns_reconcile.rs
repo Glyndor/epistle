@@ -10,8 +10,10 @@
 //! The provider is built from the configuration again on every run: a
 //! credential that was rotated, or created after the server started, is
 //! picked up without a restart. When the build fails the provider of the
-//! last run keeps writing, and the reason is logged without the
-//! credential.
+//! last run is dropped and the loop writes nothing until a build works
+//! again: a credential the operator removed is a decision to stop, and a
+//! cached provider would keep writing with it. The reason is logged without
+//! the credential.
 //!
 //! A run that fails waits longer before the next one: the interval
 //! doubles, up to a cap, spread by a jitter so a fleet of servers that
@@ -175,8 +177,8 @@ where
 	};
 	let mut failures = 0u32;
 	let mut delay = FIRST_RUN_AFTER;
-	// The provider of the last run that could build one. It keeps
-	// writing when a later build fails.
+	// The provider of the last build that worked. A build that fails
+	// drops it: no credential, no writes.
 	let mut provider: Option<Arc<dyn DnsProvider>> = None;
 	loop {
 		if !wait(delay).await {
@@ -185,17 +187,11 @@ where
 		match build(config) {
 			Ok(fresh) => provider = Some(fresh),
 			Err(reason) => {
-				if provider.is_none() {
-					tracing::warn!(
-						%reason,
-						"the DNS provider could not be built: the reconcile loop has no provider and compares nothing; run `epistle dns provider check`"
-					);
-				} else {
-					tracing::warn!(
-						%reason,
-						"the DNS provider could not be built again: the provider of the last run keeps writing"
-					);
-				}
+				tracing::warn!(
+					%reason,
+					"the DNS provider could not be built: the reconcile loop writes nothing until it can; run `epistle dns provider check`"
+				);
+				provider = None;
 			}
 		}
 		match provider.as_ref() {
