@@ -392,7 +392,7 @@ mod local;
 
 pub(crate) mod hash_gate;
 
-mod strike_locks;
+pub(crate) mod strike_locks;
 
 mod gate;
 pub use gate::{Proof, ScramPlan, ScramRefusal, bearer_proof};

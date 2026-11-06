@@ -37,7 +37,7 @@ const STRIPES: usize = 1024;
 /// the password gate's own line goes. The bound is global, not per stripe: a
 /// bound per stripe would let an attacker who spreads guesses over many
 /// subjects park as many worker threads as stripes times the bound.
-const MAX_WAITING: usize = 256;
+pub(crate) const MAX_WAITING: usize = 256;
 
 /// Too many sign-ins are already waiting for a subject of this one.
 #[derive(Debug, PartialEq, Eq)]

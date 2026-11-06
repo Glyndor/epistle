@@ -171,6 +171,7 @@ the log.
 | `jmap-push-subscriptions-per-caller` | 16 | count | own | no standard mandate |
 | `spf-max-dns-lookups` | 10 | count | must | RFC 7208 §4.6.4 (max 10 DNS-querying terms) |
 | `spf-max-void-lookups` | 2 | count | should | RFC 7208 §4.6.4 (void lookups limited to 2) |
+| `ban-strike-line` | 256 | count | own | no standard mandate |
 | `tls-minimum-version` | 1.2 | version | must | RFC 8996 (TLS 1.0/1.1 prohibited) |
 
 ## WebDAV, CalDAV and CardDAV bounds

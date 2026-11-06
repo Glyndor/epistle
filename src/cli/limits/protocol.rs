@@ -475,6 +475,11 @@ pub(super) const FIXED: &[FixedEntry] = &[
 		Should,
 		"RFC 7208 §4.6.4 (void lookups limited to 2)"
 	),
+	own!(
+		"ban-strike-line",
+		crate::smtp::directory::strike_locks::MAX_WAITING,
+		"count"
+	),
 	FixedEntry {
 		name: "tls-minimum-version",
 		value: FixedValue::TlsMinimum,
