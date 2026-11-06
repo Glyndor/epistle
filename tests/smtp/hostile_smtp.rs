@@ -14,6 +14,8 @@ mod abuse;
 mod bdat;
 #[path = "hostile_smtp/framing.rs"]
 mod framing;
+#[path = "hostile_smtp/handshake.rs"]
+mod handshake;
 #[path = "hostile_smtp/harness.rs"]
 mod harness;
 #[path = "hostile_smtp/scram.rs"]
