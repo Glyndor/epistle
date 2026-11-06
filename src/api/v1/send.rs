@@ -135,11 +135,12 @@ pub async fn send(
 		}
 	}
 
-	let domain = state
+	let first_hosted = state
 		.domains()
 		.first()
 		.map(String::as_str)
 		.unwrap_or("localhost");
+	let domain = super::send_from::message_id_domain(&request.from, first_hosted);
 	let date = crate::clock::rfc5322(std::time::SystemTime::now());
 	let message_id = format!("<{}@{domain}>", uuid::Uuid::now_v7());
 	let display_name = match request.from_name.as_deref() {
