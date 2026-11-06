@@ -17,6 +17,31 @@ use super::{
 /// The compose secret that carries the ACME account key into `certs`.
 pub(in crate::cli::init) const ACME_ACCOUNT_SECRET: &str = "epistle_acme_account_key";
 
+/// The `network_mode` of the `certs` service: a pasta instance of its own,
+/// with the two routes to the host closed.
+///
+/// `certs` needs the internet and nothing else: DNS, the ACME CA and the API of
+/// the DNS provider. It must not reach the management API, the listeners
+/// `mail` publishes, or the other containers of the stack. Measured on Podman
+/// 5.7.0 rootless on 2026-11-06:
+///
+/// - pasta remaps the host's gateway address to the host unless `--no-map-gw`
+///   says otherwise. Podman already passes that option by default, but the
+///   property is written here so it does not rest on an engine default.
+/// - podman also passes `--map-guest-addr 169.254.1.2`, the alias that makes
+///   `host.containers.internal` work: it maps to the host's own address, and
+///   through it the container reached a port another container had published
+///   and a listener the host had on `0.0.0.0`. With `none` that address maps
+///   to nothing, and the internet keeps working (the DNS forwarder podman
+///   adds is a different option).
+///
+/// A user-defined network would not say this: measured, a container on a
+/// bridge network reaches the host the same way, and the only network without
+/// a route out (`internal: true`) has no internet either. podup gives
+/// `network_mode` precedence over `networks:`, so a service cannot carry
+/// both.
+pub(in crate::cli::init) const CERTS_NETWORK_MODE: &str = "pasta:--no-map-gw,--map-guest-addr,none";
+
 /// The directory both services share: the pair and the renewal request
 /// files under `<data_dir>/acme`.
 pub(in crate::cli::init) fn pair_dir(data_dir: &Path) -> PathBuf {
@@ -59,9 +84,9 @@ pub(in crate::cli::init) fn compose_dir(data_dir: &Path) -> PathBuf {
 impl ComposeService {
 	/// Build the `certs` service. Same image, entrypoint, user and user
 	/// namespace as `mail`, so the files it writes are owned the way `mail`
-	/// reads them; `pasta` for the CA and the provider API, with no port
-	/// published; the root file system read-only and every capability
-	/// dropped.
+	/// reads them; [`CERTS_NETWORK_MODE`] for the CA and the provider API and
+	/// no route to the host, with no port published; the root file system
+	/// read-only and every capability dropped.
 	pub(in crate::cli::init::compose) fn new_certs(image: &str, answers: &Answers) -> Self {
 		let config_path = &answers.config_path;
 		let data_dir = &answers.data_dir;
@@ -88,7 +113,7 @@ impl ComposeService {
 				.is_none()
 				.then(|| vec![HOST_EPISTLE_PATH.to_string()]),
 			command: Some(serve_command(config_path, Some("certs"))),
-			network_mode: Some("pasta".to_string()),
+			network_mode: Some(CERTS_NETWORK_MODE.to_string()),
 			user: Some("65532:65532".to_string()),
 			userns_mode: Some("keep-id:uid=65532,gid=65532".to_string()),
 			volumes,
