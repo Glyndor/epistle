@@ -40,6 +40,7 @@ pub fn load(path: &std::path::Path, role: ServeRole) -> Result<Config, crate::co
 	}
 }
 async fn serve(config: Config, role: ServeRole) -> std::io::Result<()> {
+	let _store = crate::storage::lock::FileLock::store_shared(&config.data_dir)?;
 	crate::log_id::init(&config.data_dir)?;
 	crate::mtasts::publish::write_policy(&config)?;
 	tasks::log_single_signature_dkim_warning(&config);
