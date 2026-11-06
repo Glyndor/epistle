@@ -254,6 +254,9 @@ const CASES: &[(&str, &[&str], Expect)] = &[
 	("storage blobs show", &[], Done),
 	("storage blobs set fs", &[], Done),
 	("storage blobs set s3", &["--endpoint", "https://s3.example.net", "--bucket", "mail", "--region", "us-east-1", "--access-key-id", "AKIAEXAMPLE", "--secret-env", "EPISTLE_SWEEP_S3", "--force"], Done),
+	// The sweep has no [storage] key, so the run is refused before touching
+	// anything; the runs themselves are src/cli/storage/tenant_keys/tests.
+	("storage tenant-keys migrate", &["--dry-run"], Refused(1)),
 	("webhook show", &[], Done),
 	("webhook set", &["https://hooks.example.net/in"], Done),
 	("alert list", &[], Done),

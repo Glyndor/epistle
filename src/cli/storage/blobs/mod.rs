@@ -25,6 +25,12 @@ pub enum StorageCli {
 		#[command(subcommand)]
 		action: BlobsCli,
 	},
+	/// Re-encrypt stored mail under each account's tenant key, or back.
+	TenantKeys {
+		/// Tenant key action.
+		#[command(subcommand)]
+		action: crate::cli::storage::tenant_keys::TenantKeysCli,
+	},
 }
 
 /// Blob storage actions.
@@ -131,7 +137,14 @@ fn execute_with(
 	status: &mut impl Write,
 	restart: impl FnOnce(&Config, StackAction) -> ExitCode,
 ) -> Result<ExitCode, resource::ResourceError> {
-	let StorageCli::Blobs { action } = action;
+	let action = match action {
+		StorageCli::Blobs { action } => action,
+		StorageCli::TenantKeys { action } => {
+			return Ok(crate::cli::storage::tenant_keys::run(
+				path, action, dry_run, json, out, status,
+			));
+		}
+	};
 	let backend = match action {
 		BlobsCli::Show { json: leaf } => {
 			show(

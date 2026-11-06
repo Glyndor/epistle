@@ -10,7 +10,7 @@
 use ring::aead::{Aad, NONCE_LEN, Nonce};
 use ring::rand::{SecureRandom, SystemRandom};
 
-use super::keyring::{KEY_ID_LEN, KeyId, Keyring, StoredKey};
+use super::keyring::{KEY_ID_LEN, KeyId, KeyOwner, Keyring, StoredKey};
 use super::{MAGIC, OVERHEAD};
 
 /// Magic prefix of a version 2 envelope, which names its key.
@@ -179,7 +179,7 @@ pub(super) fn open(
 	keys: &Keyring,
 	stored: &[u8],
 	aad: &[u8],
-) -> Result<Option<Vec<u8>>, OpenError> {
+) -> Result<Option<(Vec<u8>, KeyOwner)>, OpenError> {
 	match kind(stored) {
 		EnvelopeKind::Plain => Ok(None),
 		EnvelopeKind::Truncated => Err(OpenError::Truncated),
@@ -188,7 +188,7 @@ pub(super) fn open(
 			let mut last = OpenError::NoKey;
 			for key in keys.v1_candidates() {
 				match open_with(&key.raw, sealed, aad) {
-					Ok(plain) => return Ok(Some(plain)),
+					Ok(plain) => return Ok(Some((plain, key.owner.clone()))),
 					Err(error) => last = error,
 				}
 			}
@@ -201,7 +201,8 @@ pub(super) fn open(
 				OpenError::UnknownKey(id)
 			})?;
 			let sealed = &stored[MAGIC_V2.len() + KEY_ID_LEN..];
-			open_with(&key.derived, sealed, &v2_aad(&id, aad)).map(Some)
+			open_with(&key.derived, sealed, &v2_aad(&id, aad))
+				.map(|plain| Some((plain, key.owner.clone())))
 		}
 	}
 }
