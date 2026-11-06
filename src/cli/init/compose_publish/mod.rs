@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 use super::apply::ApplyError;
 use super::compose::{compose_file_path, render_document};
 use super::compose_read;
-use crate::config::{Config, Listener, ListenerKind};
+use crate::config::{AcmeChallenge, Config, Listener, ListenerKind};
 
 /// The bind a listener published on a host address uses inside the container.
 /// The container side and the address the host reaches can not be the same
@@ -180,10 +180,15 @@ pub(crate) fn ports_in_file(path: &Path) -> Result<Vec<String>, String> {
 /// change to one listener never widens another one back to every address.
 /// `publish` overrides the address of one listener, which is what
 /// `epistle service set` asks for.
+/// `challenge` is the challenge the configuration answers the ACME order
+/// with, and `None` when the configuration has no `[acme]` section: only
+/// HTTP-01 is answered on port 80, so the other challenges and a
+/// configuration that renews nothing do not publish it.
 pub(super) fn published(
 	listeners: &[Listener],
 	narrow: &BTreeMap<u16, IpAddr>,
 	publish: Option<(ListenerKind, Option<IpAddr>)>,
+	challenge: Option<AcmeChallenge>,
 ) -> Vec<String> {
 	let mut ports = Vec::with_capacity(listeners.len());
 	for listener in listeners {
@@ -193,6 +198,9 @@ pub(super) fn published(
 		let port = listener
 			.port
 			.unwrap_or_else(|| listener.kind.default_port());
+		if port == ListenerKind::Acme.default_port() && challenge != Some(AcmeChallenge::Http01) {
+			continue;
+		}
 		let host = match publish {
 			Some((kind, Some(address))) if kind == listener.kind => Some(address),
 			// No address asked for and none in the map: every listener keeps
@@ -339,6 +347,7 @@ fn read_map(
 	data_dir: &Path,
 	listeners: &[Listener],
 	publish: Option<(ListenerKind, Option<IpAddr>)>,
+	challenge: Option<AcmeChallenge>,
 ) -> Result<Option<Map>, ApplyError> {
 	let path = compose_file_path(data_dir);
 	let existing = match compose_read::read(&path) {
@@ -350,7 +359,7 @@ fn read_map(
 		.map_err(|error| ApplyError::ConfigEncode(format!("invalid compose JSON: {error}")))?;
 	mail_mut(&mut document)?;
 	let current = ports(&document);
-	let wanted = published(listeners, &hosts(&document), publish);
+	let wanted = published(listeners, &hosts(&document), publish, challenge);
 	Ok(Some(Map {
 		path,
 		original: existing,
@@ -366,8 +375,9 @@ pub(crate) fn preview(
 	data_dir: &Path,
 	listeners: &[Listener],
 	publish: Option<(ListenerKind, Option<IpAddr>)>,
+	challenge: Option<AcmeChallenge>,
 ) -> Result<Mappings, ApplyError> {
-	Ok(read_map(data_dir, listeners, publish)?.map(|map| (map.current, map.wanted)))
+	Ok(read_map(data_dir, listeners, publish, challenge)?.map(|map| (map.current, map.wanted)))
 }
 
 /// Say on stderr when the generated map and the configuration the command read
@@ -376,7 +386,9 @@ pub(crate) fn preview(
 /// holds the common lock and is about to bring the two together, so this is
 /// where the operator hears about it.
 pub(crate) fn announce_mixed_state(config: &Config, status: &mut impl Write) {
-	let Ok(Some((current, wanted))) = preview(&config.data_dir, &config.listeners, None) else {
+	let challenge = config.acme.as_ref().map(|acme| acme.challenge);
+	let Ok(Some((current, wanted))) = preview(&config.data_dir, &config.listeners, None, challenge)
+	else {
 		return;
 	};
 	if current == wanted {
@@ -413,6 +425,7 @@ pub(crate) fn prepare(
 	data_dir: &Path,
 	listeners: &[Listener],
 	publish: Option<(ListenerKind, Option<IpAddr>)>,
+	challenge: Option<AcmeChallenge>,
 ) -> Result<Prepared, ApplyError> {
 	// A command killed between its two renames leaves its staged copies of
 	// this file here. The caller holds the common lock, so whatever is left
@@ -421,7 +434,7 @@ pub(crate) fn prepare(
 	crate::cli::config_edit::announce_swept(&crate::cli::config_edit::sweep_orphans(
 		generated.parent().unwrap_or(data_dir),
 	));
-	let Some(mut map) = read_map(data_dir, listeners, publish)? else {
+	let Some(mut map) = read_map(data_dir, listeners, publish, challenge)? else {
 		return Ok(Prepared {
 			companion: None,
 			narrowed: Vec::new(),

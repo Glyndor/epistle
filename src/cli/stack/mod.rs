@@ -210,6 +210,7 @@ pub(super) mod certs;
 pub(super) mod dumps;
 pub(super) mod health;
 mod images;
+pub(super) mod port_warnings;
 pub(super) mod resources;
 mod retry;
 pub(super) mod rollback;
@@ -316,7 +317,17 @@ pub(super) fn run(config: &Config, action: StackAction) -> ExitCode {
 		}
 		StackAction::RollbackDb => rollback::restore_db(config, &compose, podup),
 		StackAction::Certs { on } => certs::run(config, &compose, podup, on),
-		StackAction::Up => certs::up(&config.data_dir, &compose, podup),
+		StackAction::Up => {
+			// The ports the stack publishes on every interface on purpose
+			// are the ones podup warns about on every run; the warning is
+			// replaced by one note, and the warning about a port nobody
+			// asked to publish stays as podup printed it.
+			let mut published = port_warnings::Published::new(config);
+			let code = certs::up(&config.data_dir, &compose, podup, &mut published);
+			let mut out = std::io::stderr().lock();
+			published.note(&mut out);
+			code
+		}
 		StackAction::Down => {
 			run_sequence(podup, &compose, &[&["autostart", "uninstall"], &["down"]])
 		}
@@ -432,17 +443,19 @@ fn run_inherited(podup: &str, compose: &Path, extra: &[&str]) -> ExitCode {
 		.status()
 	{
 		Ok(status) => status,
-		Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-			super::style::error(format_args!(
-				"`podup` was on PATH for `--version` but is gone now: {error}"
-			));
-			return ExitCode::FAILURE;
-		}
-		Err(error) => {
-			super::style::error(format_args!("cannot run `podup` for the stack: {error}"));
-			return ExitCode::FAILURE;
-		}
+		Err(error) => return not_started(error),
 	};
+	finished(&status, compose, extra)
+}
+
+/// The exit code a finished `podup` leaves behind: its own, with the
+/// one-line error a non-zero status gets. The error names the exact
+/// argv, so a `podup` failure points at the command that produced it.
+pub(super) fn finished(
+	status: &std::process::ExitStatus,
+	compose: &Path,
+	extra: &[&str],
+) -> ExitCode {
 	if status.success() {
 		ExitCode::SUCCESS
 	} else {
@@ -451,8 +464,21 @@ fn run_inherited(podup: &str, compose: &Path, extra: &[&str]) -> ExitCode {
 			compose.display(),
 			extra.join(" ")
 		));
-		exit_code_from_status(&status)
+		exit_code_from_status(status)
 	}
+}
+
+/// The exit code a `podup` that could not be started leaves behind: the
+/// one-line error names what went wrong.
+pub(super) fn not_started(error: std::io::Error) -> ExitCode {
+	if error.kind() == std::io::ErrorKind::NotFound {
+		super::style::error(format_args!(
+			"`podup` was on PATH for `--version` but is gone now: {error}"
+		));
+	} else {
+		super::style::error(format_args!("cannot run `podup` for the stack: {error}"));
+	}
+	ExitCode::FAILURE
 }
 
 /// Spawn `podup` and capture its stdout: the data command (`ps`)

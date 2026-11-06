@@ -111,6 +111,70 @@ pub(crate) fn write_config(data_dir: &Path) -> PathBuf {
 	cfg_path
 }
 
+/// A `mail.toml` that carries the given `[[listeners]]` entries, so the
+/// stack knows which bind address each published port has. The bind is
+/// what tells a publication the stack wants on every interface from one
+/// nobody asked for.
+#[allow(dead_code)]
+pub(crate) fn write_config_with_listeners(
+	data_dir: &Path,
+	listeners: &[(&str, &str, u16)],
+) -> PathBuf {
+	let mut body = format!(
+		"hostname = \"mail.example.org\"\ndata_dir = {:?}\ndomains = [\"example.org\"]\n",
+		data_dir
+	);
+	for (kind, addr, port) in listeners {
+		body.push_str(&format!(
+			"\n[[listeners]]\nkind = \"{kind}\"\naddr = \"{addr}\"\nport = {port}\n"
+		));
+	}
+	let cfg_path = data_dir.parent().unwrap().join("mail.toml");
+	std::fs::write(&cfg_path, body).expect("write config");
+	#[cfg(unix)]
+	{
+		std::fs::set_permissions(&cfg_path, std::fs::Permissions::from_mode(0o600))
+			.expect("chmod 0600 on config");
+	}
+	cfg_path
+}
+
+/// The warning podup prints for a port published on every interface.
+#[allow(dead_code)]
+pub(crate) fn warning(port: u16) -> String {
+	format!(
+		"podup: warning: service 'mail': port {port} is published on every interface; use \"127.0.0.1:{port}:{port}\" to keep it on the host"
+	)
+}
+
+/// A podup shim that records its argv and prints the given lines on
+/// stderr, the way the engine prints its warnings on every `up`. The
+/// lines are quoted for the shell, so a line that carries the warning
+/// podup prints reaches the test byte for byte.
+#[allow(dead_code)]
+pub(crate) fn stderr_shim(argv_log: &Path, lines: &[String]) -> String {
+	let mut body = format!(
+		"#!/bin/sh\n\
+		 printf '%s\\n' \"$@\" >> {argv_log}\n\
+		 if [ \"$1\" = \"--version\" ]; then\n\
+		 \tprintf '\\npodup version v5.15.4\\n\\n'\n\
+		 \texit 0\n\
+		 fi\n",
+		argv_log = argv_log.display()
+	);
+	for line in lines {
+		body.push_str(&format!(
+			"printf '%s\\n' \"{}\" >&2\n",
+			line.replace('\\', "\\\\")
+				.replace('"', "\\\"")
+				.replace('$', "\\$")
+				.replace('`', "\\`")
+		));
+	}
+	body.push_str("exit 0\n");
+	body
+}
+
 /// Spawn the real `epistle` binary with the stub `podup` first on
 /// `PATH` and capture both streams. The stub's first line is
 /// `sh -n`-probed, so a syntax error in the shim body turns this

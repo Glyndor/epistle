@@ -30,7 +30,7 @@ fn the_staged_map_touches_only_the_mail_ports() {
 			port: None,
 		},
 	];
-	let staged = super::compose_publish::prepare(dir.path(), &listeners, None)
+	let staged = super::compose_publish::prepare(dir.path(), &listeners, None, None)
 		.expect("a readable generated file")
 		.companion
 		.expect("the map moves");
@@ -60,7 +60,7 @@ fn the_staged_map_touches_only_the_mail_ports() {
 	let bytes = fs::read(&path).unwrap();
 	let mtime = fs::metadata(&path).unwrap().modified().unwrap();
 	assert!(
-		super::compose_publish::prepare(dir.path(), &listeners, None)
+		super::compose_publish::prepare(dir.path(), &listeners, None, None)
 			.expect("a readable generated file")
 			.companion
 			.is_none(),
@@ -78,7 +78,7 @@ fn the_staged_map_touches_only_the_mail_ports() {
 fn an_absent_generated_file_is_a_host_install() {
 	let dir = tempfile::tempdir().unwrap();
 	assert!(
-		super::compose_publish::prepare(dir.path(), &[], None)
+		super::compose_publish::prepare(dir.path(), &[], None, None)
 			.expect("an absent stack is not an error")
 			.companion
 			.is_none()

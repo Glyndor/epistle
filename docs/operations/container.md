@@ -246,6 +246,18 @@ families and publishes on every address the host owns either way; the family
 stays in the container bind, which is where the engine needs it.
 `epistle service list` shows the address in a `HOST` column.
 
+The engine warns about every published port that names no host address
+(`podup: warning: service 'mail': port 25 is published on every interface; use
+"127.0.0.1:25:25" to keep it on the host`). Several of those ports are
+published on purpose — inbound SMTP on port 25 has to answer the whole
+internet, and every mail listener binds the wildcard so the host reaches it on
+every address it owns — so `epistle stack up` replaces those warnings with one
+note that names the ports and the bind, while a warning about a port the stack
+does not publish on purpose (a listener on loopback that an override publishes
+wide, for example) stays exactly as the engine printed it. Port 80 is
+published only for the HTTP-01 challenge, so a configuration that renews with
+`dns-01` or `tls-alpn-01` does not publish it at all.
+
 A file from a release that published the listeners with no TLS transport wide
 is different: `8090:8090`, `0.0.0.0:8090:8090` and `[::]:8090:8090` all name the
 same thing, every address of the host, so any command that re-renders the map

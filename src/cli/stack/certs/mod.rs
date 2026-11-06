@@ -82,11 +82,24 @@ pub(in crate::cli) fn steady(before: &str, after: &str, service: &str) -> Result
 /// -d` and the autostart unit. A layout that cannot be read is reported and
 /// `up` goes on: starting the stack is what `up` is for, and the copy is
 /// only removed when the file says the split runs.
-pub(in crate::cli) fn up(data_dir: &Path, compose: &Path, podup: &str) -> std::process::ExitCode {
+///
+/// The steps run with podup's stderr captured, so the warnings about the
+/// ports the stack publishes on purpose can be replaced by one note.
+pub(in crate::cli) fn up(
+	data_dir: &Path,
+	compose: &Path,
+	podup: &str,
+	published: &mut super::port_warnings::Published,
+) -> std::process::ExitCode {
 	if let Err(error) = retire_before_up(data_dir, compose) {
 		crate::cli::style::warn(format!("no leftover ACME account key was removed: {error}"));
 	}
-	crate::cli::stack::run_sequence(podup, compose, &[&["up", "-d"], &["autostart", "install"]])
+	super::port_warnings::run_steps(
+		podup,
+		compose,
+		&[&["up", "-d"], &["autostart", "install"]],
+		published,
+	)
 }
 
 /// What a switch needs from the host; the tests fake it.

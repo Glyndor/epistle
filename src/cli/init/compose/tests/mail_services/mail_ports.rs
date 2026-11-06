@@ -9,11 +9,84 @@
 //! default.
 
 use std::fs;
+use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
 use super::render;
 use super::*;
+
+/// A configuration that carries the given `[acme]` section and no
+/// `[[listeners]]` array, so the compose writer derives the listeners
+/// from the answers and reads the challenge from the file.
+fn config_with_acme(dir: &Path, acme: Option<&str>) -> PathBuf {
+	let path = dir.join("mail.toml");
+	let mut body = String::from(
+		"hostname = \"mail.example.org\"\ndata_dir = \"/var/lib/epistle\"\ndomains = [\"example.org\"]\n",
+	);
+	if let Some(section) = acme {
+		body.push_str("\n[acme]\n");
+		body.push_str(section);
+	}
+	fs::write(&path, body).expect("write config");
+	path
+}
+
+/// The published ports of the rendered compose file.
+fn published_ports(value: &Value) -> Vec<String> {
+	value["services"]["mail"]["ports"]
+		.as_array()
+		.expect("ports is an array")
+		.iter()
+		.map(|p| p.as_str().expect("port is a string").to_string())
+		.collect()
+}
+
+/// Port 80 is where the certificate authority fetches the HTTP-01 token,
+/// so the compose file publishes it only for that challenge. A
+/// configuration with no `[acme]` section renews no certificate and
+/// nothing answers on it, and the `dns-01` and `tls-alpn-01` challenges
+/// are answered without the authority ever connecting to the host. A
+/// mapping nothing answers on is a port the host publishes for no
+/// reason, and it is the reason `podup` warned about it on every
+/// `stack up` (#1595).
+#[test]
+fn the_compose_publishes_port_80_only_for_the_http_01_challenge() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut answers = minimal_answers();
+	answers.config_path = dir.path().join("mail.toml");
+	// No `[acme]` section: nothing renews a certificate, so port 80 stays
+	// closed even though the `acme` listener is one the config binds.
+	config_with_acme(dir.path(), None);
+	let ports = published_ports(&render(&answers, false));
+	assert!(
+		!ports.contains(&"80:80".to_string()),
+		"a configuration with no [acme] section must not publish port 80; got {ports:?}"
+	);
+	// The HTTP-01 challenge is answered on port 80, so the port is
+	// published.
+	config_with_acme(dir.path(), Some("challenge = \"http-01\"\n"));
+	let ports = published_ports(&render(&answers, false));
+	assert!(
+		ports.contains(&"80:80".to_string()),
+		"the HTTP-01 challenge is answered on port 80, so it must be published; got {ports:?}"
+	);
+	// A challenge that leaves the key out takes the default, which is
+	// HTTP-01.
+	config_with_acme(dir.path(), Some("domains = [\"mail.example.org\"]\n"));
+	let ports = published_ports(&render(&answers, false));
+	assert!(
+		ports.contains(&"80:80".to_string()),
+		"a challenge that is not named is HTTP-01, so port 80 must be published; got {ports:?}"
+	);
+	// The DNS-01 challenge never reaches the host on port 80.
+	config_with_acme(dir.path(), Some("challenge = \"dns-01\"\n"));
+	let ports = published_ports(&render(&answers, false));
+	assert!(
+		!ports.contains(&"80:80".to_string()),
+		"the dns-01 challenge is answered without the host, so port 80 must not be published; got {ports:?}"
+	);
+}
 
 #[test]
 fn mail_published_ports_match_the_listeners_the_config_will_bind() {
@@ -28,7 +101,15 @@ fn mail_published_ports_match_the_listeners_the_config_will_bind() {
 	// (round-tripped through the `Listener` deserialiser) so a
 	// future change to the listener set is matched by the publish
 	// map without the test having to be edited.
-	let value = render(&minimal_answers(), false);
+	//
+	// The configuration the compose file is rendered for carries the
+	// `[acme]` section, so the challenge is the HTTP-01 one and the
+	// responder on port 80 is published with the rest.
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut answers = minimal_answers();
+	answers.config_path = dir.path().join("mail.toml");
+	config_with_acme(dir.path(), Some("challenge = \"http-01\"\n"));
+	let value = render(&answers, false);
 	let ports: Vec<String> = value["services"]["mail"]["ports"]
 		.as_array()
 		.expect("ports is an array")
