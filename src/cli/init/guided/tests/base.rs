@@ -52,7 +52,7 @@ fn guided_defaults_finish_all_seven_steps() {
 	);
 	assert_eq!(saved["image"], super::super::super::images::mail_base());
 	assert!(text.contains("Step 7 of 7"));
-	assert!(text.contains("publishing is not implemented"));
+	assert!(text.contains("publishes the records the server needs"));
 	assert!(saved.contains_key("image"));
 }
 

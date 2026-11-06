@@ -2,9 +2,9 @@
 //! generates the keys, and writes the configuration file.
 //!
 //! The public addresses the operator leaves out are proposed from the
-//! host's own interfaces (`detect`). DNS publishing is another part and
-//! is deliberately out of scope here: the plan step list always carries
-//! the `dns` step as `not implemented in this build`.
+//! host's own interfaces (`detect`). In automatic mode the `dns` step
+//! publishes the records the written configuration needs, through the same
+//! reconcile run as `epistle dns publish` (`dns_step`).
 
 mod answers;
 mod answers_none;
@@ -15,6 +15,7 @@ mod compose_publish;
 pub(crate) mod compose_read;
 pub(crate) mod db_roles;
 mod detect;
+mod dns_step;
 mod draft;
 mod first_account;
 mod guided;
@@ -238,7 +239,21 @@ fn run_with(args: Args, probes: &Probes, out: &mut dyn Write) -> ExitCode {
 			}
 			report_ptr(&answers, probes, out);
 			offer_warmup(&answers.data_dir, out);
-			let report = lines(|text| outcome.report.write_to(text).is_ok());
+			let mut report = lines(|text| outcome.report.write_to(text).is_ok());
+			if answers.mode == answers::Mode::Automatic && answers.dns.is_some() {
+				let published = dns_step::publish(
+					&answers.config_path,
+					&|config: &crate::config::Config| config.dns.build_for_host(&config.hostname),
+					std::time::SystemTime::now()
+						.duration_since(std::time::UNIX_EPOCH)
+						.map(|d| d.as_secs())
+						.unwrap_or(0),
+				);
+				for line in &published {
+					let _ = writeln!(out, "{}", crate::cli::term::sanitize(line));
+				}
+				report.extend(published);
+			}
 			result("saved", &report)
 		}
 		Some(error) => {

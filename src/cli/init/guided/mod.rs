@@ -14,7 +14,7 @@ pub(super) fn run<R: BufRead, W: Write>(
 	let mut answers: Answers = toml::from_str(&Answers::template())
 		.map_err(|_| io::Error::other("invalid built-in answers template"))?;
 	ui.step(1, 7, "Setup mode")?;
-	let mode = ui.choice("mode", "Manual mode leaves DNS publishing to you. Automatic mode configures a DNS provider, but publishing is not implemented in this build. Enter chooses manual.", &["manual", "automatic"], 0)?;
+	let mode = ui.choice("mode", "Manual mode leaves DNS publishing to you. Automatic mode configures a DNS provider, publishes the records the server needs and keeps them true. Enter chooses manual.", &["manual", "automatic"], 0)?;
 	answers.mode = if mode == 0 {
 		Mode::Manual
 	} else {
