@@ -123,6 +123,7 @@ mod srs;
 mod webhook;
 
 mod dns_lockdown;
+mod dns_publish;
 
 #[cfg(test)]
 mod tests;

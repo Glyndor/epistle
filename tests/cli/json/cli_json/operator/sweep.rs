@@ -102,6 +102,7 @@ const SKIPPED: &[(&str, &str)] = &[
 	("verify-dns", "looks up DNS"),
 	("dns-records", "builds records from live DKIM and DNS state"),
 	("dns lockdown", "reads the zone through the DNS provider"),
+	("dns publish", "reads the zone through the DNS provider"),
 	("dkim show", "checks the published records through DNS"),
 	("dkim rotate", "tests/cli/json/cli_json/delivery/dkim.rs"),
 	("dkim cleanup", "src/cli/dkim/cleanup/tests/base.rs"),
