@@ -103,6 +103,7 @@ fn account_show_json_has_the_same_keys_for_both_sources() {
 			"addresses": ["bob@example.org"], "disabled": false, "quota_bytes": null,
 			"protocols": null, "two_factor": true,
 			"forward": ["out@example.com"], "catch_all": ["example.org"],
+			"encryption_key": "none (encrypt_at_rest is off)",
 		})
 	);
 	let postmaster = show("postmaster");

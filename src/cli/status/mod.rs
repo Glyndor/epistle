@@ -25,6 +25,7 @@ mod queue_area;
 mod report;
 mod resources_area;
 mod spool_area;
+mod storage_keys_area;
 mod subid_area;
 #[cfg(test)]
 mod test_support;
@@ -78,6 +79,9 @@ pub enum CheckArea {
 	Disk,
 	/// The spool filesystem: at-rest encryption is on, every file is owner-only.
 	Spool,
+	/// The at-rest keys: which one protects each tenant, retired keys, an
+	/// unfinished re-encryption.
+	StorageKeys,
 	/// The service account's subordinate id ranges overlap no other account's.
 	Subid,
 	/// The IP warm-up: each receiver group's cap, use, health and verdict.
@@ -105,6 +109,7 @@ impl CheckArea {
 		CheckArea::Queue,
 		CheckArea::Disk,
 		CheckArea::Spool,
+		CheckArea::StorageKeys,
 		CheckArea::Subid,
 		CheckArea::Warmup,
 		CheckArea::Resources,
@@ -126,6 +131,7 @@ impl CheckArea {
 			CheckArea::Queue => "queue",
 			CheckArea::Disk => "disk",
 			CheckArea::Spool => "spool",
+			CheckArea::StorageKeys => "storage_keys",
 			CheckArea::Subid => "subid",
 			CheckArea::Warmup => "warmup",
 			CheckArea::Resources => "resources",
@@ -290,6 +296,7 @@ async fn check_area(area: CheckArea, ctx: &Ctx) -> AreaReport {
 		CheckArea::Queue => queue_area::check(ctx).await,
 		CheckArea::Disk => disk_area::check(ctx).await,
 		CheckArea::Spool => spool_area::check(ctx).await,
+		CheckArea::StorageKeys => storage_keys_area::check(ctx).await,
 		CheckArea::Subid => subid_area::check(ctx).await,
 		CheckArea::Warmup => warmup_area::check(ctx).await,
 		CheckArea::Resources => resources_area::check(ctx).await,

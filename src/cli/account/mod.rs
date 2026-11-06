@@ -27,6 +27,7 @@ mod actions;
 mod args;
 mod class;
 mod dispatch;
+mod encryption_key;
 mod forward_catch_all;
 pub(super) mod json;
 pub(super) mod list_aliases;
@@ -545,10 +546,15 @@ pub(super) fn run(
 			if let Err(code) = init_log_id(config_path) {
 				return code;
 			}
+			let key = encryption_key::describe(config_path, &store, &name);
 			if leaf || json {
-				return crate::cli::account::json::show(&store, &name, out);
+				return encryption_key::show_json(&store, &name, &key, out);
 			}
-			show_with_store(&store, &name, out)
+			let code = show_with_store(&store, &name, out);
+			if code == ExitCode::SUCCESS {
+				encryption_key::show_line(out, &key);
+			}
+			code
 		}
 		Subcommand::FindLogId { log_id } => {
 			let config = match Config::load(config_path) {

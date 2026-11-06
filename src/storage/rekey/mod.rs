@@ -66,7 +66,8 @@ pub struct Totals {
 	pub rewritten: u64,
 	/// Files already under the target key.
 	pub already: u64,
-	/// Files with no envelope, left as they are.
+	/// Files with no envelope (sidecars such as `.uid` and `.flags`, and
+	/// mail from before encryption), left as they are.
 	pub plaintext: u64,
 }
 

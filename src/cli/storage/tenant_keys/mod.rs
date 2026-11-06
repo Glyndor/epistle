@@ -264,7 +264,7 @@ fn report(
 		rows.iter().try_for_each(|(account, target, totals)| {
 			writeln!(
 				out,
-				"{account}: {verb} {} file(s) under {target}; {} already there, {} plaintext left as is",
+				"{account}: {verb} {} file(s) under {target}; {} already there, {} without an envelope (sidecars, older plaintext) left as is",
 				totals.rewritten, totals.already, totals.plaintext
 			)
 		})
