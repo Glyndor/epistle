@@ -1,22 +1,29 @@
 //! The generated compose file's own lock, taken with a deadline.
 //!
-//! `stack update` and `stack resources set` rewrite that file under a lock
-//! beside it, and they hold the common lock while they do. The holder of this
-//! second lock can be an older `epistle` command or a local tool that only
-//! respects this one, and a plain `flock` waits for as long as the other
-//! process keeps it, so the wait has to end somewhere: the command announces
-//! it once, gives up when the budget the common lock started is spent, says
-//! which file it was waiting for and drops the common lock with it. Nothing is
-//! recorded in this lock, so the wait names the file and not its holder.
+//! `stack update`, `stack resources set`, `stack certs` and `dns provider
+//! set` rewrite that file under a lock beside it. The order of the two locks
+//! is always the same: the common lock first, this one after it, never the
+//! other way round. A command that holds the common lock and waits for this
+//! one, and a command that holds this one and waits for the common one,
+//! would wait for each other.
+//!
+//! The holder of this second lock can be an older `epistle` command or a
+//! local tool that only respects this one, and a plain `flock` waits for as
+//! long as the other process keeps it, so the wait has to end somewhere: the
+//! command announces it once, gives up when the budget the common lock
+//! started is spent, says which file it was waiting for and drops the common
+//! lock with it. Nothing is recorded in this lock, so the wait names the file
+//! and not its holder.
 
 use std::path::Path;
 use std::time::{Duration, Instant};
 
 use crate::storage::lock::FileLock;
 
-/// Take the lock that guards a rewrite of the generated compose file. The
-/// command already holds the common lock, so the wait is what is left of the
-/// budget that lock spent from, not a second full one.
+/// Take the lock that guards a rewrite of the generated compose file. A
+/// command that holds the common lock takes this one after it, so the wait
+/// is what is left of the budget that lock started is spent, not a second
+/// full one.
 pub(in crate::cli) fn acquire(path: &Path) -> Result<FileLock, String> {
 	acquire_within(path, crate::cli::service::lock::remaining())
 }

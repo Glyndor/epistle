@@ -45,6 +45,15 @@ pub(super) fn run(
 		.collect();
 	remove(&mut document, &zone)?;
 	let config = document.config()?;
+	// The generated compose file is rewritten through the companion, so it
+	// is read and written under the lock that guards it. The common lock
+	// above was taken first and this one after it, in every command that
+	// takes both, so no two commands wait for each other.
+	let compose_lock = if dry_run {
+		None
+	} else {
+		super::compose::lock_compose(&current)?
+	};
 	let compose = super::compose::with_token(&current, &zone, None, &dropped)?.update;
 	let edit = resource::Edit {
 		label: "dns provider",
@@ -61,6 +70,10 @@ pub(super) fn run(
 	}
 	let outcome = commit_pair(document, compose.map(|update| update.companion))
 		.map_err(ResourceError::from)?;
+	// The generated file is written, so the lock that guarded it is free
+	// again: a command that waits for it does not wait for the container
+	// this one recreates.
+	drop(compose_lock);
 	let changed = outcome == Outcome::Changed;
 	writeln!(
 		status,
