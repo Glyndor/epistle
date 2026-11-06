@@ -88,8 +88,8 @@ fn waiters_on_different_stripes_count_against_one_line() {
 		subjects_of.pop().expect("stripe"),
 		subjects_of.pop().expect("stripe"),
 	);
-	taken.push(locks.hold(&[a.clone()]).expect("free"));
-	taken.push(locks.hold(&[b.clone()]).expect("free"));
+	taken.push(locks.hold(std::slice::from_ref(&a)).expect("free"));
+	taken.push(locks.hold(std::slice::from_ref(&b)).expect("free"));
 	let waiter = {
 		let locks = locks.clone();
 		let a = a.clone();
