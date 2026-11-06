@@ -71,6 +71,23 @@ fn forward_needs_tenant_keys_on_and_rollback_needs_it_off() {
 }
 
 #[test]
+fn with_no_tenant_key_a_forward_run_is_a_server_key_rotation() {
+	let fx = fixture();
+	fx.store("alice", "new/0001.eml", b"alice");
+	let (code, out, status) = call(
+		&fx,
+		&fx.server_only(),
+		&options(Direction::Forward),
+		&mut rekey::NoHooks,
+	);
+	assert_eq!(code, ExitCode::SUCCESS, "{status}");
+	assert!(
+		out.contains("alice: rewrote 0 file(s) under the server key"),
+		"{out}"
+	);
+}
+
+#[test]
 fn a_running_server_is_refused_but_a_dry_run_is_not() {
 	let fx = fixture();
 	fx.store("alice", "new/0001.eml", b"alice");

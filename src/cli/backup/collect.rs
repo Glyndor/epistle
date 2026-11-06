@@ -110,6 +110,7 @@ pub(super) fn warn_externally_referenced(
 		}
 	}
 
+	encryption_key.extend(super::keys_note::tenant_and_retired_keys(config));
 	if !encryption_key.is_empty() {
 		crate::cli::style::warn_to(
 			warnings,

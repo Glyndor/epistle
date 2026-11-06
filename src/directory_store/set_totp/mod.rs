@@ -13,7 +13,7 @@
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 
-use crate::storage::MessageCrypto;
+use crate::storage::{KeyOwner, MessageCrypto};
 
 /// Prefix of a sealed secret. The version lets the format change later
 /// without guessing at what an old value holds.
@@ -25,9 +25,16 @@ const SEALED_PREFIX: &str = "enc:v1:";
 const UNREADABLE_SECRET: &str = "!unreadable";
 
 /// The on-disk form of `secret`: sealed under `crypto` when encryption is
-/// on, unchanged otherwise or when it is already sealed.
+/// on, unchanged otherwise or when it is already sealed under the current
+/// server key. A value only a retired server key opens is resealed under
+/// the current one, so a key rotation does not depend on the retired key
+/// forever.
 fn seal(crypto: &MessageCrypto, secret: &str) -> Result<String, super::StoreError> {
 	if secret.starts_with(SEALED_PREFIX) {
+		if let Some(plain) = under_retired_key(crypto, secret) {
+			let envelope = crypto.seal_for(&KeyOwner::Server, &plain)?;
+			return Ok(format!("{SEALED_PREFIX}{}", BASE64.encode(envelope)));
+		}
 		return Ok(secret.to_string());
 	}
 	let envelope = crypto.encode(secret.as_bytes())?;
@@ -36,6 +43,16 @@ fn seal(crypto: &MessageCrypto, secret: &str) -> Result<String, super::StoreErro
 		return Ok(secret.to_string());
 	}
 	Ok(format!("{SEALED_PREFIX}{}", BASE64.encode(envelope)))
+}
+
+/// The opened secret of a sealed value that a key other than the current
+/// server key opens, or `None`.
+fn under_retired_key(crypto: &MessageCrypto, stored: &str) -> Option<zeroize::Zeroizing<Vec<u8>>> {
+	let envelope = BASE64.decode(stored.strip_prefix(SEALED_PREFIX)?).ok()?;
+	match crypto.open_owned(&envelope) {
+		Ok((plain, owner)) if owner != KeyOwner::Server => Some(zeroize::Zeroizing::new(plain)),
+		_ => None,
+	}
 }
 
 /// The base32 secret for a stored value, or [`UNREADABLE_SECRET`] when a
@@ -78,6 +95,23 @@ impl super::AccountStore {
 			Ok(())
 		})?;
 		Ok(())
+	}
+
+	/// Rewrite `accounts.toml` so every TOTP secret that only a retired
+	/// server key opens is sealed under the current one. Returns how many
+	/// there were; nothing is written when there are none.
+	pub fn reseal_totp(&self) -> Result<usize, super::StoreError> {
+		let stale = self
+			.dynamic_accounts()
+			.iter()
+			.filter_map(|account| account.totp_secret.as_deref())
+			.filter(|secret| under_retired_key(&self.crypto, secret).is_some())
+			.count();
+		if stale > 0 {
+			// Writing the file runs every secret through `seal`.
+			self.mutate_store(|_| Ok(()))?;
+		}
+		Ok(stale)
 	}
 
 	/// Attach the at-rest encryption handle that protects the TOTP secret.

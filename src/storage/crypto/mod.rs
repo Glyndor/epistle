@@ -114,6 +114,11 @@ pub enum CryptoError {
 		"[[tenant]] encryption_key_file needs a [storage] key as well (encryption_key_file or encryption_key_env)"
 	)]
 	TenantWithoutServerKey,
+	/// Retired keys are configured but the current server key is not.
+	#[error(
+		"[storage] retired_key_files needs the current key as well (encryption_key_file or encryption_key_env)"
+	)]
+	RetiredWithoutServerKey,
 }
 
 /// Errors raised by the AEAD envelope that aren't I/O. Folding them into
@@ -249,7 +254,14 @@ impl MessageCrypto {
 		match key_bytes {
 			Some(bytes) => keys.insert(StoredKey::new(&bytes, KeyOwner::Server)?)?,
 			None if has_tenant_keys => return Err(CryptoError::TenantWithoutServerKey),
+			None if !storage.retired_key_files.is_empty() => {
+				return Err(CryptoError::RetiredWithoutServerKey);
+			}
 			None => {}
+		}
+		for (index, path) in storage.retired_key_files.iter().enumerate() {
+			let bytes = tenant::read_private_key_file(path)?;
+			keys.insert(StoredKey::new(&bytes, KeyOwner::Retired(index))?)?;
 		}
 		tenant::load(&mut keys, tenants)?;
 		Ok(Self::build(
