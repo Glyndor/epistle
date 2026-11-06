@@ -122,9 +122,14 @@ async fn evaluate(config: &Config, dns: &dyn DnsLookup) -> AreaReport {
 		));
 	}
 	let mut summary = format!("{ok} records ok");
+	summary.push_str(&named(&records, &Status::Missing, missing, "missing"));
+	summary.push_str(&named(
+		&records,
+		&Status::LookupError,
+		inconclusive,
+		"inconclusive",
+	));
 	for (count, what) in [
-		(missing, "missing"),
-		(inconclusive, "inconclusive"),
 		(mismatches, "DKIM key mismatch"),
 		(stale.len(), "shared DKIM key still published"),
 		(unchecked.len(), "split state not checkable"),
@@ -137,8 +142,34 @@ async fn evaluate(config: &Config, dns: &dyn DnsLookup) -> AreaReport {
 			summary.push_str(&format!(", {count} {what}"));
 		}
 	}
+	if missing + inconclusive > 0 {
+		summary.push_str("; run `epistle verify-dns`");
+	}
 	items.extend(findings);
 	AreaReport::from_items(items, summary)
+}
+
+/// `, N what (first, second, +K more)` for the records with `status`, or nothing when
+/// there are none. The names are the first ones in check order; the rest are counted, so
+/// the line stays short with many domains and still says where to look.
+fn named(records: &[Check], status: &Status, count: usize, what: &str) -> String {
+	if count == 0 {
+		return String::new();
+	}
+	const SHOWN: usize = 2;
+	let names: Vec<&str> = records
+		.iter()
+		.filter(|check| &check.status == status)
+		.take(SHOWN)
+		.map(|check| check.name.as_str())
+		.collect();
+	let more = count.saturating_sub(names.len());
+	let tail = if more > 0 {
+		format!(", +{more} more")
+	} else {
+		String::new()
+	};
+	format!(", {count} {what} ({}{tail})", names.join(", "))
 }
 
 fn count(records: &[Check], status: &Status) -> usize {
