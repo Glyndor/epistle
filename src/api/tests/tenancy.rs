@@ -180,3 +180,32 @@ async fn a_scoped_key_can_still_work_inside_its_own_domain() {
 	// The confinement must not turn into a key that can do nothing at all.
 	assert_eq!(status, StatusCode::OK);
 }
+
+/// `Message-ID` names the domain that sent the message. Here the first hosted domain is
+/// `a.example` and the sender is on `b.example`, so a stamp taken from the first hosted
+/// domain would name the wrong tenant.
+#[tokio::test]
+async fn the_message_id_of_a_send_names_the_senders_domain_not_the_first_hosted_one() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let app = router(scoped_state(dir.path()));
+	let (status, body) = request_with_body(
+		&app,
+		"POST",
+		"/api/v1/send",
+		Some(TOKEN.as_str()),
+		Some(serde_json::json!({
+			"from": "bob@b.example",
+			"to": ["someone@elsewhere.example"],
+			"text": "x",
+		})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	let (_, raw) = super::send::send_rich::queued(dir.path());
+	let text = String::from_utf8_lossy(&raw);
+	let line = text
+		.lines()
+		.find(|line| line.starts_with("Message-ID: "))
+		.expect("a Message-ID header");
+	assert!(line.ends_with("@b.example>"), "{line}");
+}
