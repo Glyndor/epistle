@@ -6,7 +6,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::super::dns_reconcile::{
-	FIRST_RUN_AFTER, ReconcilePlan, Tick, backoff, backoff_base, decide, loop_with, tick,
+	FIRST_RUN_AFTER, ReconcilePlan, Tick, backoff, backoff_base, build_provider, decide, loop_with,
+	tick,
 };
 use crate::config::Config;
 use crate::dns::lockdown::tests::support::Zone;
@@ -77,6 +78,13 @@ impl DnsProvider for Failing {
 	fn list(&self, _zone: &str) -> ListOp<'_> {
 		Box::pin(async { Err(ProviderError::Remote("no answer".into())) })
 	}
+}
+
+/// The provider of a run, for a loop whose provider never changes.
+fn always(
+	provider: Arc<dyn DnsProvider>,
+) -> impl FnMut(&Config) -> Result<Arc<dyn DnsProvider>, String> {
+	move |_| Ok(Arc::clone(&provider))
 }
 
 #[test]
@@ -204,7 +212,7 @@ async fn a_provider_that_fails_waits_longer_every_time() {
 	let config = config(dir.path(), CLOUDFLARE);
 	let mut waits: Vec<Duration> = Vec::new();
 	let mut runs = 0u32;
-	loop_with(&config, &Failing, |delay| {
+	loop_with(&config, always(Arc::new(Failing)), |delay| {
 		waits.push(delay);
 		runs += 1;
 		let keep = runs < 5;
@@ -234,10 +242,10 @@ async fn a_provider_that_fails_waits_longer_every_time() {
 async fn a_run_that_goes_through_resets_the_wait() {
 	let dir = tempfile::tempdir().expect("directory");
 	let config = config(dir.path(), CLOUDFLARE);
-	let zone = Zone::default();
+	let zone: Arc<dyn DnsProvider> = Arc::new(Zone::default());
 	let mut waits: Vec<Duration> = Vec::new();
 	let mut runs = 0u32;
-	loop_with(&config, &zone, |delay| {
+	loop_with(&config, always(Arc::clone(&zone)), |delay| {
 		waits.push(delay);
 		runs += 1;
 		let keep = runs < 3;
@@ -259,4 +267,75 @@ fn interval_of(config: &Config) -> Duration {
 		ReconcilePlan::Run { every } => every,
 		_ => panic!("the loop runs"),
 	}
+}
+
+/// The provider is built again on every run: a credential that was
+/// rotated, or created after the server started, is picked up without a
+/// restart, and a build that fails keeps the provider of the last run
+/// writing.
+#[tokio::test]
+async fn a_credential_that_appears_after_the_start_is_picked_up() {
+	const TOKEN: &str = "EPISTLE_TEST_LATE_TOKEN";
+	const VALUE: &str = "the-credential-that-came-late";
+	let dir = tempfile::tempdir().expect("directory");
+	let config = config(
+		dir.path(),
+		&format!("[dns]\nprovider = 'cloudflare'\nzone = 'example.org'\ntoken_env = '{TOKEN}'\n"),
+	);
+	// The credential is not there yet: the configuration builds no
+	// provider, and says which piece is missing without printing one.
+	unsafe { std::env::remove_var(TOKEN) };
+	let problem = match build_provider(&config) {
+		Ok(_) => panic!("no provider without a credential"),
+		Err(reason) => reason,
+	};
+	assert!(problem.contains(TOKEN), "{problem}");
+	assert!(!problem.contains(VALUE), "{problem}");
+
+	let zone = Arc::new(Zone::default());
+	let provider: Arc<dyn DnsProvider> = zone.clone();
+	let mut runs = 0u32;
+	let mut published = 0u32;
+	loop_with(
+		&config,
+		|config| {
+			// The provider the configuration builds would talk to the
+			// network; the test keeps the decision the configuration
+			// makes and swaps the provider for a zone in memory.
+			build_provider(config).map(|_| Arc::clone(&provider))
+		},
+		|_delay| {
+			runs += 1;
+			match runs {
+				1 => assert_eq!(
+					*zone.writes.lock().unwrap(),
+					0,
+					"the first run had no provider and wrote nothing"
+				),
+				// The credential appears after the first run.
+				2 => unsafe { std::env::set_var(TOKEN, VALUE) },
+				3 => {
+					// The credential is gone again and the zone is empty:
+					// the provider of the last run must write anyway.
+					unsafe { std::env::remove_var(TOKEN) };
+					zone.records.lock().unwrap().clear();
+					published = *zone.writes.lock().unwrap();
+					assert!(published > 0, "the run that found the credential published");
+				}
+				4 => assert!(
+					*zone.writes.lock().unwrap() > published,
+					"the provider of the last run kept writing"
+				),
+				_ => unsafe { std::env::remove_var(TOKEN) },
+			}
+			let keep = runs < 5;
+			async move { keep }
+		},
+	)
+	.await;
+	unsafe { std::env::remove_var(TOKEN) };
+	assert!(
+		holds(&zone, &spf()),
+		"the records of the configuration are published"
+	);
 }
