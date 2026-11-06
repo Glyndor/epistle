@@ -171,12 +171,21 @@ runs it renders and runs exactly as before.
   TLSA retry state (`<data_dir>/dns-tlsa`) read-write, the DNS credential
   read-only, and the ACME account key as a read-only secret at
   `secrets/acme_account.key` beside data_dir. It mounts nothing else of
-  data_dir.
+  data_dir. It cannot mount the configuration file alone: a command that edits
+  the configuration replaces the file atomically, and a container bound to the
+  old file would keep reading it. The process parses only `[acme]` and `[dns]`
+  out of it and never reads the account hashes, the API token hash, the OAuth
+  configuration, the storage key or the DKIM key paths.
 - `mail` mounts data_dir read-write as before, with three directories over it
   read-only: `<data_dir>/acme`, `<data_dir>/dns-tlsa` and `<data_dir>/compose`.
   The rule behind the list: `certs` acts on nothing `mail` can write, and the
   file that says which container holds the credential is not writable by
   `mail` either.
+- The rendered Compose file is checked for the split layout: every path each
+  service mounts and the mode it mounts it with, the pair and the TLSA state
+  writable only in `certs`, and the read-only mounts that keep `mail` from
+  writing them applied after the read-write mount of data_dir, so no later
+  mount can shadow them.
 - `epistle dns provider set` and `unset` put the credential in `certs` and
   recreate it when the stack runs it.
 - `epistle status` reports the container in its `tls` area with the days the

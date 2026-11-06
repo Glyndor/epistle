@@ -24,11 +24,13 @@ use tls::TlsStack;
 mod run;
 pub use run::run;
 
-/// The tables of the configuration the certificates role never reads. Their
-/// validation opens files that container does not mount (the `[database]`
-/// password), and giving it those files would hand it a credential it does
-/// not use.
-const NOT_FOR_CERTS: [&str; 1] = ["database"];
+/// The tables of the configuration the certificates role never reads: the
+/// accounts and their password hashes, the API token hash, the OAuth
+/// configuration, the storage key and the DKIM key paths. Their validation
+/// opens files that container does not mount (the `[database]` password, the
+/// OAuth signing key), and giving it those tables would hand it credentials
+/// it does not use.
+const NOT_FOR_CERTS: [&str; 6] = ["database", "accounts", "api", "storage", "oauth", "dkim"];
 
 /// Load the configuration `role` runs with: strictly, as every command that
 /// acts on the data does, and for the certificates role without the tables
