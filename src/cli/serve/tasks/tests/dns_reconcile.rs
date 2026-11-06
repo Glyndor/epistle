@@ -271,10 +271,10 @@ fn interval_of(config: &Config) -> Duration {
 
 /// The provider is built again on every run: a credential that was
 /// rotated, or created after the server started, is picked up without a
-/// restart, and a build that fails keeps the provider of the last run
-/// writing.
+/// restart, and a build that fails drops the provider of the last run: a
+/// credential the operator removed is a decision to stop writing.
 #[tokio::test]
-async fn a_credential_that_appears_after_the_start_is_picked_up() {
+async fn a_credential_that_appears_late_is_picked_up_and_one_that_goes_stops_the_writes() {
 	const TOKEN: &str = "EPISTLE_TEST_LATE_TOKEN";
 	const VALUE: &str = "the-credential-that-came-late";
 	let dir = tempfile::tempdir().expect("directory");
@@ -316,15 +316,16 @@ async fn a_credential_that_appears_after_the_start_is_picked_up() {
 				2 => unsafe { std::env::set_var(TOKEN, VALUE) },
 				3 => {
 					// The credential is gone again and the zone is empty:
-					// the provider of the last run must write anyway.
+					// the loop must not write with the provider of the last run.
 					unsafe { std::env::remove_var(TOKEN) };
 					zone.records.lock().unwrap().clear();
 					published = *zone.writes.lock().unwrap();
 					assert!(published > 0, "the run that found the credential published");
 				}
-				4 => assert!(
-					*zone.writes.lock().unwrap() > published,
-					"the provider of the last run kept writing"
+				4 => assert_eq!(
+					*zone.writes.lock().unwrap(),
+					published,
+					"a provider whose credential is gone must not keep writing"
 				),
 				_ => unsafe { std::env::remove_var(TOKEN) },
 			}
@@ -335,7 +336,7 @@ async fn a_credential_that_appears_after_the_start_is_picked_up() {
 	.await;
 	unsafe { std::env::remove_var(TOKEN) };
 	assert!(
-		holds(&zone, &spf()),
-		"the records of the configuration are published"
+		!holds(&zone, &spf()),
+		"nothing was written after the credential went away"
 	);
 }
