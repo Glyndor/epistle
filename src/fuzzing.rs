@@ -432,6 +432,18 @@ pub fn sasl_exchange(input: &str) {
 					== Err(ScramError::Malformed),
 				"a nonce the server did not send was accepted",
 			);
+		}
+	}
+}
+
+/// The largest index at most `max` that is a character boundary of `text`.
+fn floor_char_boundary(text: &str, max: usize) -> usize {
+	let mut end = max.min(text.len());
+	while !text.is_char_boundary(end) {
+		end -= 1;
+	}
+	end
+}
 
 /// The secret every run signs SRS addresses with. It is fixed, so a crash
 /// reproduces, and it protects nothing: the addresses it signs are never
@@ -614,13 +626,4 @@ pub fn smtp_bdat(
 			_ => {}
 		}
 	}
-}
-
-/// The largest index at most `max` that is a character boundary of `text`.
-fn floor_char_boundary(text: &str, max: usize) -> usize {
-	let mut end = max.min(text.len());
-	while !text.is_char_boundary(end) {
-		end -= 1;
-	}
-	end
 }
