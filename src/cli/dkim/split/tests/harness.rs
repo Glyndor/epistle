@@ -212,6 +212,21 @@ impl Install {
 		Install::with_selector(domains, extra, "s1")
 	}
 
+	/// `Install::new` with `[dkim]` signing with an RSA key too, so the
+	/// domains that move get a key of their own for each signature.
+	pub(super) fn with_rsa(domains: &[&str]) -> Install {
+		let install = Install::new(domains, "");
+		let rsa = install.dir.path().join("default-rsa.pem");
+		std::fs::write(&rsa, include_str!("../../../../dkim/test_rsa_key.pem")).expect("write");
+		let mut config = install.text();
+		config.push_str(&format!(
+			"rsa_selector = \"s1rsa\"\nrsa_key_file = {:?}\n",
+			rsa.display().to_string()
+		));
+		std::fs::write(&install.config, config).expect("write");
+		install
+	}
+
 	/// [`Install::new`] with the selector the shared key is published under.
 	pub(super) fn with_selector(domains: &[&str], extra: &str, selector: &str) -> Install {
 		let dir = tempfile::tempdir().expect("dir");

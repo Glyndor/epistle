@@ -1,6 +1,7 @@
 #[allow(unused_imports)]
 pub use super::*;
 
+mod dry_run;
 mod finish;
 mod flow;
 mod harness;

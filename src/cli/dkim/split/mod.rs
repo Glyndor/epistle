@@ -198,6 +198,17 @@ fn make_keys(config: &Config, plan: &plan::Plan, now: u64) -> Result<Vec<Move>, 
 		.collect()
 }
 
+/// The keys a domain moves to, ed25519 first: the selector each is
+/// published under and the file it is written to. A domain that signs with
+/// two keys gets two, and the dry run says so.
+fn keys_of(keys: &DomainKeys) -> Vec<(&str, &Path)> {
+	let mut all = vec![(keys.selector.as_str(), keys.key_file.as_path())];
+	if let Some((selector, file)) = &keys.rsa {
+		all.push((selector.as_str(), file.as_path()));
+	}
+	all
+}
+
 /// The plan as lines and as a JSON object.
 fn describe(plan: &plan::Plan, moves: &[(String, DomainKeys)]) -> serde_json::Value {
 	serde_json::json!({
@@ -284,15 +295,15 @@ pub(super) async fn split(
 		let mut report = Report::new(out, json);
 		report.line(format_args!("keep {} on the [dkim] key", plan.keeps));
 		for (domain, keys) in &shown {
-			report.line(format_args!(
-				"give {domain} a key of its own ({}) at {}",
-				keys.selector,
-				keys.key_file.display()
-			));
-			report.line(format_args!(
-				"publish TXT {}._domainkey.{domain}, wait until it resolves, then switch signing",
-				keys.selector
-			));
+			for (selector, file) in keys_of(keys) {
+				report.line(format_args!(
+					"give {domain} a key of its own ({selector}) at {}",
+					file.display()
+				));
+				report.line(format_args!(
+					"publish TXT {selector}._domainkey.{domain}, wait until it resolves, then switch signing"
+				));
+			}
 		}
 		let stale = stale_of(config, &shown).unwrap_or_default();
 		let mut result = describe(&plan, &shown);
