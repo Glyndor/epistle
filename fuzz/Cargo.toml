@@ -219,6 +219,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "smtp_bdat"
+path = "fuzz_targets/smtp/smtp_bdat.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "sender_auth_records"
 path = "fuzz_targets/dns/sender_auth_records.rs"
 test = false
@@ -228,6 +235,13 @@ bench = false
 [[bin]]
 name = "sasl_exchange"
 path = "fuzz_targets/smtp/sasl_exchange.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "srs_reverse"
+path = "fuzz_targets/queue/srs_reverse.rs"
 test = false
 doc = false
 bench = false
