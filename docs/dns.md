@@ -372,7 +372,11 @@ since, shared with a foreign record or delegated is reported and left. DKIM
 keys are left too, since they may still sign mail; `epistle dkim cleanup`
 retires keys.
 
-The command takes a lock in `<data_dir>/dns-publish/`, so two runs never
+In automatic mode the server runs the same comparison on its own every six
+hours (`[dns_publish] interval_secs`, see
+[`configuration.md`](configuration.md#dns_publish)), so a record that drifted
+or a service turned off is followed without running the command. The command
+and that loop take the same lock in `<data_dir>/dns-publish/`, so they never
 write at the same time.
 
 ### Checking provider credentials
