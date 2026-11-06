@@ -54,7 +54,20 @@ pub(super) fn run(
 	} else {
 		super::compose::lock_compose(&current)?
 	};
-	let compose = super::compose::with_token(&current, &zone, None, &dropped)?.update;
+	let compose = super::compose::with_token(&current, &zone, None, &dropped)?;
+	// The services whose definition the compose change touches: each one of
+	// them has to be recreated, or its container keeps the mount it had.
+	let touched: Vec<&'static str> = compose
+		.update
+		.as_ref()
+		.map(|update| update.changed.clone())
+		.unwrap_or_default();
+	// The override the operator keeps beside the generated file can hand
+	// the credential back to the container the split took it away from, and
+	// nothing in the generated file says so.
+	for warning in &compose.warnings {
+		crate::cli::style::warn_to(status, format_args!("{warning}"));
+	}
 	let edit = resource::Edit {
 		label: "dns provider",
 		action: "provider unset",
@@ -62,13 +75,16 @@ pub(super) fn run(
 		json,
 	};
 	if dry_run {
-		let change = compose.as_ref().map(|update| resource::CompanionChange {
-			companion: &update.companion,
-			lines: &update.lines,
-		});
+		let change = compose
+			.update
+			.as_ref()
+			.map(|update| resource::CompanionChange {
+				companion: &update.companion,
+				lines: &update.lines,
+			});
 		return resource::preview(&document, change, &edit, out);
 	}
-	let outcome = commit_pair(document, compose.map(|update| update.companion))
+	let outcome = commit_pair(document, compose.update.map(|update| update.companion))
 		.map_err(ResourceError::from)?;
 	// The generated file is written, so the lock that guarded it is free
 	// again: a command that waits for it does not wait for the container
@@ -81,7 +97,8 @@ pub(super) fn run(
 		if changed { "saved" } else { "unchanged" }
 	)
 	.map_err(|error| error.to_string())?;
-	let (code, reload) = after_credential_change_reporting(&config, outcome, status, restart)?;
+	let (code, reload) =
+		after_credential_change_reporting(&config, outcome, status, restart, &touched)?;
 	if json {
 		let object =
 			crate::cli::json_out::change_object(edit.action, changed, edit.fields, Some(reload));
