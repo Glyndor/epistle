@@ -308,6 +308,15 @@ services:
       - "10.0.0.1:8025:8025"
 ```
 
+An override that replaces the list decides where a port is published, so
+`epistle service set <name> --bind <address>` refuses when the override
+carries the port of that listener: the entry the command would write is never
+used, and the command says so instead of reporting a publication the stack
+does not make. It names the file, the line and the entry to change, and it
+leaves the configuration and the generated map alone. An override that merges
+with the generated map does not stop the change: the command publishes what it
+wrote and says how the two combine.
+
 [Exposing the API on a private interface](../api.md#exposing-the-api-on-a-private-interface)
 covers the API case, including what `--ip-cidr` sees when the container
 network does not carry the client's address.

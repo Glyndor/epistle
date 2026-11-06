@@ -108,6 +108,7 @@ pub(super) fn run(
 			))
 		})?
 		.clone();
+	let previous = current.socket_addr().port();
 	let port = match requested_port {
 		Some(0) => {
 			return Err(ResourceError::Refusal(
@@ -115,7 +116,7 @@ pub(super) fn run(
 			));
 		}
 		Some(port) => port,
-		None => current.socket_addr().port(),
+		None => previous,
 	};
 	let stack = init::compose_file_path(&config.data_dir).exists();
 	let narrow =
@@ -142,6 +143,28 @@ pub(super) fn run(
 	// the command must not describe it as published.
 	let container = container_field.unwrap_or(current.addr);
 	free_port(&config, kind, &narrow, host, container, port, stack)?;
+	// The operator's override can replace the generated map, and then the
+	// entry this command writes is never used: the stack publishes the port
+	// the way the override says, and the address the operator asked for is
+	// not one of them. A change that reports a publication the stack does
+	// not make is worse than a refusal, so the command refuses and names the
+	// entry to change.
+	let overrides = if stack {
+		Some(init::operator_override_ports(
+			&config.data_dir,
+			&[port, previous],
+		))
+	} else {
+		None
+	};
+	if let Some(overrides) = &overrides
+		&& overrides.replaces
+		&& let Some(entry) = overrides.entry(port)
+	{
+		return Err(ResourceError::Refusal(override_wins(
+			name, entry, port, host,
+		)));
+	}
 	let mut fields: Vec<(&str, toml_edit::Value)> = Vec::new();
 	if let Some(address) = container_field {
 		fields.push(("addr", address.to_string().into()));
@@ -220,7 +243,7 @@ pub(super) fn run(
 			name.as_str()
 		)
 		.map_err(text)?;
-		override_notice(stack, &config, port, current.socket_addr().port(), err)?;
+		override_notice(overrides.as_ref(), err)?;
 		if json {
 			let object =
 				json_out::change_object("set", false, fields, Some(json_out::Reload::None));
@@ -232,7 +255,7 @@ pub(super) fn run(
 	// A publication this change takes off every address of the host is said
 	// once the map carries it, so the note and the file agree.
 	init::announce_narrowed(&narrowed, err);
-	override_notice(stack, &config, port, current.socket_addr().port(), err)?;
+	override_notice(overrides.as_ref(), err)?;
 	let (code, reload) =
 		crate::cli::config_edit::after_ports_change_reporting(&config, outcome, err, restart)?;
 	if json {
@@ -247,13 +270,10 @@ pub(super) fn run(
 /// an override that is there publishes the same way before and after, and the
 /// operator ran the command to hear what answers.
 fn override_notice(
-	stack: bool,
-	config: &Config,
-	port: u16,
-	previous: u16,
+	overrides: Option<&init::OverridePorts>,
 	err: &mut impl Write,
 ) -> Result<(), ResourceError> {
-	if stack && init::operator_override_publishes(&config.data_dir, &[port, previous]) {
+	if overrides.is_some_and(init::OverridePorts::publishes) {
 		writeln!(
 			err,
 			"compose.override.yaml publishes a port for mail: it merges with the generated map, or replaces it where it carries !override."
@@ -261,6 +281,44 @@ fn override_notice(
 		.map_err(text)?;
 	}
 	Ok(())
+}
+
+/// The message a refusal carries when the operator's override replaces the
+/// generated map: the file, the entry to change, and what the stack
+/// publishes until it does. It says where the port is published and not
+/// where this command would have published it, because the override is what
+/// answers.
+fn override_wins(
+	name: ServiceName,
+	entry: &init::OverrideEntry,
+	port: u16,
+	requested: IpAddr,
+) -> String {
+	let published = match entry.address {
+		Some(address) => host_port(address, port),
+		None => "every address of the host".to_string(),
+	};
+	let wanted = socket_label(requested, port);
+	let contrast = if publishes_the_same(entry.address, requested) {
+		String::new()
+	} else {
+		format!(" and not on {wanted}")
+	};
+	format!(
+		"compose.override.yaml wins over the generated map: the ports entry on line {line} ({entry}) names port {port}, so {service} is published on {published}{contrast}. Change that entry to publish the port on {wanted}, then run this again.",
+		line = entry.line,
+		entry = entry.text,
+		service = name.as_str(),
+	)
+}
+
+/// Whether the override publishes the port on the address this command asked
+/// for, so the two say the same thing and the message needs no contrast.
+fn publishes_the_same(published: Option<IpAddr>, requested: IpAddr) -> bool {
+	match published {
+		Some(address) => address.to_canonical() == requested.to_canonical(),
+		None => requested.to_canonical().is_unspecified(),
+	}
 }
 
 /// Refuse a host-visible socket another enabled listener already answers on,

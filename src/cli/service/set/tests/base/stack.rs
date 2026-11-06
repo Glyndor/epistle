@@ -301,6 +301,111 @@ fn a_published_listener_with_an_override_says_how_the_two_combine() {
 	assert_eq!(ports_of(dir.path()), ["127.0.0.1:993:993"]);
 }
 
+/// An override that replaces the generated map decides where the port is
+/// published, and the entry the command would write is never used: the
+/// command has to say that instead of reporting a publication the stack does
+/// not make.
+#[test]
+fn an_override_that_replaces_the_generated_map_refuses_the_change() {
+	let (dir, path) = stack(&[("imaps", "::", 993)], &["993:993"]);
+	let override_path = dir.path().join("compose/compose.override.yaml");
+	std::fs::write(
+		&override_path,
+		"services:\n  mail:\n    ports: !override\n      - \"993:993\"\n",
+	)
+	.unwrap();
+	let before = std::fs::read(&path).unwrap();
+	let (mut out, mut status) = (Vec::new(), Vec::new());
+	let error = set_to(
+		&path,
+		ServiceName::Imaps,
+		Some("127.0.0.1"),
+		None,
+		false,
+		&mut out,
+		&mut status,
+	)
+	.unwrap_err();
+	let message = error.to_string();
+	assert!(matches!(error, ResourceError::Refusal(_)), "{message}");
+	assert!(
+		message.contains("compose.override.yaml"),
+		"the operator has to be told which file decides: {message}"
+	);
+	assert!(
+		message.contains("993:993") && message.contains("line 4"),
+		"the entry to change has to be named: {message}"
+	);
+	assert!(
+		status.is_empty(),
+		"the publication the stack does not make must not be reported: {status:?}"
+	);
+	assert_eq!(
+		std::fs::read(&path).unwrap(),
+		before,
+		"a refused change leaves the configuration alone"
+	);
+	assert_eq!(
+		ports_of(dir.path()),
+		["993:993"],
+		"the generated map is left alone too"
+	);
+}
+
+/// An override that names another port leaves this one alone: the change is
+/// what the operator asked for, and the notice says how the two combine.
+#[test]
+fn an_override_that_names_another_port_keeps_todays_success() {
+	let (dir, path) = stack(&[("imaps", "::", 993)], &["993:993"]);
+	let override_path = dir.path().join("compose/compose.override.yaml");
+	std::fs::write(
+		&override_path,
+		"services:\n  mail:\n    ports: !override\n      - \"8443:8443\"\n",
+	)
+	.unwrap();
+	let (mut out, mut status) = (Vec::new(), Vec::new());
+	set_to(
+		&path,
+		ServiceName::Imaps,
+		Some("127.0.0.1"),
+		None,
+		false,
+		&mut out,
+		&mut status,
+	)
+	.unwrap();
+	assert_eq!(
+		String::from_utf8(status).unwrap(),
+		"imaps published on 127.0.0.1:993.\n"
+	);
+	assert_eq!(ports_of(dir.path()), ["127.0.0.1:993:993"]);
+}
+
+/// An override that says nothing about the ports leaves the map alone, and
+/// the change is the one the operator asked for.
+#[test]
+fn an_override_without_ports_keeps_todays_success() {
+	let (dir, path) = stack(&[("imaps", "::", 993)], &["993:993"]);
+	let override_path = dir.path().join("compose/compose.override.yaml");
+	std::fs::write(&override_path, "services:\n  mail:\n    mem_limit: 512m\n").unwrap();
+	let (mut out, mut status) = (Vec::new(), Vec::new());
+	set_to(
+		&path,
+		ServiceName::Imaps,
+		Some("127.0.0.1"),
+		None,
+		false,
+		&mut out,
+		&mut status,
+	)
+	.unwrap();
+	assert_eq!(
+		String::from_utf8(status).unwrap(),
+		"imaps published on 127.0.0.1:993.\n"
+	);
+	assert_eq!(ports_of(dir.path()), ["127.0.0.1:993:993"]);
+}
+
 /// A listener that serves HTTP without TLS keeps its host mapping on loopback
 /// when nothing in the file says otherwise. The bind in `mail.toml` is the one
 /// inside the container, so the narrow address only lives in the map; an

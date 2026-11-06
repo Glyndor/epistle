@@ -139,14 +139,80 @@ fn the_override_is_recognised_only_inside_the_mail_service() {
 		let path = compose_dir.join("compose.override.yaml");
 		std::fs::write(&path, override_text).unwrap();
 		assert_eq!(
-			override_publishes(dir.path(), &ports),
+			override_ports(dir.path(), &ports).publishes(),
 			expected,
 			"override {override_text:?} over port {ports:?}"
 		);
 	}
 	assert!(
-		!override_publishes(&dir.path().join("elsewhere"), &[143]),
+		!override_ports(&dir.path().join("elsewhere"), &[143]).publishes(),
 		"a stack with no override file names no port"
+	);
+}
+
+/// The tag that replaces the generated list is what tells a merge from a
+/// replacement, and the entry that names the port is what the operator has
+/// to change: the file, the line and the text of that entry.
+#[test]
+fn an_override_that_replaces_the_generated_list_says_where_and_what() {
+	let dir = tempfile::tempdir().unwrap();
+	let path = dir.path().join("compose/compose.override.yaml");
+	std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+	for (text, replaces) in [
+		(
+			"services:\n  mail:\n    ports: !override\n      - \"25:25\"\n      - \"10.0.0.9:143:143\"\n",
+			true,
+		),
+		(
+			"services:\n  mail:\n    ports: !override [\"143:143\"]\n",
+			true,
+		),
+		(
+			"services:\n  mail: !override\n    ports:\n      - \"143:143\"\n",
+			true,
+		),
+		(
+			"services:\n  mail:\n    ports:\n      - \"10.0.0.9:143:143\"\n",
+			false,
+		),
+		(
+			"services:\n  mail: {ports: !override [\"143:143\"]}\n",
+			true,
+		),
+	] {
+		std::fs::write(&path, text).unwrap();
+		let found = override_ports(dir.path(), &[143]);
+		assert_eq!(found.replaces, replaces, "{text:?}");
+		let entry = found.entry(143).unwrap_or_else(|| panic!("{text:?}"));
+		assert_eq!(entry.ports, [143], "{text:?}");
+		assert!(
+			entry.line > 0 && entry.text.contains("143"),
+			"{text:?} names the entry on line {}: {:?}",
+			entry.line,
+			entry.text
+		);
+	}
+	// The address the entry publishes on is the one the operator wrote, and
+	// a mapping without one publishes on every address of the host.
+	let wide = "services:\n  mail:\n    ports: !override\n      - \"143:143\"\n";
+	std::fs::write(&path, wide).unwrap();
+	assert_eq!(
+		override_ports(dir.path(), &[143])
+			.entry(143)
+			.unwrap()
+			.address,
+		None,
+		"a bare mapping publishes on every address of the host"
+	);
+	let narrow = "services:\n  mail:\n    ports: !override\n      - \"10.0.0.9:143:143\"\n";
+	std::fs::write(&path, narrow).unwrap();
+	assert_eq!(
+		override_ports(dir.path(), &[143])
+			.entry(143)
+			.unwrap()
+			.address
+			.map(|address| address.to_string()),
+		Some("10.0.0.9".to_string())
 	);
 }
 
@@ -316,7 +382,7 @@ fn an_override_written_in_flow_style_or_with_ranges_is_still_reported() {
 	] {
 		std::fs::write(&path, text).unwrap();
 		assert_eq!(
-			override_publishes(dir.path(), &[993, 143]),
+			override_ports(dir.path(), &[993, 143]).publishes(),
 			expected,
 			"{text:?}"
 		);
@@ -335,7 +401,7 @@ fn single_inline_override_ports_are_reported_without_writing_the_override() {
 	] {
 		let text = format!("services:\n  mail:\n    ports: {value}\n");
 		std::fs::write(&path, &text).unwrap();
-		assert!(override_publishes(dir.path(), &[19993]), "{value}");
+		assert!(override_ports(dir.path(), &[19993]).publishes(), "{value}");
 		assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
 	}
 }
