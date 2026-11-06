@@ -21,8 +21,24 @@
 //! `stack update`, `stack resources set` and `dns provider set` take, so a
 //! rewrite that lands while the switch waits for the lock is read again under
 //! it and not lost.
+//!
+//! This module also owns the rule that says whether the container is up: a
+//! `certs` that exits at start is "running" again a second later under
+//! `restart: unless-stopped`, so one look is not enough. The switch, `status`
+//! and `stack update` all take the same two looks and the same window, so
+//! none of them claims more than the others about the container.
 
 use std::path::Path;
+use std::time::Duration;
+
+/// How long `certs` has to keep running, with the same start, before it
+/// counts as up. Its start-up checks (configuration, provider credential,
+/// resolver) end within a second when they fail, and the restart policy
+/// brings it back within another one.
+///
+/// The window is shared: the switch, `status` and `stack update` all judge
+/// the container with it, so none of them claims more than the others.
+pub(in crate::cli) const STEADY: Duration = Duration::from_secs(15);
 
 /// Whether the compose file at `compose` runs the certificates container.
 /// `Ok(false)` when there is no compose file (a host install). A file that
@@ -55,31 +71,120 @@ pub(in crate::cli) fn retire_before_up(data_dir: &Path, compose: &Path) -> Resul
 	Ok(())
 }
 
+/// The state and the start podup reports for `service`, `None` when podup
+/// lists no such container.
+fn row(json: &str, service: &str) -> Result<Option<(String, String)>, String> {
+	let rows: Vec<serde_json::Value> =
+		serde_json::from_str(json).map_err(|_| "podup ps did not print JSON".to_string())?;
+	Ok(rows
+		.iter()
+		.find(|row| row["Service"] == service)
+		.map(|row| {
+			(
+				row["State"].as_str().unwrap_or_default().to_string(),
+				row["StartedAt"].as_str().unwrap_or_default().to_string(),
+			)
+		}))
+}
+
 /// Whether `service` kept running with the same start between two
 /// `podup ps --format json` outputs. A container that restarted in between
 /// (or stopped) is not up, whatever the second look says.
 pub(in crate::cli) fn steady(before: &str, after: &str, service: &str) -> Result<(), String> {
 	let started = |json: &str| -> Result<(String, String), String> {
-		let rows: Vec<serde_json::Value> =
-			serde_json::from_str(json).map_err(|_| "podup ps did not print JSON".to_string())?;
-		let row = rows
-			.iter()
-			.find(|row| row["Service"] == service)
-			.ok_or_else(|| format!("podup lists no {service} container"))?;
-		Ok((
-			row["State"].as_str().unwrap_or_default().to_string(),
-			row["StartedAt"].as_str().unwrap_or_default().to_string(),
-		))
+		row(json, service)?.ok_or_else(|| format!("podup lists no {service} container"))
 	};
 	let (first, second) = (started(before)?, started(after)?);
 	if second.0 == "running" && first == second {
 		Ok(())
 	} else {
 		Err(format!(
-			"the {service} container did not stay up (it was {} since {:?}, then {} since {:?}); \
-			 `epistle stack logs {service}` says why",
+			"did not stay up (it was {} since {:?}, then {} since {:?})",
 			first.0, first.1, second.0, second.1
 		))
+	}
+}
+
+/// What a container that should be up is doing, as the two looks see it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::cli) enum Upness {
+	/// It runs and kept the same start between the two looks.
+	Up,
+	/// It does not run: podup lists no such container, or lists it in
+	/// another state. The text says which.
+	Down(String),
+	/// It runs, but it did not keep the same start between the two looks.
+	/// The text says what the two looks saw.
+	Unsteady(String),
+	/// It could not be read: this says why.
+	Unreadable(String),
+}
+
+impl Upness {
+	/// Whether the container is up.
+	pub(in crate::cli) fn is_up(&self) -> bool {
+		matches!(self, Upness::Up)
+	}
+
+	/// The message that says why it is not up, naming `service`.
+	pub(in crate::cli) fn why(&self, service: &str) -> String {
+		match self {
+			Upness::Up => format!("the {service} container is up"),
+			Upness::Down(text) => format!("the {service} container {text}"),
+			Upness::Unsteady(text) => format!("the {service} container {text}"),
+			Upness::Unreadable(error) => {
+				format!("the {service} container could not be read ({error})")
+			}
+		}
+	}
+}
+
+/// The state of `service`, judged with two looks `window` apart: it is up
+/// only when it kept the same start in both.
+///
+/// A container that exits at start is "running" again a second later under
+/// `restart: unless-stopped`, so one look is not enough. Everything that
+/// asks whether the container is up takes this window and this rule, so the
+/// switch, `status` and `stack update` cannot disagree about it.
+pub(in crate::cli) fn upness(
+	podup: &str,
+	compose: &Path,
+	service: &str,
+	window: Duration,
+) -> Upness {
+	let ps = || {
+		crate::cli::stack::started::ps_json_with(
+			podup,
+			compose,
+			crate::cli::stack::started::PS_TIMEOUT,
+		)
+	};
+	let before = match ps() {
+		Ok(json) => json,
+		Err(error) => return Upness::Unreadable(error),
+	};
+	std::thread::sleep(window);
+	let after = match ps() {
+		Ok(json) => json,
+		Err(error) => return Upness::Unreadable(error),
+	};
+	match steady(&before, &after, service) {
+		Ok(()) => Upness::Up,
+		Err(error) => {
+			let second = match row(&after, service) {
+				Ok(Some(row)) => row,
+				Ok(None) => return Upness::Down("is not running".to_string()),
+				Err(_) => return Upness::Unreadable(error),
+			};
+			if second.0 != "running" {
+				return Upness::Down(format!("is {}", second.0));
+			}
+			match row(&before, service) {
+				Ok(Some(_)) => Upness::Unsteady(error),
+				Ok(None) => Upness::Unsteady("was not running a moment ago".to_string()),
+				Err(_) => Upness::Unreadable(error),
+			}
+		}
 	}
 }
 
