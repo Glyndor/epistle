@@ -418,7 +418,7 @@ keeps its mail transactional whatever the request says; the response's
 
 | Limit | Value | Answer |
 |---|---|---|
-| Message size | `[server] max_message_size`, 25 MiB by default | A built message over it: `413 message_too_large`. A request body over it: plain-text `413` |
+| Message size | `max_message_size`, 25 MiB by default | A built message over it: `413 message_too_large`. A request body over it: plain-text `413` |
 | Recipients | 100 per message (`to`, `cc`, `bcc` together) | `400 invalid_input` |
 | Parts | 100 attachments and inline parts together | `400 invalid_input` |
 | Submission rate | `submission_rate_limit_per_min` recipients per minute per account, shared with SMTP and JMAP; per-domain and per-tenant limits too | `429 rate_limited`, "sending rate limit exceeded; retry later". Nothing was sent |
@@ -649,7 +649,7 @@ RFC 6749 and 8628. Wrong credentials and a wrong code give the same answer.
 
 | What | Value |
 |---|---|
-| Message size | `[server] max_message_size`, 25 MiB by default, for send, SMTP and JMAP upload alike |
+| Message size | `max_message_size`, 25 MiB by default, for send, SMTP and JMAP upload alike |
 | Recipients per message | 100 |
 | Attachments and inline parts | 100 |
 | Custom headers | 32; `extra` 10 keys |
