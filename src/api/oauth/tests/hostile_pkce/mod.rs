@@ -1,4 +1,6 @@
 //! A matching SHA256 is not permission to accept an oversized PKCE verifier.
+mod challenge;
+
 use super::base::{keys, state_with_authz};
 use crate::api::tests::hostile_wire::{Peer, supervised};
 use axum::http::StatusCode;

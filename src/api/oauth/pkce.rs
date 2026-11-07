@@ -24,6 +24,12 @@ use crate::util::constant_time;
 /// The grant-type identifier for the device-code flow (RFC 8628 §3.4).
 const DEVICE_CODE_GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
 
+/// The length of an S256 `code_challenge`: `BASE64URL(SHA256(code_verifier))`
+/// is 32 bytes, which base64url without padding writes as exactly 43
+/// characters (RFC 7636 §4.2). A challenge of any other length is not the
+/// digest of any verifier and is refused before it is stored.
+pub(super) const S256_CHALLENGE_CHARS: usize = 43;
+
 /// Current Unix time in seconds (0 on the impossible pre-epoch clock).
 fn now_secs() -> u64 {
 	SystemTime::now()
@@ -46,8 +52,9 @@ pub(crate) fn token_response(access_token: &str) -> Json<serde_json::Value> {
 /// account identity with `login`+`password` (form/JSON) or HTTP Basic.
 ///
 /// Fail-closed: only `code_challenge_method=S256` is accepted (plain is
-/// rejected); bad credentials and a missing/empty challenge are rejected; the
-/// issued code is single-use and short-lived.
+/// rejected); the challenge has to be the 43-character digest of RFC 7636
+/// §4.2; bad credentials are rejected; the issued code is single-use and
+/// short-lived.
 pub async fn authorize(
 	State(state): State<ApiState>,
 	ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
@@ -76,7 +83,10 @@ pub async fn authorize(
 		return oauth_error("invalid_request");
 	}
 	let code_challenge = fields.get("code_challenge").cloned().unwrap_or_default();
-	if code_challenge.is_empty()
+	// The challenge of an S256 flow is the digest of the verifier, so it has
+	// one exact shape (RFC 7636 §4.2). A megabyte of it is refused here,
+	// before it is stored and before the credential is even checked.
+	if !valid_challenge(&code_challenge)
 		|| fields
 			.get("client_id")
 			.map(String::is_empty)
@@ -118,6 +128,18 @@ pub async fn authorize(
 		response["state"] = serde_json::Value::String(state_param.clone());
 	}
 	Json(response).into_response()
+}
+
+/// A `code_challenge` for S256 (RFC 7636 §4.2): exactly 43 characters of the
+/// base64url alphabet (`A-Z a-z 0-9 - _`), which is what
+/// `BASE64URL(SHA256(code_verifier))` writes. A shorter or longer string, or
+/// one carrying a character outside the alphabet, cannot be the digest of
+/// any verifier: it is refused before it is stored.
+fn valid_challenge(challenge: &str) -> bool {
+	challenge.len() == S256_CHALLENGE_CHARS
+		&& challenge
+			.bytes()
+			.all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
 }
 
 /// `POST /oauth/token` (public): dispatch on `grant_type` and return a signed

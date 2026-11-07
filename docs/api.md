@@ -626,7 +626,10 @@ a bearer. `POST /oauth/device_authorization` starts a device flow,
 5 seconds) or redeems a PKCE code from `POST /oauth/authorize` (`S256` only; a `code_verifier` is
 43 to 128 characters of `A-Z a-z 0-9 - . _ ~`, and a `redirect_uri`, which is never
 followed, has to be an absolute URI of a plain scheme and, when the authorization
-carried one, the redemption carries the same).
+carried one, the redemption carries the same). The `code_challenge` of that
+request is the digest of the verifier, so it is exactly 43 characters of
+`A-Z a-z 0-9 - _` (RFC 7636 section 4.2); anything else is
+`400 invalid_request`.
 Bodies are form-encoded or JSON; errors are `{"error": "<code>"}` as in
 RFC 6749 and 8628. Wrong credentials and a wrong code give the same answer.
 

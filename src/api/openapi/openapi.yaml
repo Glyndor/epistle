@@ -1909,7 +1909,10 @@ paths:
         `code_challenge`, `code_challenge_method=S256` and the account's
         `login` and `password` (form or JSON) or HTTP Basic. No bearer is
         needed. The code lives 600 seconds and is single-use. `plain` is
-        refused. Bad credentials are `400 invalid_grant`.
+        refused. Bad credentials are `400 invalid_grant`. The
+        `code_challenge` is the digest of the verifier, so it is exactly 43
+        characters of `A-Z a-z 0-9 - _` (RFC 7636 section 4.2); another
+        length or another character is `400 invalid_request`.
       security: []
       x-epistle-scope: []
       requestBody:

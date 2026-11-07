@@ -247,7 +247,7 @@ async fn oauth_password_checks_use_the_forwarded_client_address() {
 	for (path, fields) in [
 		(
 			"/oauth/authorize",
-			"client_id=cli&code_challenge_method=S256&code_challenge=challenge",
+			"client_id=cli&code_challenge_method=S256&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
 		),
 		("/oauth/device/approve", "user_code=USER-CODE"),
 	] {
