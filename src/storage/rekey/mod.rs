@@ -1,7 +1,7 @@
 //! Re-encrypting stored mail under the key its account should use now.
 //!
-//! A run walks every account directory under `<data_dir>/accounts/` and
-//! the account's blob partition under `<data_dir>/blobs/accounts/`, and
+//! A run inventories mailbox directories, blob-only account partitions and
+//! the owned legacy shared blob pool, including shadowed copies, and
 //! rewrites each envelope that is not under the account's target key:
 //! its tenant's key going forward, the server key on a rollback or for an
 //! account in no keyed tenant. Plaintext files are left as they are.
@@ -19,7 +19,10 @@ use std::path::{Path, PathBuf};
 
 use crate::storage::{EnvelopeKind, KeyOwner, MessageCrypto, TenantChoice};
 
+mod inventory;
 pub mod journal;
+
+pub use inventory::Inventory;
 
 pub use journal::{Direction, Journal};
 
@@ -82,38 +85,36 @@ impl Totals {
 }
 
 /// The key `account`'s mail should be under for a run in `direction`.
-pub fn target_for(crypto: &MessageCrypto, account: &str, direction: Direction) -> KeyOwner {
+///
+/// # Errors
+/// Refuses an owner whose addresses were not loaded, in either direction.
+pub fn target_for(
+	crypto: &MessageCrypto,
+	account: &str,
+	direction: Direction,
+) -> std::io::Result<KeyOwner> {
+	let tenant = crypto.resolved_tenant_of_account(account).ok_or_else(|| {
+		std::io::Error::other(format!(
+			"cannot resolve owner {account:?}: no account addresses were loaded; SQL/LDAP-only or removed owners need an authoritative account snapshot in the configuration or accounts.toml before migration"
+		))
+	})?;
 	if direction == Direction::Rollback {
-		return KeyOwner::Server;
+		return Ok(KeyOwner::Server);
 	}
-	match crypto.tenant_of_account(account) {
+	Ok(match tenant {
 		TenantChoice::One(name) if crypto.has_key(&KeyOwner::Tenant(name.clone())) => {
 			KeyOwner::Tenant(name)
 		}
 		_ => KeyOwner::Server,
-	}
+	})
 }
 
-/// Every account with a directory under `<data_dir>/accounts/`, sorted.
+/// Every mailbox, blob-partition and owned shared-pool account, sorted.
+///
+/// # Errors
+/// Refuses unreadable storage and encrypted shared blobs without valid owners.
 pub fn accounts(data_dir: &Path) -> std::io::Result<Vec<String>> {
-	let root = data_dir.join("accounts");
-	let mut names = Vec::new();
-	let entries = match std::fs::read_dir(&root) {
-		Ok(entries) => entries,
-		Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(names),
-		Err(error) => return Err(error),
-	};
-	for entry in entries {
-		let entry = entry?;
-		if entry.file_type()?.is_dir()
-			&& let Ok(name) = entry.file_name().into_string()
-			&& crate::util::path_component::AccountName::new(&name).is_ok()
-		{
-			names.push(name);
-		}
-	}
-	names.sort();
-	Ok(names)
+	Ok(Inventory::load(data_dir)?.accounts().cloned().collect())
 }
 
 /// The trees that hold `account`'s encrypted files.
@@ -134,19 +135,25 @@ pub fn rekey_account(
 	dry_run: bool,
 	hooks: &mut dyn Hooks,
 ) -> std::io::Result<Totals> {
+	Inventory::load(data_dir)?.rekey_account(crypto, account, target, dry_run, hooks)
+}
+
+fn rekey_paths(
+	crypto: &MessageCrypto,
+	files: Vec<PathBuf>,
+	target: &KeyOwner,
+	dry_run: bool,
+	hooks: &mut dyn Hooks,
+) -> std::io::Result<Totals> {
 	let mut totals = Totals::default();
-	for root in roots(data_dir, account) {
-		let mut files = Vec::new();
-		collect(&root, &mut files)?;
-		for file in files {
-			if is_temp(&file) {
-				if !dry_run {
-					std::fs::remove_file(&file)?;
-				}
-				continue;
+	for file in files {
+		if is_temp(&file) {
+			if !dry_run {
+				std::fs::remove_file(&file)?;
 			}
-			totals.add(rekey_file(crypto, &file, target, dry_run, hooks)?);
+			continue;
 		}
+		totals.add(rekey_file(crypto, &file, target, dry_run, hooks)?);
 	}
 	Ok(totals)
 }

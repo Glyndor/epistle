@@ -707,26 +707,45 @@ epistle storage tenant-keys migrate [--dry-run] [--json]
 epistle storage tenant-keys migrate --rollback [--dry-run] [--json]
 ```
 
-Re-encrypts what is already stored (mail under `<data_dir>/accounts/` and
-each account's blobs under `<data_dir>/blobs/accounts/`) under the key each
-account should use now: its tenant's key when `[storage] tenant_keys = true`
-and every address of the account is in that tenant, the current server key
-otherwise. `--rollback` moves everything back under the server key, in the
-format a release without tenant keys reads. `--dry-run` only counts.
+Re-encrypts stored mail under `<data_dir>/accounts/`, account blob partitions
+under `<data_dir>/blobs/accounts/` (including owners with no mailbox directory),
+and the legacy flat and sharded shared blob pool. Every physical copy is
+covered, including a flat copy shadowed by a sharded one. Shared blobs use their
+`.owner` sidecar to select the account's target key; an encrypted shared blob
+with no valid owner stops the run before rewriting starts.
+
+The target is the tenant key when every address of the account is in that
+keyed tenant, or the current server key otherwise. `--rollback` moves everything
+back under the server key in the format a release without tenant keys reads.
+The command loads static accounts and `accounts.toml`; it refuses unresolved
+owners, including SQL/LDAP-only or removed accounts. Supply an authoritative
+account snapshot in those file-backed sources before migrating. `--dry-run`
+only counts local files and still requires store exclusion.
 
 Each file is rewritten beside the original, read back and opened under the new
 key before a rename puts it in place, keeping its name, mode and date. A run
-cut short (a crash, a power cut) leaves every file readable; run the same
-command again and it continues from `<data_dir>/rekey-journal.json`, which it
-removes when it finishes.
+cut short leaves every file readable. Run the same command again: the journal
+at `<data_dir>/rekey-journal.json` preserves its direction and diagnostic
+progress, but every account is re-scanned against the current keys and files,
+including accounts previously marked complete. The journal is removed on
+completion.
 
-It refuses to start while the server is running (stop the stack first), going
-forward with tenant keys configured but `tenant_keys` off, rolling back with
-`tenant_keys` still on, or while a run in the other direction is unfinished.
-With no tenant key configured a forward run is a server key rotation: it moves
-what a key in `retired_key_files` sealed under the current key and reseals the
-TOTP secrets in `accounts.toml` the same way. Plaintext files are left as they
-are, and blobs in an S3 bucket are not touched. Supports `--config FILE`.
+Stop the stack first. Migration holds an exclusive store-wide lock through the
+whole run, including TOTP resealing. Server startup, competing migrations and
+offline mail writers refuse access until it finishes. It also refuses forward
+migration with tenant keys configured but `tenant_keys` off, rollback with
+`tenant_keys` still on, or a run in the other direction while a journal remains.
+With no tenant key configured a forward run rotates the server key for local
+mail and blobs and reseals TOTP secrets. Plaintext files are left as they are.
+Supports `--config FILE`.
+
+**S3 is not supported by migration.** Every S3 migration, rollback and dry run
+is refused before local files or the journal change. Configuration also rejects
+`tenant_keys = true` with S3 blobs until a backend-aware migration exists.
+Server-key-only S3 writes remain supported. If an older configuration already
+wrote encrypted objects to S3, retain all keys and a release that can read their
+envelopes; do not discard retired keys or downgrade on the strength of a local
+file pass. Turning tenant writes off does not roll those objects back.
 
 ## Webhook (`epistle webhook`)
 

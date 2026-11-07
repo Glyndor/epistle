@@ -69,6 +69,11 @@ pub const OVERHEAD: usize = MAGIC.len() + NONCE_LEN + 16;
 /// to writing plaintext. No variant carries key material.
 #[derive(Debug, thiserror::Error)]
 pub enum CryptoError {
+	/// Remote tenant envelopes cannot yet be rotated or rolled back safely.
+	#[error(
+		"tenant_keys = true is not supported with S3 blobs; use filesystem blobs until a backend-aware migration exists"
+	)]
+	S3TenantWrites,
 	/// `encrypt_at_rest = true` but neither key source was configured.
 	#[error(
 		"encrypt_at_rest is enabled but no key source is configured; set encryption_key_env or encryption_key_file"
@@ -246,6 +251,13 @@ impl MessageCrypto {
 			}
 			return Ok(Self::disabled());
 		};
+		if storage.tenant_keys
+			&& matches!(
+				storage.blobs.as_ref(),
+				Some(crate::config::BlobBackendConfig::S3(_))
+			) {
+			return Err(CryptoError::S3TenantWrites);
+		}
 		let key_bytes = load_key_bytes(storage)?;
 		if storage.encrypt_at_rest && key_bytes.is_none() {
 			return Err(CryptoError::NoKeySource);
@@ -295,16 +307,19 @@ impl MessageCrypto {
 
 	/// The tenant `account` resolves to, from its addresses.
 	pub fn tenant_of_account(&self, account: &str) -> TenantChoice {
-		let accounts = self
-			.inner
-			.accounts
-			.read()
-			.ok()
-			.and_then(|slot| slot.clone());
-		let addresses = accounts
-			.map(|accounts| accounts.addresses_for(account))
-			.unwrap_or_default();
-		tenant::choose(&self.inner.keys, &addresses)
+		self.resolved_tenant_of_account(account)
+			.unwrap_or(TenantChoice::None)
+	}
+
+	/// Distinguish a known non-tenant owner from an absent address mapping.
+	/// Migration must not treat an unresolved SQL/LDAP owner as server-owned.
+	pub(crate) fn resolved_tenant_of_account(&self, account: &str) -> Option<TenantChoice> {
+		let accounts = self.inner.accounts.read().ok()?.clone()?;
+		let addresses = accounts.addresses_for(account);
+		if addresses.is_empty() {
+			return None;
+		}
+		Some(tenant::choose(&self.inner.keys, &addresses))
 	}
 
 	/// Every loaded key with its owner: the server key, retired server keys

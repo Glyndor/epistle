@@ -113,11 +113,9 @@ pub(super) fn message_crypto(
 	Ok(crypto)
 }
 
-/// Give `crypto` the account to address map of the configuration and
-/// `accounts.toml`, so a write from the CLI picks the same tenant key the
-/// server would. Nothing to do when no tenant has a key. Accounts that
-/// only an SQL or LDAP directory knows resolve to no tenant here and stay
-/// on the server key.
+/// Attach file-backed account sources when tenant-key selection needs them.
+/// SQL/LDAP-only owners are not loaded here. Migration attaches these sources
+/// unconditionally and refuses any owner they cannot resolve.
 pub(crate) fn attach_config_accounts(
 	crypto: &crate::storage::MessageCrypto,
 	config: &crate::config::Config,
@@ -129,6 +127,14 @@ pub(crate) fn attach_config_accounts(
 	{
 		return Ok(());
 	}
+	attach_file_accounts(crypto, config)
+}
+
+/// Attach static accounts and accounts.toml even for a server-only rotation.
+pub(crate) fn attach_file_accounts(
+	crypto: &crate::storage::MessageCrypto,
+	config: &crate::config::Config,
+) -> std::io::Result<()> {
 	let store = crate::directory_store::AccountStore::open(
 		&config.data_dir,
 		config.domains.clone(),

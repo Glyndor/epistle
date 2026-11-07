@@ -22,6 +22,7 @@ mod access_ops;
 mod delivery_ops;
 mod mailbox_data;
 mod restore;
+mod store_access;
 pub(in crate::cli) use restore::dispatch_restore;
 
 /// Run `f` with the loaded config, or surface a `style::error` and the
@@ -59,6 +60,13 @@ impl Cli {
 				return ExitCode::FAILURE;
 			}
 		}
+		let _store = match store_access::guard(&self.command) {
+			Ok(guard) => guard,
+			Err(error) => {
+				style::error(error);
+				return ExitCode::FAILURE;
+			}
+		};
 		match self.command {
 			Command::MtaStsServe {
 				policy_dir,

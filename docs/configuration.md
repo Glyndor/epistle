@@ -1400,7 +1400,7 @@ guide's "Data at rest".
 | `encrypt_at_rest` | Encrypt new message writes at rest (default `false`). Also encrypts the TOTP secrets in `accounts.toml`. |
 | `encryption_key_env` | Name of an env var holding the base64 32-byte key. |
 | `encryption_key_file` | Path to a file holding the base64 32-byte key (ideally outside `data_dir`); takes precedence over `encryption_key_env`. |
-| `tenant_keys` | Seal each account's new mail and JMAP blobs with the key of its `[[tenant]]` when every address of the account is in that one tenant and the tenant has an `encryption_key_file` (default `false`). Needs `encrypt_at_rest = true`. Mail already stored keeps its key until `epistle storage tenant-keys migrate`. See the security guide's "Keys per tenant". |
+| `tenant_keys` | Seal each account's new mail and JMAP blobs with the key of its `[[tenant]]` when every address of the account is in that one tenant and the tenant has an `encryption_key_file` (default `false`). Needs `encrypt_at_rest = true` and filesystem blobs. Rejected with `backend = "s3"` until a backend-aware migration exists. Mail already stored keeps its key until `epistle storage tenant-keys migrate`. See the security guide's "Keys per tenant". |
 | `retired_key_files` | Previous server keys, each a `0600` file, kept only to read what they sealed while `epistle storage tenant-keys migrate` moves it under the current key. Nothing is written with them, and one equal to the current key is refused. |
 | `deleted_retention_days` | Days to keep expunged messages in `<account>/.archive/` before the hourly sweeper removes them (default `0`). Setting this to a positive value moves expunged messages into the archive instead of deleting them; restore with `epistle archive restore` or `POST /api/v1/accounts/{name}/archive/{id}/restore`. Archived messages count toward the account's quota. |
 | `delivery_log_days` | Days to keep one line of per-recipient delivery state under `<data_dir>/deliverylog/YYYY-MM-DD.jsonl` (default `30`; `0` turns the log off). The log is metadata only; the hourly sweep removes files older than this window. Records cover delivered, deferred (one per recipient per message for each distinct reply, at most eight: a retry deferred for the same reason as the one before adds no record), failed, suppressed and canceled outcomes, each with the number of the attempt it came from, never the subject or body, and never a message body. Read with `epistle delivery list` or `GET /api/v1/deliveries`. |
@@ -1423,6 +1423,14 @@ partition per account (`blobs/accounts/<account>/ab/cd/<id>`) and a fallback
 to the shared and flat layouts for blobs written by older versions. Setting
 `backend = "s3"` redirects uploads to an S3-compatible bucket; the
 download handler and the `.owner` / `.type` sidecars follow the same path.
+
+S3 supports server-key-only writes. `[storage] tenant_keys = true` with S3 is
+rejected during configuration loading and crypto construction: remote tenant
+objects have no supported rotation or rollback path yet. The tenant-key
+migration command refuses S3 entirely, including `--rollback` and `--dry-run`,
+so a local file pass cannot certify remote data. Keep all keys needed by any
+existing S3 ciphertext and do not downgrade until a backend-aware migration is
+available. See [Keys per tenant](security.md#keys-per-tenant).
 
 | Key | Meaning |
 |---|---|

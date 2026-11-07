@@ -55,7 +55,18 @@ fn a_retired_key_reads_what_it_sealed_and_a_run_moves_it_to_the_new_key() {
 		"without the retired key the old file is closed"
 	);
 
-	let target = rekey::target_for(&rotated, "alice", rekey::Direction::Forward);
+	let account =
+		toml::from_str("name = 'alice'\naddresses = ['alice@example.org']").expect("account");
+	let store = crate::directory_store::AccountStore::open(
+		data.path(),
+		vec!["example.org".into()],
+		Default::default(),
+		vec![account],
+	)
+	.expect("directory");
+	rotated.attach_accounts(std::sync::Arc::new(store.handle()));
+	let target =
+		rekey::target_for(&rotated, "alice", rekey::Direction::Forward).expect("resolved owner");
 	assert_eq!(target, KeyOwner::Server);
 	let totals = rekey::rekey_account(&rotated, data.path(), "alice", &target, false, &mut NoHooks)
 		.expect("rekey");

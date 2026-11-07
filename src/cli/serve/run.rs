@@ -5,6 +5,19 @@ use std::process::ExitCode;
 
 /// Run the server with a validated configuration, as `role`.
 pub fn run(config: Config, role: ServeRole) -> ExitCode {
+	// Declared before the runtime so background writers stop before this drops. The
+	// certificates role does not open the mail store, so it takes no lease.
+	let _store = if matches!(role, ServeRole::Certs) {
+		None
+	} else {
+		match crate::storage::lock::FileLock::store_shared(&config.data_dir) {
+			Ok(guard) => Some(guard),
+			Err(error) => {
+				crate::cli::style::error(error);
+				return ExitCode::FAILURE;
+			}
+		}
+	};
 	let runtime = match tokio::runtime::Runtime::new() {
 		Ok(runtime) => runtime,
 		Err(error) => {

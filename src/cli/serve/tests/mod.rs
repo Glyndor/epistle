@@ -7,6 +7,7 @@ pub(super) async fn serve(config: Config) -> std::io::Result<()> {
 
 mod acme_stop;
 mod base;
+mod exclusion;
 mod limits;
 mod mta_sts;
 mod oauth;
