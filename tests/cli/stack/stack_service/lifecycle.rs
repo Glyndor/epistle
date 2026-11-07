@@ -2,7 +2,11 @@ use super::helpers::*;
 
 #[test]
 fn up_installs_autostart_after_starting_the_stack() {
-	check_sequence("up", &["up", "-d"], &["autostart", "install"]);
+	check_sequence(
+		"up",
+		&["up", "-d", "--remove-orphans"],
+		&["autostart", "install"],
+	);
 }
 
 #[test]
