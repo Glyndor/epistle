@@ -9,10 +9,14 @@ use crate::cli::stack::images::{Change, Outcome};
 #[derive(Default)]
 struct Fake {
 	database: bool,
+	/// Whether the compose file runs the certificates container.
+	certs: bool,
 	calls: Vec<String>,
 	fail: Option<&'static str>,
 	/// Areas `status` reports failing after the restart.
 	failing: Vec<(String, String)>,
+	/// The areas the update judged after the restart.
+	judged: Vec<crate::cli::status::CheckArea>,
 	logged: Vec<String>,
 	/// Whether the harden step finds a superuser to take apart.
 	superuser: bool,
@@ -70,8 +74,19 @@ impl UpdateHost for Fake {
 	fn wait_healthy(&mut self, service: &str) -> Result<(), String> {
 		self.call("healthy", format!(" {service}"))
 	}
-	fn failing_areas(&mut self) -> Vec<(String, String)> {
+	fn runs_certs(&self) -> bool {
+		self.certs
+	}
+	fn wait_steady(&mut self, service: &str) -> Result<(), String> {
+		self.calls.push(format!("steady {service}"));
+		if self.fail == Some("steady") {
+			return Err(format!("the {service} container did not stay up"));
+		}
+		Ok(())
+	}
+	fn failing_areas(&mut self, areas: &[crate::cli::status::CheckArea]) -> Vec<(String, String)> {
 		self.calls.push("status".into());
+		self.judged = areas.to_vec();
 		self.failing.clone()
 	}
 	fn log(&mut self, line: &str) {
@@ -395,5 +410,62 @@ fn images_that_cannot_be_removed_do_not_fail_a_verified_update() {
 			.any(|line| line.contains("so none was removed: images failed")),
 		"{:?}",
 		host.logged
+	);
+}
+
+/// A split stack renews the certificate in the `certs` container, and the
+/// update just recreated it: the update waits for it, and fails when it does
+/// not settle.
+#[test]
+fn a_certs_container_that_does_not_settle_fails_the_update() {
+	let mut host = Fake {
+		certs: true,
+		fail: Some("steady"),
+		..Fake::default()
+	};
+	let error = execute(&mut host, &plan(false)).expect_err("certs never settled");
+	assert!(error.contains("certs"), "{error}");
+	assert!(error.contains("sudo epistle stack rollback"), "{error}");
+	assert!(
+		!host.calls.iter().any(|call| call == "status"),
+		"the areas are judged only after the container settles: {:?}",
+		host.calls
+	);
+}
+
+#[test]
+fn a_split_stack_waits_for_the_certs_container_after_the_restart() {
+	let mut host = Fake {
+		certs: true,
+		..Fake::default()
+	};
+	execute(&mut host, &plan(false)).unwrap();
+	let at = |name: &str| host.calls.iter().position(|call| call == name).unwrap();
+	assert!(at("healthy mail") < at("steady certs"), "{:?}", host.calls);
+	assert!(at("steady certs") < at("status"), "{:?}", host.calls);
+}
+
+/// The TLS area is the one that reports the certificates container, and the
+/// restart is what decides whether it is up: a split stack judges it, a
+/// stack without the container does not.
+#[test]
+fn the_tls_area_judges_the_restart_only_on_a_split_stack() {
+	let mut host = Fake {
+		certs: true,
+		..Fake::default()
+	};
+	execute(&mut host, &plan(false)).unwrap();
+	assert!(
+		host.judged.contains(&crate::cli::status::CheckArea::Tls),
+		"{:?}",
+		host.judged
+	);
+
+	let mut host = Fake::default();
+	execute(&mut host, &plan(false)).unwrap();
+	assert!(
+		!host.judged.contains(&crate::cli::status::CheckArea::Tls),
+		"{:?}",
+		host.judged
 	);
 }

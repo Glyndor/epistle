@@ -77,10 +77,25 @@ pub(super) async fn evaluate(ctx: &Ctx, dns: &dyn crate::spf::DnsLookup) -> Area
 	match crate::cli::stack::certs::runs_certs(&compose) {
 		Ok(true) => {
 			let podup = ctx.podup.clone();
-			let state = tokio::task::spawn_blocking(move || certs::state(&podup, &compose))
-				.await
-				.unwrap_or_else(|error| Err(format!("the podup task failed: {error}")));
-			items.push(certs::item(&state, remaining));
+			let window = ctx.steady;
+			let upness = tokio::task::spawn_blocking(move || {
+				crate::cli::stack::certs::upness(&podup, &compose, "certs", window)
+			})
+			.await
+			.unwrap_or_else(|error| {
+				crate::cli::stack::certs::Upness::Unreadable(format!(
+					"the podup task failed: {error}"
+				))
+			});
+			let renewal = certs::renewal(
+				&config.data_dir,
+				config
+					.acme
+					.as_ref()
+					.map(|acme| u64::from(acme.renew_before_days)),
+				u64::try_from(epoch(ctx.now)).unwrap_or(0),
+			);
+			items.push(certs::item(&upness, renewal.as_ref(), remaining));
 		}
 		Ok(false) => {}
 		Err(error) => items.push(Item::new("certs", Level::Fail, error)),

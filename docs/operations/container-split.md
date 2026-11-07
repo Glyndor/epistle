@@ -213,7 +213,18 @@ runs it renders and runs exactly as before.
   recreate it when the stack runs it.
 - `epistle status` reports the container in its `tls` area with the days the
   certificate has left, warns while it is down and fails when fewer than seven
-  days are left.
+  days are left. It judges the container the way `stack certs` does: two
+  `podup ps` looks fifteen seconds apart, and the start has to be the same in
+  both, so a container that exits at start and comes straight back is not
+  reported as renewing. It reads the renewal's own traces too: the reason the
+  last attempt gave under `<data_dir>/acme/renew.error`, and a pair on disk
+  older than the window in which it had to be renewed, which is what a failed
+  scheduled renewal leaves behind.
+- `epistle stack update` waits for `certs` after it brings the stack up, with
+  the same rule, and fails the update (with the rollback command) when the
+  container does not settle. On a split stack it also judges the `tls` area of
+  `epistle status` after the restart, since that is the area that reports the
+  container.
 
 What changed from the plan above, and why:
 
