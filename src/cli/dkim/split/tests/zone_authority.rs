@@ -23,7 +23,6 @@ pub(super) struct ZoneAuthority {
 
 impl ZoneAuthority {
 	/// The zone's servers, all of them answering.
-	#[allow(dead_code)]
 	pub(super) fn new(zone: Zone) -> ZoneAuthority {
 		ZoneAuthority {
 			zone,

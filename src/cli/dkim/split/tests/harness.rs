@@ -325,7 +325,6 @@ pub(super) fn run_with(
 /// [`run_with`] with the zone's own nameservers, so a test can say what they
 /// serve: the cause the command reports for a record the resolver does not
 /// show comes from there.
-#[allow(dead_code)]
 pub(super) fn run_with_authority(
 	install: &Install,
 	options: &super::super::Options,
