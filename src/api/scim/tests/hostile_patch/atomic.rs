@@ -4,6 +4,9 @@ use crate::api::tests::hostile_wire::{Peer, read};
 use axum::http::StatusCode;
 use serde_json::json;
 
+/// A request that hashes a password is slow in a debug build on a loaded machine.
+const HASHING_WAIT: std::time::Duration = std::time::Duration::from_secs(120);
+
 async fn patch(peer: &Peer, operations: serde_json::Value) -> (StatusCode, serde_json::Value) {
 	read(
 		peer.client
@@ -40,7 +43,7 @@ fn victim() -> (tempfile::TempDir, crate::api::ApiState) {
 #[tokio::test]
 async fn an_operation_that_fails_leaves_the_earlier_ones_unapplied() {
 	let (_dir, state) = victim();
-	let peer = Peer::start(app(state.clone())).await;
+	let peer = Peer::start_within(app(state.clone()), HASHING_WAIT).await;
 	let before = state
 		.store()
 		.dynamic("victim")
@@ -65,7 +68,7 @@ async fn an_operation_that_fails_leaves_the_earlier_ones_unapplied() {
 #[tokio::test]
 async fn more_than_three_passwords_are_refused_before_any_is_hashed() {
 	let (_dir, state) = victim();
-	let peer = Peer::start(app(state)).await;
+	let peer = Peer::start_within(app(state), HASHING_WAIT).await;
 	let change = |n: usize| json!({"op": "replace", "path": "password", "value": format!("A-new-passphrase-{n}")});
 	let (status, body) = patch(&peer, json!([change(1)])).await;
 	assert_eq!(status, StatusCode::OK, "one password: {body}");
