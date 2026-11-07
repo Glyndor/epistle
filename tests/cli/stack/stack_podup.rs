@@ -44,6 +44,7 @@ fn up_passes_the_compose_flag_and_dash_d_to_podup() {
 			data_dir.join("compose/compose.yaml").to_str().unwrap(),
 			"up",
 			"-d",
+			"--remove-orphans",
 			"-f",
 			data_dir.join("compose/compose.yaml").to_str().unwrap(),
 			"autostart",
