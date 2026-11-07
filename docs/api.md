@@ -629,7 +629,9 @@ followed, has to be an absolute URI of a plain scheme and, when the authorizatio
 carried one, the redemption carries the same). The `code_challenge` of that
 request is the digest of the verifier, so it is exactly 43 characters of
 `A-Z a-z 0-9 - _` (RFC 7636 section 4.2); anything else is
-`400 invalid_request`.
+`400 invalid_request`. At most 100 codes may be alive for one account, 50 for
+one client address and 10,000 in all; past them the answer is
+`429 temporarily_unavailable` with `Retry-After`, and nothing is stored.
 Bodies are form-encoded or JSON; errors are `{"error": "<code>"}` as in
 RFC 6749 and 8628. Wrong credentials and a wrong code give the same answer.
 

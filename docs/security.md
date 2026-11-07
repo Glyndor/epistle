@@ -483,6 +483,23 @@ instead of being read as whichever primitive the verifier happened to use.
   /32 to /48 for eviction (it catches an attacker who stays under one /48's
   cap in many /48s of different /32s, at the price of a rule that is harder to
   state and test).
+- **Authorization codes are bounded** (`POST /oauth/authorize` needs the
+  account's credentials, but the code it hands out lives until it is
+  redeemed). One account may hold 100 live codes, one client address (an IPv4
+  address or an IPv6 /64) 50, and the server 10000; the codes that expired
+  are swept every time a new one is issued, so they hold neither memory nor
+  room. A cap that is reached is refused with `429 temporarily_unavailable`
+  and `Retry-After` until the codes counting against it expire, and nothing
+  is stored. No code is evicted to make room, unlike the device flow: a code
+  is bound to one account, one challenge and one `redirect_uri`, so dropping
+  one would hand its redemption to the wrong client. The `code_challenge` of
+  the request is the digest of the verifier, so it has to be exactly 43
+  characters of the base64url alphabet (RFC 7636 §4.2); a megabyte of it is
+  refused before it is stored and before the password is even checked.
+  Residual risk: a caller that authenticates many accounts from many
+  addresses can still fill the server's pool, for the ten minutes the codes
+  live; and a legitimate client that issues codes and never redeems them
+  waits for the expiry instead of getting room at once.
 - **Antivirus on outbound mail** (with `[antispam] clamd_socket`, on by
   default through `scan_authenticated`). A compromised account must not
   relay malware, so what local accounts submit over SMTP, the REST API and

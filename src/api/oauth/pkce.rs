@@ -30,6 +30,20 @@ const DEVICE_CODE_GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
 /// digest of any verifier and is refused before it is stored.
 pub(super) const S256_CHALLENGE_CHARS: usize = 43;
 
+/// Authorization codes alive at once, over all accounts and clients. A code
+/// is a few hundred bytes, so this bounds the memory an authenticated caller
+/// can pin, and the scan every insert does under the lock.
+pub(super) const MAX_AUTH_CODES: usize = 10_000;
+/// Authorization codes alive at once for one account. A client redeems the
+/// code it just asked for; a hundred unredeemed ones from one identity are
+/// already abnormal.
+pub(super) const MAX_CODES_PER_ACCOUNT: usize = 100;
+/// Authorization codes alive at once for one client (an IPv4 address or an
+/// IPv6 /64), over every account that client authenticates. A shared office
+/// or carrier NAT serves several accounts, so this is looser than the
+/// per-account cap.
+pub(super) const MAX_CODES_PER_CLIENT: usize = 50;
+
 /// Current Unix time in seconds (0 on the impossible pre-epoch clock).
 fn now_secs() -> u64 {
 	SystemTime::now()
@@ -54,7 +68,7 @@ pub(crate) fn token_response(access_token: &str) -> Json<serde_json::Value> {
 /// Fail-closed: only `code_challenge_method=S256` is accepted (plain is
 /// rejected); the challenge has to be the 43-character digest of RFC 7636
 /// §4.2; bad credentials are rejected; the issued code is single-use and
-/// short-lived.
+/// short-lived, and the pool of codes waiting for a redemption is capped.
 pub async fn authorize(
 	State(state): State<ApiState>,
 	ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
@@ -110,19 +124,18 @@ pub async fn authorize(
 		return oauth_error("server_error");
 	};
 	let now = now_secs();
-	authz
-		.codes
-		.lock()
-		.unwrap_or_else(|p| p.into_inner())
-		.insert(
-			code.clone(),
-			AuthCode {
-				account,
-				code_challenge,
-				expires_at: now + CODE_TTL_SECS,
-				redirect_uri: fields.get("redirect_uri").cloned(),
-			},
-		);
+	let grant = AuthCode {
+		account,
+		code_challenge,
+		expires_at: now + CODE_TTL_SECS,
+		redirect_uri: fields.get("redirect_uri").cloned(),
+		client: client_ip.map(super::device::client_bucket),
+	};
+	// The codes live until they are redeemed, so the pool is bounded: a cap
+	// that is reached refuses the request and stores nothing.
+	if let Err(seconds) = admit(&authz.codes, code.clone(), grant, now) {
+		return super::oauth_temporarily_unavailable(seconds);
+	}
 	let mut response = serde_json::json!({ "code": code });
 	if let Some(state_param) = fields.get("state") {
 		response["state"] = serde_json::Value::String(state_param.clone());
@@ -140,6 +153,60 @@ fn valid_challenge(challenge: &str) -> bool {
 		&& challenge
 			.bytes()
 			.all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+}
+
+/// Store `code` under the caps, or refuse and say how long to wait.
+///
+/// The policy, whole:
+/// 1. Expired codes are swept first. Nobody redeemed them, and they would
+///    otherwise count against the caps (and against memory) for as long as
+///    the server runs.
+/// 2. The pool holds at most [`MAX_AUTH_CODES`] codes, one account at most
+///    [`MAX_CODES_PER_ACCOUNT`] and one client at most
+///    [`MAX_CODES_PER_CLIENT`].
+/// 3. A cap that is reached refuses the request with the seconds until the
+///    codes counting against it expire. Nothing is stored.
+///
+/// Unlike the device flow, no code is evicted to make room: an authorization
+/// code is bound to one account, one challenge and one `redirect_uri`, so
+/// dropping one would hand its redemption to the wrong client.
+fn admit(
+	codes: &std::sync::Mutex<std::collections::HashMap<String, AuthCode>>,
+	code: String,
+	grant: AuthCode,
+	now: u64,
+) -> Result<(), u64> {
+	let mut codes = codes.lock().unwrap_or_else(|p| p.into_inner());
+	codes.retain(|_, c| c.expires_at > now);
+	let client = grant.client;
+	let mut per_account = 0usize;
+	let mut per_client = 0usize;
+	let mut account_wait = u64::MAX;
+	let mut client_wait = u64::MAX;
+	let mut pool_wait = u64::MAX;
+	for c in codes.values() {
+		let left = c.expires_at.saturating_sub(now);
+		pool_wait = pool_wait.min(left);
+		if c.account == grant.account {
+			per_account += 1;
+			account_wait = account_wait.min(left);
+		}
+		if c.client == client {
+			per_client += 1;
+			client_wait = client_wait.min(left);
+		}
+	}
+	if codes.len() >= MAX_AUTH_CODES {
+		return Err(pool_wait);
+	}
+	if per_account >= MAX_CODES_PER_ACCOUNT {
+		return Err(account_wait);
+	}
+	if per_client >= MAX_CODES_PER_CLIENT {
+		return Err(client_wait);
+	}
+	codes.insert(code, grant);
+	Ok(())
 }
 
 /// `POST /oauth/token` (public): dispatch on `grant_type` and return a signed
