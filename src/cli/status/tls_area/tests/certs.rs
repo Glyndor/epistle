@@ -353,3 +353,72 @@ async fn a_stack_without_the_container_has_no_certs_item() {
 		"{report:?}"
 	);
 }
+
+/// A split stack with the container down: the renewal happens in the
+/// container, so the `renewal` item must not say the certificate is renewed
+/// while it is down, and it names the container that renews it.
+#[tokio::test]
+async fn a_split_stack_with_the_container_down_does_not_renew() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut ctx = tls_ctx(dir.path(), &acme_section());
+	compose_file(&ctx, r#"{"mail": {}, "certs": {}}"#);
+	ctx.podup = podup(
+		dir.path(),
+		r#"[{"Service":"mail","State":"running"},{"Service":"certs","State":"exited"}]"#,
+	);
+	let report = evaluate(&ctx, &FakeDns::default()).await;
+	let renewal = report
+		.items
+		.iter()
+		.find(|item| item.name == "renewal")
+		.expect("renewal item");
+	assert_ne!(renewal.status, Level::Ok, "{renewal:?}");
+	assert!(
+		renewal.detail.contains("certificates container"),
+		"{}",
+		renewal.detail
+	);
+}
+
+/// The control: a split stack with the container up says the certificate is
+/// renewed, and says who renews it.
+#[tokio::test]
+async fn a_split_stack_with_the_container_up_renews() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut ctx = tls_ctx(dir.path(), &acme_section());
+	compose_file(&ctx, r#"{"mail": {}, "certs": {}}"#);
+	ctx.podup = podup(dir.path(), RUNNING);
+	let report = evaluate(&ctx, &FakeDns::default()).await;
+	let renewal = report
+		.items
+		.iter()
+		.find(|item| item.name == "renewal")
+		.expect("renewal item");
+	assert_eq!(renewal.status, Level::Ok, "{renewal:?}");
+	assert!(
+		renewal.detail.contains("certificates container"),
+		"{}",
+		renewal.detail
+	);
+}
+
+/// A container the compose file does not name, but that runs, may still hold
+/// the DNS credential and the account key: it is reported, not ignored.
+#[tokio::test]
+async fn an_orphan_container_the_compose_file_does_not_name_is_reported() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut ctx = tls_ctx(dir.path(), &acme_section());
+	compose_file(&ctx, r#"{"mail": {}}"#);
+	ctx.podup = podup(
+		dir.path(),
+		r#"[{"Service":"mail","State":"running"},{"Service":"certs","State":"running","StartedAt":"2026-11-02T06:30:01Z"}]"#,
+	);
+	let report = evaluate(&ctx, &FakeDns::default()).await;
+	let orphan = report
+		.items
+		.iter()
+		.find(|item| item.name == "certs")
+		.expect("certs item");
+	assert_eq!(orphan.status, Level::Warn, "{orphan:?}");
+	assert!(orphan.detail.contains("does not name"), "{}", orphan.detail);
+}
