@@ -37,10 +37,14 @@ fn a_child_and_what_it_started_do_not_outlive_a_test_that_panics() {
 		let child = GroupChild::spawn(&mut command).unwrap();
 		leader = Some(child.id().to_string());
 		let deadline = Instant::now() + Duration::from_secs(10);
-		while !pidfile.exists() && Instant::now() < deadline {
+		// The shell creates the file when it opens the redirection and writes
+		// the number a moment later: a file that exists can still be empty.
+		let written =
+			|| std::fs::read_to_string(&pidfile).is_ok_and(|text| !text.trim().is_empty());
+		while !written() && Instant::now() < deadline {
 			std::thread::sleep(Duration::from_millis(10));
 		}
-		assert!(pidfile.exists(), "the child never started");
+		assert!(written(), "the child never started");
 		panic!("the test fails with the child running");
 	}));
 	assert!(outcome.is_err(), "the closure must have panicked");
