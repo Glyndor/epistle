@@ -330,3 +330,25 @@ async fn a_request_that_claims_a_time_in_the_future_is_refused() {
 		"{outcome:?}"
 	);
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_requests_directory_that_is_a_link_is_not_followed() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let outside = tempfile::tempdir().expect("outside");
+	let id = "0198a1b2-c3d4-7000-8000-000000000020";
+	let root = dir.path().join("dns-handoff");
+	std::fs::create_dir_all(&root).expect("root");
+	std::os::unix::fs::symlink(outside.path(), requests_dir(&root)).expect("link");
+	let bytes = serde_json::to_vec(&accepted(id)).expect("encode");
+	std::fs::write(outside.path().join(id), bytes).expect("planted request");
+	let zone = FakeZone::new();
+	let server = Server::new(root, zone.clone(), zones(), domains());
+	assert_eq!(server.serve_once().await, 0, "nothing was taken");
+	let records = zone.records();
+	assert!(records.is_empty(), "nothing was written: {records:?}");
+	assert!(
+		outside.path().join(id).exists(),
+		"the request behind the link is left alone"
+	);
+}

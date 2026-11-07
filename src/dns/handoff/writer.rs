@@ -76,7 +76,7 @@ impl Writer {
 	}
 
 	/// Make the two directories the hand-off uses, owner-only.
-	fn prepare(&self) -> Result<(), String> {
+	pub(super) fn prepare(&self) -> Result<(), String> {
 		for dir in [requests_dir(&self.root), results_dir(&self.root)] {
 			std::fs::create_dir_all(&dir)
 				.map_err(|error| format!("cannot create {}: {error}", dir.display()))?;
@@ -141,7 +141,7 @@ impl Writer {
 	/// Remove what an earlier run left behind: the answers nobody read and
 	/// the temporary files of a request that was killed mid-write. The
 	/// requests themselves are the serving side's to remove.
-	fn sweep(&self) {
+	pub(super) fn sweep(&self) {
 		let old = (self.timeout * 2).as_secs();
 		for (dir, answers) in [
 			(results_dir(&self.root), true),
@@ -167,12 +167,14 @@ impl Writer {
 				let Ok(metadata) = entry.metadata() else {
 					continue;
 				};
-				let age = metadata
+				let Some(age) = metadata
 					.modified()
 					.ok()
-					.and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
+					.and_then(|modified| std::time::SystemTime::now().duration_since(modified).ok())
 					.map(|since| since.as_secs())
-					.unwrap_or(0);
+				else {
+					continue;
+				};
 				if age < old {
 					continue;
 				}

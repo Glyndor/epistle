@@ -118,8 +118,8 @@ async fn a_provider_failure_is_answered_with_the_reason() {
 		outcome
 			.error
 			.as_deref()
-			.is_some_and(|error| error.contains("refused the write")),
-		"the reason is carried: {outcome:?}"
+			.is_some_and(|error| error.contains("provider request failed")),
+		"the category is carried: {outcome:?}"
 	);
 }
 

@@ -165,3 +165,23 @@ async fn a_refusal_is_reported_as_the_reason() {
 	);
 	serving.abort();
 }
+
+#[test]
+fn the_sweep_removes_only_what_is_old() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let writer = Writer::new(dir.path());
+	writer.prepare().expect("directories");
+	let results = results_dir(&dir.path().join("dns-handoff"));
+	let fresh = results.join("0198a1b2-c3d4-7000-8000-000000000030");
+	let old = results.join("0198a1b2-c3d4-7000-8000-000000000031");
+	std::fs::write(&fresh, b"{}").expect("fresh answer");
+	let file = std::fs::File::create(&old).expect("old answer");
+	file.set_modified(std::time::SystemTime::now() - Duration::from_secs(1000))
+		.expect("backdate");
+	writer.sweep();
+	assert!(
+		fresh.exists(),
+		"an answer that is still being waited for stays"
+	);
+	assert!(!old.exists(), "an answer nobody read is removed");
+}

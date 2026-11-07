@@ -75,7 +75,12 @@ impl Server {
 	/// itself.
 	fn prepare(&self) {
 		for dir in [requests_dir(&self.root), results_dir(&self.root)] {
-			if std::fs::create_dir_all(&dir).is_err() {
+			// The other container writes in the same tree: a link planted
+			// where a directory belongs must not be followed or chmodded.
+			if is_link(&self.root) || is_link(&dir) || std::fs::create_dir_all(&dir).is_err() {
+				continue;
+			}
+			if is_link(&dir) {
 				continue;
 			}
 			#[cfg(unix)]
@@ -96,6 +101,9 @@ impl Server {
 
 	/// The requests that are waiting, oldest first.
 	fn pending(&self) -> Vec<Pending> {
+		if is_link(&self.root) || is_link(&requests_dir(&self.root)) {
+			return Vec::new();
+		}
 		let Ok(entries) = std::fs::read_dir(requests_dir(&self.root)) else {
 			return Vec::new();
 		};
@@ -150,13 +158,13 @@ impl Server {
 			self.remove(&pending.path);
 			return;
 		}
-		let outcome = self.write(&request).await;
+		let outcome = self.write(&request, &pending.path).await;
 		self.answer(&pending.id, outcome);
 		self.remove(&pending.path);
 	}
 
 	/// Perform the write the request asks for.
-	async fn write(&self, request: &Request) -> Outcome {
+	async fn write(&self, request: &Request, path: &std::path::Path) -> Outcome {
 		let Some(zone) = self.zone_for(&request.name) else {
 			return Outcome::failed(
 				&request.id,
@@ -171,13 +179,29 @@ impl Server {
 			proxied: None,
 		};
 		let _write = self.writes.lock().await;
+		// The wait for the lock can outlast the asking side: it takes the
+		// request back when its own wait ends, and a write nobody is waiting
+		// for any more must not happen.
+		if !path.exists()
+			|| super::check(request, &self.zones, &self.domains, super::writer::now()).is_err()
+		{
+			return Outcome::failed(&request.id, "the request was taken back or has expired");
+		}
 		let result = match request.operation {
 			super::Operation::Publish => self.provider.upsert(&zone, record).await,
 			super::Operation::Withdraw => self.provider.delete(&zone, record).await,
 		};
 		match result {
 			Ok(()) => Outcome::ok(&request.id),
-			Err(error) => Outcome::failed(&request.id, error.to_string()),
+			Err(error) => {
+				// The provider's own text can carry what its API answered:
+				// the log keeps it, the answer carries the category only.
+				tracing::warn!(%error, name = %request.name, "a DNS hand-off write failed");
+				Outcome::failed(
+					&request.id,
+					crate::dns::providers::check::failure_cause(&error),
+				)
+			}
 		}
 	}
 
@@ -243,4 +267,9 @@ fn read_request(path: &Path) -> Result<Request, String> {
 		.map_err(|error| format!("the request is not readable: {error}"))?
 		.ok_or_else(|| "the request is not there".to_string())?;
 	serde_json::from_slice(&bytes).map_err(|error| format!("the request is not readable: {error}"))
+}
+
+/// Whether `path` is a symbolic link, which is never followed here.
+fn is_link(path: &std::path::Path) -> bool {
+	std::fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink())
 }

@@ -139,8 +139,10 @@ pub(super) async fn serve(config: Config) -> std::io::Result<()> {
 		config.dns.zones(),
 		served_domains(&config),
 	);
-	let serving = tokio::spawn(handoff.run());
 	crate::privdrop::drop_privileges(config.privileges.as_ref())?;
+	// Only after the drop: the directories under the data dir are shared
+	// with the other container, and this process must not touch them as root.
+	let serving = tokio::spawn(handoff.run());
 	tracing::info!(
 		account_key = %renewal.account_key.display(),
 		directory = %crate::acme::renew::cert_path(&config.data_dir)
