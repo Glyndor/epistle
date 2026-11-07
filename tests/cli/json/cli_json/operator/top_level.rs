@@ -156,7 +156,10 @@ fn import_counts_what_it_stored() {
 		),
 		(
 			0,
-			json!({"result": "saved", "action": "import", "account": "bob", "imported": 2})
+			json!({
+				"result": "saved", "action": "import", "account": "bob", "imported": 2,
+				"rejected": 0, "rejected_entries": [],
+			})
 		)
 	);
 }
