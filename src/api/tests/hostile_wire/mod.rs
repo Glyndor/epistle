@@ -70,6 +70,13 @@ pub(in crate::api) struct Peer {
 
 impl Peer {
 	pub async fn start(app: axum::Router) -> Self {
+		Self::start_within(app, Duration::from_secs(5)).await
+	}
+
+	/// [`Self::start`] with a longer wait for each answer, for a request whose
+	/// honest cost is a password hash: Argon2 and a 600000 round SCRAM
+	/// derivation in a debug build take seconds on a loaded machine.
+	pub async fn start_within(app: axum::Router, wait: Duration) -> Self {
 		let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
 			.await
 			.expect("real HTTP bind (requires sockets)");
@@ -85,7 +92,7 @@ impl Peer {
 		let client = reqwest::Client::builder()
 			.no_proxy()
 			.redirect(reqwest::redirect::Policy::none())
-			.timeout(Duration::from_secs(5))
+			.timeout(wait)
 			.build()
 			.unwrap();
 		Self { base, client, task }
