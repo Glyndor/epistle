@@ -8,9 +8,9 @@ use serde_json::{Value, json};
 use tower::ServiceExt;
 
 use super::super::jmap_email::jmap_eventsource::{next_event, open as open_eventsource};
+use super::super::jmap_ws::revoke::Client;
 use super::base::{TOKEN, request, request_raw, request_with_body};
 use super::confinement::{TENANT_A, world};
-use super::jmap_ws_revoke::Client;
 use super::router;
 
 /// `POST /jmap/api` with the tenant key, one method call.

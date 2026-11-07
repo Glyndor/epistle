@@ -3,7 +3,7 @@
 //! of megabytes per socket by sending one very large frame.
 
 use super::base::TOKEN;
-use super::jmap_ws_revoke::Client;
+use super::revoke::Client;
 use crate::api::ApiState;
 use crate::api::jmap::limits::MAX_SIZE_REQUEST;
 use crate::storage::FsSpool;

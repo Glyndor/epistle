@@ -8,7 +8,7 @@ use std::collections::BTreeSet;
 
 /// What a route does about a key confined to some domains.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Domain {
+pub(super) enum Domain {
 	/// No tenant data at all: liveness, discovery documents, a constant answer.
 	Open,
 	/// Acts for the principal the bearer carries and never for one the request
@@ -25,17 +25,17 @@ enum Domain {
 	Credentials,
 }
 
-struct Rule {
+pub(super) struct Rule {
 	/// The full path pattern as the router registers it.
-	pattern: &'static str,
+	pub(super) pattern: &'static str,
 	/// The key scope the route needs: `read`, `write`, `send`, `scim` or `none`.
-	scope: &'static str,
-	domain: Domain,
+	pub(super) scope: &'static str,
+	pub(super) domain: Domain,
 	/// The test that proves the rule. `-` only for `Open` routes.
-	covered_by: &'static str,
+	pub(super) covered_by: &'static str,
 }
 
-const fn rule(
+pub(super) const fn rule(
 	pattern: &'static str,
 	scope: &'static str,
 	domain: Domain,
@@ -49,7 +49,7 @@ const fn rule(
 	}
 }
 
-const RULES: &[Rule] = &[
+pub(super) const RULES: &[Rule] = &[
 	rule("/healthz", "none", Domain::Open, "-"),
 	// The description of the API itself: no tenant data.
 	rule("/api/v1/openapi.json", "read", Domain::Open, "-"),
@@ -256,8 +256,7 @@ const RULES: &[Rule] = &[
 	),
 ];
 
-/// Every `.route("<path>"` in `source`, with `prefix` put in front.
-fn routes_in(source: &str, prefix: &str) -> BTreeSet<String> {
+pub(super) fn routes_in(source: &str, prefix: &str) -> BTreeSet<String> {
 	let mut found = BTreeSet::new();
 	let mut rest = source;
 	while let Some(at) = rest.find(".route(") {
@@ -272,72 +271,20 @@ fn routes_in(source: &str, prefix: &str) -> BTreeSet<String> {
 	found
 }
 
-fn registered_routes() -> BTreeSet<String> {
+pub(super) fn registered_routes() -> BTreeSet<String> {
 	let mut all = BTreeSet::new();
 	for (source, prefix) in [
-		(include_str!("../mod.rs"), ""),
-		(include_str!("../v1/mod.rs"), "/api/v1"),
-		(include_str!("../scim/mod.rs"), "/scim/v2"),
-		(include_str!("../oauth/mod.rs"), ""),
+		(include_str!("../../mod.rs"), ""),
+		(include_str!("../../v1/mod.rs"), "/api/v1"),
+		(include_str!("../../scim/mod.rs"), "/scim/v2"),
+		(include_str!("../../oauth/mod.rs"), ""),
 	] {
 		all.extend(routes_in(source, prefix));
 	}
 	all
 }
 
-#[test]
-fn every_route_declares_its_domain_rule() {
-	let declared: BTreeSet<String> = RULES.iter().map(|rule| rule.pattern.to_string()).collect();
-	assert_eq!(declared.len(), RULES.len(), "a pattern is listed twice");
-	let registered = registered_routes();
-	let undeclared: Vec<_> = registered.difference(&declared).collect();
-	let stale: Vec<_> = declared.difference(&registered).collect();
-	assert!(
-		undeclared.is_empty(),
-		"routes with no rule in RULES (decide how each treats a key confined to some domains): {undeclared:?}"
-	);
-	assert!(
-		stale.is_empty(),
-		"rules for routes that no router registers: {stale:?}"
-	);
-}
-
-#[test]
-fn every_rule_names_a_test_that_exists() {
-	let mut sources = String::new();
-	let mut pending = vec![std::path::PathBuf::from(concat!(
-		env!("CARGO_MANIFEST_DIR"),
-		"/src/api"
-	))];
-	while let Some(dir) = pending.pop() {
-		for entry in std::fs::read_dir(&dir).expect("read src/api") {
-			let path = entry.expect("entry").path();
-			if path.is_dir() {
-				pending.push(path);
-			} else if path.extension().is_some_and(|ext| ext == "rs") {
-				sources.push_str(&std::fs::read_to_string(&path).expect("read source"));
-			}
-		}
-	}
-	for rule in RULES {
-		if rule.domain == Domain::Open {
-			continue;
-		}
-		assert_ne!(rule.covered_by, "-", "{} needs a test", rule.pattern);
-		let needle = format!("fn {}(", rule.covered_by);
-		assert!(
-			sources.contains(&needle),
-			"{} is covered by {}, which does not exist",
-			rule.pattern,
-			rule.covered_by
-		);
-		assert!(!rule.scope.is_empty());
-	}
-}
-
-/// The key scopes `RULES` gives `pattern` (`read/write` is two), or `None`
-/// for a route it does not list. The OpenAPI tests hold their own scopes to it.
-pub(in super::super) fn scopes_of(pattern: &str) -> Option<BTreeSet<&'static str>> {
+pub(in crate::api) fn scopes_of(pattern: &str) -> Option<BTreeSet<&'static str>> {
 	RULES
 		.iter()
 		.find(|rule| rule.pattern == pattern)

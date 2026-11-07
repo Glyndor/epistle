@@ -1,8 +1,81 @@
+//! The queue the operator inspects and cancels from.
+
 use super::base::{TOKEN, request, test_state};
-use super::router;
-use crate::storage::FsSpool;
+use super::*;
 use axum::http::StatusCode;
 use std::time::Duration;
+
+use crate::storage::FsSpool;
+
+#[tokio::test]
+async fn queue_pagination_walks_all_entries() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let app = router(test_state(dir.path(), 5));
+
+	let (status, page) = request(&app, "GET", "/api/v1/queue?limit=2", Some(TOKEN.as_str())).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(page["entries"].as_array().expect("entries").len(), 2);
+	let cursor = page["next_cursor"].as_str().expect("cursor").to_string();
+
+	let (_, page2) = request(
+		&app,
+		"GET",
+		&format!("/api/v1/queue?limit=2&cursor={cursor}"),
+		Some(TOKEN.as_str()),
+	)
+	.await;
+	assert_eq!(page2["entries"].as_array().expect("entries").len(), 2);
+	// No overlap between pages.
+	assert_ne!(page["entries"][0]["id"], page2["entries"][0]["id"]);
+
+	let cursor2 = page2["next_cursor"].as_str().expect("cursor").to_string();
+	let (_, page3) = request(
+		&app,
+		"GET",
+		&format!("/api/v1/queue?limit=2&cursor={cursor2}"),
+		Some(TOKEN.as_str()),
+	)
+	.await;
+	assert_eq!(page3["entries"].as_array().expect("entries").len(), 1);
+	assert!(page3["next_cursor"].is_null());
+}
+
+#[tokio::test]
+async fn queue_rejects_zero_limit() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let app = router(test_state(dir.path(), 0));
+	let (status, body) = request(&app, "GET", "/api/v1/queue?limit=0", Some(TOKEN.as_str())).await;
+	assert_eq!(status, StatusCode::BAD_REQUEST);
+	assert_eq!(body["error"]["code"], "invalid_input");
+}
+
+#[tokio::test]
+async fn queue_entry_can_be_removed_once() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let app = router(test_state(dir.path(), 1));
+	let (_, page) = request(&app, "GET", "/api/v1/queue", Some(TOKEN.as_str())).await;
+	let id = page["entries"][0]["id"].as_str().expect("id").to_string();
+
+	let (status, body) = request(
+		&app,
+		"DELETE",
+		&format!("/api/v1/queue/{id}"),
+		Some(TOKEN.as_str()),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["removed"], id.as_str());
+
+	let (status, body) = request(
+		&app,
+		"DELETE",
+		&format!("/api/v1/queue/{id}"),
+		Some(TOKEN.as_str()),
+	)
+	.await;
+	assert_eq!(status, StatusCode::NOT_FOUND);
+	assert_eq!(body["error"]["code"], "not_found");
+}
 
 #[tokio::test]
 async fn queue_removal_records_cancellation_with_extra() {
