@@ -298,6 +298,10 @@ name = "hostile_smtp"
 path = "tests/smtp/hostile_smtp.rs"
 
 [[test]]
+name = "hostile_dns"
+path = "tests/smtp/hostile_dns/mod.rs"
+
+[[test]]
 name = "hostile_imap"
 path = "tests/imap/hostile_imap.rs"
 

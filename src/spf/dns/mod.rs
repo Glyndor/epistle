@@ -174,8 +174,9 @@ impl SystemDns {
 	}
 
 	/// Build over explicit name servers and options; [`Self::from_system`]
-	/// passes the host's.
-	pub(crate) fn with_config(config: ResolverConfig, opts: ResolverOpts) -> std::io::Result<Self> {
+	/// passes the host's. This also allows callers to select explicit name
+	/// servers without changing the process-wide resolver configuration.
+	pub fn with_config(config: ResolverConfig, opts: ResolverOpts) -> std::io::Result<Self> {
 		let mut reverse_opts = opts.clone();
 		reverse_opts.validate = false;
 		Ok(SystemDns {
