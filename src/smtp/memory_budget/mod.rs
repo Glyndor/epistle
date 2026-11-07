@@ -18,7 +18,7 @@
 //!
 //! The default cap is derived from the memory the `mail` container may use
 //! (see [`crate::smtp::memory_fit`]), a fifth of it, so a busy server
-//! stays clear of the OOM. A `[server] message_memory_budget` overrides the
+//! stays clear of the OOM. A `message_memory_budget` overrides the
 //! derived default; setting it to `0` disables the budget (every
 //! reservation succeeds, the historical behaviour).
 
@@ -70,7 +70,7 @@ impl std::fmt::Debug for MemoryBudget {
 
 impl MemoryBudget {
 	/// A budget that admits every reservation. The historical behaviour
-	/// for `[server] message_memory_budget = 0` and the default for
+	/// for `message_memory_budget = 0` and the default for
 	/// tests that do not wire the budget in.
 	pub fn unlimited() -> Self {
 		Self::with_cap(0)

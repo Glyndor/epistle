@@ -177,7 +177,7 @@ pub struct Session {
 	/// and refuses an explicit `AUTHENTICATE` against them.
 	pub(super) scram_enabled: bool,
 	/// APPENDLIMIT (RFC 7889): the largest literal an APPEND or REPLACE
-	/// command may carry. Follows `[server] max_message_size`, the same
+	/// command may carry. Follows `max_message_size`, the same
 	/// cap the SMTP, REST and JMAP submission paths enforce. The default
 	/// is [`super::super::command::DEFAULT_APPEND_LIMIT`]; raised or
 	/// lowered by [`Session::with_append_limit`].
@@ -289,7 +289,7 @@ impl Session {
 	/// REPLACE command may carry. `0` keeps the built-in default
 	/// ([`super::super::command::DEFAULT_APPEND_LIMIT`]); any other value
 	/// is taken as given. The server's value flows from
-	/// `[server] max_message_size`, the same cap the SMTP, REST and
+	/// `max_message_size`, the same cap the SMTP, REST and
 	/// JMAP submission paths enforce.
 	pub fn with_append_limit(mut self, bytes: usize) -> Self {
 		if bytes > 0 {

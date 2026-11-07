@@ -131,7 +131,7 @@ fn parse_flags_and_literal(
 	// RFC 7889 §3: a message above the advertised APPENDLIMIT is refused
 	// with TOOBIG, which tells the client not to retry it unchanged. The
 	// limit is the per-listener APPENDLIMIT, which follows
-	// `[server] max_message_size` (the SMTP/JMAP/REST cap).
+	// `max_message_size` (the SMTP/JMAP/REST cap).
 	if literal.size > append_limit {
 		return Err(ParseError::TooBig(tag.to_string()));
 	}

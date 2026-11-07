@@ -3,7 +3,7 @@
 //! the Session resource and by the code that applies it, so what a client is
 //! told and what the server does cannot drift apart.
 //!
-//! The operator-configured `[server] max_message_size` drives two of the
+//! The operator-configured `max_message_size` drives two of the
 //! advertised limits (`maxSizeUpload` and `maxSizeAttachmentsPerEmail`)
 //! at runtime, so they live as functions of `ApiState` rather than
 //! constants; see [`crate::api::jmap::session_resource::max_size_*`].
@@ -13,7 +13,7 @@ use axum::http::StatusCode;
 /// `maxSizeAttachmentsPerEmail` room for headers, body, and per-part
 /// headers (RFC 8621 §1.3.1). The actual advertised value is
 /// `(max_size_upload - ATTACHMENT_HEADROOM) / 78 * 76 / 4 * 3` where
-/// `max_size_upload` is the configured `[server] max_message_size`.
+/// `max_size_upload` is the configured `max_message_size`.
 pub const ATTACHMENT_HEADROOM: usize = 256 * 1024;
 
 /// `maxSizeRequest`: the most octets accepted in one `POST /jmap/api` body.

@@ -1,8 +1,8 @@
 use super::fetch::parse_fetch;
 use super::*;
 
-/// Default per-listener APPENDLIMIT (RFC 7889) when no `[server]
-/// max_message_size` is configured: the SMTP `MAX_MESSAGE_SIZE` it shares.
+/// Default per-listener APPENDLIMIT (RFC 7889) when no
+/// `max_message_size` is configured: the SMTP `MAX_MESSAGE_SIZE` it shares.
 pub const DEFAULT_APPEND_LIMIT: usize = crate::smtp::session::MAX_MESSAGE_SIZE;
 
 /// Split a line into its validated tag, verb and argument text.

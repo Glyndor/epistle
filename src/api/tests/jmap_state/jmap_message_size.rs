@@ -1,4 +1,4 @@
-//! The configured `[server] max_message_size` is advertised by the JMAP
+//! The configured `max_message_size` is advertised by the JMAP
 //! Session resource, drives the upload route's body limit, and is what
 //! the `Email/set` create builder checks before the message lands in the
 //! spool. A lowered cap is visible end-to-end: what the client is told
@@ -68,7 +68,7 @@ async fn configured_max_message_size_smaller_than_default_rejects_what_default_a
 }
 
 /// `Email/set` create refuses to build a message that would exceed the
-/// configured `[server] max_message_size`, returning the JMAP
+/// configured `max_message_size`, returning the JMAP
 /// `tooLarge` SetError. A lowered cap trips the check where the
 /// built-in default would have admitted the body.
 #[tokio::test]
