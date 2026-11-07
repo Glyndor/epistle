@@ -354,3 +354,6 @@ fn imported_json(
 	});
 	super::json_out::print(out, &result)
 }
+
+#[cfg(test)]
+mod tests;

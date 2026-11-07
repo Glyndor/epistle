@@ -165,6 +165,29 @@ fn import_counts_what_it_stored() {
 }
 
 #[test]
+fn import_refuses_an_entry_over_the_message_size_limit() {
+	// The limit is the one the server applies to what it receives: an
+	// entry over it is refused, named and counted, and the command says
+	// the import finished with errors.
+	let env = env("max_message_size = 65536\n");
+	add_account(&env, "bob");
+	let mut mbox =
+		b"From a@example.net Mon Jan  1 00:00:00 2024\nSubject: one\n\nbody\n\n".to_vec();
+	mbox.extend_from_slice(b"From b@example.net Mon Jan  1 00:00:00 2024\nSubject: big\n\n");
+	mbox.extend(std::iter::repeat_n(b'x', 100_000));
+	mbox.extend_from_slice(b"\n\n");
+	let (code, value) = run(
+		&["import", "--config", &env.config, "--account", "bob"],
+		&mbox,
+	);
+	assert_eq!(code, 1, "an entry over the limit is an error");
+	assert_eq!(value["imported"], 1, "the entry that fits is imported");
+	assert_eq!(value["rejected"], 1);
+	assert_eq!(value["rejected_entries"][0]["name"], "entry 2");
+	assert_eq!(value["rejected_entries"][0]["limit"], 65536);
+}
+
+#[test]
 fn restore_dry_run_lists_the_entries() {
 	let env = env("");
 	add_account(&env, "bob");
