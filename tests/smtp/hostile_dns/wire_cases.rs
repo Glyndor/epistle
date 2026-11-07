@@ -9,35 +9,34 @@ use epistle::spf::SpfOutcome;
 use super::harness::*;
 use super::wire::{Reply, Wire};
 
+// A CNAME loop ends in "no records" inside the resolver, which is the same as
+// a domain that publishes nothing: absence, not a temporary failure.
 #[test]
-fn spf_cname_loop_is_temperror() {
-	// Mutation: map Err(_) to Ok(Vec::new()) in SystemDns::lookup.
+fn spf_cname_loop_is_none() {
+	// Mutation: map NoRecordsFound to Err(Temporary) in SystemDns::lookup.
 	bounded(async {
 		let wire = Wire::tcp(Reply::Loop).await;
-		assert_eq!(spf(&wire.dns).await, SpfOutcome::TempError);
+		assert_eq!(spf(&wire.dns).await, SpfOutcome::None);
 		wire.assert_queries();
 	});
 }
 
 #[test]
-fn dmarc_cname_loop_is_temperror() {
-	// Mutation: map Err(_) to Ok(Vec::new()) in SystemDns::lookup.
+fn dmarc_cname_loop_is_none() {
+	// Mutation: map NoRecordsFound to Err(Temporary) in SystemDns::lookup.
 	bounded(async {
 		let wire = Wire::tcp(Reply::Loop).await;
-		assert_eq!(dmarc(&wire.dns).await, DmarcOutcome::TempError);
+		assert_eq!(dmarc(&wire.dns).await, DmarcOutcome::None);
 		wire.assert_queries();
 	});
 }
 
 #[test]
-fn mtasts_cname_loop_is_temporary() {
-	// Mutation: map Err(_) to Ok(Vec::new()) in SystemDns::lookup.
+fn mtasts_cname_loop_is_absent() {
+	// Mutation: map NoRecordsFound to Err(Temporary) in SystemDns::lookup.
 	bounded(async {
 		let wire = Wire::tcp(Reply::Loop).await;
-		assert_eq!(
-			store().policy(&wire.dns, DOMAIN).await,
-			Err(PolicyError::Temporary("TXT lookup failed".into()))
-		);
+		assert_eq!(store().policy(&wire.dns, DOMAIN).await, Ok(None));
 		wire.assert_queries();
 	});
 }

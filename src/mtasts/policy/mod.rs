@@ -119,11 +119,15 @@ type FetchFuture<'a> = Pin<Box<dyn Future<Output = FetchResult> + Send + 'a>>;
 /// Extract the `id=` attribute from a single `_mta-sts` TXT record. The
 /// record format is `v=STSv1; id=<id>[; <other>...]` per RFC 8461
 /// section 3.1; we only require the version and id fields. Returns
-/// `None` if the record is not an `STSv1` policy record or has no id.
+/// `None` if the record is not an `STSv1` policy record, has no id, or the
+/// id is not 1 to 32 ASCII letters or digits (RFC 8461 section 3.1).
 fn parse_txt_id(record: &str) -> Option<&str> {
 	let rest = record.strip_prefix("v=STSv1")?;
-	rest.split(';')
-		.find_map(|part| part.trim().strip_prefix("id="))
+	let id = rest
+		.split(';')
+		.find_map(|part| part.trim().strip_prefix("id="))?;
+	let valid = (1..=32).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_alphanumeric());
+	valid.then_some(id)
 }
 
 /// Fetches the HTTPS policy document. Abstracted for offline tests.
@@ -337,12 +341,16 @@ impl PolicyStore {
 				return Err(PolicyError::Temporary("TXT lookup failed".into()));
 			}
 		};
-		for record in records {
-			if let Some(id) = parse_txt_id(&record) {
-				return Ok(Some(id.to_string()));
-			}
+		// RFC 8461 section 3.1: more than one `v=STSv1` record means there is
+		// no policy to discover, whatever each record says.
+		let mut ids = records
+			.iter()
+			.filter(|record| record.starts_with("v=STSv1"))
+			.map(|record| parse_txt_id(record));
+		match (ids.next(), ids.next()) {
+			(Some(id), None) => Ok(id.map(str::to_string)),
+			_ => Ok(None),
 		}
-		Ok(None)
 	}
 
 	fn remember(
