@@ -303,7 +303,7 @@ its own hostname describes this hop's checks. Authenticated submission keeps
 its separate header policy in the table above.
 
 A second pass over the header section catches a reserved field the
-stripper left behind. mail-parser 0.11.9 is the safety net's parser; DKIM
+stripper left behind. mail-parser 1.0.0 is the safety net's parser; DKIM
 and ARC run their own parsers on the bytes the stripper produced and
 fold trailing Unicode whitespace with `name.trim_end()`, so the union of
 their interpretations is what the safety net covers. A reserved field the
