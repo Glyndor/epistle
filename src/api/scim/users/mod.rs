@@ -261,6 +261,11 @@ fn parse_user_name_eq(filter: &str) -> Result<String, ScimError> {
 				}
 				None => return Err(ScimError::invalid("dangling filter escape")),
 			},
+			'"' => {
+				return Err(ScimError::invalid(
+					"a quote inside the filter value has to be escaped as \\\"",
+				));
+			}
 			other => out.push(other),
 		}
 	}
@@ -460,6 +465,14 @@ pub async fn put_user(
 	Ok(scim_resource(StatusCode::OK, render_user(&stored)))
 }
 
+/// The most operations one `PATCH` may carry. The narrow set this API honours
+/// needs a handful; the rest of a large request is a request to loop.
+const MAX_PATCH_OPERATIONS: usize = 20;
+
+/// The most password changes one `PATCH` may carry: each is an Argon2 hash and
+/// a 600000 round SCRAM derivation.
+const MAX_PATCH_PASSWORDS: usize = 3;
+
 /// `PATCH /Users/{id}` — apply a sequence of narrow operations. We
 /// accept `replace` (and the equivalent `add` for single-value
 /// attributes) on `active` and `password` only. Everything else is 400.
@@ -478,27 +491,55 @@ pub async fn patch_user(
 ) -> Result<impl IntoResponse, ScimError> {
 	let principal = Principal::for_token(&state, &auth);
 	lookup_in_scope(&state, &principal, &id)?;
+	if body.operations.len() > MAX_PATCH_OPERATIONS {
+		return Err(ScimError::invalid(format!(
+			"a PATCH takes at most {MAX_PATCH_OPERATIONS} operations"
+		)));
+	}
+	// A password costs two key derivations, so the cap on them is lower than
+	// the cap on operations.
+	let passwords = body
+		.operations
+		.iter()
+		.filter(|op| op.path.as_deref() == Some("password"))
+		.count();
+	if passwords > MAX_PATCH_PASSWORDS {
+		return Err(ScimError::invalid(format!(
+			"a PATCH takes at most {MAX_PATCH_PASSWORDS} password changes"
+		)));
+	}
+	// RFC 7644 section 3.5.2: when one operation is not valid the whole request
+	// fails, so every operation is checked, and the passwords hashed, before
+	// the first one is written.
+	let mut plan = Vec::with_capacity(body.operations.len());
 	for op in &body.operations {
-		apply_operation(&state, &id, op)?;
+		plan.push(plan_operation(&state, op)?);
+	}
+	for step in plan {
+		apply_step(&state, &id, step)?;
 	}
 	let stored = lookup_in_scope(&state, &principal, &id)?;
 	Ok(scim_resource(StatusCode::OK, render_user(&stored)))
 }
 
-fn apply_operation(state: &ApiState, id: &str, op: &PatchOperation) -> Result<(), ScimError> {
+/// One checked operation, ready to be written.
+enum Step {
+	Active(bool),
+	Password {
+		hash: String,
+		scram: Option<crate::smtp::scram::ScramStored>,
+	},
+	DisplayName(String),
+}
+
+fn plan_operation(state: &ApiState, op: &PatchOperation) -> Result<Step, ScimError> {
 	match (op.op.as_str(), op.path.as_deref()) {
 		("remove", _) => Err(ScimError::invalid("`remove` operations are not supported")),
-		("replace", Some("active")) | ("add", Some("active")) => {
-			let active = op
-				.value
-				.as_bool()
-				.ok_or_else(|| ScimError::invalid("active must be a boolean"))?;
-			state
-				.store()
-				.set_disabled(id, !active)
-				.map_err(store_to_scim)?;
-			Ok(())
-		}
+		("replace", Some("active")) | ("add", Some("active")) => op
+			.value
+			.as_bool()
+			.map(Step::Active)
+			.ok_or_else(|| ScimError::invalid("active must be a boolean")),
 		("replace", Some("password")) | ("add", Some("password")) => {
 			let plain = op
 				.value
@@ -507,20 +548,11 @@ fn apply_operation(state: &ApiState, id: &str, op: &PatchOperation) -> Result<()
 			check_password(plain)?;
 			let hash = hash_password(plain, state.store())?;
 			let scram = derive_scram(plain, state.store())?;
-			state
-				.store()
-				.set_password_hash(id, hash, scram)
-				.map_err(store_to_scim)?;
-			Ok(())
+			Ok(Step::Password { hash, scram })
 		}
-		("replace", Some("displayName")) | ("add", Some("displayName")) => {
-			let display_name = op.value.as_str().unwrap_or_default();
-			state
-				.store()
-				.set_display_name(id, display_name)
-				.map_err(store_to_scim)?;
-			Ok(())
-		}
+		("replace", Some("displayName")) | ("add", Some("displayName")) => Ok(Step::DisplayName(
+			op.value.as_str().unwrap_or_default().to_string(),
+		)),
 		("replace", Some(path)) | ("add", Some(path)) => Err(ScimError::invalid(format!(
 			"`{path}` cannot be modified via PATCH; only `active`, `password` and \
 			 `displayName` are accepted"
@@ -532,6 +564,16 @@ fn apply_operation(state: &ApiState, id: &str, op: &PatchOperation) -> Result<()
 			"unsupported PATCH op \"{other}\""
 		))),
 	}
+}
+
+fn apply_step(state: &ApiState, id: &str, step: Step) -> Result<(), ScimError> {
+	let store = state.store();
+	match step {
+		Step::Active(active) => store.set_disabled(id, !active).map(|_| ()),
+		Step::Password { hash, scram } => store.set_password_hash(id, hash, scram),
+		Step::DisplayName(name) => store.set_display_name(id, &name).map(|_| ()),
+	}
+	.map_err(store_to_scim)
 }
 
 #[cfg(test)]

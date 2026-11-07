@@ -1,5 +1,7 @@
 pub use super::*;
 
+pub(in crate::api) mod hostile_wire;
+
 pub(super) mod b;
 pub(super) mod base;
 pub(super) mod cidr_dual_stack;
