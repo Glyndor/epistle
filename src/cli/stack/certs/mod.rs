@@ -16,6 +16,11 @@
 //!
 //! `stack rollback` turns it off before it puts an older binary back, since
 //! that binary may not know `serve --role`.
+//!
+//! The compose file is rewritten under the lock that guards it, the same one
+//! `stack update`, `stack resources set` and `dns provider set` take, so a
+//! rewrite that lands while the switch waits for the lock is read again under
+//! it and not lost.
 
 use std::path::Path;
 
@@ -104,6 +109,9 @@ pub(in crate::cli) fn up(
 
 /// What a switch needs from the host; the tests fake it.
 pub(in crate::cli) trait SwitchHost {
+	/// The compose file this switch rewrites. The lock beside it guards
+	/// the rewrite, so the file is read, rendered and written under it.
+	fn compose_path(&self) -> &Path;
 	/// The compose file as it is now.
 	fn compose_text(&mut self) -> Result<String, String>;
 	/// `existing` rendered again with the certificates container `on` or off.
@@ -133,9 +141,28 @@ pub(in crate::cli) enum Switched {
 	AlreadyThere,
 }
 
+/// The lock that guards a rewrite of the compose file at `compose`: the
+/// one `stack update`, `stack resources set` and `dns provider set` take,
+/// so a rewrite of the file never loses the change another writer made.
+fn compose_lock(compose: &Path) -> Result<crate::storage::lock::FileLock, String> {
+	let lock = crate::storage::locked::lock_path(compose);
+	crate::cli::compose::lock::acquire(&lock)
+}
+
 /// Bring the stack to the layout `on` names. `Err` says what failed and
 /// what was put back.
 pub(in crate::cli) fn switch(host: &mut impl SwitchHost, on: bool) -> Result<Switched, String> {
+	// The compose file is read, rendered and written under the lock that
+	// guards it, so a rewrite that lands while this command waits for the
+	// lock is read again under it and not lost: what is written is never a
+	// render of a file that has changed since it was read.
+	//
+	// That lock is taken after the common one, never before it: the caller
+	// holds the common lock already (see `stack::entry`), and a command
+	// that holds the common lock and waits for this one, and a command that
+	// holds this one and waits for the common one, would wait for each
+	// other.
+	let _held = compose_lock(host.compose_path())?;
 	let existing = host.compose_text()?;
 	let running =
 		serde_json::from_str::<serde_json::Value>(&existing).map_err(|error| {

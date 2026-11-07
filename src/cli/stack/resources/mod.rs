@@ -212,7 +212,10 @@ pub(super) fn run(
 			}
 			// `stack update` rewrites the same file under the same lock: the
 			// file is read once the lock is held, so neither loses the
-			// other's change.
+			// other's change. The common lock is held already, so this one
+			// is taken after it: the order of the two is the same in every
+			// command that takes both, and no two of them wait for each
+			// other.
 			let lock = crate::storage::locked::lock_path(compose);
 			let _held = match crate::cli::compose::lock::acquire(&lock) {
 				Ok(held) => held,
