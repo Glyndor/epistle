@@ -1,8 +1,10 @@
 # Splitting `mail` into containers
 
 This is the plan for the work tracked in #1399 and #1400, and the decisions that
-have to hold across its phases. It describes what is intended, not what runs
-today: `docs/operations/container.md` describes the stack as it is.
+have to hold across its phases. Phase 1 runs today, off by default; the section
+"What runs today" under it says what was built and where it departs from the
+plan. The later phases are intended, not built: `docs/operations/container.md`
+describes the stack as it is.
 
 ## Where it starts
 
@@ -183,14 +185,72 @@ and `REACHED` on the last is the state this phase wants.
 - The concurrency suite gets the case of a certificate replaced while
   connections open, and a DKIM key replaced while messages are signed.
 
-## Open questions
+### What runs today
 
-- Whether `http-01` and `tls-alpn-01`, which need ports that `mail` owns, are
-  worth keeping with the `acme-challenge/` volume or should be dropped in favour
-  of `dns-01` for installs that use the `certs` container.
-- Whether the DKIM key files should be created by `certs` as above or by the
-  signing service of phase 2 from the start, which would remove one move.
-- How the Compose generator expresses a per-container egress rule on rootless
-  Podman, if it can at all: it expresses the routes of `certs` out of the host,
-  but it has no filter by destination, so the addresses the host owns that are
-  not its global one stay routable from the container.
+Phase 1 is implemented and off by default. `sudo epistle stack certs enable`
+turns it on for a stack (see [`docs/cli.md`](../cli.md)); a stack that never
+runs it renders and runs exactly as before.
+
+- `certs` runs `epistle serve --role certs`: ACME renewal with `dns-01`
+  through `[dns]`, the TLSA refresh after a new certificate and its retries,
+  and the withdrawal of each challenge record when its order ends. It binds
+  nothing, publishes no port and takes no request; it reads the request file
+  `epistle tls renew` leaves under `<data_dir>/acme`.
+- `mail` runs `epistle serve --role mail`: the listeners, the pair read from
+  `<data_dir>/acme` and reloaded when it changes, no order, no DNS write and
+  no TLSA state written.
+- `certs` mounts the config directory read-only, `<data_dir>/acme` and the
+  TLSA retry state (`<data_dir>/dns-tlsa`) read-write, the DNS credential
+  read-only, and the ACME account key as a read-only secret at
+  `secrets/acme_account.key` beside data_dir. It mounts nothing else of
+  data_dir.
+- `mail` mounts data_dir read-write as before, with three directories over it
+  read-only: `<data_dir>/acme`, `<data_dir>/dns-tlsa` and `<data_dir>/compose`.
+  The rule behind the list: `certs` acts on nothing `mail` can write, and the
+  file that says which container holds the credential is not writable by
+  `mail` either.
+- `epistle dns provider set` and `unset` put the credential in `certs` and
+  recreate it when the stack runs it.
+- `epistle status` reports the container in its `tls` area with the days the
+  certificate has left, warns while it is down and fails when fewer than seven
+  days are left.
+
+What changed from the plan above, and why:
+
+- **The table's `dkim/` volume does not exist yet.** DKIM rotation and key
+  generation stay in `mail` for now, and with the split on they wait, since
+  rotation publishes through the credential `mail` no longer holds; the key
+  in use keeps signing and `status` says so. The hook is in place: the role
+  check in `serve` that keeps rotation off in `--role mail`, and the `certs`
+  service that already holds the credential. Moving rotation is the next step:
+  each domain now has a key of its own (#1545), and the rotation of each
+  domain's key on its own state (#1579) is what moves into `certs`, once.
+- **The `acme-challenge/` volume does not exist.** See the first answer below.
+- **`stack rollback`** turns the container off with the current binary before
+  it puts an older binary back, because that binary may not know `--role`.
+- **The account key is copied, never moved.** `enable` copies it to
+  `secrets/`, brings the new layout up, waits for both services, and only then
+  removes the copy under data_dir, and only when both copies are the same key.
+  A failure writes the previous `compose.yaml` back. `disable` copies it back
+  and keeps the copy in `secrets/`. Two different keys are never reconciled:
+  the command stops and names both files.
+
+## Open questions, answered
+
+- **`http-01` and `tls-alpn-01` with the container: dropped.** `certs` answers
+  only `dns-01`, and `enable` refuses another challenge. Both need ports `mail`
+  owns, and keeping them would mean a channel from `certs` into `mail`, or one
+  from `mail` that `certs` acts on, which is exactly what this phase removes.
+  An install that renews with `http-01` keeps working with the split off.
+- **Who creates the DKIM key files: the signing service of phase 2.** Creating
+  them in `certs` would move them once now and again in phase 2, and the key
+  that signs belongs with the service that signs. Until then they stay in
+  `mail`.
+- **A per-container egress rule on rootless Podman: not expressed.** Compose
+  under rootless Podman cannot filter by destination, so `certs` and `mail`
+  both use `pasta`. The address podman maps to the host is closed in the
+  `certs` service with `pasta` options, so the host's own services are not
+  reachable from it by that name. What `certs` needs is the CA's directory host (`[acme]
+  directory_url`) and the provider's API host, plus the authoritative name
+  servers of the zone for the visibility check; an operator who filters egress
+  on the host can allow those for the account's traffic.
