@@ -145,7 +145,7 @@ const NUMBERS: &[(&str, &[&str], &str)] = &[
 		"{} requests and {} uploads in flight",
 	),
 	(
-		"src/api/jmap/event_source.rs",
+		"src/api/jmap/event_source/mod.rs",
 		&["MAX_STREAMS_PER_CALLER"],
 		"{} event streams per credential",
 	),
