@@ -67,15 +67,29 @@ impl Wire {
 	/// Return TC=1 over UDP with a tempting partial policy, while TCP at
 	/// this port refuses connections. This is not a generic SERVFAIL test.
 	pub async fn truncated_without_tcp() -> Self {
-		let socket = UdpSocket::bind("127.0.0.1:0").await.expect("bind DNS UDP");
+		// Reserve the same TCP port without listening: deterministic refusal.
+		// The kernel picks the UDP port; another test may hold a TCP listener
+		// on that number, so a taken one is given up and another is drawn.
+		let (socket, reserved) = {
+			let mut attempts = 0;
+			loop {
+				let socket = UdpSocket::bind("127.0.0.1:0").await.expect("bind DNS UDP");
+				let port = socket.local_addr().expect("DNS address").port();
+				let reserved =
+					socket2::Socket::new(socket2::Domain::IPV4, socket2::Type::STREAM, None)
+						.expect("reserve refused TCP port");
+				match reserved.bind(&std::net::SocketAddr::from(([127, 0, 0, 1], port)).into()) {
+					Ok(()) => break (socket, reserved),
+					Err(error)
+						if attempts < 100 && error.kind() == std::io::ErrorKind::AddrInUse =>
+					{
+						attempts += 1;
+					}
+					Err(error) => panic!("reserve DNS TCP address: {error}"),
+				}
+			}
+		};
 		let port = socket.local_addr().expect("DNS address").port();
-		// Reserve the same TCP port without listening: deterministic refusal,
-		// even if another test or process binds an ephemeral TCP listener.
-		let reserved = socket2::Socket::new(socket2::Domain::IPV4, socket2::Type::STREAM, None)
-			.expect("reserve refused TCP port");
-		reserved
-			.bind(&std::net::SocketAddr::from(([127, 0, 0, 1], port)).into())
-			.expect("reserve DNS TCP address");
 		let queries = Arc::new(AtomicUsize::new(0));
 		let count = queries.clone();
 		let task = tokio::spawn(async move {
