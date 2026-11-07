@@ -96,8 +96,35 @@ impl SwitchHost for StackHost<'_> {
 }
 
 /// Turn the certificates container `on` or off for the stack at `compose`,
-/// as the service account.
-pub(in crate::cli) fn run(config: &Config, compose: &Path, podup: &str, on: bool) -> ExitCode {
+/// as the service account, after checking that the configuration can renew
+/// from `certs` and asking unless `yes`.
+pub(in crate::cli) fn run(
+	config: &Config,
+	compose: &Path,
+	podup: &str,
+	on: bool,
+	yes: bool,
+) -> ExitCode {
+	if on && let Err(reason) = crate::cli::serve::certs_requirements(config) {
+		crate::cli::style::error(format_args!("stack certs enable: {reason}"));
+		return ExitCode::FAILURE;
+	}
+	let (action, question) = if on {
+		(
+			"stack certs enable",
+			"Move the ACME renewal, the TLSA refresh and the DNS credential into a certs \
+			 container, and recreate mail without them? [y/N]",
+		)
+	} else {
+		(
+			"stack certs disable",
+			"Put the ACME renewal and the DNS credential back in mail and remove the certs \
+			 container? [y/N]",
+		)
+	};
+	if let Err(code) = crate::cli::prompt::confirm_destructive(action, question, yes) {
+		return code;
+	}
 	let mut host = StackHost {
 		config,
 		compose,

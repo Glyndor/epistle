@@ -123,6 +123,14 @@ const SKIPPED: &[(&str, &str)] = &[
 	("stack stop", "tests/cli/json/cli_json/operator/stack.rs"),
 	("stack start", "tests/cli/json/cli_json/operator/stack.rs"),
 	("stack rollback", "replaces the installed binary, as root"),
+	(
+		"stack certs enable",
+		"recreates the stack through podup; src/cli/stack/certs/tests",
+	),
+	(
+		"stack certs disable",
+		"recreates the stack through podup; src/cli/stack/certs/tests",
+	),
 	("init", "tests/cli/json/cli_json/operator/init.rs"),
 	(
 		"restore",

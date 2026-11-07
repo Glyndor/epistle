@@ -7,18 +7,26 @@ use crate::cli::stack::StackAction;
 /// The two directions of `stack certs`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Subcommand)]
 pub enum CertsCli {
-	/// Move the ACME renewal, the TLSA refresh and the DNS credential into
-	/// a `certs` container.
-	Enable,
+	/// Move ACME renewal, TLSA and the DNS credential to `certs`.
+	Enable {
+		/// Do not ask for confirmation.
+		#[arg(long, short = 'y')]
+		yes: bool,
+	},
 	/// Put them back in `mail`.
-	Disable,
+	Disable {
+		/// Do not ask for confirmation.
+		#[arg(long, short = 'y')]
+		yes: bool,
+	},
 }
 
 impl CertsCli {
 	/// The stack action this direction runs.
 	pub(in crate::cli) fn action(self) -> StackAction {
-		StackAction::Certs {
-			on: self == CertsCli::Enable,
+		match self {
+			CertsCli::Enable { yes } => StackAction::Certs { on: true, yes },
+			CertsCli::Disable { yes } => StackAction::Certs { on: false, yes },
 		}
 	}
 }

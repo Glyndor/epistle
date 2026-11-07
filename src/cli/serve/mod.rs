@@ -430,6 +430,7 @@ async fn serve(config: Config, role: ServeRole) -> std::io::Result<()> {
 }
 mod ban_policy;
 mod certs;
+pub(in crate::cli) use certs::requirements as certs_requirements;
 mod role;
 pub use role::ServeRole;
 #[cfg(test)]
