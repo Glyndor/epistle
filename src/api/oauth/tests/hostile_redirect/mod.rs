@@ -1,4 +1,6 @@
 //! The headless authorize endpoint must reject hostile redirect parameters.
+mod bound;
+
 use super::base::{keys, state_with_authz};
 use crate::api::tests::hostile_wire::{Peer, supervised};
 use axum::http::StatusCode;

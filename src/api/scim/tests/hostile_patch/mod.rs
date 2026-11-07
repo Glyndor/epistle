@@ -1,4 +1,6 @@
 //! A sub-2-MiB request must not bypass an operation-count budget.
+mod atomic;
+
 use super::base::{SCIM_KEY_SECRET, app, build_state};
 use crate::api::tests::hostile_wire::{Peer, read, supervised};
 use axum::http::StatusCode;

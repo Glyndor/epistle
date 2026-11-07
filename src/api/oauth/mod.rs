@@ -87,6 +87,9 @@ struct AuthCode {
 	code_challenge: String,
 	/// Unix seconds after which this code is expired.
 	expires_at: u64,
+	/// The `redirect_uri` the authorization request carried. When it carried
+	/// one, the redemption has to carry the same (RFC 6749 section 4.1.3).
+	redirect_uri: Option<String>,
 }
 
 impl AuthzServer {

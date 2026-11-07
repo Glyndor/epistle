@@ -110,6 +110,7 @@ pub async fn authorize(
 				account,
 				code_challenge,
 				expires_at: now + CODE_TTL_SECS,
+				redirect_uri: fields.get("redirect_uri").cloned(),
 			},
 		);
 	let mut response = serde_json::json!({ "code": code });
@@ -170,6 +171,13 @@ fn redeem_authorization_code(
 		return oauth_error("invalid_grant");
 	};
 	if stored.expires_at <= now {
+		return oauth_error("invalid_grant");
+	}
+	// RFC 6749 section 4.1.3: a code issued for a redirect_uri is redeemed with
+	// the same one, byte for byte.
+	if let Some(bound) = &stored.redirect_uri
+		&& fields.get("redirect_uri") != Some(bound)
+	{
 		return oauth_error("invalid_grant");
 	}
 	// A verifier outside RFC 7636 section 4.1 cannot be the one the challenge

@@ -605,7 +605,8 @@ responses are `application/scim+json` and errors use the SCIM error object.
 `/scim/v2/Users` supports `GET` (with `filter=userName eq "x"`, a quote inside the
 value escaped as `\"`, `startIndex`, `count` up to 200), `POST`, and on
 `/Users/{id}` `GET`, `PUT`, `PATCH` (`replace` or `add` of `active`, `password`
-or `displayName` only, at most 100 operations per request) and
+or `displayName` only, at most 20 operations and 3 password changes per request, and all of them are
+checked before the first is applied) and
 `DELETE` (`204`, queued mail is kept). `id` is the account name. Only
 API-managed accounts appear. `totalResults` is the number of users on the
 page, not the number that match. `/Groups` answers `501`. A `POST` and `PUT`
@@ -624,7 +625,8 @@ a bearer. `POST /oauth/device_authorization` starts a device flow,
 `password` (or HTTP Basic), and `POST /oauth/token` polls (no faster than every
 5 seconds) or redeems a PKCE code from `POST /oauth/authorize` (`S256` only; a `code_verifier` is
 43 to 128 characters of `A-Z a-z 0-9 - . _ ~`, and a `redirect_uri`, which is never
-followed, has to be an absolute URI of a plain scheme).
+followed, has to be an absolute URI of a plain scheme and, when the authorization
+carried one, the redemption carries the same).
 Bodies are form-encoded or JSON; errors are `{"error": "<code>"}` as in
 RFC 6749 and 8628. Wrong credentials and a wrong code give the same answer.
 
