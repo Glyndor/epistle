@@ -299,7 +299,7 @@ fn the_scopes_agree_with_the_route_rules_table() {
 	}
 	let mut checked = 0;
 	for (path, scopes) in per_path {
-		let Some(expected) = crate::api::tests::route_rules::scopes_of(&path) else {
+		let Some(expected) = crate::api::tests::keys::rules::scopes_of(&path) else {
 			continue;
 		};
 		let expected: BTreeSet<String> = expected.into_iter().map(str::to_string).collect();

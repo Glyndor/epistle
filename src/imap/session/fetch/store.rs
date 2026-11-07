@@ -3,7 +3,7 @@
 
 use super::super::super::command::SequenceSet;
 use super::super::mailbox::{Flag, Snapshot, render_flags};
-use super::super::select::flags_line_for;
+use super::super::mailboxes::select::flags_line_for;
 use super::super::state::State;
 use super::super::{Output, Session, StoreMode};
 
@@ -276,7 +276,10 @@ impl Session {
 		let code = if modified.is_empty() {
 			String::new()
 		} else {
-			format!("[MODIFIED {}] ", super::super::codes::uid_set(&modified))
+			format!(
+				"[MODIFIED {}] ",
+				super::super::commands::codes::uid_set(&modified)
+			)
 		};
 		response.push_str(&format!("{tag} OK {code}STORE completed\r\n"));
 		Output::text(response)
