@@ -39,7 +39,14 @@ pub(super) fn publish(config_path: &Path, provider: Provider<'_>, now: u64) -> V
 			"dns: not published, the [dns] credential could not be read; once it can, run `epistle dns publish`".into(),
 		];
 	};
-	let _lock = match store::lock(&config.data_dir, LOCK_WAIT) {
+	let runtime = match tokio::runtime::Builder::new_current_thread()
+		.enable_all()
+		.build()
+	{
+		Ok(runtime) => runtime,
+		Err(error) => return vec![format!("dns: not published, no async runtime: {error}")],
+	};
+	let _lock = match runtime.block_on(store::lock_wait(&config.data_dir, LOCK_WAIT)) {
 		Ok(Some(lock)) => lock,
 		Ok(None) => {
 			return vec![
@@ -48,13 +55,6 @@ pub(super) fn publish(config_path: &Path, provider: Provider<'_>, now: u64) -> V
 			];
 		}
 		Err(error) => return vec![format!("dns: not published: {error}")],
-	};
-	let runtime = match tokio::runtime::Builder::new_current_thread()
-		.enable_all()
-		.build()
-	{
-		Ok(runtime) => runtime,
-		Err(error) => return vec![format!("dns: not published, no async runtime: {error}")],
 	};
 	let outcome = runtime.block_on(once::run(&config, provider.as_ref(), now, NET_TIMEOUT));
 	lines(outcome)

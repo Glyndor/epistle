@@ -218,7 +218,7 @@ where
 /// One run of the loop. A run that finds the ledger locked (an operator is
 /// running `epistle dns publish`) is skipped; the next tick tries again.
 pub async fn tick(config: &Config, provider: &dyn crate::dns::provider::DnsProvider) -> Tick {
-	let lock = match crate::dns::reconcile::store::lock(&config.data_dir, Duration::ZERO) {
+	let lock = match crate::dns::reconcile::store::lock(&config.data_dir) {
 		Ok(Some(lock)) => lock,
 		Ok(None) => {
 			tracing::info!("dns reconcile skipped: another publish holds the ledger");
