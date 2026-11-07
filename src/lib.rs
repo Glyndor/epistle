@@ -61,6 +61,8 @@ pub mod webdav;
 pub mod webhook;
 
 #[cfg(test)]
+mod hostile_public_http;
+#[cfg(test)]
 #[path = "../tests/common/executable.rs"]
 mod test_executable;
 #[cfg(test)]
