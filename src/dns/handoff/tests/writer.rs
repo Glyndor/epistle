@@ -4,7 +4,7 @@
 use std::time::Duration;
 
 use super::super::{Write, Writer, requests_dir, results_dir};
-use super::{FakeZone, domains, zones};
+use super::{FakeZone, configured, domains, zones};
 
 /// The wait a test gives the answer.
 const WAIT: Duration = Duration::from_millis(200);
@@ -16,8 +16,14 @@ fn writer(dir: &std::path::Path) -> Writer {
 
 /// A certificates container that takes every request and answers it.
 fn server(dir: &std::path::Path, zone: std::sync::Arc<FakeZone>) -> tokio::task::JoinHandle<()> {
-	let server = super::super::Server::new(dir.join("dns-handoff"), zone, zones(), domains())
-		.with_poll(Duration::from_millis(10));
+	let server = super::super::Server::new(
+		dir.join("dns-handoff"),
+		zone,
+		zones(),
+		domains(),
+		configured(),
+	)
+	.with_poll(Duration::from_millis(10));
 	tokio::spawn(server.run())
 }
 

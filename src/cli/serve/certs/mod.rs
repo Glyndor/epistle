@@ -106,6 +106,18 @@ fn served_domains(config: &Config) -> Vec<String> {
 	domains
 }
 
+/// The selectors this installation uses besides the ones a rotation makes:
+/// the ones the operator wrote in `[dkim]` and in every `[[dkim.domain]]`.
+/// A rotation publishes and retires those, so the requests that name them
+/// have to be accepted here.
+fn configured_selectors(config: &Config) -> Vec<String> {
+	config
+		.dkim
+		.as_ref()
+		.map(|dkim| dkim.configured_selectors())
+		.unwrap_or_default()
+}
+
 /// Run the certificates role until SIGTERM or SIGINT. A configuration this
 /// role cannot work with, or a provider whose credential does not load,
 /// stops the start (fail closed); a CA or DNS failure later is logged and
@@ -138,6 +150,7 @@ pub(super) async fn serve(config: Config) -> std::io::Result<()> {
 		Arc::clone(&provider),
 		config.dns.zones(),
 		served_domains(&config),
+		configured_selectors(&config),
 	);
 	crate::privdrop::drop_privileges(config.privileges.as_ref())?;
 	// Only after the drop: the directories under the data dir are shared

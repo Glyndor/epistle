@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use super::super::{Operation, Outcome, Request, Server, requests_dir, results_dir};
-use super::{FakeZone, domains, zones};
+use super::{FakeZone, configured, domains, zones};
 
 /// The hand-off directory of a test.
 fn root(dir: &Path) -> std::path::PathBuf {
@@ -54,7 +54,13 @@ async fn a_publication_is_performed_and_answered() {
 			crate::dns::handoff::writer::now(),
 		),
 	);
-	let server = Server::new(root(dir.path()), zone.clone(), zones(), domains());
+	let server = Server::new(
+		root(dir.path()),
+		zone.clone(),
+		zones(),
+		domains(),
+		configured(),
+	);
 	assert_eq!(server.serve_once().await, 1);
 	assert_eq!(
 		zone.values("ed1._domainkey.example.org"),
@@ -85,7 +91,13 @@ async fn a_withdrawal_is_performed_and_answered() {
 			crate::dns::handoff::writer::now(),
 		),
 	);
-	let server = Server::new(root(dir.path()), zone.clone(), zones(), domains());
+	let server = Server::new(
+		root(dir.path()),
+		zone.clone(),
+		zones(),
+		domains(),
+		configured(),
+	);
 	server.serve_once().await;
 	assert!(
 		zone.values("ed1._domainkey.example.org").is_empty(),
@@ -110,7 +122,7 @@ async fn a_provider_failure_is_answered_with_the_reason() {
 			crate::dns::handoff::writer::now(),
 		),
 	);
-	let server = Server::new(root(dir.path()), zone, zones(), domains());
+	let server = Server::new(root(dir.path()), zone, zones(), domains(), configured());
 	server.serve_once().await;
 	let outcome = answer(dir.path(), id);
 	assert!(!outcome.ok, "the write did not happen");
@@ -135,7 +147,13 @@ async fn an_expired_request_is_refused() {
 		id,
 		accepted(id, "ed1._domainkey.example.org", Operation::Publish, old),
 	);
-	let server = Server::new(root(dir.path()), zone.clone(), zones(), domains());
+	let server = Server::new(
+		root(dir.path()),
+		zone.clone(),
+		zones(),
+		domains(),
+		configured(),
+	);
 	server.serve_once().await;
 	let outcome = answer(dir.path(), id);
 	assert!(!outcome.ok, "the request was too old");
@@ -170,7 +188,13 @@ async fn the_requests_are_served_in_the_order_they_were_made() {
 			now - 10,
 		),
 	);
-	let server = Server::new(root(dir.path()), zone.clone(), zones(), domains());
+	let server = Server::new(
+		root(dir.path()),
+		zone.clone(),
+		zones(),
+		domains(),
+		configured(),
+	);
 	server.serve_once().await;
 	let names: Vec<String> = zone.records().into_iter().map(|(name, _)| name).collect();
 	assert_eq!(
@@ -190,7 +214,13 @@ async fn a_request_that_is_not_readable_is_answered_and_removed() {
 	let id = "0198a1b2-c3d4-7000-8000-000000000007";
 	std::fs::create_dir_all(requests_dir(&root(dir.path()))).expect("requests dir");
 	std::fs::write(requests_dir(&root(dir.path())).join(id), b"not json").expect("write");
-	let server = Server::new(root(dir.path()), zone.clone(), zones(), domains());
+	let server = Server::new(
+		root(dir.path()),
+		zone.clone(),
+		zones(),
+		domains(),
+		configured(),
+	);
 	server.serve_once().await;
 	let outcome = answer(dir.path(), id);
 	assert!(!outcome.ok, "the request was refused");
@@ -213,7 +243,7 @@ async fn a_file_that_is_not_a_request_is_left_alone() {
 	// The temporary file of a request that is being written.
 	let temporary = requests_dir(&root(dir.path())).join(".0198.tmp");
 	std::fs::write(&temporary, b"half a request").expect("write");
-	let server = Server::new(root(dir.path()), zone, zones(), domains());
+	let server = Server::new(root(dir.path()), zone, zones(), domains(), configured());
 	assert_eq!(server.serve_once().await, 0, "nothing was taken");
 	assert!(
 		temporary.exists(),

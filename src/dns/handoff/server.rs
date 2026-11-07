@@ -28,6 +28,10 @@ pub struct Server {
 	zones: Vec<String>,
 	/// The domains this installation serves.
 	domains: Vec<String>,
+	/// The selectors this installation uses besides the ones a rotation
+	/// makes: the ones the operator configured. A rotation publishes and
+	/// retires those too, so a request for any other selector is refused.
+	selectors: Vec<String>,
 	/// The lock every write holds, so two of them never interleave.
 	writes: Arc<tokio::sync::Mutex<()>>,
 	/// How often the requests are looked for.
@@ -41,12 +45,14 @@ impl Server {
 		provider: Arc<dyn DnsProvider>,
 		zones: Vec<String>,
 		domains: Vec<String>,
+		selectors: Vec<String>,
 	) -> Self {
 		Server {
 			root,
 			provider,
 			zones,
 			domains,
+			selectors,
 			writes: Arc::new(tokio::sync::Mutex::new(())),
 			poll: POLL,
 		}
@@ -151,9 +157,13 @@ impl Server {
 			self.remove(&pending.path);
 			return;
 		}
-		if let Err(reason) =
-			super::check(&request, &self.zones, &self.domains, super::writer::now())
-		{
+		if let Err(reason) = super::check(
+			&request,
+			&self.zones,
+			&self.domains,
+			&self.selectors,
+			super::writer::now(),
+		) {
 			self.answer(&pending.id, Outcome::failed(&pending.id, reason));
 			self.remove(&pending.path);
 			return;
@@ -183,7 +193,14 @@ impl Server {
 		// request back when its own wait ends, and a write nobody is waiting
 		// for any more must not happen.
 		if !path.exists()
-			|| super::check(request, &self.zones, &self.domains, super::writer::now()).is_err()
+			|| super::check(
+				request,
+				&self.zones,
+				&self.domains,
+				&self.selectors,
+				super::writer::now(),
+			)
+			.is_err()
 		{
 			return Outcome::failed(&request.id, "the request was taken back or has expired");
 		}

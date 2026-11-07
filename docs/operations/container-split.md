@@ -87,9 +87,11 @@ hand-off directory. It is not a way to use the token. `mail` writes a file
 that names a record to publish or to withdraw, and `certs` performs it with
 the credential; `certs` checks every request and refuses anything that is not
 a DKIM key record (`<selector>._domainkey.<domain>`) of a domain this
-installation serves, in a zone the `[dns]` configuration covers, and the
-refusal is answered with the reason. A request the rotation would never make
-is therefore the only thing that reaches the provider, and the key material
+installation serves, in a zone the `[dns]` configuration covers, under a
+selector this installation uses (one a rotation makes, or one the operator
+configured in `[dkim]` or in a `[[dkim.domain]]` entry), and the refusal is
+answered with the reason. A request the rotation would never make is
+therefore the only thing that reaches the provider, and the key material
 never leaves `mail`. `certs` decides by itself when to renew, and it takes
 the requests it finds in the directory as it finds them.
 

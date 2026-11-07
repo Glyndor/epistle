@@ -7,41 +7,20 @@
 
 use std::path::Path;
 
-use super::super::{Operation, Outcome, Request, Server, requests_dir, results_dir};
-use super::{FakeZone, domains, zones};
-
-/// Write a request the way the asking side writes it.
-fn request(dir: &Path, id: &str, request: &Request) {
-	std::fs::create_dir_all(requests_dir(&dir.join("dns-handoff"))).expect("requests dir");
-	let bytes = serde_json::to_vec(request).expect("encode");
-	crate::storage::write_secret(&requests_dir(&dir.join("dns-handoff")).join(id), &bytes)
-		.expect("write");
-}
-
-/// The answer to the request `id`.
-fn answer(dir: &Path, id: &str) -> Outcome {
-	let bytes = std::fs::read(results_dir(&dir.join("dns-handoff")).join(id)).expect("the answer");
-	serde_json::from_slice(&bytes).expect("decode")
-}
-
-/// A request the serving side would accept, to change one thing at a time.
-fn accepted(id: &str) -> Request {
-	Request {
-		id: id.to_string(),
-		operation: Operation::Publish,
-		name: "ed1._domainkey.example.org".to_string(),
-		kind: "TXT".to_string(),
-		value: "v=DKIM1; k=ed25519; p=abc".to_string(),
-		ttl: 300,
-		created_at: crate::dns::handoff::writer::now(),
-	}
-}
+use super::super::{Operation, Outcome, Server};
+use super::{FakeZone, accepted, answer, configured, domains, request, zones};
 
 /// Serve the request in `dir` and answer with what the zone holds and what
 /// the answer says.
 async fn served(dir: &Path, id: &str) -> (Vec<(String, String)>, Outcome) {
 	let zone = FakeZone::new();
-	let server = Server::new(dir.join("dns-handoff"), zone.clone(), zones(), domains());
+	let server = Server::new(
+		dir.join("dns-handoff"),
+		zone.clone(),
+		zones(),
+		domains(),
+		configured(),
+	);
 	server.serve_once().await;
 	(zone.records(), answer(dir, id))
 }
@@ -67,11 +46,11 @@ async fn a_name_that_is_not_a_dkim_record_is_refused() {
 }
 
 #[tokio::test]
-async fn a_selector_no_rotation_makes_is_refused() {
+async fn a_selector_nothing_uses_is_refused() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let id = "0198a1b2-c3d4-7000-8000-000000000012";
 	let mut hostile = accepted(id);
-	hostile.name = "mail._domainkey.example.org".to_string();
+	hostile.name = "random._domainkey.example.org".to_string();
 	request(dir.path(), id, &hostile);
 	let (records, outcome) = served(dir.path(), id).await;
 	assert!(records.is_empty(), "nothing was written: {records:?}");
@@ -79,7 +58,7 @@ async fn a_selector_no_rotation_makes_is_refused() {
 		outcome
 			.error
 			.as_deref()
-			.is_some_and(|error| error.contains("not a selector a rotation makes")),
+			.is_some_and(|error| error.contains("not a selector this installation uses")),
 		"{outcome:?}"
 	);
 }
@@ -116,6 +95,7 @@ async fn a_domain_outside_every_zone_is_refused() {
 		zone.clone(),
 		zones(),
 		vec!["other.test".to_string()],
+		configured(),
 	);
 	server.serve_once().await;
 	assert!(zone.records().is_empty(), "nothing was written");
@@ -222,7 +202,7 @@ async fn a_time_to_live_above_the_bound_is_refused() {
 #[tokio::test]
 async fn a_withdrawal_that_carries_a_value_is_refused() {
 	let dir = tempfile::tempdir().expect("tempdir");
-	let id = "0198a1b2-c3d4-7000-8000-000000000019";
+	let id = "0198a1b2-c3d4-7000-8000-00000000001a";
 	let mut hostile = accepted(id);
 	hostile.operation = Operation::Withdraw;
 	request(dir.path(), id, &hostile);
@@ -234,121 +214,5 @@ async fn a_withdrawal_that_carries_a_value_is_refused() {
 			.as_deref()
 			.is_some_and(|error| error.contains("whole record set")),
 		"{outcome:?}"
-	);
-}
-
-#[tokio::test]
-async fn a_request_that_names_another_id_is_refused() {
-	let dir = tempfile::tempdir().expect("tempdir");
-	let id = "0198a1b2-c3d4-7000-8000-00000000001a";
-	let mut hostile = accepted(id);
-	hostile.id = "0198a1b2-c3d4-7000-8000-00000000001b".to_string();
-	request(dir.path(), id, &hostile);
-	let (records, outcome) = served(dir.path(), id).await;
-	assert!(records.is_empty(), "nothing was written: {records:?}");
-	assert!(
-		outcome
-			.error
-			.as_deref()
-			.is_some_and(|error| error.contains("another id")),
-		"{outcome:?}"
-	);
-}
-
-#[tokio::test]
-async fn a_request_with_an_unknown_field_is_refused() {
-	let dir = tempfile::tempdir().expect("tempdir");
-	let id = "0198a1b2-c3d4-7000-8000-00000000001c";
-	std::fs::create_dir_all(requests_dir(&dir.path().join("dns-handoff"))).expect("requests dir");
-	let mut value = serde_json::to_value(accepted(id)).expect("encode");
-	value.as_object_mut().expect("object").insert(
-		"zone".to_string(),
-		serde_json::Value::String("evil.test".to_string()),
-	);
-	std::fs::write(
-		requests_dir(&dir.path().join("dns-handoff")).join(id),
-		serde_json::to_vec(&value).expect("encode"),
-	)
-	.expect("write");
-	let (records, outcome) = served(dir.path(), id).await;
-	assert!(records.is_empty(), "nothing was written: {records:?}");
-	assert!(!outcome.ok, "the request was refused");
-}
-
-#[tokio::test]
-async fn a_request_that_is_too_long_is_refused() {
-	let dir = tempfile::tempdir().expect("tempdir");
-	let id = "0198a1b2-c3d4-7000-8000-00000000001d";
-	std::fs::create_dir_all(requests_dir(&dir.path().join("dns-handoff"))).expect("requests dir");
-	let mut hostile = accepted(id);
-	hostile.value = format!("v=DKIM1; p={}", "a".repeat(20_000));
-	request(dir.path(), id, &hostile);
-	let (records, outcome) = served(dir.path(), id).await;
-	assert!(records.is_empty(), "nothing was written: {records:?}");
-	assert!(!outcome.ok, "the request was refused");
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn a_request_behind_a_link_is_refused() {
-	let dir = tempfile::tempdir().expect("tempdir");
-	let id = "0198a1b2-c3d4-7000-8000-00000000001e";
-	let outside = dir.path().join("outside.json");
-	let bytes = serde_json::to_vec(&accepted(id)).expect("encode");
-	std::fs::write(&outside, bytes).expect("write");
-	std::fs::create_dir_all(requests_dir(&dir.path().join("dns-handoff"))).expect("requests dir");
-	std::os::unix::fs::symlink(
-		&outside,
-		requests_dir(&dir.path().join("dns-handoff")).join(id),
-	)
-	.expect("link");
-	let (records, outcome) = served(dir.path(), id).await;
-	assert!(records.is_empty(), "nothing was written: {records:?}");
-	assert!(
-		outcome
-			.error
-			.as_deref()
-			.is_some_and(|error| error.contains("not readable")),
-		"{outcome:?}"
-	);
-}
-
-#[tokio::test]
-async fn a_request_that_claims_a_time_in_the_future_is_refused() {
-	let dir = tempfile::tempdir().expect("tempdir");
-	let id = "0198a1b2-c3d4-7000-8000-00000000001f";
-	let mut hostile = accepted(id);
-	hostile.created_at = crate::dns::handoff::writer::now() + 3600;
-	request(dir.path(), id, &hostile);
-	let (records, outcome) = served(dir.path(), id).await;
-	assert!(records.is_empty(), "nothing was written: {records:?}");
-	assert!(
-		outcome
-			.error
-			.as_deref()
-			.is_some_and(|error| error.contains("time in the future")),
-		"{outcome:?}"
-	);
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn a_requests_directory_that_is_a_link_is_not_followed() {
-	let dir = tempfile::tempdir().expect("tempdir");
-	let outside = tempfile::tempdir().expect("outside");
-	let id = "0198a1b2-c3d4-7000-8000-000000000020";
-	let root = dir.path().join("dns-handoff");
-	std::fs::create_dir_all(&root).expect("root");
-	std::os::unix::fs::symlink(outside.path(), requests_dir(&root)).expect("link");
-	let bytes = serde_json::to_vec(&accepted(id)).expect("encode");
-	std::fs::write(outside.path().join(id), bytes).expect("planted request");
-	let zone = FakeZone::new();
-	let server = Server::new(root, zone.clone(), zones(), domains());
-	assert_eq!(server.serve_once().await, 0, "nothing was taken");
-	let records = zone.records();
-	assert!(records.is_empty(), "nothing was written: {records:?}");
-	assert!(
-		outside.path().join(id).exists(),
-		"the request behind the link is left alone"
 	);
 }

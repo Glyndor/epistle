@@ -2,6 +2,7 @@ use super::*;
 
 mod renewal;
 mod requirements;
+mod selectors;
 
 /// A configuration whose `[acme]` uses `challenge`, with a Cloudflare
 /// `[dns]` entry for `example.org` when `dns` is set. The token file is
