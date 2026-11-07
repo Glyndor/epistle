@@ -100,7 +100,9 @@ fn maildir_export_round_trips_through_import() {
 			"bob",
 			&MessageCrypto::disabled(),
 			out.path(),
-			false
+			false,
+			crate::smtp::session::MAX_MESSAGE_SIZE,
+			&mut std::io::sink()
 		),
 		ExitCode::SUCCESS
 	);
