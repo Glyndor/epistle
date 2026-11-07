@@ -369,15 +369,11 @@ impl BlobBackend for S3Backend {
 				if !response.status().is_success() {
 					return Err(BlobError::Remote(format!("HTTP {}", response.status())));
 				}
-				// Parse the body as JSON manually: enabling reqwest's
-				// `json` feature would pull in serde_json at the
-				// crate-boundary level, which is overkill for one call.
 				let body_bytes = response
 					.bytes()
 					.await
 					.map_err(|error| BlobError::Remote(error.to_string()))?;
-				let body: ListResponse = serde_json::from_slice(&body_bytes)
-					.map_err(|error| BlobError::Remote(error.to_string()))?;
+				let body = parse_list(&body_bytes)?;
 				for entry in body.contents {
 					// Sidecars end with `.type` or `.owner`; skip them so
 					// `list` returns payload ids only. The check happens
@@ -421,6 +417,19 @@ struct ListResponse {
 struct ListEntry {
 	#[serde(rename = "Key")]
 	key: String,
+}
+
+/// The body of a ListObjectsV2 answer. S3 answers with XML
+/// (`ListBucketResult`); a store that answers with the same fields as JSON is
+/// read too, so the first character decides.
+fn parse_list(bytes: &[u8]) -> Result<ListResponse, BlobError> {
+	let text = std::str::from_utf8(bytes)
+		.map_err(|error| BlobError::Remote(format!("the listing is not text: {error}")))?;
+	if text.trim_start().starts_with('<') {
+		quick_xml::de::from_str(text).map_err(|error| BlobError::Remote(error.to_string()))
+	} else {
+		serde_json::from_str(text).map_err(|error| BlobError::Remote(error.to_string()))
+	}
 }
 
 /// Percent-encode without touching unreserved characters S3 already accepts.

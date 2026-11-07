@@ -7,3 +7,5 @@ pub(super) mod run;
 pub(super) mod run_memory;
 pub(super) mod run_security;
 pub(super) mod subscribe;
+
+mod hostile;
