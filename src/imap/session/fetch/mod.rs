@@ -55,7 +55,10 @@ impl Session {
 		if let (true, Some(since)) = (vanished, changed_since) {
 			let uids = snapshot.vanished_since(since);
 			if !uids.is_empty() {
-				let line = format!("* VANISHED (EARLIER) {}\r\n", super::codes::uid_set(&uids));
+				let line = format!(
+					"* VANISHED (EARLIER) {}\r\n",
+					super::commands::codes::uid_set(&uids)
+				);
 				bytes.extend_from_slice(line.as_bytes());
 			}
 		}

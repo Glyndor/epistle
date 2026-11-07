@@ -49,13 +49,13 @@ function name is the stable reference.
 | 2.1.x Character set | Met (deliberate deviation) | The accepted set is **printable ASCII** (0x20–0x7E: letters, digits, space, standard punctuation); control characters and non-ASCII/Unicode are rejected (`src/password::validate`). This is a deliberate deviation from 2.1.1's "accept Unicode" — a defined, keyboard-typeable set per the org policy — at the cost of Unicode passphrases. |
 | 2.1.7 Reject known-breached passwords | Met | Every set/change is checked against a bundled local breached / common-password list (`src/password/breached_common.txt`, loaded once into a set), rejecting known-weak passwords offline with no third-party call. The list is a curated starter set, meant to grow. |
 | 2.1.9 No composition rules | Met | No forced upper/lower/digit/special (ASVS v4 §2.1.9 / NIST 800-63B): `src/password::validate` enforces only length, character set and the breach list — length plus breach-rejection carry the strength. |
-| 2.2.1 Anti-automation / brute-force throttling | Partial / **Gap** | Per-connection 3-strikes close on SMTP (`src/smtp/session/mod.rs`), IMAP (`src/imap/session/auth.rs`) and now ManageSieve (`src/managesieve/session/mod.rs`, fixed in this sweep); the API has a sliding-window failure budget (`src/api/state/mod.rs::AuthLimiter`). **No cross-connection per-IP/per-account ban** for the mail protocols — documented below (deferred — needs a persistent store). |
+| 2.2.1 Anti-automation / brute-force throttling | Partial / **Gap** | Per-connection 3-strikes close on SMTP (`src/smtp/session/mod.rs`), IMAP (`src/imap/session/auth/mod.rs`) and now ManageSieve (`src/managesieve/session/mod.rs`, fixed in this sweep); the API has a sliding-window failure budget (`src/api/state/mod.rs::AuthLimiter`). **No cross-connection per-IP/per-account ban** for the mail protocols — documented below (deferred — needs a persistent store). |
 | 2.2.3 Secure notification of auth events | Met | Auth failures are logged as counts (no credentials); delivery/security events flow to webhooks. |
 | 2.4.1 Passwords stored with an approved KDF (Argon2) | Met | argon2id PHC everywhere (`src/smtp/auth/mod.rs::hash_password`/`verify_password`); 16-byte CSPRNG salt via `ring::SystemRandom`. Config rejects any non-argon2id stored hash (`src/config/validate/mod.rs`). |
 | 2.5.x Credential recovery does not reveal the credential | Met | Verification returns a bare `false` on any error; no reset oracle in the server. |
 | 2.6 / 2.8 Look-up / OTP verifiers (TOTP) | Partial | TOTP verified with a constant-time compare and a bounded ±1 step window (`src/totp/mod.rs::verify`, `crate::util::constant_time::eq`). **No replay guard / no recovery codes / secret stored in cleartext** — documented below (deferred — needs persistent state and at-rest key management). |
 | 2.7 Out-of-band verifier | N/A | No SMS/email OOB second factor is offered. |
-| 2.9 Cryptographic verifier (SCRAM) | Met | SCRAM-SHA-256 / -SHA-256-PLUS: password never on the wire, channel binding to the cert (`tls-server-end-point`), downgrade flag rejected when -PLUS is offered (`src/smtp/scram/mod.rs`, `src/imap/session/auth.rs`). |
+| 2.9 Cryptographic verifier (SCRAM) | Met | SCRAM-SHA-256 / -SHA-256-PLUS: password never on the wire, channel binding to the cert (`tls-server-end-point`), downgrade flag rejected when -PLUS is offered (`src/smtp/scram/mod.rs`, `src/imap/session/auth/mod.rs`). |
 | 2.10.1 No user-enumeration oracle | Met | Unknown login and wrong password both resolve to `None` with an identical reply in every protocol (`src/smtp/directory/mod.rs::authenticate_with_ip`/`credentials`). |
 | 2.10.4 OAuth/JWT bearer fully validated | Met (hardened in this sweep) | `alg` pinned by caller (no confusion), signature verified, `iss`/`aud`/`nbf` checked, and **`exp` now required** — a token without a bounded lifetime is rejected (`src/jwt/mod.rs::check_claims`, fixed in this sweep). |
 
@@ -88,7 +88,7 @@ function name is the stable reference.
 | 4.x Sender ownership (MAIL FROM) | Met | An authenticated sender may only use a reverse-path / From it owns (`src/smtp/session/envelope.rs` → `src/smtp/directory/mod.rs::owns_address`); relay to foreign domains requires auth. |
 
 > RFC 4314 IMAP ACLs are stored and reported (`SETACL`/`GETACL`/`MYRIGHTS`,
-> `src/imap/session/acl.rs`) but no shared-mailbox **read path consults them yet**
+> `src/imap/session/mailboxes/acl.rs`) but no shared-mailbox **read path consults them yet**
 > — every data path is owner-scoped, so this is fail-safe (deny), not a leak. If
 > a shared-read path is added it must enforce these stored rights.
 
@@ -130,7 +130,7 @@ function name is the stable reference.
 
 | Req (L3) | Status | Evidence |
 |---|---|---|
-| 7.1.1 No secrets/PII in logs | Met | All the `tracing` call sites (about 360 outside the test modules) audited: none interpolate a password, hash, token, API key, SCRAM proof, private key or raw SASL blob. Auth failures log a **count** only (`src/smtp/session/scram.rs`, `src/imap/session/auth.rs`). |
+| 7.1.1 No secrets/PII in logs | Met | All the `tracing` call sites (about 360 outside the test modules) audited: none interpolate a password, hash, token, API key, SCRAM proof, private key or raw SASL blob. Auth failures log a **count** only (`src/smtp/session/scram.rs`, `src/imap/session/auth/mod.rs`). |
 | 7.1.2 No credentials in logs even on the failure path | Met | The decoded PLAIN/LOGIN/SCRAM bytes never reach a log macro; no protocol logs its raw command line. |
 | 7.4.1 Generic error to the client; details server-side | Met | API errors return fixed strings (`src/api/error/mod.rs::internal` → "Internal error."); underlying errors dropped via `.map_err(|_| …)`; JMAP errors are static. No stack trace, file path, SQL text or version reaches a client. |
 | 7.4.x No version/internal banner to unauthenticated clients | Met | SMTP/POP3/IMAP/ManageSieve greetings carry no version, IMAP `ID` returns `NIL`, and no HTTP `Server` header is sent. The `/status` version is behind the closed API. |
@@ -153,7 +153,7 @@ function name is the stable reference.
 
 | Req (L3) | Status | Evidence |
 |---|---|---|
-| 9.1.1 TLS for all client connections | Met | rustls (ring provider, TLS 1.2/1.3 only). AUTH refused before TLS on every protocol: SMTP `538` (`src/smtp/session/mod.rs`), IMAP `[PRIVACYREQUIRED]` (`src/imap/session/auth.rs`), ManageSieve `ENCRYPT-NEEDED`, POP3 implicit-TLS only (no port 110). |
+| 9.1.1 TLS for all client connections | Met | rustls (ring provider, TLS 1.2/1.3 only). AUTH refused before TLS on every protocol: SMTP `538` (`src/smtp/session/mod.rs`), IMAP `[PRIVACYREQUIRED]` (`src/imap/session/auth/mod.rs`), ManageSieve `ENCRYPT-NEEDED`, POP3 implicit-TLS only (no port 110). |
 | 9.1.2 Strong TLS configuration, no weak protocols | Met | rustls negotiates only TLS 1.2/1.3; the crypto provider is pinned (`src/tls/mod.rs::ensure_crypto_provider`). |
 | 9.1.3 Fail closed on TLS misconfiguration | Met | A missing/unreadable/empty/mismatched cert or key is a fatal `TlsError` — the server refuses to start rather than serve plaintext (`src/tls/mod.rs`, tested). |
 | 9.2.1 Outbound connections use verified TLS where required | Met | Outbound `tls_connect` authenticates via PKIX (webpki roots + ServerName) whenever `pkix_required` holds (`src/queue/client/mod.rs`): no usable TLSA records, and either a mandate (MTA-STS enforce / REQUIRETLS) or `[queue] outbound_tls = "strict"` (the default). With usable TLSA records the handshake accepts any certificate and DANE authenticates it against them, also under MTA-STS enforce and REQUIRETLS (RFC 8461 section 2, RFC 8689 section 4.2.1: a DANE-EE leaf is normally self-signed, so PKIX must not run first); a mismatch fails closed. Any secure TLSA RRset, usable or not, makes STARTTLS mandatory. A remote without STARTTLS where TLS is mandatory yields a **transient** error (retry, never cleartext). Every combination is pinned by `src/queue/worker/tests/routing/policy_matrix.rs`. |
