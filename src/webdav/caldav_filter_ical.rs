@@ -2,7 +2,7 @@
 //! components of an object with their properties, and the RFC 4791 §9.9
 //! overlap test a `time-range` applies to them.
 
-use super::caldav_filter::TimeRange;
+use super::caldav_filter::{TimeRange, Verdict};
 use super::rrule;
 
 const DAY: i64 = 86_400;
@@ -106,13 +106,24 @@ impl Component {
 	/// `DTEND` (`DUE` for a `VTODO`), else `DURATION`, else one day for an
 	/// all-day start and zero otherwise. A `VTODO` without `DTSTART` is
 	/// placed at its `DUE`, and one with neither matches every range.
-	pub fn overlaps(&self, range: TimeRange) -> bool {
+	///
+	/// The expansion charges the caller's remaining work and answers
+	/// [`Verdict::Unknown`] when it ran out before it could tell: a series
+	/// that was not expanded may still hold an occurrence inside the range.
+	pub fn overlaps(&self, range: TimeRange, left: &mut usize) -> Verdict {
 		let todo = self.name == "VTODO";
 		let end_name = if todo { "DUE" } else { "DTEND" };
 		let Some((start, all_day)) = self.instant("DTSTART") else {
 			return match self.instant("DUE") {
-				Some((due, _)) if todo => range.start < due && range.end >= due,
-				_ => todo,
+				Some((due, _)) if todo => {
+					if range.start < due && range.end >= due {
+						Verdict::Matched
+					} else {
+						Verdict::No
+					}
+				}
+				_ if todo => Verdict::Matched,
+				_ => Verdict::No,
 			};
 		};
 		let length = match self.instant(end_name) {
@@ -128,16 +139,25 @@ impl Component {
 			.property("RRULE")
 			.and_then(|p| rrule::parse_rule(&p.value));
 		let from = range.start.saturating_sub(length);
-		rrule::expand(start, rule.as_ref(), from, range.end)
-			.into_iter()
-			.any(|occurrence| {
-				occurrence < range.end
-					&& if length > 0 {
-						occurrence.saturating_add(length) > range.start
-					} else {
-						occurrence >= range.start
-					}
-			})
+		let (occurrences, exceeded) =
+			rrule::expand_shared(start, rule.as_ref(), from, range.end, left);
+		let hit = occurrences.into_iter().any(|occurrence| {
+			occurrence < range.end
+				&& if length > 0 {
+					occurrence.saturating_add(length) > range.start
+				} else {
+					occurrence >= range.start
+				}
+		});
+		if hit {
+			// One occurrence inside the range is enough; the rest of the
+			// series cannot change the answer.
+			return Verdict::Matched;
+		}
+		if exceeded {
+			return Verdict::Unknown;
+		}
+		Verdict::No
 	}
 }
 
