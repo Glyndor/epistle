@@ -38,16 +38,29 @@ pub(super) fn import(
 ) -> ExitCode {
 	match Config::load(config) {
 		Ok(config) => match message_crypto(&config) {
-			Ok(crypto) => match maildir {
-				Some(dir) => import::run_maildir(&config.data_dir, &account, &crypto, &dir, json),
-				None => import::run(
-					&config.data_dir,
-					&account,
-					&crypto,
-					std::io::stdin().lock(),
-					json,
-				),
-			},
+			Ok(crypto) => {
+				let limit = import::limit_from_config(&config);
+				match maildir {
+					Some(dir) => import::run_maildir(
+						&config.data_dir,
+						&account,
+						&crypto,
+						&dir,
+						json,
+						limit,
+						&mut std::io::stdout().lock(),
+					),
+					None => import::run(
+						&config.data_dir,
+						&account,
+						&crypto,
+						std::io::stdin().lock(),
+						json,
+						limit,
+						&mut std::io::stdout().lock(),
+					),
+				}
+			}
 			Err(code) => code,
 		},
 		Err(error) => {

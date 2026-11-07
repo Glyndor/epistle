@@ -1788,7 +1788,7 @@ without the flag the output, text or JSON, is exactly what it was.
 | Command | What it does |
 |---|---|
 | `epistle export --account N [--maildir DIR]` | Export an account's mailboxes as an mbox stream on stdout, or as a Maildir tree where `Work/Project` is the Maildir++ folder `.Work.Project`. |
-| `epistle import --account N [--maildir DIR]` | Import an mbox stream from stdin, or a Maildir tree. Maildir++ folders become nested folders: `.Work.Project` is `Work/Project`. |
+| `epistle import --account N [--maildir DIR]` | Import an mbox stream from stdin, or a Maildir tree. Maildir++ folders become nested folders: `.Work.Project` is `Work/Project`. An entry over the message size limit (`max_message_size`, the same limit the server applies to what it receives) is refused, named and counted, the import carries on with the rest, and the command exits 1. |
 | `epistle migrate imap --account N --host H --user U` | Copy a remote IMAP account, resumably. See [migration](operations/migration.md). |
 | `epistle migrate mox --from DIR` / `migrate stalwart --from FILE` | Import domains, accounts, aliases and DKIM keys. Needs `--passwords-out FILE` (a new file, mode 0600, one `account<TAB>password` line per new account) or `--password-reset`, except with `--dry-run`. `--merge` keeps what already exists and adds the rest; `--json` prints the plan and the changes. |
 | `epistle queue` | List the outbound delivery queue (same as `queue list`). See [Outbound queue](#outbound-queue). |
