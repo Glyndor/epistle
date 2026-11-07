@@ -7,25 +7,8 @@
 //! publishes and retires them, so a hand-off that refused them would leave
 //! the records of the selector in service published forever.
 
-use std::path::Path;
-
-use super::super::{Operation, Outcome, Request, Server};
-use super::{FakeZone, accepted, answer, configured, domains, request, zones};
-
-/// Serve the request in `dir` and answer with what the zone holds and what
-/// the answer says.
-async fn served(dir: &Path, id: &str) -> (Vec<(String, String)>, Outcome) {
-	let zone = FakeZone::new();
-	let server = Server::new(
-		dir.join("dns-handoff"),
-		zone.clone(),
-		zones(),
-		domains(),
-		configured(),
-	);
-	server.serve_once().await;
-	(zone.records(), answer(dir, id))
-}
+use super::super::{Operation, Request, Server};
+use super::{FakeZone, accepted, answer, configured, domains, request, served, zones};
 
 /// A request for the selector the operator configured in `[dkim]`.
 fn configured_request(id: &str, selector: &str, operation: Operation) -> Request {

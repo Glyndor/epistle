@@ -9,11 +9,12 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use crate::dns::handoff::{Operation, Outcome, Request, requests_dir, results_dir};
+use crate::dns::handoff::{Operation, Outcome, Request, Server, requests_dir, results_dir};
 use crate::dns::provider::{DnsProvider, DnsRecord, ProviderError};
 
 pub(super) mod format;
 pub(super) mod hostile;
+pub(super) mod requests;
 pub(super) mod rotation;
 pub(super) mod selectors;
 pub(super) mod server;
@@ -185,4 +186,19 @@ pub(super) fn accepted(id: &str) -> Request {
 		ttl: 300,
 		created_at: crate::dns::handoff::writer::now(),
 	}
+}
+
+/// Serve the request in `dir` and answer with what the zone holds and what
+/// the answer says.
+pub(super) async fn served(dir: &Path, id: &str) -> (Vec<(String, String)>, Outcome) {
+	let zone = FakeZone::new();
+	let server = Server::new(
+		dir.join("dns-handoff"),
+		zone.clone(),
+		zones(),
+		domains(),
+		configured(),
+	);
+	server.serve_once().await;
+	(zone.records(), answer(dir, id))
 }

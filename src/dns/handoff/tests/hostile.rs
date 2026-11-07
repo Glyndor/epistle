@@ -5,25 +5,8 @@
 //! every one of them has to end with nothing in the zone and an answer that
 //! says why.
 
-use std::path::Path;
-
-use super::super::{Operation, Outcome, Server};
-use super::{FakeZone, accepted, answer, configured, domains, request, zones};
-
-/// Serve the request in `dir` and answer with what the zone holds and what
-/// the answer says.
-async fn served(dir: &Path, id: &str) -> (Vec<(String, String)>, Outcome) {
-	let zone = FakeZone::new();
-	let server = Server::new(
-		dir.join("dns-handoff"),
-		zone.clone(),
-		zones(),
-		domains(),
-		configured(),
-	);
-	server.serve_once().await;
-	(zone.records(), answer(dir, id))
-}
+use super::super::{Operation, Server};
+use super::{FakeZone, accepted, answer, configured, request, served, zones};
 
 /// A request that is refused: nothing is written and the answer says why.
 #[tokio::test]
