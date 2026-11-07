@@ -70,7 +70,7 @@ static PROBE: Probe = Probe;
 
 /// Run `work` and say how many bytes it held at once, at most, on this
 /// thread: what it allocated and had not yet freed.
-pub(in super::super) fn peak_bytes<T>(work: impl FnOnce() -> T) -> (T, usize) {
+pub(crate) fn peak_bytes<T>(work: impl FnOnce() -> T) -> (T, usize) {
 	LIVE.with(|cell| cell.set(Some((0, 0))));
 	let out = work();
 	let peak = LIVE.with(|cell| cell.take()).map_or(0, |(_, peak)| peak);
