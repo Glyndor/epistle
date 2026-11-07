@@ -366,15 +366,21 @@ values the certificate refresh published count as epistle's own too. So:
   listed under "By hand".
 
 Every record enters the ledger before it is written, so a write whose answer
-was lost is still known as epistle's own. The first write that fails stops
-the run; running the command again picks up where it stopped. A second run
-with nothing to do prints `nothing to change`.
+was lost is still known as epistle's own. A write that failed and left nothing
+in the zone takes the claim back: the ledger says what epistle published,
+never what it did not. The first write that fails stops the run; running the
+command again picks up where it stopped. A second run with nothing to do
+prints `nothing to change`.
 
 `--undo` withdraws what the ledgers list: a record still in the zone exactly
 as written and alone in its place is removed, and anything changed by hand
 since, shared with a foreign record or delegated is reported and left. DKIM
 keys are left too, since they may still sign mail; `epistle dkim cleanup`
-retires keys.
+retires keys. The removal takes the record epistle published and nothing
+else: the provider is asked for the exact removal, so a record another account
+wrote between the listing and the removal is still there. A provider that
+cannot remove one value (its API rewrites the whole set of the name) removes
+the record the ordinary way.
 
 In automatic mode the server runs the same comparison on its own every six
 hours (`[dns_publish] interval_secs`, see

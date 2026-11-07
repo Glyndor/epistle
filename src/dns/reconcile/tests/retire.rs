@@ -1,7 +1,9 @@
 //! Records the configuration no longer needs: only epistle's own leave.
 
+use super::run::{harness, publish, read};
 use super::support::*;
 use super::*;
+use crate::dns::lockdown::tests::support::Zone;
 
 fn pop3() -> DnsRecord {
 	rec(
@@ -168,5 +170,34 @@ fn a_ledger_record_whose_slot_is_still_needed_is_handled_as_an_update() {
 		plan.entries.len(),
 		1,
 		"the old value is replaced, not also removed"
+	);
+}
+
+/// A record another account writes between the listing and the removal is
+/// still there when the removal is done: the publisher takes the record
+/// epistle published and nothing else.
+#[test]
+fn a_record_another_account_wrote_in_the_meantime_is_not_removed_with_our_own() {
+	let h = harness();
+	let spf = txt("example.org", "v=spf1 mx -all");
+	let theirs = txt("example.org", "v=spf1 include:_spf.example.net -all");
+	let zone = Racing {
+		zone: Zone::default(),
+		foreign: theirs.clone(),
+	};
+	let _ = publish(&h, &zone, read(&h, &zone, std::slice::from_ref(&spf)));
+	// The configuration no longer needs the record: the run retires it.
+	let report = publish(&h, &zone, read(&h, &zone, &[]));
+	assert!(report.failure.is_none(), "{:?}", report.failure);
+	let now = zone.zone.snapshot();
+	assert!(
+		!holds(&now, &spf),
+		"the record epistle published goes: {:#?}",
+		now
+	);
+	assert!(
+		holds(&now, &theirs),
+		"a record another account wrote must survive: {:#?}",
+		now
 	);
 }

@@ -6,6 +6,10 @@
 //! that fails stops the run: the rest of the plan was made against a zone
 //! that may have changed.
 //!
+//! A write that failed and left nothing in the zone takes the claim back:
+//! the ledger says what epistle published, and it never says it published a
+//! record that is not there.
+//!
 //! A provider that checks a precondition gets the exact set at the name and
 //! type, applied only if the zone still holds what was read. Every other
 //! provider gets the ordinary upsert or delete, which the plan only asks for
@@ -87,14 +91,28 @@ async fn apply_zone(target: &Target<'_>, run: ZoneRun, report: &mut Report) -> R
 		);
 		match entry.action {
 			Action::Create | Action::Update => {
+				// The intent is written first, so a write whose answer is
+				// lost is still known as epistle's own at the next run. A
+				// write that failed leaves nothing behind, and the claim
+				// is taken back: the ledger must not say epistle published
+				// a record that is not there.
+				let claimed = ledger.clone();
 				ledger.remember(record, None, target.now);
 				store::store(target.data_dir, &ledger).map_err(|e| {
 					format!("{what}: the ledger could not be saved ({e}); nothing was written")
 				})?;
-				let identity = writer
-					.put(record)
-					.await
-					.map_err(|e| format!("{what} failed: {e}"))?;
+				let identity = match writer.put(record).await {
+					Ok(identity) => identity,
+					Err(error) => {
+						if !written(&writer, record).await {
+							ledger = claimed;
+							store::store(target.data_dir, &ledger).map_err(|e| {
+								format!("{what} failed and the claim could not be taken back ({e})")
+							})?;
+						}
+						return Err(format!("{what} failed: {error}"));
+					}
+				};
 				if identity.is_some() {
 					ledger.remember(record, identity, target.now);
 					store::store(target.data_dir, &ledger).map_err(|e| {
@@ -140,6 +158,25 @@ fn remember_tlsa(target: &Target<'_>, record: &DnsRecord) {
 	}
 }
 
+/// Whether the zone holds `record` after a write that failed.
+///
+/// A write whose answer was lost left the record in the zone: the write
+/// happened and only the answer did not arrive. A write that failed left it
+/// out. The zone tells the two apart, and the ledger may only claim what is
+/// really there.
+///
+/// A zone that cannot be read leaves the claim in doubt, and a claim in
+/// doubt is taken back: a record that is there and not claimed is left
+/// alone, while a record that is not there and claimed would be taken away
+/// from whoever published it later.
+async fn written(writer: &Writer<'_>, record: &DnsRecord) -> bool {
+	let provider = writer.target.provider;
+	match within(writer.target.timeout, provider.list(&writer.zone)).await {
+		Ok(listing) => listing.iter().any(|held| same_record(held, record)),
+		Err(_) => false,
+	}
+}
+
 impl Writer<'_> {
 	/// The set the zone holds at the name and type of `record`.
 	fn set_of(&self, record: &DnsRecord) -> Vec<ObservedRecord> {
@@ -177,12 +214,13 @@ impl Writer<'_> {
 	async fn remove(&mut self, record: &DnsRecord) -> Result<(), String> {
 		if self.guard == Guard::Unchecked {
 			let provider = self.target.provider;
-			within(
-				self.target.timeout,
-				provider.delete(&self.zone, record.clone()),
-			)
-			.await
-			.map_err(|e| e.to_string())?;
+			let zone = self.zone.clone();
+			let timeout = self.target.timeout;
+			// The exact removal: the record epistle wrote and nothing
+			// else, so a record another account wrote in between stays.
+			super::remove::remove(provider, &zone, record, timeout)
+				.await
+				.map_err(|e| e.to_string())?;
 			return Ok(());
 		}
 		let before = self.set_of(record);
