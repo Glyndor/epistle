@@ -134,7 +134,14 @@ impl DnsProvider for Flawed {
 	}
 }
 
+/// How many seconds the negative answer a blind [`Resolver`] holds is good
+/// for: the zone's SOA minimum, the life a cached "no such name" has.
+pub(super) const NEGATIVE_TTL: u32 = 1800;
+
 /// A resolver that shows the zone, or shows nothing (`blind`).
+///
+/// A blind resolver holds a negative answer for the names it does not show,
+/// and says how long that answer is good for ([`NEGATIVE_TTL`]).
 pub(super) struct Resolver {
 	pub zone: Zone,
 	pub blind: bool,
@@ -171,6 +178,16 @@ impl DnsLookup for Resolver {
 		_name: &str,
 	) -> Pin<Box<dyn Future<Output = Result<Vec<String>, DnsFailure>> + Send + '_>> {
 		Box::pin(async { Ok(Vec::new()) })
+	}
+
+	/// A blind resolver holds a negative answer; one that shows the zone has
+	/// nothing negative to say.
+	fn negative_ttl(
+		&self,
+		_name: &str,
+	) -> Pin<Box<dyn Future<Output = Result<Option<u32>, DnsFailure>> + Send + '_>> {
+		let held = self.blind;
+		Box::pin(async move { Ok(held.then_some(NEGATIVE_TTL)) })
 	}
 }
 
@@ -302,7 +319,29 @@ pub(super) fn run_with(
 	resolver: &dyn DnsLookup,
 	json: bool,
 ) -> (std::process::ExitCode, String, String, usize) {
-	drive(install, options, provider, resolver, (json, true), 0)
+	drive(install, options, provider, resolver, None, (json, true), 0)
+}
+
+/// [`run_with`] with the zone's own nameservers, so a test can say what they
+/// serve: the cause the command reports for a record the resolver does not
+/// show comes from there.
+pub(super) fn run_with_authority(
+	install: &Install,
+	options: &super::super::Options,
+	provider: Option<Arc<dyn DnsProvider>>,
+	resolver: &dyn DnsLookup,
+	authority: Option<&dyn crate::dns::authoritative::AuthorityLookup>,
+	json: bool,
+) -> (std::process::ExitCode, String, String, usize) {
+	drive(
+		install,
+		options,
+		provider,
+		resolver,
+		authority,
+		(json, true),
+		0,
+	)
 }
 
 /// [`run`] where the restart of the server fails with `code`.
@@ -314,7 +353,15 @@ pub(super) fn run_failing_restart(
 	(json, code): (bool, u8),
 ) -> (std::process::ExitCode, String, String, usize) {
 	let provider = provider.map(|p| Arc::new(p) as Arc<dyn DnsProvider>);
-	drive(install, options, provider, resolver, (json, true), code)
+	drive(
+		install,
+		options,
+		provider,
+		resolver,
+		None,
+		(json, true),
+		code,
+	)
 }
 
 /// [`run_with`] without the lock of the data directory: what a run does once it
@@ -325,7 +372,15 @@ pub(super) fn run_holding_the_lock(
 	provider: Option<Arc<dyn DnsProvider>>,
 	resolver: &dyn DnsLookup,
 ) -> (std::process::ExitCode, String, String, usize) {
-	drive(install, options, provider, resolver, (false, false), 0)
+	drive(
+		install,
+		options,
+		provider,
+		resolver,
+		None,
+		(false, false),
+		0,
+	)
 }
 
 fn drive(
@@ -333,12 +388,14 @@ fn drive(
 	options: &super::super::Options,
 	provider: Option<Arc<dyn DnsProvider>>,
 	resolver: &dyn DnsLookup,
+	authority: Option<&dyn crate::dns::authoritative::AuthorityLookup>,
 	(json, locked): (bool, bool),
 	restart_code: u8,
 ) -> (std::process::ExitCode, String, String, usize) {
 	let services = |provider| super::super::Services {
 		provider,
 		resolver,
+		authority,
 		waits: vec![std::time::Duration::ZERO; 2],
 	};
 	let (mut out, mut err) = (Vec::new(), Vec::new());

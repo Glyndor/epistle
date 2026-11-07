@@ -10,6 +10,12 @@
 //! signed with a key receivers cannot find. A run that stops anywhere before
 //! the entry is written changes nothing about signing; running it again reuses
 //! the keys and publishes the same records.
+//!
+//! When the wait ends with records still missing, the report asks the zone's
+//! own nameservers what they serve and names the cause: a record the zone
+//! publishes and the host's resolver hides behind a cached negative answer,
+//! or a record the zone does not serve yet. The cause is reported, not acted
+//! on: signing still switches only when the host's resolver shows the record.
 
 use std::io::Write;
 use std::path::Path;
@@ -24,11 +30,13 @@ use crate::config::Config;
 use crate::dkim::domain_keys::{self, DomainKeys};
 use crate::dkim::split_state;
 use crate::dkim::stale::{self, Stale};
+use crate::dns::authoritative::{AuthorityLookup, SystemAuthority};
 use crate::dns::provider::DnsProvider;
 use crate::spf::DnsLookup;
 
 use restart::{confirm_restart, nothing_to_split, restart_onto, restart_pending};
 
+mod diagnosis;
 mod finish;
 mod plan;
 mod publish;
@@ -55,6 +63,9 @@ pub(super) struct Services<'a> {
 	pub provider: Option<Arc<dyn DnsProvider>>,
 	/// The resolver that must show the records before signing switches.
 	pub resolver: &'a dyn DnsLookup,
+	/// The zone's own nameservers, asked when a record the resolver does not
+	/// show has to be told apart from one the zone does not serve.
+	pub authority: Option<&'a dyn AuthorityLookup>,
 	/// The pauses between the queries that look for the records.
 	pub waits: Vec<Duration>,
 }
@@ -89,6 +100,11 @@ pub(super) fn run(path: &Path, options: &Options, json: bool, out: &mut impl Wri
 		}
 	};
 	let waits = vec![Duration::from_secs(POLL_SECONDS); (options.wait / POLL_SECONDS) as usize];
+	// The zone's own nameservers are asked when a record does not show up,
+	// to tell a record the zone does not serve from one the host's resolver
+	// is hiding. A resolver that cannot be built leaves the cause unknown,
+	// which the report says.
+	let authority = SystemAuthority::from_system().ok();
 	let mut err = crate::cli::style::stderr();
 	runtime.block_on(run_locked(
 		path,
@@ -96,6 +112,9 @@ pub(super) fn run(path: &Path, options: &Options, json: bool, out: &mut impl Wri
 		|config| Services {
 			provider: config.dns.build_for_host(&config.hostname),
 			resolver: &resolver,
+			authority: authority
+				.as_ref()
+				.map(|authority| authority as &dyn AuthorityLookup),
 			waits,
 		},
 		(json, out, &mut err),
@@ -360,8 +379,10 @@ pub(super) async fn split(
 	}
 	let absent = publish::missing(services.resolver, &records, &services.waits).await;
 	if !absent.is_empty() {
-		for record in &absent {
-			report.line(format_args!("not visible yet: {}", record.name));
+		let causes = diagnosis::diagnose(&absent, services.resolver, services.authority).await;
+		for (missing, diagnosis) in absent.iter().zip(causes.iter()) {
+			report.line(format_args!("not visible yet: {}", missing.record.name));
+			report.line(format_args!("  {}", diagnosis.cause.explanation()));
 		}
 		report.line(
 			"no domain was switched; run `epistle dkim split` again when the records resolve (the keys are kept)",
@@ -381,7 +402,18 @@ pub(super) async fn split(
 		result["action"] = "split".into();
 		result["missing"] = absent
 			.iter()
-			.map(|r| r.name.clone())
+			.map(|missing| missing.record.name.clone())
+			.collect::<Vec<_>>()
+			.into();
+		result["causes"] = causes
+			.iter()
+			.map(|diagnosis| {
+				serde_json::json!({
+					"name": diagnosis.name,
+					"cause": diagnosis.cause.name(),
+					"negative_ttl": diagnosis.cause.ttl(),
+				})
+			})
 			.collect::<Vec<_>>()
 			.into();
 		let _ = report.object(result);
