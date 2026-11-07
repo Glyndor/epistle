@@ -68,15 +68,3 @@ pub(super) fn item(state: &Result<Option<String>, String>, remaining: i64) -> It
 		),
 	)
 }
-
-/// With the certificates container DKIM rotation waits: it publishes
-/// through the credential `mail` no longer holds, and moves to `certs` in a
-/// later step.
-pub(super) fn dkim_item() -> Item {
-	Item::new(
-		"dkim rotation",
-		Level::Warn,
-		"DKIM keys do not rotate while the certificates container holds the DNS credential; the \
-		 key in use keeps signing",
-	)
-}

@@ -6,6 +6,7 @@ pub mod authoritative;
 pub mod check_host;
 pub mod desired;
 pub mod detect;
+pub mod handoff;
 pub mod lockdown;
 pub mod names;
 pub mod provider;

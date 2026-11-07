@@ -171,7 +171,11 @@ fn a_key_with_a_second_name_or_behind_a_symlink_is_not_copied() {
 
 #[test]
 fn a_bound_directory_that_is_a_symlink_is_refused_before_anything_is_placed() {
-	for index in 0..2 {
+	let count = {
+		let root = tempfile::tempdir().expect("tempdir");
+		split_dirs(&data_dir(root.path())).len()
+	};
+	for index in 0..count {
 		let root = tempfile::tempdir().expect("tempdir");
 		let data_dir = data_dir(root.path());
 		// A directory mail writes, and a link to it where certs binds from.

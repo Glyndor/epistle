@@ -3,6 +3,7 @@
 //! starts only with what it renews with.
 
 use super::*;
+use crate::cli::serve::tasks::DnsWrite;
 use std::path::Path;
 use std::time::Duration;
 
@@ -113,4 +114,17 @@ async fn the_certificates_role_refuses_to_start_without_acme() {
 		.await
 		.expect_err("nothing to renew");
 	assert!(error.to_string().contains("has no [acme]"), "{error}");
+}
+
+/// The `mail` role holds no DNS credential, so its rotations publish
+/// through the hand-off the certificates container serves; the role that
+/// holds the credential writes the records itself.
+#[test]
+fn the_mail_role_publishes_through_the_hand_off_and_the_whole_server_by_itself() {
+	let dir = std::path::Path::new("/var/lib/epistle");
+	assert_eq!(dns_write_for_role(ServeRole::All, dir), DnsWrite::Direct);
+	assert_eq!(
+		dns_write_for_role(ServeRole::Mail, dir),
+		DnsWrite::Handoff(crate::dns::handoff::dir(dir))
+	);
 }

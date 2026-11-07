@@ -101,6 +101,23 @@ impl Dkim {
 			.find(|d| d.name.eq_ignore_ascii_case(name))
 	}
 
+	/// The selectors the operator configured: the ones in `[dkim]` and the
+	/// ones every `[[dkim.domain]]` entry names.
+	///
+	/// A rotation publishes and retires these: the configured pair signs
+	/// until the first rotation replaces it, and the override's pair signs
+	/// until that domain rotates. Whoever writes the records on their behalf
+	/// has to accept them, so this is the list the DNS hand-off is given.
+	pub fn configured_selectors(&self) -> Vec<String> {
+		let mut selectors = vec![self.selector.clone()];
+		selectors.extend(self.rsa_selector.clone());
+		for entry in &self.domain {
+			selectors.push(entry.selector.clone());
+			selectors.extend(entry.rsa_selector.clone());
+		}
+		selectors
+	}
+
 	/// Selectors that leftover detection (`epistle dkim cleanup` and the
 	/// rotation task's report) must never count as unused: the configured
 	/// pair, every override's pair, and the selector an override's key file
@@ -108,11 +125,8 @@ impl Dkim {
 	/// use. An override is not rotated, so nothing in the rotation state
 	/// names it, and its record and key file would otherwise look orphaned.
 	pub fn kept_selectors(&self) -> Vec<String> {
-		let mut kept = vec![self.selector.clone()];
-		kept.extend(self.rsa_selector.clone());
+		let mut kept = self.configured_selectors();
 		for entry in &self.domain {
-			kept.push(entry.selector.clone());
-			kept.extend(entry.rsa_selector.clone());
 			for file in std::iter::once(&entry.key_file).chain(entry.rsa_key_file.as_ref()) {
 				let selector = file
 					.file_name()
