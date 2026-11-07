@@ -77,6 +77,13 @@ fn lines(outcome: Result<once::Outcome, String>) -> Vec<String> {
 	for warning in outcome.warnings {
 		lines.push(format!("dns: left out: {warning}"));
 	}
+	for failure in &outcome.failures {
+		lines.push(format!(
+			"dns: not published in {}: {}",
+			failure.zone,
+			crate::cli::term::sanitize(&failure.reason)
+		));
+	}
 	for (zone, entry) in &outcome.conflicts {
 		lines.push(format!(
 			"dns: conflict in {zone}: {}",

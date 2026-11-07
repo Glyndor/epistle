@@ -64,17 +64,38 @@ pub fn load(data_dir: &Path, zone: &str) -> Result<Ledger, String> {
 
 /// Store `ledger` through a temporary file and a rename, so a crash never
 /// leaves half a ledger.
+///
+/// The write goes through `crate::storage::write_secret`, the shape the
+/// rest of the code uses for the files that hold state: the temporary
+/// file is created anew (`O_EXCL`) with mode `0600`, so an entry already
+/// at its name — a symlink included — is replaced, never written through;
+/// the file and the directory are `fsync(2)`'d, so the rename survives a
+/// power failure; and the ledger is never readable by anybody but its
+/// owner.
 pub fn store(data_dir: &Path, ledger: &Ledger) -> Result<(), String> {
 	let path = path(data_dir, &ledger.zone)?;
 	let parent = dir(data_dir);
-	std::fs::create_dir_all(&parent)
-		.map_err(|error| format!("cannot create {}: {error}", parent.display()))?;
+	create_private_dir(&parent)?;
 	let text = serde_json::to_string_pretty(ledger)
 		.map_err(|error| format!("cannot encode the ledger: {error}"))?;
-	let staging = path.with_extension("json.new");
-	std::fs::write(&staging, text)
-		.and_then(|()| std::fs::rename(&staging, &path))
+	crate::storage::write_secret(&path, text.as_bytes())
 		.map_err(|error| format!("cannot write {}: {error}", path.display()))
+}
+
+/// Create `dir` and its parents, readable by its owner alone: the ledger
+/// of a zone says what epistle published there, and it does not belong to
+/// the world.
+fn create_private_dir(dir: &Path) -> Result<(), String> {
+	let mut builder = std::fs::DirBuilder::new();
+	builder.recursive(true);
+	#[cfg(unix)]
+	{
+		use std::os::unix::fs::DirBuilderExt;
+		builder.mode(0o700);
+	}
+	builder
+		.create(dir)
+		.map_err(|error| format!("cannot create {}: {error}", dir.display()))
 }
 
 /// The zones that have a ledger, sorted. No directory is no ledger.
@@ -109,9 +130,13 @@ pub struct Lock {
 /// it is still held after the wait: the caller does not publish.
 pub fn lock(data_dir: &Path, wait: Duration) -> Result<Option<Lock>, String> {
 	let dir = dir(data_dir);
-	std::fs::create_dir_all(&dir)
-		.map_err(|error| format!("cannot create {}: {error}", dir.display()))?;
+	create_private_dir(&dir)?;
 	let path = dir.join(".lock");
+	// A lock file is not a place for anything but the lock: it is created
+	// readable by its owner alone, the way the rest of the code creates
+	// its lock files.
+	crate::storage::lock::create_private(&path)
+		.map_err(|error| format!("cannot create {}: {error}", path.display()))?;
 	let file = std::fs::OpenOptions::new()
 		.create(true)
 		.truncate(false)

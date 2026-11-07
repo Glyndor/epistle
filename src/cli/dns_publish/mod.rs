@@ -218,13 +218,25 @@ fn publish(
 			return ExitCode::FAILURE;
 		}
 	}
+	// A zone that could not be read is told to the operator before the
+	// question: the plan above does not cover it.
+	for failure in &survey.failures {
+		style::error_to(err, &failure.reason);
+	}
 	if !survey.changes() {
-		let _ = writeln!(err, "nothing to change");
-		return ExitCode::SUCCESS;
+		if survey.failures.is_empty() {
+			let _ = writeln!(err, "nothing to change");
+			return ExitCode::SUCCESS;
+		}
+		return ExitCode::FAILURE;
 	}
 	if request.dry_run {
 		let _ = writeln!(err, "dry run: nothing was published");
-		return ExitCode::SUCCESS;
+		return if survey.failures.is_empty() {
+			ExitCode::SUCCESS
+		} else {
+			ExitCode::FAILURE
+		};
 	}
 	let question = format!("Apply these {} changes to DNS?", survey.writes());
 	if let Err(code) =
@@ -245,12 +257,13 @@ fn publish(
 		"{} changes applied; `epistle dns publish --undo` withdraws what epistle published",
 		report.applied.len()
 	);
-	match report.failure {
-		None => ExitCode::SUCCESS,
-		Some(failure) => {
+	match (report.failure, survey.failures.is_empty()) {
+		(None, true) => ExitCode::SUCCESS,
+		(Some(failure), _) => {
 			style::error_to(err, failure);
 			ExitCode::FAILURE
 		}
+		(None, false) => ExitCode::FAILURE,
 	}
 }
 

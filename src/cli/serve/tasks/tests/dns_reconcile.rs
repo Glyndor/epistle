@@ -5,10 +5,12 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::super::dns_reconcile::{ReconcilePlan, decide, tick};
+use super::super::dns_reconcile::{
+	FIRST_RUN_AFTER, ReconcilePlan, Tick, backoff, backoff_base, decide, loop_with, tick,
+};
 use crate::config::Config;
 use crate::dns::lockdown::tests::support::Zone;
-use crate::dns::provider::{DnsRecord, RecordKind};
+use crate::dns::provider::{DnsProvider, DnsRecord, ListOp, Op, ProviderError, RecordKind};
 
 fn config(dir: &std::path::Path, extra: &str) -> Config {
 	toml::from_str(&format!(
@@ -19,6 +21,11 @@ fn config(dir: &std::path::Path, extra: &str) -> Config {
 
 const CLOUDFLARE: &str = "[dns]\nprovider = 'cloudflare'\nzone = 'example.org'\ntoken_env = 'EPISTLE_TEST_UNSET_TOKEN'\n";
 
+/// Two `[[dns]]` entries: one with a credential that is there and one
+/// whose `token_env` names a variable that is not set.
+const TWO_ZONES: &str = "[[dns]]\nprovider = 'cloudflare'\nzone = 'example.org'\ntoken = 'inline-token'\n\
+	[[dns]]\nprovider = 'cloudflare'\nzone = 'other.net'\ntoken_env = 'EPISTLE_TEST_UNSET_TOKEN'\n";
+
 fn spf() -> DnsRecord {
 	DnsRecord::new("example.org", RecordKind::Txt, "v=spf1 mx -all", 3600)
 }
@@ -27,6 +34,49 @@ fn holds(zone: &Zone, record: &DnsRecord) -> bool {
 	zone.snapshot()
 		.iter()
 		.any(|r| crate::dns::rrset::same_record(r, record))
+}
+
+/// A provider that works for every zone but one: the zone it cannot list
+/// is the one whose `[dns]` entry has no credential.
+struct OneBlind {
+	inner: Zone,
+	blind: String,
+}
+
+impl DnsProvider for OneBlind {
+	fn upsert(&self, zone: &str, record: DnsRecord) -> Op<'_> {
+		self.inner.upsert(zone, record)
+	}
+	fn delete(&self, zone: &str, record: DnsRecord) -> Op<'_> {
+		self.inner.delete(zone, record)
+	}
+	fn list(&self, zone: &str) -> ListOp<'_> {
+		self.inner.list(zone)
+	}
+	fn publish_snapshot<'a>(
+		&'a self,
+		zone: &'a str,
+	) -> crate::dns::publish::provider::SnapshotOp<'a> {
+		if zone == self.blind {
+			return Box::pin(async { Err(ProviderError::Unsupported) });
+		}
+		self.inner.publish_snapshot(zone)
+	}
+}
+
+/// A provider that never answers.
+struct Failing;
+
+impl DnsProvider for Failing {
+	fn upsert(&self, _zone: &str, _record: DnsRecord) -> Op<'_> {
+		Box::pin(async { Err(ProviderError::Remote("no answer".into())) })
+	}
+	fn delete(&self, _zone: &str, _record: DnsRecord) -> Op<'_> {
+		Box::pin(async { Err(ProviderError::Remote("no answer".into())) })
+	}
+	fn list(&self, _zone: &str) -> ListOp<'_> {
+		Box::pin(async { Err(ProviderError::Remote("no answer".into())) })
+	}
 }
 
 #[test]
@@ -90,4 +140,123 @@ async fn a_tick_while_a_publish_holds_the_ledger_writes_nothing() {
 		.expect("free");
 	tick(&config, zone.as_ref()).await;
 	assert_eq!(*zone.writes.lock().unwrap(), 0);
+}
+
+/// A zone whose credential is missing does not stop the other zones: the
+/// tick publishes the zone that can be published and leaves the other one
+/// alone.
+#[tokio::test]
+async fn a_tick_with_a_broken_credential_publishes_the_other_zone() {
+	let dir = tempfile::tempdir().expect("directory");
+	let config = toml::from_str(&format!(
+		"hostname = 'mail.example.org'\ndata_dir = {:?}\ndomains = ['example.org', 'other.net']\n{TWO_ZONES}",
+		dir.path()
+	))
+	.expect("config");
+	let provider = OneBlind {
+		inner: Zone::default(),
+		blind: "other.net".to_string(),
+	};
+	let outcome = tick(&config, &provider).await;
+	assert_eq!(outcome, Tick::Failed, "the run did not go through");
+	assert!(
+		holds(&provider.inner, &spf()),
+		"the zone that could be published is published"
+	);
+}
+
+/// The wait after a failed run grows, and it never grows past the cap.
+#[test]
+fn the_backoff_doubles_up_to_the_cap() {
+	let every = Duration::from_secs(600);
+	assert_eq!(backoff_base(every, 1), every);
+	assert_eq!(backoff_base(every, 2), every * 2);
+	assert_eq!(backoff_base(every, 3), every * 4);
+	assert_eq!(backoff_base(every, 4), every * 8);
+	assert_eq!(backoff_base(every, 40), every * 8);
+	// The wait never goes below the configured interval, whatever the
+	// interval is.
+	let week = Duration::from_secs(604_800);
+	assert_eq!(backoff_base(week, 1), week);
+	assert_eq!(backoff_base(week, 40), week);
+}
+
+/// The wait is spread around its base, so a fleet of servers does not ask
+/// the provider at the same second.
+#[test]
+fn the_backoff_is_spread_around_its_base() {
+	let every = Duration::from_secs(600);
+	for failures in 1..6 {
+		let base = backoff_base(every, failures);
+		let wait = backoff(every, failures);
+		assert!(
+			wait >= base * 4 / 5 && wait <= base * 6 / 5,
+			"wait {wait:?} is not around the base {base:?}"
+		);
+	}
+}
+
+/// A provider that fails is asked less often: the interval between two
+/// attempts grows with every failure.
+#[tokio::test]
+async fn a_provider_that_fails_waits_longer_every_time() {
+	let dir = tempfile::tempdir().expect("directory");
+	let config = config(dir.path(), CLOUDFLARE);
+	let mut waits: Vec<Duration> = Vec::new();
+	let mut runs = 0u32;
+	loop_with(&config, &Failing, |delay| {
+		waits.push(delay);
+		runs += 1;
+		let keep = runs < 5;
+		async move { keep }
+	})
+	.await;
+	assert_eq!(waits.len(), 5);
+	// The first wait is the wait before the first run.
+	assert_eq!(waits[0], FIRST_RUN_AFTER);
+	let every = interval_of(&config);
+	for (index, failures) in [1u32, 2, 3, 4].iter().enumerate() {
+		let base = backoff_base(every, *failures);
+		let wait = waits[index + 1];
+		assert!(
+			wait >= base * 4 / 5 && wait <= base * 6 / 5,
+			"wait {index} is {wait:?}, not around the base {base:?}"
+		);
+	}
+	// The interval between two attempts grows.
+	assert!(waits[2] > waits[1], "{:?}", waits);
+	assert!(waits[3] > waits[2], "{:?}", waits);
+}
+
+/// A run that goes through resets the wait: the next one is the
+/// configured interval again.
+#[tokio::test]
+async fn a_run_that_goes_through_resets_the_wait() {
+	let dir = tempfile::tempdir().expect("directory");
+	let config = config(dir.path(), CLOUDFLARE);
+	let zone = Zone::default();
+	let mut waits: Vec<Duration> = Vec::new();
+	let mut runs = 0u32;
+	loop_with(&config, &zone, |delay| {
+		waits.push(delay);
+		runs += 1;
+		let keep = runs < 3;
+		async move { keep }
+	})
+	.await;
+	let every = interval_of(&config);
+	assert_eq!(waits[0], FIRST_RUN_AFTER);
+	assert_eq!(
+		waits[1], every,
+		"a run that went through waits the interval"
+	);
+	assert_eq!(waits[2], every, "and again");
+}
+
+/// The interval the loop runs at.
+fn interval_of(config: &Config) -> Duration {
+	match decide(config) {
+		ReconcilePlan::Run { every } => every,
+		_ => panic!("the loop runs"),
+	}
 }

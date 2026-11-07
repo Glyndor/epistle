@@ -22,14 +22,18 @@ pub struct Outcome {
 	/// Inputs that could not be read; the records they would produce are
 	/// missing from the run.
 	pub warnings: Vec<String>,
+	/// The zones that could not be read, and why. The other zones were
+	/// compared and published.
+	pub failures: Vec<survey::ZoneFailure>,
 	/// Why the run stopped partway, when it did.
 	pub failure: Option<String>,
 }
 
 /// Compare every zone with the configuration and apply the difference. The
-/// caller holds the ledger lock ([`super::store::lock`]). `Err` when nothing
-/// could be compared: the record set or a zone could not be read, and
-/// nothing was written.
+/// caller holds the ledger lock ([`super::store::lock`]). `Err` when
+/// nothing could be compared at all: the record set could not be read.
+/// A zone that could not be read is reported in
+/// [`Outcome::failures`] and the other zones are compared and published.
 pub async fn run(
 	config: &Config,
 	provider: &dyn DnsProvider,
@@ -47,12 +51,19 @@ pub async fn run(
 		incomplete: incomplete.as_deref(),
 	};
 	let survey = survey::survey(&context).await?;
+	let changes = survey.changes();
+	let survey::Survey {
+		zones,
+		by_hand,
+		failures,
+	} = survey;
 	let mut outcome = Outcome {
-		by_hand: survey.by_hand.len(),
+		by_hand: by_hand.len(),
 		warnings: desired.warnings,
+		failures,
 		..Outcome::default()
 	};
-	for zone in &survey.zones {
+	for zone in &zones {
 		for entry in &zone.plan.entries {
 			if entry.action == Action::Conflict {
 				outcome
@@ -61,7 +72,7 @@ pub async fn run(
 			}
 		}
 	}
-	if !survey.changes() {
+	if !changes {
 		return Ok(outcome);
 	}
 	let target = apply::Target {
@@ -71,7 +82,7 @@ pub async fn run(
 		timeout,
 		now,
 	};
-	let report = apply::apply(&target, survey.zones).await;
+	let report = apply::apply(&target, zones).await;
 	outcome.applied = report.applied;
 	outcome.failure = report.failure;
 	Ok(outcome)

@@ -166,41 +166,64 @@ impl Dns {
 	/// credentials are missing (fail closed: no automation rather than a broken
 	/// provider).
 	pub fn build(&self) -> Option<Arc<dyn DnsProvider>> {
-		self.build_inner(None)
+		self.try_build(None).ok()
 	}
 
 	/// Like [`Dns::build`], for a server named `hostname`: providers that can
 	/// label records with their origin (Cloudflare tags) use it.
 	pub fn build_for_host(&self, hostname: &str) -> Option<Arc<dyn DnsProvider>> {
-		self.build_inner(Some(hostname))
+		self.try_build(Some(hostname)).ok()
 	}
 
-	fn build_inner(&self, hostname: Option<&str>) -> Option<Arc<dyn DnsProvider>> {
+	/// Why this entry cannot publish, when it cannot: the credential or
+	/// the setting it names and does not have.
+	///
+	/// The reason names the missing piece (the variable that is not set,
+	/// the file that cannot be read) and never the value of a
+	/// credential. `None` when the entry builds a provider, so a
+	/// provider whose credential is complete but that cannot list a
+	/// zone is not mistaken for a missing credential.
+	pub fn build_problem(&self) -> Option<String> {
+		self.try_build(None).err()
+	}
+
+	/// Build the provider, or say what the entry lacks.
+	fn try_build(&self, hostname: Option<&str>) -> Result<Arc<dyn DnsProvider>, String> {
 		match self.provider.to_ascii_lowercase().as_str() {
 			"cloudflare" => {
 				let provider = CloudflareProvider::new(self.secret()?);
-				Some(Arc::new(match hostname {
+				Ok(Arc::new(match hostname {
 					Some(host) => provider.with_hostname(host),
 					None => provider,
 				}))
 			}
 			"dnsimple" => {
-				let account_id = self.account_id.clone()?;
-				Some(Arc::new(DnsimpleProvider::new(self.secret()?, account_id)))
+				let account_id = self
+					.account_id
+					.clone()
+					.ok_or_else(|| "no account_id is set".to_string())?;
+				Ok(Arc::new(DnsimpleProvider::new(self.secret()?, account_id)))
 			}
-			"bunny" => Some(Arc::new(BunnyProvider::new(self.secret()?))),
+			"bunny" => Ok(Arc::new(BunnyProvider::new(self.secret()?))),
 			"spaceship" => {
-				let api_key = non_empty(self.access_key.clone())?;
+				let api_key = non_empty(self.access_key.clone())
+					.ok_or_else(|| "no access_key is set".to_string())?;
 				let api_secret = self.aws_secret()?;
-				Some(Arc::new(SpaceshipProvider::new(
+				Ok(Arc::new(SpaceshipProvider::new(
 					api_key,
 					api_secret,
 					self.zone.clone(),
 				)))
 			}
-			"desec" => Some(Arc::new(DesecProvider::new(self.secret()?))),
+			"desec" => Ok(Arc::new(DesecProvider::new(self.secret()?))),
 			"gcloud" => {
-				let account = load_gcloud_account(self.credentials_file.as_deref()?)?;
+				let path = self
+					.credentials_file
+					.as_deref()
+					.ok_or_else(|| "no credentials_file is set".to_string())?;
+				let account = load_gcloud_account(path).ok_or_else(|| {
+					format!("the credentials_file {} cannot be read", path.display())
+				})?;
 				// An empty `private_key` would pass `serde_json` but
 				// fail at JWT signing time, on the first operation
 				// against the live API. The other providers reject
@@ -213,72 +236,95 @@ impl Dns {
 				// provider that would later error on the first
 				// write.
 				if account.private_key.trim().is_empty() {
-					None
-				} else {
-					Some(Arc::new(GcloudProvider::new(self.secret()?, account)))
+					return Err(format!(
+						"the credentials_file {} has no private key",
+						path.display()
+					));
 				}
+				Ok(Arc::new(GcloudProvider::new(self.secret()?, account)))
 			}
 			"namecheap" => {
 				// The API refuses every call without `ClientIp`, so a
 				// missing or non-IPv4 address builds no provider.
-				let client_ip = self.client_ip.as_deref()?.trim().parse().ok()?;
-				Some(Arc::new(
+				let client_ip = self
+					.client_ip
+					.as_deref()
+					.ok_or_else(|| "no client_ip is set".to_string())?
+					.trim()
+					.parse()
+					.ok()
+					.ok_or_else(|| "the client_ip is not an IPv4 address".to_string())?;
+				Ok(Arc::new(
 					NamecheapProvider::new(self.secret()?)
-						.ok()?
+						.ok()
+						.ok_or_else(|| "the token is not a user:key pair".to_string())?
 						.with_client_ip(client_ip),
 				))
 			}
 			"ovh" => {
-				let application_key = non_empty(self.access_key.clone())?;
+				let application_key = non_empty(self.access_key.clone())
+					.ok_or_else(|| "no access_key is set".to_string())?;
 				let application_secret = self.aws_secret()?;
 				let consumer_key = self.consumer_key()?;
 				let secret = ScopedSecret::new(&self.zone, consumer_key);
 				// A non-https endpoint fails closed like missing credentials:
 				// no provider rather than one that would send its keys in clear.
-				let base =
-					crate::dns::providers::ovh::resolve_base(self.endpoint.as_deref()).ok()?;
-				Some(Arc::new(
+				let base = crate::dns::providers::ovh::resolve_base(self.endpoint.as_deref())
+					.ok()
+					.ok_or_else(|| "the endpoint is not a known OVH endpoint".to_string())?;
+				Ok(Arc::new(
 					OvhProvider::new(application_key, application_secret, secret).with_base(base),
 				))
 			}
 			"route53" => {
-				let access_key = non_empty(self.access_key.clone())?;
+				let access_key = non_empty(self.access_key.clone())
+					.ok_or_else(|| "no access_key is set".to_string())?;
 				let secret_key = self.aws_secret()?;
-				let hosted_zone_id = non_empty(self.hosted_zone_id.clone())?;
-				Some(Arc::new(Route53Provider::new(
+				let hosted_zone_id = non_empty(self.hosted_zone_id.clone())
+					.ok_or_else(|| "no hosted_zone_id is set".to_string())?;
+				Ok(Arc::new(Route53Provider::new(
 					access_key,
 					secret_key,
 					hosted_zone_id,
 				)))
 			}
 			"porkbun" => {
-				let api_key = non_empty(self.access_key.clone())?;
+				let api_key = non_empty(self.access_key.clone())
+					.ok_or_else(|| "no access_key is set".to_string())?;
 				let secret = self.aws_secret()?;
-				Some(Arc::new(PorkbunProvider::new(
+				Ok(Arc::new(PorkbunProvider::new(
 					ScopedSecret::new(&self.zone, secret),
 					api_key,
 				)))
 			}
-			"digitalocean" => Some(Arc::new(DigitaloceanProvider::new(self.secret()?))),
+			"digitalocean" => Ok(Arc::new(DigitaloceanProvider::new(self.secret()?))),
 			"rfc2136" => {
 				let secret = self.secret()?;
-				let key_name = non_empty(self.key_name.clone())?;
-				let endpoint = non_empty(self.endpoint.clone())?;
-				Some(Arc::new(
+				let key_name = non_empty(self.key_name.clone())
+					.ok_or_else(|| "no key_name is set".to_string())?;
+				let endpoint = non_empty(self.endpoint.clone())
+					.ok_or_else(|| "no endpoint is set".to_string())?;
+				Ok(Arc::new(
 					Rfc2136Provider::new(secret, &key_name, self.algorithm.as_deref(), &endpoint)
-						.ok()?,
+						.ok()
+						.ok_or_else(|| "the TSIG key cannot be used".to_string())?,
 				))
 			}
 			"godaddy" => {
-				let api_key = non_empty(self.access_key.clone())?;
+				let api_key = non_empty(self.access_key.clone())
+					.ok_or_else(|| "no access_key is set".to_string())?;
 				let api_secret = self.aws_secret()?;
-				Some(Arc::new(GodaddyProvider::new(
+				Ok(Arc::new(GodaddyProvider::new(
 					api_key,
 					api_secret,
 					self.zone.clone(),
 				)))
 			}
-			_ => None,
+			"manual" => Err("the entry is in manual mode: it publishes nothing".to_string()),
+			_ => Err(format!(
+				"the provider {:?} is not a supported provider",
+				self.provider
+			)),
 		}
 	}
 
@@ -286,37 +332,55 @@ impl Dns {
 	/// Empty or whitespace-only values are treated as absent so a TOML
 	/// placeholder (`secret_key = ""`) does not build a provider that
 	/// then sends `sso-key :`.
-	fn aws_secret(&self) -> Option<String> {
+	fn aws_secret(&self) -> Result<String, String> {
 		if let Some(var) = &self.secret_key_env {
-			return std::env::var(var).ok().filter(|s| !s.trim().is_empty());
+			return std::env::var(var)
+				.ok()
+				.filter(|s| !s.trim().is_empty())
+				.ok_or_else(|| {
+					format!("the secret_key_env variable {var} is not set or is empty")
+				});
 		}
 		non_empty(self.secret_key.clone())
+			.ok_or_else(|| "no secret_key or secret_key_env is set".to_string())
 	}
 
 	/// The OVH consumer key from `consumer_key_env` (preferred) or inline.
 	/// Same empty-string handling as [`Self::aws_secret`].
-	fn consumer_key(&self) -> Option<String> {
+	fn consumer_key(&self) -> Result<String, String> {
 		if let Some(var) = &self.consumer_key_env {
-			return std::env::var(var).ok().filter(|s| !s.trim().is_empty());
+			return std::env::var(var)
+				.ok()
+				.filter(|s| !s.trim().is_empty())
+				.ok_or_else(|| {
+					format!("the consumer_key_env variable {var} is not set or is empty")
+				});
 		}
 		non_empty(self.consumer_key.clone())
+			.ok_or_else(|| "no consumer_key or consumer_key_env is set".to_string())
 	}
 
 	/// Resolve the scoped token from inline / env / file, in that precedence.
 	/// The inline path trims and rejects empty values; the env / file
 	/// paths already do (see [`ScopedSecret::from_env`] and
 	/// [`ScopedSecret::from_file`]).
-	fn secret(&self) -> Option<ScopedSecret> {
+	///
+	/// The error says which source was named and could not be read, so
+	/// the operator is told about the missing credential instead of a
+	/// provider that cannot be used.
+	fn secret(&self) -> Result<ScopedSecret, String> {
 		if let Some(token) = non_empty(self.token.clone()) {
-			return Some(ScopedSecret::new(&self.zone, token));
+			return Ok(ScopedSecret::new(&self.zone, token));
 		}
 		if let Some(var) = &self.token_env {
-			return ScopedSecret::from_env(&self.zone, var);
+			return ScopedSecret::from_env(&self.zone, var)
+				.ok_or_else(|| format!("the token_env variable {var} is not set or is empty"));
 		}
 		if let Some(path) = &self.token_file {
-			return ScopedSecret::from_file(&self.zone, path).ok();
+			return ScopedSecret::from_file(&self.zone, path)
+				.map_err(|_| format!("the token_file {} cannot be read", path.display()));
 		}
-		None
+		Err("no token, token_env or token_file is set".to_string())
 	}
 }
 

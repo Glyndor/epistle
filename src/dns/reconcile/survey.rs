@@ -1,8 +1,12 @@
 //! Read everything a run needs before anything is written: the zone that
 //! holds each needed record, the listing of every zone, the ledgers, and
-//! the records other parts of epistle keep. A zone that cannot be read
-//! stops the whole run here, so a run never writes one zone and then finds
-//! it cannot see the next.
+//! the records other parts of epistle keep.
+//!
+//! A zone whose provider cannot be read is reported and left alone: the
+//! other zones are compared and published, so one entry with a broken
+//! credential does not stop every other domain from being published. A
+//! ledger that cannot be read stops the run instead: without it epistle
+//! does not know what it owns, and every record in it would turn foreign.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -28,6 +32,15 @@ pub struct ZoneRun {
 	pub snapshot: Snapshot,
 }
 
+/// A zone that could not be read, and why it was left alone.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ZoneFailure {
+	/// The zone.
+	pub zone: String,
+	/// Why the zone was not compared.
+	pub reason: String,
+}
+
 /// A needed record no provider writes: its zone is `manual` or no `[dns]`
 /// entry covers it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -45,6 +58,9 @@ pub struct Survey {
 	pub zones: Vec<ZoneRun>,
 	/// The records left to the operator.
 	pub by_hand: Vec<ByHand>,
+	/// The zones that could not be read. The other zones were compared and
+	/// are published.
+	pub failures: Vec<ZoneFailure>,
 }
 
 impl Survey {
@@ -120,12 +136,16 @@ pub async fn survey(ctx: &Context<'_>) -> Result<Survey, String> {
 	for (zone, needed) in zones {
 		let snapshot = match within(ctx.timeout, ctx.provider.publish_snapshot(&zone)).await {
 			Ok(snapshot) => snapshot,
-			Err(ProviderError::Unsupported) => {
-				return Err(format!(
-					"this DNS provider cannot list the {zone} zone, so epistle cannot tell its own records from anybody else's; nothing was written"
-				));
+			Err(error) => {
+				// The zone is left alone and the run goes on with the
+				// other zones: one entry with a broken credential must
+				// not stop every other domain from being published.
+				survey.failures.push(ZoneFailure {
+					zone: zone.clone(),
+					reason: unreadable(config, &zone, &error),
+				});
+				continue;
 			}
-			Err(error) => return Err(format!("reading the {zone} zone failed: {error}")),
 		};
 		let ledger = store::load(&config.data_dir, &zone)?;
 		let lockdown = lockdown_records(config, &zone)?;
@@ -147,6 +167,28 @@ pub async fn survey(ctx: &Context<'_>) -> Result<Survey, String> {
 		});
 	}
 	Ok(survey)
+}
+
+/// Why the zone could not be read.
+///
+/// The credential comes first: an entry whose token is missing is not a
+/// provider that cannot list, and the operator needs to be told which
+/// one it is. Only an entry that builds a provider leaves the
+/// capability as the reason.
+fn unreadable(config: &Config, zone: &str, error: &ProviderError) -> String {
+	match error {
+		ProviderError::Unsupported => match config
+			.dns
+			.entry_for(zone)
+			.and_then(|dns| dns.build_problem())
+		{
+			Some(problem) => format!("the [dns] entry for {zone} cannot publish: {problem}"),
+			None => format!(
+				"this DNS provider cannot list the {zone} zone, so epistle cannot tell its own records from anybody else's"
+			),
+		},
+		other => format!("reading the {zone} zone failed: {other}"),
+	}
 }
 
 /// Run `op` with a deadline; running out is a provider failure.

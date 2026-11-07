@@ -4,5 +4,6 @@ pub(super) mod dmarc;
 pub(super) mod needed;
 pub(super) mod retire;
 pub(super) mod run;
+pub(super) mod store;
 pub(super) mod support;
 pub(super) mod undo;
