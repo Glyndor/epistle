@@ -383,7 +383,9 @@ hours (`[dns_publish] interval_secs`, see
 [`configuration.md`](configuration.md#dns_publish)), so a record that drifted
 or a service turned off is followed without running the command. The command
 and that loop take the same lock in `<data_dir>/dns-publish/`, so they never
-write at the same time.
+write at the same time. The DKIM and TLSA rotations write in the same zones,
+and they take the lock of the zone too: a value the rotation published is
+never overwritten by a comparison that read the zone before it.
 
 ### Checking provider credentials
 

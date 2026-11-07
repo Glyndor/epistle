@@ -9,6 +9,11 @@
 //! this module planned, only if the zone still holds what was read. A
 //! provider that applies no guarded change never gets a write that could
 //! remove a foreign record: the refresh fails closed and says why.
+//!
+//! The lock of the zone is held from the listing to the write (see
+//! [`crate::dns::zone_lock`]): the reconcile loop publishes in the same
+//! zone, and a value it planned before this refresh must not overwrite the
+//! one published here.
 
 use crate::dns::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind};
 use crate::dns::publish::provider::{
@@ -45,6 +50,10 @@ pub(super) async fn publish(
 ) -> Result<(), Refused> {
 	let name = format!("_25._tcp.{hostname}");
 	let zone = crate::dns::zone::resolve(provider, hostname).await?;
+	// The lock of the zone is taken before the zone is read and held until
+	// the write is done: the value published here is the one the zone
+	// keeps, whatever the reconcile loop publishes in between.
+	let _lock = crate::dns::zone_lock::lock(&zone).await;
 	let record = DnsRecord::new(name.clone(), RecordKind::Tlsa, value, super::TTL);
 	let snapshot = match provider.publish_snapshot(&zone).await {
 		Ok(snapshot) => snapshot,
