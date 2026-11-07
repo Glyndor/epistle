@@ -46,12 +46,12 @@ const XML_BODY_LIMIT: usize = 1024 * 1024;
 /// Maximum size of a single `PUT` body. No project-level upload cap was
 /// already wired into the WebDAV path, so this constant is the per-file
 /// limit. It was chosen to match the old fixed JMAP upload limit; JMAP now
-/// follows `[server] max_message_size` (25 MiB by default), so a DAV
+/// follows `max_message_size` (25 MiB by default), so a DAV
 /// resource may be larger than a message. A per-account
 /// storage quota (the `quota_bytes` field in the account config) applies on
 /// top of this for cumulative usage; this is the per-file cap.
 ///
-/// WebDAV `PUT` keeps its own cap rather than `[server] max_message_size`
+/// WebDAV `PUT` keeps its own cap rather than `max_message_size`
 /// because a single resource (a calendar, a long vCard, a large attachment
 /// archive) can be larger than a single mail message by design. The cap is
 /// fixed at `PUT_BODY_LIMIT` and is **not** configurable from

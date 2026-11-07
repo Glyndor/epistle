@@ -138,7 +138,7 @@ struct Inner {
 	/// `EmailSubmission/set` builder, the JMAP `upload` body limit,
 	/// and the REST `POST /api/v1/send` body limit. The default is
 	/// [`crate::smtp::session::MAX_MESSAGE_SIZE`]; operators raise or
-	/// lower it with the `[server] max_message_size` config key.
+	/// lower it with the `max_message_size` config key.
 	max_message_size: usize,
 	/// Recipients one message may name through the REST send endpoint and
 	/// JMAP `EmailSubmission/set`, the same count the SMTP listeners accept.

@@ -431,7 +431,7 @@ fn declared_oversize_is_rejected_at_mail_time() {
 }
 
 /// The per-instance message-size cap is what the operator sets in
-/// `[server] max_message_size`; the SMTP `SIZE` extension, MAIL FROM
+/// `max_message_size`; the SMTP `SIZE` extension, MAIL FROM
 /// SIZE parameter, the per-line running check, the end-of-DATA check,
 /// and the BDAT per-chunk cap all share the same value. Lowering the
 /// cap on one session must shrink every check at once: a size the

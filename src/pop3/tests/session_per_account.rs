@@ -1,4 +1,4 @@
-//! `[server] max_connections_per_account`: POP3 rejects an eleventh
+//! `max_connections_per_account`: POP3 rejects an eleventh
 //! connection from the same (account, IP) with `-ERR [IN-USE]` and
 //! releases the slot on every disconnect path.
 

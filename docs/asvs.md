@@ -53,7 +53,7 @@ function name is the stable reference.
 | 2.2.3 Secure notification of auth events | Met | Auth failures are logged as counts (no credentials); delivery/security events flow to webhooks. |
 | 2.4.1 Passwords stored with an approved KDF (Argon2) | Met | argon2id PHC everywhere (`src/smtp/auth/mod.rs::hash_password`/`verify_password`); 16-byte CSPRNG salt via `ring::SystemRandom`. Config rejects any non-argon2id stored hash (`src/config/validate/mod.rs`). |
 | 2.5.x Credential recovery does not reveal the credential | Met | Verification returns a bare `false` on any error; no reset oracle in the server. |
-| 2.6 / 2.8 Look-up / OTP verifiers (TOTP) | Partial | TOTP verified with a constant-time compare and a bounded ±1 step window (`src/totp/mod.rs::verify`, `constant_time_eq`). **No replay guard / no recovery codes / secret stored in cleartext** — documented below (deferred — needs persistent state and at-rest key management). |
+| 2.6 / 2.8 Look-up / OTP verifiers (TOTP) | Partial | TOTP verified with a constant-time compare and a bounded ±1 step window (`src/totp/mod.rs::verify`, `crate::util::constant_time::eq`). **No replay guard / no recovery codes / secret stored in cleartext** — documented below (deferred — needs persistent state and at-rest key management). |
 | 2.7 Out-of-band verifier | N/A | No SMS/email OOB second factor is offered. |
 | 2.9 Cryptographic verifier (SCRAM) | Met | SCRAM-SHA-256 / -SHA-256-PLUS: password never on the wire, channel binding to the cert (`tls-server-end-point`), downgrade flag rejected when -PLUS is offered (`src/smtp/scram/mod.rs`, `src/imap/session/auth.rs`). |
 | 2.10.1 No user-enumeration oracle | Met | Unknown login and wrong password both resolve to `None` with an identical reply in every protocol (`src/smtp/directory/mod.rs::authenticate_with_ip`/`credentials`). |
@@ -113,12 +113,12 @@ function name is the stable reference.
 
 | Req (L3) | Status | Evidence |
 |---|---|---|
-| 6.2.1 Approved algorithms, no home-rolled crypto | Met | All crypto via `ring`/`rustls`/`argon2`/`webpki`. No MD5/SHA-1/DES/RC4 for any security purpose. (The single SHA-1 is the RFC 6238-mandated TOTP HMAC, `src/totp/mod.rs`.) |
+| 6.2.1 Approved algorithms, no home-rolled crypto | Met | All crypto via `ring`/`rustls`/`argon2`/`webpki`. No MD5/SHA-1/DES/RC4 for any security purpose. (SHA-1 appears in three places, all legacy-mandated: the RFC 6238 TOTP HMAC in `src/totp/mod.rs`, the RFC 3161 token digest in `src/evidence/tsa/verify/mod.rs`, and the OVH API request signature in `src/dns/providers/ovh/mod.rs`.) |
 | 6.2.2 Argon2id for password hashing | Met | `src/smtp/auth/mod.rs::hash_password` (argon2id PHC). |
-| 6.2.3 Constant-time comparison of secrets | Met | TOTP and SRS use full-length XOR-fold compares (`src/totp/mod.rs::constant_time_eq`, `src/queue/srs/mod.rs::constant_time_eq`); the API bearer compare is `==` on **SHA-256 digests** of the token — a timing leak of a pre-image-resistant digest reveals nothing about the token (justified at `src/api/state/mod.rs::token_matches`). |
+| 6.2.3 Constant-time comparison of secrets | Met | TOTP and SRS use length-aware constant-time compares (`src/totp/mod.rs` via `crate::util::constant_time::eq`, `src/queue/srs/mod.rs::constant_time_eq`); the API bearer compare is `==` on **SHA-256 digests** of the token — a timing leak of a pre-image-resistant digest reveals nothing about the token (justified at `src/api/state/mod.rs::token_matches`). |
 | 6.3.1 CSPRNG for all secrets | Met | `ring::rand::SystemRandom` for salts, app-password secrets, SCRAM/IMAP/SMTP nonces, ACME keys, DKIM keygen (`src/cli/util.rs::generate_secret`, `src/smtp/auth/mod.rs`, `src/acme/`, `src/dkim/`). No `thread_rng`/predictable seeding in non-test code. |
 | 6.4.1 Secret key material protected at rest | Met (hardened in this sweep) | DKIM and ACME private keys are written `create_new` + `0o600` (atomic, no permissive window): ACME `src/acme/renew/mod.rs::write_secret`, manual keygen `src/cli/util.rs`, and DKIM **rotation** `src/dkim/rotate/mod.rs::write_key` (fixed in this sweep — previously wrote then chmod'd). |
-| 6.x DKIM/JWT algorithm hygiene | Met | DKIM accepts only rsa-sha256 / ed25519-sha256 (rsa-sha1 rejected), verify uses `RSA_PKCS1_2048_8192_SHA256` (≥2048-bit) / ED25519 (`src/dkim/verify/mod.rs`). ARC accepts the same two algorithms and dispatches on the one the header declares: `a=ed25519-sha256` verifies with ED25519 over the SHA-256 digest of the signed data, `a=rsa-sha256` with `RSA_PKCS1_1024_8192_SHA256_FOR_LEGACY_USE_ONLY` (≥1024-bit) over a key whose modulus is read from the record, and a record whose `k=` type does not match the declared algorithm is refused (`src/arc/key.rs`). |
+| 6.x DKIM/JWT algorithm hygiene | Met | DKIM accepts only rsa-sha256 / ed25519-sha256 (rsa-sha1 rejected), verify uses `RSA_PKCS1_1024_8192_SHA256_FOR_LEGACY_USE_ONLY` (≥1024-bit, per RFC 8301 §3.2) / ED25519 (`src/dkim/verify/mod.rs`). ARC accepts the same two algorithms and dispatches on the one the header declares: `a=ed25519-sha256` verifies with ED25519 over the SHA-256 digest of the signed data, `a=rsa-sha256` with `RSA_PKCS1_1024_8192_SHA256_FOR_LEGACY_USE_ONLY` (≥1024-bit) over a key whose modulus is read from the record, and a record whose `k=` type does not match the declared algorithm is refused (`src/arc/key.rs`). |
 
 > **Note (deferred):** the TOTP shared secret is stored as cleartext base32 in
 > the account store (`src/directory_store/mod.rs`). Encrypting it at rest needs a
@@ -130,7 +130,7 @@ function name is the stable reference.
 
 | Req (L3) | Status | Evidence |
 |---|---|---|
-| 7.1.1 No secrets/PII in logs | Met | All 50 `tracing` call sites audited: none interpolate a password, hash, token, API key, SCRAM proof, private key or raw SASL blob. Auth failures log a **count** only (`src/smtp/session/scram.rs`, `src/imap/session/auth.rs`). |
+| 7.1.1 No secrets/PII in logs | Met | All the `tracing` call sites (about 360 outside the test modules) audited: none interpolate a password, hash, token, API key, SCRAM proof, private key or raw SASL blob. Auth failures log a **count** only (`src/smtp/session/scram.rs`, `src/imap/session/auth.rs`). |
 | 7.1.2 No credentials in logs even on the failure path | Met | The decoded PLAIN/LOGIN/SCRAM bytes never reach a log macro; no protocol logs its raw command line. |
 | 7.4.1 Generic error to the client; details server-side | Met | API errors return fixed strings (`src/api/error/mod.rs::internal` → "Internal error."); underlying errors dropped via `.map_err(|_| …)`; JMAP errors are static. No stack trace, file path, SQL text or version reaches a client. |
 | 7.4.x No version/internal banner to unauthenticated clients | Met | SMTP/POP3/IMAP/ManageSieve greetings carry no version, IMAP `ID` returns `NIL`, and no HTTP `Server` header is sent. The `/status` version is behind the closed API. |
@@ -243,7 +243,7 @@ change — adding one half-built would be worse than tracking it honestly.
    now flattens every control character to a space and caps the length before the
    reason reaches any sink. Tests:
    `sanitizes_crlf_in_reason_to_prevent_header_injection` and `caps_reason_length`
-   in `src/queue/bounce/mod.rs`.
+   in `src/queue/bounce/tests/base.rs`.
 
 3. **JWT accepted without `exp`** (V2/V3, was high). `src/jwt/mod.rs::check_claims`
    only checked `exp` when present, so a token without a bounded lifetime never
@@ -257,7 +257,7 @@ Two further low-severity hardening fixes were applied:
    `src/dkim/rotate/mod.rs::write_key` wrote the private key and then chmod'd it,
    leaving a brief world/group-readable window. It now creates the file with
    `create_new` + `0o600` (no permissive window; matches ACME/manual keygen).
-   Test: `write_key_creates_with_owner_only_perms_and_refuses_overwrite` in
+   Test: `write_key_creates_with_owner_only_perms_and_replaces_whole` in
    `src/dkim/rotate/tests/base.rs`.
 
 5. **ManageSieve had no failed-auth connection close** (V2.2.1, was low). Unlike
@@ -292,10 +292,10 @@ surgical change and should be tracked as its own issue.
 | Chapter | Met | N/A | Gap |
 |---|---|---|---|
 | V1 Architecture | 9 | 0 | 0 |
-| V2 Authentication | 9 | 1 | 2 (both partial)\* |
+| V2 Authentication | 10 | 1 | 2 (both partial)\* |
 | V3 Session | 3 | 3 | 0 |
 | V4 Access Control | 7 | 0 | 1 (partial) |
-| V5 Validation | 6 | 0 | 0 |
+| V5 Validation | 8 | 0 | 0 |
 | V6 Cryptography | 6 | 0 | 0 (1 deferred note) |
 | V7 Error/Logging | 5 | 0 | 0 |
 | V8 Data Protection | 4 | 0 | 0 |

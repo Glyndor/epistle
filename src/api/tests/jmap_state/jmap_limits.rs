@@ -133,7 +133,7 @@ async fn a_body_at_the_advertised_size_is_accepted_and_one_more_octet_is_not() {
 async fn an_upload_far_over_max_size_upload_gets_the_limit_problem() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = router(test_state(dir.path(), 0));
-	// The configured `[server] max_message_size` drives the upload route's
+	// The configured `max_message_size` drives the upload route's
 	// body limit. One MiB over is enough to trip it without building a
 	// 50 MiB+ buffer in a unit test.
 	let body = vec![0u8; crate::smtp::session::MAX_MESSAGE_SIZE + 1024 * 1024];

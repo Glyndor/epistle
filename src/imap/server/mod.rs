@@ -105,7 +105,7 @@ pub struct Server {
 	/// every session. `None` disables training and STORE answers the same.
 	training: Option<crate::antispam::training_queue::TrainingQueue>,
 	/// APPENDLIMIT (RFC 7889): the largest literal an APPEND or REPLACE
-	/// command may carry. Follows `[server] max_message_size`, the same
+	/// command may carry. Follows `max_message_size`, the same
 	/// cap the SMTP, REST and JMAP submission paths enforce. Default is
 	/// [`super::command::DEFAULT_APPEND_LIMIT`].
 	append_limit: usize,

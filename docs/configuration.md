@@ -54,7 +54,7 @@ a connection URL.
 | `quota_bytes` | int | 5 GiB | Default per-account mailbox quota (RFC 9208), used when an account has no per-account or per-domain quota. Absent means 5 GiB; `0` means no limit, here and in `domain_quotas` or an account's own `quota_bytes`. IMAP QUOTA, JMAP `Quota/get` and `epistle limits show` report the same limit (none when it is `0`). Enforced on every path, measured as IMAP QUOTA reports it (archived mail included): IMAP APPEND answers `NO [OVERQUOTA]`; SMTP refuses a full mailbox at `RCPT TO` with `452 4.2.2` for that recipient only, and a message that would overfill one is accepted for the other recipients with a DSN to the sender, or refused with `552 5.2.2` when it fits none; `POST /api/v1/send` answers `507 mailbox_full` and JMAP `EmailSubmission/set` `overQuota`, with nothing queued. |
 | `domain_quotas` | table | `{}` | `domain → bytes`: default mailbox quota for accounts in a domain (overridden by a per-account `quota_bytes`). `0` means no limit. |
 | `submission_rate_limit_per_min` | int | unset | Recipients an authenticated account may submit per minute, on SMTP, `POST /api/v1/send` and JMAP `EmailSubmission/set` together: one budget per account whatever the protocol, app password or sender address. A message costs one unit per recipient: on SMTP every `RCPT TO` the server accepted, on the API every `to`, `cc` and `bcc` address, on JMAP the envelope `rcptTo` or, without an envelope, the deduplicated `To`, `Cc` and `Bcc` (RFC 8621). It is charged once, when the message is accepted, all of it or none: a transaction ended by `RSET`, a message over the limit and one refused on the way out cost nothing. Over the limit: SMTP `450 4.7.1 sending rate limit exceeded; retry later` (at `MAIL FROM` once the budget is spent, at the end of the data when the message has more recipients than are left), REST `429` `rate_limited` with the message `sending rate limit exceeded; retry later`, JMAP `SetError` `rateLimit` with the same description. Absent disables it (the default); `epistle limits` refuses `0`, which the server reads as no limit. Changes apply when the server restarts. |
-| `new_recipients_per_day` | int | unset | Cap on first-time recipients an authenticated account may write to in a rolling 24h window. Refused: SMTP `450 4.7.1 too many new recipients today; retry tomorrow`, REST `429 rate_limited`, JMAP `tooManyRecipients`. Absent disables the cap (the default). The `init` scaffold later sets a default of 200. |
+| `new_recipients_per_day` | int | unset | Cap on first-time recipients an authenticated account may write to in a rolling 24h window. Refused: SMTP `450 4.7.1 too many new recipients today; retry tomorrow`, REST `429 rate_limited`, JMAP `tooManyRecipients`. Absent disables the cap (the default); it stays disabled until the operator sets it (`epistle limits set new-recipients-per-day <N>`). |
 | `default_feedback_id` | bool | `true` | Write a `Feedback-ID` of the sending domain and the class on a submission that carries none (`epistle:<class>:<domain>`). `false` leaves the field to the client. See [headers](headers.md#identification-headers). |
 | `default_list_unsubscribe` | bool | `true` | Give a bulk `transactional` submission a `mailto:` `List-Unsubscribe` naming the sender, when it has none. Marketing mail is left alone (it must carry a one-click unsubscribe) and personal mail never gets one. Nothing on the server answers the address it points at: it is the sender's own mailbox, and the sender's own tooling has to act on it. `false` turns it off for every class. |
 | `bulk_recipients` | int | `20` | Recipients above which a `transactional` submission counts as bulk for `default_list_unsubscribe`: `20`, the default, means twenty-one or more. A notice to a handful of people is correspondence, not bulk mail. Refused below `1`: it is a count of recipients, and zero would make every transactional submission bulk. For no unsubscribe at all, turn `default_list_unsubscribe` off. |
@@ -106,7 +106,7 @@ a connection URL.
 | `clamd_on_error` | `accept` or `defer` | `accept` | What a scan clamd could not run does. `accept` lets the message through unscanned; `defer` answers `451 4.7.1 content scan unavailable, try again later`, inbound and on submission, so the sender retries and nothing passes unscanned. A message clamd can never take (see `clamd_max_bytes`) is refused for good with `552 5.3.4`, not retried. `epistle init` writes `defer` into a new configuration with clamd; an existing configuration without the key keeps `accept`. |
 | `clamd_timeout_secs` | integer | `30` | Deadline in seconds for the entire connection, write, and reply exchange. |
 | `clamd_max_bytes` | integer | `26279936` (25 MiB + 64 KiB) | Messages above this size are not sent to clamd. With `clamd_on_error = "accept"` they are accepted unscanned; with `defer` they are refused with `552 5.3.4 message too large for the content scan`. The size counts the trace and authentication headers the server adds, so `defer` requires at least `max_message_size` + 64 KiB (the configuration is refused otherwise). A message exactly at the limit is scanned. |
-| `scan_authenticated` | boolean | `true` | Also scan what this server's own accounts send: SMTP submission after AUTH, `/api/v1/send` and JMAP `EmailSubmission/set`, to local and remote recipients alike. A detection is always refused, whatever `clamd_on_found` says. Only the antivirus runs on that mail, never the Bayesian filter, reputation, DNSBL or greylisting. Has an effect only with `clamd_socket` set. |
+| `scan_authenticated` | boolean | `true` | Also scan what this server's own accounts send: SMTP submission after AUTH, `/api/v1/send` and JMAP `EmailSubmission/set`, to local and remote recipients alike. A detection is always refused, whatever `clamd_on_found` says. Only the antivirus runs on that mail, never the Bayesian filter, reputation, DNSBL or greylisting. On the antivirus it has an effect only with `clamd_socket` set; the attachment policy applies to the submissions it covers with or without clamd. |
 | `bayes_junk_at` | float in `[0.0, 1.0]` | `0.95` | Score at or above which an unauthenticated message is delivered to the recipient's Junk mailbox with `X-Spam-Status: Yes` and the score in `X-Spam-Score`. Authenticated mail is never scored this way. A corpus below `MIN_TRUSTED_MESSAGES` (200) ham AND spam does not decide anything: a threshold acts only on a trained corpus: the account's own, or the shared one for an account with too little of its own, an alias or a list. |
 | `bayes_reject_at` | float in `[0.0, 1.0]` | unset | Score at or above which an unauthenticated message is refused during DATA with `550 5.7.1 message rejected as spam`. Absent disables the rejection path (default). When set, must be at least `bayes_junk_at` so the rejected band is a subset of the junked one. |
 
@@ -320,7 +320,7 @@ hostname. Supply that certificate and its private key with `--cert` and `--key`.
 ### `[tls]`
 TLS material, shared by all transports. Required by `submissions`/`imap`/`imaps`/`manage-sieve`; enables STARTTLS on `smtp`/`submission`.
 
-Without `[acme]` the pair is yours to renew (certbot, a Cloudflare origin certificate, one you made). The server looks at both files every minute and, when either changed, loads the new pair, checks that every certificate of the chain parses and that the key belongs to the certificate, and only then puts it in service on every listener: SMTP, submission, IMAP, POP3, ManageSieve, the HTTPS API and autoconfig, and DAV. Open connections keep the certificate they started with; no restart is needed. A pair that does not load (half written, a key from another certificate, a broken chain) is logged once and the certificate in service stays until the files form a valid pair. SCRAM-SHA-256-PLUS follows the new certificate. Replace the files by writing them beside and renaming them over the old ones when you can; the server retries a pair it caught mid-write as soon as the files change again.
+Without `[acme]` the pair is yours to renew (certbot, a Cloudflare origin certificate, one you made). The server looks at both files every minute and, when either changed, loads the new pair, checks that every certificate of the chain parses and that the key belongs to the certificate, and only then puts it in service on the listeners that take it: SMTP, submission, IMAP, POP3, ManageSieve and `autoconfigs`. The API, WebDAV, `autoconfig`, `acme` and `metrics` listeners carry plain HTTP and never take this pair (see the note above). Open connections keep the certificate they started with; no restart is needed. A pair that does not load (half written, a key from another certificate, a broken chain) is logged once and the certificate in service stays until the files form a valid pair. SCRAM-SHA-256-PLUS follows the new certificate. Replace the files by writing them beside and renaming them over the old ones when you can; the server retries a pair it caught mid-write as soon as the files change again.
 
 With `[acme]` the pair named here is the bootstrap `init` generates (`<data_dir>/keys/`): the server presents it until the authority issues the certificate, and the issued pair takes its place at `<data_dir>/acme/`. A server whose ACME certificate is not on disk yet starts with that bootstrap pair instead of exiting.
 
@@ -533,9 +533,12 @@ size that still fits 25 MiB once base64-encoded (about 18 MB).
 
 ### Uploaded blob storage
 
-JMAP uploads live under `<data_dir>/blobs/`, sharded two levels deep by the
-**last** four characters of the blob id: `blobs/ab/cd/<id>`, with the `.type`
-and `.owner` sidecars beside the payload.
+JMAP uploads live under `<data_dir>/blobs/accounts/<account>/`, sharded two
+levels deep by the **last** four characters of the blob id:
+`blobs/accounts/<account>/ab/cd/<id>`, with the `.type` and `.owner` sidecars
+beside the payload. The shared pool older versions wrote (`blobs/ab/cd/<id>`
+and the flat `blobs/<id>`) is still read, and the `.owner` sidecar ties each
+of those blobs to its account.
 
 The shard comes from the end of the id rather than the start because blob ids
 are UUIDv7, whose first 48 bits are a timestamp — every blob written in the
@@ -544,8 +547,8 @@ everything into one bucket while looking sharded.
 
 There is no migration. A blob written by an older version stays where it is
 and is still read, still counted against quota, and still reclaimed; only new
-blobs are written into the shards. Nothing needs to be moved and nothing needs
-configuring.
+blobs are written into the per-account partition. Nothing needs to be moved and
+nothing needs configuring.
 
 ### IMAP COMPRESS=DEFLATE
 
@@ -927,7 +930,7 @@ the shared corpus, where before it was not scored unless its first member had a
 trained corpus.
 
 Account deletion (`DELETE /api/v1/accounts/{name}`, `DELETE /Users/{id}`
-on SCIM, `epistle accounts remove`) calls `BayesStore::forget_scope` to
+on SCIM, `epistle account remove`) calls `BayesStore::forget_scope` to
 drop every per-scope row. Without this, a recreated account would
 inherit the previous user's training.
 
@@ -1415,7 +1418,8 @@ format and the migration path.
 Where uploaded JMAP blobs (`POST /jmap/upload/{account}`) live. Absent (or
 `backend = "fs"`) keeps the historical default of `<data_dir>/blobs/`,
 sharded two levels by the **last** four characters of the blob id, with a
-fallback to the flat layout for blobs written by older versions. Setting
+partition per account (`blobs/accounts/<account>/ab/cd/<id>`) and a fallback
+to the shared and flat layouts for blobs written by older versions. Setting
 `backend = "s3"` redirects uploads to an S3-compatible bucket; the
 download handler and the `.owner` / `.type` sidecars follow the same path.
 
@@ -1447,10 +1451,12 @@ SDK dependency; the AWS SDK tree would be heavier than the four HTTP
 calls). A bucket that returns 401 or 403 surfaces as
 `BlobError::Auth`, never as "object not found", so an operator chasing
 wrong credentials is not led to chase a phantom missing blob. When
-`backend = "s3"` is set, blob-store reclaim (`reclaim_blobs`) and the
-`/api/v1/accounts/{name}/quota` path no longer walk the local filesystem
-— quota is enforced by the configured per-account limit and the operator
-manages bucket lifecycle on the S3 side.
+`backend = "s3"` is set, nothing new is written to the local filesystem, but
+the reclaim sweep (`reclaim_blobs`) and the `/api/v1/accounts/{name}/quota`
+path still walk the local blob tree, so blobs left on disk from before the
+switch keep counting against the quota. The quota itself is enforced by the
+configured per-account limit, and the operator manages bucket lifecycle on
+the S3 side.
 
 ### `[otel]`
 OpenTelemetry trace export. Present enables exporting tracing spans over OTLP/HTTP to a collector.
@@ -1595,9 +1601,10 @@ token = "your_api_token"        # or token_file / token_env
   provider requests `per_page=100` (the API maximum) and follows
   `pagination.total_pages`. Records are returned as FQDNs — the relative
   `name` from the API is joined to the configured zone.
-- **Unsupported kinds:** MX (priority is not modelled by epistle yet), SRV
-  (priority/weight/port), and TLSA (no structured-data field). The provider
-  returns `provider does not support writes` for these.
+- **Unsupported kinds:** TLSA (no structured-data field). The provider returns
+  `provider does not support writes` for it. MX and SRV are published, with
+  the priority (and weight and port for SRV) split into the fields the API
+  expects.
 - **API base:** `https://api.dnsimple.com/v2` — overridable through the
   provider's `with_base` for tests.
 #### `[dns]`: GoDaddy specifics
@@ -1782,7 +1789,8 @@ client_ip = "203.0.113.25"                # IPv4 on the API whitelist
   zone. epistle's upsert/delete is a read-modify-write (`getHosts` → mutate
   → `setHosts`), so if an operator also edits the zone by hand between
   those calls their changes are silently dropped. Pair with periodic drift
-  checks (`epistle dns-check`) for zones that are not fully epistle-owned.
+  checks (`epistle dns provider test`) for zones that are not fully
+  epistle-owned.
 
 #### `[dns]` — RFC 2136 specifics
 ```toml
@@ -1819,15 +1827,18 @@ algorithm = "hmac-sha256"     # default; "hmac-sha384" and "hmac-sha512" support
   answers NOERROR whether the RRset existed or not.
 - **`list` is not implemented.** RFC 2136 defines UPDATE only; reading
   the zone back would need AXFR or per-name queries that the provider
-  has no way to enumerate. Drift detection (`epistle dns-check`) will
+  has no way to enumerate. Drift detection (`epistle dns provider test`) will
   return `provider does not support writes` against an rfc2136 zone.
-- **Supported record kinds:** A, AAAA, TXT, CNAME, TLSA. MX and SRV are
-  rejected (`Unsupported`) because they carry extra fields
-  (preference, weight, port) that epistle does not currently build.
+- **Supported record kinds:** A, AAAA, TXT, CNAME, MX, SRV, TLSA and CAA (only
+  the `issue` CAA tag). The priority of an MX and the priority/weight/port of
+  an SRV are split out of the presentation form before they go on the wire.
 #### `[dns]` — Google Cloud DNS specifics
+```toml
+[dns]
 provider = "gcloud"
 token = "unused"                       # placeholder; auth is signature-based
 credentials_file = "/etc/epistle/dns/gcloud.json"
+```
 - **Auth is signature-based, not bearer-based.** `token` (and friends) is a
   placeholder; Google authenticates the service account with a JWT RS256
   signed with the private key from the credentials file. The bearer
@@ -1847,8 +1858,8 @@ credentials_file = "/etc/epistle/dns/gcloud.json"
   name cannot appear.
 - **Delete is idempotent.** Deleting an absent rrset is a no-op; the
   provider only submits a change when the rrset exists in the zone.
-- **TLSA is supported** via the structured `rrdatas` path. MX/SRV are not
-  emitted yet and return `provider does not support writes`.
+- **TLSA is supported** via the structured `rrdatas` path, and so are MX, SRV
+  and CAA.
 #### `[dns]` — Bunny specifics
 
 ```toml
@@ -1878,10 +1889,11 @@ token = "your-bunny-account-key"      # or token_file / token_env
 - **Delete is idempotent.** `DELETE` returns `404` for a record that is
   already gone (e.g. removed between our find and delete by another
   caller); epistle swallows the `404` and returns `Ok`.
-- **TLSA and SRV are not supported** — Bunny's API takes a `Type` integer
-  and the MX/SRV/TLSA wire formats need fields (`Priority`, `Port`,
-  `Flags`, `Tag`) epistle does not yet emit. epistle returns
-  `provider does not support writes` for those kinds and skips them.
+- **TLSA is not supported**: it needs the `Flags`, `Tag` and `Certificate`
+  fields epistle does not emit, so epistle returns `provider does not support
+  writes` for it and skips it. MX and SRV are published (types 4 and 8): an MX
+  travels as `<priority> <target>` and an SRV as `weight port target`, because
+  Bunny's API pins the SRV priority at 0.
 
 #### `[dns]` — Spaceship specifics
 
@@ -1917,8 +1929,9 @@ secret_key_env = "EPISTLE_SPACESHIP_SECRET"
 - **TXT values are unquoted.** Spaceship stores TXT content verbatim on
   the wire — epistle sends `value: "v=DMARC1; p=none"` rather than
   `"value: "\"v=DMARC1; p=none\""`.
-- **Supported record kinds:** A, AAAA, TXT, CNAME, TLSA. MX and SRV are
-  rejected (`Unsupported`) for the same reason as the other providers.
+- **Supported record kinds:** A, AAAAA, TXT, CNAME, MX, SRV, TLSA and CAA. The
+  priority of an MX and the priority/weight/port of an SRV travel in the
+  fields the API expects.
 
 ### `[dns_publish]`
 
@@ -1996,7 +2009,7 @@ A multi-target alias: one address that delivers to several local accounts.
 | `list_id` | Treat the alias as a **mailing list**: delivered copies gain `List-Id` (this value), `List-Post`, and `List-Unsubscribe` headers (RFC 2369/2919). Absent means a plain alias. The value is written between angle brackets as it stands, so it has to be an identifier those brackets can carry: a dot-atom of non-empty `atext` atoms joined by single dots, as in `team.example.org`. Anything else is refused at load, brackets and whitespace included; RFC 2919 puts a description outside the brackets (`Team List <team.example.org>`) and this server does not compose one |
 
 ### Masked email addresses
-Per-account disposable aliases, surfaced under `/api/v1/accounts/{name}/masked`. The server picks the random suffix (8 lowercase base32 chars from the CSPRNG); the client only supplies a human-readable label. The local part of every mask is `<label-slug>.<random>@<first configured domain>`. Disabled masks reject exactly like unknown users (no leak that one existed). The per-account cap is `masked_addresses_max` (default 100); going over returns `429`.
+Per-account disposable aliases, surfaced under `/api/v1/accounts/{name}/masked`. The server picks the random suffix (8 lowercase base32 chars from the CSPRNG); the client only supplies a human-readable label. The local part of every mask is `<label-slug>.<random>@<first configured domain>`. Disabled masks reject exactly like unknown users (no leak that one existed). The per-account cap is `masked_addresses_max` (default 100); going over returns `409 conflict`.
 
 ### `[[tenant]]`
 A tenant is a named group of domains with optional aggregate caps. Tenancy is what makes a resellable deployment work: each tenant gets its own per-account cap (already covered by `quota_bytes` / `domain_quotas`) plus aggregate caps the operator can promise to the tenant without having to revisit per-account limits. With no `[[tenant]]` block the server behaves exactly as it always has; the empty list is the identity.
@@ -2200,17 +2213,17 @@ runtime worker.
 |---|---|---|
 | Script size | 1 MiB (1048576 octets), also the ManageSieve literal limit | `maxSizeScript` |
 | Scripts per account | 50 | `maxNumberScripts` |
-| Script name | 128 characters and 200 octets; no control character (U+0000 to U+001F, U+007F to U+009F), no U+2028 or U+2029, no `/` or `\`, no bidirectional formatting character; no leading or trailing white space; Unicode normal form C | `maxSizeScriptName` (200) |
+| Script name | 128 characters and 512 octets; no control character (U+0000 to U+001F, U+007F to U+009F), no U+2028 or U+2029, no `/` or `\`, no bidirectional formatting character; no leading or trailing white space; Unicode normal form C | `maxSizeScriptName` (512) |
 | `redirect` actions per run of a script | 4, each address once | `maxNumberRedirects` |
 | `sieveExtensions` | `fileinto envelope vacation imap4flags relational variables reject ereject copy body date mailbox subaddress comparator-i;octet comparator-i;ascii-casemap comparator-i;ascii-numeric`, the list ManageSieve puts in `SIEVE` | `sieveExtensions` |
 
 `notificationMethods` and `externalLists` are `null`: `enotify` and
-`extlists` are not run. **Known deviations from RFC 9661:** `maxSizeScriptName`
-is 200 and not the 512 octets the RFC asks for, because a script name is a
-file name and 200 octets is what fits next to the staging file of an atomic
-write; and an empty script is accepted, as ManageSieve accepts it (the RFC
-asks for at least one character), so that the one check is the same for both
-protocols.
+`extlists` are not run. **Known deviations from RFC 9661:** an empty script is
+accepted, as ManageSieve accepts it (the RFC asks for at least one
+character), so that the one check is the same for both protocols. The 512
+octets the RFC asks for are all available: a name longer than 200 octets is
+stored under a hashed file name, with the name itself in a `.name` sidecar
+beside it.
 
 **Content is a blob.** A client uploads the script (`POST
 /jmap/upload/{accountId}`) and names the blob in `blobId` on `create` or

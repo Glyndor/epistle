@@ -6,9 +6,9 @@ impl Server {
 	/// Set APPENDLIMIT (RFC 7889), the largest literal an APPEND or
 	/// REPLACE command may carry on this listener. `0` keeps the
 	/// built-in default ([`crate::imap::command::DEFAULT_APPEND_LIMIT`]); any
-	/// other value is taken as given. Flows from `[server]
-	/// max_message_size`, the same cap the SMTP, REST and JMAP
-	/// submission paths enforce.
+	/// other value is taken as given. Flows from
+	/// `max_message_size`, the same cap the SMTP, REST and JMAP submission paths
+	/// enforce.
 	pub fn with_append_limit(mut self, bytes: usize) -> Self {
 		if bytes > 0 {
 			self.append_limit = bytes;
@@ -18,7 +18,7 @@ impl Server {
 
 	/// Apply the shared per-account counter after authentication. The
 	/// listener must call this once at startup with the counter built
-	/// from `[server] max_connections_per_account`. `None` keeps the
+	/// from `max_connections_per_account`. `None` keeps the
 	/// listener free of any per-account cap (the historical behaviour).
 	pub fn with_per_account_counter(
 		mut self,

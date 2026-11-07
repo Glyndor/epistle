@@ -124,7 +124,7 @@ pub async fn session(
 	// The Session resource advertises the configured cap, not a hard-coded
 	// constant, so what the client is told and what the handlers enforce
 	// cannot drift. `maxSizeUpload` is the same number the upload route's
-	// body limit applies (configured `[server] max_message_size`), and the
+	// body limit applies (configured `max_message_size`), and the
 	// per-attachment bound is the same base minus the headroom that the
 	// rest of the message needs for headers and the body itself.
 	let max_message_size = state.max_message_size();

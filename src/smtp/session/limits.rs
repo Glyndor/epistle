@@ -2,7 +2,7 @@
 //! configuration may move them within.
 
 /// Maximum accepted message size in bytes. The historical default and
-/// the upper bound for the configurable `[server] max_message_size`;
+/// the upper bound for the configurable `max_message_size`;
 /// raise it on operators who know what they are doing, lower it on
 /// operators who want to be conservative.
 pub const MAX_MESSAGE_SIZE: usize = 25 * 1024 * 1024;

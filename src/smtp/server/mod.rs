@@ -188,7 +188,7 @@ pub struct Server {
 	/// Shared byte budget every DATA / BDAT reservation draws from.
 	/// `None` (the default) leaves the historical unbounded behaviour
 	/// in place; the listener is constructed with `Some` when the
-	/// operator configured `[server] message_memory_budget`.
+	/// operator configured `message_memory_budget`.
 	memory_budget: Option<std::sync::Arc<MemoryBudget>>,
 	/// Per-client-IP concurrent connection cap for this listener. A
 	/// peer over the cap is answered `421 4.7.0` and closed. The cap

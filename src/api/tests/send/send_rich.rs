@@ -158,7 +158,7 @@ async fn a_message_over_the_size_limit_once_built_is_refused() {
 	assert!(spool.list().expect("list").is_empty(), "nothing queued");
 }
 
-/// The configured `[server] max_message_size` is the cap on the `POST
+/// The configured `max_message_size` is the cap on the `POST
 /// /api/v1/send` body too: the request body's `text` plus the headers
 /// the endpoint writes itself grows past the cap, and the layer rejects
 /// the body before any handler runs. axum's `DefaultBodyLimit` answers

@@ -10,7 +10,7 @@ impl Session {
 				"{tag} NO [SERVERBUG] cannot initialize mailboxes\r\n"
 			));
 		}
-		// `[server] max_connections_per_account` (default 10 per (account,
+		// `max_connections_per_account` (default 10 per (account,
 		// IP) and 50 in total). Applied after the directory admits the
 		// credentials but before the mailbox is opened so a refused
 		// connection does not leave mailboxes around. The slot is held by

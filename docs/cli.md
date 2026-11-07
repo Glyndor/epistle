@@ -144,7 +144,11 @@ a terminal. Echo comes back when the read ends, Ctrl-C included.
 
 **Destructive commands.** `account remove`, `account 2fa disable`,
 `app-password revoke`, `app-password rotate`, `relay disable`, `api-key revoke`, `archive purge`, `domain remove`, `domain disable`, `domain alias remove`,
-`alias remove`, `masked remove`, `queue remove` and `restore` ask before they
+`alias remove`, `masked remove`, `queue remove`, `dns publish`, `dns publish --undo`,
+`dns lockdown`, `dns lockdown --undo`, `dkim cleanup`, `learning reset`,
+`warmup start`, `webhook disable`, `stack rollback`, `evidence acknowledge`,
+`evidence abandon`, `evidence key rotate`, `evidence timestamp disable`,
+`evidence clock accept` and `restore` ask before they
 change anything, and the question names what goes: the account with its masked
 addresses and app passwords, the API key's scopes, the queued message's sender
 and recipient count, the number of archived entries (`Purge all N archived
@@ -1636,7 +1640,8 @@ failure of the disk or the process itself can stop a run after the keys.
 What this build does **not** do (other parts of `init`, deliberately out of
 scope here):
 
-- a management-API credential: `services.api = true` writes an API listener and
+- a management-API credential: `services.api = true` in the answers file writes an
+  API listener and
   an empty `[api]` section. Create labelled keys with `epistle api-key create`.
   Operators who want a static token may set `token_hash` themselves using
   `epistle token-hash`. `epistle status` treats "no static token configured"

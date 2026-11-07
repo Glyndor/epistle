@@ -67,7 +67,7 @@ pub fn router(state: ApiState) -> Router {
 			get(jmap::download),
 		)
 		// The upload route's body limit is `maxSizeUpload`: the
-		// operator-configured `[server] max_message_size`, the same value
+		// operator-configured `max_message_size`, the same value
 		// the SMTP path applies at end-of-DATA. The handler answers a
 		// larger body with the spec's limit error. Other routes keep the
 		// default cap.

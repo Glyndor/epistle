@@ -16,7 +16,7 @@ pub(super) struct Envelope<'a> {
 }
 
 /// The full message for `request`, refused when it would not fit the
-/// configured `[server] max_message_size` once built.
+/// configured `max_message_size` once built.
 pub(super) fn build(
 	request: &SendRequest,
 	envelope: &Envelope<'_>,
