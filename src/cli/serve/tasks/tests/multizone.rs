@@ -1,6 +1,7 @@
 //! DKIM rotation decides per zone when the configuration has one `[[dns]]`
 //! entry per zone.
 
+use super::super::DnsWrite;
 use super::dkim_rotation::{DkimRotationPlan, decide_dkim_rotation};
 use crate::config::Config;
 
@@ -16,7 +17,7 @@ fn plan_with(domains: &str, entries: &str) -> (Vec<String>, Vec<String>) {
 		"{BASE}domains = {domains}\n[dkim]\nselector = \"mail\"\nkey_file = \"/etc/mail/dkim.pem\"\n{entries}"
 	))
 	.expect("parses");
-	match decide_dkim_rotation(&config) {
+	match decide_dkim_rotation(&config, &DnsWrite::Direct) {
 		DkimRotationPlan::Run {
 			signing_domains,
 			out_of_zone,
@@ -104,4 +105,76 @@ fn a_list_of_one_entry_is_scoped_to_its_zone() {
 	);
 	assert_eq!(signing, vec!["example.org"]);
 	assert_eq!(outside, vec!["other.example"]);
+}
+
+/// With the certificates container on the credential is in the other
+/// container: an entry this process cannot read a credential for still
+/// publishes, through the hand-off.
+#[test]
+fn with_the_split_a_zone_whose_credential_is_not_here_still_rotates() {
+	let config: Config = toml::from_str(&format!(
+		"{BASE}domains = [\"example.org\", \"client.net\"]\n[dkim]\nselector = \"mail\"\nkey_file = \"/etc/mail/dkim.pem\"\n[[dns]]\nprovider = \"cloudflare\"\nzone = \"example.org\"\n{}[[dns]]\nprovider = \"desec\"\nzone = \"client.net\"\n",
+		token()
+	))
+	.expect("parses");
+	let DkimRotationPlan::Run {
+		signing_domains,
+		out_of_zone,
+		..
+	} = decide_dkim_rotation(
+		&config,
+		&DnsWrite::Handoff(std::path::PathBuf::from("/var/lib/mail/dns-handoff")),
+	)
+	else {
+		panic!("rotation should run");
+	};
+	assert_eq!(signing_domains, vec!["client.net", "example.org"]);
+	assert!(
+		out_of_zone.is_empty(),
+		"the credential is in the certificates container: {out_of_zone:?}"
+	);
+}
+
+/// The same configuration without the split: the entry whose credential
+/// this process cannot read holds the rotation back, as it always did.
+#[test]
+fn without_the_split_a_zone_whose_credential_is_not_here_holds_the_rotation_back() {
+	let config: Config = toml::from_str(&format!(
+		"{BASE}domains = [\"example.org\", \"client.net\"]\n[dkim]\nselector = \"mail\"\nkey_file = \"/etc/mail/dkim.pem\"\n[[dns]]\nprovider = \"cloudflare\"\nzone = \"example.org\"\n{}[[dns]]\nprovider = \"desec\"\nzone = \"client.net\"\n",
+		token()
+	))
+	.expect("parses");
+	let DkimRotationPlan::Run {
+		signing_domains,
+		out_of_zone,
+		..
+	} = decide_dkim_rotation(&config, &DnsWrite::Direct)
+	else {
+		panic!("rotation should run");
+	};
+	assert_eq!(signing_domains, vec!["example.org"]);
+	assert_eq!(out_of_zone, vec!["client.net"]);
+}
+
+/// A manual zone publishes nothing, in either mode.
+#[test]
+fn with_the_split_a_manual_zone_still_holds_the_rotation_back() {
+	let config: Config = toml::from_str(&format!(
+		"{BASE}domains = [\"example.org\", \"client.net\"]\n[dkim]\nselector = \"mail\"\nkey_file = \"/etc/mail/dkim.pem\"\n[[dns]]\nprovider = \"cloudflare\"\nzone = \"example.org\"\n{}[[dns]]\nprovider = \"manual\"\nzone = \"client.net\"\n",
+		token()
+	))
+	.expect("parses");
+	let DkimRotationPlan::Run {
+		signing_domains,
+		out_of_zone,
+		..
+	} = decide_dkim_rotation(
+		&config,
+		&DnsWrite::Handoff(std::path::PathBuf::from("/var/lib/mail/dns-handoff")),
+	)
+	else {
+		panic!("rotation should run");
+	};
+	assert_eq!(signing_domains, vec!["example.org"]);
+	assert_eq!(out_of_zone, vec!["client.net"]);
 }

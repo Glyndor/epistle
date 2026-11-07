@@ -55,6 +55,12 @@ pub(in crate::cli::init) fn tlsa_state_dir(data_dir: &Path) -> PathBuf {
 	state.parent().map_or(state.clone(), Path::to_path_buf)
 }
 
+/// The directory the two containers share for the DNS writes the mail
+/// container asks for: the hand-off the DKIM rotation goes through.
+pub(in crate::cli::init) fn handoff_dir(data_dir: &Path) -> PathBuf {
+	crate::dns::handoff::dir(data_dir)
+}
+
 /// What `mail` sees read-only, mounted over its read-write data_dir: every
 /// directory under data_dir that `certs` reads or that decides what `certs`
 /// does. `certs` acts on nothing the process that takes SMTP can write.
@@ -95,6 +101,10 @@ impl ComposeService {
 			VolumeMount::bind(config_dir, config_dir, true),
 			VolumeMount::bind(&pair_dir(data_dir), &pair_dir(data_dir), false),
 			VolumeMount::bind(&tlsa_state_dir(data_dir), &tlsa_state_dir(data_dir), false),
+			// The hand-off: the mail container asks this one to write the
+			// DKIM records, because the credential is here and the keys are
+			// there.
+			VolumeMount::bind(&handoff_dir(data_dir), &handoff_dir(data_dir), false),
 		];
 		let mut environment = BTreeMap::new();
 		environment.insert("TZ".to_string(), "UTC".to_string());

@@ -1,6 +1,7 @@
 //! Which domains' own keys the server rotates: each domain on its own, held
 //! back only by its own zone.
 
+use super::super::DnsWrite;
 use super::super::domain_rotation::{DomainRotationPlan, decide_domain_rotation};
 use crate::config::Config;
 
@@ -19,7 +20,7 @@ fn plan(dns: &str) -> DomainRotationPlan {
 		 [[dkim.domain]]\nname = 'other.net'\nselector = 'own1'\nkey_file = '/etc/mail/net.pem'\n{dns}"
 	))
 	.expect("parses");
-	decide_domain_rotation(&config)
+	decide_domain_rotation(&config, &DnsWrite::Direct)
 }
 
 #[test]

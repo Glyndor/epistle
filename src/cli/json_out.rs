@@ -100,11 +100,18 @@ impl<'a> Report<'a> {
 	/// Print `value` as the JSON result. Without `--json` nothing is
 	/// printed and the exit code is success.
 	pub(crate) fn object(&mut self, value: Value) -> ExitCode {
+		self.object_with(value, ExitCode::SUCCESS)
+	}
+
+	/// Print `value` as the JSON result and answer with `code`: a command
+	/// that did part of the work and could not finish the rest prints what
+	/// it did, with the exit code the failure deserves.
+	pub(crate) fn object_with(&mut self, value: Value, code: ExitCode) -> ExitCode {
 		if !self.json {
-			return ExitCode::SUCCESS;
+			return code;
 		}
 		match writeln!(self.out, "{value}") {
-			Ok(()) => ExitCode::SUCCESS,
+			Ok(()) => code,
 			Err(error) => {
 				super::style::error(format_args!("writing JSON: {error}"));
 				ExitCode::FAILURE

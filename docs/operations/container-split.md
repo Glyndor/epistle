@@ -51,8 +51,12 @@ code that uses them:
 - ACME issuance and renewal, with the `dns-01` challenge published through the
   `[dns]` provider;
 - the TLSA record refresh when a certificate is replaced;
-- the publication and withdrawal of DKIM selectors during rotation, and the
-  generation of the new key pair.
+- the publication and withdrawal of the DKIM selectors a rotation asks for.
+
+The DKIM keys themselves stay in `mail`: it makes them, it keeps them, it
+decides when to rotate them, and it confirms that a resolver sees the new
+record before the key signs. What moves is the write of the record, which
+`mail` asks `certs` to perform through the hand-off directory.
 
 `mail` stops mounting `dns_provider_token` and the ACME account key. After this
 phase a compromise of the process that takes SMTP from the internet cannot
@@ -71,26 +75,52 @@ by request.
 | `tls/` | read and write | read only | the certificate and key of each hostname |
 | `dkim/` | read and write | read only | the key files rotation produces |
 | `acme-challenge/` | read and write | read only | the `http-01` and `tls-alpn-01` tokens that `mail` answers on ports 80 and 443 |
+| `dns-handoff/` | read and write | read and write | the DNS writes `mail` asks `certs` to perform |
 | `dns_provider_token` | read only | not mounted | the provider credential |
 
 `serve` already watches its certificate and key files and swaps them without a
 restart, so `mail` needs no new channel to learn that a certificate was
 replaced. The same reload applies to a rotated DKIM key.
 
-There is no request interface from `mail` to `certs` in this phase, and that is
-deliberate: a channel that lets the exposed process ask for a DNS write is a way
-to use the token. `certs` decides by itself when to renew and rotate, from the
-clock and from what it reads on its volumes.
+There is one request interface from `mail` to `certs` in this phase: the
+hand-off directory. It is not a way to use the token. `mail` writes a file
+that names a record to publish or to withdraw, and `certs` performs it with
+the credential; `certs` checks every request and refuses anything that is not
+a DKIM key record (`<selector>._domainkey.<domain>`) of a domain this
+installation serves, in a zone the `[dns]` configuration covers, under a
+selector this installation uses (one a rotation makes, or one the operator
+configured in `[dkim]` or in a `[[dkim.domain]]` entry), and the refusal is
+answered with the reason. A request the rotation would never make is
+therefore the only thing that reaches the provider, and the key material
+never leaves `mail`. `certs` decides by itself when to renew, and it takes
+the requests it finds in the directory as it finds them.
+
+### The hand-off
+
+`mail` writes `<data_dir>/dns-handoff/requests/<id>` and waits for
+`<data_dir>/dns-handoff/results/<id>`, which `certs` writes when it has
+performed the write or refused it. A request that is not answered within a
+minute is taken back: the rotation fails, withdraws what it published, and
+the key in service keeps signing. A request that is older than a minute is
+refused, so a write the rotation has already given up on is never performed
+behind its back.
 
 ### Failure behaviour
 
-- If `certs` is down, `mail` serves the certificate it has until it expires, and
-  `epistle status` reports the container and the days left.
-- DKIM rotation pauses and resumes from its journal; signing keeps using the
-  current key.
+- If `certs` is down, `mail` serves the certificate it has until it expires,
+  and `epistle status` reports the container and the days left.
+- DKIM rotation keeps running: the records are written by `certs`. While
+  `certs` is down the rotation cannot publish, so it takes the write back and
+  the key in service keeps signing; the rotation is journaled and the next
+  tick finishes it when `certs` answers.
+- `epistle dkim cleanup` removes the leftover key files in both layouts, but
+  only `certs` can read the zone: with the split on, the TXT records are not
+  checked, the command says so and exits with a failure instead of reporting
+  a removal that never happens.
 - `epistle dns ...` commands that write records run in `certs` through
   `podup exec`, or on the host when there is no stack, so the operator's token
   never has to reach `mail`.
+
 
 ### Upgrade and rollback
 
@@ -148,6 +178,8 @@ and `REACHED` on the last is the state this phase wants.
   test provider.
 - A hostile case with `mail` compromised: it cannot read the token, cannot write
   to `tls/`, `dkim/` or `acme-challenge/`, and keeps serving after `certs` stops.
+  What it can ask for is a DKIM record of a domain this installation serves, and
+  nothing else.
 - The concurrency suite gets the case of a certificate replaced while
   connections open, and a DKIM key replaced while messages are signed.
 

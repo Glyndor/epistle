@@ -106,3 +106,54 @@ impl KeyPublisher for ProviderPublisher {
 		})
 	}
 }
+
+/// A [`KeyPublisher`] that asks the certificates container to do the
+/// writing.
+///
+/// With the certificates container on, this process holds no DNS
+/// credential: the record is written by the container that holds it, and
+/// this one learns whether the write happened. The write goes through the
+/// same hand-off the `[dkim]` key's rotation uses.
+pub struct HandoffPublisher {
+	/// The asking side of the hand-off.
+	writer: crate::dns::handoff::Writer,
+	/// The lock every write holds, shared with the other domains.
+	writes: Arc<tokio::sync::Mutex<()>>,
+}
+
+impl HandoffPublisher {
+	/// The publisher that writes through `writer`.
+	pub fn new(writer: crate::dns::handoff::Writer) -> Self {
+		HandoffPublisher {
+			writer,
+			writes: Arc::new(tokio::sync::Mutex::new(())),
+		}
+	}
+
+	/// Take `writes` as the lock every write holds, shared with other
+	/// publishers.
+	pub fn sharing_writes(mut self, writes: Arc<tokio::sync::Mutex<()>>) -> Self {
+		self.writes = writes;
+		self
+	}
+}
+
+impl KeyPublisher for HandoffPublisher {
+	fn publish<'a>(&'a self, name: &'a str, value: &'a str) -> PublishOp<'a> {
+		Box::pin(async move {
+			let _write = self.writes.lock().await;
+			self.writer
+				.perform(crate::dns::handoff::Write::dkim(name, value))
+				.await
+		})
+	}
+
+	fn withdraw<'a>(&'a self, name: &'a str) -> PublishOp<'a> {
+		Box::pin(async move {
+			let _write = self.writes.lock().await;
+			self.writer
+				.perform(crate::dns::handoff::Write::withdraw(name))
+				.await
+		})
+	}
+}

@@ -63,3 +63,7 @@ pub(in crate::cli) use domain_rotation::{decide_domain_rotation, dns_publishes_f
 
 pub(super) use dkim_rotation::spawn_dkim_rotation;
 pub(in crate::cli) use dkim_rotation::{DkimRotationPlan, decide_dkim_rotation};
+
+mod dns_write;
+
+pub(in crate::cli) use dns_write::DnsWrite;

@@ -121,6 +121,40 @@ fn certs_holds_the_credential_the_key_and_writes_the_pair() {
 	);
 }
 
+/// The two containers share the hand-off directory: `mail` asks for the
+/// DKIM records to be written and `certs` writes them, because the
+/// credential is there and the keys are here.
+#[test]
+fn the_two_containers_share_the_hand_off_directory() {
+	let value = render(&split_answers("/secure/dns/token"), true);
+	let handoff = "/var/lib/epistle/dns-handoff";
+	assert!(
+		mounts(&value, "mail").contains(&bind(handoff, false)),
+		"mail asks the other container to write the records: {:?}",
+		mounts(&value, "mail")
+	);
+	assert!(
+		mounts(&value, "certs").contains(&bind(handoff, false)),
+		"certs writes the records mail asks for: {:?}",
+		mounts(&value, "certs")
+	);
+}
+
+/// Without the split the hand-off is not mounted: the rotation writes the
+/// records itself.
+#[test]
+fn without_the_split_the_hand_off_is_not_mounted() {
+	let mut answers = split_answers("/secure/dns/token");
+	answers.services.certs = false;
+	let value = render(&answers, true);
+	let handoff = "/var/lib/epistle/dns-handoff";
+	assert!(
+		!mounts(&value, "mail").contains(&bind(handoff, false)),
+		"{:?}",
+		mounts(&value, "mail")
+	);
+}
+
 /// The default: the stack that never turns it on renders as before.
 #[test]
 fn without_certs_mail_keeps_the_credential_and_no_certs_service_exists() {

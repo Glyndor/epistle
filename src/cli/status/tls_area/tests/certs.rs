@@ -103,7 +103,7 @@ fn stack(ctx: &mut Ctx, dir: &Path, services: &str, rows: &str) {
 }
 
 #[tokio::test]
-async fn a_split_stack_reports_the_container_and_the_waiting_dkim_rotation() {
+async fn a_split_stack_reports_the_container() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let mut ctx = tls_ctx(
 		dir.path(),
@@ -124,8 +124,8 @@ async fn a_split_stack_reports_the_container_and_the_waiting_dkim_rotation() {
 	assert_eq!(container.status, Level::Warn);
 	assert!(container.detail.contains("40 days left"));
 	assert!(
-		report.items.iter().any(|item| item.name == "dkim rotation"),
-		"{report:?}"
+		!report.items.iter().any(|item| item.name == "dkim rotation"),
+		"the rotation keeps running through the certificates container: {report:?}"
 	);
 }
 

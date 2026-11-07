@@ -2,6 +2,7 @@
 //! `[[dkim.domain]]` override: it neither publishes nor retires records
 //! there, and an override outside the `[dns]` zone does not stop it.
 
+use super::super::DnsWrite;
 use super::dkim_rotation::{DkimRotationPlan, decide_dkim_rotation};
 use crate::config::Config;
 
@@ -17,7 +18,7 @@ fn config(domains: &str) -> Config {
 
 #[test]
 fn an_overridden_domain_is_not_a_signing_domain_of_the_default_key() {
-	match decide_dkim_rotation(&config("['example.org', 'other.net']")) {
+	match decide_dkim_rotation(&config("['example.org', 'other.net']"), &DnsWrite::Direct) {
 		DkimRotationPlan::Run {
 			signing_domains,
 			out_of_zone,
