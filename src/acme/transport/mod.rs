@@ -34,9 +34,16 @@ impl HttpTransport {
 	/// Build a transport with a 30-second total request timeout applied to every
 	/// call. Returns `AcmeError::Transport` if the underlying reqwest client
 	/// cannot be constructed (for example, an invalid TLS backend).
+	///
+	/// Redirects are not followed. A redirect would carry the signed request
+	/// — and the account key it proves — to whatever host the answer named,
+	/// and the client asked the CA for a resource, not for another address.
+	/// The client checks the URLs the CA names; this is the other half of
+	/// the same rule, for the answers that come with a status of their own.
 	pub fn new() -> Result<Self, AcmeError> {
 		let client = reqwest::Client::builder()
 			.timeout(Duration::from_secs(30))
+			.redirect(reqwest::redirect::Policy::none())
 			.build()
 			.map_err(|e| AcmeError::Transport(e.to_string()))?;
 		Ok(HttpTransport { client })
@@ -49,6 +56,16 @@ fn header(response: &reqwest::Response, name: &str) -> Option<String> {
 		.get(name)
 		.and_then(|v| v.to_str().ok())
 		.map(str::to_string)
+}
+
+/// The error for a 3xx answer: the client never follows one, so the status
+/// is the whole story. The URL is named because it is the resource the CA
+/// was asked for, and the reason because a redirect here means the CA (or
+/// whoever stands in its place) aimed the next request somewhere else.
+fn refuse_redirect(status: u16, url: &str) -> AcmeError {
+	AcmeError::Transport(format!(
+		"the ACME endpoint {url} answered {status}: redirects are not followed"
+	))
 }
 
 /// Drain the body of a reqwest response into a single buffer, refusing any
@@ -90,6 +107,9 @@ impl AcmeTransport for HttpTransport {
 				.await
 				.map_err(|e| AcmeError::Transport(e.to_string()))?;
 			let status = response.status().as_u16();
+			if (300..400).contains(&status) {
+				return Err(refuse_redirect(status, &url));
+			}
 			let body = read_response_body(response).await?;
 			// The directory is the one resource fetched with GET. A refusal
 			// carries a problem document, not a directory, so the status is
@@ -111,6 +131,9 @@ impl AcmeTransport for HttpTransport {
 				.await
 				.map_err(|e| AcmeError::Transport(e.to_string()))?;
 			let status = response.status().as_u16();
+			if (300..400).contains(&status) {
+				return Err(refuse_redirect(status, &url));
+			}
 			if !(200..300).contains(&status) {
 				// A HEAD answer carries no body: the status is all there is.
 				return Err(ca_refusal(status, &[]));
@@ -135,6 +158,9 @@ impl AcmeTransport for HttpTransport {
 			let nonce = header(&response, REPLAY_NONCE).unwrap_or_default();
 			let location = header(&response, reqwest::header::LOCATION.as_str());
 			let status = response.status().as_u16();
+			if (300..400).contains(&status) {
+				return Err(refuse_redirect(status, &url));
+			}
 			let body = read_response_body(response).await?;
 			Ok(PostResponse {
 				nonce,
