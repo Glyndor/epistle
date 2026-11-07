@@ -218,6 +218,12 @@ impl DnsProvider for DigitaloceanProvider {
 			self.delete_inner(&zone, record).await
 		}))
 	}
+	fn delete_exact(&self, zone: &str, record: DnsRecord) -> Op<'_> {
+		let zone = zone.to_string();
+		Box::pin(crate::dns::providers::within(async move {
+			self.delete_exact_inner(&zone, record).await
+		}))
+	}
 	fn list(&self, zone: &str) -> ListOp<'_> {
 		let zone = zone.to_string();
 		let zone_name = zone.to_string();
@@ -242,6 +248,8 @@ async fn decode<T: serde::de::DeserializeOwned>(
 mod pages;
 mod requests;
 mod write;
+
+mod exact;
 
 #[cfg(test)]
 mod tests;
