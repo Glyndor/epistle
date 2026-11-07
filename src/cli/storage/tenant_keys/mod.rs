@@ -21,7 +21,8 @@ pub enum TenantKeysCli {
 	/// Re-encrypt stored mail under the key each account should use now.
 	///
 	/// Mail and blobs move to the tenant key or the server key; a run cut
-	/// short continues where it stopped.
+	/// short revalidates every account against the current keys. S3 blob
+	/// storage is refused until a backend-aware migration exists.
 	Migrate {
 		/// Re-encrypt everything back under the server key, in the format a
 		/// release without tenant keys reads. Needs `tenant_keys = false`.
@@ -43,11 +44,27 @@ pub(in crate::cli) fn run(
 		Ok(config) => config,
 		Err(error) => return fail(status, error),
 	};
+	if matches!(
+		config
+			.storage
+			.as_ref()
+			.and_then(|storage| storage.blobs.as_ref()),
+		Some(crate::config::BlobBackendConfig::S3(_))
+	) {
+		return fail(
+			status,
+			"S3 blob migration is unsupported until a backend-aware migration exists; keep all storage and tenant keys and do not downgrade",
+		);
+	}
+	let _store = match crate::storage::lock::FileLock::store_exclusive(&config.data_dir) {
+		Ok(guard) => guard,
+		Err(error) => return fail(status, error),
+	};
 	let crypto = match MessageCrypto::from_full_config(&config) {
 		Ok(crypto) => crypto,
 		Err(error) => return fail(status, error),
 	};
-	if let Err(error) = crate::cli::util::attach_config_accounts(&crypto, &config) {
+	if let Err(error) = crate::cli::util::attach_file_accounts(&crypto, &config) {
 		return fail(status, format!("cannot read the accounts: {error}"));
 	}
 	let TenantKeysCli::Migrate { rollback } = action;
@@ -65,7 +82,7 @@ pub(in crate::cli) fn run(
 			std::time::SystemTime::now(),
 		),
 	};
-	let code = migrate(
+	let code = migrate_locked(
 		&config.data_dir,
 		&crypto,
 		&options,
@@ -172,7 +189,7 @@ fn refusal(
 }
 
 /// The migrate run itself, with its hooks injectable for tests.
-pub(crate) fn migrate(
+fn migrate_locked(
 	data_dir: &Path,
 	crypto: &MessageCrypto,
 	options: &Options,
@@ -188,29 +205,29 @@ pub(crate) fn migrate(
 		return fail(status, reason);
 	}
 	let mut progress = unfinished.unwrap_or_else(|| Journal::new(options.direction));
-	let accounts = match rekey::accounts(data_dir) {
-		Ok(accounts) => accounts,
+	let inventory = match rekey::Inventory::load(data_dir) {
+		Ok(inventory) => inventory,
 		Err(error) => return fail(status, error),
 	};
 	let mut rows = Vec::new();
-	for account in accounts {
-		if progress.done.contains(&account) {
-			continue;
-		}
-		let target = rekey::target_for(crypto, &account, options.direction);
-		let totals =
-			match rekey::rekey_account(crypto, data_dir, &account, &target, options.dry_run, hooks)
-			{
-				Ok(totals) => totals,
-				Err(error) => {
-					return fail(
-						status,
-						format!(
-							"{account}: {error}; the run stopped here and resumes when run again"
-						),
-					);
-				}
-			};
+	// A previous scan says nothing about today's target keys or files.
+	// Revalidate every account; already-current envelopes need no rewrite.
+	progress.done.clear();
+	for account in inventory.accounts() {
+		let target = match rekey::target_for(crypto, account, options.direction) {
+			Ok(target) => target,
+			Err(error) => return fail(status, error),
+		};
+		let totals = match inventory.rekey_account(crypto, account, &target, options.dry_run, hooks)
+		{
+			Ok(totals) => totals,
+			Err(error) => {
+				return fail(
+					status,
+					format!("{account}: {error}; the run stopped here and resumes when run again"),
+				);
+			}
+		};
 		if !options.dry_run {
 			progress.done.push(account.clone());
 			progress.rewritten += totals.rewritten;
@@ -218,7 +235,7 @@ pub(crate) fn migrate(
 				return fail(status, error);
 			}
 		}
-		rows.push((account, target, totals));
+		rows.push((account.clone(), target, totals));
 	}
 	if !options.dry_run
 		&& let Err(error) = journal::remove(data_dir)

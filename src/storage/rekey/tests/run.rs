@@ -12,7 +12,7 @@ fn acme() -> KeyOwner {
 fn run_all(fx: &super::fixture::Fixture, crypto: &MessageCrypto, direction: Direction) -> Totals {
 	let mut sum = Totals::default();
 	for account in accounts(fx.data_dir()).expect("accounts") {
-		let target = target_for(crypto, &account, direction);
+		let target = target_for(crypto, &account, direction).expect("resolved owner");
 		let totals = rekey_account(
 			crypto,
 			fx.data_dir(),
@@ -149,13 +149,16 @@ fn a_file_whose_key_is_not_loaded_is_reported_and_left_alone() {
 fn an_account_in_no_keyed_tenant_targets_the_server_key() {
 	let fx = fixture();
 	let crypto = fx.crypto();
-	assert_eq!(target_for(&crypto, "alice", Direction::Forward), acme());
 	assert_eq!(
-		target_for(&crypto, "bob", Direction::Forward),
+		target_for(&crypto, "alice", Direction::Forward).expect("resolved owner"),
+		acme()
+	);
+	assert_eq!(
+		target_for(&crypto, "bob", Direction::Forward).expect("resolved owner"),
 		KeyOwner::Server
 	);
 	assert_eq!(
-		target_for(&crypto, "alice", Direction::Rollback),
+		target_for(&crypto, "alice", Direction::Rollback).expect("resolved owner"),
 		KeyOwner::Server
 	);
 }

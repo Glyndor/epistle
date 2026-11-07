@@ -1,5 +1,6 @@
 //! The journal of a re-encryption run: which direction it goes and which
-//! accounts it has finished, so a run cut short resumes where it stopped.
+//! accounts it last scanned. A resumed run revalidates every account: keys
+//! and files may have changed while the server or another offline writer ran.
 //!
 //! It lives at `<data_dir>/rekey-journal.json`, written `0600` through a
 //! temporary file and a rename after every finished account, and is removed
@@ -41,7 +42,8 @@ pub struct Journal {
 	pub version: u32,
 	/// The direction the run goes.
 	pub direction: Direction,
-	/// Accounts whose files are all under their target key.
+	/// Accounts scanned in the interrupted pass, for status only. Resume
+	/// scans them again against the current keys and files.
 	pub done: Vec<String>,
 	/// Files rewritten so far, across every finished account.
 	pub rewritten: u64,

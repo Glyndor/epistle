@@ -4,7 +4,7 @@ use super::*;
 use crate::storage::EnvelopeKind;
 use crate::storage::rekey::tests::fixture::{Fixture, fixture};
 
-fn options(direction: Direction) -> Options {
+pub(super) fn options(direction: Direction) -> Options {
 	Options {
 		direction,
 		dry_run: false,
@@ -13,7 +13,7 @@ fn options(direction: Direction) -> Options {
 	}
 }
 
-fn call(
+pub(super) fn call(
 	fx: &Fixture,
 	crypto: &MessageCrypto,
 	options: &Options,
@@ -30,7 +30,7 @@ fn call(
 }
 
 /// Stops the run just before its rename number `0`, as a power cut would.
-struct Cut(usize);
+pub(super) struct Cut(pub(super) usize);
 
 impl Hooks for Cut {
 	fn before_replace(&mut self, _original: &Path) -> std::io::Result<()> {
@@ -147,7 +147,10 @@ fn a_cut_run_is_journalled_and_the_next_run_finishes_it() {
 		&mut rekey::NoHooks,
 	);
 	assert_eq!(code, ExitCode::SUCCESS);
-	assert!(!out.contains("alice"), "alice is done and skipped: {out}");
+	assert!(
+		out.contains("alice: rewrote 0 file(s)"),
+		"completed Alice is revalidated: {out}"
+	);
 	assert!(
 		out.contains("bob: rewrote 1 file(s) under the server key"),
 		"{out}"
@@ -185,11 +188,10 @@ fn a_run_in_the_other_direction_waits_for_the_unfinished_one() {
 }
 
 #[test]
-fn accounts_a_journal_marks_done_are_skipped_on_resume() {
+fn accounts_a_journal_marks_done_are_revalidated_on_resume() {
 	let fx = fixture();
 	let crypto = fx.crypto_writing(true);
 	let path = fx.store("alice", "new/0001.eml", b"one");
-	let before = std::fs::read(&path).expect("read");
 	let mut resumed = Journal::new(Direction::Forward);
 	resumed.done.push("alice".into());
 	journal::write(fx.data_dir(), &resumed).expect("journal");
@@ -200,8 +202,13 @@ fn accounts_a_journal_marks_done_are_skipped_on_resume() {
 		&mut rekey::NoHooks,
 	);
 	assert_eq!(code, ExitCode::SUCCESS);
-	assert!(!out.contains("alice"), "{out}");
-	assert_eq!(std::fs::read(&path).expect("read"), before);
+	assert!(out.contains("alice: rewrote 1 file(s)"), "{out}");
+	let stored = std::fs::read(&path).expect("read");
+	assert_eq!(
+		crypto.open_owned(&stored).expect("open").1,
+		KeyOwner::Tenant("acme".into())
+	);
+	assert!(fx.server_only().decode(&stored).is_err());
 }
 
 #[test]
