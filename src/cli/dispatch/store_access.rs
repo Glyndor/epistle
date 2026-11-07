@@ -45,7 +45,52 @@ pub(super) fn guard(command: &Command) -> Result<Option<FileLock>, String> {
 			| Legacy::ApiKeys { config, .. }
 			| Legacy::ApiKeyRevoke { config, .. } => config,
 		},
-		_ => return Ok(None),
+		// Every other command is named here, so a new `Command` variant does not compile
+		// until someone decides whether it needs the lease. Do not turn this back into a
+		// wildcard.
+		//
+		// Hold their own longer lived guard: `serve`, and `storage tenant-keys` (migration).
+		Command::Serve { .. } | Command::Storage { .. } => return Ok(None),
+		// Never open the mail store: keys, documents printed from the configuration, DNS and
+		// TLS checks, status, the stack, and the commands that only read or write
+		// configuration or operational state outside the encrypted mail files.
+		Command::MtaStsServe { .. }
+		| Command::ConfigCheck { .. }
+		| Command::DkimKeygen { .. }
+		| Command::StorageKeygen { .. }
+		| Command::OauthKeygen { .. }
+		| Command::VerifyDns { .. }
+		| Command::DnsRecords { .. }
+		| Command::Mobileconfig { .. }
+		| Command::SrvRecords { .. }
+		| Command::Autoconfig { .. }
+		| Command::Autodiscover { .. }
+		| Command::Delivery { .. }
+		| Command::Evidence { .. }
+		| Command::Ban { .. }
+		| Command::TokenHash { .. }
+		| Command::Reports { .. }
+		| Command::Local { .. }
+		| Command::Init { .. }
+		| Command::Limits { .. }
+		| Command::Dns { .. }
+		| Command::Srs { .. }
+		| Command::Webhook { .. }
+		| Command::Alert { .. }
+		| Command::Relay { .. }
+		| Command::Service { .. }
+		| Command::Status { .. }
+		| Command::Check { .. }
+		| Command::Antispam { .. }
+		| Command::Attachments { .. }
+		| Command::Stack { .. }
+		| Command::Db { .. }
+		| Command::Dkim { .. }
+		| Command::Tls { .. }
+		| Command::Probe { .. }
+		| Command::Completions { .. }
+		| Command::MoveSubids { .. }
+		| Command::Manpages { .. } => return Ok(None),
 	};
 	let config = Config::load(path).map_err(|error| error.to_string())?;
 	FileLock::store_shared(&config.data_dir)
