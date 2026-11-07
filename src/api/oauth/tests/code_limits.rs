@@ -197,3 +197,27 @@ async fn a_swept_pool_lets_the_capped_client_ask_again() {
 	assert_eq!(status, StatusCode::OK, "{body}");
 	assert_eq!(authz.codes.lock().unwrap().len(), 1);
 }
+
+#[tokio::test]
+async fn one_account_cannot_hold_more_than_its_share_of_codes_over_many_clients() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let state = state_with_authz(dir.path(), &keys());
+	let authz = state.authz().expect("authz");
+	{
+		// The same account from many addresses, each under its own client cap.
+		let mut codes = authz.codes.lock().unwrap();
+		for n in 0..super::pkce::MAX_CODES_PER_ACCOUNT {
+			let ip = format!("198.51.100.{}", n / 10 + 10);
+			codes.insert(format!("old{n}"), code("alice", bucket(&ip), now() + 600));
+		}
+	}
+	let app = router(state.clone());
+	let (status, body) = authorize(&app, "203.0.113.7").await;
+	assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
+	assert_eq!(body["error"], "temporarily_unavailable");
+	assert_eq!(
+		authz.codes.lock().unwrap().len(),
+		super::pkce::MAX_CODES_PER_ACCOUNT,
+		"the refused code was not stored"
+	);
+}
