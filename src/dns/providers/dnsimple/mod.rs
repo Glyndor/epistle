@@ -88,6 +88,10 @@ struct Record {
 	weight: Option<u16>,
 	#[serde(default)]
 	port: Option<u16>,
+	#[serde(default)]
+	flags: Option<u8>,
+	#[serde(default)]
+	caa_tag: Option<String>,
 }
 
 impl DnsimpleProvider {
@@ -336,6 +340,12 @@ impl DnsProvider for DnsimpleProvider {
 			self.delete_inner(&zone, record).await
 		}))
 	}
+	fn delete_exact(&self, zone: &str, record: DnsRecord) -> Op<'_> {
+		let zone = zone.to_string();
+		Box::pin(crate::dns::providers::within(async move {
+			self.delete_exact_inner(&zone, record).await
+		}))
+	}
 	fn list(&self, zone: &str) -> ListOp<'_> {
 		let zone = zone.to_string();
 		let zone_name = zone.to_string();
@@ -372,6 +382,8 @@ fn check(response: reqwest::Response) -> Result<(), ProviderError> {
 
 mod delete;
 mod upsert;
+
+mod exact;
 
 #[cfg(test)]
 mod tests;
