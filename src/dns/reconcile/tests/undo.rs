@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use super::run::{block, harness, publish, read};
-use super::support::{rec, txt};
+use super::support::{Racing, holds, rec, txt};
 use super::*;
 use crate::dns::lockdown::tests::support::Zone;
 use crate::dns::reconcile::store;
@@ -74,4 +74,32 @@ fn undo_leaves_a_dkim_key_in_service() {
 	let done = block(undo(&h.config, &zone, None, false, Duration::from_secs(5))).expect("undo");
 	assert_eq!(outcome_of(&done, &key), "left");
 	assert_eq!(zone.snapshot(), vec![key]);
+}
+
+/// A record another account writes between the listing and the removal is
+/// still there when the removal is done: `--undo` takes the record epistle
+/// published and nothing else.
+#[test]
+fn undo_leaves_a_record_another_account_wrote_in_the_meantime() {
+	let h = harness();
+	let spf = txt("example.org", "v=spf1 mx -all");
+	let theirs = txt("example.org", "v=spf1 include:_spf.example.net -all");
+	let zone = Racing {
+		zone: Zone::default(),
+		foreign: theirs.clone(),
+	};
+	let _ = publish(&h, &zone, read(&h, &zone, std::slice::from_ref(&spf)));
+	let done = block(undo(&h.config, &zone, None, false, Duration::from_secs(5))).expect("undo");
+	assert_eq!(outcome_of(&done, &spf), "remove");
+	let now = zone.zone.snapshot();
+	assert!(
+		!holds(&now, &spf),
+		"the record epistle published goes: {:#?}",
+		now
+	);
+	assert!(
+		holds(&now, &theirs),
+		"a record another account wrote must survive: {:#?}",
+		now
+	);
 }

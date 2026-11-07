@@ -5,11 +5,16 @@
 //! hand since, one that shares its slot with somebody else's, one under a
 //! delegation, and the DKIM keys, which may still sign mail and are retired
 //! by the key rotation. Nothing outside the ledgers is touched.
+//!
+//! The removal takes the record epistle wrote and nothing else: the exact
+//! removal of the provider contract is asked for first, so a record another
+//! account wrote between the listing and the removal is still there.
 
 use std::time::Duration;
 
 use serde::Serialize;
 
+use super::remove::remove;
 use super::slot::{is_dkim, slot_of};
 use super::survey::within;
 use super::{Ledger, store};
@@ -79,8 +84,7 @@ pub async fn undo(
 			}
 			let (outcome, reason) = decide(&record, &name, &listing, &cuts);
 			if outcome == "remove"
-				&& !dry_run && let Err(error) =
-				within(timeout, provider.delete(&zone, record.clone())).await
+				&& !dry_run && let Err(error) = remove(provider, &zone, &record, timeout).await
 			{
 				report.failure = Some(format!(
 					"removing {name} {} failed: {error}",
@@ -111,7 +115,13 @@ fn decide(
 ) -> (&'static str, String) {
 	let kind = record.kind.as_str();
 	if let Some(cut) = cuts.above(name) {
-		return ("left", format!("{cut} is delegated to other nameservers"));
+		return (
+			"left",
+			format!(
+				"{} is delegated to other nameservers",
+				super::from_zone(cut)
+			),
+		);
 	}
 	if is_dkim(record) {
 		return (

@@ -1,6 +1,9 @@
 //! Records and plans for the reconcile tests.
 
 use super::*;
+use crate::dns::lockdown::tests::support::Zone;
+use crate::dns::provider::DnsProvider;
+use crate::dns::rrset::same_record;
 
 pub(crate) const ZONE: &str = "example.org";
 
@@ -54,6 +57,11 @@ pub(crate) fn action_for(plan: &ZonePlan, record: &DnsRecord) -> Action {
 	found[0].action
 }
 
+/// Whether the zone holds `record`.
+pub(crate) fn holds(zone: &[DnsRecord], record: &DnsRecord) -> bool {
+	zone.iter().any(|r| same_record(r, record))
+}
+
 /// The SPF, MX and DMARC a domain needs.
 pub(crate) fn basics() -> Vec<DnsRecord> {
 	vec![
@@ -64,4 +72,44 @@ pub(crate) fn basics() -> Vec<DnsRecord> {
 			"v=DMARC1; p=quarantine; rua=mailto:postmaster@example.org; adkim=s; aspf=s",
 		),
 	]
+}
+
+/// A zone that lets another account write into it between the listing and
+/// the removal: the foreign record goes in just before the delete is
+/// answered.
+///
+/// The ordinary delete follows the write rule of the provider contract and
+/// takes the whole set of the kind (a TXT of the same purpose goes with it);
+/// the exact delete takes the record with the value and nothing else.
+pub(crate) struct Racing {
+	/// The zone the records live in.
+	pub(crate) zone: Zone,
+	/// The record another account writes, at the moment of the removal.
+	pub(crate) foreign: DnsRecord,
+}
+
+impl DnsProvider for Racing {
+	fn upsert(&self, zone: &str, record: DnsRecord) -> crate::dns::provider::Op<'_> {
+		self.zone.upsert(zone, record)
+	}
+	fn delete(&self, zone: &str, record: DnsRecord) -> crate::dns::provider::Op<'_> {
+		self.zone.delete(zone, record)
+	}
+	fn delete_exact(&self, _zone: &str, record: DnsRecord) -> crate::dns::provider::Op<'_> {
+		let zone = &self.zone;
+		let foreign = self.foreign.clone();
+		Box::pin(async move {
+			// Another account writes into the same slot, right now.
+			zone.records.lock().unwrap().push(foreign);
+			// The exact removal takes the record with this value alone.
+			zone.records
+				.lock()
+				.unwrap()
+				.retain(|r| !same_record(r, &record));
+			Ok(())
+		})
+	}
+	fn list(&self, zone: &str) -> crate::dns::provider::ListOp<'_> {
+		self.zone.list(zone)
+	}
 }
