@@ -122,7 +122,9 @@ impl Options {
 			None | Some("*") => TYPES.to_vec(),
 			Some(list) => {
 				let names: Vec<&str> = list.split(',').collect();
-				if names.iter().any(|name| name.is_empty()) {
+				// RFC 8620 section 7.3: the single character `*`, or a list of
+				// type names; the two do not mix.
+				if names.iter().any(|name| name.is_empty() || *name == "*") {
 					return Err("types must be * or a comma-separated list of type names");
 				}
 				TYPES
@@ -266,3 +268,6 @@ impl futures_core::Stream for Events {
 		Poll::Pending
 	}
 }
+
+#[cfg(test)]
+mod tests;
