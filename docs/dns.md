@@ -123,7 +123,7 @@ never at the same one.
 #### Long TXT values split at 255 octets
 
 RFC 1035 §3.3.14 caps each character-string at 255 octets, and RSA-2048
-`p=` is around 410 bytes (RSA-4096 around 755). When
+`p=` is around 392 bytes (RSA-4096 around 736). When
 `epistle dns-records` prints the RSA selector's record, it splits the
 value at the boundary and quotes each part, so the operator can paste
 the line into a zone file directly:
@@ -275,8 +275,12 @@ change (ACME renewal or a replaced `[tls]` pair):
 
 So users configure a client from just their address and password:
 
-- Publish the **SRV** records from `epistle srv-records` (submission, IMAP(S),
-  POP3S, ManageSieve, and the autodiscover SRV).
+- Publish the **SRV** records from `epistle srv-records` (submission over
+  implicit TLS and STARTTLS, IMAP over implicit TLS and STARTTLS, POP3S, and
+  the `_pop3` "unavailable" marker). The ManageSieve, JMAP and CalDAV/CardDAV
+  locators come from `epistle dns-records`, which follows the listeners you
+  enabled; there is no autodiscover SRV, `autoconfig` and `autodiscover` are
+  CNAMEs.
 - Point `autoconfig.example.org` and `autodiscover.example.org` at the host and
   add an `autoconfigs` listener (port 443). It serves the documents over HTTPS
   with the server certificate, so no TLS proxy is needed; the certificate must
@@ -611,8 +615,10 @@ epistle dns provider set desec --zone example.org --store-token --config /etc/ep
 
 Use your provider and zone, and repeat its other required settings, such as
 `--account-id` for DNSimple. `--store-token` reads the current token without
-printing it, writes `<data_dir>/../secrets/dns_provider_token` with mode `0600`,
-and replaces `dns.token` and `dns.token_env` with `dns.token_file`. With
+printing it, writes `secrets/dns_provider_token` with mode `0600` (with several
+`[[dns]]` entries, `secrets/dns_provider_token_<zone>` with the dots as
+underscores), and replaces `dns.token` and `dns.token_env` with
+`dns.token_file`. With
 `--token-env NAME` or `--token-file /absolute/path`, it imports that source
 instead. A different existing destination is refused.
 
