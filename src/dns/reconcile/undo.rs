@@ -48,6 +48,10 @@ pub struct UndoReport {
 
 /// Undo the ledgers in scope. Every zone is read before anything is
 /// removed; a zone that cannot be read stops the run with nothing written.
+///
+/// The report is never lost: a record that was removed and whose ledger
+/// cannot be saved stops the run with the report of what was removed in
+/// hand, so the operator knows what the zone holds now.
 pub async fn undo(
 	config: &Config,
 	provider: &dyn DnsProvider,
@@ -92,15 +96,28 @@ pub async fn undo(
 				));
 				return Ok(report);
 			}
-			if outcome != "left" && !dry_run {
-				forget(config, &mut ledger, &record)?;
-			}
+			// What happened to the record goes into the report before
+			// the ledger is saved: a ledger that cannot be saved must
+			// not take the report of what went with it.
 			report.entries.push(UndoEntry {
 				zone: zone.clone(),
-				record,
+				record: record.clone(),
 				outcome,
 				reason,
 			});
+			if outcome != "left" && !dry_run {
+				// The record is out of the zone. The ledger that says
+				// so may fail to be saved: the run stops with the
+				// report of what was removed in hand, so the operator
+				// knows what the zone holds now.
+				if let Err(error) = forget(config, &mut ledger, &record) {
+					report.failure = Some(format!(
+						"{name} {} is out of the zone but the ledger could not be saved ({error}); the ledger still lists it, and the next run withdraws it again",
+						record.kind.as_str()
+					));
+					return Ok(report);
+				}
+			}
 		}
 	}
 	Ok(report)
@@ -148,6 +165,9 @@ fn decide(
 	}
 }
 
+/// Forget `record` in the ledger and save it. The error names the ledger
+/// that could not be saved: the record is out of the zone, and the ledger
+/// that says so is not there.
 fn forget(config: &Config, ledger: &mut Ledger, record: &DnsRecord) -> Result<(), String> {
 	ledger.forget(record);
 	store::store(&config.data_dir, ledger)

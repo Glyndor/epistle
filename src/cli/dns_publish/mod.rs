@@ -96,7 +96,7 @@ pub(super) fn execute(
 				style::error_to(err, "cannot start the async runtime");
 				return ExitCode::FAILURE;
 			};
-			let _lock = match store::lock(&config.data_dir, LOCK_WAIT) {
+			let _lock = match runtime.block_on(store::lock_wait(&config.data_dir, LOCK_WAIT)) {
 				Ok(Some(lock)) => lock,
 				Ok(None) => {
 					style::error_to(
@@ -324,10 +324,21 @@ fn undo(
 				.iter()
 				.filter(|e| e.outcome == "remove")
 				.count();
-			let _ = writeln!(err, "{removed} records removed");
-			match report.failure {
-				None => ExitCode::SUCCESS,
+			match &report.failure {
+				None => {
+					let _ = writeln!(err, "{removed} records removed");
+					ExitCode::SUCCESS
+				}
 				Some(failure) => {
+					// The run stopped partway: the report of what went
+					// is printed before the error, so the operator knows
+					// what the zone holds now. With `--json` the
+					// document of the preview is the one the machine
+					// reads, and the error names the record.
+					if !request.json {
+						let _ = out.write_all(render::undo_text(&report, false).as_bytes());
+					}
+					let _ = writeln!(err, "{removed} records removed");
 					style::error_to(err, failure);
 					ExitCode::FAILURE
 				}

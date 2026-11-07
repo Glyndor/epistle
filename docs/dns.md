@@ -380,7 +380,10 @@ retires keys. The removal takes the record epistle published and nothing
 else: the provider is asked for the exact removal, so a record another account
 wrote between the listing and the removal is still there. A provider that
 cannot remove one value (its API rewrites the whole set of the name) removes
-the record the ordinary way.
+the record the ordinary way. If the ledger cannot be saved after a removal,
+the report of what was removed is printed and the command fails: the record is
+out of the zone and the ledger still lists it, so the next run withdraws it
+again.
 
 In automatic mode the server runs the same comparison on its own every six
 hours (`[dns_publish] interval_secs`, see

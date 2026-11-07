@@ -5,7 +5,6 @@
 //! reconcile loop write the same files, so both take the lock in that
 //! directory before they read a zone.
 
-use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -123,37 +122,63 @@ pub fn zones(data_dir: &Path) -> Result<Vec<String>, String> {
 /// The lock of the ledger directory. Held while it lives.
 #[derive(Debug)]
 pub struct Lock {
-	_file: File,
+	_file: crate::storage::lock::FileLock,
 }
 
-/// Take the lock, waiting at most `wait` for whoever holds it. `None` when
-/// it is still held after the wait: the caller does not publish.
-pub fn lock(data_dir: &Path, wait: Duration) -> Result<Option<Lock>, String> {
+/// Take the lock of the ledger directory, if it is free.
+///
+/// The lock is the one the rest of the code takes
+/// (`crate::storage::lock::FileLock`), so the reconcile loop and the
+/// command that publishes by hand never write at the same time, and the
+/// lock file is created the way the rest of the code creates its lock
+/// files.
+///
+/// Nothing here waits: the lock is either free or held by somebody else,
+/// so this can be called from inside the async runtime without stopping a
+/// worker of it.
+pub fn lock(data_dir: &Path) -> Result<Option<Lock>, String> {
+	let path = lock_path(data_dir)?;
+	acquire(&path)
+}
+
+/// Take the lock of the ledger directory, waited for at most `wait`.
+///
+/// The wait is between two tries and the runtime keeps running while it
+/// waits, so a caller that waits for the lock never stops a worker of the
+/// runtime. `None` when the lock is still held after the wait: the
+/// caller does not publish.
+pub async fn lock_wait(data_dir: &Path, wait: Duration) -> Result<Option<Lock>, String> {
+	let path = lock_path(data_dir)?;
+	let began = Instant::now();
+	loop {
+		if let Some(lock) = acquire(&path)? {
+			return Ok(Some(lock));
+		}
+		if began.elapsed() >= wait {
+			return Ok(None);
+		}
+		tokio::time::sleep(RETRY).await;
+	}
+}
+
+/// How long the wait between two tries for the lock lasts.
+const RETRY: Duration = Duration::from_millis(100);
+
+/// The path of the lock file, its directory created private.
+fn lock_path(data_dir: &Path) -> Result<PathBuf, String> {
 	let dir = dir(data_dir);
 	create_private_dir(&dir)?;
-	let path = dir.join(".lock");
+	Ok(dir.join(".lock"))
+}
+
+/// Take the lock of `path` if it is free.
+fn acquire(path: &Path) -> Result<Option<Lock>, String> {
 	// A lock file is not a place for anything but the lock: it is created
 	// readable by its owner alone, the way the rest of the code creates
 	// its lock files.
-	crate::storage::lock::create_private(&path)
+	crate::storage::lock::create_private(path)
 		.map_err(|error| format!("cannot create {}: {error}", path.display()))?;
-	let file = std::fs::OpenOptions::new()
-		.create(true)
-		.truncate(false)
-		.write(true)
-		.open(&path)
-		.map_err(|error| format!("cannot open {}: {error}", path.display()))?;
-	let began = Instant::now();
-	loop {
-		match file.try_lock() {
-			Ok(()) => return Ok(Some(Lock { _file: file })),
-			Err(std::fs::TryLockError::WouldBlock) if began.elapsed() < wait => {
-				std::thread::sleep(Duration::from_millis(100));
-			}
-			Err(std::fs::TryLockError::WouldBlock) => return Ok(None),
-			Err(std::fs::TryLockError::Error(error)) => {
-				return Err(format!("cannot lock {}: {error}", path.display()));
-			}
-		}
-	}
+	crate::storage::lock::FileLock::try_acquire(path)
+		.map(|lock| lock.map(|file| Lock { _file: file }))
+		.map_err(|error| format!("cannot lock {}: {error}", path.display()))
 }
