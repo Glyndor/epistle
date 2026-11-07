@@ -1,7 +1,7 @@
 //! Bounded current behavior, including unsupported SECONDLY's single DTSTART.
 
-use super::{calendar, event, filter, isolated, measured};
-use crate::webdav::{caldav_filter, caldav_filter_ical};
+use super::{calendar, event, filter, isolated, matches, measured};
+use crate::webdav::caldav_filter_ical;
 
 #[test]
 fn nested_events_do_not_leak_properties_or_recurse() {
@@ -20,7 +20,7 @@ fn nested_events_do_not_leak_properties_or_recurse() {
 			assert_eq!(components[0].name, "VEVENT");
 			assert_eq!(components[0].values("SUMMARY").count(), 0);
 			let f = filter("20260101T000000Z", "20260102T000000Z", "");
-			assert!(measured(|| caldav_filter::matches(&f, &ics)));
+			assert!(measured(|| matches(&f, &ics)));
 		},
 	);
 }
@@ -37,9 +37,9 @@ fn endless_folding_preserves_the_property_and_event_boundary() {
 				"20260102T000000Z",
 				"<C:prop-filter name=\"SUMMARY\"><C:text-match match-type=\"ends-with\">xEND</C:text-match></C:prop-filter>",
 			);
-			assert!(measured(|| caldav_filter::matches(&f, &ics)));
+			assert!(measured(|| matches(&f, &ics)));
 			let absent = filter("20260102T000000Z", "20260103T000000Z", "");
-			assert!(!measured(|| caldav_filter::matches(&absent, &ics)));
+			assert!(!measured(|| matches(&absent, &ics)));
 		},
 	);
 }
@@ -52,8 +52,8 @@ fn secondly_without_end_uses_the_current_single_start_fallback() {
 			let ics = calendar(&event("FREQ=SECONDLY", ""));
 			let at_start = filter("20260101T000000Z", "99990101T000000Z", "");
 			let later = filter("20260101T000001Z", "99990101T000000Z", "");
-			assert!(measured(|| caldav_filter::matches(&at_start, &ics)));
-			assert!(!measured(|| caldav_filter::matches(&later, &ics)));
+			assert!(measured(|| matches(&at_start, &ics)));
+			assert!(!measured(|| matches(&later, &ics)));
 		},
 	);
 }
@@ -70,8 +70,8 @@ fn enormous_interval_and_combined_selectors_finish_with_exact_matches() {
 				let ics = calendar(&event(rule, ""));
 				let hit = filter("20260101T000000Z", "20260102T000000Z", "");
 				let miss = filter("20270101T000000Z", "99990101T000000Z", "");
-				assert!(measured(|| caldav_filter::matches(&hit, &ics)), "{rule}");
-				assert!(!measured(|| caldav_filter::matches(&miss, &ics)), "{rule}");
+				assert!(measured(|| matches(&hit, &ics)), "{rule}");
+				assert!(!measured(|| matches(&miss, &ics)), "{rule}");
 			}
 		},
 	);
@@ -96,15 +96,15 @@ fn combined_selectors_clip_one_series_at_the_expansion_budget() {
 			assert_eq!(occurrences[0], start);
 			let ics = calendar(&event(rule, ""));
 			let f = filter("20260101T000000Z", "99990101T000000Z", "");
-			assert!(measured(|| caldav_filter::matches(&f, &ics)));
+			assert!(measured(|| matches(&f, &ics)));
 		},
 	);
 }
 
 #[test]
-fn counted_selectors_clip_before_a_distant_window() {
+fn counted_selectors_refuse_the_object_they_cannot_reach() {
 	isolated(
-		"calendar::counted_selectors_clip_before_a_distant_window",
+		"calendar::counted_selectors_refuse_the_object_they_cannot_reach",
 		|| {
 			// 2026 to 2500 is >100,000 days. COUNT forces the selector to walk
 			// from DTSTART, exhausting its budget before the requested window.
@@ -113,9 +113,11 @@ fn counted_selectors_clip_before_a_distant_window() {
 				"",
 			));
 			let f = filter("25000101T000000Z", "25000102T000000Z", "");
-			assert!(
-				!measured(|| caldav_filter::matches(&f, &ics)),
-				"current per-series clipping can yield no match before the window"
+			// The search ran out of work before it reached the window, so it
+			// cannot answer: the object is refused, not called a non-match.
+			assert_eq!(
+				measured(|| crate::webdav::caldav_filter::matches(&f, &ics)),
+				Err(crate::webdav::caldav_filter::TooMuchWork)
 			);
 		},
 	);

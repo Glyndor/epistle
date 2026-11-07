@@ -24,6 +24,7 @@ const SCANNED_FILES: &[&str] = &[
 	"util/mailbox_path/mod.rs",
 	"util/header/mod.rs",
 	"webdav/caldav_busy/mod.rs",
+	"webdav/caldav_filter/mod.rs",
 	"webdav/quota/mod.rs",
 	"webdav/bounds/mod.rs",
 ];
