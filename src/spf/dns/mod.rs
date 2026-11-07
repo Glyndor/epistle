@@ -140,6 +140,16 @@ pub trait DnsLookup: Send + Sync {
 	fn ptr(&self, _ip: IpAddr) -> Lookup<'_, Vec<String>> {
 		Box::pin(async { Ok(Vec::new()) })
 	}
+	/// The life left in the resolver's negative answer for `name`, when it
+	/// gives one: the seconds its "no such name" is still good for (RFC 2308
+	/// section 5). A resolver that answers with the records, or that does
+	/// not say, reports none.
+	///
+	/// The default implementation reports none, so a fixture that does not
+	/// care about negative caching keeps compiling.
+	fn negative_ttl(&self, _name: &str) -> Lookup<'_, Option<u32>> {
+		Box::pin(async { Ok(None) })
+	}
 }
 
 /// Real resolver on top of hickory.
@@ -342,6 +352,29 @@ impl DnsLookup for SystemDns {
 					.collect()),
 				Err(NetError::Dns(DnsError::NoRecordsFound(_))) => Ok(Vec::new()),
 				Err(_) => Err(DnsFailure::Temporary),
+			}
+		})
+	}
+
+	/// The negative answer the resolver holds for `name` says how long it
+	/// is good for: the SOA of the zone carries that life (RFC 2308 section
+	/// 5), and the resolver hands it over with the answer. A name that
+	/// resolves, or a failure that is not a denial, says nothing.
+	fn negative_ttl(&self, name: &str) -> Lookup<'_, Option<u32>> {
+		let name = name.to_string();
+		Box::pin(async move {
+			use hickory_resolver::net::{DnsError, NetError};
+			use hickory_resolver::proto::rr::RecordType;
+			match self
+				.resolver
+				.lookup(format!("{name}."), RecordType::TXT)
+				.await
+			{
+				Ok(_) => Ok(None),
+				Err(NetError::Dns(DnsError::NoRecordsFound(no_records))) => {
+					Ok(no_records.negative_ttl)
+				}
+				Err(_) => Ok(None),
 			}
 		})
 	}
