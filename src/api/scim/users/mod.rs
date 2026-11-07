@@ -261,6 +261,11 @@ fn parse_user_name_eq(filter: &str) -> Result<String, ScimError> {
 				}
 				None => return Err(ScimError::invalid("dangling filter escape")),
 			},
+			'"' => {
+				return Err(ScimError::invalid(
+					"a quote inside the filter value has to be escaped as \\\"",
+				));
+			}
 			other => out.push(other),
 		}
 	}
@@ -460,6 +465,10 @@ pub async fn put_user(
 	Ok(scim_resource(StatusCode::OK, render_user(&stored)))
 }
 
+/// The most operations one `PATCH` may carry. The narrow set this API honours
+/// needs a handful; the rest of a large request is a request to loop.
+const MAX_PATCH_OPERATIONS: usize = 100;
+
 /// `PATCH /Users/{id}` — apply a sequence of narrow operations. We
 /// accept `replace` (and the equivalent `add` for single-value
 /// attributes) on `active` and `password` only. Everything else is 400.
@@ -478,6 +487,11 @@ pub async fn patch_user(
 ) -> Result<impl IntoResponse, ScimError> {
 	let principal = Principal::for_token(&state, &auth);
 	lookup_in_scope(&state, &principal, &id)?;
+	if body.operations.len() > MAX_PATCH_OPERATIONS {
+		return Err(ScimError::invalid(format!(
+			"a PATCH takes at most {MAX_PATCH_OPERATIONS} operations"
+		)));
+	}
 	for op in &body.operations {
 		apply_operation(&state, &id, op)?;
 	}

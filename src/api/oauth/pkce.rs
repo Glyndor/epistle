@@ -65,6 +65,16 @@ pub async fn authorize(
 	if fields.get("code_challenge_method").map(String::as_str) != Some("S256") {
 		return oauth_error("invalid_request");
 	}
+	// This endpoint answers with JSON and never redirects, so a `redirect_uri`
+	// is only echoed by clients that always send one. It still has to be an
+	// absolute URI of a plain scheme, without control characters, or it is
+	// refused: nothing downstream should ever be handed a script URL or a
+	// header-splitting value.
+	if let Some(uri) = fields.get("redirect_uri")
+		&& !valid_redirect_uri(uri)
+	{
+		return oauth_error("invalid_request");
+	}
 	let code_challenge = fields.get("code_challenge").cloned().unwrap_or_default();
 	if code_challenge.is_empty()
 		|| fields
@@ -162,6 +172,12 @@ fn redeem_authorization_code(
 	if stored.expires_at <= now {
 		return oauth_error("invalid_grant");
 	}
+	// A verifier outside RFC 7636 section 4.1 cannot be the one the challenge
+	// came from, and it is refused before it is hashed. The code is already
+	// consumed, like on any other mismatch.
+	if !valid_verifier(verifier) {
+		return oauth_error("invalid_grant");
+	}
 	// BASE64URL(SHA256(code_verifier)) == code_challenge (RFC 7636 §4.6).
 	let digest = ring::digest::digest(&ring::digest::SHA256, verifier.as_bytes());
 	let computed = B64URL.encode(digest.as_ref());
@@ -172,4 +188,43 @@ fn redeem_authorization_code(
 		Some(token) => token_response(&token).into_response(),
 		None => oauth_error("server_error"),
 	}
+}
+
+/// A `code_verifier` as RFC 7636 section 4.1 writes it: 43 to 128 characters
+/// of the unreserved set. Anything longer or odder is refused before it is
+/// hashed, so a megabyte of verifier costs nothing.
+fn valid_verifier(verifier: &str) -> bool {
+	(43..=128).contains(&verifier.len())
+		&& verifier
+			.bytes()
+			.all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~'))
+}
+
+/// An absolute `http`, `https` or application URI (`scheme:` followed by
+/// something), short, with no control character, space or backslash. Not a
+/// scheme that runs code in a browser, and not a network-path reference.
+fn valid_redirect_uri(uri: &str) -> bool {
+	if uri.is_empty() || uri.len() > 2048 {
+		return false;
+	}
+	if uri
+		.bytes()
+		.any(|byte| byte <= b' ' || byte == 0x7f || byte == b'\\')
+	{
+		return false;
+	}
+	let Some((scheme, rest)) = uri.split_once(':') else {
+		return false;
+	};
+	let scheme_ok = scheme
+		.bytes()
+		.next()
+		.is_some_and(|first| first.is_ascii_alphabetic())
+		&& scheme
+			.bytes()
+			.all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'-' | b'.'));
+	let scheme = scheme.to_ascii_lowercase();
+	scheme_ok
+		&& !rest.is_empty()
+		&& !matches!(scheme.as_str(), "javascript" | "data" | "vbscript" | "file")
 }
