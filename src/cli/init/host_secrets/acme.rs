@@ -121,6 +121,43 @@ pub(crate) fn place(data_dir: &Path, certs: bool) -> Result<Vec<String>, String>
 	Ok(lines)
 }
 
+/// Put the account key where the certificates container reads it, without
+/// creating one.
+///
+/// The certificates container reads the key at `secrets/acme_account.key`,
+/// beside data_dir, through a mount it cannot write, so a key that is
+/// nowhere is a container that cannot renew: it exits at start, podman
+/// restarts it and it is "running" again a second later. The copy under
+/// data_dir is put there when it is the one that survives; two copies that
+/// differ are refused, since the operator keeps the one the authority
+/// knows.
+///
+/// One line for what was done, `None` when the key was already there.
+pub(crate) fn place_for_certs(data_dir: &Path) -> Result<Option<String>, String> {
+	let in_data_dir = crate::acme::renew::account_key_path(data_dir);
+	let in_secrets = super::acme_account_key(data_dir);
+	match (read_key(&in_data_dir)?, read_key(&in_secrets)?) {
+		(None, None) => Err(format!(
+			"there is no ACME account key: {} and {} hold none, and the certificates \
+			 container reads {}; put the key there by hand",
+			in_data_dir.display(),
+			in_secrets.display(),
+			in_secrets.display()
+		)),
+		(Some(left), Some(right)) if left != right => Err(format!(
+			"{} and {} hold different ACME account keys; keep the one the authority knows \
+			 and delete the other",
+			in_data_dir.display(),
+			in_secrets.display()
+		)),
+		// The key is where the container reads it.
+		(_, Some(_)) => Ok(None),
+		// Only the copy `mail` can read survives: it is put where the
+		// container reads it.
+		(Some(_), None) => copy_key(&in_data_dir, &in_secrets),
+	}
+}
+
 /// Remove the copy under data_dir once the certificates container runs:
 /// `mail` mounts data_dir, so a key left there is a key `mail` can read.
 /// Only a copy identical to the one in `secrets/` is removed.

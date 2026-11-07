@@ -52,6 +52,18 @@ pub(super) fn action(token_flags: &[&str]) -> DnsCli {
 	action_of("cloudflare", token_flags)
 }
 
+/// The `unset` command for the given zone, ready to run.
+pub(super) fn unset_of(zone: &str) -> DnsCli {
+	let crate::cli::Command::Dns { action, .. } =
+		crate::cli::Cli::try_parse_from(["epistle", "dns", "provider", "unset", "--zone", zone])
+			.unwrap()
+			.command
+	else {
+		unreachable!("dns arguments must select the dns command")
+	};
+	action
+}
+
 /// The `set` command for the given provider, with the given token flags.
 fn action_of(provider: &str, token_flags: &[&str]) -> DnsCli {
 	let mut full = vec![
@@ -72,6 +84,21 @@ fn action_of(provider: &str, token_flags: &[&str]) -> DnsCli {
 	action
 }
 
+/// A stack install whose generated compose file runs the certificates
+/// container, with the given mounts in the `mail` service.
+pub(super) fn split_stack_with(
+	body: &str,
+	mounts: &[(&str, &str)],
+) -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
+	let (dir, path, compose) = stack_with(body, mounts);
+	let mut document: serde_json::Value =
+		serde_json::from_str(&std::fs::read_to_string(&compose).unwrap()).unwrap();
+	document["services"]["certs"] =
+		serde_json::json!({"environment": {"TZ": "UTC"}, "volumes": []});
+	std::fs::write(&compose, document.to_string()).unwrap();
+	(dir, path, compose)
+}
+
 /// The mounts of the `mail` service, as the container engine reads them.
 pub(super) fn mail_mounts(compose: &std::path::Path) -> Vec<serde_json::Value> {
 	let document: serde_json::Value =
@@ -84,9 +111,28 @@ pub(super) fn mail_mounts(compose: &std::path::Path) -> Vec<serde_json::Value> {
 
 /// Whether the token file is mounted read-only at its own path.
 pub(super) fn mounted(compose: &std::path::Path, path: &str) -> bool {
-	mail_mounts(compose).iter().any(|mount| {
-		mount["source"] == path && mount["target"] == path && mount["read_only"] == true
-	})
+	mounted_by(compose, "mail", path)
+}
+
+/// Whether the token file is mounted read-only at its own path in `service`.
+pub(super) fn mounted_by(compose: &std::path::Path, service: &str, path: &str) -> bool {
+	let document: serde_json::Value =
+		serde_json::from_str(&std::fs::read_to_string(compose).unwrap()).unwrap();
+	document["services"][service]["volumes"]
+		.as_array()
+		.map(|volumes| {
+			volumes.iter().any(|mount| {
+				mount["source"] == path && mount["target"] == path && mount["read_only"] == true
+			})
+		})
+		.unwrap_or_default()
+}
+
+/// Whether the service forwards the variable to the container.
+pub(super) fn forwarded_by(compose: &std::path::Path, service: &str, name: &str) -> bool {
+	let document: serde_json::Value =
+		serde_json::from_str(&std::fs::read_to_string(compose).unwrap()).unwrap();
+	document["services"][service]["environment"][name] == format!("${{{name}}}")
 }
 
 /// The token file the configuration names has to be mounted into `mail`, or
@@ -128,46 +174,6 @@ fn a_token_file_is_mounted_into_the_mail_container() {
 
 /// With the certificates container the credential is mounted in `certs`,
 /// which is recreated, and `mail` is left without it.
-#[test]
-fn with_the_certificates_container_the_token_goes_to_certs_only() {
-	let (_dir, path, compose) = stack();
-	let mut document: serde_json::Value =
-		serde_json::from_str(&std::fs::read_to_string(&compose).unwrap()).unwrap();
-	document["services"]["certs"] =
-		serde_json::json!({"environment": {"TZ": "UTC"}, "volumes": []});
-	std::fs::write(&compose, document.to_string()).unwrap();
-	let (mut out, mut status) = (Vec::new(), Vec::new());
-	let mut reached = None;
-	let result = execute_with(
-		&path,
-		action(&["--token-file", TOKEN]),
-		false,
-		false,
-		&mut out,
-		&mut status,
-		|_, action| {
-			reached = Some(action);
-			ExitCode::SUCCESS
-		},
-	);
-	assert_eq!(result.unwrap(), ExitCode::SUCCESS);
-	assert!(!mounted(&compose, TOKEN), "mail must not get the token");
-	let after: serde_json::Value =
-		serde_json::from_str(&std::fs::read_to_string(&compose).unwrap()).unwrap();
-	assert!(
-		after["services"]["certs"]["volumes"]
-			.as_array()
-			.unwrap()
-			.iter()
-			.any(|mount| mount["source"] == TOKEN && mount["read_only"] == true),
-		"{after}"
-	);
-	assert!(
-		matches!(&reached, Some(StackAction::Recreate { service }) if service == "certs"),
-		"{reached:?}"
-	);
-}
-
 /// The preview has to show the compose change: a dry run that prints nothing
 /// hides the change the command is about to make.
 #[test]

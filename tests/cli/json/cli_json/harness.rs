@@ -149,7 +149,7 @@ pub fn chatty_podup(env: &Env) -> std::path::PathBuf {
 	);
 	let compose = env.data_dir().join("compose/compose.yaml");
 	std::fs::create_dir_all(compose.parent().expect("parent")).expect("compose dir");
-	std::fs::write(&compose, b"# compose fixture\n").expect("write compose");
+	std::fs::write(&compose, b"{\"services\":{}}\n").expect("write compose");
 	bin
 }
 
