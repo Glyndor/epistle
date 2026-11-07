@@ -217,7 +217,7 @@ pub fn plan(answers: &Answers) -> Result<Plan, ApplyError> {
 /// `crate::config::ListenerKind::default_port()` so a future change
 /// to the schema default flows through both the plan and the serve
 /// path together; the schema-vs-plan drift test in
-/// `src/cli/init/apply/tests/listeners_lines.rs` is what catches a
+/// `src/cli/init/apply/tests/steps/lines.rs` is what catches a
 /// `listener_entries` that hardcoded the old number alongside a
 /// `ListenerKind` that switched.
 fn listener_entries(

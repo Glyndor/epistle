@@ -2,13 +2,13 @@
 //! and the `write_validated_config` staging path) and for
 //! report-shape assertions plus plan-phase refusals that do not
 //! belong in the apply-phase refusal tests in
-//! `src/cli/init/apply/tests/invalid_keys.rs`. Lifted into a sibling because
-//! `src/cli/init/apply/tests/invalid_keys.rs` was at the per-file line limit and
+//! `src/cli/init/apply/tests/refusals/keys.rs`. Lifted into a sibling because
+//! `src/cli/init/apply/tests/refusals/keys.rs` was at the per-file line limit and
 //! the natural seam is the apply-config side of the apply phase.
 
 use std::path::Path;
 
-use super::failures::{answers_minimal, apply_error_name, render_report_to_string};
+use super::super::helpers::errors::{answers_minimal, apply_error_name, render_report_to_string};
 use super::*;
 
 /// A step the run left out is rendered with its name and its reason,

@@ -1,6 +1,6 @@
 //! Apply unit tests: report rendering, ApplyError Display, and the
 //! no-parent error. Lives in a sibling because the original
-//! `src/cli/init/apply/tests/base.rs` and `src/cli/init/apply/tests/reuse.rs` are at the per-file line
+//! `src/cli/init/apply/tests/helpers/answers.rs` and `src/cli/init/apply/tests/keys/reuse.rs` are at the per-file line
 //! limit. These tests pin the operator-visible strings that drive
 //! the stderr output during a failed or partial run.
 
@@ -10,8 +10,8 @@ use std::path::PathBuf;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
+use super::super::helpers::errors::apply_error_name;
 use super::apply_config;
-use super::failures::apply_error_name;
 use super::*;
 use crate::cli::init::answers::{DnsAnswers, Mode, Services};
 
@@ -272,5 +272,5 @@ fn apply_writes_a_config_with_every_service_kind() {
 	// API setup is exercised separately below.
 }
 
-#[path = "config_errors_extra.rs"]
+#[path = "errors_extra.rs"]
 mod extra;

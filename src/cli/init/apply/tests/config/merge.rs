@@ -1,7 +1,7 @@
 //! Apply unit tests: the existing-config-that-differs behaviour.
 //!
-//! Lives in a sibling because the main `src/cli/init/apply/tests/base.rs` and
-//! `src/cli/init/apply/tests/reuse.rs` / `src/cli/init/apply/tests/config_errors.rs` are at the per-file line
+//! Lives in a sibling because the main `src/cli/init/apply/tests/helpers/answers.rs` and
+//! `src/cli/init/apply/tests/keys/reuse.rs` / `src/cli/init/apply/tests/config/errors.rs` are at the per-file line
 //! limit. These tests pin what happens when an existing config on
 //! disk already has the operator's hand-written keys and init
 //! needs to merge the desired config on top.
@@ -9,7 +9,7 @@
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::path::PathBuf;
 
-use super::failures::apply_error_name;
+use super::super::helpers::errors::apply_error_name;
 use super::*;
 use crate::cli::init::answers::{Mode, Services};
 

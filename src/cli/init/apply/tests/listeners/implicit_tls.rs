@@ -5,7 +5,7 @@
 //! clients cannot connect to. The same bind address the STARTTLS
 //! listener uses applies, and compose publishes both ports.
 //!
-//! Sister to `src/cli/init/apply/tests/bind.rs` and `src/cli/init/apply/tests/listeners_lines.rs`
+//! Sister to `src/cli/init/apply/tests/listeners/bind.rs` and `src/cli/init/apply/tests/steps/lines.rs`
 //! because those files are already at the per-file line ceiling and
 //! this surface is its own focused seam.
 

@@ -1,13 +1,13 @@
 //! Tests for the staging-file retry loop and the `StagingGuard`
 //! that removes the staging file on a write failure. Lifted into a
-//! sibling so `src/cli/init/apply/tests/invalid_paths.rs` stays under the per-file
+//! sibling so `src/cli/init/apply/tests/config/paths.rs` stays under the per-file
 //! line limit. Production uses `create_unique_staging` (the real
 //! CSPRNG plus the real `write_all` and `sync_all` step); these
 //! tests drive `create_unique_staging_with`, the seam that injects
 //! the suffix source and the write step so a controlled collision
 //! sequence and a forced write failure can be exercised.
 
-use super::failures::apply_error_name;
+use super::super::helpers::errors::apply_error_name;
 use super::*;
 
 #[cfg(unix)]
