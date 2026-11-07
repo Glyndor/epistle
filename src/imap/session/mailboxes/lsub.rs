@@ -1,10 +1,15 @@
 //! IMAP SUBSCRIBE / UNSUBSCRIBE / LSUB (RFC 9051 §6.3.6).
 
-use super::{Output, Session, mailbox};
+use super::super::{Output, Session, mailbox};
 use crate::imap::list_tree::{self, Hidden};
 
 impl Session {
-	pub(super) fn lsub(&mut self, tag: &str, reference: &str, pattern: &str) -> Output {
+	pub(in crate::imap::session) fn lsub(
+		&mut self,
+		tag: &str,
+		reference: &str,
+		pattern: &str,
+	) -> Output {
 		let Some(account) = self.account().map(str::to_string) else {
 			return Output::text(format!("{tag} NO not authenticated\r\n"));
 		};
@@ -29,7 +34,7 @@ impl Session {
 		Output::text(response)
 	}
 
-	pub(super) fn subscription_op(
+	pub(in crate::imap::session) fn subscription_op(
 		&mut self,
 		tag: &str,
 		operation: impl FnOnce(&std::path::Path, &str) -> std::io::Result<()>,

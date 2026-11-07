@@ -1,9 +1,18 @@
-//! Complete authentication only after the personal mailboxes are available.
+//! Completion of an IMAP authentication: the step that turns a verified
+//! credential into an authenticated session, once the personal mailboxes of
+//! the account exist and the connection slot is taken.
 
-use super::{Output, Session, State, mailbox};
+use super::super::super::mailbox;
+use super::super::state::State;
+use super::super::{Output, Session};
 
 impl Session {
-	pub(super) fn auth_success(&mut self, tag: &str, account: String, completion: &str) -> Output {
+	pub(in crate::imap::session) fn auth_success(
+		&mut self,
+		tag: &str,
+		account: String,
+		completion: &str,
+	) -> Output {
 		if let Err(error) = mailbox::ensure_defaults(&self.data_dir, &account) {
 			tracing::error!(%error, "cannot initialize personal mailboxes");
 			return Output::text(format!(

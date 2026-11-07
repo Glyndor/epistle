@@ -6,9 +6,10 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 
 use crate::smtp::directory::bearer_proof;
 
-use super::auth::{PendingAuth, continuation, decode};
-use super::state::State;
-use super::{Output, Session};
+use super::super::state::State;
+use super::super::{Output, Session};
+use super::PendingAuth;
+use super::mechanisms::{continuation, decode};
 
 /// The failure document of RFC 7628 section 3.2.2, sent as the error
 /// challenge. It names no scope and no discovery URL: the server has none to
@@ -19,7 +20,11 @@ impl Session {
 	/// Start an OAuth exchange. With an initial response the token is checked
 	/// at once; without one the server sends an empty continuation and reads
 	/// the client's message on the next line, as PLAIN does.
-	pub(super) fn oauth_begin(&mut self, tag: &str, initial: Option<String>) -> Output {
+	pub(in crate::imap::session) fn oauth_begin(
+		&mut self,
+		tag: &str,
+		initial: Option<String>,
+	) -> Output {
 		match initial {
 			Some(_) => self.oauth_bearer(tag, initial),
 			None => {
@@ -33,7 +38,11 @@ impl Session {
 
 	/// Authenticate with the bearer token in a base64 OAUTHBEARER/XOAUTH2
 	/// client message.
-	pub(super) fn oauth_bearer(&mut self, tag: &str, initial: Option<String>) -> Output {
+	pub(in crate::imap::session) fn oauth_bearer(
+		&mut self,
+		tag: &str,
+		initial: Option<String>,
+	) -> Output {
 		let proof = bearer_proof(self.oauth.as_deref());
 		let outcome = self
 			.oauth

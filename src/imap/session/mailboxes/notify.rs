@@ -1,13 +1,15 @@
 //! IMAP NOTIFY (RFC 5465).
 
-use super::super::command::{NotifyEvent, NotifyGroup, NotifyMailboxes, NotifyRequest, StatusItem};
-use super::{Output, Session, State, mailbox};
+use super::super::super::command::{
+	NotifyEvent, NotifyGroup, NotifyMailboxes, NotifyRequest, StatusItem,
+};
+use super::super::{Output, Session, State, mailbox};
 
 impl Session {
 	/// NOTIFY (RFC 5465): record which selected-mailbox events the client wants
 	/// pushed unsolicited. With `SET STATUS`, report the current state of every
 	/// other mailbox the request names (§5.1). Requires authentication.
-	pub(super) fn notify(&mut self, tag: &str, request: NotifyRequest) -> Output {
+	pub(in crate::imap::session) fn notify(&mut self, tag: &str, request: NotifyRequest) -> Output {
 		let Some(account) = self.account().map(str::to_string) else {
 			return Output::text(format!("{tag} NO not authenticated\r\n"));
 		};

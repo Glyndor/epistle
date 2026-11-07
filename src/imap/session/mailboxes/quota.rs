@@ -1,10 +1,10 @@
 //! IMAP QUOTA: GETQUOTAROOT, GETQUOTA (RFC 9208).
 
-use super::mailbox;
-use super::{Output, Session};
+use super::super::mailbox;
+use super::super::{Output, Session};
 
 impl Session {
-	pub(super) fn get_quota_root(&self, tag: &str, mailbox_name: &str) -> Output {
+	pub(in crate::imap::session) fn get_quota_root(&self, tag: &str, mailbox_name: &str) -> Output {
 		let Some(account) = self.account().map(str::to_string) else {
 			return Output::text(format!("{tag} NO not authenticated\r\n"));
 		};
@@ -19,7 +19,7 @@ impl Session {
 	}
 
 	/// GETQUOTA: report the quota for a root (only the empty root exists).
-	pub(super) fn get_quota(&self, tag: &str, root: &str) -> Output {
+	pub(in crate::imap::session) fn get_quota(&self, tag: &str, root: &str) -> Output {
 		let Some(account) = self.account().map(str::to_string) else {
 			return Output::text(format!("{tag} NO not authenticated\r\n"));
 		};

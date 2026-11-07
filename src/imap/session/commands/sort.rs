@@ -1,12 +1,12 @@
 //! IMAP SORT command (RFC 5256).
 
-use super::super::command::SortKey;
-use super::base_subject::base_subject;
-use super::helpers::{header_value_raw, search_matches};
-use super::mailbox::MessageRef;
-use super::sort_keys::{address_key, internal_seconds, sent_seconds};
-use super::state::State;
-use super::{Output, SearchKey, Session};
+use super::super::super::command::SortKey;
+use super::super::base_subject::base_subject;
+use super::super::helpers::{header_value_raw, search_matches};
+use super::super::mailbox::MessageRef;
+use super::super::sort_keys::{address_key, internal_seconds, sent_seconds};
+use super::super::state::State;
+use super::super::{Output, SearchKey, Session};
 
 /// A comparable SORT key value. Within one sort position every message yields
 /// the same variant, so cross-variant comparison never happens in practice.
@@ -35,7 +35,7 @@ fn sort_value(key: SortKey, message: &MessageRef, text: Option<&str>) -> SortVal
 }
 
 impl Session {
-	pub(super) fn sort(
+	pub(in crate::imap::session) fn sort(
 		&mut self,
 		tag: &str,
 		keys: &[(bool, SortKey)],

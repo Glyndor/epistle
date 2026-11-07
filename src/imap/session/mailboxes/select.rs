@@ -1,7 +1,8 @@
 //! IMAP SELECT/EXAMINE/CLOSE/UNSELECT (RFC 9051 §6.3, RFC 3691).
 
-use super::state::State;
-use super::{Output, Session, codes, mailbox};
+use super::super::commands::codes;
+use super::super::state::State;
+use super::super::{Output, Session, mailbox};
 
 /// Build the `* FLAGS (...)` line that lists the five system flags and
 /// every `keyword` carried by some message in the mailbox. The line
@@ -10,7 +11,7 @@ use super::{Output, Session, codes, mailbox};
 /// shape so a client that tracks the per-mailbox keyword set from the
 /// last FLAGS it saw never sees a FETCH (or APPEND completion) carry
 /// a keyword it was never told about (§7.3.5).
-pub(super) fn flags_line_for(keyword_tokens: &[String]) -> String {
+pub(in crate::imap::session) fn flags_line_for(keyword_tokens: &[String]) -> String {
 	if keyword_tokens.is_empty() {
 		"FLAGS (\\Seen \\Answered \\Flagged \\Deleted \\Draft)\r\n".to_string()
 	} else {
@@ -43,7 +44,7 @@ fn deselect_for_failed_select(state: &mut State) -> bool {
 impl Session {
 	/// CHECK (RFC 3501 §6.4.1): a checkpoint, and like NOOP a point where
 	/// the client hears what changed in the mailbox.
-	pub(super) fn check(&mut self, tag: &str) -> Output {
+	pub(in crate::imap::session) fn check(&mut self, tag: &str) -> Output {
 		if matches!(self.state, State::Selected { .. }) {
 			let updates = self.sync_selected(true);
 			Output::text(format!("{updates}{tag} OK CHECK completed\r\n"))
@@ -52,7 +53,7 @@ impl Session {
 		}
 	}
 
-	pub(super) fn select(
+	pub(in crate::imap::session) fn select(
 		&mut self,
 		tag: &str,
 		mailbox: &str,
@@ -167,7 +168,7 @@ impl Session {
 		Output::text(response)
 	}
 
-	pub(super) fn close(&mut self, tag: &str) -> Output {
+	pub(in crate::imap::session) fn close(&mut self, tag: &str) -> Output {
 		match &mut self.state {
 			State::Selected {
 				snapshot,
@@ -192,7 +193,7 @@ impl Session {
 	}
 
 	/// UNSELECT (RFC 3691): leave the mailbox without expunging \Deleted.
-	pub(super) fn unselect(&mut self, tag: &str) -> Output {
+	pub(in crate::imap::session) fn unselect(&mut self, tag: &str) -> Output {
 		match &self.state {
 			State::Selected { account, .. } => {
 				self.state = State::Authenticated {

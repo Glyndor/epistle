@@ -1,11 +1,11 @@
 //! IMAP response-code and reply-line builders.
 
-use super::super::command::ReturnOpt;
-use super::mailbox;
+use super::super::super::command::ReturnOpt;
+use super::super::mailbox;
 
 /// Build the ESEARCH reply line (RFC 4731) for the requested return options.
 /// `modseq` is the CONDSTORE MODSEQ result (RFC 7162 §3.1.5), written last.
-pub(super) fn esearch_line(
+pub(in crate::imap::session) fn esearch_line(
 	tag: &str,
 	uid: bool,
 	hits: &[u32],
@@ -30,7 +30,7 @@ pub(super) fn esearch_line(
 /// are always UIDs. Returns an empty string when the
 /// requested options produce no output for this mailbox (e.g. only `ALL` was
 /// asked for and nothing matched), so empty per-mailbox lines are omitted.
-pub(super) fn esearch_multi_line(
+pub(in crate::imap::session) fn esearch_multi_line(
 	tag: &str,
 	mailbox: &str,
 	uid_validity: u32,
@@ -79,7 +79,7 @@ fn esearch_results(hits: &[u32], opts: &[ReturnOpt]) -> String {
 /// Build the UIDPLUS `[COPYUID validity src dst] ` response code, or an empty
 /// string if the destination UIDs cannot be resolved. The destination
 /// UIDVALIDITY comes from the target mailbox.
-pub(super) fn copyuid_code(
+pub(in crate::imap::session) fn copyuid_code(
 	data_dir: &std::path::Path,
 	account: &str,
 	target: &str,
@@ -113,7 +113,7 @@ pub(super) fn copyuid_code(
 /// Format a UID list as a comma-separated set (no range coalescing).
 /// Write ascending `numbers` as a sequence-set, joining each run of
 /// consecutive values into a `first:last` range (`1,2,3,5` becomes `1:3,5`).
-pub(super) fn sequence_set(numbers: &[u32]) -> String {
+pub(in crate::imap::session) fn sequence_set(numbers: &[u32]) -> String {
 	let mut out = String::new();
 	let mut i = 0;
 	while i < numbers.len() {
@@ -136,7 +136,7 @@ pub(super) fn sequence_set(numbers: &[u32]) -> String {
 	out
 }
 
-pub(super) fn uid_set(uids: &[u32]) -> String {
+pub(in crate::imap::session) fn uid_set(uids: &[u32]) -> String {
 	uids.iter()
 		.map(u32::to_string)
 		.collect::<Vec<_>>()

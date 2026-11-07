@@ -11,13 +11,13 @@
 
 use std::borrow::Cow;
 
-use super::super::command::{Command, SearchScope};
-use super::Session;
+use super::super::super::command::{Command, SearchScope};
+use super::super::Session;
 use crate::util::mutf7;
 
 impl Session {
 	/// Whether mailbox names cross the wire as UTF-8 on this connection.
-	pub(super) fn utf8_names(&self) -> bool {
+	pub(in crate::imap::session) fn utf8_names(&self) -> bool {
 		self.utf8_accept || self.imap4rev2
 	}
 
@@ -33,7 +33,7 @@ impl Session {
 
 	/// A stored mailbox name as the astring a response carries: spelled
 	/// for this connection by [`Self::wire_name`], then quoted.
-	pub(super) fn mailbox_astring(&self, stored: &str) -> String {
+	pub(in crate::imap::session) fn mailbox_astring(&self, stored: &str) -> String {
 		astring(&self.wire_name(stored), self.utf8_names())
 	}
 }
@@ -41,7 +41,7 @@ impl Session {
 /// `value` as an IMAP string (RFC 9051 §4.3): quoted, with `"` and `\`
 /// escaped, unless it holds a character a quoted string cannot carry (CR,
 /// LF, or 8-bit without UTF-8 on the connection), which needs a literal.
-pub(super) fn astring(value: &str, utf8: bool) -> String {
+pub(in crate::imap::session) fn astring(value: &str, utf8: bool) -> String {
 	let quotable = value
 		.chars()
 		.all(|c| !matches!(c, '\r' | '\n') && (utf8 || c.is_ascii()));
@@ -62,7 +62,7 @@ pub(super) fn astring(value: &str, utf8: bool) -> String {
 
 /// Rewrite the UTF-8 mailbox names in a command into their stored spelling.
 /// List patterns are encoded too: the wildcards are ASCII and survive as is.
-pub(super) fn to_stored_names(command: &mut Command) {
+pub(in crate::imap::session) fn to_stored_names(command: &mut Command) {
 	fn encode(name: &mut String) {
 		*name = mutf7::encode(name);
 	}

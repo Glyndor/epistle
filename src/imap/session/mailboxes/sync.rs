@@ -9,11 +9,12 @@
 
 use std::collections::HashMap;
 
-use super::fetch::store::collect_mailbox_keywords;
-use super::mailbox::{Snapshot, render_flags};
+use super::super::Session;
+use super::super::commands::codes;
+use super::super::fetch::store::collect_mailbox_keywords;
+use super::super::mailbox::{Snapshot, render_flags};
+use super::super::state::State;
 use super::select::flags_line_for;
-use super::state::State;
-use super::{Session, codes};
 
 impl Session {
 	/// Re-read the SELECTed mailbox and return the untagged responses that
@@ -26,7 +27,7 @@ impl Session {
 	/// Expunges renumber the mailbox, so this must not run while answering
 	/// FETCH, STORE or SEARCH (RFC 3501 §7.4.1). Without `report_flags` the
 	/// client's view of the flags is kept, so a later call reports them.
-	pub(super) fn sync_selected(&mut self, report_flags: bool) -> String {
+	pub(in crate::imap::session) fn sync_selected(&mut self, report_flags: bool) -> String {
 		let Some((account, mailbox)) = self.selected_pair() else {
 			return String::new();
 		};
@@ -53,7 +54,7 @@ impl Session {
 fn changes(known: &Snapshot, fresh: &Snapshot, uidonly: bool) -> String {
 	let mut response = String::new();
 	let replaced = fresh.uid_validity() != known.uid_validity();
-	let current: HashMap<u32, &super::mailbox::MessageRef> = fresh
+	let current: HashMap<u32, &super::super::mailbox::MessageRef> = fresh
 		.messages()
 		.map(|message| (message.uid, message))
 		.collect();
@@ -82,7 +83,7 @@ fn changes(known: &Snapshot, fresh: &Snapshot, uidonly: bool) -> String {
 		response.push_str(&format!("* {}", flags_line_for(&fresh_keywords)));
 	}
 	for (index, (before, now)) in survivors.iter().enumerate() {
-		if super::super::flags::flags_equal(&before.flags, &now.flags) {
+		if super::super::super::flags::flags_equal(&before.flags, &now.flags) {
 			continue;
 		}
 		let flags = render_flags(&now.flags);

@@ -3,12 +3,17 @@
 
 use crate::imap::metadata;
 
-use super::mailbox;
-use super::{Output, Session};
+use super::super::mailbox;
+use super::super::{Output, Session};
 
 impl Session {
 	/// GETMETADATA: report the requested entries that have a stored value.
-	pub(super) fn get_metadata(&self, tag: &str, mailbox: &str, entries: &[String]) -> Output {
+	pub(in crate::imap::session) fn get_metadata(
+		&self,
+		tag: &str,
+		mailbox: &str,
+		entries: &[String],
+	) -> Output {
 		let Some(account) = self.account().map(str::to_string) else {
 			return Output::text(format!("{tag} NO not authenticated\r\n"));
 		};
@@ -35,7 +40,7 @@ impl Session {
 	}
 
 	/// SETMETADATA: set or delete annotation entries.
-	pub(super) fn set_metadata(
+	pub(in crate::imap::session) fn set_metadata(
 		&self,
 		tag: &str,
 		mailbox: &str,

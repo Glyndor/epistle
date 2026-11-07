@@ -60,7 +60,7 @@ fn quota_names_the_empty_root_as_a_quoted_string() {
 
 #[test]
 fn astring_escapes_quoted_specials_and_falls_back_to_a_literal() {
-	use crate::imap::session::utf8::astring;
+	use crate::imap::session::commands::utf8::astring;
 	assert_eq!(astring("My Box", false), "\"My Box\"");
 	assert_eq!(astring("a\"b\\c", false), "\"a\\\"b\\\\c\"");
 	assert_eq!(astring("", false), "\"\"");

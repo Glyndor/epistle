@@ -1,13 +1,13 @@
 //! IMAP EXPUNGE and UID EXPUNGE (RFC 9051 §6.4.5, RFC 4315).
 
-use super::super::command::SequenceSet;
-use super::codes::uid_set;
-use super::mailbox::Flag;
-use super::state::State;
-use super::{Output, Session};
+use super::super::super::command::SequenceSet;
+use super::super::commands::codes::uid_set;
+use super::super::mailbox::Flag;
+use super::super::state::State;
+use super::super::{Output, Session};
 
 impl Session {
-	pub(super) fn expunge(&mut self, tag: &str) -> Output {
+	pub(in crate::imap::session) fn expunge(&mut self, tag: &str) -> Output {
 		let uidonly = self.uidonly;
 		let State::Selected {
 			snapshot,
@@ -35,7 +35,11 @@ impl Session {
 		}
 	}
 
-	pub(super) fn uid_expunge(&mut self, tag: &str, sequence: &SequenceSet) -> Output {
+	pub(in crate::imap::session) fn uid_expunge(
+		&mut self,
+		tag: &str,
+		sequence: &SequenceSet,
+	) -> Output {
 		let uidonly = self.uidonly;
 		// Capture the SEARCHRES `$` set before the mutable borrow of
 		// `self.state`. UID EXPUNGE always matches against UIDs, so the

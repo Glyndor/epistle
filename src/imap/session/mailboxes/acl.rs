@@ -4,12 +4,12 @@
 
 use crate::imap::acl;
 
-use super::mailbox;
-use super::{Output, Session};
+use super::super::mailbox;
+use super::super::{Output, Session};
 
 impl Session {
 	/// GETACL: report the owner's full rights plus any stored entries.
-	pub(super) fn get_acl(&self, tag: &str, mailbox: &str) -> Output {
+	pub(in crate::imap::session) fn get_acl(&self, tag: &str, mailbox: &str) -> Output {
 		let Some(account) = self.checked_mailbox(mailbox) else {
 			return self.acl_error(tag);
 		};
@@ -22,7 +22,7 @@ impl Session {
 	}
 
 	/// MYRIGHTS: report the authenticated account's rights on the mailbox.
-	pub(super) fn my_rights(&self, tag: &str, mailbox: &str) -> Output {
+	pub(in crate::imap::session) fn my_rights(&self, tag: &str, mailbox: &str) -> Output {
 		let Some(account) = self.checked_mailbox(mailbox) else {
 			return self.acl_error(tag);
 		};
@@ -34,7 +34,12 @@ impl Session {
 	}
 
 	/// LISTRIGHTS: the rights guaranteed to, and grantable for, an identifier.
-	pub(super) fn list_rights(&self, tag: &str, mailbox: &str, identifier: &str) -> Output {
+	pub(in crate::imap::session) fn list_rights(
+		&self,
+		tag: &str,
+		mailbox: &str,
+		identifier: &str,
+	) -> Output {
 		let Some(account) = self.checked_mailbox(mailbox) else {
 			return self.acl_error(tag);
 		};
@@ -52,7 +57,7 @@ impl Session {
 	}
 
 	/// SETACL: grant/modify rights for an identifier on a mailbox.
-	pub(super) fn set_acl(
+	pub(in crate::imap::session) fn set_acl(
 		&self,
 		tag: &str,
 		mailbox: &str,
@@ -73,7 +78,12 @@ impl Session {
 	}
 
 	/// DELETEACL: remove an identifier's rights on a mailbox.
-	pub(super) fn delete_acl(&self, tag: &str, mailbox: &str, identifier: &str) -> Output {
+	pub(in crate::imap::session) fn delete_acl(
+		&self,
+		tag: &str,
+		mailbox: &str,
+		identifier: &str,
+	) -> Output {
 		let Some(account) = self.checked_mailbox(mailbox) else {
 			return self.acl_error(tag);
 		};

@@ -1,10 +1,10 @@
 //! IMAP THREAD command, ORDEREDSUBJECT algorithm (RFC 5256 §3).
 
-use super::base_subject::base_subject;
-use super::helpers::{header_value_raw, search_matches};
-use super::sort_keys::sent_seconds;
-use super::state::State;
-use super::{Output, SearchKey, Session};
+use super::super::base_subject::base_subject;
+use super::super::helpers::{header_value_raw, search_matches};
+use super::super::sort_keys::sent_seconds;
+use super::super::state::State;
+use super::super::{Output, SearchKey, Session};
 use std::collections::HashMap;
 
 /// One matching message: its sent date and sequence number, which order it,
@@ -16,7 +16,12 @@ struct Member {
 }
 
 impl Session {
-	pub(super) fn thread(&mut self, tag: &str, criteria: &[SearchKey], uid: bool) -> Output {
+	pub(in crate::imap::session) fn thread(
+		&mut self,
+		tag: &str,
+		criteria: &[SearchKey],
+		uid: bool,
+	) -> Output {
 		let State::Selected { snapshot, .. } = &self.state else {
 			return Output::text(format!("{tag} BAD no mailbox selected\r\n"));
 		};
