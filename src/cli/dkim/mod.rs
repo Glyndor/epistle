@@ -10,7 +10,7 @@ use std::process::ExitCode;
 
 use clap::Subcommand;
 
-use super::serve::tasks::{DkimRotationPlan, decide_dkim_rotation};
+use super::serve::tasks::{DkimRotationPlan, DnsWrite, decide_dkim_rotation};
 use crate::config::Config;
 use crate::dkim::rotate::{self, rsa_selector_for, selector_for};
 
@@ -172,11 +172,12 @@ pub(super) fn preflight(config: &Config, now: u64) -> Result<Plan, String> {
 	if config.dns.is_empty() {
 		return Err("[dns] is not configured: the new key could not be published".into());
 	}
+	let write = DnsWrite::for_install(config);
 	let DkimRotationPlan::Run {
 		signing_domains,
 		out_of_zone,
 		..
-	} = decide_dkim_rotation(config)
+	} = decide_dkim_rotation(config, &write)
 	else {
 		return Err("rotation is off for this configuration".to_string());
 	};
@@ -191,16 +192,20 @@ pub(super) fn preflight(config: &Config, now: u64) -> Result<Plan, String> {
 		return Err("no signing domain is configured, so nothing could be published".to_string());
 	}
 	// Every signing domain is published through the entry of its own zone,
-	// so each of those entries has to build.
-	for domain in &signing_domains {
-		let buildable = config
-			.dns
-			.entry_for(domain)
-			.is_some_and(|dns| dns.build().is_some());
-		if !buildable {
-			return Err(
-				"the [dns] provider cannot be built (missing or empty credentials)".to_string(),
-			);
+	// so each of those entries has to build. With the certificates
+	// container on, the credential is there and this process never reads
+	// it: the entries are built by the container that holds the credential.
+	if write.holds_credential() {
+		for domain in &signing_domains {
+			let buildable = config
+				.dns
+				.entry_for(domain)
+				.is_some_and(|dns| dns.build().is_some());
+			if !buildable {
+				return Err(
+					"the [dns] provider cannot be built (missing or empty credentials)".to_string(),
+				);
+			}
 		}
 	}
 	let active = rotate::active_ed25519(dkim, &config.data_dir).map_err(|e| e.to_string())?;

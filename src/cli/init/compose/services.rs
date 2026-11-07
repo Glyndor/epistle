@@ -181,6 +181,13 @@ impl ComposeService {
 		// there and nowhere else, and the pair it writes is read-only here.
 		if answers.services.certs {
 			volumes.extend(certs::read_only_in_mail(data_dir));
+			// The hand-off both containers share: this one asks the other
+			// to write the DKIM records, because the credential is there.
+			volumes.push(VolumeMount::bind(
+				&certs::handoff_dir(data_dir),
+				&certs::handoff_dir(data_dir),
+				false,
+			));
 		} else {
 			add_dns_credentials(answers, &mut volumes, &mut environment);
 		}

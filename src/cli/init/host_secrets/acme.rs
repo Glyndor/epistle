@@ -84,11 +84,14 @@ fn copy_key(from: &Path, to: &Path) -> Result<Option<String>, String> {
 
 /// The directories a split stack binds from data_dir on their own, which a
 /// bind mount needs to exist before the container starts.
-pub(crate) fn split_dirs(data_dir: &Path) -> [PathBuf; 2] {
+pub(crate) fn split_dirs(data_dir: &Path) -> [PathBuf; 3] {
 	let tlsa = crate::dns::tlsa::state_path(data_dir);
 	[
 		crate::acme::renew::pair_dir(data_dir),
 		tlsa.parent().map_or(tlsa.clone(), Path::to_path_buf),
+		// The hand-off the two containers share: the mail container asks
+		// the certificates container to write the DKIM records.
+		crate::dns::handoff::dir(data_dir),
 	]
 }
 

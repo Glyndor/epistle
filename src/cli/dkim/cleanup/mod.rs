@@ -8,7 +8,7 @@
 
 use std::process::ExitCode;
 
-use crate::cli::serve::tasks::{DkimRotationPlan, decide_dkim_rotation};
+use crate::cli::serve::tasks::{DkimRotationPlan, DnsWrite, decide_dkim_rotation};
 use crate::cli::{prompt, style};
 use crate::config::Config;
 use crate::dkim::rotate::{find_orphans, request_cleanup};
@@ -39,7 +39,7 @@ pub(super) fn cleanup_with(
 		style::error("[dkim] is not configured");
 		return ExitCode::FAILURE;
 	};
-	let plan = decide_dkim_rotation(config);
+	let plan = decide_dkim_rotation(config, &DnsWrite::Direct);
 	let (domains, served) = match &plan {
 		DkimRotationPlan::Run {
 			signing_domains,

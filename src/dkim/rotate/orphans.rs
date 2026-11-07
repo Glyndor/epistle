@@ -212,6 +212,15 @@ impl Rotator {
 		}
 		let _ = std::fs::remove_file(&request);
 		let orphans = self.orphans().await?;
+		// The records were not looked for, so they were not removed: the
+		// operator has to hear it, or the cleanup looks done and the
+		// records stay.
+		if let Some(reason) = &orphans.unlisted {
+			tracing::warn!(
+				%reason,
+				"the leftover DKIM TXT records were not looked for, and none was removed"
+			);
+		}
 		let mut failed = Vec::new();
 		for name in &orphans.records {
 			if let Err(error) = self

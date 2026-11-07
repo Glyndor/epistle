@@ -3,17 +3,19 @@
 //! This process holds what lets a caller rewrite the zone, the DNS provider
 //! credential and the ACME account key, and runs only the work that needs
 //! them: issuance and renewal with the `dns-01` challenge published through
-//! `[dns]`, the TLSA refresh when the certificate changes, and the withdrawal
-//! of each challenge record once its order is done. It binds no listener and
-//! takes no request: it decides from the clock and from the request file
+//! `[dns]`, the TLSA record refresh when the certificate changes, the
+//! withdrawal of each challenge record once its order is done, and the DNS
+//! writes the mail container asks for. It binds no listener and takes no
+//! request: it decides from the clock and from the request file
 //! `epistle tls renew` leaves under `<data_dir>/acme`.
 //!
 //! The new pair is written to `<data_dir>/acme/{cert,key}.pem`, which `mail`
 //! mounts read-only and picks up without a restart (`--role mail`).
 //!
-//! DKIM rotation is not here yet: it stays in `mail`, which cannot publish
-//! without the credential, so with the split on it waits (see
-//! `docs/operations/container-split.md`).
+//! The DKIM rotation stays in `mail`, which keeps the keys and drives the
+//! rotation; the records it publishes are written here, through the
+//! hand-off directory both containers mount (`crate::dns::handoff`). `mail`
+//! holds no DNS credential and this container holds no DKIM private key.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -82,6 +84,28 @@ pub(super) fn renewal(
 	}
 }
 
+/// The domains this installation serves: the ones a DKIM record may be
+/// asked for. The mail container asks this one to write the records of the
+/// domains it signs for, and nothing else.
+fn served_domains(config: &Config) -> Vec<String> {
+	let mut domains: Vec<String> = config
+		.domains
+		.iter()
+		.map(|domain| domain.to_ascii_lowercase())
+		.collect();
+	for alias in config.domain_aliases.keys() {
+		domains.push(alias.to_ascii_lowercase());
+	}
+	if let Some(dkim) = &config.dkim {
+		for entry in &dkim.domain {
+			domains.push(entry.name.to_ascii_lowercase());
+		}
+	}
+	domains.sort();
+	domains.dedup();
+	domains
+}
+
 /// Run the certificates role until SIGTERM or SIGINT. A configuration this
 /// role cannot work with, or a provider whose credential does not load,
 /// stops the start (fail closed); a CA or DNS failure later is logged and
@@ -105,8 +129,17 @@ pub(super) async fn serve(config: Config) -> std::io::Result<()> {
 		&config,
 		acme,
 		responder,
-		(provider, config.hostname.clone()),
+		(Arc::clone(&provider), config.hostname.clone()),
 	);
+	// The mail container keeps the DKIM keys and drives the rotation; the
+	// records it publishes are written here, where the credential is.
+	let handoff = crate::dns::handoff::Server::new(
+		crate::dns::handoff::dir(&config.data_dir),
+		Arc::clone(&provider),
+		config.dns.zones(),
+		served_domains(&config),
+	);
+	let serving = tokio::spawn(handoff.run());
 	crate::privdrop::drop_privileges(config.privileges.as_ref())?;
 	tracing::info!(
 		account_key = %renewal.account_key.display(),
@@ -126,6 +159,9 @@ pub(super) async fn serve(config: Config) -> std::io::Result<()> {
 	// before the container is killed; what is left after the deadline is
 	// withdrawn at the next start, from the journal.
 	renewing.stop(STOP_DEADLINE).await;
+	// A DNS write in flight is dropped with the task: the mail container
+	// asks again, and a request that was not answered is taken back.
+	serving.abort();
 	tracing::info!(signal = name, "certificates role stopped");
 	Ok(())
 }

@@ -32,7 +32,10 @@ fn refusal(config: &Config, now: u64) -> String {
 fn refuses_without_dns_exactly_as_the_server_stays_off() {
 	let dir = tempfile::tempdir().expect("dir");
 	let config = config_with(dir.path(), "['example.org']", "");
-	assert_eq!(decide_dkim_rotation(&config), DkimRotationPlan::Off);
+	assert_eq!(
+		decide_dkim_rotation(&config, &DnsWrite::Direct),
+		DkimRotationPlan::Off
+	);
 	assert!(refusal(&config, 5 * DAY).contains("[dns] is not configured"));
 	let mut out = Vec::new();
 	assert_eq!(
@@ -49,7 +52,7 @@ fn refuses_without_dns_exactly_as_the_server_stays_off() {
 fn refuses_an_out_of_zone_signing_domain_like_the_server() {
 	let dir = tempfile::tempdir().expect("dir");
 	let config = config_with(dir.path(), "['example.org', 'other.net']", DNS);
-	match decide_dkim_rotation(&config) {
+	match decide_dkim_rotation(&config, &DnsWrite::Direct) {
 		DkimRotationPlan::Run { out_of_zone, .. } => assert_eq!(out_of_zone, vec!["other.net"]),
 		other => panic!("unexpected plan {other:?}"),
 	}
@@ -218,4 +221,26 @@ fn a_domain_without_an_override_is_pointed_at_the_default_rotation() {
 		"dkim rotate --domain example.net: example.net has no [[dkim.domain]] key and signs \
 		 with the [dkim] default; rotate that with `epistle dkim rotate`"
 	);
+}
+
+/// With the certificates container on the credential is in that container,
+/// so the host does not refuse a rotation it cannot perform itself: the
+/// request it queues is served by the server, which publishes through the
+/// hand-off.
+#[test]
+fn a_split_stack_does_not_refuse_for_the_credential_it_does_not_hold() {
+	let dir = tempfile::tempdir().expect("dir");
+	let config = config_with(
+		dir.path(),
+		"['example.org']",
+		"[dns]\nprovider = 'cloudflare'\nzone = 'example.org'\ntoken_file = '/nonexistent/token'\n",
+	);
+	// The compose file says the certificates container runs.
+	let compose = crate::cli::init::compose_file_path(dir.path());
+	std::fs::create_dir_all(compose.parent().expect("parent")).expect("mkdir");
+	std::fs::write(&compose, "{\"services\": {\"certs\": {}}}").expect("compose");
+	// The rotation is not refused for the credential this process cannot
+	// read.
+	let plan = preflight(&config, 5 * DAY).expect("the rotation is queued");
+	assert_eq!(plan.next, "ed5");
 }

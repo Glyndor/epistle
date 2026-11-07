@@ -4,6 +4,7 @@
 //! duties they own. The pure decision lives here next to the spawner that
 //! consumes it so the two cannot drift apart on what "should we rotate" means.
 
+use super::DnsWrite;
 use crate::config::Config;
 
 /// Outcome of the pure rotation-decision policy. Returned by
@@ -43,7 +44,12 @@ pub enum DkimRotationPlan {
 /// Pure policy: should the DKIM rotation task be spawned, with what timing,
 /// and did the operator still set the now-ignored legacy fields? Pulled out
 /// of [`spawn_dkim_rotation`] so it can be exercised without I/O.
-pub fn decide_dkim_rotation(config: &Config) -> DkimRotationPlan {
+///
+/// `write` says where the records go: with the certificates container on,
+/// this process holds no credential, so a `[dns]` entry counts as able to
+/// publish when it is configured for the zone and is not `manual`; the
+/// credential is the other container's business.
+pub fn decide_dkim_rotation(config: &Config, write: &DnsWrite) -> DkimRotationPlan {
 	let Some(dkim) = &config.dkim else {
 		return DkimRotationPlan::Off;
 	};
@@ -72,7 +78,7 @@ pub fn decide_dkim_rotation(config: &Config) -> DkimRotationPlan {
 		// zone, or one whose credential cannot be read, holds the rotation
 		// back like a zone nobody configured. A lone `[dns]` keeps the old
 		// rule, and its credential is checked when the task starts.
-		let covered = super::dns_publishes_for(config, &domain);
+		let covered = super::dns_publishes_for(config, &domain, write.holds_credential());
 		if covered {
 			signing_domains.push(domain);
 		} else {
@@ -93,6 +99,9 @@ pub fn decide_dkim_rotation(config: &Config) -> DkimRotationPlan {
 /// it runs by default with the constant interval / overlap from
 /// [`crate::dkim`]; an operator does not opt in.
 ///
+/// `write` says where the records go: the provider this process holds, or
+/// the hand-off the certificates container serves.
+///
 /// The legacy `rotate_days` / `rotate_overlap_days` fields on `[dkim]` are
 /// kept for backward compatibility (so existing configs keep loading under
 /// `deny_unknown_fields`) but are ignored: a one-shot deprecation warning
@@ -106,8 +115,9 @@ pub fn spawn_dkim_rotation(
 	config: &Config,
 	dkim_signer: &Option<crate::dkim::ReloadableSigner>,
 	webhook: Option<std::sync::Arc<crate::webhook::Webhook>>,
+	write: &DnsWrite,
 ) {
-	match decide_dkim_rotation(config) {
+	match decide_dkim_rotation(config, write) {
 		DkimRotationPlan::Off => {
 			// Only the "no [dns]" case is interesting to log here: rotation
 			// is a security property and the operator may have intended to
@@ -161,14 +171,31 @@ pub fn spawn_dkim_rotation(
 			// actual provider now. A missing or wrong [dns] falls through
 			// to the same "silent off" as before, that is a separate
 			// misconfiguration the operator must fix anyway (the DNS
-			// provider is also used elsewhere, e.g. ACME TLSA).
+			// provider is also used elsewhere, e.g. ACME TLSA). With the
+			// certificates container on there is no credential here at all:
+			// the records go through the hand-off the other container
+			// serves.
+			let provider: std::sync::Arc<dyn crate::dns::provider::DnsProvider> = match write {
+				DnsWrite::Direct => {
+					let Some(provider) = config.dns.build_for_host(&config.hostname) else {
+						return;
+					};
+					provider
+				}
+				DnsWrite::Handoff(dir) => {
+					tracing::info!(
+						"[dkim] rotation publishes through the certificates container: this \
+						 process holds no DNS credential"
+					);
+					std::sync::Arc::new(crate::dns::handoff::HandoffProvider::new(
+						crate::dns::handoff::Writer::at(dir.clone()),
+					))
+				}
+			};
 			let Some(signer) = dkim_signer else {
 				return;
 			};
 			let Some(first) = config.dns.first() else {
-				return;
-			};
-			let Some(provider) = config.dns.build_for_host(&config.hostname) else {
 				return;
 			};
 			let zone = first.zone.clone();

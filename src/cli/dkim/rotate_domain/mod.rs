@@ -7,6 +7,7 @@
 
 use std::process::ExitCode;
 
+use crate::cli::serve::tasks::DnsWrite;
 use crate::config::Config;
 use crate::dkim::domain_rotate;
 
@@ -36,7 +37,8 @@ pub(in crate::cli) fn preflight(
 		));
 	};
 	let domain = entry.name.to_ascii_lowercase();
-	let plan = super::super::serve::tasks::decide_domain_rotation(config);
+	let plan =
+		super::super::serve::tasks::decide_domain_rotation(config, &DnsWrite::for_install(config));
 	if !plan.rotating.contains(&domain) {
 		return Err(format!(
 			"no [dns] entry can publish records at {domain} (none covers it, or its entry is manual or has no credential): its key does not rotate"

@@ -72,7 +72,7 @@ pub(super) async fn evaluate(ctx: &Ctx, dns: &dyn crate::spf::DnsLookup) -> Area
 		epoch(ctx.now),
 	));
 	// The certificates container renews in a split stack: its state decides
-	// whether anything renews, and DKIM rotation waits while it runs.
+	// whether anything renews.
 	let compose = crate::cli::init::compose_file_path(&config.data_dir);
 	match crate::cli::stack::certs::runs_certs(&compose) {
 		Ok(true) => {
@@ -81,9 +81,6 @@ pub(super) async fn evaluate(ctx: &Ctx, dns: &dyn crate::spf::DnsLookup) -> Area
 				.await
 				.unwrap_or_else(|error| Err(format!("the podup task failed: {error}")));
 			items.push(certs::item(&state, remaining));
-			if config.dkim.is_some() {
-				items.push(certs::dkim_item());
-			}
 		}
 		Ok(false) => {}
 		Err(error) => items.push(Item::new("certs", Level::Fail, error)),
