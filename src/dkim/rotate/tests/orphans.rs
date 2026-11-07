@@ -155,6 +155,74 @@ async fn an_unreadable_state_finds_nothing_to_remove() {
 	);
 }
 
+/// A provider that cannot read the zone: the one the process that holds the
+/// DKIM keys has when the DNS credential is in the certificates container.
+struct CannotList;
+
+impl crate::dns::provider::DnsProvider for CannotList {
+	fn upsert(
+		&self,
+		_zone: &str,
+		_record: crate::dns::provider::DnsRecord,
+	) -> crate::dns::provider::Op<'_> {
+		Box::pin(async { Ok(()) })
+	}
+
+	fn delete(
+		&self,
+		_zone: &str,
+		_record: crate::dns::provider::DnsRecord,
+	) -> crate::dns::provider::Op<'_> {
+		Box::pin(async { Ok(()) })
+	}
+
+	fn list(&self, zone: &str) -> crate::dns::provider::ListOp<'_> {
+		let zone = zone.to_string();
+		Box::pin(async move {
+			Err(crate::dns::provider::ProviderError::Remote(format!(
+				"no DNS credential in this process; the certificates container reads {zone}"
+			)))
+		})
+	}
+}
+
+#[tokio::test]
+async fn a_cleanup_that_cannot_read_the_zone_fails_and_removes_no_record() {
+	let lab = Lab::new(Start::RetireDue);
+	lab.install_key("ed5", "dkim-ed5.key");
+	let rotator = Rotator::new(
+		lab.root.clone(),
+		ReloadableSigner::new(Arc::new(
+			Signer::load("ed0", &lab.root.join("ed0.key")).expect("key"),
+		)),
+		Arc::new(CannotList),
+		"example.org".into(),
+		DOMAINS.map(String::from).to_vec(),
+		30 * 86_400,
+		86_400,
+	);
+	request_cleanup(&lab.root).expect("request");
+	let error = rotator
+		.serve_cleanup()
+		.await
+		.expect_err("the zone could not be read");
+	assert!(
+		error
+			.to_string()
+			.contains("the TXT records were not checked"),
+		"{error}"
+	);
+	// The key file is removed all the same: it is found from the rotation
+	// state alone, and nothing signs with it.
+	assert!(
+		!lab.root.join("dkim-ed5.key").exists(),
+		"the leftover key file is gone"
+	);
+	// No record was removed: the zone was never read.
+	let names: Vec<String> = lab.zone.records.lock().unwrap().keys().cloned().collect();
+	assert!(names.iter().any(|n| n.starts_with("ed5.")), "{names:?}");
+}
+
 /// A state naming an RSA key in each of its three places.
 fn dual_state() -> RotationState {
 	let mut state = state_with_all_three();

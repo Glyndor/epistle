@@ -113,6 +113,10 @@ behind its back.
   `certs` is down the rotation cannot publish, so it takes the write back and
   the key in service keeps signing; the rotation is journaled and the next
   tick finishes it when `certs` answers.
+- `epistle dkim cleanup` removes the leftover key files in both layouts, but
+  only `certs` can read the zone: with the split on, the TXT records are not
+  checked, the command says so and exits with a failure instead of reporting
+  a removal that never happens.
 - `epistle dns ...` commands that write records run in `certs` through
   `podup exec`, or on the host when there is no stack, so the operator's token
   never has to reach `mail`.

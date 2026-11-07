@@ -205,6 +205,13 @@ impl Rotator {
 	/// was served. The request is consumed first, whatever happens next:
 	/// a failure is logged, and what is left shows again in
 	/// `epistle dkim cleanup`.
+	///
+	/// A zone that could not be read makes the cleanup fail: the TXT
+	/// records were neither looked for nor removed, and a cleanup that
+	/// answers "done" while the records stay published is a lie the
+	/// operator cannot see. The leftover key files are removed all the
+	/// same: they are found from the rotation state alone, and nothing
+	/// signs with them.
 	pub async fn serve_cleanup(&self) -> Result<bool, RotateError> {
 		let request = self.data_dir.join(CLEANUP_FILE);
 		if !request.exists() {
@@ -212,6 +219,7 @@ impl Rotator {
 		}
 		let _ = std::fs::remove_file(&request);
 		let orphans = self.orphans().await?;
+		let mut failed = Vec::new();
 		// The records were not looked for, so they were not removed: the
 		// operator has to hear it, or the cleanup looks done and the
 		// records stay.
@@ -220,8 +228,8 @@ impl Rotator {
 				%reason,
 				"the leftover DKIM TXT records were not looked for, and none was removed"
 			);
+			failed.push(format!("the TXT records were not checked: {reason}"));
 		}
-		let mut failed = Vec::new();
 		for name in &orphans.records {
 			if let Err(error) = self
 				.provider
