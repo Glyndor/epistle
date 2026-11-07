@@ -174,7 +174,7 @@ pub fn parse_rule(value: &str) -> Option<Rule> {
 				None => rule.unsupported = true,
 			},
 			"BYMONTHDAY" => match val.split(',').map(parse_signed).collect::<Option<Vec<_>>>() {
-				Some(days) if days.iter().all(|d| (1..=31).contains(&d.abs())) => {
+				Some(days) if days.iter().all(|d| (1..=31).contains(&d.unsigned_abs())) => {
 					rule.by_month_day = days;
 				}
 				_ => rule.unsupported = true,
@@ -228,7 +228,7 @@ fn parse_by_day(entry: &str) -> Option<ByDay> {
 	let weekday = weekday_of(entry.get(split..)?)?;
 	let ordinal = match entry.get(..split)? {
 		"" => None,
-		text => Some(parse_signed(text).filter(|n| *n != 0 && n.abs() <= 53)?),
+		text => Some(parse_signed(text).filter(|n| *n != 0 && n.unsigned_abs() <= 53)?),
 	};
 	Some(ByDay { ordinal, weekday })
 }
