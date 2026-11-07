@@ -186,14 +186,13 @@ keep two parallel sets of values in `mail.toml`, one for the host
 and one for the container, and would silently break the moment
 either side drifted.
 
-The management API listener is not configured by `init`: the
-assistant refuses `services.api = true` because there is no
-credential the operator can hand the stack without editing the
-generated config by hand. An operator who enables the API in
-the generated config binds it on `::` inside the container
-(the same dual-stack bind the mail listeners use); a loopback
-listener is not reachable through the pasta mapping, so the
-host-side reach is the operator's responsibility, not the
+The management API listener is not configured by `init` unless the answers
+file asks for it: `services.api = true` writes an API listener on loopback and
+an empty `[api]` section, and no static token is generated, so a key still has
+to be made with `epistle api-key create`. An operator who binds it on `::` in
+the generated config (the same dual-stack bind the mail listeners use) makes
+it reachable through the pasta mapping; a loopback listener is not reachable
+through it, so the host-side reach is the operator's responsibility, not the
 init stack's. Init keeps publishing a listener when the
 operator's keep-existing-listeners merge leaves it on a
 non-loopback address; where the host reaches it is the
