@@ -21,6 +21,10 @@ const ISSUER: &str = "https://mail.example";
 const AUDIENCE: &str = "mail";
 const LOGIN: &str = "alice@example.org";
 
+/// A valid S256 `code_challenge`: 43 characters of the base64url alphabet,
+/// which is what `BASE64URL(SHA256(code_verifier))` writes (RFC 7636 §4.2).
+pub(super) const CHALLENGE: &str = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM";
+
 /// An ES256 key pair: the base64 PKCS#8 private key for the signer and the
 /// base64 public point for the verifier (they are a matching pair).
 pub(in super::super) struct Keys {
