@@ -42,7 +42,8 @@ MAGIC ‖ nonce(12) ‖ ciphertext ‖ tag(16)
 
 - An envelope copied over another message's envelope fails to decrypt.
 - A changed or truncated envelope fails to decrypt.
-- A sealed envelope read with no key loaded fails with "no key is loaded".
+- A sealed envelope read with no key loaded fails with "encrypted message but
+  no decryption key loaded".
 
 An envelope that fails is never delivered with defaults and never deleted:
 it stays in `spool/new/`, the worker logs it on every pass and skips it, and
