@@ -96,6 +96,7 @@ fn as_root(config_path: &Path, to: Option<&str>, yes: bool) -> Result<String, St
 			.arg(config_path)
 			.arg("certs")
 			.arg("disable")
+			.arg("--yes")
 			.status();
 		if !off.is_ok_and(|status| status.success()) {
 			return Err(Stop::Failed(format!(

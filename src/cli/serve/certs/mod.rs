@@ -30,7 +30,7 @@ const STOP_DEADLINE: std::time::Duration = std::time::Duration::from_secs(8);
 /// What the certificates role needs from the configuration: an `[acme]`
 /// section that validates with `dns-01`, and a `[dns]` provider to publish
 /// the challenge through. `Err` names the missing piece.
-pub(super) fn requirements(config: &Config) -> Result<&Acme, String> {
+pub(in crate::cli) fn requirements(config: &Config) -> Result<&Acme, String> {
 	let Some(acme) = config.acme.as_ref() else {
 		return Err(
 			"`--role certs` renews the ACME certificate, and the configuration has no [acme]"

@@ -91,9 +91,10 @@ pub enum StackCli {
 	/// The database half of `rollback`, run as the service account.
 	#[command(hide = true)]
 	RollbackDb,
-	/// Turn the certificates container on or off (see
-	/// docs/operations/container-split.md).
-	#[command(hide = true)]
+	/// Move certificate renewal and the DNS credential to a certs container.
+	///
+	/// `disable` puts them back in mail. `enable` needs `[acme] challenge = "dns-01"` and a `[dns]` provider. See
+	/// docs/operations/container-split.md.
 	Certs {
 		/// `enable` or `disable`.
 		#[command(subcommand)]
@@ -189,6 +190,8 @@ pub(crate) enum StackAction {
 	Certs {
 		/// `true` to run it.
 		on: bool,
+		/// Skip the confirmation.
+		yes: bool,
 	},
 	/// Show or change the limits in the compose file; podup is not run.
 	Resources {
@@ -316,7 +319,7 @@ pub(super) fn run(config: &Config, action: StackAction) -> ExitCode {
 			ExitCode::FAILURE
 		}
 		StackAction::RollbackDb => rollback::restore_db(config, &compose, podup),
-		StackAction::Certs { on } => certs::run(config, &compose, podup, on),
+		StackAction::Certs { on, yes } => certs::run(config, &compose, podup, on, yes),
 		StackAction::Up => {
 			// The ports the stack publishes on every interface on purpose
 			// are the ones podup warns about on every run; the warning is
