@@ -33,9 +33,14 @@ pub(super) trait UpdateHost {
 	fn podup(&mut self, step: &[String]) -> Result<(), String>;
 	/// Wait until `service` reports healthy.
 	fn wait_healthy(&mut self, service: &str) -> Result<(), String>;
+	/// Whether the compose file runs the certificates container.
+	fn runs_certs(&self) -> bool;
+	/// Wait until `service` is up with the same start, the way `stack certs`
+	/// judges the certificates container.
+	fn wait_steady(&mut self, service: &str) -> Result<(), String>;
 	/// The `status` areas a restart can break that now fail, with their
 	/// detail.
-	fn failing_areas(&mut self) -> Vec<(String, String)>;
+	fn failing_areas(&mut self, areas: &[crate::cli::status::CheckArea]) -> Vec<(String, String)>;
 	/// Report a line to the operator.
 	fn log(&mut self, line: &str);
 }
@@ -89,7 +94,17 @@ pub(super) fn execute(host: &mut impl UpdateHost, plan: &UpdatePlan) -> Result<(
 	}
 	host.wait_healthy("mail")
 		.map_err(|error| format!("{error}. {ROLLBACK}"))?;
-	let failing = host.failing_areas();
+	// A split stack renews the certificate in the `certs` container, and the
+	// update just recreated it. The update waits for it to settle the way
+	// `stack certs` does and fails when it does not: an upgrade that
+	// reports success with nothing renewing is not an upgrade.
+	let runs_certs = host.runs_certs();
+	if runs_certs {
+		host.wait_steady("certs")
+			.map_err(|error| format!("{error}. {ROLLBACK}"))?;
+	}
+	let areas = restart_areas(runs_certs);
+	let failing = host.failing_areas(&areas);
 	if !failing.is_empty() {
 		let named: Vec<String> = failing
 			.iter()
@@ -100,7 +115,14 @@ pub(super) fn execute(host: &mut impl UpdateHost, plan: &UpdatePlan) -> Result<(
 			named.join("; ")
 		));
 	}
-	host.log("mail is healthy and config, ports and db pass");
+	host.log(&format!(
+		"mail is healthy and {} pass",
+		areas
+			.iter()
+			.map(|area| area.name())
+			.collect::<Vec<&str>>()
+			.join(", ")
+	));
 	// The dumps only exist so `stack rollback` can put the schema back; a
 	// verified update has nothing to go back from. A failure here is a
 	// leftover, not a failed update.
@@ -139,6 +161,27 @@ pub(super) fn execute(host: &mut impl UpdateHost, plan: &UpdatePlan) -> Result<(
 /// What a failed restart tells the operator to run.
 const ROLLBACK: &str = "To go back to the previous version and, if the schema moved, the \
 	database from before the update, run `sudo epistle stack rollback`";
+
+/// The `status` areas a restart can break. DNS, TLS, the queue and the
+/// antivirus depend on the world outside the restart (a recreated clamav
+/// spends minutes downloading signatures), so they do not judge it.
+const RESTART_AREAS: [crate::cli::status::CheckArea; 3] = [
+	crate::cli::status::CheckArea::Config,
+	crate::cli::status::CheckArea::Ports,
+	crate::cli::status::CheckArea::Db,
+];
+
+/// The areas this restart has to pass: the ones above, plus the TLS area
+/// when the compose file runs the certificates container. That area is the
+/// one that reports the container, and the restart is what decides whether
+/// it is up.
+fn restart_areas(runs_certs: bool) -> Vec<crate::cli::status::CheckArea> {
+	let mut areas = RESTART_AREAS.to_vec();
+	if runs_certs {
+		areas.push(crate::cli::status::CheckArea::Tls);
+	}
+	areas
+}
 
 #[cfg(test)]
 mod tests;
