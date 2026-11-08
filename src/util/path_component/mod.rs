@@ -328,9 +328,17 @@ pub fn message_file(dir: &Path, id: Uuid, ext: MessageExt) -> std::io::Result<Pa
 	contained_child(dir, &format!("{id}{}", ext.suffix()))
 }
 
-/// `<dir>/<id><ext>.tmp`, the staging name used before an atomic rename.
+/// `<dir>/<id><ext>.<unique>.tmp`, the staging name used before an atomic
+/// rename.
+///
+/// The staging name carries a fresh token on every call, so two writes of the
+/// same sidecar at the same time never stage into the same file. With one
+/// fixed name the second writer truncates the first's staging file, the first
+/// renames the second's bytes over the sidecar, and the second rename then
+/// fails with ENOENT: one client is told the write failed although the other
+/// client's flags were the ones that landed.
 pub fn message_tmp_file(dir: &Path, id: Uuid, ext: MessageExt) -> std::io::Result<PathBuf> {
-	contained_child(dir, &format!("{id}{}.tmp", ext.suffix()))
+	contained_child(dir, &format!("{id}{}.{}.tmp", ext.suffix(), Uuid::now_v7()))
 }
 
 /// The fixed per-mailbox (and, for the JMAP journal, per-account) bookkeeping
@@ -347,6 +355,8 @@ pub enum StateFile {
 	UidValidityLock,
 	/// Mod-sequence counter.
 	ModseqCounter,
+	/// Per-mailbox lock serialising the mod-sequence counter.
+	ModseqLock,
 	/// Expunge log (QRESYNC).
 	Vanished,
 	/// Metadata index.
@@ -368,6 +378,7 @@ impl StateFile {
 			Self::UidValidityLast => ".uidvalidity_last",
 			Self::UidValidityLock => ".uidvalidity_lock",
 			Self::ModseqCounter => ".modseqctr",
+			Self::ModseqLock => ".modseq_lock",
 			Self::Vanished => ".vanished",
 			Self::Index => ".index",
 			Self::JmapJournal => ".jmap_changes",
@@ -382,9 +393,13 @@ pub fn state_file(dir: &Path, file: StateFile) -> std::io::Result<PathBuf> {
 	contained_child(dir, file.name())
 }
 
-/// `<dir>/<state file>.tmp`, the staging name used before an atomic rename.
+/// `<dir>/<state file>.<unique>.tmp`, the staging name used before an atomic
+/// rename.
+///
+/// The token keeps two concurrent writes of the same state file from sharing
+/// one staging name, for the reason [`message_tmp_file`] gives.
 pub fn state_tmp_file(dir: &Path, file: StateFile) -> std::io::Result<PathBuf> {
-	contained_child(dir, &format!("{}.tmp", file.name()))
+	contained_child(dir, &format!("{}.{}.tmp", file.name(), Uuid::now_v7()))
 }
 
 #[cfg(test)]
