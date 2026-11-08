@@ -87,11 +87,16 @@ pub fn parse(text: &str) -> Result<Policy, PolicyError> {
 				});
 			}
 			"max_age" => {
-				max_age = Some(
-					value
-						.parse()
-						.map_err(|_| PolicyError::Malformed("bad max_age".into()))?,
-				);
+				let seconds: u64 = value
+					.parse()
+					.map_err(|_| PolicyError::Malformed("bad max_age".into()))?;
+				// RFC 8461 section 3.2: the largest value is one year. The
+				// document comes from the domain we deliver to, so an
+				// unbounded number is hostile input, not a long policy.
+				if seconds > MAX_AGE_SECS {
+					return Err(PolicyError::Malformed("max_age is over one year".into()));
+				}
+				max_age = Some(seconds);
 			}
 			"mx" => mx.push(value.to_ascii_lowercase()),
 			// Unknown keys are ignored for forward compatibility.
@@ -193,6 +198,10 @@ impl PolicyFetcher for SystemFetcher {
 /// policy itself stays valid as a fallback for its whole `max_age`.
 const MAX_CACHE: Duration = Duration::from_secs(24 * 3600);
 
+/// The largest `max_age` a policy may declare, in seconds: one year
+/// (RFC 8461 section 3.2).
+pub(crate) const MAX_AGE_SECS: u64 = 31_557_600;
+
 /// How long "no policy" is remembered before discovery runs again.
 const NO_POLICY_CACHE: Duration = Duration::from_secs(600);
 
@@ -252,7 +261,7 @@ impl PolicyStore {
 		let cached = self
 			.cache
 			.lock()
-			.expect("mta-sts cache mutex")
+			.unwrap_or_else(|poisoned| poisoned.into_inner())
 			.get(&domain)
 			.cloned();
 		let fallback = cached
@@ -362,15 +371,24 @@ impl PolicyStore {
 		expires: Duration,
 	) {
 		let now = Instant::now();
-		self.cache.lock().expect("mta-sts cache mutex").insert(
-			domain.to_string(),
-			Cached {
-				policy,
-				txt_id,
-				refresh: now + refresh,
-				expires: now + expires,
-			},
-		);
+		// `Instant + Duration` panics when the sum does not fit, and it would
+		// do so with the cache locked. The instants are computed first and
+		// saturate at a year, which no policy may exceed.
+		let year = Duration::from_secs(MAX_AGE_SECS);
+		let refresh = now.checked_add(refresh).unwrap_or(now + year);
+		let expires = now.checked_add(expires).unwrap_or(now + year);
+		self.cache
+			.lock()
+			.unwrap_or_else(|poisoned| poisoned.into_inner())
+			.insert(
+				domain.to_string(),
+				Cached {
+					policy,
+					txt_id,
+					refresh,
+					expires,
+				},
+			);
 	}
 
 	/// Make the cached entry for `domain` due for refresh now, as if its
