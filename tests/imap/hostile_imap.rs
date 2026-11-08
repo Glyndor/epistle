@@ -5,6 +5,8 @@
 mod abuse;
 #[path = "hostile_imap/auth_tls.rs"]
 mod auth_tls;
+#[path = "hostile_imap/authenticate.rs"]
+mod authenticate;
 #[path = "hostile_imap/compress.rs"]
 mod compress;
 #[path = "hostile_imap/compress_support.rs"]
