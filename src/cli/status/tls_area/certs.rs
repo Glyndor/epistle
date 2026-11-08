@@ -15,6 +15,10 @@
 //! last failed attempt leaves its reason under `<data_dir>/acme/renew.error`,
 //! and a pair on disk that is older than the window in which it had to be
 //! renewed says the same without leaving a file behind.
+//!
+//! A container the compose file does not name is the other way round: it
+//! renews nothing that the stack can see, and it may still hold the DNS
+//! credential, so it is reported.
 
 use std::path::Path;
 
@@ -114,15 +118,6 @@ pub(super) fn item(upness: &Upness, renewal: Option<&Renewal>, remaining: i64) -
 	} else {
 		"already expired".to_string()
 	};
-	let level = |running: bool| {
-		if remaining < FAIL_DAYS * DAY {
-			Level::Fail
-		} else if running {
-			Level::Ok
-		} else {
-			Level::Warn
-		}
-	};
 	match upness {
 		Upness::Up => match renewal {
 			None => Item::new(
@@ -132,7 +127,7 @@ pub(super) fn item(upness: &Upness, renewal: Option<&Renewal>, remaining: i64) -
 			),
 			Some(renewal) => Item::new(
 				"certs",
-				level(false),
+				level(remaining, false),
 				format!(
 					"the certificates container runs, but {}; {left}",
 					renewal.why()
@@ -141,7 +136,7 @@ pub(super) fn item(upness: &Upness, renewal: Option<&Renewal>, remaining: i64) -
 		},
 		Upness::Down(text) => Item::new(
 			"certs",
-			level(false),
+			level(remaining, false),
 			format!(
 				"the certificates container {text}, so nothing renews: mail serves the certificate \
 				 it has, {left}; `epistle stack up` starts it"
@@ -149,7 +144,7 @@ pub(super) fn item(upness: &Upness, renewal: Option<&Renewal>, remaining: i64) -
 		),
 		Upness::Unsteady(text) => Item::new(
 			"certs",
-			level(false),
+			level(remaining, false),
 			format!(
 				"the certificates container {text}, so the renewal is not guaranteed: mail serves \
 				 the certificate it has, {left}; `epistle stack logs certs` says why"
@@ -157,11 +152,71 @@ pub(super) fn item(upness: &Upness, renewal: Option<&Renewal>, remaining: i64) -
 		),
 		Upness::Unreadable(error) => Item::new(
 			"certs",
-			level(false),
+			level(remaining, false),
 			format!(
 				"the certificates container could not be read ({error}), so nothing renews: mail \
 				 serves the certificate it has, {left}; `epistle stack up` starts it"
 			),
 		),
+	}
+}
+
+/// The renewal item of a split stack: the certificates container renews the
+/// certificate, so the item names it and is not `ok` while it does not run.
+pub(super) fn split_renewal(upness: &Upness, remaining: i64) -> Item {
+	match upness {
+		Upness::Up => Item::new(
+			"renewal",
+			Level::Ok,
+			"renewed by ACME, in the certificates container",
+		),
+		Upness::Down(text) => Item::new(
+			"renewal",
+			level(remaining, false),
+			format!(
+				"the certificates container {text}, so nothing renews the certificate: mail \
+				 serves the one it has"
+			),
+		),
+		Upness::Unsteady(text) => Item::new(
+			"renewal",
+			level(remaining, false),
+			format!(
+				"the certificates container {text}, so the renewal is not guaranteed: mail serves \
+				 the one it has"
+			),
+		),
+		Upness::Unreadable(error) => Item::new(
+			"renewal",
+			level(remaining, false),
+			format!(
+				"the certificates container could not be read ({error}), so nothing renews the \
+				 certificate: mail serves the one it has"
+			),
+		),
+	}
+}
+
+/// The item for a certificates container the compose file does not name,
+/// but that runs: it may still hold the DNS credential and the ACME account
+/// key, and nothing else reports it.
+pub(super) fn orphan_item() -> Item {
+	Item::new(
+		"certs",
+		Level::Warn,
+		"a certificates container the compose file does not name is running: it may still hold \
+		 the DNS credential and the ACME account key; `epistle stack up` removes it",
+	)
+}
+
+/// How bad a state that does not renew is: a certificate close to its expiry
+/// fails, a container that runs is fine.
+fn level(remaining: i64, running: bool) -> Level {
+	if remaining < FAIL_DAYS * DAY {
+		Level::Fail
+	} else if running {
+		Level::Ok
+	} else {
+		Level::Warn
 	}
 }
