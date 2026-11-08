@@ -54,6 +54,34 @@ pub use vacation_store::{
 	write as write_vacation,
 };
 
+/// Create `path` and its missing parents with owner-only (`0700`)
+/// permissions.
+///
+/// The mode is pinned at create time (`DirBuilder::mode`), so the
+/// directory is never briefly readable by another user whatever the
+/// umask of the process that made it, and a directory left behind by an
+/// earlier deploy is tightened on the next write. The same shape
+/// `src/storage/spool` uses for the mailbox tree.
+pub(crate) fn create_private_dir(path: &std::path::Path) -> std::io::Result<()> {
+	let mut builder = std::fs::DirBuilder::new();
+	builder.recursive(true);
+	#[cfg(unix)]
+	{
+		use std::os::unix::fs::DirBuilderExt;
+		builder.mode(0o700);
+	}
+	builder.create(path)?;
+	#[cfg(unix)]
+	{
+		use std::os::unix::fs::PermissionsExt;
+		let metadata = std::fs::metadata(path)?;
+		if metadata.permissions().mode() & 0o777 != 0o700 {
+			std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
+		}
+	}
+	Ok(())
+}
+
 /// Atomically write `bytes` to `path` with owner-only (`0600`) permissions.
 ///
 /// The file is created `O_EXCL` at `0600` from the start — never written at the
