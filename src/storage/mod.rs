@@ -94,6 +94,20 @@ pub(crate) fn create_private_dir(path: &std::path::Path) -> std::io::Result<()> 
 /// and the parent directory is `fsync(2)`'d afterwards so the rename survives
 /// a power failure between the rename and a follow-up dirent write.
 pub(crate) fn write_secret(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+	write_with_mode(path, bytes, 0o600)
+}
+
+/// Atomically write `bytes` to `path` with the file mode the caller names.
+///
+/// The same shape as [`write_secret`], for the files that are not secrets: a
+/// certificate chain is public and keeps `0644`. The staging file is created
+/// `0600` and only widened to `mode` once its bytes are on disk, so the
+/// content is never readable by another user while it is being written.
+pub(crate) fn write_with_mode(
+	path: &std::path::Path,
+	bytes: &[u8],
+	mode: u32,
+) -> std::io::Result<()> {
 	use std::io::Write;
 	let parent = path
 		.parent()
@@ -120,6 +134,11 @@ pub(crate) fn write_secret(path: &std::path::Path, bytes: &[u8]) -> std::io::Res
 		.write_all(bytes)
 		.and_then(|()| file.sync_all())
 		.and_then(|()| {
+			#[cfg(unix)]
+			{
+				use std::os::unix::fs::PermissionsExt;
+				file.set_permissions(std::fs::Permissions::from_mode(mode))?;
+			}
 			drop(file);
 			std::fs::rename(&tmp, path)
 		});
