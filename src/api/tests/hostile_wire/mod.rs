@@ -11,6 +11,20 @@ const DEADLINE: Duration = Duration::from_secs(30);
 /// more arenas, so the line sits at twice that.
 const MAX_RSS_KIB: u64 = 256 * 1024;
 
+/// A build instrumented for coverage keeps counters for every line and its
+/// worker peaks several times higher than a plain one while the code is
+/// the same, so the ceiling is four times higher there. `cargo llvm-cov`
+/// sets both variables for the test processes it starts.
+fn max_rss_kib() -> u64 {
+	let instrumented = std::env::var_os("LLVM_PROFILE_FILE").is_some()
+		|| std::env::var_os("CARGO_LLVM_COV").is_some();
+	if instrumented {
+		MAX_RSS_KIB * 4
+	} else {
+		MAX_RSS_KIB
+	}
+}
+
 /// Return true in the supervisor, false in the isolated test worker.
 /// A process deadline also catches synchronous handlers that never yield.
 /// The RSS ceiling includes runtime, fixtures and request/response buffers.
@@ -44,8 +58,8 @@ pub(in crate::api) fn supervised(module: &str, test: &str) -> bool {
 					.parse::<u64>()
 					.ok()
 			});
-			if peak.is_some_and(|kib| kib > MAX_RSS_KIB) {
-				violation = Some("HTTP worker exceeded 256 MiB peak RSS");
+			if peak.is_some_and(|kib| kib > max_rss_kib()) {
+				violation = Some("HTTP worker exceeded its peak RSS ceiling");
 			}
 		}
 		if violation.is_some() {
