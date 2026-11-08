@@ -112,6 +112,13 @@ fn submit_email(
 			recipients
 		}
 	};
+	// The envelope is made of lowercase addresses whatever case the client or
+	// the stored headers spelled; the headers themselves are never rewritten.
+	let mail_from = crate::util::address::normalize(&mail_from);
+	let recipients: Vec<String> = recipients
+		.iter()
+		.map(|address| crate::util::address::normalize(address))
+		.collect();
 	if recipients.is_empty() {
 		return Err("noRecipients".into());
 	}

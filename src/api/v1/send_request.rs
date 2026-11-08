@@ -123,7 +123,7 @@ impl SendRequest {
 			.iter()
 			.chain(&self.cc)
 			.chain(&self.bcc)
-			.cloned()
+			.map(|address| crate::util::address::normalize(address))
 			.collect()
 	}
 

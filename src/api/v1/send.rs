@@ -33,8 +33,11 @@ const NEW_RECIPIENT_LIMIT_MESSAGE: &str = "too many new recipients today; retry 
 pub async fn send(
 	State(state): State<ApiState>,
 	Extension(auth): Extension<MatchedAuth>,
-	Json(request): Json<SendRequest>,
+	Json(mut request): Json<SendRequest>,
 ) -> Result<Json<Queued>, ApiError> {
+	// The sender is one lowercase address from here on, whatever case the
+	// client typed; the recipients are lowercased by `recipients()`.
+	request.from = crate::util::address::normalize(&request.from);
 	let explicit_class = request.class()?;
 	let recipients = request.recipients();
 	if recipients.is_empty() {

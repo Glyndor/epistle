@@ -37,7 +37,10 @@ pub enum AddressError {
 }
 
 impl Address {
-	/// Parse and validate an address. The stored `domain` is the lowercase
+	/// Parse and validate an address. The local part is lowercased: epistle
+	/// never tells two spellings of one address apart, so the envelope, the
+	/// queue, the logs and every lookup see the same string whatever case the
+	/// sender typed. The stored `domain` is the lowercase
 	/// ASCII A-label returned by [`crate::domain::normalize`]: two
 	/// spellings of one internationalised domain land on the same key, and
 	/// a Cyrillic look-alike of a Latin name is refused before it ever
@@ -53,12 +56,12 @@ impl Address {
 			DomainError::Confusable => AddressError::ConfusableDomain,
 		})?;
 		Ok(Address {
-			local_part: local_part.to_string(),
+			local_part: local_part.to_lowercase(),
 			domain,
 		})
 	}
 
-	/// The (case-preserved) local part.
+	/// The lowercase local part.
 	pub fn local_part(&self) -> &str {
 		&self.local_part
 	}
