@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use ldap3::SearchEntry;
 
-use super::{account_name, build_filter, escape_filter, first_value};
+use super::{account_name, build_filter, escape_filter, first_value, validated_addresses};
 use crate::config::Ldap;
 
 fn config() -> Ldap {
@@ -126,4 +126,27 @@ fn an_account_name_that_cannot_be_a_directory_is_skipped() {
 		let entry = entry(&[("uid", &[name]), ("mail", &["x@example.org"])]);
 		assert_eq!(account_name(&config, &entry), None, "case {}", name.len());
 	}
+}
+
+#[test]
+fn only_valid_mailboxes_of_the_mail_attribute_reach_the_directory() {
+	let entry = entry(&[(
+		"mail",
+		&[
+			"Alice.B@EXAMPLE.org",
+			"not an address",
+			"a@b.example>\r\nRCPT TO:<z@victim.example",
+			"no-at-sign",
+			"",
+			"bob@example.org",
+		],
+	)]);
+	assert_eq!(
+		validated_addresses(&entry, "mail"),
+		vec![
+			"alice.b@example.org".to_string(),
+			"bob@example.org".to_string()
+		]
+	);
+	assert!(validated_addresses(&entry, "absent").is_empty());
 }
