@@ -15,3 +15,4 @@ pub(super) mod jmap_eventsource;
 pub(super) mod jmap_f;
 pub(super) mod jmap_framing;
 pub(super) mod jmap_g;
+pub(super) mod jmap_upload_quota;

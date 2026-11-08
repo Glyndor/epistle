@@ -147,3 +147,42 @@ fn raw_entries_lists_every_recorded_message_id() {
 	assert!(ids.contains(&"<b@x>"));
 	assert_eq!(entries.len(), 2);
 }
+
+/// Submissions of one account at the same moment cannot all pass the quota
+/// check: the check and the write are one step, so only what fits is stored.
+#[test]
+fn copies_stored_at_the_same_time_stop_at_the_quota() {
+	use std::sync::{Arc, Barrier};
+	for _ in 0..10 {
+		let dir = temp_data_dir();
+		ensure_account(dir.path(), "alice");
+		let start = Arc::new(Barrier::new(8));
+		let handles: Vec<_> = (0..8)
+			.map(|n| {
+				let (path, start) = (dir.path().to_path_buf(), start.clone());
+				std::thread::spawn(move || {
+					let data = format!(
+						"From: a@example.org\r\nSubject: {n}\r\n\r\n{}\r\n",
+						"x".repeat(700)
+					);
+					start.wait();
+					super::store_copy(
+						&path,
+						"alice",
+						data.as_bytes(),
+						&format!("<m{n}@example.org>"),
+						&crate::storage::MessageCrypto::disabled(),
+						Some(1800),
+					)
+				})
+			})
+			.collect();
+		let stored = handles
+			.into_iter()
+			.map(|handle| handle.join().expect("submission"))
+			.filter(Result::is_ok)
+			.count();
+		// 1800 bytes hold two copies of about 750, not three.
+		assert_eq!(stored, 2, "{stored} copies fit a quota of two");
+	}
+}

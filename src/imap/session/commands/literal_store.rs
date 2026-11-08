@@ -53,17 +53,41 @@ impl Session {
 				}
 			}
 		}
-		let id = match mailbox::append_dated(
-			&self.data_dir,
-			&account,
-			&mailbox,
-			&flags,
-			date,
-			data,
-			&self.crypto,
-		) {
-			Ok(id) => id,
-			Err(_) => return Output::text(format!("{tag} NO {verb} failed\r\n")),
+		// Quota enforcement (RFC 9208), repeated under the account's
+		// admission lock. The check that ran before the literal was read
+		// is stale by now: another path may have stored a message in the
+		// meantime. The check and the write are one step here, so two
+		// APPENDs of one account at the same moment cannot both pass the
+		// check and leave the account over its quota. The lock is the one
+		// the delivery path takes, and it is not held while the literal
+		// travels: only around this check and this write.
+		let id = {
+			let lock = crate::smtp::quota::delivery_lock_for(&self.data_dir, &account);
+			let _admission = lock.lock().unwrap_or_else(|e| e.into_inner());
+			let size = data.len() as u64;
+			// The reservations of uploads first, the usage after: see
+			// `crate::smtp::quota::reserve`.
+			let reserved = crate::smtp::quota::reserved_bytes(&self.data_dir, &account);
+			if self.effective_quota().is_some_and(|limit| {
+				mailbox::account_usage(&self.data_dir, &account, &self.crypto)
+					.saturating_add(reserved)
+					.saturating_add(size)
+					> limit
+			}) {
+				return Output::text(format!("{tag} NO [OVERQUOTA] storage quota exceeded\r\n"));
+			}
+			match mailbox::append_dated(
+				&self.data_dir,
+				&account,
+				&mailbox,
+				&flags,
+				date,
+				data,
+				&self.crypto,
+			) {
+				Ok(id) => id,
+				Err(_) => return Output::text(format!("{tag} NO {verb} failed\r\n")),
+			}
 		};
 		// UIDPLUS: report the UIDVALIDITY and UID assigned (RFC 4315).
 		let code = match mailbox::appenduid(&self.data_dir, &account, &mailbox, id) {
