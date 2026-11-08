@@ -323,7 +323,7 @@ pub(super) fn run(dir: PathBuf, port_base: u16) -> ExitCode {
 		prepared.password.as_deref(),
 		&mut super::style::stderr(),
 	);
-	super::serve::run(prepared.config)
+	super::serve::run(prepared.config, super::serve::ServeRole::All)
 }
 
 /// Print the on-start banner to `out`. The password is only printed on

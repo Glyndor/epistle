@@ -102,7 +102,7 @@ pub(super) fn normalized(addresses: &[String]) -> Vec<String> {
 /// Read the disabled-overlay file directly when possible, falling back to
 /// an empty set on any I/O or parse error so `list`/`show` never block on
 /// a malformed JSON file.
-pub(super) fn disabled_set(config: &Config) -> Option<HashSet<String>> {
+pub(in crate::cli) fn disabled_set(config: &Config) -> Option<HashSet<String>> {
 	let path = config.data_dir.join("aliases.json");
 	let text = std::fs::read_to_string(&path).ok()?;
 	let file: serde_json::Value = serde_json::from_str(&text).ok()?;

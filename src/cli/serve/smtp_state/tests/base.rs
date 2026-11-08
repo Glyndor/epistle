@@ -6,7 +6,7 @@ use tokio::net::UnixListener;
 
 /// Build an [`ApiState`]-free [`Config`] without going through the
 /// `mail.toml` validator: the tests in this file only touch the new
-/// `[server] max_message_size`, `max_connections_per_ip`, and
+/// `max_message_size`, `max_connections_per_ip`, and
 /// `message_memory_budget` keys, which `Config::load` itself parses
 /// through `#[serde(default)]`. The validator still wants the same
 /// fields as the rest of the config (hostname, data_dir), so the

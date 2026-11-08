@@ -8,6 +8,9 @@ mod harness;
 #[path = "cli_json/accounts/account.rs"]
 mod account;
 
+#[path = "cli_json/accounts/account_list_aliases.rs"]
+mod account_list_aliases;
+
 #[path = "cli_json/operator/config_edits.rs"]
 mod config_edits;
 

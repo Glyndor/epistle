@@ -3,6 +3,7 @@ pub use super::*;
 pub(super) mod send_as;
 pub(super) mod send_attachments;
 pub(super) mod send_bcc;
+pub(super) mod send_case;
 pub(super) mod send_class;
 pub(super) mod send_class_key;
 pub(super) mod send_class_paths;

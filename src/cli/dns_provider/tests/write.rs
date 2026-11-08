@@ -13,7 +13,7 @@ use std::os::unix::fs::PermissionsExt;
 pub(super) const TOKEN: &str = "/etc/epistle/secrets/dns.token";
 
 /// A stack install whose generated compose file carries no token mount.
-fn stack() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
+pub(super) fn stack() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
 	stack_with("hostname = 'mail.example.org'\ndata_dir = {data:?}\n", &[])
 }
 
@@ -48,8 +48,20 @@ pub(super) fn stack_with(
 }
 
 /// The `set` command with the given token flags, ready to run.
-fn action(token_flags: &[&str]) -> DnsCli {
+pub(super) fn action(token_flags: &[&str]) -> DnsCli {
 	action_of("cloudflare", token_flags)
+}
+
+/// The `unset` command for the given zone, ready to run.
+pub(super) fn unset_of(zone: &str) -> DnsCli {
+	let crate::cli::Command::Dns { action, .. } =
+		crate::cli::Cli::try_parse_from(["epistle", "dns", "provider", "unset", "--zone", zone])
+			.unwrap()
+			.command
+	else {
+		unreachable!("dns arguments must select the dns command")
+	};
+	action
 }
 
 /// The `set` command for the given provider, with the given token flags.
@@ -72,6 +84,21 @@ fn action_of(provider: &str, token_flags: &[&str]) -> DnsCli {
 	action
 }
 
+/// A stack install whose generated compose file runs the certificates
+/// container, with the given mounts in the `mail` service.
+pub(super) fn split_stack_with(
+	body: &str,
+	mounts: &[(&str, &str)],
+) -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
+	let (dir, path, compose) = stack_with(body, mounts);
+	let mut document: serde_json::Value =
+		serde_json::from_str(&std::fs::read_to_string(&compose).unwrap()).unwrap();
+	document["services"]["certs"] =
+		serde_json::json!({"environment": {"TZ": "UTC"}, "volumes": []});
+	std::fs::write(&compose, document.to_string()).unwrap();
+	(dir, path, compose)
+}
+
 /// The mounts of the `mail` service, as the container engine reads them.
 pub(super) fn mail_mounts(compose: &std::path::Path) -> Vec<serde_json::Value> {
 	let document: serde_json::Value =
@@ -84,9 +111,28 @@ pub(super) fn mail_mounts(compose: &std::path::Path) -> Vec<serde_json::Value> {
 
 /// Whether the token file is mounted read-only at its own path.
 pub(super) fn mounted(compose: &std::path::Path, path: &str) -> bool {
-	mail_mounts(compose).iter().any(|mount| {
-		mount["source"] == path && mount["target"] == path && mount["read_only"] == true
-	})
+	mounted_by(compose, "mail", path)
+}
+
+/// Whether the token file is mounted read-only at its own path in `service`.
+pub(super) fn mounted_by(compose: &std::path::Path, service: &str, path: &str) -> bool {
+	let document: serde_json::Value =
+		serde_json::from_str(&std::fs::read_to_string(compose).unwrap()).unwrap();
+	document["services"][service]["volumes"]
+		.as_array()
+		.map(|volumes| {
+			volumes.iter().any(|mount| {
+				mount["source"] == path && mount["target"] == path && mount["read_only"] == true
+			})
+		})
+		.unwrap_or_default()
+}
+
+/// Whether the service forwards the variable to the container.
+pub(super) fn forwarded_by(compose: &std::path::Path, service: &str, name: &str) -> bool {
+	let document: serde_json::Value =
+		serde_json::from_str(&std::fs::read_to_string(compose).unwrap()).unwrap();
+	document["services"][service]["environment"][name] == format!("${{{name}}}")
 }
 
 /// The token file the configuration names has to be mounted into `mail`, or
@@ -126,6 +172,8 @@ fn a_token_file_is_mounted_into_the_mail_container() {
 	);
 }
 
+/// With the certificates container the credential is mounted in `certs`,
+/// which is recreated, and `mail` is left without it.
 /// The preview has to show the compose change: a dry run that prints nothing
 /// hides the change the command is about to make.
 #[test]
@@ -398,5 +446,42 @@ fn the_dry_run_does_not_print_a_multiline_token() {
 	assert!(
 		!printed.contains(token),
 		"the dry run printed the token: {printed}"
+	);
+}
+
+/// The generated compose file is rewritten under the lock that guards it,
+/// the same one `stack update`, `stack resources set` and `stack certs`
+/// take: the command waits for it, and a rewrite that lands meanwhile is
+/// not lost.
+#[test]
+fn the_compose_file_is_rewritten_under_the_lock_that_guards_it() {
+	let (_dir, path, compose) = stack();
+	let held =
+		crate::storage::lock::FileLock::acquire(&crate::storage::locked::lock_path(&compose))
+			.expect("lock");
+	let running = std::thread::spawn(move || {
+		let (mut out, mut status) = (Vec::new(), Vec::new());
+		execute_with(
+			&path,
+			action(&["--token-file", TOKEN]),
+			false,
+			false,
+			&mut out,
+			&mut status,
+			|_, _| ExitCode::SUCCESS,
+		)
+	});
+	std::thread::sleep(std::time::Duration::from_millis(500));
+	assert!(
+		!mounted(&compose, TOKEN),
+		"the compose file was rewritten while the lock was held elsewhere"
+	);
+	drop(held);
+	let result = running.join().expect("set");
+	assert_eq!(result.unwrap(), ExitCode::SUCCESS);
+	assert!(
+		mounted(&compose, TOKEN),
+		"the token mount is not on disk: {}",
+		std::fs::read_to_string(&compose).unwrap()
 	);
 }

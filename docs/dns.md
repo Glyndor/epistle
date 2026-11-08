@@ -123,7 +123,7 @@ never at the same one.
 #### Long TXT values split at 255 octets
 
 RFC 1035 §3.3.14 caps each character-string at 255 octets, and RSA-2048
-`p=` is around 410 bytes (RSA-4096 around 755). When
+`p=` is around 392 bytes (RSA-4096 around 736). When
 `epistle dns-records` prints the RSA selector's record, it splits the
 value at the boundary and quotes each part, so the operator can paste
 the line into a zone file directly:
@@ -275,8 +275,12 @@ change (ACME renewal or a replaced `[tls]` pair):
 
 So users configure a client from just their address and password:
 
-- Publish the **SRV** records from `epistle srv-records` (submission, IMAP(S),
-  POP3S, ManageSieve, and the autodiscover SRV).
+- Publish the **SRV** records from `epistle srv-records` (submission over
+  implicit TLS and STARTTLS, IMAP over implicit TLS and STARTTLS, POP3S, and
+  the `_pop3` "unavailable" marker). The ManageSieve, JMAP and CalDAV/CardDAV
+  locators come from `epistle dns-records`, which follows the listeners you
+  enabled; there is no autodiscover SRV, `autoconfig` and `autodiscover` are
+  CNAMEs.
 - Point `autoconfig.example.org` and `autodiscover.example.org` at the host and
   add an `autoconfigs` listener (port 443). It serves the documents over HTTPS
   with the server certificate, so no TLS proxy is needed; the certificate must
@@ -318,6 +322,77 @@ about: the search goes on to the parent only in the first case. When the
 provider fails — a timeout, a refused token, a reply that does not parse
 — the search stops and the record is not written anywhere: publishing it
 in the parent zone would put it in a zone the operator did not ask for.
+
+### Publishing the record set
+
+`epistle dns publish [<domain>] [--yes] [--json] [--undo]` (and the `dns`
+flag `--dry-run`) publishes the records `epistle dns-records` prints. Both
+read the same set, computed once from the configuration. The command reads
+every zone through the `[dns]` provider, prints the plan (`--json` prints the
+same plan as JSON), asks, and writes. Without a domain it covers every domain
+in `domains`.
+
+Each record of the plan has one action:
+
+| Action | Meaning |
+|---|---|
+| `create` | The record is missing and is written. |
+| `update` | epistle published the record with another value and rewrites it. |
+| `remove` | epistle published the record and the configuration no longer needs it, for example the SRV locator of a service you turned off. |
+| `present` | epistle published the record and it is there as needed. |
+| `adopted` | The record is there as needed and somebody else wrote it. It is left alone and not claimed. |
+| `kept` | The DMARC record in place is at least as strict as the one epistle needs, or `dns lockdown` is moving it. |
+| `conflict` | A record epistle did not write is in the way. Nothing is written; fix it by hand. |
+| `gone` | A record epistle published is no longer in the zone; the ledger forgets it. |
+| `skipped` | The name is delegated, is not a valid DNS name, or is a DKIM key, which the key rotation retires. |
+
+What epistle wrote is kept in a ledger, one file per zone under
+`<data_dir>/dns-publish/<zone>.json`: the name, type, value, the release that
+wrote it and when. Own versus foreign comes from the ledger alone, never from
+the record description or the Cloudflare tags, which are labels. The TLSA
+values the certificate refresh published count as epistle's own too. So:
+
+- A record somebody else wrote is never replaced or removed. Every provider
+  replaces the whole set of an MX, SRV, CAA, TLSA, A, AAAA or CNAME on a write,
+  so a set that holds a foreign value is a conflict, and so is a second SPF or
+  DMARC record at a name.
+- A DMARC record is never replaced by a weaker one: `p=`, `sp=`, `np=` and
+  the `adkim=s` / `aspf=s` alignment are compared tag by tag.
+- A record that differs only in TTL or description is not rewritten.
+- Names below a delegation (NS records under the zone apex) are left alone,
+  as `dns lockdown` does.
+- A provider that cannot list a zone (`route53`, `rfc2136`) stops the command
+  before it writes anything. A zone whose `[[dns]]` entry is `manual` is
+  listed under "By hand".
+
+Every record enters the ledger before it is written, so a write whose answer
+was lost is still known as epistle's own. A write that failed and left nothing
+in the zone takes the claim back: the ledger says what epistle published,
+never what it did not. The first write that fails stops the run; running the
+command again picks up where it stopped. A second run with nothing to do
+prints `nothing to change`.
+
+`--undo` withdraws what the ledgers list: a record still in the zone exactly
+as written and alone in its place is removed, and anything changed by hand
+since, shared with a foreign record or delegated is reported and left. DKIM
+keys are left too, since they may still sign mail; `epistle dkim cleanup`
+retires keys. The removal takes the record epistle published and nothing
+else: the provider is asked for the exact removal, so a record another account
+wrote between the listing and the removal is still there. A provider that
+cannot remove one value (its API rewrites the whole set of the name) removes
+the record the ordinary way. If the ledger cannot be saved after a removal,
+the report of what was removed is printed and the command fails: the record is
+out of the zone and the ledger still lists it, so the next run withdraws it
+again.
+
+In automatic mode the server runs the same comparison on its own every six
+hours (`[dns_publish] interval_secs`, see
+[`configuration.md`](configuration.md#dns_publish)), so a record that drifted
+or a service turned off is followed without running the command. The command
+and that loop take the same lock in `<data_dir>/dns-publish/`, so they never
+write at the same time. The DKIM and TLSA rotations write in the same zones,
+and they take the lock of the zone too: a value the rotation published is
+never overwritten by a comparison that read the zone before it.
 
 ### Checking provider credentials
 
@@ -551,14 +626,19 @@ epistle dns provider set desec --zone example.org --store-token --config /etc/ep
 
 Use your provider and zone, and repeat its other required settings, such as
 `--account-id` for DNSimple. `--store-token` reads the current token without
-printing it, writes `<data_dir>/../secrets/dns_provider_token` with mode `0600`,
-and replaces `dns.token` and `dns.token_env` with `dns.token_file`. With
+printing it, writes `secrets/dns_provider_token` with mode `0600` (with several
+`[[dns]]` entries, `secrets/dns_provider_token_<zone>` with the dots as
+underscores), and replaces `dns.token` and `dns.token_env` with
+`dns.token_file`. With
 `--token-env NAME` or `--token-file /absolute/path`, it imports that source
 instead. A different existing destination is refused.
 
 For a generated stack, the command removes the old token environment entry and
 the read-only mount of a token file the configuration no longer names, adds the
-mount of the new source only to `mail`, and recreates `mail`. A container that
+mount of the new source only to `mail`, and recreates `mail`. A stack that runs
+the certificates container (`epistle stack certs enable`) gets the credential
+in `certs` instead, which is recreated, and `mail` never mounts it; the ACME
+`dns-01` challenge and the TLSA record are then published from `certs`. A container that
 keeps the mount of a credential you took away still has that credential, so the
 mount leaves with the setting that named it. Without a stack, restart the server
 yourself. Remove the old environment variable from your shell, service

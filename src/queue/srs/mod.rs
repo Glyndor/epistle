@@ -14,6 +14,14 @@ const BASE32: &[u8; 32] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 /// The timestamp wraps every 1024 days (two base32 characters).
 const TS_MODULUS: u64 = 1024;
 
+/// A fresh secret for one domain: 32 bytes from the system CSPRNG, as
+/// URL-safe base64 (43 characters). `None` only if the system has no entropy.
+pub fn generate_secret() -> Option<String> {
+	use base64::Engine;
+	let bytes = ring::rand::generate::<[u8; 32]>(&ring::rand::SystemRandom::new()).ok()?;
+	Some(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes.expose()))
+}
+
 /// Rewrites and validates SRS sender addresses with a shared secret.
 pub struct Srs {
 	key: hmac::Key,
@@ -32,13 +40,32 @@ impl Srs {
 	/// is the current day number (UNIX seconds / 86400).
 	pub fn forward(&self, local: &str, domain: &str, our_domain: &str, now_days: u64) -> String {
 		let ts = encode_timestamp(now_days);
-		let hash = self.hash(&ts, domain, local);
+		let hash = self.hash(None, &ts, domain, local);
 		format!("SRS0={hash}={ts}={domain}={local}@{our_domain}")
+	}
+
+	/// Like [`forward`](Self::forward), for mail that a hosted domain's
+	/// account forwards: the address names `hosted` (`SRS0.<hosted>=...`) and
+	/// the HMAC covers it, so an address made for one hosted domain does not
+	/// verify as another's even under the same secret.
+	pub fn forward_for(
+		&self,
+		hosted: &str,
+		(local, domain): (&str, &str),
+		our_domain: &str,
+		now_days: u64,
+	) -> String {
+		let hosted = hosted.to_ascii_lowercase();
+		let ts = encode_timestamp(now_days);
+		let hash = self.hash(Some(&hosted), &ts, domain, local);
+		format!("SRS0.{hosted}={hash}={ts}={domain}={local}@{our_domain}")
 	}
 
 	/// Validate and reverse an `SRS0` local-part back to `(local, domain)`.
 	/// Returns `None` if the address is malformed, the HMAC does not match, or
 	/// the timestamp is older than `max_age_days` (or implausibly far future).
+	/// An address that names a hosted domain is for
+	/// [`reverse_for`](Self::reverse_for), never for this method.
 	pub fn reverse(
 		&self,
 		srs_local: &str,
@@ -46,7 +73,38 @@ impl Srs {
 		max_age_days: u64,
 	) -> Option<(String, String)> {
 		let rest = strip_prefix_ci(srs_local, "SRS0=")?;
-		// hash=ts=domain=local, where local may itself contain '='.
+		self.reverse_fields(None, rest, now_days, max_age_days)
+	}
+
+	/// Validate and reverse an `SRS0.<hosted>=...` local-part made by
+	/// [`forward_for`](Self::forward_for) for exactly `hosted`.
+	pub fn reverse_for(
+		&self,
+		hosted: &str,
+		srs_local: &str,
+		now_days: u64,
+		max_age_days: u64,
+	) -> Option<(String, String)> {
+		let (named, rest) = split_hosted(srs_local)?;
+		if !named.eq_ignore_ascii_case(hosted) {
+			return None;
+		}
+		self.reverse_fields(
+			Some(&named.to_ascii_lowercase()),
+			rest,
+			now_days,
+			max_age_days,
+		)
+	}
+
+	/// `hash=ts=domain=local`, where local may itself contain '='.
+	fn reverse_fields(
+		&self,
+		scope: Option<&str>,
+		rest: &str,
+		now_days: u64,
+		max_age_days: u64,
+	) -> Option<(String, String)> {
 		let mut parts = rest.splitn(4, '=');
 		let hash = parts.next()?;
 		let ts = parts.next()?;
@@ -55,24 +113,27 @@ impl Srs {
 		if domain.is_empty() || local.is_empty() {
 			return None;
 		}
+		let stamp = decode_timestamp(ts)?;
 
 		// Constant-time compare of the recomputed hash.
-		let expected = self.hash(ts, domain, local);
+		let expected = self.hash(scope, ts, domain, local);
 		if !constant_time_eq(expected.as_bytes(), hash.as_bytes()) {
 			return None;
 		}
 
-		let stamp = decode_timestamp(ts)?;
 		if timestamp_age(stamp, now_days) > max_age_days {
 			return None;
 		}
 		Some((local.to_string(), domain.to_string()))
 	}
 
-	/// First four base64 characters of HMAC over the lowercased `ts=domain=local`.
-	fn hash(&self, ts: &str, domain: &str, local: &str) -> String {
+	/// First four base64 characters of HMAC over the lowercased
+	/// `ts=domain=local`, preceded by `hosted|` when the address names a
+	/// hosted domain.
+	fn hash(&self, hosted: Option<&str>, ts: &str, domain: &str, local: &str) -> String {
 		use base64::Engine;
-		let data = format!("{ts}={domain}={local}").to_ascii_lowercase();
+		let scope = hosted.map(|name| format!("{name}|")).unwrap_or_default();
+		let data = format!("{scope}{ts}={domain}={local}").to_ascii_lowercase();
 		let tag = hmac::sign(&self.key, data.as_bytes());
 		let encoded = base64::engine::general_purpose::STANDARD.encode(tag.as_ref());
 		encoded.chars().take(4).collect()
@@ -113,8 +174,24 @@ fn timestamp_age(stamp: u64, now_days: u64) -> u64 {
 	(now + TS_MODULUS - stamp) % TS_MODULUS
 }
 
+/// Split `SRS0.<hosted>=rest` into the hosted domain and `rest`. The name is
+/// a DNS-name shape only: it picks which secret verifies the address, and
+/// the HMAC is what proves it.
+pub(crate) fn split_hosted(srs_local: &str) -> Option<(&str, &str)> {
+	let after = strip_prefix_ci(srs_local, "SRS0.")?;
+	let (hosted, rest) = after.split_once('=')?;
+	let plausible = !hosted.is_empty()
+		&& hosted
+			.bytes()
+			.all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'.');
+	plausible.then_some((hosted, rest))
+}
+
 fn strip_prefix_ci<'a>(text: &'a str, prefix: &str) -> Option<&'a str> {
-	(text.len() >= prefix.len() && text[..prefix.len()].eq_ignore_ascii_case(prefix))
+	// `get` answers `None` when the cut falls inside a multibyte character, where slicing
+	// would panic on an address chosen by whoever sent the mail.
+	let head = text.get(..prefix.len())?;
+	head.eq_ignore_ascii_case(prefix)
 		.then(|| &text[prefix.len()..])
 }
 
@@ -129,6 +206,9 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 	}
 	diff == 0
 }
+
+mod keys;
+pub use keys::SrsKeys;
 
 #[cfg(test)]
 mod tests;

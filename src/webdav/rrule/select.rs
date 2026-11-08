@@ -154,7 +154,7 @@ pub(super) fn expand(
 	rule: &Rule,
 	window_start: i64,
 	window_end: i64,
-	budget: usize,
+	left: &mut usize,
 ) -> (Vec<i64>, bool) {
 	let time = dtstart.rem_euclid(DAY);
 	let walked_from = if rule.count.is_some() {
@@ -163,13 +163,12 @@ pub(super) fn expand(
 		i64::from(first_index(dtstart, rule.freq, rule.interval, window_start))
 	};
 	let mut out = Vec::new();
-	let mut left = budget;
 	let mut seen = 0u64;
 	for k in walked_from.. {
-		if left == 0 {
+		if *left == 0 {
 			return (out, true);
 		}
-		left -= 1;
+		*left -= 1;
 		let (period_start, days) = period(rule, dtstart, k);
 		if period_start.saturating_mul(DAY) >= window_end
 			|| rule
@@ -191,10 +190,10 @@ pub(super) fn expand(
 			}
 			seen += 1;
 			if at >= window_start {
-				if left == 0 {
+				if *left == 0 {
 					return (out, true);
 				}
-				left -= 1;
+				*left -= 1;
 				out.push(at);
 			}
 		}

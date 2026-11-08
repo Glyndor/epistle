@@ -25,10 +25,11 @@ fn parses_simple_address() {
 }
 
 #[test]
-fn lowercases_domain_but_preserves_local_part() {
+fn lowercases_the_local_part_and_the_domain() {
 	let address = Address::parse("Alice.B@EXAMPLE.ORG").expect("valid");
-	assert_eq!(address.local_part(), "Alice.B");
+	assert_eq!(address.local_part(), "alice.b");
 	assert_eq!(address.domain(), "example.org");
+	assert_eq!(address.to_string(), "alice.b@example.org");
 }
 
 #[test]

@@ -85,18 +85,20 @@ pub(super) fn nothing_to_split(
 
 /// Restart the server and, when that is confirmed, record that the moved keys
 /// are the ones signing. `Ok((confirmed, reload))`; `Err` carries the exit code
-/// of a restart that failed.
+/// of an error that kept the restart from being attempted.
 pub(super) fn restart_onto(
 	config: &Config,
 	outcome: crate::cli::config_edit::Outcome,
 	err: &mut impl Write,
 	restart: impl FnOnce(&Config, crate::cli::stack::StackAction) -> ExitCode,
 ) -> Result<(bool, crate::cli::json_out::Reload), ExitCode> {
+	// A restart that fails is not an error of this command: the move is
+	// written and not confirmed, which is the pending state (exit 4), so the
+	// code the restart returned is never the one this command exits with.
 	let reload = match crate::cli::config_edit::after_change_reporting(
 		config, outcome, true, err, restart,
 	) {
-		Ok((ExitCode::SUCCESS, reload)) => reload,
-		Ok((code, _)) => return Err(code),
+		Ok((_, reload)) => reload,
 		Err(ResourceError::Refusal(message) | ResourceError::Failure(message)) => {
 			crate::cli::style::error_to(err, message);
 			return Err(ExitCode::FAILURE);

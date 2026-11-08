@@ -87,6 +87,12 @@ struct AuthCode {
 	code_challenge: String,
 	/// Unix seconds after which this code is expired.
 	expires_at: u64,
+	/// The `redirect_uri` the authorization request carried. When it carried
+	/// one, the redemption has to carry the same (RFC 6749 section 4.1.3).
+	redirect_uri: Option<String>,
+	/// Who asked for the code (an IPv4 address or an IPv6 /64), for the
+	/// per-client cap; `None` when the peer address was not available.
+	client: Option<(bool, u64)>,
 }
 
 impl AuthzServer {
@@ -249,10 +255,11 @@ fn form_decode(token: &str) -> String {
 }
 
 /// An RFC 6749 / 8628 OAuth error response: `{"error": "..."}` with HTTP 400
-/// (or 429 for `slow_down`). The body never reveals which of several inputs was
-/// wrong beyond the registered error code.
+/// (or 429 for `slow_down` and `temporarily_unavailable`). The body never
+/// reveals which of several inputs was wrong beyond the registered error
+/// code.
 pub(crate) fn oauth_error(code: &'static str) -> Response {
-	let status = if code == "slow_down" {
+	let status = if matches!(code, "slow_down" | "temporarily_unavailable") {
 		StatusCode::TOO_MANY_REQUESTS
 	} else {
 		StatusCode::BAD_REQUEST
@@ -262,7 +269,19 @@ pub(crate) fn oauth_error(code: &'static str) -> Response {
 
 /// OAuth throttling response with the remaining wait in whole seconds.
 fn oauth_rate_limited(seconds: u64) -> Response {
-	let mut response = oauth_error("slow_down");
+	throttled("slow_down", seconds)
+}
+
+/// A refusal because the server is at a cap it cannot lift right now
+/// (RFC 6749 section 4.1.2.1 `temporarily_unavailable`): nothing was stored,
+/// and the client is told how long to wait.
+pub(crate) fn oauth_temporarily_unavailable(seconds: u64) -> Response {
+	throttled("temporarily_unavailable", seconds)
+}
+
+/// A throttled OAuth answer: the error code and the wait in `Retry-After`.
+fn throttled(code: &'static str, seconds: u64) -> Response {
+	let mut response = oauth_error(code);
 	response
 		.headers_mut()
 		.insert(header::RETRY_AFTER, seconds.into());

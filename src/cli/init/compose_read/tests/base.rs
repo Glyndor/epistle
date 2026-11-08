@@ -118,13 +118,13 @@ fn a_fifo_at_the_generated_compose_path_stops_the_map_readers_too() {
 		addr: "0.0.0.0".parse().unwrap(),
 		port: Some(19993),
 	}];
-	let previewed = compose_publish::preview(dir.path(), &listeners, None)
+	let previewed = compose_publish::preview(dir.path(), &listeners, None, None)
 		.expect_err("a fifo is not a file to read");
 	assert!(
 		previewed.to_string().contains("must be a regular file"),
 		"{previewed}"
 	);
-	let Err(prepared) = compose_publish::prepare(dir.path(), &listeners, None) else {
+	let Err(prepared) = compose_publish::prepare(dir.path(), &listeners, None, None) else {
 		panic!("a fifo is not a file to read")
 	};
 	assert!(

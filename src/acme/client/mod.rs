@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex};
 
 use super::directory::Directory;
 use super::jws::AccountKey;
+use super::policy::Policy;
 use super::problem::Refusal;
 use super::protocol::{self, Authorization, Order};
 
@@ -30,6 +31,17 @@ pub enum AcmeError {
 	/// expected challenge, or a state the flow cannot recover from.
 	#[error("protocol error: {0}")]
 	Protocol(String),
+	/// A URL the CA named was refused before anything was sent to it: it
+	/// was not `https`, or it pointed at an address the operator did not
+	/// choose. The URL and the reason are named; the request that would
+	/// have carried the account key never left the client.
+	#[error("refused URL {url}: {reason}")]
+	RefusedUrl {
+		/// The URL the CA named, as it named it.
+		url: String,
+		/// Why the policy refused it.
+		reason: String,
+	},
 }
 
 /// The error a refused answer carries.
@@ -85,6 +97,7 @@ pub struct AcmeClient<T: AcmeTransport> {
 	transport: T,
 	key: Arc<AccountKey>,
 	directory: Directory,
+	policy: Policy,
 	nonce: Mutex<String>,
 	account_url: Mutex<Option<String>>,
 }
@@ -96,13 +109,20 @@ impl<T: AcmeTransport> AcmeClient<T> {
 		key: AccountKey,
 		directory_url: &str,
 	) -> Result<Self, AcmeError> {
+		let policy = Policy::for_directory(directory_url)?;
 		let body = transport.get(directory_url).await?;
 		let directory = Directory::parse(&body).map_err(|e| AcmeError::Protocol(e.to_string()))?;
+		// Every URL the CA names is checked before it is used: the CA
+		// chooses them, and one that chose badly would aim the signed
+		// request — and the account key it proves — at a host the
+		// operator did not choose.
+		let directory = policy.check_directory(&directory)?;
 		let nonce = transport.new_nonce(&directory.new_nonce).await?;
 		Ok(AcmeClient {
 			transport,
 			key: Arc::new(key),
 			directory,
+			policy,
 			nonce: Mutex::new(nonce),
 			account_url: Mutex::new(None),
 		})
@@ -113,16 +133,32 @@ impl<T: AcmeTransport> AcmeClient<T> {
 	}
 
 	/// Sign and POST `payload` to `url`, threading the nonce and `kid`.
+	///
+	/// The URL is checked here, the one place every signed request goes
+	/// through: a URL that came from a response body or a `Location` header
+	/// is refused before it is signed, so the account key never travels to
+	/// a destination the policy rejects.
 	async fn signed_post(&self, url: &str, payload: &[u8]) -> Result<PostResponse, AcmeError> {
+		let url = self.policy.check(url)?;
 		let nonce = self.take_nonce();
 		let kid = self.account_url.lock().expect("account lock").clone();
 		let jws = self
 			.key
-			.sign(url, &nonce, payload, kid.as_deref())
+			.sign(&url, &nonce, payload, kid.as_deref())
 			.map_err(|e| AcmeError::Protocol(e.to_string()))?;
-		let response = self.transport.post(url, &jws).await?;
+		let response = self.transport.post(&url, &jws).await?;
 		// Every answer carries the next nonce, a refusal included.
 		*self.nonce.lock().expect("nonce lock") = response.nonce.clone();
+		// A 3xx names another resource, and following it would carry the
+		// signed request to a host the CA chose. The transport does not
+		// follow redirects either; this is the same refusal seen from the
+		// client, for the transports that answer with the status alone.
+		if (300..400).contains(&response.status) {
+			return Err(AcmeError::Transport(format!(
+				"the CA answered {} for {url}: redirects are not followed",
+				response.status
+			)));
+		}
 		// A CA that refuses answers with a non-2xx status and a problem
 		// document. The status is the only thing that tells the two apart,
 		// and the body of a refusal is never the resource that was asked
@@ -152,7 +188,10 @@ impl<T: AcmeTransport> AcmeClient<T> {
 				"the CA answered newAccount without a Location: no account was created".into(),
 			)
 		})?;
-		*self.account_url.lock().expect("account lock") = Some(location);
+		// The account URL is the `kid` of every later request, so it is
+		// checked before it is held.
+		let account_url = self.policy.check(&location)?;
+		*self.account_url.lock().expect("account lock") = Some(account_url);
 		Ok(())
 	}
 
@@ -173,10 +212,42 @@ impl<T: AcmeTransport> AcmeClient<T> {
 			.await?;
 		let order: Order = serde_json::from_slice(&response.body)
 			.map_err(|e| AcmeError::Protocol(e.to_string()))?;
+		let order = self.checked_order(order)?;
 		let url = response
 			.location
 			.ok_or_else(|| AcmeError::Protocol("newOrder response had no Location".into()))?;
+		let url = self.policy.check(&url)?;
 		Ok((order, url))
+	}
+
+	/// The order with every URL it names checked: the authorizations to
+	/// answer, the URL to finalize at and the URL to download the chain
+	/// from. The CA chose all three.
+	fn checked_order(&self, mut order: Order) -> Result<Order, AcmeError> {
+		let mut authorizations = Vec::with_capacity(order.authorizations.len());
+		for url in &order.authorizations {
+			authorizations.push(self.policy.check(url)?);
+		}
+		order.authorizations = authorizations;
+		order.finalize = self.policy.check(&order.finalize)?;
+		order.certificate = order
+			.certificate
+			.as_deref()
+			.map(|url| self.policy.check(url))
+			.transpose()?;
+		Ok(order)
+	}
+
+	/// The authorization with every challenge URL checked: the client POSTs
+	/// to them, so the CA chooses where those go too.
+	fn checked_authorization(
+		&self,
+		mut authorization: Authorization,
+	) -> Result<Authorization, AcmeError> {
+		for challenge in &mut authorization.challenges {
+			challenge.url = self.policy.check(&challenge.url)?;
+		}
+		Ok(authorization)
 	}
 
 	/// Fetch a resource with POST-as-GET (RFC 8555 §6.3: empty payload).
@@ -187,7 +258,9 @@ impl<T: AcmeTransport> AcmeClient<T> {
 	/// Fetch an authorization (its identifier and challenges).
 	pub async fn authorization(&self, url: &str) -> Result<Authorization, AcmeError> {
 		let response = self.post_as_get(url).await?;
-		serde_json::from_slice(&response.body).map_err(|e| AcmeError::Protocol(e.to_string()))
+		let authorization: Authorization = serde_json::from_slice(&response.body)
+			.map_err(|e| AcmeError::Protocol(e.to_string()))?;
+		self.checked_authorization(authorization)
 	}
 
 	/// Tell the CA a challenge is ready to be validated (POST `{}`).

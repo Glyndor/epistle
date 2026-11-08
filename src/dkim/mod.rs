@@ -2,6 +2,7 @@
 
 pub(crate) mod canon;
 pub mod domain_keys;
+pub mod domain_rotate;
 pub(crate) mod key_record;
 mod per_domain;
 pub mod rotate;

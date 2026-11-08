@@ -78,25 +78,56 @@ pub(super) async fn publish(
 	failed
 }
 
+/// What the resolver answered for the name of a record it does not show.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Answer {
+	/// Nothing at that name: the resolver holds a negative answer for it.
+	Nothing,
+	/// Other values at that name, but not this key.
+	Others,
+	/// No answer at all: the lookup failed.
+	Failed,
+}
+
+/// A record the resolver does not show, and what it answered instead.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct Missing {
+	/// The record that does not show.
+	pub record: Record,
+	/// What the resolver answered for its name.
+	pub answer: Answer,
+}
+
 /// The records `resolver` does not show with the right key, after one query
 /// and one more after each of `waits`. Empty when every record is visible.
 pub(super) async fn missing(
 	resolver: &dyn DnsLookup,
 	records: &[Record],
 	waits: &[Duration],
-) -> Vec<Record> {
+) -> Vec<Missing> {
 	let mut waits = waits.iter();
 	loop {
 		let mut absent = Vec::new();
 		for record in records {
-			let seen = match resolver.txt(&record.name).await {
-				Ok(values) => values
-					.iter()
-					.any(|value| crate::dkim::key_record::same_usable_key(value, &record.value)),
-				Err(_) => false,
+			let (seen, answer) = match resolver.txt(&record.name).await {
+				Ok(values) => {
+					let seen = values.iter().any(|value| {
+						crate::dkim::key_record::same_usable_key(value, &record.value)
+					});
+					let answer = if values.is_empty() {
+						Answer::Nothing
+					} else {
+						Answer::Others
+					};
+					(seen, answer)
+				}
+				Err(_) => (false, Answer::Failed),
 			};
 			if !seen {
-				absent.push(record.clone());
+				absent.push(Missing {
+					record: record.clone(),
+					answer,
+				});
 			}
 		}
 		match (absent.is_empty(), waits.next()) {

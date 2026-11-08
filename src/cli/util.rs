@@ -100,10 +100,50 @@ pub(super) fn token_hash_from(reader: impl std::io::BufRead, json: bool) -> Exit
 pub(super) fn message_crypto(
 	config: &crate::config::Config,
 ) -> Result<crate::storage::MessageCrypto, ExitCode> {
-	crate::storage::MessageCrypto::from_config(config.storage.as_ref()).map_err(|error| {
+	let crypto = crate::storage::MessageCrypto::from_full_config(config).map_err(|error| {
 		super::style::error(error);
 		ExitCode::FAILURE
-	})
+	})?;
+	attach_config_accounts(&crypto, config).map_err(|error| {
+		super::style::error(format!(
+			"cannot read the accounts to pick tenant keys: {error}"
+		));
+		ExitCode::FAILURE
+	})?;
+	Ok(crypto)
+}
+
+/// Attach file-backed account sources when tenant-key selection needs them.
+/// SQL/LDAP-only owners are not loaded here. Migration attaches these sources
+/// unconditionally and refuses any owner they cannot resolve.
+pub(crate) fn attach_config_accounts(
+	crypto: &crate::storage::MessageCrypto,
+	config: &crate::config::Config,
+) -> std::io::Result<()> {
+	if !config
+		.tenants
+		.iter()
+		.any(|tenant| tenant.encryption_key_file.is_some())
+	{
+		return Ok(());
+	}
+	attach_file_accounts(crypto, config)
+}
+
+/// Attach static accounts and accounts.toml even for a server-only rotation.
+pub(crate) fn attach_file_accounts(
+	crypto: &crate::storage::MessageCrypto,
+	config: &crate::config::Config,
+) -> std::io::Result<()> {
+	let store = crate::directory_store::AccountStore::open(
+		&config.data_dir,
+		config.domains.clone(),
+		config.domain_aliases.clone(),
+		config.accounts.clone(),
+	)
+	.map_err(|error| std::io::Error::other(error.to_string()))?;
+	crypto.attach_accounts(std::sync::Arc::new(store.handle()));
+	Ok(())
 }
 
 /// `epistle storage-keygen`: print a fresh base64 32-byte at-rest encryption key

@@ -204,6 +204,17 @@ impl Directory {
 			}
 			BanOutcome::Clear { account } => account,
 		};
+		// From here to the strike this sign-in runs alone among those that
+		// share a subject with it, so the guess behind it is not verified once
+		// the ban it would have joined is already armed. Without it a burst
+		// as wide as the password gate passes the question above together.
+		let _together = match self.hold_strike_locks(login, resolved_account.as_deref(), ip) {
+			Ok(held) => held,
+			Err(strike_locks::Crowded) => {
+				self.note_gate_rejection(protocol);
+				return hash_gate::Verdict::Busy;
+			}
+		};
 		// The hashing runs off the async worker and a few at a time. A check
 		// turned away for lack of a place verified nothing: it moves no
 		// strike, it is not a failed login, and the session says "try again".
@@ -271,6 +282,38 @@ impl Directory {
 			Some((account, label)) => hash_gate::Verdict::Admitted { account, label },
 			None => hash_gate::Verdict::Refused,
 		}
+	}
+
+	/// The stripes of the subjects a sign-in of `login` strikes: the client,
+	/// the account as seen from the client, and the account (a stand-in for an
+	/// unknown login, as in [`Directory::record_ban_outcome`]). None without a
+	/// ban store, which has nothing to keep together.
+	fn hold_strike_locks(
+		&self,
+		login: &str,
+		account: Option<&str>,
+		ip: Option<std::net::IpAddr>,
+	) -> Result<strike_locks::Held<'_>, strike_locks::Crowded> {
+		let mut subjects = Vec::with_capacity(3);
+		if self.ban_store.is_some() {
+			if let Some(ip) = ip {
+				subjects.push(bans::subject_client(ip));
+			}
+			let decoy;
+			let account = match account {
+				Some(account) => Some(account),
+				None if login.is_empty() => None,
+				None => {
+					decoy = Self::decoy_account(login);
+					Some(decoy.as_str())
+				}
+			};
+			if let Some(account) = account {
+				subjects.push(bans::subject_pair(account, ip));
+				subjects.push(bans::subject_account(account));
+			}
+		}
+		self.strike_locks.hold(&subjects)
 	}
 
 	/// The shared ban check that every password-based authentication path

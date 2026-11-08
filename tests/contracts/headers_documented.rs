@@ -19,6 +19,14 @@ use std::path::{Path, PathBuf};
 /// Names the scan finds that are not headers of a message.
 const NOT_HEADERS: &[(&str, &str)] = &[
 	("Proc-Type", "a PEM key header in the key importer"),
+	(
+		"X-Drip",
+		"a header of a hostile HTTP request in the tests of the public listeners",
+	),
+	(
+		"X-Injected",
+		"a header of a hostile HTTP request in the tests of the public listeners",
+	),
 	("Report-ID", "text inside the subject of a DMARC report"),
 	(
 		"Content-Length",

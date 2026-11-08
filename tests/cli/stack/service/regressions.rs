@@ -203,3 +203,67 @@ fn external_http_publication_is_refused_for_host_and_stack_even_with_certificate
 		}
 	}
 }
+
+/// An override that replaces the generated map decides where the port is
+/// published: the entry the command would write is never used, so the
+/// command refuses, names the file and the entry to change, and leaves every
+/// file alone.
+#[test]
+fn service_set_refuses_when_the_operator_override_replaces_the_generated_map() {
+	let (dir, config) = fixture();
+	let compose = dir.path().join("compose/compose.yaml");
+	fs::create_dir_all(compose.parent().unwrap()).unwrap();
+	fs::write(
+		&compose,
+		r#"{"services":{"mail":{"ports":["25:25","19993:19993"]}}}"#,
+	)
+	.unwrap();
+	let override_path = compose.with_file_name("compose.override.yaml");
+	let override_text = "services:\n  mail:\n    ports: !override\n      - \"25:25\"\n      - \"10.0.0.9:19993:19993\"\n";
+	fs::write(&override_path, override_text).unwrap();
+	let bin = dir.path().join("bin");
+	let argv_log = dir.path().join("argv.log");
+	fs::write(&argv_log, "").unwrap();
+	helpers::install_podup_shim(&bin, &helpers::recorder_shim(&argv_log));
+	let output = helpers::run_with_podup(
+		&[
+			"service",
+			"--config",
+			config.to_str().unwrap(),
+			"set",
+			"imaps",
+			"--bind",
+			"127.0.0.1",
+		],
+		&bin,
+	);
+	assert_eq!(
+		output.status.code(),
+		Some(1),
+		"a change the override wins is not a change: {}",
+		String::from_utf8_lossy(&output.stderr)
+	);
+	let stderr = String::from_utf8(output.stderr).unwrap();
+	assert!(
+		stderr.contains("compose.override.yaml") && stderr.contains("10.0.0.9:19993:19993"),
+		"the operator has to be told which file and which entry decide: {stderr}"
+	);
+	assert!(
+		!stderr.contains("published on 127.0.0.1:19993"),
+		"the publication the stack does not make must not be reported: {stderr}"
+	);
+	assert_eq!(
+		ports(&compose),
+		serde_json::json!(["25:25", "19993:19993"]),
+		"a refused change leaves the generated map alone"
+	);
+	assert_eq!(
+		fs::read_to_string(&override_path).unwrap(),
+		override_text,
+		"the override stays exactly as the operator wrote it"
+	);
+	assert!(
+		helpers::read_argv_log(&argv_log).is_empty(),
+		"a refused change must not reach the stack"
+	);
+}

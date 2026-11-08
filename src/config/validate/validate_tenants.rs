@@ -9,6 +9,24 @@ use crate::config::validate_dns_name;
 
 impl Config {
 	pub(super) fn validate_tenants(&self) -> Result<(), ConfigError> {
+		if let Some(storage) = &self.storage
+			&& storage.tenant_keys
+			&& !storage.encrypt_at_rest
+		{
+			return Err(ConfigError::Invalid(
+				"[storage] tenant_keys = true needs encrypt_at_rest = true".into(),
+			));
+		}
+		if let Some(storage) = &self.storage
+			&& storage.tenant_keys
+			&& matches!(
+				storage.blobs.as_ref(),
+				Some(crate::config::BlobBackendConfig::S3(_))
+			) {
+			return Err(ConfigError::Invalid(
+				"[storage] tenant_keys = true is not supported with S3 blobs; use filesystem blobs until a backend-aware migration exists".into(),
+			));
+		}
 		if self.tenants.is_empty() {
 			return Ok(());
 		}
@@ -29,6 +47,12 @@ impl Config {
 				return Err(ConfigError::Invalid(format!(
 					"[[tenant]] name \"{name}\" is declared more than once"
 				)));
+			}
+			if tenant.encryption_key_file.is_some() && tenant.name.is_none() {
+				return Err(ConfigError::Invalid(
+					"a [[tenant]] with encryption_key_file needs a name, which the key is known by"
+						.into(),
+				));
 			}
 			if let Some(max) = tenant.max_domains
 				&& (max as usize) < tenant.domains.len()
@@ -76,6 +100,47 @@ impl Config {
 						"[[tenant]] {} quota_bytes ({tenant_quota}) is below the sum of its domains' domain_quotas ({sum})",
 						tenant_label(tenant)
 					)));
+				}
+			}
+		}
+		Ok(())
+	}
+}
+
+impl Config {
+	/// A tenant's `[tenant.webhook]` passes the checks the server-wide one
+	/// does, names the tenant's domains for it to receive anything, and signs
+	/// with a secret no other webhook uses: an event of one tenant must never
+	/// verify as another's, and the server-wide receiver is not a tenant's.
+	pub(super) fn validate_tenant_webhooks(&self) -> Result<(), ConfigError> {
+		let mut holders: HashMap<&str, String> = HashMap::new();
+		if let Some(secret) = self.webhook.as_ref().and_then(|w| w.secret.as_deref()) {
+			holders.insert(secret, "the server-wide [webhook]".to_string());
+		}
+		for tenant in &self.tenants {
+			let Some(webhook) = &tenant.webhook else {
+				continue;
+			};
+			let label = tenant_label(tenant);
+			webhook.validate_as(&format!("[tenant.webhook] of tenant \"{label}\""))?;
+			if tenant.domains.is_empty() {
+				return Err(ConfigError::Invalid(format!(
+					"[tenant.webhook] of tenant \"{label}\" receives nothing: the tenant lists no domains"
+				)));
+			}
+			let Some(secret) = webhook.secret.as_deref() else {
+				continue;
+			};
+			let owner = format!("tenant \"{label}\"");
+			match holders.get(secret) {
+				Some(other) => {
+					return Err(ConfigError::Invalid(format!(
+						"[tenant.webhook] of {owner} signs with the same secret as {other}; \
+						 a tenant's events must be signed with a secret of its own"
+					)));
+				}
+				None => {
+					holders.insert(secret, owner);
 				}
 			}
 		}

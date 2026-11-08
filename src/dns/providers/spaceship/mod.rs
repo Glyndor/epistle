@@ -149,120 +149,6 @@ impl SpaceshipProvider {
 			.header(reqwest::header::CONTENT_TYPE, "application/json")
 	}
 
-	/// `PUT /dns/records/{zone}` — append items with `force: true`. Spaceship
-	/// documents the body as `{ force: true, items: [ ... ] }` and replies 204
-	/// on success. SRV uses dedicated `priority`/`weight`/`port`/`target`
-	/// fields; everything else uses the kind-specific value field.
-	async fn add(&self, kind: &str, rel: &str, record: &DnsRecord) -> Result<(), ProviderError> {
-		let url = self.records_url()?;
-		let mut item = serde_json::json!({
-			"type": kind,
-			"name": rel,
-			"ttl": record.ttl,
-		});
-		if record.kind == RecordKind::Srv {
-			let (priority, weight, port, target) = parse_srv(&record.value)
-				.ok_or_else(|| ProviderError::Remote(format!("bad SRV value: {}", record.value)))?;
-			let map = item.as_object_mut().expect("object");
-			map.insert("priority".to_string(), priority.into());
-			map.insert("weight".to_string(), weight.into());
-			map.insert("port".to_string(), port.into());
-			map.insert("target".to_string(), target.into());
-		} else if record.kind == RecordKind::Caa {
-			let mut parts = record.value.splitn(3, ' ');
-			let flags: u8 = parts
-				.next()
-				.and_then(|p| p.parse().ok())
-				.ok_or_else(|| ProviderError::Remote("CAA needs flags tag value".into()))?;
-			let tag = parts
-				.next()
-				.ok_or_else(|| ProviderError::Remote("CAA needs flags tag value".into()))?
-				.to_string();
-			let value = parts
-				.next()
-				.ok_or_else(|| ProviderError::Remote("CAA needs flags tag value".into()))?
-				.trim_matches('"')
-				.to_string();
-			let map = item.as_object_mut().expect("object");
-			map.insert("flag".to_string(), flags.into());
-			map.insert("tag".to_string(), tag.into());
-			map.insert("value".to_string(), value.into());
-		} else if record.kind == RecordKind::Mx {
-			// Spaceship stores MX as `preference` (number) + `exchange`
-			// (target) fields.
-			let mut parts = record.value.split_whitespace();
-			let priority: u16 = parts
-				.next()
-				.and_then(|p| p.parse().ok())
-				.ok_or_else(|| ProviderError::Remote("MX needs priority target".into()))?;
-			let target = parts
-				.next()
-				.ok_or_else(|| ProviderError::Remote("MX needs priority target".into()))?;
-			let target = crate::dns::provider::mx_target_for_api(target).to_string();
-			let map = item.as_object_mut().expect("object");
-			map.insert("preference".to_string(), priority.into());
-			map.insert("exchange".to_string(), target.into());
-		} else {
-			let map = item.as_object_mut().expect("object");
-			map.insert(
-				Self::value_field(&record.kind).to_string(),
-				Self::wire_value(record).into(),
-			);
-		}
-		let body = serde_json::json!({
-			"force": true,
-			"items": [item],
-		})
-		.to_string();
-		let response = self
-			.request(reqwest::Method::PUT, url)
-			.body(body)
-			.send()
-			.await
-			.map_err(transport)?;
-		check(response)
-	}
-
-	/// `DELETE /dns/records/{zone}`, remove the matching item(s). The body
-	/// is an array of `{type, name, [value]}` records. The contract from
-	/// `src/dns/provider/mod.rs` says a TXT delete with a value drops only
-	/// the record whose value matches, and an empty-value delete drops
-	/// every record at the owner (the DKIM rotator's retire path).
-	/// Spaceship's API matches by `value` when the field is present,
-	/// so the empty-value case omits the field to mean "wholesale";
-	/// the value-bearing case includes it. Replies 204 whether or not
-	/// anything matched (idempotent by definition).
-	async fn remove(&self, kind: &str, rel: &str, record: &DnsRecord) -> Result<(), ProviderError> {
-		// TXT value-bearing deletes need the value to disambiguate
-		// same-name records; the wholesale empty-value case leaves
-		// the field off.
-		let value = (record.kind == RecordKind::Txt && !record.value.is_empty())
-			.then(|| Self::wire_value(record));
-		self.remove_value(kind, rel, value).await
-	}
-
-	/// Send one DELETE for `(kind, rel)`, naming `value` exactly as given
-	/// when there is one.
-	async fn remove_value(
-		&self,
-		kind: &str,
-		rel: &str,
-		value: Option<String>,
-	) -> Result<(), ProviderError> {
-		let url = self.records_url()?;
-		let mut item = serde_json::json!({"type": kind, "name": rel});
-		if let Some(value) = value {
-			item["value"] = serde_json::Value::String(value);
-		}
-		let response = self
-			.request(reqwest::Method::DELETE, url)
-			.body(serde_json::json!([item]).to_string())
-			.send()
-			.await
-			.map_err(transport)?;
-		check(response)
-	}
-
 	/// `GET /dns/records/{zone}?take=500&skip=N` — list records. Spaceship
 	/// caps `take` at 500; we page through `skip` until we have fetched
 	/// `total` records so a large zone is not silently truncated.
@@ -389,56 +275,6 @@ impl SpaceshipProvider {
 		Self::extract_value(item).unwrap_or_default()
 	}
 
-	async fn upsert_inner(&self, record: DnsRecord) -> Result<(), ProviderError> {
-		self.authorize(&record)?;
-		let kind = Self::api_kind(&record.kind)?;
-		let rel = self.relative_name(&record.name);
-		// Spaceship has no in-place update: remove the existing matching
-		// record first, then add the new one. remove() is a 204 either way,
-		// so this is also the idempotent path when the record is absent.
-		if record.kind == RecordKind::Txt {
-			// A TXT delete matches the exact stored value, so the record
-			// to remove is the OLD one of the same purpose (the contract
-			// in `src/dns/provider/mod.rs`), read from the zone; removing by
-			// the new value would leave a rotated DKIM key behind. A
-			// sibling of another purpose is never named.
-			for old in self.txt_values_at(&rel).await? {
-				if same_txt_purpose(&old, &record.value) {
-					self.remove_value(kind, &rel, Some(old)).await?;
-				}
-			}
-		} else {
-			self.remove(kind, &rel, &record).await?;
-		}
-		self.add(kind, &rel, &record).await
-	}
-
-	/// The stored values of every TXT at the relative name `rel`, as the
-	/// list returns them.
-	async fn txt_values_at(&self, rel: &str) -> Result<Vec<String>, ProviderError> {
-		Ok(self
-			.list_all()
-			.await?
-			.into_iter()
-			.filter(|item| {
-				item.get("type").and_then(|v| v.as_str()) == Some("TXT")
-					&& item.get("name").and_then(|v| v.as_str()) == Some(rel)
-			})
-			.filter_map(|item| {
-				item.get("value")
-					.and_then(|v| v.as_str())
-					.map(str::to_string)
-			})
-			.collect())
-	}
-
-	async fn delete_inner(&self, record: DnsRecord) -> Result<(), ProviderError> {
-		self.authorize(&record)?;
-		let kind = Self::api_kind(&record.kind)?;
-		let rel = self.relative_name(&record.name);
-		self.remove(kind, &rel, &record).await
-	}
-
 	async fn list_inner(&self) -> Result<Vec<DnsRecord>, ProviderError> {
 		let items = self.list_all().await?;
 		let zone = self.zone.trim_end_matches('.').to_string();
@@ -520,6 +356,11 @@ impl DnsProvider for SpaceshipProvider {
 			self.delete_inner(record).await
 		}))
 	}
+	fn delete_exact(&self, _zone: &str, record: DnsRecord) -> Op<'_> {
+		Box::pin(crate::dns::providers::within(async move {
+			self.delete_exact_inner(record).await
+		}))
+	}
 	fn list(&self, zone: &str) -> ListOp<'_> {
 		let zone_name = zone.to_string();
 		Box::pin(crate::dns::providers::listing(zone_name, async move {
@@ -540,6 +381,11 @@ fn check(response: reqwest::Response) -> Result<(), ProviderError> {
 		Err(ProviderError::Remote(format!("HTTP {status}")))
 	}
 }
+
+mod upsert;
+mod write;
+
+mod exact;
 
 #[cfg(test)]
 mod tests;

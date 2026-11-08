@@ -56,7 +56,10 @@ async fn a_missing_record_is_drift_and_fails() {
 	dns.txt.remove("example.org");
 	let report = evaluate(&config, &dns).await;
 	assert_eq!(report.status, Level::Fail, "{report:?}");
-	assert_eq!(report.detail, "6 records ok, 1 missing");
+	assert_eq!(
+		report.detail,
+		"6 records ok, 1 missing (example.org); run `epistle verify-dns`"
+	);
 	let item = report
 		.items
 		.iter()
@@ -76,7 +79,10 @@ async fn an_inconclusive_lookup_only_warns() {
 	dns.txt_errors.push("_dmarc.example.org".into());
 	let report = evaluate(&config, &dns).await;
 	assert_eq!(report.status, Level::Warn, "{report:?}");
-	assert_eq!(report.detail, "6 records ok, 1 inconclusive");
+	assert_eq!(
+		report.detail,
+		"6 records ok, 1 inconclusive (_dmarc.example.org); run `epistle verify-dns`"
+	);
 }
 
 #[tokio::test]
@@ -359,5 +365,34 @@ async fn a_zone_listing_that_fails_leaves_the_proxy_state_unknown() {
 	assert_eq!(
 		items[0].detail,
 		"listing the example.org zone failed, so the proxy state was not checked: provider error: HTTP 502"
+	);
+}
+
+fn missing(name: &str) -> crate::dns::Check {
+	crate::dns::Check {
+		kind: "TXT".into(),
+		name: name.into(),
+		status: crate::dns::Status::Missing,
+		detail: String::new(),
+	}
+}
+
+#[test]
+fn the_line_names_the_first_two_missing_records_and_counts_the_rest() {
+	let records: Vec<_> = ["a.test", "b.test", "c.test", "d.test"]
+		.iter()
+		.map(|name| missing(name))
+		.collect();
+	assert_eq!(
+		super::named(&records, &crate::dns::Status::Missing, 4, "missing"),
+		", 4 missing (a.test, b.test, +2 more)"
+	);
+	assert_eq!(
+		super::named(&records[..1], &crate::dns::Status::Missing, 1, "missing"),
+		", 1 missing (a.test)"
+	);
+	assert_eq!(
+		super::named(&records, &crate::dns::Status::LookupError, 0, "x"),
+		""
 	);
 }

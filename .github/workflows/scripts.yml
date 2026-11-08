@@ -22,6 +22,7 @@ on:
       - ".github/scripts/**"
       - "debian/rules"
       - ".github/workflows/release.yml"
+      - ".github/workflows/reusable-version-bump.yml"
   pull_request:
     paths:
       - ".github/workflows/scripts.yml"
@@ -31,6 +32,10 @@ on:
       # fire on the push after the merge, which is after the damage.
       - "debian/rules"
       - ".github/workflows/release.yml"
+      # version_bump/test_is_version_bump.py runs the judge step of this
+      # reusable as written. The workflows that call it filter on their own
+      # paths and would not run for an edit to it alone.
+      - ".github/workflows/reusable-version-bump.yml"
 
 permissions:
   contents: read

@@ -6,9 +6,9 @@
 //! challenge it published whether validation succeeded or not, so a TXT record
 //! or a challenge certificate never outlives the order that needed it.
 
-use std::collections::HashMap;
+use std::path::PathBuf;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Arc;
 use std::time::Duration;
 
 use super::client::AcmeError;
@@ -16,6 +16,10 @@ use super::http01::ChallengeStore;
 use super::jws::AccountKey;
 use super::tlsalpn::AlpnChallengeStore;
 use crate::dns::provider::{DnsProvider, DnsRecord, RecordKind};
+
+mod pending;
+pub use pending::{PENDING_FILE, journal_path};
+use pending::{Pending, PendingTxt};
 
 type Fut<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
@@ -35,6 +39,13 @@ pub trait ChallengeResponder: Send + Sync {
 	/// effort: a failure is logged, never returned, so it cannot mask the
 	/// outcome of the order.
 	fn withdraw<'a>(&'a self, domain: &'a str, token: &'a str, key: &'a AccountKey) -> Fut<'a, ()>;
+	/// Withdraw everything this responder still has published, including
+	/// what an earlier run of the server left behind. Run at startup and
+	/// when the renewal loop stops. A responder whose answers live only in
+	/// this process has nothing to do: they end with it.
+	fn withdraw_pending(&self) -> Fut<'_, ()> {
+		Box::pin(async {})
+	}
 }
 
 impl ChallengeResponder for ChallengeStore {
@@ -104,12 +115,12 @@ pub struct Dns01 {
 	visibility: Arc<dyn TxtVisibility>,
 	timeout: Duration,
 	interval: Duration,
-	/// The zone every published challenge was published in, keyed by the
-	/// challenge it belongs to. The withdrawal removes the record from the
-	/// zone that holds it and asks the provider nothing: a lookup that
-	/// fails at that moment must not send the removal to another zone and
-	/// leave the record behind.
-	published: Mutex<HashMap<(String, String), String>>,
+	/// Every record published and not yet removed, with the zone it was
+	/// published in. The withdrawal removes the record from the zone that
+	/// holds it and asks the provider nothing: a lookup that fails at that
+	/// moment must not send the removal to another zone and leave the
+	/// record behind.
+	published: Pending,
 }
 
 /// How long a published record may take to reach every authoritative server
@@ -129,8 +140,17 @@ impl Dns01 {
 			visibility,
 			timeout: DNS01_PROPAGATION_TIMEOUT,
 			interval: DNS01_POLL_INTERVAL,
-			published: Mutex::new(HashMap::new()),
+			published: Pending::in_memory(),
 		}
+	}
+
+	/// Keep the published records in a journal at `path` as well, and take
+	/// over the records an earlier run left in it, so a server that stopped
+	/// before its withdrawal removes them at its next start (see
+	/// [`ChallengeResponder::withdraw_pending`]).
+	pub fn with_journal(mut self, path: PathBuf) -> Self {
+		self.published = Pending::with_journal(path);
+		self
 	}
 
 	/// Override the propagation bounds (tests use zero to fail at once).
@@ -168,33 +188,17 @@ impl Dns01 {
 		}
 	}
 
-	/// The published zones, recovered when a thread that held the lock
-	/// panicked. The map is a record of what was published, and a panic
-	/// elsewhere must not take the withdrawal down with it.
-	fn published_zones(&self) -> MutexGuard<'_, HashMap<(String, String), String>> {
-		self.published
-			.lock()
-			.unwrap_or_else(|poisoned| poisoned.into_inner())
-	}
-
-	/// Keep the zone a challenge was published in, so the withdrawal
-	/// removes the record from the same zone.
-	fn remember(&self, domain: &str, token: &str, zone: &str) {
-		self.published_zones()
-			.insert((domain.to_string(), token.to_string()), zone.to_string());
-	}
-
-	/// The zone a challenge was published in, left in the record.
-	fn zone_of(&self, domain: &str, token: &str) -> Option<String> {
-		self.published_zones()
-			.get(&(domain.to_string(), token.to_string()))
-			.cloned()
-	}
-
-	/// Drop the record of a challenge once its withdrawal has returned.
-	fn forget(&self, domain: &str, token: &str) {
-		self.published_zones()
-			.remove(&(domain.to_string(), token.to_string()));
+	/// Remove one published record from the zone that holds it. It is
+	/// forgotten only once the provider removed it: a withdrawal cancelled
+	/// before the delete returned, or a delete that failed, is run again by
+	/// the next withdrawal, at shutdown or at the next start.
+	async fn remove(&self, entry: PendingTxt) {
+		match self.provider.delete(&entry.zone, entry.record).await {
+			Ok(()) => self.published.remove(&entry.domain, &entry.token),
+			Err(error) => {
+				tracing::warn!(%error, domain = %entry.domain, "dns-01: challenge record not removed");
+			}
+		}
 	}
 }
 
@@ -218,10 +222,19 @@ impl ChallengeResponder for Dns01 {
 			let zone = crate::dns::zone::resolve(self.provider.as_ref(), domain)
 				.await
 				.map_err(|error| AcmeError::Protocol(format!("dns-01: publish: {error}")))?;
-			// The zone is kept with the challenge before the write, so a
-			// write that half-succeeded is withdrawn from the zone it
-			// landed in.
-			self.remember(domain, token, &zone);
+			// The record and its zone are kept before the write, so a write
+			// that half-succeeded is withdrawn from the zone it landed in,
+			// by this run or, through the journal, by the next one.
+			self.published
+				.insert(PendingTxt {
+					domain: domain.to_string(),
+					token: token.to_string(),
+					zone: zone.clone(),
+					record: record.clone(),
+				})
+				.map_err(|error| {
+					AcmeError::Protocol(format!("dns-01: publish: journal: {error}"))
+				})?;
 			self.provider
 				.upsert(&zone, record.clone())
 				.await
@@ -230,14 +243,18 @@ impl ChallengeResponder for Dns01 {
 		})
 	}
 
-	fn withdraw<'a>(&'a self, domain: &'a str, token: &'a str, key: &'a AccountKey) -> Fut<'a, ()> {
+	fn withdraw<'a>(
+		&'a self,
+		domain: &'a str,
+		token: &'a str,
+		_key: &'a AccountKey,
+	) -> Fut<'a, ()> {
 		Box::pin(async move {
-			let record = Self::record(domain, token, key);
 			// The zone the challenge was published in. It is the one the
 			// publish used, and the provider is not asked again: a
 			// lookup that fails now would send the removal to a zone
 			// that does not hold the record, and the record would stay.
-			let Some(zone) = self.zone_of(domain, token) else {
+			let Some(entry) = self.published.get(domain, token) else {
 				// The zone is not known: the challenge was never
 				// published, or it was published by another run. The
 				// record is left where it is rather than removed from a
@@ -248,15 +265,29 @@ impl ChallengeResponder for Dns01 {
 				);
 				return;
 			};
-			if let Err(error) = self.provider.delete(&zone, record).await {
-				tracing::warn!(%error, %domain, "dns-01: challenge record not removed");
+			self.remove(entry).await;
+		})
+	}
+
+	fn withdraw_pending(&self) -> Fut<'_, ()> {
+		Box::pin(async move {
+			let pending = self.published.all();
+			if !pending.is_empty() {
+				let domains: Vec<&str> =
+					pending.iter().map(|entry| entry.domain.as_str()).collect();
+				tracing::info!(
+					?domains,
+					"dns-01: withdrawing challenge records still published"
+				);
 			}
-			// Forgotten only now: a withdrawal cancelled before the delete
-			// returned finds its zone again when it is run a second time.
-			self.forget(domain, token);
+			for entry in pending {
+				self.remove(entry).await;
+			}
 		})
 	}
 }
 
+#[cfg(test)]
+pub(crate) mod fake_zone;
 #[cfg(test)]
 mod tests;

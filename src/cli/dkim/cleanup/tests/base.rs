@@ -76,7 +76,15 @@ const ZONE: [&str; 3] = [
 
 fn run(config: &Config, provider: Option<&dyn DnsProvider>, dry_run: bool) -> (ExitCode, String) {
 	let mut out = Vec::new();
-	let code = cleanup_with(config, provider, dry_run, true, false, &mut out);
+	let code = cleanup_with(
+		config,
+		&DnsWrite::Direct,
+		provider,
+		dry_run,
+		true,
+		false,
+		&mut out,
+	);
 	(code, String::from_utf8(out).expect("utf-8"))
 }
 
@@ -152,7 +160,15 @@ fn run_json(
 	dry_run: bool,
 ) -> (ExitCode, serde_json::Value) {
 	let mut out = Vec::new();
-	let code = cleanup_with(config, provider, dry_run, true, true, &mut out);
+	let code = cleanup_with(
+		config,
+		&DnsWrite::Direct,
+		provider,
+		dry_run,
+		true,
+		true,
+		&mut out,
+	);
 	let text = String::from_utf8(out).expect("utf-8");
 	assert_eq!(text.lines().count(), 1, "not one line of JSON: {text}");
 	(code, serde_json::from_str(&text).expect("json"))

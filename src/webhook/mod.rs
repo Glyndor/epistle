@@ -4,14 +4,18 @@
 //! HMAC-SHA256 signed. Webhooks are advisory and fail open: a delivery error is
 //! logged and never blocks mail processing.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
-use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 pub(crate) mod destination;
+mod endpoint;
+mod route;
+
+use endpoint::Endpoint;
+pub use route::{account_owner, from_config, single_domain};
 
 /// A delivery event worth notifying about. Serializes to the POST body.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -163,12 +167,19 @@ pub enum WebhookEvent {
 /// The `message` carried by the `test` event.
 pub const TEST_MESSAGE: &str = "epistle webhook test: connectivity check, no mail activity";
 
-/// Posts events to a configured endpoint with a bounded timeout.
+/// Posts events to the configured endpoints with a bounded timeout: the
+/// server-wide one and, for the domains of a tenant that has its own, the
+/// tenant's. An event goes to exactly one of them, chosen by the hosted
+/// domain it belongs to (see [`Webhook::notify_for`]).
 pub struct Webhook {
-	client: reqwest::Client,
-	url: String,
-	secret: Option<String>,
-	metrics: Option<std::sync::Arc<crate::metrics::Metrics>>,
+	/// The server-wide `[webhook]`: where the events of every domain that no
+	/// tenant webhook claims go, and the server's own events.
+	default: Option<Endpoint>,
+	/// Hosted domain (lowercase) to the endpoint of the tenant that owns it.
+	/// `None` is a tenant whose webhook is switched off or cannot be used: its
+	/// domains' events go nowhere, not to the server-wide webhook.
+	tenants: HashMap<String, Option<Arc<Endpoint>>>,
+	metrics: Option<Arc<crate::metrics::Metrics>>,
 }
 
 /// Why a webhook poster could not be built.
@@ -197,13 +208,12 @@ impl From<reqwest::Error> for WebhookError {
 	}
 }
 
-/// The poster for a configured webhook section: the section says whether a
-/// private destination is allowed, and the poster follows.
-pub fn poster(section: &crate::config::Webhook) -> Result<Webhook, WebhookError> {
-	match section.allow_private_webhooks {
-		true => Webhook::new_allowing_private(&section.url, section.secret.clone()),
-		false => Webhook::new(&section.url, section.secret.clone()),
-	}
+/// The poster for the connectivity probe of the `[webhook]` section alone
+/// (`epistle webhook test`): the section says whether a private destination
+/// is allowed, and the poster follows. It knows no tenant, so code that sends
+/// events builds its poster with [`from_config`] instead.
+pub(crate) fn probe_poster(section: &crate::config::Webhook) -> Result<Webhook, WebhookError> {
+	Endpoint::from_section(section).map(Webhook::with_default)
 }
 
 impl Webhook {
@@ -215,66 +225,46 @@ impl Webhook {
 	/// [`Webhook::new_allowing_private`] when that is what the operator
 	/// asked for.
 	pub fn new(url: &str, secret: Option<String>) -> Result<Self, WebhookError> {
-		Self::build(url, secret, false)
+		Endpoint::build(url, secret, false).map(Self::with_default)
 	}
 
 	/// Build a webhook poster that may post to a private destination, for
 	/// an operator who says so in the configuration.
 	pub fn new_allowing_private(url: &str, secret: Option<String>) -> Result<Self, WebhookError> {
-		Self::build(url, secret, true)
+		Endpoint::build(url, secret, true).map(Self::with_default)
 	}
 
-	fn build(url: &str, secret: Option<String>, allow_private: bool) -> Result<Self, WebhookError> {
-		destination::check_url(url, allow_private).map_err(WebhookError::Destination)?;
-		let mut builder = reqwest::Client::builder()
-			.timeout(Duration::from_secs(15))
-			// Never follow a redirect: the POST carries the signature and the
-			// event, and a 307 would resend both wherever the endpoint (or
-			// whoever took it over) points, an internal address included.
-			.redirect(reqwest::redirect::Policy::none())
-			// The addresses the host name resolves to are checked as well:
-			// a name that points inside the networks of this host is as
-			// private as the address it spells.
-			.dns_resolver(Arc::new(destination::DestinationResolver { allow_private }));
-		if !allow_private {
-			// The proxy of the environment resolves the name itself and
-			// connects to the address it chooses, so neither the check above
-			// nor the resolver would see the address the event reaches. The
-			// client that refuses private destinations goes to the endpoint
-			// directly; the one that allows them uses the proxy as any
-			// other client does.
-			builder = builder.no_proxy();
-		}
-		let client = builder.build()?;
-		Ok(Webhook {
-			client,
-			url: url.to_string(),
-			secret,
+	fn with_default(endpoint: Endpoint) -> Self {
+		Webhook {
+			default: Some(endpoint),
+			tenants: HashMap::new(),
 			metrics: None,
-		})
+		}
 	}
 
 	/// Record delivery outcomes to these process metrics.
-	pub fn with_metrics(mut self, metrics: std::sync::Arc<crate::metrics::Metrics>) -> Self {
+	pub fn with_metrics(mut self, metrics: Arc<crate::metrics::Metrics>) -> Self {
 		self.metrics = Some(metrics);
 		self
 	}
 
-	/// The signed POST for a serialized event body.
-	fn request(&self, body: Vec<u8>) -> reqwest::RequestBuilder {
-		let mut request = self
-			.client
-			.post(&self.url)
-			.header(reqwest::header::CONTENT_TYPE, "application/json");
-		if let Some(secret) = &self.secret {
-			request = request.header("X-Webhook-Signature", sign(secret, &body));
-		}
-		request.body(body)
+	/// Deliver `event`, to the endpoint of the domain it names, if it names
+	/// one (`MessageReceived`), else to the server-wide one. Fails open:
+	/// transport/serialization errors are logged, never propagated.
+	pub async fn notify(&self, event: &WebhookEvent) {
+		self.notify_for(event.hosted_domain().as_deref(), event)
+			.await;
 	}
 
-	/// Deliver `event`. Fails open: transport/serialization errors are logged,
-	/// never propagated.
-	pub async fn notify(&self, event: &WebhookEvent) {
+	/// Deliver `event` as an event of the hosted `domain`. A domain of a
+	/// tenant with its own webhook posts to that one only, signed with that
+	/// tenant's secret, and to nothing when the tenant's webhook is off: it
+	/// never falls back to the server-wide webhook or to another tenant's.
+	/// Any other domain, and `None`, posts to the server-wide webhook.
+	pub async fn notify_for(&self, domain: Option<&str>, event: &WebhookEvent) {
+		let Some(endpoint) = self.endpoint_for(domain) else {
+			return;
+		};
 		let body = match serde_json::to_vec(event) {
 			Ok(body) => body,
 			Err(error) => {
@@ -282,7 +272,7 @@ impl Webhook {
 				return;
 			}
 		};
-		match self.request(body).send().await {
+		match endpoint.request(body).send().await {
 			Ok(response) if response.status().is_redirection() => {
 				tracing::warn!(status = %response.status(), "webhook endpoint answered with a redirect, which is not followed");
 				if let Some(metrics) = &self.metrics {
@@ -303,6 +293,14 @@ impl Webhook {
 		}
 	}
 
+	/// The one endpoint an event of `domain` goes to, if any.
+	fn endpoint_for(&self, domain: Option<&str>) -> Option<&Endpoint> {
+		match domain.and_then(|domain| self.tenants.get(&domain.to_ascii_lowercase())) {
+			Some(tenant) => tenant.as_deref(),
+			None => self.default.as_ref(),
+		}
+	}
+
 	/// Post the `test` event and report what the endpoint answered. Unlike
 	/// [`Webhook::notify`] this surfaces failures and the HTTP status, and it
 	/// does not touch the delivery metrics.
@@ -311,7 +309,11 @@ impl Webhook {
 			message: TEST_MESSAGE.into(),
 		};
 		let body = serde_json::to_vec(&event).expect("a test event always serializes");
-		Ok(self.request(body).send().await?.status())
+		let endpoint = self
+			.default
+			.as_ref()
+			.expect("a poster made from a [webhook] section has its endpoint");
+		Ok(endpoint.request(body).send().await?.status())
 	}
 }
 

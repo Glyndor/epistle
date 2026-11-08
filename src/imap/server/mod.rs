@@ -94,7 +94,7 @@ pub struct Server {
 	/// Days to keep expunged messages in `<account>/.archive/` before the
 	/// hourly sweeper removes them. `0` keeps the legacy behaviour:
 	/// expunge deletes the on-disk files immediately. The sweep itself runs
-	/// in [`crate::cli::serve::tasks::spawn_archive_sweep`].
+	/// in [`crate::cli::serve::tasks::sweeps::spawn_archive_sweep`].
 	retention_days: u64,
 	/// The authentication protocol this listener serves (`Imap` or
 	/// `Imaps`); tagged on every password attempt through this server so a
@@ -105,7 +105,7 @@ pub struct Server {
 	/// every session. `None` disables training and STORE answers the same.
 	training: Option<crate::antispam::training_queue::TrainingQueue>,
 	/// APPENDLIMIT (RFC 7889): the largest literal an APPEND or REPLACE
-	/// command may carry. Follows `[server] max_message_size`, the same
+	/// command may carry. Follows `max_message_size`, the same
 	/// cap the SMTP, REST and JMAP submission paths enforce. Default is
 	/// [`super::command::DEFAULT_APPEND_LIMIT`].
 	append_limit: usize,
@@ -209,55 +209,11 @@ impl Server {
 						Some(until) => std::cmp::min(line_deadline, until),
 						None => line_deadline,
 					};
-					let read = loop {
-						let remaining = deadline.saturating_duration_since(Instant::now());
-						let poll = if session.notify_active() {
-							IDLE_POLL.min(remaining)
-						} else {
-							remaining
-						};
-						let reading = stream.read(&mut buffer);
-						let Some(waited) =
-							crate::shutdown::or_drain(self.drain.as_deref(), poll, reading).await
-						else {
-							let _ = response_writer::write_response(
-								&mut *stream,
-								SHUTTING_DOWN,
-								&clock,
-								session.is_authenticated(),
-							)
-							.await;
-							return Ok(());
-						};
-						match waited {
-							Ok(Ok(n)) => break n,
-							Ok(Err(e)) => return Err(e),
-							Err(_) => {
-								if !session.notify_active() || Instant::now() >= deadline {
-									tracing::debug!("IMAP idle timeout, closing connection");
-									let _ = response_writer::write_response(
-										&mut *stream,
-										b"* BYE idle timeout\r\n",
-										&clock,
-										session.is_authenticated(),
-									)
-									.await;
-									return Ok(());
-								}
-								if let Some(notification) = session.check_notify()
-									&& response_writer::write_response(
-										&mut *stream,
-										&notification.bytes,
-										&clock,
-										session.is_authenticated(),
-									)
-									.await
-									.is_err()
-								{
-									return Ok(());
-								}
-							}
-						}
+					let Some(read) = self
+						.read_more(&mut *stream, &mut buffer, &clock, &mut session, deadline)
+						.await?
+					else {
+						return Ok(());
 					};
 					if read == 0 {
 						return Ok(());
@@ -453,27 +409,10 @@ impl Server {
 				if output.collect_auth {
 					// Read one SASL continuation line and feed it back.
 					let deadline = clock.step(session.is_authenticated());
-					let response = loop {
-						match decoder.next_line() {
-							Ok(Some(line)) => break line,
-							Ok(None) => {
-								let read = match tokio::time::timeout_at(
-									deadline,
-									stream.read(&mut buffer),
-								)
-								.await
-								{
-									Ok(Ok(n)) => n,
-									Ok(Err(e)) => return Err(e),
-									Err(_) => return Ok(()),
-								};
-								if read == 0 {
-									return Ok(());
-								}
-								decoder.feed(&buffer[..read]);
-							}
-							Err(_) => return Ok(()),
-						}
+					let Some(response) =
+						read_auth_line(&mut *stream, &mut decoder, &mut buffer, deadline).await?
+					else {
+						return Ok(());
 					};
 					let response = String::from_utf8(response).unwrap_or_default();
 					output = session.auth_response(&response);
@@ -551,5 +490,8 @@ mod discard;
 mod idle;
 
 mod server_literal;
+
+mod read;
+use read::read_auth_line;
 
 mod session_factory;

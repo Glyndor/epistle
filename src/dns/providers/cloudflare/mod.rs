@@ -123,185 +123,6 @@ impl CloudflareProvider {
 		self
 	}
 
-	/// The Cloudflare record type for a kind we can publish. TXT/A/AAAA/CNAME
-	/// go through a plain `content` field; TLSA, SRV, MX, and CAA use a
-	/// structured `data` object — each carries its kind-specific shape
-	/// (`usage selector matching cert` / `priority weight port target` /
-	/// `priority host` / `flags tag value`).
-	fn api_kind(kind: &RecordKind) -> Result<&'static str, ProviderError> {
-		match kind {
-			RecordKind::A => Ok("A"),
-			RecordKind::Aaaa => Ok("AAAA"),
-			RecordKind::Txt => Ok("TXT"),
-			RecordKind::Cname => Ok("CNAME"),
-			RecordKind::Tlsa => Ok("TLSA"),
-			RecordKind::Srv => Ok("SRV"),
-			RecordKind::Mx => Ok("MX"),
-			RecordKind::Caa => Ok("CAA"),
-			// Cloudflare accepts HTTPS and SVCB; publishing NS, HTTPS
-			// or SVCB is the operator's call, not epistle's. Any
-			// other (custom) type is also out of scope.
-			RecordKind::Ns | RecordKind::Https | RecordKind::Svcb | RecordKind::Other(_) => {
-				Err(ProviderError::Unsupported)
-			}
-		}
-	}
-
-	/// The Cloudflare record body for a record: TLSA and SRV carry a
-	/// structured `data` object (`usage selector matching_type certificate` /
-	/// `priority weight port target`), everything else a plain `content`
-	/// string. SRV splits the presentation form on whitespace.
-	#[cfg(test)]
-	fn record_body(kind: &str, record: &DnsRecord) -> Result<String, ProviderError> {
-		Ok(Self::record_value(kind, record)?.to_string())
-	}
-
-	/// The record body as JSON, before tags are added.
-	fn record_value(kind: &str, record: &DnsRecord) -> Result<serde_json::Value, ProviderError> {
-		let mut value = if record.kind == RecordKind::Tlsa {
-			let mut parts = record.value.split_whitespace();
-			let usage: u8 =
-				parts
-					.next()
-					.and_then(|p| p.parse().ok())
-					.ok_or(ProviderError::Remote(
-						"TLSA needs usage selector matching cert".into(),
-					))?;
-			let selector: u8 =
-				parts
-					.next()
-					.and_then(|p| p.parse().ok())
-					.ok_or(ProviderError::Remote(
-						"TLSA needs usage selector matching cert".into(),
-					))?;
-			let matching: u8 =
-				parts
-					.next()
-					.and_then(|p| p.parse().ok())
-					.ok_or(ProviderError::Remote(
-						"TLSA needs usage selector matching cert".into(),
-					))?;
-			let cert = parts.next().ok_or(ProviderError::Remote(
-				"TLSA needs usage selector matching cert".into(),
-			))?;
-			serde_json::json!({
-				"type": kind,
-				"name": record.name,
-				"ttl": record.ttl,
-				"data": {
-					"usage": usage,
-					"selector": selector,
-					"matching_type": matching,
-					"certificate": cert,
-				},
-			})
-		} else if record.kind == RecordKind::Srv {
-			let (priority, weight, port, target) = parse_srv(&record.value)
-				.ok_or_else(|| ProviderError::Remote(format!("bad SRV value: {}", record.value)))?;
-			serde_json::json!({
-				"type": kind,
-				"name": record.name,
-				"ttl": record.ttl,
-				"data": {
-					"priority": priority,
-					"weight": weight,
-					"port": port,
-					"target": target,
-				},
-			})
-		} else if record.kind == RecordKind::Caa {
-			serde_json::json!({
-				"type": kind,
-				"name": record.name,
-				"ttl": record.ttl,
-				"data": Self::caa_data(&record.value)?,
-			})
-		} else if record.kind == RecordKind::Mx {
-			// MX value: `<priority> <target>` — split into `priority` and
-			// `host` fields per Cloudflare's MX data shape.
-			let mut parts = record.value.split_whitespace();
-			let priority: u8 = parts
-				.next()
-				.and_then(|p| p.parse().ok())
-				.ok_or_else(|| ProviderError::Remote("MX needs priority target".into()))?;
-			let target = parts
-				.next()
-				.ok_or_else(|| ProviderError::Remote("MX needs priority target".into()))?;
-			let target = crate::dns::provider::mx_target_for_api(target).to_string();
-			serde_json::json!({
-				"type": kind,
-				"name": record.name,
-				"ttl": record.ttl,
-				"data": {
-					"priority": priority,
-					"host": target,
-				},
-			})
-		} else {
-			// A TXT `content` "must consist of quoted "character
-			// strings" (RFC 1035), each with a length of up to 255
-			// bytes. Strings exceeding this allowed maximum length are
-			// automatically split."
-			// (<https://developers.cloudflare.com/api/resources/dns/subresources/records/methods/create/>,
-			// TXTRecord.content, read 2026-10-12). Only the dashboard
-			// adds missing quotes (DNS changelog, 2024-10-15); a value
-			// sent through the API unquoted is stored as given, so it
-			// goes quoted and already split, escaped the RFC 1035 way.
-			let content = if record.kind == RecordKind::Txt {
-				txt_encode(&record.value, TXT_FORM)
-			} else {
-				record.value.clone()
-			};
-			let mut body = serde_json::json!({
-				"type": kind,
-				"name": record.name,
-				"content": content,
-				"ttl": record.ttl,
-			});
-			// Cloudflare only accepts `proxied` on the kinds it can
-			// actually proxy (A, AAAA, CNAME). Pin those to DNS-only:
-			// the proxy only speaks HTTP(S), so a mail hostname, an
-			// `autoconfig`, an `autodiscover`, or an `mta-sts` A/AAAA/CNAME
-			// the proxy took over would never deliver mail. Other kinds
-			// do not take the field.
-			if matches!(
-				record.kind,
-				RecordKind::A | RecordKind::Aaaa | RecordKind::Cname
-			) {
-				body["proxied"] = serde_json::Value::from(false);
-			}
-			body
-		};
-		value["comment"] = serde_json::Value::from(record_description());
-		Ok(value)
-	}
-
-	/// The Cloudflare wire shape for a CAA record body: per
-	/// <https://developers.cloudflare.com/api/operations/dns-records-create-dns-record>
-	/// CAA uses a `data` object with `flags`, `tag` and `value`. We parse the
-	/// presentation form `"<flags> <tag> <value>"` we emit.
-	fn caa_data(value: &str) -> Result<serde_json::Value, ProviderError> {
-		let mut parts = value.splitn(3, ' ');
-		let flags: u8 = parts
-			.next()
-			.and_then(|p| p.parse().ok())
-			.ok_or_else(|| ProviderError::Remote("CAA needs flags tag value".into()))?;
-		let tag = parts
-			.next()
-			.ok_or_else(|| ProviderError::Remote("CAA needs flags tag value".into()))?
-			.to_string();
-		let v = parts
-			.next()
-			.ok_or_else(|| ProviderError::Remote("CAA needs flags tag value".into()))?
-			.trim_matches('"')
-			.to_string();
-		Ok(serde_json::json!({
-			"flags": flags,
-			"tag": tag,
-			"value": v,
-		}))
-	}
-
 	/// Reject a record the token is not scoped for, before any network call.
 	fn authorize(&self, record: &DnsRecord) -> Result<(), ProviderError> {
 		if self.secret.authorizes(&record.name) {
@@ -397,149 +218,6 @@ impl CloudflareProvider {
 		let records: ListRecords = self.get_json(url).await?;
 		Ok(records.result)
 	}
-
-	async fn upsert_inner(&self, zone: &str, record: DnsRecord) -> Result<(), ProviderError> {
-		self.authorize(&record)?;
-		let kind = Self::api_kind(&record.kind)?;
-		let zone_id = self.zone_id(zone).await?;
-		let body = Self::record_value(kind, &record)?;
-		// The upsert contract in `src/dns/provider/mod.rs`: a TXT replaces
-		// the record of the same purpose and leaves every other TXT
-		// at the name alone (an ACME challenge, a verification
-		// token). Two records of the same purpose at the same name
-		// are a configuration mistake (SPF returns permerror, DMARC
-		// is ignored): the upsert collapses them by editing the
-		// first match and deleting every other. Every other kind
-		// owns its name, so the write replaces the whole set: the
-		// first record is updated in place and any others at the
-		// name are removed.
-		let found = self.find_records(&zone_id, &record.name, kind).await?;
-		let (existing, extra) = if record.kind == RecordKind::Txt {
-			// Filter to records of the same purpose only: an
-			// untagged TXT at the same owner (an ACME challenge,
-			// a site-verification token) is not a duplicate of
-			// epistle's record and the upsert must leave it alone.
-			let mut found = found
-				.into_iter()
-				.filter(|r| same_txt_purpose(&r.content, &record.value));
-			let primary = found.next();
-			let rest: Vec<RecordRef> = found.collect();
-			(primary, rest)
-		} else {
-			let mut found = found.into_iter();
-			(found.next(), found.collect::<Vec<_>>())
-		};
-		let operator_tags: Vec<String> = existing
-			.as_ref()
-			.map(|r| r.tags.clone())
-			.unwrap_or_default();
-		let url = self.records_url(&zone_id, existing.as_ref().map(|r| r.id.as_str()))?;
-		let own = self
-			.host_tag
-			.as_deref()
-			.filter(|_| self.tags_allowed.load(Ordering::Relaxed));
-		let response = self
-			.write(
-				&url,
-				existing.is_some(),
-				&body,
-				&cloudflare_tags::merge(&operator_tags, own),
-			)
-			.await?;
-		if own.is_some() && retry_without_tags(response.status()) {
-			let retry = self
-				.write(
-					&url,
-					existing.is_some(),
-					&body,
-					&cloudflare_tags::merge(&operator_tags, None),
-				)
-				.await?;
-			if retry.status().is_success() {
-				self.tags_allowed.store(false, Ordering::Relaxed);
-				tracing::warn!(
-					"Cloudflare refused DNS record tags (they need a paid plan); records are written without them from now on"
-				);
-			}
-			decode_ok(retry).await?;
-		} else {
-			decode_ok(response).await?;
-		}
-		for stale in extra {
-			self.delete_id(&zone_id, &stale.id).await?;
-		}
-		Ok(())
-	}
-
-	/// Delete the record with `id`.
-	async fn delete_id(&self, zone_id: &str, id: &str) -> Result<(), ProviderError> {
-		let response = self
-			.client
-			.delete(self.records_url(zone_id, Some(id))?.into_url())
-			.bearer_auth(self.secret.token())
-			.send()
-			.await
-			.map_err(transport)?;
-		decode_ok(response).await
-	}
-
-	/// Send one create (POST) or update (PUT) with `tags`; the body is
-	/// `body` plus a `tags` array when there are any.
-	async fn write(
-		&self,
-		url: &HttpsUrl,
-		update: bool,
-		body: &serde_json::Value,
-		tags: &[String],
-	) -> Result<reqwest::Response, ProviderError> {
-		let mut body = body.clone();
-		if !tags.is_empty() {
-			body["tags"] = serde_json::Value::from(tags.to_vec());
-		}
-		let method = if update {
-			reqwest::Method::PUT
-		} else {
-			reqwest::Method::POST
-		};
-		self.client
-			.request(method, url.clone().into_url())
-			.bearer_auth(self.secret.token())
-			.header(reqwest::header::CONTENT_TYPE, "application/json")
-			.body(body.to_string())
-			.send()
-			.await
-			.map_err(transport)
-	}
-
-	async fn delete_inner(&self, zone: &str, record: DnsRecord) -> Result<(), ProviderError> {
-		self.authorize(&record)?;
-		let kind = Self::api_kind(&record.kind)?;
-		let zone_id = self.zone_id(zone).await?;
-		// The TXT matching rule from `src/dns/provider/mod.rs` is the
-		// contract: a value-bearing delete drops only the record
-		// whose content matches the value (a sibling ACME challenge
-		// at the same owner survives), an empty-value delete drops
-		// every record at the owner (the DKIM rotator's retire
-		// path). Other record kinds fall through to the
-		// first-by-(type, name) selection, which is the existing
-		// whole-set semantics.
-		let needle = if record.kind == RecordKind::Txt {
-			if record.value.is_empty() {
-				None
-			} else {
-				Some(record.value.as_str())
-			}
-		} else {
-			None
-		};
-		let Some(found) = self
-			.find_record(&zone_id, &record.name, kind, needle)
-			.await?
-		else {
-			return Ok(()); // already absent: idempotent.
-		};
-		self.delete_id(&zone_id, &found.id).await
-	}
 }
 
 impl DnsProvider for CloudflareProvider {
@@ -568,6 +246,12 @@ impl DnsProvider for CloudflareProvider {
 		let zone = zone.to_string();
 		Box::pin(crate::dns::providers::within(async move {
 			self.delete_inner(&zone, record).await
+		}))
+	}
+	fn delete_exact(&self, zone: &str, record: DnsRecord) -> Op<'_> {
+		let zone = zone.to_string();
+		Box::pin(crate::dns::providers::within(async move {
+			self.delete_exact_inner(&zone, record).await
 		}))
 	}
 	fn list(&self, zone: &str) -> ListOp<'_> {
@@ -623,6 +307,11 @@ async fn decode_ok(response: reqwest::Response) -> Result<(), ProviderError> {
 		Err(ProviderError::Remote(format!("HTTP {status}")))
 	}
 }
+
+mod record;
+mod write;
+
+mod exact;
 
 #[cfg(test)]
 mod tests;

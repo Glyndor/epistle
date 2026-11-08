@@ -13,9 +13,11 @@ mod delivery;
 pub mod delivery_log;
 pub(crate) mod lock;
 pub(crate) mod locked;
+pub mod rekey;
 mod routing;
 pub(crate) mod save_sent;
 mod spool;
+pub(crate) mod unshared;
 pub(crate) mod vacation_markers;
 pub mod vacation_store;
 
@@ -29,7 +31,9 @@ pub use blob_backend::{
 };
 pub use correspondents::{CapOutcome, CorrespondentStore, Recorded};
 pub use crypto::{
-	CryptoAuthError, CryptoError, KEY_LEN, MAGIC, MessageCrypto, OVERHEAD, generate_key_base64,
+	AccountAddresses, CryptoAuthError, CryptoError, EnvelopeKind, KEY_LEN, KeyId, KeyOwner, MAGIC,
+	MAGIC_V2, MAX_OVERHEAD, MessageCrypto, OVERHEAD, OVERHEAD_V2, TenantChoice,
+	generate_key_base64, is_envelope, kind as envelope_kind,
 };
 pub use delivery::LocalDelivery;
 pub use delivery_log::{DEFAULT_DELIVERY_LOG_DAYS, DeliveryLog, DeliveryOutcome, DeliveryRecord};

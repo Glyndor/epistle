@@ -27,6 +27,13 @@ on:
 
 permissions: {}
 
+# One release of a tag at a time. A second run on the same tag would build
+# and push the same image and write the same release, so it waits for the
+# first instead of cancelling it half way.
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
 jobs:
   # Gate every release on promoted, version-matched, advisory-free code.
   verify:
@@ -75,6 +82,7 @@ jobs:
           # checks out before the gate has looked at it.
           ref: main
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Move to the release commit, only when it is promoted
         env:
@@ -238,6 +246,7 @@ jobs:
           # The commit `verify` resolved, so the package is built from the
           # tree that was audited and version-checked.
           ref: ${{ needs.verify.outputs.commit }}
+          persist-credentials: false
 
       - name: Build the package
         env:
@@ -557,6 +566,7 @@ jobs:
           # The commit `verify` resolved, so the image carries the same tree
           # the gate audited.
           ref: ${{ needs.verify.outputs.commit }}
+          persist-credentials: false
 
       - name: Build the image for ${{ matrix.arch }}
         env:

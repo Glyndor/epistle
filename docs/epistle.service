@@ -3,7 +3,7 @@
 # Install:
 #   install -Dm644 docs/epistle.service /etc/systemd/system/epistle.service
 #   install -d -m 0750 -o glyndor-epistle -g glyndor-epistle /etc/epistle
-#   install -m 0600 -o glyndor-epistle -g glyndor-epistle epistle.toml /etc/epistle/mail.toml
+#   install -m 0600 -o glyndor-epistle -g glyndor-epistle mail.toml /etc/epistle/mail.toml
 #   systemctl daemon-reload && systemctl enable --now epistle
 #
 # The config is owned by the account the service runs as, on purpose. The

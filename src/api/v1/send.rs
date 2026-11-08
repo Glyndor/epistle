@@ -33,8 +33,22 @@ const NEW_RECIPIENT_LIMIT_MESSAGE: &str = "too many new recipients today; retry 
 pub async fn send(
 	State(state): State<ApiState>,
 	Extension(auth): Extension<MatchedAuth>,
-	Json(request): Json<SendRequest>,
+	Json(mut request): Json<SendRequest>,
 ) -> Result<Json<Queued>, ApiError> {
+	// The sender is one lowercase address from here on, whatever case the
+	// client typed; the recipients are lowercased by `recipients()`.
+	request.from = crate::util::address::normalize(&request.from);
+	// The headers epistle writes and signs carry the same lowercase addresses.
+	for list in [&mut request.to, &mut request.cc, &mut request.bcc] {
+		for address in list.iter_mut() {
+			*address = crate::util::address::normalize(address);
+		}
+	}
+	for single in [&mut request.reply_to, &mut request.sender] {
+		if let Some(address) = single.as_mut() {
+			*address = crate::util::address::normalize(address);
+		}
+	}
 	let explicit_class = request.class()?;
 	let recipients = request.recipients();
 	if recipients.is_empty() {
@@ -135,11 +149,12 @@ pub async fn send(
 		}
 	}
 
-	let domain = state
+	let first_hosted = state
 		.domains()
 		.first()
 		.map(String::as_str)
 		.unwrap_or("localhost");
+	let domain = super::send_from::message_id_domain(&request.from, first_hosted);
 	let date = crate::clock::rfc5322(std::time::SystemTime::now());
 	let message_id = format!("<{}@{domain}>", uuid::Uuid::now_v7());
 	let display_name = match request.from_name.as_deref() {

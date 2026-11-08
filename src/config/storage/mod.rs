@@ -49,6 +49,20 @@ pub struct Storage {
 	/// `encryption_key_env` when both are set.
 	#[serde(default)]
 	pub encryption_key_file: Option<PathBuf>,
+	/// Write each account's new mail and blobs under the key of its
+	/// `[[tenant]]` when that tenant has an `encryption_key_file`. Default
+	/// `false`: every write uses the server key, as before. Needs
+	/// `encrypt_at_rest = true`. Mail already stored keeps its key until
+	/// `epistle storage tenant-keys migrate` re-encrypts it.
+	#[serde(default)]
+	pub tenant_keys: bool,
+	/// Previous server keys, each a `0600` file like `encryption_key_file`,
+	/// kept only to read what they sealed while
+	/// `epistle storage tenant-keys migrate` moves it under the current
+	/// key. Nothing is ever written with them. Remove an entry once the
+	/// migration has finished and the spool and evidence it sealed are gone.
+	#[serde(default)]
+	pub retired_key_files: Vec<PathBuf>,
 	/// Days to keep expunged messages in the per-account archive
 	/// (`<account>/.archive/`) before the hourly sweeper removes them. `0`
 	/// (default) keeps the current behaviour: an expunge deletes the on-disk

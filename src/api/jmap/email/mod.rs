@@ -122,6 +122,8 @@ pub(super) fn email_set(
 				account,
 				crypto: state.crypto(),
 				uploads,
+				limit: state.max_message_size(),
+				spent: std::cell::Cell::new(0),
 			};
 			match create_email(spec, &sources, state.max_message_size()) {
 				Ok(info) => {

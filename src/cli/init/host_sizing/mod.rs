@@ -206,6 +206,9 @@ fn keep_existing(answers: &mut Answers, compose: &Path) {
 		let off = document.get("x-epistle-antivirus") == Some(&serde_json::Value::Bool(false));
 		answers.services.antivirus = Some(!off);
 	}
+	// A stack whose certificates container runs keeps it: the answers file
+	// cannot turn it on or off (`epistle stack certs` does).
+	answers.services.certs = document["services"].get("certs").is_some();
 	let recorded: std::collections::BTreeMap<String, super::resources::ServiceResources> =
 		match document.get("x-epistle-resources") {
 			Some(value) => serde_json::from_value(value.clone()).unwrap_or_default(),

@@ -30,6 +30,11 @@ pub enum Command {
 		/// Path to the configuration file.
 		#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
+		/// The part of the server this process runs: `all` (the default),
+		/// `mail` (listeners, certificate read from disk) or `certs`
+		/// (certificate renewal only, no listener).
+		#[arg(long, value_enum, default_value_t = serve::ServeRole::All)]
+		role: serve::ServeRole,
 	},
 	/// Validate a configuration file and report problems.
 	ConfigCheck {
@@ -532,6 +537,21 @@ pub enum Command {
 		/// Storage administration area.
 		#[command(subcommand)]
 		action: crate::cli::storage::blobs::StorageCli,
+	},
+	/// Manage the SRS secret of each hosted domain.
+	Srs {
+		/// Configuration file; accepted before or after the srs action.
+		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
+		config: PathBuf,
+		/// Print the validated diff without writing or restarting.
+		#[arg(long, global = true)]
+		dry_run: bool,
+		/// Print the result as one JSON object on stdout.
+		#[arg(long, global = true)]
+		json: bool,
+		/// SRS secret administration action.
+		#[command(subcommand)]
+		action: crate::cli::srs::SrsCli,
 	},
 	/// Manage the outbound event webhook.
 	Webhook {

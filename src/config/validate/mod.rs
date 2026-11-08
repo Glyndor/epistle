@@ -29,12 +29,14 @@ impl Config {
 		self.validate_domains()?;
 		self.validate_disabled_domains()?;
 		self.dns.validate()?;
+		self.dns_publish.validate()?;
 		self.validate_accounts()?;
 		self.validate_srs()?;
 		self.validate_api()?;
 		self.validate_listeners()?;
 		self.validate_acme()?;
 		self.validate_webhook()?;
+		self.validate_tenant_webhooks()?;
 		self.validate_retry_schedule()?;
 		self.validate_privileges()?;
 		self.validate_transport()?;
@@ -138,39 +140,9 @@ impl Config {
 	}
 
 	fn validate_webhook(&self) -> Result<(), ConfigError> {
-		let Some(webhook) = &self.webhook else {
-			return Ok(());
-		};
-		// Event payloads carry message metadata, so require TLS, except for a
-		// loopback endpoint, which never leaves the host. The host is compared
-		// after parsing: a name that only starts like `localhost` or
-		// `127.0.0.1` can point anywhere.
-		let refused = || {
-			ConfigError::Invalid("[webhook] url must be https (or a loopback http endpoint)".into())
-		};
-		let url = url::Url::parse(&webhook.url).map_err(|_| refused())?;
-		let loopback = match url.host() {
-			Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
-			Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
-			Some(url::Host::Domain(name)) => name.eq_ignore_ascii_case("localhost"),
-			None => false,
-		};
-		// A private destination needs the operator to say so: the webhook
-		// client refuses those destinations, so a section that names one
-		// without the option never delivers. The file still loads, because a
-		// webhook is advisory and a configuration that worked before must not
-		// stop the server from starting after an upgrade.
-		let private = crate::webhook::destination::names_private(&webhook.url);
-		if private && !webhook.allow_private_webhooks {
-			tracing::warn!(
-				"[webhook] url names a private address and no webhook will be delivered; set allow_private_webhooks = true to reach it"
-			);
-		}
-		match url.scheme() {
-			"https" => Ok(()),
-			"http" if loopback => Ok(()),
-			"http" if private && webhook.allow_private_webhooks => Ok(()),
-			_ => Err(refused()),
+		match &self.webhook {
+			Some(webhook) => webhook.validate_as("[webhook]"),
+			None => Ok(()),
 		}
 	}
 
@@ -284,41 +256,6 @@ impl Config {
 				| crate::config::ListenerKind::Autoconfig
 				| crate::config::ListenerKind::Metrics
 		)
-	}
-
-	/// Reject a config that forwards mail from any account without a configured
-	/// SRS secret. The recommended SPF policy for our domains is `-all`
-	/// (hardfail) — see `dns::records::build_records` — and `-all` only stays
-	/// safe to publish because forwarding rewrites the envelope sender onto
-	/// our own domain (SRS), so the next hop evaluates SPF against our record
-	/// and passes. Without SRS, forwarded mail keeps the original sender; the
-	/// recipient MTA's SPF check on the original domain fails, and any domain
-	/// that publishes `-all` rejects the message. Refusing here surfaces the
-	/// mismatch at load time rather than at the first forwarded bounce.
-	fn validate_srs(&self) -> Result<(), ConfigError> {
-		let forwarding: Vec<&str> = self
-			.accounts
-			.iter()
-			.filter(|account| !account.forward.is_empty())
-			.map(|account| account.name.as_str())
-			.collect();
-		if forwarding.is_empty() {
-			return Ok(());
-		}
-		if self.srs_secret.is_none() {
-			let names = forwarding
-				.iter()
-				.map(|name| format!("\"{name}\""))
-				.collect::<Vec<_>>()
-				.join(", ");
-			return Err(ConfigError::Invalid(format!(
-				"[[accounts]] {names} set `forward = [...]` but no `srs_secret` is configured; \
-				 without SRS, forwarded mail keeps the original envelope sender and any \
-				 destination whose SPF policy is `-all` will reject the message. \
-				 Set `srs_secret` or remove the `forward` entries."
-			)));
-		}
-		Ok(())
 	}
 
 	fn validate_alerts(&self) -> Result<(), ConfigError> {

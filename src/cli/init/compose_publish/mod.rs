@@ -16,6 +16,8 @@
 //! whenever the map has no address for it, and a wildcard in the map is the
 //! same wide publication as the bare form, so it narrows with it.
 
+mod overrides;
+
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -24,7 +26,9 @@ use std::path::{Path, PathBuf};
 use super::apply::ApplyError;
 use super::compose::{compose_file_path, render_document};
 use super::compose_read;
-use crate::config::{Config, Listener, ListenerKind};
+use crate::config::{AcmeChallenge, Config, Listener, ListenerKind};
+
+pub(crate) use overrides::{OverrideEntry, OverridePorts, override_ports};
 
 /// The bind a listener published on a host address uses inside the container.
 /// The container side and the address the host reaches can not be the same
@@ -180,10 +184,15 @@ pub(crate) fn ports_in_file(path: &Path) -> Result<Vec<String>, String> {
 /// change to one listener never widens another one back to every address.
 /// `publish` overrides the address of one listener, which is what
 /// `epistle service set` asks for.
+/// `challenge` is the challenge the configuration answers the ACME order
+/// with, and `None` when the configuration has no `[acme]` section: only
+/// HTTP-01 is answered on port 80, so the other challenges and a
+/// configuration that renews nothing do not publish it.
 pub(super) fn published(
 	listeners: &[Listener],
 	narrow: &BTreeMap<u16, IpAddr>,
 	publish: Option<(ListenerKind, Option<IpAddr>)>,
+	challenge: Option<AcmeChallenge>,
 ) -> Vec<String> {
 	let mut ports = Vec::with_capacity(listeners.len());
 	for listener in listeners {
@@ -193,6 +202,9 @@ pub(super) fn published(
 		let port = listener
 			.port
 			.unwrap_or_else(|| listener.kind.default_port());
+		if port == ListenerKind::Acme.default_port() && challenge != Some(AcmeChallenge::Http01) {
+			continue;
+		}
 		let host = match publish {
 			Some((kind, Some(address))) if kind == listener.kind => Some(address),
 			// No address asked for and none in the map: every listener keeps
@@ -339,6 +351,7 @@ fn read_map(
 	data_dir: &Path,
 	listeners: &[Listener],
 	publish: Option<(ListenerKind, Option<IpAddr>)>,
+	challenge: Option<AcmeChallenge>,
 ) -> Result<Option<Map>, ApplyError> {
 	let path = compose_file_path(data_dir);
 	let existing = match compose_read::read(&path) {
@@ -350,7 +363,7 @@ fn read_map(
 		.map_err(|error| ApplyError::ConfigEncode(format!("invalid compose JSON: {error}")))?;
 	mail_mut(&mut document)?;
 	let current = ports(&document);
-	let wanted = published(listeners, &hosts(&document), publish);
+	let wanted = published(listeners, &hosts(&document), publish, challenge);
 	Ok(Some(Map {
 		path,
 		original: existing,
@@ -366,8 +379,9 @@ pub(crate) fn preview(
 	data_dir: &Path,
 	listeners: &[Listener],
 	publish: Option<(ListenerKind, Option<IpAddr>)>,
+	challenge: Option<AcmeChallenge>,
 ) -> Result<Mappings, ApplyError> {
-	Ok(read_map(data_dir, listeners, publish)?.map(|map| (map.current, map.wanted)))
+	Ok(read_map(data_dir, listeners, publish, challenge)?.map(|map| (map.current, map.wanted)))
 }
 
 /// Say on stderr when the generated map and the configuration the command read
@@ -376,7 +390,9 @@ pub(crate) fn preview(
 /// holds the common lock and is about to bring the two together, so this is
 /// where the operator hears about it.
 pub(crate) fn announce_mixed_state(config: &Config, status: &mut impl Write) {
-	let Ok(Some((current, wanted))) = preview(&config.data_dir, &config.listeners, None) else {
+	let challenge = config.acme.as_ref().map(|acme| acme.challenge);
+	let Ok(Some((current, wanted))) = preview(&config.data_dir, &config.listeners, None, challenge)
+	else {
 		return;
 	};
 	if current == wanted {
@@ -413,6 +429,7 @@ pub(crate) fn prepare(
 	data_dir: &Path,
 	listeners: &[Listener],
 	publish: Option<(ListenerKind, Option<IpAddr>)>,
+	challenge: Option<AcmeChallenge>,
 ) -> Result<Prepared, ApplyError> {
 	// A command killed between its two renames leaves its staged copies of
 	// this file here. The caller holds the common lock, so whatever is left
@@ -421,7 +438,7 @@ pub(crate) fn prepare(
 	crate::cli::config_edit::announce_swept(&crate::cli::config_edit::sweep_orphans(
 		generated.parent().unwrap_or(data_dir),
 	));
-	let Some(mut map) = read_map(data_dir, listeners, publish)? else {
+	let Some(mut map) = read_map(data_dir, listeners, publish, challenge)? else {
 		return Ok(Prepared {
 			companion: None,
 			narrowed: Vec::new(),
@@ -444,150 +461,6 @@ pub(crate) fn prepare(
 		}),
 		narrowed: moved,
 	})
-}
-
-/// Whether the operator's override already publishes one of `ports` for `mail`.
-/// Every stack invocation passes `compose.override.yaml` after
-/// `compose.yaml` (`epistle stack` builds that argv), so a mapping in it is
-/// merged with the generated one, or replaces it, and the operator has to hear
-/// that.
-///
-/// The override is YAML and no YAML parser ships in the binary, so this scans
-/// the `mail` block for the numbers a `ports:` item carries. A mapping
-/// publishes `[ADDRESS:]PORT:PORT`, so `143` in an item names the port; other
-/// values in the block (a memory limit, an image tag) are not ports and do not
-/// match. The block is found in the block form (`mail:` on its own line), in
-/// flow style (`mail: {ports: [...]}`) and with the key quoted. A file this
-/// scan cannot make sense of reports `false`: the warning is advice, and
-/// refusing a valid change over it would be worse. What the scan can not see is
-/// a `ports` key it does not reach: one behind an anchor, an alias, or a value
-/// a template fills in at run time.
-pub(crate) fn override_publishes(data_dir: &Path, ports: &[u16]) -> bool {
-	let path = compose_file_path(data_dir).with_file_name("compose.override.yaml");
-	let Ok(text) = compose_read::read(&path).map(|read| read.unwrap_or_default()) else {
-		return false;
-	};
-	let Ok(text) = String::from_utf8(text) else {
-		return false;
-	};
-	let mut mail_at: Option<usize> = None;
-	let mut list_at: Option<usize> = None;
-	for line in text.lines() {
-		let indent = indent(line);
-		let body = line.trim();
-		if body.is_empty() || body.starts_with('#') {
-			continue;
-		}
-		if mail_at.is_some_and(|at| indent <= at) {
-			mail_at = None;
-		}
-		if list_at.is_some_and(|at| indent <= at) {
-			list_at = None;
-		}
-		if list_at.is_some() {
-			if publishes(body.trim_start_matches('-'), ports) {
-				return true;
-			}
-			continue;
-		}
-		if mail_at.is_none() {
-			let Some(value) = value_of(body, "mail") else {
-				continue;
-			};
-			// `mail: {ports: [...]}` carries the block on one line, so there
-			// is nothing to indent into: the answer comes from the line.
-			match value.trim().strip_prefix('{') {
-				Some(flow) => {
-					if flow_publishes(flow, ports) {
-						return true;
-					}
-				}
-				None => {
-					if value.trim().is_empty() {
-						mail_at = Some(indent);
-					}
-				}
-			}
-			continue;
-		}
-		// The list can sit on this line (`ports: ["143:143"]`) or on
-		// the lines below it, indented (`ports: !override` plus items).
-		let Some(value) = value_of(body, "ports") else {
-			continue;
-		};
-		if publishes(value, ports) {
-			return true;
-		}
-		list_at = Some(indent);
-	}
-	false
-}
-
-/// The value of `key: value` in one line of the override, with the key
-/// unquoted. `None` when the line does not open that key.
-fn value_of<'a>(line: &'a str, key: &str) -> Option<&'a str> {
-	let (name, value) = line.split_once(':')?;
-	(name.trim().trim_matches(['"', '\'']) == key).then_some(value)
-}
-
-/// Whether a flow-style block names one of `ports` in a `ports` key. The
-/// braces are already off the value, so each item is one mapping entry and
-/// only the one that opens `ports` carries the numbers.
-fn flow_publishes(block: &str, ports: &[u16]) -> bool {
-	flow_items(block)
-		.into_iter()
-		.filter_map(|item| value_of(item.trim(), "ports"))
-		.any(|value| publishes(value, ports))
-}
-
-/// The comma-separated items of a flow block. A comma inside a nested list or
-/// mapping separates values, not entries, so only the ones at the outermost
-/// level end an item.
-fn flow_items(block: &str) -> Vec<&str> {
-	let (mut items, mut start, mut depth) = (Vec::new(), 0, 0usize);
-	for (at, character) in block.char_indices() {
-		match character {
-			'[' | '{' => depth += 1,
-			']' | '}' => depth = depth.saturating_sub(1),
-			',' if depth == 0 => {
-				items.push(&block[start..at]);
-				start = at + character.len_utf8();
-			}
-			_ => {}
-		}
-	}
-	items.push(&block[start..]);
-	items
-}
-
-/// Whether a `ports:` value names one of `ports`. A mapping is
-/// `[ADDRESS:]PORT:PORT` and an item may be a range of them, so the numbers
-/// and the ranges are the ports; `!override`, a comment, a key and an empty
-/// value carry none and never match.
-fn publishes(value: &str, ports: &[u16]) -> bool {
-	value
-		.split(|c: char| {
-			c.is_whitespace() || matches!(c, ':' | ',' | '[' | ']' | '{' | '}' | '"' | '\'')
-		})
-		.map(|field| field.trim().trim_matches(['"', '\'']))
-		.any(|field| ports.iter().any(|port| names(field, *port)))
-}
-
-/// Whether one item of a `ports:` list names `port`, either as the number
-/// itself or as a range of numbers that carries it.
-fn names(item: &str, port: u16) -> bool {
-	match item.split_once('-') {
-		Some((from, to)) => match (from.parse::<u16>(), to.parse::<u16>()) {
-			(Ok(from), Ok(to)) => (from..=to).contains(&port),
-			_ => false,
-		},
-		None => item.parse::<u16>().is_ok_and(|named| named == port),
-	}
-}
-
-/// The column a line is indented by.
-fn indent(line: &str) -> usize {
-	line.len() - line.trim_start().len()
 }
 
 /// The `ports:` array of the `mail` service, empty when the file has none.

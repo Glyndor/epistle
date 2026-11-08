@@ -8,6 +8,7 @@
 
 use super::*;
 use crate::dns::provider::ProviderError;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// A provider that records every write as `upsert ZONE NAME` or

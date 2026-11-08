@@ -24,6 +24,7 @@ const SCANNED_FILES: &[&str] = &[
 	"util/mailbox_path/mod.rs",
 	"util/header/mod.rs",
 	"webdav/caldav_busy/mod.rs",
+	"webdav/caldav_filter/mod.rs",
 	"webdav/quota/mod.rs",
 	"webdav/bounds/mod.rs",
 ];
@@ -378,7 +379,11 @@ fn every_limit_constant_in_the_protocol_modules_has_a_row() {
 				.chain(parent.as_ref())
 				.any(|label| sources.contains(&format!("{label}::{name}")));
 			let path = format!("{module}::{name}");
-			let excused = NOT_A_ROW.iter().any(|(excused, _)| *excused == path);
+			// An excuse may name the constant through the module that re-exports it.
+			let reexported = parent.as_ref().map(|parent| format!("{parent}::{name}"));
+			let excused = NOT_A_ROW
+				.iter()
+				.any(|(excused, _)| *excused == path || reexported.as_deref() == Some(*excused));
 			if !listed && !excused {
 				unlisted.push(path);
 			}
@@ -435,9 +440,11 @@ fn every_excused_constant_still_exists_and_is_not_also_a_row() {
 	for (path, reason) in NOT_A_ROW {
 		assert!(!reason.is_empty(), "{path}: say why it is not a row");
 		let found = sources.iter().any(|(module, code)| {
-			limit_constants(code)
-				.iter()
-				.any(|name| format!("{module}::{name}") == *path)
+			let parent = module.rsplit_once("::").map(|(parent, _)| parent);
+			limit_constants(code).iter().any(|name| {
+				format!("{module}::{name}") == *path
+					|| parent.is_some_and(|parent| format!("{parent}::{name}") == *path)
+			})
 		});
 		assert!(
 			found,

@@ -70,7 +70,7 @@ pub fn router(max_message_size: usize) -> Router<ApiState> {
 		.route("/deliveries", get(deliveries::list))
 		// Explicit body ceiling consistent with the SMTP message-size limit,
 		// rather than relying on the framework default. The cap is the
-		// operator-configured `[server] max_message_size`, so the REST
+		// operator-configured `max_message_size`, so the REST
 		// `POST /api/v1/send` builder never goes above what the SMTP
 		// `SIZE` and end-of-DATA checks accept.
 		.route(

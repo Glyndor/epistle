@@ -43,13 +43,13 @@ fn only_a_listener_without_tls_inherits_loopback() {
 	];
 	let listeners = listeners(&rows.map(|(kind, addr, port, _)| (kind, addr, port)));
 	assert_eq!(
-		published(&listeners, &BTreeMap::new(), None),
+		published(&listeners, &BTreeMap::new(), None, None),
 		rows.map(|(_, _, _, mapping)| mapping),
 	);
 	let mut narrow = BTreeMap::new();
 	narrow.insert(8090, "203.0.113.5".parse().unwrap());
 	assert_eq!(
-		published(&listeners, &narrow, None)[1],
+		published(&listeners, &narrow, None, None)[1],
 		"203.0.113.5:8090:8090",
 		"an address the operator chose wins over the default"
 	);
@@ -69,7 +69,7 @@ fn every_wide_publication_of_a_listener_without_tls_narrows_to_loopback() {
 	for wide in ["8090:8090", "0.0.0.0:8090:8090", "[::]:8090:8090"] {
 		let document = serde_json::json!({"services": {"mail": {"ports": ["25:25", wide]}}});
 		assert_eq!(
-			published(&listeners, &hosts(&document), None),
+			published(&listeners, &hosts(&document), None, None),
 			vec!["127.0.0.1:8090:8090"],
 			"{wide} publishes on every address of the host"
 		);
@@ -77,7 +77,7 @@ fn every_wide_publication_of_a_listener_without_tls_narrows_to_loopback() {
 	let document =
 		serde_json::json!({"services": {"mail": {"ports": ["25:25", "203.0.113.5:8090:8090"]}}});
 	assert_eq!(
-		published(&listeners, &hosts(&document), None),
+		published(&listeners, &hosts(&document), None, None),
 		vec!["203.0.113.5:8090:8090"],
 		"an address the operator chose for the port is not a wildcard"
 	);

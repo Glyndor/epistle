@@ -291,71 +291,6 @@ async fn upsert_patches_when_record_already_exists() {
 }
 
 #[tokio::test]
-async fn delete_absent_record_is_idempotent() {
-	let (provider, state) = mock(Vec::new()).await;
-	provider
-		.delete(ZONE, txt("_dmarc.example.org", "x"))
-		.await
-		.expect("delete");
-	let s = state.lock().unwrap();
-	assert!(
-		!s.calls.iter().any(|c| c.starts_with("DELETE")),
-		"calls: {:?}",
-		s.calls
-	);
-}
-
-#[tokio::test]
-async fn delete_existing_record_sends_delete_call() {
-	let existing = vec![record(7, "_dmarc", "TXT", "v=DMARC1", 3600)];
-	let (provider, state) = mock(existing).await;
-	provider
-		.delete(ZONE, txt("_dmarc.example.org", "v=DMARC1"))
-		.await
-		.expect("delete");
-	let s = state.lock().unwrap();
-	let deletes = s.calls.iter().filter(|c| c.starts_with("DELETE")).count();
-	assert_eq!(deletes, 1, "calls: {:?}", s.calls);
-}
-
-/// A TXT delete with a value must drop only the matching record
-/// and leave siblings at the same owner. Two ACME DNS-01 challenges
-/// at the same owner is the canonical case: cleaning up one
-/// certificate order's challenge must not wipe the second
-/// order's. DNSimple addresses every record by id, so the fix is
-/// to find the id whose content matches the value (not the first
-/// by (name, kind)) and delete that one alone. The records below
-/// intentionally put the sibling first, so a regression that
-/// returns the first record by name+kind deletes the wrong id.
-#[tokio::test]
-async fn txt_delete_with_a_value_drops_only_the_matching_challenge() {
-	let existing = vec![
-		record(22, "_acme-challenge", "TXT", "token-bbbb", 60),
-		record(21, "_acme-challenge", "TXT", "token-aaaa", 60),
-	];
-	let (provider, state) = mock(existing).await;
-	provider
-		.delete(ZONE, txt("_acme-challenge.example.org", "token-aaaa"))
-		.await
-		.expect("delete one of two challenges");
-	let s = state.lock().unwrap();
-	assert!(
-		s.calls
-			.iter()
-			.any(|c| c == "DELETE /v2/{account}/zones/{zone}/records/21"),
-		"the matching id is deleted: {:?}",
-		s.calls
-	);
-	assert!(
-		!s.calls
-			.iter()
-			.any(|c| c == "DELETE /v2/{account}/zones/{zone}/records/22"),
-		"sibling id must not be deleted: {:?}",
-		s.calls
-	);
-}
-
-#[tokio::test]
 async fn list_parses_records_and_builds_fqdns() {
 	let existing = vec![
 		record(1, "", "TXT", "v=spf1 -all", 3600),
@@ -371,88 +306,6 @@ async fn list_parses_records_and_builds_fqdns() {
 	assert_eq!(apex.kind, RecordKind::Txt);
 	assert_eq!(apex.value, "v=spf1 -all");
 	assert!(records.iter().any(|r| r.name == "_dmarc.example.org"));
-}
-
-#[tokio::test]
-async fn record_outside_zone_is_rejected_without_network() {
-	let (provider, state) = mock(Vec::new()).await;
-	let result = provider
-		.upsert(ZONE, txt("_dmarc.other.example", "x"))
-		.await;
-	assert_eq!(result, Err(ProviderError::Auth));
-	let s = state.lock().unwrap();
-	assert!(s.calls.is_empty(), "calls: {:?}", s.calls);
-}
-
-#[tokio::test]
-async fn unsupported_kind_is_rejected() {
-	let (provider, state) = mock(Vec::new()).await;
-	let tlsa = DnsRecord {
-		name: "_25._tcp.example.org".into(),
-		kind: RecordKind::Tlsa,
-		value: "3 0 1 abcd".into(),
-		ttl: 3600,
-		proxied: None,
-	};
-	assert_eq!(
-		provider.upsert(ZONE, tlsa).await,
-		Err(ProviderError::Unsupported)
-	);
-	assert!(state.lock().unwrap().calls.is_empty());
-}
-
-#[tokio::test]
-async fn mx_upsert_splits_priority_target_into_fields() {
-	let (provider, state) = mock(Vec::new()).await;
-	let mx = DnsRecord {
-		name: "example.org".into(),
-		kind: RecordKind::Mx,
-		value: "10 mail.example.org".into(),
-		ttl: 3600,
-		proxied: None,
-	};
-	provider.upsert(ZONE, mx).await.expect("mx upsert");
-	let body = state.lock().unwrap().bodies[0].clone();
-	assert!(body.contains("\"type\":\"MX\""), "{body}");
-	assert!(body.contains("\"content\":\"mail.example.org\""), "{body}");
-	assert!(body.contains("\"priority\":10"), "{body}");
-}
-
-#[tokio::test]
-async fn srv_upsert_splits_priority_weight_port_target_into_fields() {
-	let (provider, state) = mock(Vec::new()).await;
-	let srv = DnsRecord {
-		name: "_submissions._tcp.example.org".into(),
-		kind: RecordKind::Srv,
-		value: "0 1 465 mail.example.org".into(),
-		ttl: 3600,
-		proxied: None,
-	};
-	provider.upsert(ZONE, srv).await.expect("srv upsert");
-	let body = state.lock().unwrap().bodies[0].clone();
-	assert!(body.contains("\"type\":\"SRV\""), "{body}");
-	assert!(body.contains("\"content\":\"mail.example.org\""), "{body}");
-	assert!(body.contains("\"priority\":0"), "{body}");
-	assert!(body.contains("\"weight\":1"), "{body}");
-	assert!(body.contains("\"port\":465"), "{body}");
-}
-
-#[tokio::test]
-async fn caa_upsert_splits_into_content_flags_and_caa_tag() {
-	let (provider, state) = mock(Vec::new()).await;
-	let caa = DnsRecord {
-		name: "example.org".into(),
-		kind: RecordKind::Caa,
-		value: "0 issue \"letsencrypt.org\"".into(),
-		ttl: 3600,
-		proxied: None,
-	};
-	provider.upsert(ZONE, caa).await.expect("caa upsert");
-	let body = state.lock().unwrap().bodies[0].clone();
-	assert!(body.contains("\"type\":\"CAA\""), "{body}");
-	assert!(body.contains("\"content\":\"letsencrypt.org\""), "{body}");
-	assert!(body.contains("\"flags\":0"), "{body}");
-	assert!(body.contains("\"caa_tag\":\"issue\""), "{body}");
 }
 
 mod txt_forms;
@@ -481,3 +334,8 @@ async fn the_zone_search_goes_on_to_the_parent_when_the_child_zone_is_not_there(
 		ZONE
 	);
 }
+
+mod delete;
+mod kinds;
+
+mod exact;

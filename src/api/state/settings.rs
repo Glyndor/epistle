@@ -50,13 +50,13 @@ impl ApiState {
 
 	/// The per-instance message-size cap. Defaults to
 	/// [`crate::smtp::session::MAX_MESSAGE_SIZE`]; operators raise or
-	/// lower it with the `[server] max_message_size` config key.
+	/// lower it with the `max_message_size` config key.
 	pub fn max_message_size(&self) -> usize {
 		self.inner.max_message_size
 	}
 
 	/// Override the per-instance message-size cap. Used by `serve` to
-	/// apply the operator's `[server] max_message_size`. Must be set
+	/// apply the operator's `max_message_size`. Must be set
 	/// before the state is shared. `0` keeps the default.
 	pub fn with_max_message_size(mut self, bytes: usize) -> Self {
 		if let Some(inner) = Arc::get_mut(&mut self.inner)

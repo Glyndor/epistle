@@ -20,6 +20,9 @@ use std::path::{Path, PathBuf};
 pub(crate) const STORAGE_KEY: &str = "storage.key";
 /// The file name of the OAuth ES256 signing key.
 pub(crate) const OAUTH_SIGNING_KEY: &str = "oauth_signing.key";
+/// The file name of the ACME account key once the certificates container
+/// renews: only that container mounts it, so `mail` cannot sign an order.
+pub(crate) const ACME_ACCOUNT_KEY: &str = "acme_account.key";
 
 /// The directory: `secrets` beside data_dir.
 pub(crate) fn dir(data_dir: &Path) -> PathBuf {
@@ -40,6 +43,11 @@ pub(crate) fn storage_key(data_dir: &Path) -> PathBuf {
 /// Where the OAuth signing key lives.
 pub(crate) fn oauth_signing_key(data_dir: &Path) -> PathBuf {
 	dir(data_dir).join(OAUTH_SIGNING_KEY)
+}
+
+/// Where the ACME account key lives while the certificates container renews.
+pub(crate) fn acme_account_key(data_dir: &Path) -> PathBuf {
+	dir(data_dir).join(ACME_ACCOUNT_KEY)
 }
 
 /// Where an install from before this layout kept `name`.
@@ -183,6 +191,8 @@ pub(crate) fn repoint_config(text: &str, data_dir: &Path) -> Result<Option<Strin
 	}
 	Ok(changed.then(|| document.to_string()))
 }
+
+pub(crate) mod acme;
 
 #[cfg(test)]
 mod tests;

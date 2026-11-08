@@ -31,6 +31,28 @@ pub(super) fn after_backup(data_dir: &Path, warnings: &mut impl Write) {
 	}
 }
 
+/// The tenant and retired storage key files the configuration names, one
+/// line each, for the backup's encryption key warning. An archive with
+/// mail under a tenant key is unreadable without that tenant's file, and
+/// mail still under a retired key without the retired file. Paths only;
+/// never the keys.
+pub(super) fn tenant_and_retired_keys(config: &crate::config::Config) -> Vec<String> {
+	let tenants = config.tenants.iter().filter_map(|tenant| {
+		let path = tenant.encryption_key_file.as_ref()?;
+		let name = tenant.name.as_deref().unwrap_or("<unnamed tenant>");
+		Some(format!(
+			"[[tenant]] \"{name}\" encryption_key_file = {}",
+			path.display()
+		))
+	});
+	let retired = config
+		.storage
+		.iter()
+		.flat_map(|storage| storage.retired_key_files.iter())
+		.map(|path| format!("[storage] retired_key_files: {}", path.display()));
+	tenants.chain(retired).collect()
+}
+
 /// After a restore: say where the keys must be before the stack starts, or,
 /// for an archive from before they moved, that `stack update` moves the
 /// copies it just laid down under data_dir.
@@ -53,7 +75,8 @@ pub(super) fn after_restore(
 			status,
 			"backups do not carry the storage key or the OAuth signing key; put the ones this \
 			 install used back at {} and {} (mode 0600, owned by the service account) before \
-			 `epistle stack up`; without the storage key, mail encrypted at rest stays unreadable",
+			 `epistle stack up`; without the storage key, mail encrypted at rest stays unreadable. The key files of every \
+			 [[tenant]] and retired key the configuration names go back too",
 			host_secrets::storage_key(data_dir).display(),
 			host_secrets::oauth_signing_key(data_dir).display(),
 		);

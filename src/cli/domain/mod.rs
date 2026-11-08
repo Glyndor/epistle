@@ -433,6 +433,11 @@ fn add_domain(config: &Config, document: &mut ConfigDocument, domain: &str) -> R
 		new_array.push(toml_edit::Value::from(existing.clone()));
 	}
 	document.replace_top_array("domains", new_array)?;
+	// The domain signs the sender of what it forwards with a secret of its
+	// own from the start, never with one shared with the others.
+	let secret = crate::queue::srs::generate_secret()
+		.ok_or("the system gave no random bytes for the domain's SRS secret")?;
+	crate::cli::srs::set_domain_secret(document, domain, secret, None)?;
 	Ok(())
 }
 
@@ -473,6 +478,7 @@ fn remove_domain(
 			document.remove_map_entry(map, &key)?;
 		}
 	}
+	document.remove_elements("srs_domain", "name", &domain.trim().to_ascii_lowercase())?;
 	Ok(())
 }
 

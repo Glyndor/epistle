@@ -12,7 +12,16 @@ use crate::storage::{FsSpool, MessageCrypto};
 
 /// List every account (static config + dynamic store) with its addresses and
 /// source. Writes to `out` so the formatting is unit-testable.
+#[cfg(test)]
 pub(super) fn list(config: &Config, out: &mut impl std::io::Write) -> ExitCode {
+	list_with(config, false, out)
+}
+
+/// [`list`] that, with `aliases`, also prints under each account the address
+/// aliases delivering to it, and closes with a count of the ones that
+/// deliver to no local account. Without it the output is byte for byte what
+/// `list` always printed.
+pub(super) fn list_with(config: &Config, aliases: bool, out: &mut impl std::io::Write) -> ExitCode {
 	let store = match AccountStore::open(
 		&config.data_dir,
 		config.domains.clone(),
@@ -27,6 +36,12 @@ pub(super) fn list(config: &Config, out: &mut impl std::io::Write) -> ExitCode {
 	};
 	let mut views = store.account_views();
 	views.sort_by(|a, b| a.0.cmp(&b.0));
+	let attached = aliases.then(|| crate::cli::account::list_aliases::attach(config, &views));
+	let under = |name: &str| -> Vec<String> {
+		attached.as_ref().map_or_else(Vec::new, |attached| {
+			attached.of(name).iter().map(|entry| entry.line()).collect()
+		})
+	};
 	if let Some(decor) = super::term::stdout(false) {
 		let mut table = Table::new(&["NAME", "STATE", "SOURCE", "ADDRESSES"]).state_col(1);
 		for (name, addresses, dynamic) in &views {
@@ -38,14 +53,28 @@ pub(super) fn list(config: &Config, out: &mut impl std::io::Write) -> ExitCode {
 				addresses.join(","),
 			]);
 		}
-		let _ = table.write(decor, out);
+		// The first rendered line is the header, then one per account in order.
+		let rendered = table.render(decor);
+		let _ = writeln!(out, "{}", rendered[0]);
+		for ((name, _, _), line) in views.iter().zip(&rendered[1..]) {
+			let _ = writeln!(out, "{line}");
+			for under in under(name) {
+				let _ = writeln!(out, "{}", super::term::fit(&under, decor.width));
+			}
+		}
 	} else {
 		for (name, addresses, dynamic) in &views {
 			let source = if *dynamic { "dynamic" } else { "static" };
 			let _ = writeln!(out, "{name}\t{source}\t{}", addresses.join(","));
+			for under in under(name) {
+				let _ = writeln!(out, "{under}");
+			}
 		}
 	}
 	let _ = writeln!(out, "{} accounts", views.len());
+	if let Some(summary) = attached.as_ref().and_then(|attached| attached.summary()) {
+		let _ = writeln!(out, "{summary}");
+	}
 	ExitCode::SUCCESS
 }
 

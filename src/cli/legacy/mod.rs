@@ -239,7 +239,10 @@ impl Legacy {
 		match self {
 			Legacy::Accounts { config, json } => (
 				config,
-				Resource::Account(account::Subcommand::List { json }),
+				Resource::Account(account::Subcommand::List {
+					json,
+					aliases: false,
+				}),
 			),
 			Legacy::AccountAdd {
 				config,

@@ -11,7 +11,11 @@ mod harness;
 mod headers;
 #[path = "hostile_http/jmap.rs"]
 mod jmap;
+#[path = "hostile_http/jmap_wire.rs"]
+mod jmap_wire;
 #[path = "hostile_http/webdav.rs"]
 mod webdav;
 #[path = "hostile_http/webdav_race.rs"]
 mod webdav_race;
+#[path = "hostile_http/webdav_wire.rs"]
+mod webdav_wire;

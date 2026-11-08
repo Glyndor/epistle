@@ -60,7 +60,7 @@ fn a_redirect_that_is_not_an_address_is_never_queued() {
 #[test]
 fn a_redirect_that_is_an_address_is_queued_in_its_canonical_form() {
 	let delivered = deliver_with("redirect \"Who@Target.Example\";");
-	assert_eq!(targets(&delivered), vec!["Who@target.example"]);
+	assert_eq!(targets(&delivered), vec!["who@target.example"]);
 }
 
 #[test]

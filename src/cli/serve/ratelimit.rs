@@ -12,8 +12,8 @@ use crate::smtp::ratelimit::{InboundLimit, SendLimiter};
 use crate::smtp::server::Server;
 
 /// The three rate limiters `serve` needs to attach to each SMTP listener.
-/// Created whenever the matching `[server] submission_rate_limit_per_min`
-/// or `[server] inbound_rate_limit_*` section is configured; `None`
+/// Created whenever the matching `submission_rate_limit_per_min`
+/// or `inbound_rate_limit_*` section is configured; `None`
 /// disables the corresponding check at MAIL FROM time.
 pub(super) struct RateLimiters {
 	/// Optional per-account submission rate limiter.

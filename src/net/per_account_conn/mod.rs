@@ -4,7 +4,7 @@
 //! path has authenticated the principal, the server knows the local
 //! account the connection belongs to. From that moment on, two caps
 //! apply: one per (account, client IP) and one per account in aggregate.
-//! Both defaults come from `[server] max_connections_per_account`; the
+//! Both defaults come from `max_connections_per_account`; the
 //! defaults are 10 per (account, IP) and 50 per account, which matches
 //! Dovecot's `mail_max_userip_connections` (10) and a sensible total.
 //!

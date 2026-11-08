@@ -438,6 +438,8 @@ async fn per_tenant_aggregate_limit_refuses_a_second_submission() {
 		max_accounts: None,
 		max_domains: None,
 		submission_rate_limit_per_min: Some(1),
+		encryption_key_file: None,
+		webhook: None,
 	}]));
 	let (acceptor, cert) = acceptor_and_cert();
 	let server = build_smtp_server(

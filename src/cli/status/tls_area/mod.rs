@@ -12,6 +12,7 @@ use x509_parser::prelude::FromDer;
 use super::Ctx;
 use super::clock::epoch;
 use super::report::{AreaReport, Item, Level};
+use crate::cli::stack::certs::Upness;
 use crate::config::Config;
 
 const DAY: i64 = 86_400;
@@ -60,10 +61,21 @@ pub(super) async fn evaluate(ctx: &Ctx, dns: &dyn crate::spf::DnsLookup) -> Area
 		}
 	};
 	let remaining = leaf.not_after - epoch(ctx.now);
+	// The layout of the stack decides who renews the certificate: `mail`
+	// does, or the certificates container does, and then only while it runs.
+	let compose = crate::cli::init::compose_file_path(&config.data_dir);
+	let layout = layout(ctx, &compose, config).await;
 	let mut items = vec![
 		expiry_item(remaining),
 		names_item(&config.hostname, &leaf.names),
-		renewal_item(config.acme.is_some(), remaining),
+		renewal_item(
+			config.acme.is_some(),
+			remaining,
+			match &layout {
+				Layout::Split { upness, .. } => Some(upness),
+				Layout::Whole | Layout::Unreadable(_) => None,
+			},
+		),
 	];
 	items.extend(super::tls_tlsa::tlsa_item(&config.hostname, &leaf.chain, dns).await);
 	items.extend(super::tls_tlsa::pending_item(
@@ -71,6 +83,19 @@ pub(super) async fn evaluate(ctx: &Ctx, dns: &dyn crate::spf::DnsLookup) -> Area
 		&config.hostname,
 		epoch(ctx.now),
 	));
+	match &layout {
+		Layout::Split { upness, renewal } => {
+			items.push(certs::item(upness, renewal.as_ref(), remaining));
+		}
+		Layout::Whole => {
+			if let Some(orphan) = orphan(ctx, &compose).await {
+				items.push(orphan);
+			}
+		}
+		Layout::Unreadable(error) => {
+			items.push(Item::new("certs", Level::Fail, error.clone()));
+		}
+	}
 	// Reversed so the first item wins a tie: the expiry reads best first.
 	let worst = items
 		.iter()
@@ -82,6 +107,80 @@ pub(super) async fn evaluate(ctx: &Ctx, dns: &dyn crate::spf::DnsLookup) -> Area
 		_ => format!("{}: {}", config.hostname, worst.detail),
 	};
 	AreaReport::from_items(items, summary)
+}
+
+/// What the layout of the stack says about the renewal.
+enum Layout {
+	/// The certificates container renews the certificate: its state decides
+	/// whether anything renews at all.
+	Split {
+		upness: Upness,
+		renewal: Option<certs::Renewal>,
+	},
+	/// `mail` renews the certificate and the compose file names no
+	/// certificates container.
+	Whole,
+	/// The compose file cannot be read, so the layout is unknown.
+	Unreadable(String),
+}
+
+/// What the compose file says runs, and the state of the certificates
+/// container when it does.
+async fn layout(ctx: &Ctx, compose: &std::path::Path, config: &Config) -> Layout {
+	match crate::cli::stack::certs::runs_certs(compose) {
+		Ok(true) => {
+			let podup = ctx.podup.clone();
+			let window = ctx.steady;
+			let compose = compose.to_path_buf();
+			let upness = tokio::task::spawn_blocking(move || {
+				crate::cli::stack::certs::upness(&podup, &compose, "certs", window)
+			})
+			.await
+			.unwrap_or_else(|error| {
+				crate::cli::stack::certs::Upness::Unreadable(format!(
+					"the podup task failed: {error}"
+				))
+			});
+			let renewal = certs::renewal(
+				&config.data_dir,
+				config
+					.acme
+					.as_ref()
+					.map(|acme| u64::from(acme.renew_before_days)),
+				u64::try_from(epoch(ctx.now)).unwrap_or(0),
+			);
+			Layout::Split { upness, renewal }
+		}
+		Ok(false) => Layout::Whole,
+		Err(error) => Layout::Unreadable(error),
+	}
+}
+
+/// The item for a certificates container the compose file does not name,
+/// but that is running: it may still hold the DNS credential and the ACME
+/// account key, and nothing else reports it.
+async fn orphan(ctx: &Ctx, compose: &std::path::Path) -> Option<Item> {
+	// A host install has no compose file and no container.
+	if !compose.is_file() {
+		return None;
+	}
+	let podup = ctx.podup.clone();
+	let compose = compose.to_path_buf();
+	let rows = tokio::task::spawn_blocking(move || {
+		crate::cli::stack::started::ps_json_with(
+			&podup,
+			&compose,
+			crate::cli::stack::started::PS_TIMEOUT,
+		)
+	})
+	.await
+	.ok()?
+	.ok()?;
+	let (state, _) = crate::cli::stack::certs::row(&rows, "certs").ok()??;
+	if state != "running" {
+		return None;
+	}
+	Some(certs::orphan_item())
 }
 
 /// The certificate file the running server presents, resolved the same way
@@ -149,23 +248,29 @@ fn expiry_item(remaining: i64) -> Item {
 
 /// Whether something renews the certificate: ACME does; without it the
 /// operator replaces the files, and a certificate close to expiry is worth a
-/// warning of its own.
-fn renewal_item(acme: bool, remaining: i64) -> Item {
-	if acme {
-		return Item::new("renewal", Level::Ok, "renewed by ACME");
-	}
-	if remaining < UNRENEWED_WARN_DAYS * DAY {
+/// warning of its own. In a split stack the certificates container is the
+/// one that renews it, so the item names it and is not `ok` while it is
+/// down.
+fn renewal_item(acme: bool, remaining: i64, upness: Option<&Upness>) -> Item {
+	if !acme {
+		if remaining < UNRENEWED_WARN_DAYS * DAY {
+			return Item::new(
+				"renewal",
+				Level::Warn,
+				"expires soon and nothing renews it (no [acme]): replace cert_file and key_file; the server picks the new pair up within a minute",
+			);
+		}
 		return Item::new(
 			"renewal",
-			Level::Warn,
-			"expires soon and nothing renews it (no [acme]): replace cert_file and key_file; the server picks the new pair up within a minute",
+			Level::Ok,
+			"not renewed automatically (no [acme]); replace the files before it expires",
 		);
 	}
-	Item::new(
-		"renewal",
-		Level::Ok,
-		"not renewed automatically (no [acme]); replace the files before it expires",
-	)
+	match upness {
+		// The certificates container holds the renewal.
+		Some(upness) => certs::split_renewal(upness, remaining),
+		None => Item::new("renewal", Level::Ok, "renewed by ACME"),
+	}
 }
 
 fn names_item(hostname: &str, names: &[String]) -> Item {
@@ -212,6 +317,8 @@ impl crate::spf::DnsLookup for NoDns {
 		Box::pin(async { Ok(Vec::new()) })
 	}
 }
+
+mod certs;
 
 #[cfg(test)]
 mod tests;

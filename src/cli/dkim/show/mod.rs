@@ -11,6 +11,8 @@ use crate::dkim::Signer;
 use crate::dkim::rotate::{self, ROTATE_INTERVAL_DAYS};
 use crate::spf::DnsLookup;
 
+mod rotation_error;
+
 /// The previous selector still published during its overlap window.
 #[derive(Debug, Serialize)]
 pub(super) struct PreviousView {
@@ -20,10 +22,9 @@ pub(super) struct PreviousView {
 	rsa_selector: Option<String>,
 }
 
-/// A per-domain override as `dkim show` reports it: the domain and its
-/// ed25519 selector (and optional RSA selector). The path to the key
-/// file is the one the operator wrote, so a sanity-check from the
-/// command line can find it.
+/// A per-domain override as `dkim show` reports it: the domain and the
+/// ed25519 selector and key file it signs with (and the RSA ones): the
+/// entry's until the domain's key rotates, the rotated ones after.
 #[derive(Debug, Serialize)]
 pub(super) struct DomainView {
 	domain: String,
@@ -117,15 +118,16 @@ fn key_views(
 	config: &Config,
 	dkim: &crate::config::Dkim,
 	default: (&str, Option<&str>),
+	own: &OwnKeys,
 ) -> Vec<KeyView> {
 	let on_default = dkim.domains_on_default(&config.domains, &config.domain_aliases);
 	signing_domains(config)
 		.into_iter()
-		.map(|domain| match dkim.override_for(&domain) {
-			Some(entry) => KeyView {
+		.map(|domain| match own.get(&domain) {
+			Some(active) => KeyView {
 				source: "dkim.domain",
-				selector: entry.selector.clone(),
-				rsa_selector: entry.rsa_selector.clone(),
+				selector: active.ed.selector.clone(),
+				rsa_selector: active.rsa.as_ref().map(|rsa| rsa.selector.clone()),
 				shared_with: Vec::new(),
 				domain,
 			},
@@ -140,6 +142,21 @@ fn key_views(
 					.collect(),
 				domain,
 			},
+		})
+		.collect()
+}
+
+/// The keys in service of every domain with a `[[dkim.domain]]` entry, by
+/// lowercase domain: the ones its rotation put in service, or the entry's.
+type OwnKeys = std::collections::HashMap<String, crate::dkim::domain_rotate::DomainActive>;
+
+fn own_keys(config: &Config, dkim: &crate::config::Dkim) -> Result<OwnKeys, String> {
+	dkim.domain
+		.iter()
+		.map(|entry| {
+			let active = crate::dkim::domain_rotate::active_keys(entry, &config.data_dir)
+				.map_err(|error| format!("{}: {error}", entry.name))?;
+			Ok((entry.name.to_ascii_lowercase(), active))
 		})
 		.collect()
 }
@@ -189,6 +206,7 @@ pub(super) async fn build(
 	let state = rotate::read_state(&config.data_dir).map_err(|e| e.to_string())?;
 	let signer = Signer::load(&active.selector, &active.key_file).map_err(|e| e.to_string())?;
 	let rsa = rotate::active_rsa(dkim, &config.data_dir).map_err(|e| e.to_string())?;
+	let own = own_keys(config, dkim)?;
 	let mut expected: Vec<(String, Option<String>)> =
 		vec![(active.selector.clone(), Some(signer.dns_record_value()))];
 	// An RSA key that does not load is still looked up, by presence only.
@@ -213,12 +231,12 @@ pub(super) async fn build(
 			// A per-domain override replaces the default for the domain
 			// it names. The configured selectors are only checked for
 			// domains without an override.
-			if let Some(override_) = dkim.override_for(&domain) {
+			if let Some(active) = own.get(&domain) {
 				let mut override_expected: Vec<(String, Option<String>)> = Vec::new();
-				match Signer::load(&override_.selector, &override_.key_file) {
+				match Signer::load(&active.ed.selector, &active.ed.key_file) {
 					Ok(signer) => {
 						override_expected
-							.push((override_.selector.clone(), Some(signer.dns_record_value())));
+							.push((active.ed.selector.clone(), Some(signer.dns_record_value())));
 					}
 					Err(error) => {
 						crate::cli::style::warn(format_args!(
@@ -226,11 +244,9 @@ pub(super) async fn build(
 						));
 					}
 				}
-				if let (Some(rsa_selector), Some(rsa_key_file)) =
-					(&override_.rsa_selector, &override_.rsa_key_file)
-				{
-					let value = crate::dkim::rsa_record_value(rsa_key_file).ok();
-					override_expected.push((rsa_selector.clone(), value));
+				if let Some(rsa) = &active.rsa {
+					let value = crate::dkim::rsa_record_value(&rsa.key_file).ok();
+					override_expected.push((rsa.selector.clone(), value));
 				}
 				for (selector, value) in &override_expected {
 					let name = format!("{selector}._domainkey.{domain}");
@@ -265,6 +281,7 @@ pub(super) async fn build(
 			&active.selector,
 			rsa.as_ref().map(|rsa| rsa.selector.as_str()),
 		),
+		&own,
 	);
 	let (stale_records, stale_unchecked) = match dns {
 		Some(dns) => match crate::dkim::stale::names(config) {
@@ -319,16 +336,22 @@ pub(super) async fn build(
 		rsa_key_file: rsa.as_ref().map(|rsa| rsa.key_file.clone()),
 		rsa_selector: rsa.map(|rsa| rsa.selector),
 		rotation_requested_at: rotate::pending_request(&config.data_dir).map(|r| r.requested_at),
-		last_request_error: rotate::last_error(&config.data_dir),
+		last_request_error: rotation_error::current(
+			rotate::last_error(&config.data_dir),
+			rotated_at,
+		),
 		overrides: dkim
 			.domain
 			.iter()
-			.map(|entry| DomainView {
-				domain: entry.name.clone(),
-				selector: entry.selector.clone(),
-				key_file: entry.key_file.clone(),
-				rsa_selector: entry.rsa_selector.clone(),
-				rsa_key_file: entry.rsa_key_file.clone(),
+			.filter_map(|entry| {
+				let active = own.get(&entry.name.to_ascii_lowercase())?;
+				Some(DomainView {
+					domain: entry.name.clone(),
+					selector: active.ed.selector.clone(),
+					key_file: active.ed.key_file.clone(),
+					rsa_selector: active.rsa.as_ref().map(|rsa| rsa.selector.clone()),
+					rsa_key_file: active.rsa.as_ref().map(|rsa| rsa.key_file.clone()),
+				})
 			})
 			.collect(),
 		keys,

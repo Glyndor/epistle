@@ -278,7 +278,7 @@ fn service_set_says_how_the_operator_override_combines_and_touches_nothing() {
 	let (compose, override_bytes) = stack(
 		dir.path(),
 		&["25:25", "19993:19993"],
-		"services:\n  mail:\n    ports: !override\n      - \"25:25\"\n      - \"10.0.0.9:19993:19993\"\n",
+		"services:\n  mail:\n    ports:\n      - \"25:25\"\n      - \"10.0.0.9:19993:19993\"\n",
 	);
 	let shim_dir = dir.path().join("bin");
 	let argv_log = dir.path().join("argv.log");

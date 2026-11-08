@@ -141,6 +141,7 @@ the log.
 | `sieve-variable-length` | 4096 | octets | own | RFC 5229 §4.1 (a server may keep as little as 4000 octets) |
 | `sieve-variables-total-bytes` | 65536 | octets | own | no standard mandate |
 | `sieve-variables` | 128 | count | own | no standard mandate |
+| `caldav-query-work` | 100000 | count | own | no standard mandate |
 | `caldav-freebusy-window` | 34560000 | seconds | own | no standard mandate |
 | `caldav-freebusy-items` | 50000 | count | own | no standard mandate |
 | `caldav-freebusy-file-size` | 8388608 | octets | own | no standard mandate |
@@ -171,6 +172,7 @@ the log.
 | `jmap-push-subscriptions-per-caller` | 16 | count | own | no standard mandate |
 | `spf-max-dns-lookups` | 10 | count | must | RFC 7208 §4.6.4 (max 10 DNS-querying terms) |
 | `spf-max-void-lookups` | 2 | count | should | RFC 7208 §4.6.4 (void lookups limited to 2) |
+| `ban-strike-line` | 256 | count | own | no standard mandate |
 | `tls-minimum-version` | 1.2 | version | must | RFC 8996 (TLS 1.0/1.1 prohibited) |
 
 ## WebDAV, CalDAV and CardDAV bounds
@@ -184,6 +186,10 @@ more than a fixed amount of work or memory:
   except a `.ics` or `.vcf`, which is held to 4 MiB (`413`).
 - A `calendar-multiget` or `addressbook-multiget` may name 1000 distinct
   resources. Two spellings of one resource count once. More is `413`.
+- A `calendar-query` object may cost 100000 component visits and recurrence
+  steps, which every component of the object shares; an object that exhausts
+  that budget is answered with its own `507` inside the `207` reply, and the
+  request goes on with the other objects.
 - A `calendar-query`, `addressbook-query` or `free-busy-query` body is read up
   to 64 KiB; more is `413`.
 - The body of a report reply is at most 24 MiB and 64 KiB, counted after escaping.

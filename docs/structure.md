@@ -33,30 +33,29 @@ taken yet.
    by responsibility, never by size.
 2. A module with more than one file becomes a folder with `mod.rs`, and its
    siblings are declared with a plain `mod <sibling>;`.
-3. The unit tests of a module live in a sibling file, never in an inline
-   `mod tests { ... }` block. `foo.rs` declares
-   `#[cfg(test)] #[path = "foo_tests.rs"] mod tests;` and the tests sit in
-   `foo_tests.rs` beside it; a `mod.rs` uses `mod_tests.rs`.
-4. `#[path]` declares that sibling test module, or reads a data file next to
-   the module that uses it. A `#[path]` that splits production code across
+3. The unit tests of a module live in a `tests/` folder beside it, never in an
+   inline `mod tests { ... }` block. `foo.rs` declares
+   `#[cfg(test)] mod tests;` and the tests sit in `foo/tests/`; a `mod.rs`
+   does the same.
+4. `#[path]` declares a test file next to the module that uses it, or reads a
+   data file next to it. A `#[path]` that splits production code across
    files is a missing folder, and those are the ones the batches remove.
 
-Whether the tests of each module should move into a folder of their own is
-an open decision for the maintainer. Until it is taken, rule 3 is the rule.
+The tests of a module live in a folder of their own, and that is the shape the
+tree keeps.
 
 ## Tests
 
 `src/cidr/mod.rs` and `src/cidr/tests/base.rs` are the shape of rule 3, and so are
 `src/metrics/mod.rs` and `src/metrics/tests/base.rs`. Tests that outgrow one
-file are split by topic as `<module>_tests_<topic>.rs`, each declared the
-same way.
+file are split by topic as `tests/<topic>.rs`, each declared the same way.
 
 The integration suite is separate: `tests/`, one file per flow, with shared
 helpers in `tests/common/` and fixtures in `tests/fixtures/`.
 
 ## Naming
 
-A module, its error type and its tests share one stem. A file that has to be
+A module and its error type share one stem. A file that has to be
 called `<stem>_routes.rs` and `<stem>_queue.rs` to tell its parts apart is
 asking to become the folder `<stem>/`.
 

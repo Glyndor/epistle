@@ -1,8 +1,6 @@
 //! What the worker does with the outcome of a recipient: suppression, the
 //! failure webhook, the failure report (DSN) and the delay warning.
 
-use std::collections::BTreeMap;
-
 use super::Worker;
 use super::conversation::Conversation;
 use crate::queue::bounce::ReportRecipient;
@@ -154,7 +152,7 @@ impl Worker {
 					Some("recipient is on the suppression list"),
 					0,
 				);
-				self.notify_suppressed(id, recipient, &envelope.extra);
+				self.notify_suppressed(id, recipient, envelope);
 			}
 		}
 		Ok(due)
@@ -213,7 +211,7 @@ impl Worker {
 						recipient,
 						message_id.clone(),
 						conversation.remote.clone(),
-						&entry.envelope.extra,
+						&entry.envelope,
 					);
 				}
 				Err(DeliveryError::Transient(reason)) => {
@@ -237,7 +235,7 @@ impl Worker {
 						reason,
 						conversation.remote.clone(),
 						attempts,
-						&entry.envelope.extra,
+						&entry.envelope,
 					);
 				}
 				Err(DeliveryError::Permanent(reason)) => {
@@ -286,7 +284,7 @@ impl Worker {
 						recipient,
 						reason,
 						conversation.remote.clone(),
-						&entry.envelope.extra,
+						&entry.envelope,
 					);
 				}
 			}
@@ -314,7 +312,7 @@ impl Worker {
 		recipient: &str,
 		reason: &str,
 		remote: Option<String>,
-		extra: &BTreeMap<String, String>,
+		envelope: &crate::storage::Envelope,
 	) {
 		if let Some(webhook) = &self.webhook {
 			let webhook = webhook.clone();
@@ -324,9 +322,10 @@ impl Worker {
 				reason: reason.to_string(),
 				class: classify_reason(reason, true).class.label().to_string(),
 				remote,
-				extra: extra.clone(),
+				extra: envelope.extra.clone(),
 			};
-			tokio::spawn(async move { webhook.notify(&event).await });
+			let domain = envelope.owner.clone();
+			tokio::spawn(async move { webhook.notify_for(domain.as_deref(), &event).await });
 		}
 	}
 
@@ -340,7 +339,7 @@ impl Worker {
 		recipient: &str,
 		message_id: Option<String>,
 		remote: Option<String>,
-		extra: &BTreeMap<String, String>,
+		envelope: &crate::storage::Envelope,
 	) {
 		let Some(webhook) = &self.webhook else {
 			return;
@@ -351,9 +350,10 @@ impl Worker {
 			recipient: recipient.to_string(),
 			message_id,
 			remote,
-			extra: extra.clone(),
+			extra: envelope.extra.clone(),
 		};
-		tokio::spawn(async move { webhook.notify(&event).await });
+		let domain = envelope.owner.clone();
+		tokio::spawn(async move { webhook.notify_for(domain.as_deref(), &event).await });
 	}
 
 	/// Fire a `Delayed` webhook for one recipient. Sent at most once
@@ -371,7 +371,7 @@ impl Worker {
 		reason: &str,
 		remote: Option<String>,
 		attempts_before: u32,
-		extra: &BTreeMap<String, String>,
+		envelope: &crate::storage::Envelope,
 	) {
 		let Some(webhook) = &self.webhook else {
 			return;
@@ -386,13 +386,19 @@ impl Worker {
 			reason: reason.to_string(),
 			remote,
 			attempt: attempts_before + 1,
-			extra: extra.clone(),
+			extra: envelope.extra.clone(),
 		};
-		tokio::spawn(async move { webhook.notify(&event).await });
+		let domain = envelope.owner.clone();
+		tokio::spawn(async move { webhook.notify_for(domain.as_deref(), &event).await });
 	}
 
 	/// Fire a `Suppressed` webhook for one recipient.
-	fn notify_suppressed(&self, id: uuid::Uuid, recipient: &str, extra: &BTreeMap<String, String>) {
+	fn notify_suppressed(
+		&self,
+		id: uuid::Uuid,
+		recipient: &str,
+		envelope: &crate::storage::Envelope,
+	) {
 		let Some(webhook) = &self.webhook else {
 			return;
 		};
@@ -400,9 +406,10 @@ impl Worker {
 		let event = crate::webhook::WebhookEvent::Suppressed {
 			spool_id: id,
 			recipient: recipient.to_string(),
-			extra: extra.clone(),
+			extra: envelope.extra.clone(),
 		};
-		tokio::spawn(async move { webhook.notify(&event).await });
+		let domain = envelope.owner.clone();
+		tokio::spawn(async move { webhook.notify_for(domain.as_deref(), &event).await });
 	}
 
 	/// Give up on the pending recipients of an expired message: each fails
@@ -458,7 +465,7 @@ impl Worker {
 				Some(&Self::bounded_reply(reason)),
 				state.attempts,
 			);
-			self.notify_failed(id, recipient, reason, state.remote.clone(), &envelope.extra);
+			self.notify_failed(id, recipient, reason, state.remote.clone(), &envelope);
 		}
 		Ok(())
 	}

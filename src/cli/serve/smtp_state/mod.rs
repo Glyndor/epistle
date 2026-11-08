@@ -54,15 +54,15 @@ pub(super) struct SmtpSharedState {
 	/// listener, the REST send endpoint and JMAP submission.
 	pub max_recipients: usize,
 	/// Optional shared byte budget every `DATA` / `BDAT` reservation
-	/// draws from, shared by every SMTP listener: `[server]
-	/// message_memory_budget`, or when unset the one derived from the mail
+	/// draws from, shared by every SMTP listener:
+	/// `message_memory_budget`, or when unset the one derived from the mail
 	/// container's memory limit. `None` when it is set to `0`.
 	pub memory_budget: Option<Arc<MemoryBudget>>,
 	/// The minimum transfer rate every SMTP listener holds a message
-	/// transaction to (`[server] min_data_rate` and `data_rate_grace`).
+	/// transaction to (`min_data_rate` and `data_rate_grace`).
 	pub data_rate: DataRate,
 	/// The junk-command limit and session lifetime of every SMTP listener
-	/// (`[server] junk_command_limit` and `max_session_time`).
+	/// (`junk_command_limit` and `max_session_time`).
 	pub session_limits: SessionLimits,
 	/// Optional external content scanner hook.
 	pub scanner_hook: Option<Arc<dyn MailHook>>,

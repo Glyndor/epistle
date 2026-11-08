@@ -102,6 +102,7 @@ const SKIPPED: &[(&str, &str)] = &[
 	("verify-dns", "looks up DNS"),
 	("dns-records", "builds records from live DKIM and DNS state"),
 	("dns lockdown", "reads the zone through the DNS provider"),
+	("dns publish", "reads the zone through the DNS provider"),
 	("dkim show", "checks the published records through DNS"),
 	("dkim rotate", "tests/cli/json/cli_json/delivery/dkim.rs"),
 	("dkim cleanup", "src/cli/dkim/cleanup/tests/base.rs"),
@@ -122,6 +123,14 @@ const SKIPPED: &[(&str, &str)] = &[
 	("stack stop", "tests/cli/json/cli_json/operator/stack.rs"),
 	("stack start", "tests/cli/json/cli_json/operator/stack.rs"),
 	("stack rollback", "replaces the installed binary, as root"),
+	(
+		"stack certs enable",
+		"recreates the stack through podup; src/cli/stack/certs/tests",
+	),
+	(
+		"stack certs disable",
+		"recreates the stack through podup; src/cli/stack/certs/tests",
+	),
 	("init", "tests/cli/json/cli_json/operator/init.rs"),
 	(
 		"restore",
@@ -157,6 +166,7 @@ const CASES: &[(&str, &[&str], Expect)] = &[
 	("suppression import", &["@TMP/sweep-suppression.txt"], Done),
 	("suppression remove", &["gone@example.net"], Done),
 	("account list", &[], Done),
+	("account list", &["--aliases"], Done),
 	(
 		"account add",
 		&["alice", "--address", "alice@example.org"],
@@ -231,6 +241,9 @@ const CASES: &[(&str, &[&str], Expect)] = &[
 	),
 	("domain alias remove", &["alias.example.net", "--yes"], Done),
 	("domain remove", &["example.net", "--yes"], Done),
+	("srs show", &[], Done),
+	("srs split", &[], Done),
+	("srs rotate", &["example.org"], Done),
 	("suppression", &[], Done),
 	("delivery", &[], Done),
 	("queue", &[], Done),
@@ -250,6 +263,9 @@ const CASES: &[(&str, &[&str], Expect)] = &[
 	("storage blobs show", &[], Done),
 	("storage blobs set fs", &[], Done),
 	("storage blobs set s3", &["--endpoint", "https://s3.example.net", "--bucket", "mail", "--region", "us-east-1", "--access-key-id", "AKIAEXAMPLE", "--secret-env", "EPISTLE_SWEEP_S3", "--force"], Done),
+	// The sweep has no [storage] key, so the run is refused before touching
+	// anything; the runs themselves are src/cli/storage/tenant_keys/tests.
+	("storage tenant-keys migrate", &["--dry-run"], Refused(1)),
 	("webhook show", &[], Done),
 	("webhook set", &["https://hooks.example.net/in"], Done),
 	("alert list", &[], Done),

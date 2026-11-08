@@ -208,6 +208,7 @@ fn blob(blob_id: &str, sources: &Sources<'_>) -> Result<(Option<String>, Vec<u8>
 				.content_type
 				.clone()
 				.filter(|kind| kind != "application/octet-stream");
+			sources.charge(upload.data.len())?;
 			return Ok((recorded, upload.data.clone()));
 		}
 		Found::OverBudget => return Err(json!({"type": "tooLarge"})),
@@ -228,7 +229,10 @@ fn blob(blob_id: &str, sources: &Sources<'_>) -> Result<(Option<String>, Vec<u8>
 		None => Some(("message/rfc822".to_string(), raw)),
 	});
 	match stored {
-		Some((kind, data)) => Ok((Some(kind), data)),
+		Some((kind, data)) => {
+			sources.charge(data.len())?;
+			Ok((Some(kind), data))
+		}
 		None => Err(json!({"type": "blobNotFound", "notFound": [blob_id]})),
 	}
 }

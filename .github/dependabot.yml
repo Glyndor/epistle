@@ -11,7 +11,7 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
-    labels: ["type:deps", "type:ci"]
+    labels: ["type:ci", "area:ci", "prio:P3", "effort:XS"]
     open-pull-requests-limit: 5
     target-branch: "develop"
     cooldown:
@@ -25,9 +25,18 @@ updates:
   # binary reads at build time), the container image's base (Containerfile) and
   # the OpenLDAP image the directory tests run against, whose digest nothing
   # watched.
-  # One group across both directories, because the mail base digest must be
-  # the same in the two files and a test compares them. A PostgreSQL major is
-  # ignored: it needs `epistle db upgrade`, not a new digest.
+  # The mail base digest (gcr.io/distroless/static-debian13) must be the same
+  # in the Containerfile and in deploy/images/Dockerfile, and a test compares
+  # them. A group only gathers the updates of one directory unless it sets
+  # `group-by: dependency-name`, which is the documented way to group the
+  # same dependency across the `directories` of an entry, and it applies to
+  # version updates only. The `images` group below also filters on minor and
+  # patch, and a bump of a digest with the same tag has no semver level, so
+  # #1563 and #1565 came out as two separate pull requests that each failed the
+  # test. `distroless-base` has no `update-types` and groups by name, so the
+  # digest moves in both files in one pull request. A group is matched first
+  # to last, so it must stay above `images`. A PostgreSQL major is ignored: it
+  # needs `epistle db upgrade`, not a new digest.
   - package-ecosystem: "docker"
     directories:
       - "/"
@@ -36,7 +45,7 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
-    labels: ["type:deps"]
+    labels: ["type:deps", "area:deploy", "prio:P3", "effort:XS"]
     open-pull-requests-limit: 5
     target-branch: "develop"
     cooldown:
@@ -44,6 +53,9 @@ updates:
     commit-message:
       prefix: "chore(deps)"
     groups:
+      distroless-base:
+        patterns: ["*distroless*"]
+        group-by: dependency-name
       images:
         patterns: ["*"]
         update-types: ["minor", "patch"]
@@ -70,7 +82,7 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
-    labels: ["type:deps"]
+    labels: ["type:deps", "prio:P3", "effort:XS"]
     open-pull-requests-limit: 5
     target-branch: "develop"
     cooldown:
@@ -100,7 +112,7 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
-    labels: ["type:deps"]
+    labels: ["type:deps", "area:ci", "prio:P3", "effort:XS"]
     open-pull-requests-limit: 5
     target-branch: "develop"
     cooldown:

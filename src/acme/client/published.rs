@@ -57,7 +57,9 @@ impl Drop for Published {
 		let key = self.key.clone();
 		// The withdrawal of a dropped order runs detached. It is not
 		// guaranteed: a runtime that stops before the task finishes drops it,
-		// so what was pending is logged now, where an operator can clean it.
+		// so what was pending is logged now. In `serve` the renewal loop's
+		// stop withdraws it again while shutdown waits, and a dns-01 record
+		// is also kept in a journal that the next start withdraws.
 		let pending: Vec<&str> = entries.iter().map(|(domain, _)| domain.as_str()).collect();
 		tracing::warn!(
 			?pending,

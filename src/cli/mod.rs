@@ -10,7 +10,7 @@ mod archive;
 mod attachments;
 mod autoconfig;
 mod autodiscover;
-mod backup;
+pub(crate) mod backup;
 mod ban;
 mod completions;
 pub mod config_edit;
@@ -119,9 +119,11 @@ mod storage;
 
 mod tls;
 
+mod srs;
 mod webhook;
 
 mod dns_lockdown;
+mod dns_publish;
 
 #[cfg(test)]
 mod tests;

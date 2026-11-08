@@ -418,7 +418,7 @@ keeps its mail transactional whatever the request says; the response's
 
 | Limit | Value | Answer |
 |---|---|---|
-| Message size | `[server] max_message_size`, 25 MiB by default | A built message over it: `413 message_too_large`. A request body over it: plain-text `413` |
+| Message size | `max_message_size`, 25 MiB by default | A built message over it: `413 message_too_large`. A request body over it: plain-text `413` |
 | Recipients | 100 per message (`to`, `cc`, `bcc` together) | `400 invalid_input` |
 | Parts | 100 attachments and inline parts together | `400 invalid_input` |
 | Submission rate | `submission_rate_limit_per_min` recipients per minute per account, shared with SMTP and JMAP; per-domain and per-tenant limits too | `429 rate_limited`, "sending rate limit exceeded; retry later". Nothing was sent |
@@ -551,6 +551,11 @@ The only other headers are `Content-Type: application/json`. There is no
 timestamp, event id or nonce, so a replay is yours to detect: the pair
 `event` and `spool_id` with `recipient` identifies a delivery event.
 
+**Per tenant.** A tenant with a `[tenant.webhook]` receives the events of its
+domains, signed with its own secret, and no other tenant's; every other domain
+uses `[webhook]`. See [a webhook per
+tenant](configuration.md#a-webhook-per-tenant-tenantwebhook).
+
 **Delivery.** Each event is posted once, with a 15 second timeout and no
 retry. A redirect is not followed and counts as a failure. Any other answer,
 a `500` included, counts as sent, and a failure to connect is logged and
@@ -597,9 +602,11 @@ objects in a `/get` or `/set` it is a `200` whose method response is the error
 
 For an identity provider that provisions mail accounts. Scope `scim`;
 responses are `application/scim+json` and errors use the SCIM error object.
-`/scim/v2/Users` supports `GET` (with `filter=userName eq "x"`, `startIndex`,
-`count` up to 200), `POST`, and on `/Users/{id}` `GET`, `PUT`, `PATCH`
-(`replace` or `add` of `active`, `password` or `displayName` only) and
+`/scim/v2/Users` supports `GET` (with `filter=userName eq "x"`, a quote inside the
+value escaped as `\"`, `startIndex`, `count` up to 200), `POST`, and on
+`/Users/{id}` `GET`, `PUT`, `PATCH` (`replace` or `add` of `active`, `password`
+or `displayName` only, at most 20 operations and 3 password changes per request, and all of them are
+checked before the first is applied) and
 `DELETE` (`204`, queued mail is kept). `id` is the account name. Only
 API-managed accounts appear. `totalResults` is the number of users on the
 page, not the number that match. `/Groups` answers `501`. A `POST` and `PUT`
@@ -616,7 +623,15 @@ OAUTHBEARER on IMAP and SMTP submission. The REST API does not accept them as
 a bearer. `POST /oauth/device_authorization` starts a device flow,
 `POST /oauth/device/approve` approves it with the account's `login` and
 `password` (or HTTP Basic), and `POST /oauth/token` polls (no faster than every
-5 seconds) or redeems a PKCE code from `POST /oauth/authorize` (`S256` only).
+5 seconds) or redeems a PKCE code from `POST /oauth/authorize` (`S256` only; a `code_verifier` is
+43 to 128 characters of `A-Z a-z 0-9 - . _ ~`, and a `redirect_uri`, which is never
+followed, has to be an absolute URI of a plain scheme and, when the authorization
+carried one, the redemption carries the same). The `code_challenge` of that
+request is the digest of the verifier, so it is exactly 43 characters of
+`A-Z a-z 0-9 - _` (RFC 7636 section 4.2); anything else is
+`400 invalid_request`. At most 100 codes may be alive for one account, 50 for
+one client address and 10,000 in all; past them the answer is
+`429 temporarily_unavailable` with `Retry-After`, and nothing is stored.
 Bodies are form-encoded or JSON; errors are `{"error": "<code>"}` as in
 RFC 6749 and 8628. Wrong credentials and a wrong code give the same answer.
 
@@ -644,7 +659,7 @@ RFC 6749 and 8628. Wrong credentials and a wrong code give the same answer.
 
 | What | Value |
 |---|---|
-| Message size | `[server] max_message_size`, 25 MiB by default, for send, SMTP and JMAP upload alike |
+| Message size | `max_message_size`, 25 MiB by default, for send, SMTP and JMAP upload alike |
 | Recipients per message | 100 |
 | Attachments and inline parts | 100 |
 | Custom headers | 32; `extra` 10 keys |

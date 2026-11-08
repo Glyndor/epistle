@@ -91,24 +91,24 @@ fn no_feedback_id_is_written_when_the_switch_is_off() {
 }
 
 #[test]
-fn the_vendor_marker_is_off_by_default_and_carries_no_version() {
+fn the_vendor_marker_is_on_by_default_carries_no_version_and_can_be_turned_off() {
 	let mut message = submitted("alice@example.org", &["bob@elsewhere.example"], "");
 	apply_to(&mut message, MailClass::Personal, &policy());
-	assert!(values(&message, "x-epistle").is_empty());
+	assert_eq!(
+		values(&message, "x-epistle"),
+		vec![X_EPISTLE_VALUE.to_string()]
+	);
 
 	let mut message = submitted("alice@example.org", &["bob@elsewhere.example"], "");
 	apply_to(
 		&mut message,
 		MailClass::Personal,
 		&Policy {
-			x_epistle: true,
+			x_epistle: false,
 			..policy()
 		},
 	);
-	assert_eq!(
-		values(&message, "x-epistle"),
-		vec![X_EPISTLE_VALUE.to_string()]
-	);
+	assert!(values(&message, "x-epistle").is_empty());
 }
 
 #[test]
@@ -469,7 +469,14 @@ fn a_client_cannot_write_our_namespace_even_when_the_marker_is_off() {
 		&["bob@elsewhere.example"],
 		"X-Epistle: 9\r\n",
 	);
-	apply_to(&mut message, MailClass::Personal, &policy());
+	apply_to(
+		&mut message,
+		MailClass::Personal,
+		&Policy {
+			x_epistle: false,
+			..policy()
+		},
+	);
 	assert!(
 		values(&message, "x-epistle").is_empty(),
 		"{:?}",

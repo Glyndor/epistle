@@ -147,7 +147,6 @@ pub fn mark_restarted(
 /// interleaving. It is held until the returned file is dropped, waits up to
 /// `within`, and says so when it gives up.
 pub fn lock(data_dir: &Path, within: std::time::Duration) -> Result<std::fs::File, String> {
-	use std::os::fd::AsRawFd;
 	use std::os::unix::fs::OpenOptionsExt;
 	let lock_path = data_dir.join(LOCK);
 	let file = std::fs::OpenOptions::new()
@@ -158,12 +157,41 @@ pub fn lock(data_dir: &Path, within: std::time::Duration) -> Result<std::fs::Fil
 		.mode(0o600)
 		.open(&lock_path)
 		.map_err(|error| format!("cannot open {}: {error}", lock_path.display()))?;
+	flock(&file, libc::LOCK_EX, within, &lock_path)?;
+	Ok(file)
+}
+
+/// The lock a run that only looks takes (`--dry-run`): it waits for a run that
+/// is changing things, as [`lock`] does, but never creates the lock file. No
+/// file means no run has ever taken the lock, so there is nothing to wait for
+/// and `None` comes back; a dry run leaves the data directory as it found it.
+pub fn observe(
+	data_dir: &Path,
+	within: std::time::Duration,
+) -> Result<Option<std::fs::File>, String> {
+	let lock_path = data_dir.join(LOCK);
+	let file = match std::fs::File::open(&lock_path) {
+		Ok(file) => file,
+		Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+		Err(error) => return Err(format!("cannot open {}: {error}", lock_path.display())),
+	};
+	flock(&file, libc::LOCK_SH, within, &lock_path)?;
+	Ok(Some(file))
+}
+
+fn flock(
+	file: &std::fs::File,
+	mode: libc::c_int,
+	within: std::time::Duration,
+	lock_path: &Path,
+) -> Result<(), String> {
+	use std::os::fd::AsRawFd;
 	let began = std::time::Instant::now();
 	loop {
-		// SAFETY: flock on a descriptor this function owns.
-		let taken = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0;
+		// SAFETY: flock on a descriptor this function borrows from its caller.
+		let taken = unsafe { libc::flock(file.as_raw_fd(), mode | libc::LOCK_NB) } == 0;
 		if taken {
-			return Ok(file);
+			return Ok(());
 		}
 		if began.elapsed() >= within {
 			return Err(format!(

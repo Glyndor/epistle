@@ -2,28 +2,24 @@
 //! `[[dkim.domain]]` override when it has one, the `[dkim]` default
 //! otherwise.
 //!
-//! The default is hot-swappable, because the rotation task replaces it.
-//! Overrides are loaded once at startup and never rotated: an override's
-//! key lives until the operator replaces it in the configuration and
-//! restarts the server.
-
-use std::sync::Arc;
+//! The default and every override are hot-swappable: the rotation of the
+//! `[dkim]` key replaces the default, and each domain's own rotation
+//! replaces that domain's override.
 
 use super::rotate::ReloadableSigner;
-use super::sign::Signer;
 
 /// One per-domain override as the signer keeps it: the lowercase domain
-/// name and the static `Signer` that signs for it.
+/// name and the signer of that domain, which its rotation replaces.
 #[derive(Clone)]
 pub struct DomainSigner {
 	/// Lowercased hosted domain this override signs for.
 	pub domain: String,
-	/// The static `Signer` (loaded once at startup, not rotated).
-	pub signer: Arc<Signer>,
+	/// The domain's signer, swapped by the domain's rotation.
+	pub signer: ReloadableSigner,
 }
 
 /// The signer the storage sink uses. It holds the hot-swappable default
-/// and the immutable per-domain overrides; signing for a message's `d=`
+/// and the hot-swappable per-domain overrides; signing for a message's `d=`
 /// picks the override when one is configured, the default otherwise.
 #[derive(Clone)]
 pub struct PerDomainSigner {
@@ -52,7 +48,7 @@ impl PerDomainSigner {
 			.iter()
 			.find(|d| d.domain.eq_ignore_ascii_case(domain))
 		{
-			return override_signer.signer.sign(domain, raw);
+			return override_signer.signer.current().sign(domain, raw);
 		}
 		self.default_signer.current().sign(domain, raw)
 	}

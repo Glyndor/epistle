@@ -166,7 +166,7 @@ fn finish_at(reply: Reply, log: &sync::Log, delivered: Option<u64>) -> Response 
 
 /// `Some(true)` for level 1 (or no level), `Some(false)` for infinite,
 /// `None` for anything else.
-fn level(body: &str) -> Option<bool> {
+pub(super) fn level(body: &str) -> Option<bool> {
 	let levels = elements(body, "sync-level")?;
 	match levels.first().map(|level| level.inner.trim()) {
 		None | Some("1") => Some(true),
@@ -177,7 +177,7 @@ fn level(body: &str) -> Option<bool> {
 
 /// The token named by the request, `None` for a first sync (no
 /// `sync-token` element, or an empty one).
-fn requested_token(body: &str) -> Option<String> {
+pub(super) fn requested_token(body: &str) -> Option<String> {
 	let tokens = elements(body, "sync-token")?;
 	let token = unescape(tokens.first()?.inner.trim());
 	(!token.is_empty()).then_some(token)

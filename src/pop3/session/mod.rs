@@ -338,7 +338,7 @@ impl<B: Backend> Session<B> {
 
 	/// Load `account`'s mailbox and enter the transaction state.
 	fn complete_login(&mut self, account: String) -> Response {
-		// `[server] max_connections_per_account` (default 10 per
+		// `max_connections_per_account` (default 10 per
 		// (account, IP) and 50 in total). Applied after the backend
 		// admits the credentials but before the mailbox is loaded so a
 		// refused connection does not touch the mail store. The slot

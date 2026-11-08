@@ -195,6 +195,7 @@ pub(super) fn build_config(
 		public_ipv6: answers.public_ipv6.map(|a| a.to_string()),
 		data_dir: answers.data_dir.display().to_string(),
 		domains: answers.domains.clone(),
+		srs_domain: srs_domains(&answers.domains)?,
 		listeners,
 		api: services.api.then(std::collections::BTreeMap::new),
 		dkim,
@@ -216,6 +217,24 @@ pub(super) fn build_config(
 			encrypted_archives: "flag",
 		},
 	})
+}
+
+/// A fresh secret for each domain of a new installation.
+fn srs_domains(domains: &[String]) -> Result<Vec<DesiredSrsDomain>, ApplyError> {
+	domains
+		.iter()
+		.map(|domain| {
+			let secret = crate::queue::srs::generate_secret().ok_or_else(|| {
+				ApplyError::ConfigInvalid(
+					"the system gave no random bytes for an SRS secret".into(),
+				)
+			})?;
+			Ok(DesiredSrsDomain {
+				name: domain.to_ascii_lowercase(),
+				secret,
+			})
+		})
+		.collect()
 }
 
 /// Top-level keys `init` writes into the desired config. The merge

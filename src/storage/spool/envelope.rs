@@ -64,6 +64,16 @@ pub struct Envelope {
 	/// a header). Empty in every envelope written before this field existed.
 	#[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
 	pub extra: BTreeMap<String, String>,
+	/// The hosted domain whose webhook is told about this entry's delivery.
+	/// The server decides it when it queues the entry (the domain of the
+	/// authenticated account that sent it, of the local recipient that
+	/// forwarded it, or of the delivery that produced a report) and never
+	/// reads it from the message or the envelope sender, which the sender
+	/// writes. `None` for an entry queued before the field existed and for
+	/// one whose owner is not a single domain; its events use the
+	/// server-wide webhook.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub owner: Option<String>,
 	/// The class the server granted the submission. Written by the server,
 	/// never by the client; `personal` for every envelope written before the
 	/// field existed and for mail that arrived from elsewhere.

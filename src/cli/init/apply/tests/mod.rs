@@ -1,19 +1,15 @@
+//! The apply-phase tests, one folder per topic: the plan the operator
+//! reads, what the run puts on disk, the configuration the operator
+//! already has, the config file `init` writes, the listeners it binds,
+//! the keys it generates and the shapes it must refuse.
+
 pub use super::*;
 
-mod acme;
-mod base;
-mod bind;
-mod config_errors;
-mod config_merge;
-mod domain_keys;
-mod failures;
-mod fifo;
-mod implicit_tls;
-mod invalid_keys;
-mod invalid_paths;
-mod keep_dns_list;
-mod keep_listeners;
-mod listeners_lines;
-mod reuse;
-mod secrets;
-mod staging;
+pub(super) mod config;
+pub(super) mod existing;
+pub(super) mod helpers;
+pub(super) mod keys;
+pub(super) mod listeners;
+pub(super) mod refusals;
+pub(super) mod steps;
+pub(super) mod writes;

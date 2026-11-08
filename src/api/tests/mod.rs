@@ -1,35 +1,24 @@
+//! The API tests, one folder per topic: the routes every deployment
+//! answers, the API keys and their scopes, the account surfaces, the
+//! JMAP WebSocket, the limits a submission meets and the isolation
+//! between tenants.
+
 pub use super::*;
 
-pub(super) mod b;
+pub(in crate::api) mod hostile_wire;
+
 pub(super) mod base;
-pub(super) mod cidr_dual_stack;
-pub(super) mod display_name;
-pub(super) mod jmap_ws_revoke;
-pub(super) mod jmap_ws_size;
-pub(super) mod key_reload;
-pub(super) mod masked;
-pub(super) mod newrecipients;
-pub(super) mod queue;
-pub(super) mod quota;
-pub(super) mod recipients;
-pub(super) mod route_rules;
-pub(super) mod scram_off;
-pub(super) mod secret_diagnostics;
-pub(super) mod single_label;
-pub(super) mod tenancy;
-pub(super) mod tenancy_routes;
-pub(super) mod tenant_limits_e2e;
-
-pub(super) mod authentication;
-
-pub(super) mod changes;
-
-pub(super) mod jmap_email;
-
-pub(super) mod jmap_state;
-
-pub(super) mod sieve;
-
-pub(super) mod send;
 
 pub(super) mod access;
+pub(super) mod accounts;
+pub(super) mod authentication;
+pub(super) mod changes;
+pub(super) mod jmap_email;
+pub(super) mod jmap_state;
+pub(super) mod jmap_ws;
+pub(super) mod keys;
+pub(super) mod routes;
+pub(super) mod send;
+pub(super) mod sieve;
+pub(super) mod submissions;
+pub(super) mod tenancy;

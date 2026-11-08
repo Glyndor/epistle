@@ -26,8 +26,11 @@ use crate::directory_store::{AccountStore, StoreError};
 mod actions;
 mod args;
 mod class;
+mod dispatch;
+mod encryption_key;
 mod forward_catch_all;
 pub(super) mod json;
+pub(super) mod list_aliases;
 pub(super) mod name;
 pub(super) mod reload;
 mod two_factor;
@@ -42,6 +45,7 @@ pub use args::{
 	AddressArgs, AddressSubcommand, CatchAllArgs, CatchAllSubcommand, ForwardArgs,
 	ForwardSubcommand, TwoFactorArgs, TwoFactorSubcommand,
 };
+use dispatch::{dispatch_catch_all, dispatch_forward, dispatch_two_factor};
 #[allow(unused_imports)]
 pub(super) use forward_catch_all::{
 	catch_all_add_with_store, catch_all_list, catch_all_remove_with_store, forward_add_with_store,
@@ -62,6 +66,12 @@ pub enum Subcommand {
 		/// Print a JSON array of `{"name", "source", "addresses"}` objects.
 		#[arg(long)]
 		json: bool,
+		/// Show under each account the address aliases that deliver to it.
+		///
+		/// A disabled alias is marked, not hidden. With `--json` each account
+		/// gains an `aliases` array of `{"address", "enabled", "hidden"}`.
+		#[arg(long)]
+		aliases: bool,
 	},
 	/// Create a dynamic account.
 	///
@@ -396,7 +406,10 @@ pub(super) fn run(
 	// reader, while `remove` decides the queue policy before it touches
 	// anything.
 	match subcommand {
-		Subcommand::List { json: leaf } => {
+		Subcommand::List {
+			json: leaf,
+			aliases,
+		} => {
 			let config = match Config::load(config_path) {
 				Ok(config) => config,
 				Err(error) => {
@@ -405,9 +418,9 @@ pub(super) fn run(
 				}
 			};
 			if leaf || json {
-				return crate::cli::account::json::list(&config, out);
+				return crate::cli::account::json::list(&config, aliases, out);
 			}
-			super::accounts::list(&config, out)
+			super::accounts::list_with(&config, aliases, out)
 		}
 		Subcommand::Add {
 			name,
@@ -533,10 +546,15 @@ pub(super) fn run(
 			if let Err(code) = init_log_id(config_path) {
 				return code;
 			}
+			let key = encryption_key::describe(config_path, &store, &name);
 			if leaf || json {
-				return crate::cli::account::json::show(&store, &name, out);
+				return encryption_key::show_json(&store, &name, &key, out);
 			}
-			show_with_store(&store, &name, out)
+			let code = show_with_store(&store, &name, out);
+			if code == ExitCode::SUCCESS {
+				encryption_key::show_line(out, &key);
+			}
+			code
 		}
 		Subcommand::FindLogId { log_id } => {
 			let config = match Config::load(config_path) {
@@ -565,122 +583,5 @@ pub(super) fn run(
 		Subcommand::Forward(args) => dispatch_forward(args, config_path, json, out),
 		Subcommand::CatchAll(args) => dispatch_catch_all(args, config_path, json, out),
 		Subcommand::TwoFactor(args) => dispatch_two_factor(args, config_path, json, out),
-	}
-}
-
-/// Run `epistle account forward …` against the dynamic store. The
-/// mutator refuses a static account so a typo cannot land on disk;
-/// refusing up front keeps the prepare/store sequence identical to the
-/// rest of the umbrella.
-fn dispatch_forward(
-	args: ForwardArgs,
-	config_path: &Path,
-	json: bool,
-	out: &mut impl std::io::Write,
-) -> ExitCode {
-	let store = match prepare(config_path, dynamic_name(&args.action)) {
-		Ok(store) => store,
-		Err(code) => return code,
-	};
-	match args.action {
-		ForwardSubcommand::List { name, json: leaf } if leaf || json => {
-			crate::cli::account::json::forwards(&store, &name, out)
-		}
-		ForwardSubcommand::List { name, .. } => forward_list(&store, &name, out),
-		ForwardSubcommand::Add { name, address } => {
-			// Delivery rewrites a forwarded envelope sender with SRS only
-			// when `srs_secret` is set; without it the next hop checks SPF
-			// against the original sender's domain and a `-all` domain
-			// rejects the copy. The config loader refuses a static forward
-			// for the same reason.
-			if Config::load(config_path).is_ok_and(|config| config.srs_secret.is_none()) {
-				return crate::cli::exit::policy(format_args!(
-					"account {name} forward: set `srs_secret` in the config first; \
-					 without SRS a forwarded copy fails SPF at the next hop"
-				));
-			}
-			forward_add_with_store(&store, &name, &address, out, json)
-		}
-		ForwardSubcommand::Remove { name, address } => {
-			forward_remove_with_store(&store, &name, &address, out, json)
-		}
-	}
-}
-
-/// Run `epistle account catch-all …` against the dynamic store.
-fn dispatch_catch_all(
-	args: CatchAllArgs,
-	config_path: &Path,
-	json: bool,
-	out: &mut impl std::io::Write,
-) -> ExitCode {
-	let store = match prepare(config_path, catch_all_name(&args.action)) {
-		Ok(store) => store,
-		Err(code) => return code,
-	};
-	match args.action {
-		CatchAllSubcommand::List { name, json: leaf } if leaf || json => {
-			crate::cli::account::json::catch_alls(&store, &name, out)
-		}
-		CatchAllSubcommand::List { name, .. } => catch_all_list(&store, &name, out),
-		CatchAllSubcommand::Add { name, domain } => {
-			catch_all_add_with_store(&store, &name, &domain, out, json)
-		}
-		CatchAllSubcommand::Remove { name, domain } => {
-			catch_all_remove_with_store(&store, &name, &domain, out, json)
-		}
-	}
-}
-
-/// The account name from any forward sub-action. The dispatcher above
-/// uses it as the canonical "is this a static account" check before
-/// running any mutator.
-fn dynamic_name(action: &ForwardSubcommand) -> &str {
-	match action {
-		ForwardSubcommand::List { name, .. }
-		| ForwardSubcommand::Add { name, .. }
-		| ForwardSubcommand::Remove { name, .. } => name,
-	}
-}
-
-/// The account name from any catch-all sub-action.
-fn catch_all_name(action: &CatchAllSubcommand) -> &str {
-	match action {
-		CatchAllSubcommand::List { name, .. }
-		| CatchAllSubcommand::Add { name, .. }
-		| CatchAllSubcommand::Remove { name, .. } => name,
-	}
-}
-
-/// Run `epistle account 2fa …` against the dynamic store. The mutator
-/// refuses a static account with the config-edit hint before any TOTP
-/// action runs, mirroring the rest of the umbrella.
-fn dispatch_two_factor(
-	args: TwoFactorArgs,
-	config_path: &Path,
-	json: bool,
-	out: &mut impl std::io::Write,
-) -> ExitCode {
-	let store = match prepare(config_path, two_factor_name(&args.action)) {
-		Ok(store) => store,
-		Err(code) => return code,
-	};
-	match args.action {
-		TwoFactorSubcommand::Show { name, json: leaf } if leaf || json => {
-			crate::cli::account::json::two_factor(&store, &name, out)
-		}
-		TwoFactorSubcommand::Show { name, .. } => two_factor_show(&store, &name, out),
-		TwoFactorSubcommand::Disable { name, yes } => {
-			two_factor_disable(&store, &name, yes, out, json)
-		}
-	}
-}
-
-/// The account name from any 2fa sub-action. The dispatcher above uses
-/// it as the canonical "is this a static account" check before any
-/// mutator or read runs.
-fn two_factor_name(action: &TwoFactorSubcommand) -> &str {
-	match action {
-		TwoFactorSubcommand::Show { name, .. } | TwoFactorSubcommand::Disable { name, .. } => name,
 	}
 }

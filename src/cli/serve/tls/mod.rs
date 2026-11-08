@@ -7,6 +7,7 @@ use tokio_rustls::TlsAcceptor;
 
 use std::sync::Arc;
 
+use super::role::ServeRole;
 use crate::acme::challenge::{ChallengeResponder, Dns01};
 use crate::acme::http01::ChallengeStore;
 use crate::acme::tlsalpn::AlpnChallengeStore;
@@ -15,7 +16,7 @@ use crate::tls::{ReloadableAcceptor, tls_server_end_point};
 
 /// TLS/ACME startup state: listener acceptors share one reloadable certificate
 /// source, plus the SCRAM channel-binding hash. The ACME renewal task is
-/// spawned inside the helper and not returned.
+/// spawned inside the helper and returned so shutdown can stop it.
 pub(super) struct TlsStack {
 	/// The shared TLS acceptor, whose certificate resolver observes renewal
 	/// even when a listener retains its clone for the lifetime of the server.
@@ -25,15 +26,30 @@ pub(super) struct TlsStack {
 	/// SCRAM-SHA-256-PLUS channel binding hash; `None` when ACME is set.
 	/// It follows a static certificate the operator replaces on disk.
 	pub channel_binding: Option<crate::tls::EndPoint>,
+	/// The ACME renewal loop, stopped at shutdown so the challenges it
+	/// still has published are withdrawn before the process exits.
+	pub acme_renewal: Option<crate::acme::renew::Renewal>,
 }
 
 /// Load the TLS acceptor, build the reloadable variant, compute the
 /// SCRAM channel-binding hash, and spawn the ACME renewal task when one
 /// is configured. Failures propagate through `?` so a missing or
 /// malformed `[tls]` section stops the start.
+#[cfg(test)]
 pub(super) fn build_tls(
 	config: &Config,
 	challenge_store: ChallengeStore,
+) -> std::io::Result<TlsStack> {
+	build_tls_for(config, challenge_store, ServeRole::All)
+}
+
+/// [`build_tls`] for a process running `role`. With [`ServeRole::Mail`] the
+/// certificates container renews: this process reloads the ACME pair when
+/// its files change, and neither places an order nor touches DNS.
+pub(super) fn build_tls_for(
+	config: &Config,
+	challenge_store: ChallengeStore,
+	role: ServeRole,
 ) -> std::io::Result<TlsStack> {
 	// TLS is loaded once and shared; failure to load is fatal (fail closed).
 	// The certificate comes from the shared resolver: after a restart the
@@ -47,7 +63,7 @@ pub(super) fn build_tls(
 	let alpn_store = config
 		.acme
 		.as_ref()
-		.filter(|acme| acme.challenge == AcmeChallenge::TlsAlpn01)
+		.filter(|acme| acme.challenge == AcmeChallenge::TlsAlpn01 && role.renews_certificates())
 		.map(|_| Arc::new(AlpnChallengeStore::new()));
 	let reloadable_tls = tls_acceptor.map(|acceptor| match &alpn_store {
 		Some(store) => ReloadableAcceptor::with_acme_alpn(acceptor, store.clone()),
@@ -73,18 +89,43 @@ pub(super) fn build_tls(
 		if let Some(end_point) = &channel_binding {
 			watcher = watcher.with_end_point(end_point.clone());
 		}
-		let provider = config.dns.build_for_host(&config.hostname);
-		tokio::spawn(crate::tls::watch::run(
-			watcher,
-			provider,
-			config.hostname.clone(),
-			config.data_dir.clone(),
-		));
+		if publishes_tlsa(role) {
+			let provider = config.dns.build_for_host(&config.hostname);
+			tokio::spawn(crate::tls::watch::run(
+				watcher,
+				provider,
+				config.hostname.clone(),
+				config.data_dir.clone(),
+			));
+		} else {
+			// The mail role neither publishes TLSA nor writes the TLSA state
+			// in data_dir: the certificates container reads that state, and
+			// it must not act on anything this process could have written.
+			tokio::spawn(crate::tls::watch::follow(watcher));
+		}
 	}
 
-	// ACME automatic renewal: publish the certificate to every TLS listener.
-	// Requires a [tls] bootstrap certificate to reload into.
-	if let Some(acme) = &config.acme {
+	let mut acme_renewal = None;
+	// The certificates container renews and writes the ACME pair; this
+	// process presents whatever valid pair those files hold.
+	if follows_acme_files(config, role) {
+		match &reloadable_tls {
+			Some(reloadable) => {
+				let acme = crate::config::Tls {
+					cert_file: crate::acme::renew::cert_path(&config.data_dir),
+					key_file: crate::acme::renew::key_path(&config.data_dir),
+					client_ca: config.tls.as_ref().and_then(|tls| tls.client_ca.clone()),
+				};
+				let watcher = crate::tls::watch::CertWatcher::new(acme, reloadable.clone());
+				tokio::spawn(crate::tls::watch::follow(watcher));
+			}
+			None => tracing::warn!(
+				"[acme] is configured but no certificate is in service; nothing to reload until one is"
+			),
+		}
+	} else if let Some(acme) = &config.acme {
+		// ACME automatic renewal: publish the certificate to every TLS
+		// listener. Requires a [tls] bootstrap certificate to reload into.
 		match &reloadable_tls {
 			Some(reloadable) => {
 				// When a DNS provider is configured, refresh the TLSA record on
@@ -94,16 +135,24 @@ pub(super) fn build_tls(
 					.build_for_host(&config.hostname)
 					.map(|provider| (provider, config.hostname.clone()));
 				let responder = responder(config, challenge_store, alpn_store)?;
-				tokio::spawn(crate::acme::renew::run(
-					acme.directory_url.clone(),
-					acme.contacts.clone(),
-					acme.domains.clone(),
-					responder,
-					config.data_dir.clone(),
-					reloadable.clone(),
-					u64::from(acme.renew_before_days),
-					tlsa,
-				));
+				let (acme, data_dir, reloadable) =
+					(acme.clone(), config.data_dir.clone(), reloadable.clone());
+				acme_renewal = Some(crate::acme::renew::Renewal::spawn(|stop| {
+					crate::acme::renew::run(
+						crate::acme::renew::RenewalJob {
+							directory_url: acme.directory_url,
+							contacts: acme.contacts,
+							domains: acme.domains,
+							responder,
+							account_key: crate::acme::renew::account_key_path(&data_dir),
+							data_dir,
+							reloadable: Some(reloadable),
+							renew_before_days: u64::from(acme.renew_before_days),
+							tlsa,
+						},
+						stop,
+					)
+				}));
 			}
 			None => tracing::warn!("[acme] is configured but [tls] is not; skipping ACME renewal"),
 		}
@@ -113,6 +162,7 @@ pub(super) fn build_tls(
 		tls_acceptor,
 		reloadable_tls,
 		channel_binding,
+		acme_renewal,
 	})
 }
 
@@ -121,6 +171,19 @@ pub(super) fn build_tls(
 /// replacing the files.
 pub(super) fn watches_files(config: &Config) -> bool {
 	config.tls.is_some() && config.acme.is_none()
+}
+
+/// Whether a reloaded static pair has its TLSA record published, and the
+/// TLSA state in data_dir written, by this process. Never by the mail role:
+/// the certificates container acts on that state.
+pub(super) fn publishes_tlsa(role: ServeRole) -> bool {
+	role.writes_dns()
+}
+
+/// Whether this process reloads the ACME pair another process writes: the
+/// listeners of a stack whose certificates container renews.
+pub(super) fn follows_acme_files(config: &Config, role: ServeRole) -> bool {
+	config.acme.is_some() && role == ServeRole::Mail
 }
 
 /// The responder for the configured `[acme] challenge`. Validation already
@@ -141,7 +204,12 @@ fn responder(
 				)
 			})?;
 			let visibility = crate::acme::dns01_authoritative::AuthoritativeTxt::from_system()?;
-			Ok(Arc::new(Dns01::new(provider, Arc::new(visibility))))
+			// The journal lets the next start withdraw a record this run
+			// could not, when it stops before its withdrawal finished.
+			let journal = crate::acme::challenge::journal_path(&config.data_dir);
+			Ok(Arc::new(
+				Dns01::new(provider, Arc::new(visibility)).with_journal(journal),
+			))
 		}
 		_ => Ok(Arc::new(http01)),
 	}

@@ -12,6 +12,7 @@ mod copy;
 mod dedupe;
 mod durability;
 mod folders;
+pub(crate) mod fuzzing;
 mod insecure;
 mod ledger;
 mod metadata;

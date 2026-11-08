@@ -1,4 +1,4 @@
-//! `[server] max_connections_per_account`: after authentication, IMAP
+//! `max_connections_per_account`: after authentication, IMAP
 //! rejects an eleventh connection from the same (account, IP) pair with
 //! `NO [LIMIT]` and releases the slot on every disconnect path.
 

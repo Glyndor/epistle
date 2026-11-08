@@ -422,6 +422,11 @@ impl DnsProvider for BunnyProvider {
 			self.delete_inner(record).await
 		}))
 	}
+	fn delete_exact(&self, _zone: &str, record: DnsRecord) -> Op<'_> {
+		Box::pin(crate::dns::providers::within(async move {
+			self.delete_exact_inner(record).await
+		}))
+	}
 	fn list(&self, zone: &str) -> ListOp<'_> {
 		let zone_name = zone.to_string();
 		Box::pin(crate::dns::providers::listing(zone_name, async move {
@@ -492,6 +497,8 @@ fn check(response: reqwest::Response) -> Result<(), ProviderError> {
 		Err(ProviderError::Remote(format!("HTTP {status}")))
 	}
 }
+
+mod exact;
 
 #[cfg(test)]
 mod tests;

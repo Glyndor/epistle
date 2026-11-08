@@ -34,7 +34,7 @@ url = "{url}"
 /// where the URL was accepted, that value is the parsed `Config`, and the
 /// URL inside it carries the database password. A panic message is a CI
 /// log, and CodeQL reads printing it as cleartext logging of sensitive
-/// information (`src/config/tests/redaction.rs` records the same lesson).
+/// information (`src/config/tests/debug.rs` records the same lesson).
 /// The case name and the error text are enough to reproduce locally.
 fn rejection(result: Result<super::Config, super::ConfigError>, case: &str) -> String {
 	match result {

@@ -165,6 +165,63 @@ pub async fn run(
 	}
 }
 
+/// Look at the files every [`WATCH_INTERVAL`] for the life of the server and
+/// swap a changed, valid pair in, publishing nothing.
+///
+/// `mail` runs this when the certificates container writes the ACME pair:
+/// that container refreshes the TLSA record, and `mail` holds no DNS
+/// credential. Files that cannot be read yet (nothing issued) and a pair
+/// that does not load are each reported once, not on every tick, and the
+/// certificate in service stays.
+pub async fn follow(mut watcher: CertWatcher) {
+	let mut ticker = tokio::time::interval(WATCH_INTERVAL);
+	// The first tick is immediate and the files were just loaded.
+	ticker.tick().await;
+	let mut reported: Option<String> = None;
+	loop {
+		ticker.tick().await;
+		if let Some(line) = followed(watcher.poll(), &mut reported) {
+			match line {
+				Followed::Reloaded => tracing::info!(
+					"the certificate files the certificates container writes changed; the new certificate is in service"
+				),
+				Followed::Refused(reason) => tracing::warn!(
+					%reason,
+					"the certificate files the certificates container writes are not a usable pair; the previous certificate stays in service",
+				),
+			}
+		}
+	}
+}
+
+/// A line [`follow`] logs.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Followed {
+	/// A new pair is in service.
+	Reloaded,
+	/// The files do not form a usable pair; carries the reason.
+	Refused(String),
+}
+
+/// What one look reports, given the refusal already `reported`: a new pair
+/// always, a refusal only when its reason differs from the last one.
+pub fn followed(polled: Polled, reported: &mut Option<String>) -> Option<Followed> {
+	match polled {
+		Polled::Unchanged => None,
+		Polled::Reloaded { .. } => {
+			*reported = None;
+			Some(Followed::Reloaded)
+		}
+		Polled::Refused(reason) => {
+			if reported.as_deref() == Some(reason.as_str()) {
+				return None;
+			}
+			*reported = Some(reason.clone());
+			Some(Followed::Refused(reason))
+		}
+	}
+}
+
 fn epoch_secs() -> u64 {
 	std::time::SystemTime::now()
 		.duration_since(std::time::UNIX_EPOCH)

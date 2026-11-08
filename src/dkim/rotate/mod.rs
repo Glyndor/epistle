@@ -190,7 +190,7 @@ fn parse_state(path: &std::path::Path) -> Result<Option<RotationState>, RotateEr
 /// its key was in service still loads (its `pending` entry is what the
 /// next tick finishes), but a state that names no selector and keeps a
 /// retired key is inconsistent, and it is reported as such.
-fn decode_state(
+pub(crate) fn decode_state(
 	path: &std::path::Path,
 	bytes: &[u8],
 ) -> Result<Option<RotationState>, RotateError> {
@@ -493,17 +493,11 @@ impl Rotator {
 	/// leaves the data directory as a fresh install looks. The server reads
 	/// such a state as an absent one, so the file was never worth keeping.
 	fn save_state(&self, state: &RotationState) -> std::io::Result<()> {
-		if state.is_empty() {
-			remove_state_file(&self.state_path);
-			return Ok(());
-		}
-		let bytes = serde_json::to_vec_pretty(state).map_err(std::io::Error::other)?;
-		if let Ok(current) = std::fs::read(&self.state_path)
-			&& matches!(decode_state(&self.state_path, &current), Ok(Some(_)))
-		{
-			crate::storage::write_secret(&self.data_dir.join(STATE_BACKUP_FILE), &current)?;
-		}
-		crate::storage::write_secret(&self.state_path, &bytes)
+		save_state_file(
+			&self.state_path,
+			&self.data_dir.join(STATE_BACKUP_FILE),
+			state,
+		)
 	}
 
 	/// The DNS record name for a selector's public key at `domain`.
@@ -549,6 +543,30 @@ fn txt_record(name: &str, value: &str) -> DnsRecord {
 	}
 }
 
+/// Write `state` to `path` the way [`Rotator`] saves its own state: the
+/// state being replaced, when it reads, is kept first as `backup`; then the
+/// new bytes go through a synced temporary file renamed over `path`. A state
+/// that names no key in service is not written: `path` is removed instead.
+/// The per-domain rotation saves its state with the same function, so both
+/// keep the same last good copy.
+pub(crate) fn save_state_file(
+	path: &std::path::Path,
+	backup: &std::path::Path,
+	state: &RotationState,
+) -> std::io::Result<()> {
+	if state.is_empty() {
+		remove_state_file(path);
+		return Ok(());
+	}
+	let bytes = serde_json::to_vec_pretty(state).map_err(std::io::Error::other)?;
+	if let Ok(current) = std::fs::read(path)
+		&& matches!(decode_state(path, &current), Ok(Some(_)))
+	{
+		crate::storage::write_secret(backup, &current)?;
+	}
+	crate::storage::write_secret(path, &bytes)
+}
+
 /// Remove a state file that names no key. Best effort: the server reads
 /// an empty state as an absent one, so a file that stays behind is
 /// harmless; the failure is logged rather than allowed to break the
@@ -570,6 +588,13 @@ fn remove_state_file(path: &std::path::Path) {
 #[error("dkim rotation: {0}")]
 pub struct RotateError(String);
 
+impl RotateError {
+	/// A rotation failure that `reason` explains.
+	pub(crate) fn from_reason(reason: impl Into<String>) -> Self {
+		RotateError(reason.into())
+	}
+}
+
 impl From<std::io::Error> for RotateError {
 	fn from(error: std::io::Error) -> Self {
 		RotateError(error.to_string())
@@ -580,11 +605,13 @@ impl From<std::io::Error> for RotateError {
 mod tests;
 
 mod steps;
+pub(crate) use steps::{Step, pending_key, remove_key_file, write_key};
 
 mod orphans;
 pub use orphans::{CLEANUP_FILE, Orphans, find_orphans, request_cleanup};
 
 mod publication;
+pub(crate) use publication::key_of;
 
 mod rsa;
 pub use publication::publication_waits;

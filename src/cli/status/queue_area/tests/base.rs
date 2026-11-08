@@ -33,6 +33,7 @@ fn enqueue(data_dir: &Path, age: i64, attempts: u32, next_attempt: u64) -> Uuid 
 		recipient_state: Default::default(),
 		account: None,
 		extra: BTreeMap::new(),
+		owner: None,
 		class: Default::default(),
 		evidence: false,
 		retain_days: 0,
@@ -162,6 +163,8 @@ fn sealed_envelopes_are_read_with_the_configured_key() {
 	.expect("key file");
 	let storage = crate::config::Storage {
 		encrypt_at_rest: true,
+		tenant_keys: false,
+		retired_key_files: Vec::new(),
 		encryption_key_env: None,
 		encryption_key_file: Some(key_file),
 		deleted_retention_days: 0,

@@ -25,7 +25,7 @@ fn test_config(data_dir: &Path, listeners: Vec<Listener>) -> Config {
 fn run_with_no_listeners_exits_cleanly() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	assert_eq!(
-		run(test_config(dir.path(), vec![])),
+		run(test_config(dir.path(), vec![]), ServeRole::All),
 		std::process::ExitCode::SUCCESS
 	);
 }

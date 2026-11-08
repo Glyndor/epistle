@@ -165,7 +165,9 @@ pub(super) fn run(config: &Config, compose: &Path, podup: &str) -> ExitCode {
 	// neither lost under the new file nor written over the update. The wait
 	// for it ends at the common lock's deadline, so a holder elsewhere can
 	// not keep this command out of the configuration directory for as long
-	// as it lasts.
+	// as it lasts. The common lock is held already, so this one is taken
+	// after it: the order of the two is the same in every command that
+	// takes both, and no two of them wait for each other.
 	let lock = crate::storage::locked::lock_path(compose);
 	let _held = match crate::cli::compose::lock::acquire(&lock) {
 		Ok(held) => held,
@@ -197,6 +199,7 @@ pub(super) fn run(config: &Config, compose: &Path, podup: &str) -> ExitCode {
 		compose,
 		podup,
 		database: plan_has_database(compose),
+		certs: plan_has_certs(compose),
 		config_path: &plan.config_path,
 	};
 	match execute::execute(&mut host, &plan) {
@@ -213,15 +216,6 @@ pub(super) fn run(config: &Config, compose: &Path, podup: &str) -> ExitCode {
 /// for several failed probes before the update is called failed.
 const HEALTH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 
-/// The `status` areas a restart can break. DNS, TLS, the queue and the
-/// antivirus depend on the world outside the restart (a recreated clamav
-/// spends minutes downloading signatures), so they do not judge it.
-const RESTART_AREAS: [crate::cli::status::CheckArea; 3] = [
-	crate::cli::status::CheckArea::Config,
-	crate::cli::status::CheckArea::Ports,
-	crate::cli::status::CheckArea::Db,
-];
-
 /// Whether the compose file on disk has a `db` service. Read the same way, so
 /// a fifo at the path is skipped over instead of waited on with the lock held.
 fn plan_has_database(compose: &Path) -> bool {
@@ -232,12 +226,20 @@ fn plan_has_database(compose: &Path) -> bool {
 		.is_some_and(|value| value["services"].get("db").is_some())
 }
 
+/// Whether the compose file on disk runs the certificates container. Read the
+/// same way, so a fifo at the path is skipped over instead of waited on with
+/// the lock held.
+fn plan_has_certs(compose: &Path) -> bool {
+	crate::cli::stack::certs::runs_certs(compose).unwrap_or(false)
+}
+
 /// The real host of an update: podup, the backup code's dump, stderr.
 struct Live<'a> {
 	config: &'a Config,
 	compose: &'a Path,
 	podup: &'a str,
 	database: bool,
+	certs: bool,
 	config_path: &'a Path,
 }
 
@@ -287,6 +289,7 @@ impl execute::UpdateHost for Live<'_> {
 			&self.config.data_dir,
 			self.config_path,
 			self.has_database(),
+			super::certs::runs_certs(self.compose)?,
 		)
 	}
 
@@ -312,8 +315,28 @@ impl execute::UpdateHost for Live<'_> {
 		super::health::wait_healthy(self.podup, self.compose, service, HEALTH_TIMEOUT)
 	}
 
-	fn failing_areas(&mut self) -> Vec<(String, String)> {
-		crate::cli::status::failing(self.config_path, &RESTART_AREAS)
+	fn runs_certs(&self) -> bool {
+		self.certs
+	}
+
+	fn wait_steady(&mut self, service: &str) -> Result<(), String> {
+		let upness = crate::cli::stack::certs::upness(
+			self.podup,
+			self.compose,
+			service,
+			crate::cli::stack::certs::STEADY,
+		);
+		if upness.is_up() {
+			return Ok(());
+		}
+		Err(format!(
+			"{}; `epistle stack logs {service}` says why",
+			upness.why(service)
+		))
+	}
+
+	fn failing_areas(&mut self, areas: &[crate::cli::status::CheckArea]) -> Vec<(String, String)> {
+		crate::cli::status::failing(self.config_path, areas)
 			.unwrap_or_else(|error| vec![("status".to_string(), error)])
 	}
 

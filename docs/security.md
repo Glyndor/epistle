@@ -197,7 +197,7 @@ Configured SHA-256 comparisons and legacy argon2id verification are unchanged.
   `553` at `MAIL FROM`, `550 5.7.1` at the `From` header, `forbiddenFrom` in
   JMAP and `forbidden_from` in the API, as is any address of another account
   or of another domain. Loosening any of them is a decision about spoofing,
-  not a fix. The table of cases lives in `src/smtp/directory/send_as_fixture.rs`.
+  not a fix. The table of cases lives in `src/smtp/directory/fixtures/send_as_fixture.rs`.
 - Every recipient is resolved against the directory before any network work; an
   empty directory rejects everything (fail-closed).
 - JMAP and `POST /api/v1/send` act for the **principal** the bearer carries,
@@ -213,7 +213,7 @@ Configured SHA-256 comparisons and legacy argon2id verification are unchanged.
   Every route with per-tenant data applies the key's domains, not only the
   accounts routes (see "Domain-confined API keys" in the configuration
   reference for the list). A route is added together with its rule in
-  `src/api/tests/route_rules.rs`, or that test fails.
+  `src/api/tests/keys/rules.rs`, or that test fails.
   A credential that matches no key reaches nothing. Every JMAP method, upload,
   download and the WebSocket check the account against the principal; a
   refused account gets the same `accountNotFound` (HTTP 404 on upload and
@@ -483,6 +483,23 @@ instead of being read as whichever primitive the verifier happened to use.
   /32 to /48 for eviction (it catches an attacker who stays under one /48's
   cap in many /48s of different /32s, at the price of a rule that is harder to
   state and test).
+- **Authorization codes are bounded** (`POST /oauth/authorize` needs the
+  account's credentials, but the code it hands out lives until it is
+  redeemed). One account may hold 100 live codes, one client address (an IPv4
+  address or an IPv6 /64) 50, and the server 10000; the codes that expired
+  are swept every time a new one is issued, so they hold neither memory nor
+  room. A cap that is reached is refused with `429 temporarily_unavailable`
+  and `Retry-After` until the codes counting against it expire, and nothing
+  is stored. No code is evicted to make room, unlike the device flow: a code
+  is bound to one account, one challenge and one `redirect_uri`, so dropping
+  one would hand its redemption to the wrong client. The `code_challenge` of
+  the request is the digest of the verifier, so it has to be exactly 43
+  characters of the base64url alphabet (RFC 7636 §4.2); a megabyte of it is
+  refused before it is stored and before the password is even checked.
+  Residual risk: a caller that authenticates many accounts from many
+  addresses can still fill the server's pool, for the ten minutes the codes
+  live; and a legitimate client that issues codes and never redeems them
+  waits for the expiry instead of getting room at once.
 - **Antivirus on outbound mail** (with `[antispam] clamd_socket`, on by
   default through `scan_authenticated`). A compromised account must not
   relay malware, so what local accounts submit over SMTP, the REST API and
@@ -494,6 +511,22 @@ instead of being read as whichever primitive the verifier happened to use.
   open when clamd cannot be reached, like the inbound one, and `epistle
   status` warns while scans keep failing, so an antivirus that is silently
   not scanning does not go unnoticed.
+- **A webhook per tenant.** Event payloads carry addresses, subjects and
+  remote replies, so a tenant's receiver must not see another tenant's. The
+  hosted domain an event belongs to picks its one webhook, and the server
+  decides that domain (the authenticated account's, the forwarding local
+  recipient's), records it in the queue entry, and never reads it from the
+  envelope sender, which a user can set to another tenant's domain; an entry
+  with no recorded owner uses the default: the tenant's
+  `[tenant.webhook]` when the domain is the tenant's, the default `[webhook]`
+  otherwise, never both and never a fallback when a tenant's is off or fails.
+  Each webhook signs with its own secret (the loader refuses two that share
+  one) and is reached through its own client, built exactly as the default's:
+  a tenant's URL is held to the same destination policy against SSRF (no
+  private, loopback, link-local or translated address unless that webhook says
+  `allow_private_webhooks`, the resolved addresses judged too, no redirect, no
+  proxy of the environment). One webhook allowing private destinations does not
+  allow them for another.
 - **Forwarding loops.** Every copy stored in a mailbox starts with
   `Return-Path` (any one the message arrived with is removed) and the
   `Delivered-To` of the address it was delivered to, and a forwarded copy
@@ -596,7 +629,9 @@ observes the current state.
   new writes, and old plaintext mail still reads correctly.
 - **Backups stay encrypted:** `epistle backup` archives the on-disk bytes
   verbatim, so a backup of an encrypted store remains ciphertext — restore it on
-  a host with the same key. Use `epistle export` for a decrypted copy.
+  a host with the same keys: the server key, every tenant key and every
+  retired key the configuration names, which `epistle backup` lists. Use
+  `epistle export` for a decrypted copy.
 - **TOTP secrets** in `accounts.toml` are encrypted with the same key
   (stored as `enc:v1:<base64>`) when `encrypt_at_rest = true`, and are
   protected only then: without at-rest encryption they are stored in
@@ -605,6 +640,72 @@ observes the current state.
   encrypted the next time the server writes `accounts.toml`. If a stored
   secret cannot be decrypted (key missing or wrong), that account's
   password login fails instead of skipping the second factor.
+
+### Keys per tenant
+
+On a server that hosts several clients, one `[storage]` key means one leaked
+key opens all of them. A `[[tenant]]` can carry its own key
+(`encryption_key_file`, a `0600` file from `epistle storage-keygen`, kept off
+the data disk like the server key), and with `[storage] tenant_keys = true`
+the mail and JMAP blobs of its accounts are sealed with it.
+
+- **What uses which key.** An account whose every address is in one tenant
+  with a key writes under that key. An account in no tenant, in a tenant
+  without a key, with addresses in two tenants, or with one address outside
+  its tenant stays on the server key: the tenant does not own all of its mail.
+  The outbound spool, the evidence store and the TOTP secrets in
+  `accounts.toml` stay on the server key too. `epistle account show` and the
+  `storage_keys` area of `epistle status` say which key protects what.
+- **Independent keys, not derived ones.** A tenant key is its own random key,
+  not one derived from the server key. Deriving it would make the server key
+  open every tenant again, and removing a tenant's key would erase nothing.
+  The server refuses to start when two tenants, or a tenant and the server,
+  are given the same key.
+- **Every file says which key sealed it.** Files sealed with a tenant key use
+  a second envelope version that carries a key id: 16 bytes expanded with
+  HKDF-SHA256 from the key, which names it without revealing anything about
+  it (see [`storage.md`](storage.md#envelope-versions)). Files from before
+  keep the first version, which means the server key, and keep reading
+  without any change. Nothing re-encrypts by itself.
+- **Moving what is already stored** is explicit:
+  `epistle storage tenant-keys migrate` re-encrypts it tenant by tenant,
+  verifies every new copy on disk before it replaces the old one, and resumes
+  after a cut by re-scanning every account against the current keys and files.
+  It includes blob-only owners and both legacy shared blob layouts; encrypted
+  shared blobs need valid `.owner` sidecars. The offline command loads static
+  accounts and `accounts.toml` and refuses owners it cannot resolve, including
+  SQL/LDAP-only accounts, until an authoritative account snapshot is supplied.
+  An exclusive store-wide lock excludes server startup and offline mail writers
+  for the entire migration. `--rollback` brings everything back under the server key in the
+  first envelope version, which is what to run before going back to a release
+  without tenant keys: such a release reads a version 2 file as if it were
+  plaintext and serves ciphertext.
+- **Filesystem blobs only.** Configuration refuses `tenant_keys = true`
+  with S3 until a backend-aware migration exists. Migration, rollback and dry
+  runs also refuse S3 before touching local data. Server-key-only S3 writes
+  remain supported. For S3 objects written by an earlier configuration, keep
+  every required key and a release that reads their envelopes; do not discard
+  retired keys or downgrade based on a local-file migration. Disabling tenant
+  writes does not convert existing remote objects.
+- **Erasure by key.** Deleting a tenant's key file and removing its
+  `encryption_key_file` line makes every file sealed with it unreadable on
+  purpose, including the copies in backups, without having to find them. The
+  same holds by accident: a lost tenant key is a lost mailbox for that tenant,
+  exactly as with the server key. A configured key file that is missing stops
+  the server instead.
+- **What it does not protect.** The server holds every key in memory, so a
+  live compromise of the server reaches every tenant. A process that can write
+  to the data directory could move a tenant's file into another tenant's
+  mailbox and have the server open it there; this is about stolen disks,
+  backups and keys, not about a writer on the disk.
+
+**Rotating the server key with filesystem blobs.** List the old key file in `[storage]
+retired_key_files`, put the new one in `encryption_key_file`, restart, and run
+`epistle storage tenant-keys migrate` with the stack stopped. A retired key is
+only read, never written with. The run moves every message and blob it sealed,
+and the TOTP secrets, under the new key. Remove the retired entry once the
+queue has drained and the evidence it sealed has aged out; until then
+`epistle status` keeps a warning on it.
 
 ## Logs and account names
 
@@ -672,7 +773,8 @@ clients when replacing a credential, and retain decryption keys for old backups.
 | SCRAM: `accounts.toml`, alongside password hash | Base64 salt, iteration count, StoredKey and ServerKey; PBKDF2-HMAC-SHA256 | `epistle account password N` derives a fresh verifier; older work factors upgrade on successful PLAIN/LOGIN |
 | App passwords: `app_passwords.toml` | Salted argon2id PHC, with label and restrictions | `epistle app-password rotate N LABEL`; distribute the new secret |
 | TOTP: `accounts.toml` | Base32 shared secret; `enc:v1:<base64>` ChaCha20-Poly1305 envelope when storage encryption is enabled | DELETE then POST `/api/v1/accounts/{name}/totp`; scan the new secret in the authenticator |
-| Storage key: `[storage] encryption_key_file` or `encryption_key_env`; init writes beside the data directory in `secrets/` | Base64 32-byte encryption key | `epistle storage-keygen`; decrypt/export existing data under the old key and re-import under the new key, including TOTP; changing only the key loses access |
+| Storage key: `[storage] encryption_key_file` or `encryption_key_env`; init writes beside the data directory in `secrets/` | Base64 32-byte encryption key | `epistle storage-keygen`; move the old file to `[storage] retired_key_files`, point `encryption_key_file` at the new one, restart and run `epistle storage tenant-keys migrate` with the stack stopped (see "Keys per tenant"); changing only the key loses access. With S3 blobs, migration is refused: retain all required keys until a backend-aware migration exists |
+| Tenant keys: `[[tenant]] encryption_key_file` | Base64 32-byte encryption key, one per tenant | `epistle storage-keygen`; the same retire and migrate steps as the storage key, per tenant, are not available yet: re-encrypt the tenant back to the server key with `--rollback`, change its key, and migrate forward again. This requires filesystem blobs; S3 tenant writes and migration are refused |
 | DKIM: configured `key_file`, RSA key file, per-domain overrides and rotated `dkim-*.key` files | Ed25519/RSA PKCS#8 PEM | `epistle dkim rotate`; for overrides use `epistle dkim-keygen`, publish the new selector and update configuration |
 | TLS: configured private-key PEM; ACME `acme/account.key` and `acme/key.pem` | Base64 PKCS#8 account key; PEM certificate private key | Replace manual PEM and restart; `epistle tls renew` renews managed certificates; retain the ACME account key or explicitly register a replacement |
 | OAuth issuer: `[oauth] signing_key` or `signing_key_file` | Base64 PKCS#8 ES256 private key | `epistle oauth-keygen`; replace private key and matching public key, restart; issued tokens need renewal |
@@ -681,10 +783,10 @@ clients when replacing a credential, and retain decryption keys for old backups.
 | LDAP: `[ldap] bind_password`; user passwords at LDAP source | Plaintext service bind password; user passwords verified by LDAP bind | Rotate in LDAP, update bind configuration and restart; replace user passwords in LDAP |
 | DNS: `[dns]` token/access secrets/consumer key, provider files or named environment variables (including service-account credentials and TSIG) | Plaintext provider credentials, provider-specific JSON or base64 key | Rotate at the provider, update the configured source and restart |
 | S3 blobs: `[storage.blobs] secret_access_key_file` or `secret_access_key_env` | Plaintext access secret | Rotate at the S3 provider, update file/environment and restart |
-| Webhook: `[[webhook]] secret` | Plaintext HMAC signing secret | Replace at both sender configuration and receiver, restart |
+| Webhook: `[webhook] secret`, and `[tenant.webhook] secret` of each tenant that has one | Plaintext HMAC signing secrets, one per webhook; no two may be equal | Replace at both sender configuration and receiver, restart; a tenant's secret signs only that tenant's events |
 | LLM scanner: `[antispam.llm] api_key_env` | Plaintext provider key in process environment | Rotate at provider, update service environment and restart |
 | SubjectPass: `subjectpass.key`; log pseudonyms: `log-pseudonym.key` | Raw per-server HMAC keys | Stop the server, securely retire the relevant file and restart to generate a new one; outstanding retry tokens or historical log mappings cease to work |
-| SRS: `srs_secret` in `mail.toml` | Plaintext HMAC secret | Replace configuration and restart; outstanding forwarded return addresses stop verifying |
+| SRS: `[[srs_domain]] secret` per hosted domain, and `srs_secret` in `mail.toml` for the domains without one | Plaintext HMAC secrets | `epistle srs rotate DOMAIN` moves the old secret to `previous_secret`, which keeps verifying the return addresses already out; remove it after 14 days. Replacing `srs_secret` alone stops the older addresses from verifying; `epistle srs split` first, and keep it until they expire |
 | Bayesian corpus: `bayes-corpus.key` | Raw HMAC key for token pseudonyms | Preserve with the corpus; to replace, reset/retrain the corpus under a new key while stopped, then restart |
 | Evidence: `<evidence>/key.pk8`, staged `key.next.pk8` | Ed25519 PKCS#8 private keys | `epistle evidence key rotate`; retain public keys and signed hand-over records so historical evidence verifies |
 | Timestamp authority: `token_file` referenced by `<evidence>/timestamp.json` | Plaintext bearer token in an owner-only file | Rotate at the authority and replace the file; it is read on each request |

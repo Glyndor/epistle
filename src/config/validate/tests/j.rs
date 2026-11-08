@@ -6,7 +6,7 @@
 //!
 //! Mode and existence are checked on `st_mode` and `metadata` (the kernel is
 //! the oracle), so the assertions hold when the suite runs as root. The
-//! `src/config/tests/redaction.rs` precedent makes the same point about file-mode
+//! `src/config/tests/debug.rs` precedent makes the same point about file-mode
 //! checks at the file-system layer rather than at the uid layer.
 
 use std::os::unix::fs::PermissionsExt as _;

@@ -141,7 +141,7 @@ pub fn export(
 		.filter(|(_, day, _, _)| written.contains(day))
 	{
 		let stored = find_kept(evidence_root, id, day, days)?;
-		let bytes = if stored.starts_with(crate::storage::MAGIC) {
+		let bytes = if crate::storage::is_envelope(&stored) {
 			crypto
 				.decode_with_aad(&stored, id.as_bytes())
 				.map_err(|_| BundleError::Refused("a kept message cannot be decrypted".into()))?

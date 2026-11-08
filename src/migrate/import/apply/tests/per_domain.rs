@@ -36,10 +36,10 @@ fn server_signer(dkim: &crate::config::Dkim) -> PerDomainSigner {
 		.iter()
 		.map(|entry| DomainSigner {
 			domain: entry.name.to_ascii_lowercase(),
-			signer: Arc::new(
+			signer: ReloadableSigner::new(Arc::new(
 				Signer::load(&entry.selector, &entry.key_file)
 					.unwrap_or_else(|_| panic!("the override key loads")),
-			),
+			)),
 		})
 		.collect();
 	PerDomainSigner::new(ReloadableSigner::new(Arc::new(default)), overrides)

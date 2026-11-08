@@ -62,7 +62,14 @@ permissions:
   contents: read
 
 jobs:
+  # A pure version bump changes nothing this job builds but the version
+  # string, so the job skips it. See reusable-version-bump.yml.
+  decide:
+    uses: ./.github/workflows/reusable-version-bump.yml
+
   db-tests:
+    needs: decide
+    if: ${{ !cancelled() && needs.decide.outputs.run != 'false' }}
     # Not `integration tests`: that name said nothing about which integration,
     # and a required status check is matched by its name string, so any workflow
     # reaching for the same generic label would be indistinguishable from this
@@ -164,8 +171,11 @@ jobs:
         # list was a maintainer's-eye view of "the tests that matter" and
         # missed any new database test the operator added without updating
         # the list. `--tests` closes that hole at the cost of a longer
-        # coverage run; the cost is paid once per push, not on every PR,
-        # because the path filter keeps the workflow off unrelated PRs.
+        # coverage run, and that cost is paid on every pull request that
+        # changes `src/**` or a test folder outside the exclusions above, not
+        # only on the push: the path filter keeps out tests-only changes in
+        # those folders, documentation and CI, not code. A pure version bump
+        # skips it through `decide`.
         env:
           # Measured on 1.98 against postgres:18 (a throwaway
           # `podman run -d docker.io/library/postgres:18` on the same

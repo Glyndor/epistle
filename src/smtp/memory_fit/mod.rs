@@ -5,7 +5,7 @@
 //! 24 MiB BDAT transfer peaked at 55.7 MiB, the same body over DATA and TLS
 //! at 70 MiB), while the budget counts body bytes only. A full budget can
 //! therefore cost about [`PEAK_FACTOR`] times its size. When
-//! `[server] message_memory_budget` is not set, the budget is a fifth of
+//! `message_memory_budget` is not set, the budget is a fifth of
 //! the container's memory limit ([`LIMIT_DIVISOR`]), rounded down to whole
 //! MiB: about 60% of the limit at the peak, under the [`WARN_PERCENT`] line
 //! a configured budget is held to, the rest left to IMAP and JMAP sessions,

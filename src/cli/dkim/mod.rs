@@ -10,7 +10,7 @@ use std::process::ExitCode;
 
 use clap::Subcommand;
 
-use super::serve::tasks::{DkimRotationPlan, decide_dkim_rotation};
+use super::serve::tasks::{DkimRotationPlan, DnsWrite, decide_dkim_rotation};
 use crate::config::Config;
 use crate::dkim::rotate::{self, rsa_selector_for, selector_for};
 
@@ -35,9 +35,10 @@ pub enum DkimCli {
 		/// Check the preconditions and print what would happen; change nothing.
 		#[arg(long)]
 		dry_run: bool,
-		/// Always refused: a `[[dkim.domain]]` key does not rotate. The
-		/// refusal says how to replace it, or that the domain signs with
-		/// the default key, which `dkim rotate` without `--domain` rotates.
+		/// Rotate this domain's own `[[dkim.domain]]` key instead, under a
+		/// new `own<day>` selector (and `ownrsa<day>` with dual signing).
+		/// Refused for a domain that signs with the `[dkim]` key, which
+		/// `dkim rotate` without `--domain` rotates.
 		#[arg(long)]
 		domain: Option<String>,
 	},
@@ -171,11 +172,12 @@ pub(super) fn preflight(config: &Config, now: u64) -> Result<Plan, String> {
 	if config.dns.is_empty() {
 		return Err("[dns] is not configured: the new key could not be published".into());
 	}
+	let write = DnsWrite::for_install(config);
 	let DkimRotationPlan::Run {
 		signing_domains,
 		out_of_zone,
 		..
-	} = decide_dkim_rotation(config)
+	} = decide_dkim_rotation(config, &write)
 	else {
 		return Err("rotation is off for this configuration".to_string());
 	};
@@ -190,16 +192,20 @@ pub(super) fn preflight(config: &Config, now: u64) -> Result<Plan, String> {
 		return Err("no signing domain is configured, so nothing could be published".to_string());
 	}
 	// Every signing domain is published through the entry of its own zone,
-	// so each of those entries has to build.
-	for domain in &signing_domains {
-		let buildable = config
-			.dns
-			.entry_for(domain)
-			.is_some_and(|dns| dns.build().is_some());
-		if !buildable {
-			return Err(
-				"the [dns] provider cannot be built (missing or empty credentials)".to_string(),
-			);
+	// so each of those entries has to build. With the certificates
+	// container on, the credential is there and this process never reads
+	// it: the entries are built by the container that holds the credential.
+	if write.holds_credential() {
+		for domain in &signing_domains {
+			let buildable = config
+				.dns
+				.entry_for(domain)
+				.is_some_and(|dns| dns.build().is_some());
+			if !buildable {
+				return Err(
+					"the [dns] provider cannot be built (missing or empty credentials)".to_string(),
+				);
+			}
 		}
 	}
 	let active = rotate::active_ed25519(dkim, &config.data_dir).map_err(|e| e.to_string())?;
@@ -268,26 +274,7 @@ pub(super) fn rotate_now_with(
 	out: &mut impl std::io::Write,
 ) -> ExitCode {
 	if let Some(name) = domain.as_deref() {
-		// A `[[dkim.domain]]` key is not rotated (the rotation journal
-		// covers the default key only), so refuse instead of rotating the
-		// default under a name the operator did not mean.
-		let has_override = config
-			.dkim
-			.as_ref()
-			.is_some_and(|dkim| dkim.override_for(name).is_some());
-		let reason = if has_override {
-			format!(
-				"per-domain keys do not rotate; replace the key of [[dkim.domain]] {name} in the \
-				 configuration file, publish its record (epistle dns-records) and restart the server"
-			)
-		} else {
-			format!(
-				"{name} has no [[dkim.domain]] key and signs with the [dkim] default; \
-				 rotate that with `epistle dkim rotate`"
-			)
-		};
-		super::style::error_to(err, format_args!("dkim rotate --domain {name}: {reason}"));
-		return ExitCode::FAILURE;
+		return rotate_domain::rotate_domain(config, name, dry_run, now, json, err, out);
 	}
 	let plan = match preflight(config, now) {
 		Ok(plan) => plan,
@@ -392,6 +379,7 @@ pub(super) fn run_split(
 }
 
 mod cleanup;
+mod rotate_domain;
 mod show;
 mod split;
 

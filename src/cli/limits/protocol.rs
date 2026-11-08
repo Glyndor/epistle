@@ -314,6 +314,11 @@ pub(super) const FIXED: &[FixedEntry] = &[
 	),
 	own!("sieve-variables", crate::sieve::MAX_VARS, "count"),
 	own!(
+		"caldav-query-work",
+		crate::webdav::caldav_filter::MAX_QUERY_WORK,
+		"count"
+	),
+	own!(
 		"caldav-freebusy-window",
 		crate::webdav::caldav_busy::MAX_WINDOW_SECS,
 		"seconds"
@@ -474,6 +479,11 @@ pub(super) const FIXED: &[FixedEntry] = &[
 		"count",
 		Should,
 		"RFC 7208 §4.6.4 (void lookups limited to 2)"
+	),
+	own!(
+		"ban-strike-line",
+		crate::smtp::directory::strike_locks::MAX_WAITING,
+		"count"
 	),
 	FixedEntry {
 		name: "tls-minimum-version",

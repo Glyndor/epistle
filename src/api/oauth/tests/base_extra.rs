@@ -7,9 +7,10 @@ async fn pkce_rejects_plain_method() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let keys = keys();
 	let app = router(state_with_authz(dir.path(), &keys));
-	// `plain` (and an absent method) must be rejected: S256 only.
+	// `plain` (and an absent method) must be rejected: S256 only. The
+	// challenge is a valid one, so the method is the only fault.
 	let auth = format!(
-		"client_id=cli&code_challenge=abc&code_challenge_method=plain&login={LOGIN}&password={}",
+		"client_id=cli&code_challenge={CHALLENGE}&code_challenge_method=plain&login={LOGIN}&password={}",
 		urlenc(fixtures::password())
 	);
 	let (status, body) = post_form(&app, "/oauth/authorize", &auth).await;
@@ -22,8 +23,11 @@ async fn pkce_authorize_rejects_bad_credentials() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let keys = keys();
 	let app = router(state_with_authz(dir.path(), &keys));
-	let auth = "client_id=cli&code_challenge=abc&code_challenge_method=S256&login=alice@example.org&password=nope";
-	let (status, body) = post_form(&app, "/oauth/authorize", auth).await;
+	// The challenge is a valid one, so the password is the only fault.
+	let auth = format!(
+		"client_id=cli&code_challenge={CHALLENGE}&code_challenge_method=S256&login=alice@example.org&password=nope"
+	);
+	let (status, body) = post_form(&app, "/oauth/authorize", &auth).await;
 	assert_eq!(status, StatusCode::BAD_REQUEST);
 	assert_eq!(body["error"], "invalid_grant");
 }

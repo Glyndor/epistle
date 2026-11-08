@@ -27,3 +27,38 @@ fn only_a_static_pair_is_watched() {
 	);
 	assert!(!watches_files(&config(false, false)), "no [tls] at all");
 }
+
+/// The listeners of a split stack reload the pair the certificates container
+/// writes; every other process either renews it or watches a static pair.
+#[test]
+fn only_the_mail_role_follows_the_acme_files() {
+	use crate::cli::serve::ServeRole;
+	assert!(follows_acme_files(&config(true, true), ServeRole::Mail));
+	assert!(!follows_acme_files(&config(true, true), ServeRole::All));
+	assert!(!follows_acme_files(&config(true, true), ServeRole::Certs));
+	assert!(
+		!follows_acme_files(&config(true, false), ServeRole::Mail),
+		"no [acme]: the static pair is watched as before"
+	);
+}
+
+#[test]
+fn the_roles_that_hold_the_dns_credential() {
+	use crate::cli::serve::ServeRole;
+	assert!(ServeRole::All.writes_dns() && ServeRole::All.renews_certificates());
+	assert!(ServeRole::Certs.writes_dns() && ServeRole::Certs.renews_certificates());
+	assert!(!ServeRole::Mail.writes_dns() && !ServeRole::Mail.renews_certificates());
+	assert_eq!(
+		[ServeRole::All, ServeRole::Mail, ServeRole::Certs].map(ServeRole::as_str),
+		["all", "mail", "certs"]
+	);
+}
+
+/// The TLSA state the certificates container reads is never written by the
+/// process that takes SMTP from the internet.
+#[test]
+fn the_mail_role_never_publishes_tlsa() {
+	use crate::cli::serve::ServeRole;
+	assert!(!publishes_tlsa(ServeRole::Mail));
+	assert!(publishes_tlsa(ServeRole::All));
+}

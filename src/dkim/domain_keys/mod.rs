@@ -64,7 +64,7 @@ fn day(now: u64) -> u64 {
 /// (`<prefix><day>x2`, `x3`, ... after it). A selector a key is still
 /// published under must not be the name of a new key's record: publishing it
 /// would replace the TXT of the key that is signing.
-fn free_selector(prefix: &str, day: u64, reserved: &[String]) -> String {
+pub(crate) fn free_selector(prefix: &str, day: u64, reserved: &[String]) -> String {
 	let taken = |name: &str| reserved.iter().any(|r| r.eq_ignore_ascii_case(name));
 	let mut candidate = format!("{prefix}{day}");
 	let mut n = 2;
@@ -159,7 +159,7 @@ fn install_new_with(
 }
 
 /// Create `dir` readable by its owner only.
-fn private_dir(dir: &Path) -> std::io::Result<()> {
+pub(crate) fn private_dir(dir: &Path) -> std::io::Result<()> {
 	let mut builder = std::fs::DirBuilder::new();
 	builder.recursive(true);
 	#[cfg(unix)]

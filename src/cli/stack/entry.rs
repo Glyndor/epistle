@@ -5,11 +5,18 @@ use std::path::Path;
 use std::process::ExitCode;
 
 /// Hold the shared writer lock before loading the configuration for a stack
-/// update or a resource edit. Reloads called by service edits already hold it.
+/// update, a resource edit or a switch of the certificates container.
+/// Reloads called by service edits already hold it.
+///
+/// The lock is the first of the two a writer of the generated compose file
+/// takes: the lock beside that file comes after it, never before, so a
+/// command that holds this one and waits for that one, and a command that
+/// holds that one and waits for this one, would wait for each other.
 pub(in crate::cli) fn run_from_path(path: &Path, cli: StackCli, json: bool) -> ExitCode {
 	let writes = matches!(
 		cli,
 		StackCli::Update
+			| StackCli::Certs { .. }
 			| StackCli::Resources {
 				action: Some(_),
 				..

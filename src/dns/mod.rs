@@ -2,14 +2,18 @@
 //! what epistle expects, and report drift. Read-only — it never changes DNS,
 //! so it is safe to run anytime and needs no provider credentials.
 
+pub mod authoritative;
 pub mod check_host;
+pub mod desired;
 pub mod detect;
+pub mod handoff;
 pub mod lockdown;
 pub mod names;
 pub mod provider;
 pub mod providers;
 pub mod proxied_check;
 pub mod publish;
+pub mod reconcile;
 pub mod records;
 pub mod router;
 pub mod rrset;
@@ -19,6 +23,7 @@ mod tests;
 pub mod tlsa;
 pub mod txt;
 pub mod zone;
+pub mod zone_lock;
 
 use crate::dns::provider::txt_purpose;
 use crate::spf::DnsLookup;

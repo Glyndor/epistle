@@ -20,12 +20,51 @@ const LIST_MAX_PAGES: u32 = 1000;
 impl CloudflareProvider {
 	pub(super) async fn list_inner(&self, zone: &str) -> Result<Vec<DnsRecord>, ProviderError> {
 		let zone_id = self.zone_id(zone).await?;
+		Ok(self
+			.list_refs(&zone_id, zone)
+			.await?
+			.into_iter()
+			.map(|r| {
+				let kind = RecordKind::from_token(&r.kind);
+				// The read form is not documented. A record written by
+				// the API comes back quoted (possibly re-split), one an
+				// older release wrote unquoted comes back as it was;
+				// `txt_decode` reads both as the logical value.
+				let value = match (&kind, r.priority) {
+					(RecordKind::Txt, _) => txt_decode(&r.content, TXT_FORM),
+					// `priority target`, the shape every MX value has.
+					(RecordKind::Mx, Some(priority)) => format!("{priority} {}", r.content),
+					_ => r.content,
+				};
+				// Cloudflare only returns `proxied` for the kinds it can
+				// proxy (A, AAAA, CNAME). Other kinds leave it `None`,
+				// which the rest of epistle treats as "not applicable".
+				let proxied = match &kind {
+					RecordKind::A | RecordKind::Aaaa | RecordKind::Cname => r.proxied,
+					_ => None,
+				};
+				DnsRecord {
+					name: r.name,
+					kind,
+					value,
+					ttl: r.ttl,
+					proxied,
+				}
+			})
+			.collect())
+	}
+	/// All pages with record IDs retained for value-exact deletion.
+	pub(super) async fn list_refs(
+		&self,
+		zone_id: &str,
+		zone: &str,
+	) -> Result<Vec<RecordRef>, ProviderError> {
 		let mut listed: Vec<RecordRef> = Vec::new();
 		let mut page = 1;
 		let mut expected: Option<u32> = None;
 		loop {
 			let url = self
-				.records_url(&zone_id, None)?
+				.records_url(zone_id, None)?
 				.with_query("per_page", &LIST_PAGE_SIZE.to_string())
 				.with_query("page", &page.to_string());
 			let records: ListRecords = self.get_json(url).await?;
@@ -63,35 +102,6 @@ impl CloudflareProvider {
 			}
 			page += 1;
 		}
-		Ok(listed
-			.into_iter()
-			.map(|r| {
-				let kind = RecordKind::from_token(&r.kind);
-				// The read form is not documented. A record written by
-				// the API comes back quoted (possibly re-split), one an
-				// older release wrote unquoted comes back as it was;
-				// `txt_decode` reads both as the logical value.
-				let value = match (&kind, r.priority) {
-					(RecordKind::Txt, _) => txt_decode(&r.content, TXT_FORM),
-					// `priority target`, the shape every MX value has.
-					(RecordKind::Mx, Some(priority)) => format!("{priority} {}", r.content),
-					_ => r.content,
-				};
-				// Cloudflare only returns `proxied` for the kinds it can
-				// proxy (A, AAAA, CNAME). Other kinds leave it `None`,
-				// which the rest of epistle treats as "not applicable".
-				let proxied = match &kind {
-					RecordKind::A | RecordKind::Aaaa | RecordKind::Cname => r.proxied,
-					_ => None,
-				};
-				DnsRecord {
-					name: r.name,
-					kind,
-					value,
-					ttl: r.ttl,
-					proxied,
-				}
-			})
-			.collect())
+		Ok(listed)
 	}
 }

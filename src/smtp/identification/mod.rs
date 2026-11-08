@@ -63,7 +63,7 @@ pub struct Policy {
 }
 
 impl Default for Policy {
-	/// Every header on except the vendor marker, which is off.
+	/// Every header on.
 	fn default() -> Self {
 		Self {
 			feedback_id: true,
@@ -71,7 +71,7 @@ impl Default for Policy {
 			bulk_recipients: DEFAULT_BULK_RECIPIENTS,
 			list_id: true,
 			system_auto_submitted: true,
-			x_epistle: false,
+			x_epistle: true,
 			organization: true,
 			domain_organization: BTreeMap::new(),
 		}

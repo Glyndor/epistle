@@ -18,6 +18,7 @@ mod set;
 mod show;
 #[cfg(test)]
 mod tests;
+mod token_env;
 mod unset;
 mod write;
 
@@ -34,6 +35,8 @@ pub enum DnsCli {
 	},
 	/// Lock the zone against mail spoofing.
 	Lockdown(crate::cli::dns_lockdown::LockdownArgs),
+	/// Publish the records the configuration needs, and keep them true.
+	Publish(crate::cli::dns_publish::PublishArgs),
 }
 
 /// Provider actions.
@@ -72,6 +75,7 @@ pub enum ProviderCli {
 pub(super) fn run(path: &Path, action: DnsCli, dry_run: bool, json: bool) -> ExitCode {
 	match action {
 		DnsCli::Lockdown(args) => crate::cli::dns_lockdown::run(path, args, dry_run),
+		DnsCli::Publish(args) => crate::cli::dns_publish::run(path, args, dry_run, json),
 		action => resource::exit_resource(execute_with(
 			path,
 			action,
@@ -94,7 +98,10 @@ fn execute_with(
 	restart: impl FnOnce(&Config, StackAction) -> ExitCode,
 ) -> Result<ExitCode, resource::ResourceError> {
 	let DnsCli::Provider { action } = action else {
-		return Err("dns lockdown runs through its own path; this should not be reached".into());
+		return Err(
+			"dns lockdown and dns publish run through their own path; this should not be reached"
+				.into(),
+		);
 	};
 	let (change, verb, fields): (resource::Change, _, _) = match action {
 		ProviderCli::Check { json: leaf } => {

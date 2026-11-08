@@ -13,6 +13,13 @@
 //! taken from `DTEND`, `DUE` or `DURATION` (an all-day `DTSTART` lasts a
 //! day). It is honoured on `VEVENT` and `VTODO` only.
 //!
+//! The search of one object is bounded: every component it visits and every
+//! recurrence step it expands share the budget of [`MAX_QUERY_WORK`], so a
+//! file with many series cannot multiply the bound. An object that exhausts
+//! it is not answered as a non-match, because a series that was not expanded
+//! may still hold an occurrence inside the window: the caller is told the
+//! object could not be searched.
+//!
 //! Anything else (a nested comp-filter such as `VALARM`, a `param-filter`,
 //! a time-range on a property, a bound that does not parse) is refused with
 //! `403` and `CALDAV:supported-filter`, never silently dropped: a client
@@ -209,28 +216,95 @@ fn prop_filter(element: &Element<'_>) -> Result<PropFilter, Unsupported> {
 	Ok(filter)
 }
 
-/// Whether the iCalendar object `ics` matches `filter`.
-pub fn matches(filter: &CalendarQueryFilter, ics: &str) -> bool {
-	if filter.components.is_empty() {
-		return true;
-	}
-	let components = super::caldav_filter_ical::top_level(ics);
-	filter.components.iter().all(|comp_filter| {
-		let mut named = components.iter().filter(|c| c.name == comp_filter.name);
-		if comp_filter.is_not_defined {
-			named.next().is_none()
-		} else {
-			named.any(|comp| component_matches(comp_filter, comp))
-		}
-	})
+/// The most work one `calendar-query` object may cost: the components it
+/// visits plus the recurrence steps its series expand. Every component of the
+/// object and every expansion it runs share this one budget, so a file with
+/// many series cannot multiply the bound.
+pub const MAX_QUERY_WORK: usize = 100_000;
+
+/// The search could not tell whether the object matches: it ran out of work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TooMuchWork;
+
+/// What the search of one component concluded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Verdict {
+	/// The component matches.
+	Matched,
+	/// The component does not match, and the search was complete.
+	No,
+	/// The search ran out of work before it could tell.
+	Unknown,
 }
 
-fn component_matches(filter: &CompFilter, comp: &super::caldav_filter_ical::Component) -> bool {
-	if let Some(range) = filter.time_range
-		&& !comp.overlaps(range)
-	{
-		return false;
+/// Whether the object matches the filter.
+///
+/// The work of every component and every recurrence expansion of the object
+/// shares one budget, [`MAX_QUERY_WORK`]. `Err(TooMuchWork)` means the search
+/// ran out of work before it could tell, so the answer is not "no match": the
+/// caller has to say the object could not be searched, because a series that
+/// was not expanded may still hold an occurrence inside the window.
+pub fn matches(filter: &CalendarQueryFilter, ics: &str) -> Result<bool, TooMuchWork> {
+	if filter.components.is_empty() {
+		return Ok(true);
 	}
+	let mut left = MAX_QUERY_WORK;
+	let components = super::caldav_filter_ical::top_level(ics);
+	for comp_filter in &filter.components {
+		let mut matched = false;
+		let mut unknown = false;
+		for comp in components.iter().filter(|c| c.name == comp_filter.name) {
+			left = left.checked_sub(1).ok_or(TooMuchWork)?;
+			if comp_filter.is_not_defined {
+				// The object holds such a component, so it cannot be absent.
+				return Ok(false);
+			}
+			match component_matches(comp_filter, comp, &mut left)? {
+				Verdict::Matched => {
+					matched = true;
+					break;
+				}
+				Verdict::No => {}
+				Verdict::Unknown => unknown = true,
+			}
+		}
+		if comp_filter.is_not_defined {
+			// No component of that name: the object matches without it.
+			continue;
+		}
+		if matched {
+			continue;
+		}
+		if unknown {
+			return Err(TooMuchWork);
+		}
+		return Ok(false);
+	}
+	Ok(true)
+}
+
+/// Search one component against one comp-filter.
+///
+/// The property filters decide the component on their own and cost little, so
+/// they are read first: a component that fails them needs no recurrence
+/// expansion, and the work budget is left for the series that can still
+/// match.
+fn component_matches(
+	filter: &CompFilter,
+	comp: &super::caldav_filter_ical::Component,
+	left: &mut usize,
+) -> Result<Verdict, TooMuchWork> {
+	if !prop_filters_pass(filter, comp) {
+		return Ok(Verdict::No);
+	}
+	let Some(range) = filter.time_range else {
+		return Ok(Verdict::Matched);
+	};
+	Ok(comp.overlaps(range, left))
+}
+
+/// Whether every prop-filter of the filter accepts the component.
+fn prop_filters_pass(filter: &CompFilter, comp: &super::caldav_filter_ical::Component) -> bool {
 	filter.prop_filters.iter().all(|prop_filter| {
 		let mut values = comp.values(&prop_filter.name).peekable();
 		if prop_filter.is_not_defined {

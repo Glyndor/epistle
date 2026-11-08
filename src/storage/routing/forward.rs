@@ -11,6 +11,11 @@ use crate::smtp::sink::SinkError;
 use super::SplitDelivery;
 use crate::storage::delivery::{Redirect, forwarded_copy};
 
+/// The domain of an address, or the empty string for one without `@`.
+fn domain_of(address: &str) -> &str {
+	address.rsplit_once('@').map_or("", |(_, domain)| domain)
+}
+
 impl SplitDelivery {
 	/// Queue every redirect of `message`, preserving the (non-null)
 	/// original sender behind SRS when it is on. Each copy names the
@@ -27,8 +32,10 @@ impl SplitDelivery {
 				Some(arc_headers) => [arc_headers.into_bytes(), data].concat(),
 				None => data,
 			};
+			let redirect_from = redirect.delivered_to.clone();
 			let forwarded = AcceptedMessage {
-				reverse_path: self.forward_sender(&message.reverse_path),
+				reverse_path: self
+					.forward_sender(&message.reverse_path, domain_of(&redirect.delivered_to)),
 				recipients: vec![redirect.to],
 				data,
 				require_tls: false,
@@ -37,7 +44,10 @@ impl SplitDelivery {
 				sender_verified: false,
 				no_dsn: Vec::new(),
 			};
-			self.store_outbound(&forwarded)?;
+			self.store_outbound(
+				&forwarded,
+				crate::webhook::single_domain([redirect_from.as_str()]).as_deref(),
+			)?;
 			if let Some(metrics) = &self.metrics {
 				metrics.forwarded();
 			}
@@ -85,7 +95,10 @@ impl SplitDelivery {
 			std::time::SystemTime::now(),
 			self.identification.system_auto_submitted,
 		) {
-			Some(bounce) => self.store_outbound(&bounce),
+			Some(bounce) => self.store_outbound(
+				&bounce,
+				crate::webhook::single_domain(looped.iter().map(String::as_str)).as_deref(),
+			),
 			None => Ok(()),
 		}
 	}

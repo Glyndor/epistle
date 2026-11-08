@@ -30,7 +30,9 @@ use serde::Serialize;
 use super::answers::Answers;
 use super::apply::{ApplyError, Report, ReportStep, listeners_to_write};
 use super::compose_publish;
+use crate::config::AcmeChallenge;
 
+pub(super) mod challenge;
 mod dns_credentials;
 mod host_binary;
 
@@ -149,6 +151,16 @@ pub(super) fn write_compose_step_with_host_binary(
 	{
 		return Err(ApplyError::HostBinaryInvalid(message));
 	}
+	// The certificates container mounts its account key and two directories
+	// of data_dir; podup refuses a bind or a secret whose source is missing.
+	if answers.services.certs {
+		super::host_secrets::acme::place(&answers.data_dir, true).map_err(|error| {
+			ApplyError::KeyWrite(
+				super::host_secrets::acme_account_key(&answers.data_dir),
+				std::io::Error::other(error),
+			)
+		})?;
+	}
 	ensure_compose_file(answers, answers.services.database, report)?;
 	Ok(())
 }
@@ -178,7 +190,8 @@ pub(super) fn ensure_compose_file(
 	let listeners = listeners_to_write(answers)?;
 	let narrow = compose_publish::hosts_in_file(&path)
 		.map_err(|error| compose_publish::apply_read(&path, error))?;
-	let published_ports = compose_publish::published(&listeners, &narrow, None);
+	let published_ports =
+		compose_publish::published(&listeners, &narrow, None, challenge_in_effect(answers));
 	let composed = ComposeFile::build(answers, published_ports.clone(), database);
 	// `serde_json::to_string_pretty` is the stable pretty-printer
 	// the tests pin on: the rendered file carries a trailing
@@ -232,7 +245,8 @@ pub(super) fn render_for(answers: &Answers, database: bool) -> Result<String, Ap
 	let path = compose_file_path(&answers.data_dir);
 	let narrow = compose_publish::hosts_in_file(&path)
 		.map_err(|error| compose_publish::apply_read(&path, error))?;
-	let published_ports = compose_publish::published(&listeners, &narrow, None);
+	let published_ports =
+		compose_publish::published(&listeners, &narrow, None, challenge_in_effect(answers));
 	let composed = ComposeFile::build(answers, published_ports, database);
 	render_document(&composed)
 }
@@ -256,6 +270,18 @@ pub(super) fn render_for_with_host_binary(
 		return Err(ApplyError::HostBinaryInvalid(message));
 	}
 	render_for(answers, database)
+}
+
+/// The challenge the configuration answers the ACME order with, and
+/// `None` when it renews no certificate at all.
+///
+/// The configuration is the one the stack serves, and the apply phase
+/// writes it before it renders the compose file, so the section the
+/// merge leaves there is the one this reads. Port 80 is published only
+/// for HTTP-01: the other two challenges are answered without the
+/// certificate authority ever connecting to the host.
+fn challenge_in_effect(answers: &Answers) -> Option<AcmeChallenge> {
+	challenge::in_config(&answers.config_path)
 }
 
 fn write_readme(dir: &Path, report: &mut Report) -> Result<(), ApplyError> {
@@ -378,6 +404,12 @@ impl ComposeFile {
 			"mail".to_string(),
 			ComposeService::new_mail(&image, answers, database, published_ports, nofile),
 		);
+		if answers.services.certs {
+			services.insert(
+				"certs".to_string(),
+				ComposeService::new_certs(&image, answers),
+			);
+		}
 		// Off only when the answers or the host's memory said so.
 		let antivirus = answers.services.antivirus != Some(false);
 		if antivirus {
@@ -396,6 +428,16 @@ impl ComposeFile {
 				name.to_string(),
 				TopLevelSecret {
 					file: path(&answers.data_dir).display().to_string(),
+				},
+			);
+		}
+		if answers.services.certs {
+			secrets.insert(
+				services::ACME_ACCOUNT_SECRET.to_string(),
+				TopLevelSecret {
+					file: super::host_secrets::acme_account_key(&answers.data_dir)
+						.display()
+						.to_string(),
 				},
 			);
 		}
@@ -476,6 +518,7 @@ pub(super) fn minimal_answers() -> crate::cli::init::Answers {
 			webdav: false,
 			api: false,
 			database: false,
+			certs: false,
 		},
 		image: None,
 		resources: Default::default(),

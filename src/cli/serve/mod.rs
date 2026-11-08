@@ -23,7 +23,40 @@ use smtp_state::SmtpSharedState;
 use tls::TlsStack;
 mod run;
 pub use run::run;
-async fn serve(config: Config) -> std::io::Result<()> {
+
+/// The tables of the configuration the certificates role never reads: the
+/// accounts and their password hashes, the API token hash, the OAuth
+/// configuration, the storage key and the DKIM key paths. Their validation
+/// opens files that container does not mount (the `[database]` password, the
+/// OAuth signing key), and giving it those tables would hand it credentials
+/// it does not use.
+const NOT_FOR_CERTS: [&str; 6] = ["database", "accounts", "api", "storage", "oauth", "dkim"];
+
+/// Load the configuration `role` runs with: strictly, as every command that
+/// acts on the data does, and for the certificates role without the tables
+/// it never reads.
+pub fn load(path: &std::path::Path, role: ServeRole) -> Result<Config, crate::config::ConfigError> {
+	match role {
+		ServeRole::Certs => Config::load_without(path, &NOT_FOR_CERTS),
+		ServeRole::All | ServeRole::Mail => Config::load(path),
+	}
+}
+
+/// Where the DKIM rotations write their records in this role.
+///
+/// The certificates container holds the DNS credential, so the `mail` role
+/// holds none: its rotations publish through the hand-off the other
+/// container serves, and the keys stay where they are.
+fn dns_write_for_role(role: ServeRole, data_dir: &std::path::Path) -> tasks::DnsWrite {
+	match role {
+		ServeRole::All => tasks::DnsWrite::Direct,
+		ServeRole::Mail => tasks::DnsWrite::Handoff(crate::dns::handoff::dir(data_dir)),
+		ServeRole::Certs => tasks::DnsWrite::Direct,
+	}
+}
+
+async fn serve(config: Config, role: ServeRole) -> std::io::Result<()> {
+	let _store = crate::storage::lock::FileLock::store_shared(&config.data_dir)?;
 	crate::log_id::init(&config.data_dir)?;
 	crate::mtasts::publish::write_policy(&config)?;
 	tasks::log_single_signature_dkim_warning(&config);
@@ -34,8 +67,8 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		return Ok(());
 	}
 	let ldap_auth = tasks::build_ldap_authenticator(&config);
-	let crypto = crate::storage::MessageCrypto::from_config(config.storage.as_ref())
-		.map_err(std::io::Error::other)?;
+	let crypto =
+		crate::storage::MessageCrypto::from_full_config(&config).map_err(std::io::Error::other)?;
 	let mut store = store::open_account_store(&config)?;
 	for collision in store.address_collisions() {
 		tracing::error!("{collision}");
@@ -57,9 +90,12 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		.with_crypto(crypto.clone())
 		.into_shared();
 	let directory = account_store.handle();
+	// A write picks its tenant key from the account's addresses.
+	crypto.attach_accounts(Arc::new(directory.clone()));
 	let SplitCompanions {
 		split,
 		dkim_signer,
+		domain_signers,
 		webhook,
 		arc_sealer,
 		mut evidence,
@@ -92,13 +128,16 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	} = smtp_state::build_smtp_shared_state(&config, &metrics)?;
 	let mailbox_limits = connection_limits::MailboxLimits::from_config(&config);
 	let http_limits = connection_limits::http_limits(&config);
-	let sink = crate::antispam::submission_scan::ScanningSink::wrap_with_attachments(
+	let sink = crate::antispam::submission_scan::ScanningSink::wrap_resolving(
 		config.antispam.scan_authenticated,
 		Arc::new(split),
 		clamd,
 		attachment_policy.clone(),
-		Some(metrics.clone()),
-		webhook.clone(),
+		(
+			Some(metrics.clone()),
+			webhook.clone(),
+			Some(directory.clone()),
+		),
 	)?;
 	let bayes = tasks::open_bayes(&config, &reputation_pool, &crypto, &metrics)?;
 	tasks::spawn_sql_directory(&config, &reputation_pool, Arc::clone(&account_store)).await?;
@@ -125,7 +164,28 @@ async fn serve(config: Config) -> std::io::Result<()> {
 	)?;
 	tasks::spawn_dmarc_flush(&config, Arc::clone(&spf_dns), Arc::clone(&sink))?;
 	tasks::spawn_tlsrpt_reports(&config, Arc::clone(&spf_dns), Arc::clone(&sink))?;
-	tasks::spawn_dkim_rotation(&config, &dkim_signer, webhook.as_ref().map(Arc::clone));
+	if role.writes_dns() || config.dkim.is_some() {
+		// The rotations publish their records through the provider this
+		// process holds, or, with the certificates container on, through
+		// the hand-off the other container serves: that one holds the DNS
+		// credential, and this one holds the keys.
+		let write = dns_write_for_role(role, &config.data_dir);
+		tasks::spawn_dkim_rotation(
+			&config,
+			&dkim_signer,
+			webhook.as_ref().map(Arc::clone),
+			&write,
+		);
+		tasks::spawn_domain_rotations(
+			&config,
+			&domain_signers,
+			webhook.as_ref().map(Arc::clone),
+			&write,
+		);
+	}
+	if role.writes_dns() {
+		tasks::dns_reconcile::spawn(&config);
+	}
 	tasks::spawn_alert_engine(
 		&config,
 		Arc::clone(&metrics),
@@ -141,7 +201,8 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		tls_acceptor,
 		reloadable_tls,
 		channel_binding,
-	} = tls::build_tls(&config, challenge_store.clone())?;
+		acme_renewal,
+	} = tls::build_tls_for(&config, challenge_store.clone(), role)?;
 	let ipv4_any_ports = startup::ipv4_any_ports(&config);
 	let mut tasks = Vec::new();
 	let drain = crate::shutdown::Drain::new();
@@ -387,13 +448,17 @@ async fn serve(config: Config) -> std::io::Result<()> {
 		}
 	}
 	crate::privdrop::drop_privileges(config.privileges.as_ref())?;
-	let stopped = wait::until_stopped(tasks, &drain).await;
+	let stopped = wait::until_stopped(tasks, &drain, acme_renewal).await;
 	watcher.abort();
 	let _ = watcher.await;
 	crate::directory_store::remove_reload_status(&config.data_dir);
 	stopped
 }
 mod ban_policy;
+mod certs;
+pub(in crate::cli) use certs::requirements as certs_requirements;
+mod role;
+pub use role::ServeRole;
 #[cfg(test)]
 mod tests;
 mod wait;

@@ -49,13 +49,13 @@ function name is the stable reference.
 | 2.1.x Character set | Met (deliberate deviation) | The accepted set is **printable ASCII** (0x20–0x7E: letters, digits, space, standard punctuation); control characters and non-ASCII/Unicode are rejected (`src/password::validate`). This is a deliberate deviation from 2.1.1's "accept Unicode" — a defined, keyboard-typeable set per the org policy — at the cost of Unicode passphrases. |
 | 2.1.7 Reject known-breached passwords | Met | Every set/change is checked against a bundled local breached / common-password list (`src/password/breached_common.txt`, loaded once into a set), rejecting known-weak passwords offline with no third-party call. The list is a curated starter set, meant to grow. |
 | 2.1.9 No composition rules | Met | No forced upper/lower/digit/special (ASVS v4 §2.1.9 / NIST 800-63B): `src/password::validate` enforces only length, character set and the breach list — length plus breach-rejection carry the strength. |
-| 2.2.1 Anti-automation / brute-force throttling | Partial / **Gap** | Per-connection 3-strikes close on SMTP (`src/smtp/session/mod.rs`), IMAP (`src/imap/session/auth.rs`) and now ManageSieve (`src/managesieve/session/mod.rs`, fixed in this sweep); the API has a sliding-window failure budget (`src/api/state/mod.rs::AuthLimiter`). **No cross-connection per-IP/per-account ban** for the mail protocols — documented below (deferred — needs a persistent store). |
+| 2.2.1 Anti-automation / brute-force throttling | Partial / **Gap** | Per-connection 3-strikes close on SMTP (`src/smtp/session/mod.rs`), IMAP (`src/imap/session/auth/mod.rs`) and now ManageSieve (`src/managesieve/session/mod.rs`, fixed in this sweep); the API has a sliding-window failure budget (`src/api/state/mod.rs::AuthLimiter`). A persistent ban store is shared across connections and listeners: 5 failures in 15 minutes ban an IP, a client/account pair or an account, for 15 minutes first and doubling up to 24 hours (`src/antispam/bans/`, tables `auth_failure` and `auth_ban` in `migrations/0005_auth_bans.sql`, `docs/security.md`). It needs the PostgreSQL store; without it the per-connection limits are all there is. |
 | 2.2.3 Secure notification of auth events | Met | Auth failures are logged as counts (no credentials); delivery/security events flow to webhooks. |
 | 2.4.1 Passwords stored with an approved KDF (Argon2) | Met | argon2id PHC everywhere (`src/smtp/auth/mod.rs::hash_password`/`verify_password`); 16-byte CSPRNG salt via `ring::SystemRandom`. Config rejects any non-argon2id stored hash (`src/config/validate/mod.rs`). |
 | 2.5.x Credential recovery does not reveal the credential | Met | Verification returns a bare `false` on any error; no reset oracle in the server. |
-| 2.6 / 2.8 Look-up / OTP verifiers (TOTP) | Partial | TOTP verified with a constant-time compare and a bounded ±1 step window (`src/totp/mod.rs::verify`, `constant_time_eq`). **No replay guard / no recovery codes / secret stored in cleartext** — documented below (deferred — needs persistent state and at-rest key management). |
+| 2.6 / 2.8 Look-up / OTP verifiers (TOTP) | Partial | TOTP verified with a constant-time compare and a bounded ±1 step window (`src/totp/mod.rs::verify`, `crate::util::constant_time::eq`). **No replay guard / no recovery codes.** The secret is sealed (`enc:v1:`) when `encrypt_at_rest` is on with an `encryption_key_file`, and stored as base32 otherwise (`src/directory_store/set_totp/mod.rs`). The first two are documented below (deferred — they need persistent state). |
 | 2.7 Out-of-band verifier | N/A | No SMS/email OOB second factor is offered. |
-| 2.9 Cryptographic verifier (SCRAM) | Met | SCRAM-SHA-256 / -SHA-256-PLUS: password never on the wire, channel binding to the cert (`tls-server-end-point`), downgrade flag rejected when -PLUS is offered (`src/smtp/scram/mod.rs`, `src/imap/session/auth.rs`). |
+| 2.9 Cryptographic verifier (SCRAM) | Met | SCRAM-SHA-256 / -SHA-256-PLUS: password never on the wire, channel binding to the cert (`tls-server-end-point`), downgrade flag rejected when -PLUS is offered (`src/smtp/scram/mod.rs`, `src/imap/session/auth/mod.rs`). |
 | 2.10.1 No user-enumeration oracle | Met | Unknown login and wrong password both resolve to `None` with an identical reply in every protocol (`src/smtp/directory/mod.rs::authenticate_with_ip`/`credentials`). |
 | 2.10.4 OAuth/JWT bearer fully validated | Met (hardened in this sweep) | `alg` pinned by caller (no confusion), signature verified, `iss`/`aud`/`nbf` checked, and **`exp` now required** — a token without a bounded lifetime is rejected (`src/jwt/mod.rs::check_claims`, fixed in this sweep). |
 
@@ -79,16 +79,16 @@ function name is the stable reference.
 | Req (L3) | Status | Evidence |
 |---|---|---|
 | 4.1.1 Enforced at a trusted server layer | Met | Single `require_bearer_token` layer over the whole authenticated router; `/healthz` is the only unauthenticated route and returns a static body (`src/api/mod.rs`, `src/api/state/mod.rs`). |
-| 4.1.3 Least privilege | Partial | OS-level: privileges dropped irreversibly (`src/privdrop/mod.rs::verify` asserts `setuid(0)` fails). API-level: a single operator token authorizes all accounts (by design — the API consumer is the operator/panel); a scoped per-account API key would be stricter. Noted, not a cross-tenant leak. |
+| 4.1.3 Least privilege | Partial | OS-level: privileges dropped irreversibly (`src/privdrop/mod.rs::verify` asserts `setuid(0)` fails). API-level: a single operator token authorizes all accounts (by design — the API consumer is the operator/panel); an API key can be scoped to one account (`--account`, `src/api/api_keys/mod.rs`) for JMAP and `/api/v1/send`; the operator token stays unscoped. Noted, not a cross-tenant leak. |
 | 4.1.5 Fail closed on access-control errors | Met | Every auth/key check ANDs its conditions and rejects on malformed/missing input (`src/api/api_keys/mod.rs::admits`, `src/directory_store/app_passwords/mod.rs::admits`). |
 | 4.2.1 Object-level authZ / no IDOR | Met | JMAP blob ids parsed as UUIDs before any FS use; every data path uses the authenticated `self.account()` (`src/api/jmap/`); IMAP mailbox names allow-listed level by level and stored as one directory each (`src/util/mailbox_path/mod.rs::valid_folder`, `disk_name`). |
 | 4.2.2 State-changing ops protected | Met | All mutating API/JMAP routes sit behind the bearer middleware. |
 | 4.3.1 Admin interfaces require additional protection | Met | Management API is closed by default (Podman-internal); the CLI runs only as the isolated user/sudo. |
 | 4.3.3 Per-account confinement (WebDAV/CalDAV/CardDAV) | Met | `src/webdav/path/mod.rs::resolve` percent-decodes, rejects NUL/`..`/`\`/non-`Normal` components and ends with a `starts_with(root)` guard; the root is derived from the *resolved* account (`src/webdav/auth/mod.rs`, `src/webdav/handler/mod.rs`). |
-| 4.x Sender ownership (MAIL FROM) | Met | An authenticated sender may only use a reverse-path / From it owns (`src/smtp/session/mod.rs` → `src/smtp/directory/mod.rs::owns_address`); relay to foreign domains requires auth. |
+| 4.x Sender ownership (MAIL FROM) | Met | An authenticated sender may only use a reverse-path / From it owns (`src/smtp/session/envelope.rs` → `src/smtp/directory/mod.rs::owns_address`); relay to foreign domains requires auth. |
 
 > RFC 4314 IMAP ACLs are stored and reported (`SETACL`/`GETACL`/`MYRIGHTS`,
-> `src/imap/session/acl.rs`) but no shared-mailbox **read path consults them yet**
+> `src/imap/session/mailboxes/acl.rs`) but no shared-mailbox **read path consults them yet**
 > — every data path is owner-scoped, so this is fail-safe (deny), not a leak. If
 > a shared-read path is added it must enforce these stored rights.
 
@@ -99,7 +99,7 @@ function name is the stable reference.
 | Req (L3) | Status | Evidence |
 |---|---|---|
 | 5.1.x Input validation at the boundary | Met | Addresses validated and length-capped (`src/smtp/address/mod.rs`, 254/64, control chars rejected); SMTPUTF8/EAI handled. |
-| 5.1.4 Bounds on attacker-controlled sizes | Met | SMTP data line 998 (`src/smtp/line/mod.rs`), command line 512 (`src/smtp/command.rs`), message 25 MiB and ≤100 recipients (`src/smtp/session/mod.rs`), inbound trace-hop cap (`src/smtp/trace/mod.rs`), outbound reply 64 KiB (`src/queue/client/mod.rs`), MTA-STS body 64 KiB (`src/mtasts/policy/mod.rs`), bounce header block 4096 (`src/queue/bounce/mod.rs`). |
+| 5.1.4 Bounds on attacker-controlled sizes | Met | SMTP data line 998 (`src/smtp/line/mod.rs`), command line 512 (`src/smtp/command.rs`), message 25 MiB and ≤100 recipients (`src/smtp/session/limits.rs`), inbound trace-hop cap (`src/smtp/trace/mod.rs`), outbound reply 64 KiB (`src/queue/client/mod.rs`), MTA-STS body 64 KiB (`src/mtasts/policy/mod.rs`), bounce header block 4096 (`src/queue/bounce/mod.rs`). |
 | 5.2.x Sanitize unstructured / hostile content | Met (fixed in this sweep) | A remote MTA's reply is sanitized (controls → space, length-capped) before it reaches any DSN header or body (`src/queue/bounce/mod.rs::sanitize_reason`). |
 | 5.3.1 Output encoding / no header (CRLF) injection | Met | Inbound: bare CR/LF/NUL rejected by the decoder (`src/smtp/line/mod.rs`). Outbound: bounce/DSN reason sanitized (above); addresses are validated values. |
 | 5.3.4 Parameterized queries only (SQLi) | Met | Every query is a sqlx **compile-time macro** with bound `$n` params — no string-built SQL anywhere (`src/antispam/corpus/mod.rs`, `src/antispam/reputation/mod.rs`). |
@@ -113,16 +113,17 @@ function name is the stable reference.
 
 | Req (L3) | Status | Evidence |
 |---|---|---|
-| 6.2.1 Approved algorithms, no home-rolled crypto | Met | All crypto via `ring`/`rustls`/`argon2`/`webpki`. No MD5/SHA-1/DES/RC4 for any security purpose. (The single SHA-1 is the RFC 6238-mandated TOTP HMAC, `src/totp/mod.rs`.) |
+| 6.2.1 Approved algorithms, no home-rolled crypto | Met | All crypto via `ring`/`rustls`/`argon2`/`webpki`. No MD5/SHA-1/DES/RC4 for any security purpose. (SHA-1 appears in three places, all legacy-mandated: the RFC 6238 TOTP HMAC in `src/totp/mod.rs`, the RFC 3161 token digest in `src/evidence/tsa/verify/mod.rs`, and the OVH API request signature in `src/dns/providers/ovh/mod.rs`.) |
 | 6.2.2 Argon2id for password hashing | Met | `src/smtp/auth/mod.rs::hash_password` (argon2id PHC). |
-| 6.2.3 Constant-time comparison of secrets | Met | TOTP and SRS use full-length XOR-fold compares (`src/totp/mod.rs::constant_time_eq`, `src/queue/srs/mod.rs::constant_time_eq`); the API bearer compare is `==` on **SHA-256 digests** of the token — a timing leak of a pre-image-resistant digest reveals nothing about the token (justified at `src/api/state/mod.rs::token_matches`). |
+| 6.2.3 Constant-time comparison of secrets | Met | TOTP and SRS use length-aware constant-time compares (`src/totp/mod.rs` via `crate::util::constant_time::eq`, `src/queue/srs/mod.rs::constant_time_eq`); the API bearer compare is `==` on **SHA-256 digests** of the token — a timing leak of a pre-image-resistant digest reveals nothing about the token (justified at `src/api/state/mod.rs::token_matches`). |
 | 6.3.1 CSPRNG for all secrets | Met | `ring::rand::SystemRandom` for salts, app-password secrets, SCRAM/IMAP/SMTP nonces, ACME keys, DKIM keygen (`src/cli/util.rs::generate_secret`, `src/smtp/auth/mod.rs`, `src/acme/`, `src/dkim/`). No `thread_rng`/predictable seeding in non-test code. |
 | 6.4.1 Secret key material protected at rest | Met (hardened in this sweep) | DKIM and ACME private keys are written `create_new` + `0o600` (atomic, no permissive window): ACME `src/acme/renew/mod.rs::write_secret`, manual keygen `src/cli/util.rs`, and DKIM **rotation** `src/dkim/rotate/mod.rs::write_key` (fixed in this sweep — previously wrote then chmod'd). |
-| 6.x DKIM/JWT algorithm hygiene | Met | DKIM accepts only rsa-sha256 / ed25519-sha256 (rsa-sha1 rejected), verify uses `RSA_PKCS1_2048_8192_SHA256` (≥2048-bit) / ED25519 (`src/dkim/verify/mod.rs`). ARC accepts the same two algorithms and dispatches on the one the header declares: `a=ed25519-sha256` verifies with ED25519 over the SHA-256 digest of the signed data, `a=rsa-sha256` with `RSA_PKCS1_1024_8192_SHA256_FOR_LEGACY_USE_ONLY` (≥1024-bit) over a key whose modulus is read from the record, and a record whose `k=` type does not match the declared algorithm is refused (`src/arc/key.rs`). |
+| 6.x DKIM/JWT algorithm hygiene | Met | DKIM accepts only rsa-sha256 / ed25519-sha256 (rsa-sha1 rejected), verify uses `RSA_PKCS1_1024_8192_SHA256_FOR_LEGACY_USE_ONLY` (≥1024-bit, per RFC 8301 §3.2) / ED25519 (`src/dkim/verify/mod.rs`). ARC accepts the same two algorithms and dispatches on the one the header declares: `a=ed25519-sha256` verifies with ED25519 over the SHA-256 digest of the signed data, `a=rsa-sha256` with `RSA_PKCS1_1024_8192_SHA256_FOR_LEGACY_USE_ONLY` (≥1024-bit) over a key whose modulus is read from the record, and a record whose `k=` type does not match the declared algorithm is refused (`src/arc/key.rs`). |
 
-> **Note (deferred):** the TOTP shared secret is stored as cleartext base32 in
-> the account store (`src/directory_store/mod.rs`). Encrypting it at rest needs a
-> key-management mechanism; documented as a gap below.
+> **Note:** the TOTP shared secret is stored as base32 in the account store
+> unless `encrypt_at_rest` is on with a `[storage] encryption_key_file`; then it
+> is sealed with ChaCha20-Poly1305 as `enc:v1:<base64>` and an unreadable value
+> fails closed (`src/directory_store/set_totp/mod.rs`).
 
 ---
 
@@ -130,7 +131,7 @@ function name is the stable reference.
 
 | Req (L3) | Status | Evidence |
 |---|---|---|
-| 7.1.1 No secrets/PII in logs | Met | All 50 `tracing` call sites audited: none interpolate a password, hash, token, API key, SCRAM proof, private key or raw SASL blob. Auth failures log a **count** only (`src/smtp/session/scram.rs`, `src/imap/session/auth.rs`). |
+| 7.1.1 No secrets/PII in logs | Met | All the `tracing` call sites (about 360 outside the test modules) audited: none interpolate a password, hash, token, API key, SCRAM proof, private key or raw SASL blob. Auth failures log a **count** only (`src/smtp/session/scram.rs`, `src/imap/session/auth/mod.rs`). |
 | 7.1.2 No credentials in logs even on the failure path | Met | The decoded PLAIN/LOGIN/SCRAM bytes never reach a log macro; no protocol logs its raw command line. |
 | 7.4.1 Generic error to the client; details server-side | Met | API errors return fixed strings (`src/api/error/mod.rs::internal` → "Internal error."); underlying errors dropped via `.map_err(|_| …)`; JMAP errors are static. No stack trace, file path, SQL text or version reaches a client. |
 | 7.4.x No version/internal banner to unauthenticated clients | Met | SMTP/POP3/IMAP/ManageSieve greetings carry no version, IMAP `ID` returns `NIL`, and no HTTP `Server` header is sent. The `/status` version is behind the closed API. |
@@ -153,7 +154,7 @@ function name is the stable reference.
 
 | Req (L3) | Status | Evidence |
 |---|---|---|
-| 9.1.1 TLS for all client connections | Met | rustls (ring provider, TLS 1.2/1.3 only). AUTH refused before TLS on every protocol: SMTP `538` (`src/smtp/session/mod.rs`), IMAP `[PRIVACYREQUIRED]` (`src/imap/session/auth.rs`), ManageSieve `ENCRYPT-NEEDED`, POP3 implicit-TLS only (no port 110). |
+| 9.1.1 TLS for all client connections | Met | rustls (ring provider, TLS 1.2/1.3 only). AUTH refused before TLS on every protocol: SMTP `538` (`src/smtp/session/mod.rs`), IMAP `[PRIVACYREQUIRED]` (`src/imap/session/auth/mod.rs`), ManageSieve `ENCRYPT-NEEDED`, POP3 implicit-TLS only (no port 110). |
 | 9.1.2 Strong TLS configuration, no weak protocols | Met | rustls negotiates only TLS 1.2/1.3; the crypto provider is pinned (`src/tls/mod.rs::ensure_crypto_provider`). |
 | 9.1.3 Fail closed on TLS misconfiguration | Met | A missing/unreadable/empty/mismatched cert or key is a fatal `TlsError` — the server refuses to start rather than serve plaintext (`src/tls/mod.rs`, tested). |
 | 9.2.1 Outbound connections use verified TLS where required | Met | Outbound `tls_connect` authenticates via PKIX (webpki roots + ServerName) whenever `pkix_required` holds (`src/queue/client/mod.rs`): no usable TLSA records, and either a mandate (MTA-STS enforce / REQUIRETLS) or `[queue] outbound_tls = "strict"` (the default). With usable TLSA records the handshake accepts any certificate and DANE authenticates it against them, also under MTA-STS enforce and REQUIRETLS (RFC 8461 section 2, RFC 8689 section 4.2.1: a DANE-EE leaf is normally self-signed, so PKIX must not run first); a mismatch fails closed. Any secure TLSA RRset, usable or not, makes STARTTLS mandatory. A remote without STARTTLS where TLS is mandatory yields a **transient** error (retry, never cleartext). Every combination is pinned by `src/queue/worker/tests/routing/policy_matrix.rs`. |
@@ -243,7 +244,7 @@ change — adding one half-built would be worse than tracking it honestly.
    now flattens every control character to a space and caps the length before the
    reason reaches any sink. Tests:
    `sanitizes_crlf_in_reason_to_prevent_header_injection` and `caps_reason_length`
-   in `src/queue/bounce/mod.rs`.
+   in `src/queue/bounce/tests/base.rs`.
 
 3. **JWT accepted without `exp`** (V2/V3, was high). `src/jwt/mod.rs::check_claims`
    only checked `exp` when present, so a token without a bounded lifetime never
@@ -257,7 +258,7 @@ Two further low-severity hardening fixes were applied:
    `src/dkim/rotate/mod.rs::write_key` wrote the private key and then chmod'd it,
    leaving a brief world/group-readable window. It now creates the file with
    `create_new` + `0o600` (no permissive window; matches ACME/manual keygen).
-   Test: `write_key_creates_with_owner_only_perms_and_refuses_overwrite` in
+   Test: `write_key_creates_with_owner_only_perms_and_replaces_whole` in
    `src/dkim/rotate/tests/base.rs`.
 
 5. **ManageSieve had no failed-auth connection close** (V2.2.1, was low). Unlike
@@ -271,19 +272,13 @@ Two further low-severity hardening fixes were applied:
 These are real ASVS L3 deficiencies, recorded honestly. Each needs more than a
 surgical change and should be tracked as its own issue.
 
-- **Cross-connection brute-force ban (V2.2.1).** Throttling is per-connection
-  (3-strikes) plus the API's in-memory budget; there is no persistent per-IP /
-  per-account failure tracker shared across connections, so an attacker can
-  reconnect and keep guessing. A correct fix is a persistent ban table (the
-  product context anticipates a PostgreSQL ban table).
 - **TOTP replay, recovery codes, and at-rest secret (V2.6/V2.8, V6.4).** The OTP
-  has no last-consumed-step replay guard, no single-use recovery codes, and the
-  shared secret is stored as cleartext base32. Each needs persistent per-account
-  state and (for the secret) an at-rest encryption key mechanism.
-- **Per-account-scoped API keys (V4.1.3 least privilege).** A single operator
-  token authorizes every account's mail. This is by design (the consumer is the
-  operator/panel) and is not a cross-tenant leak, but a scoped key would be
-  stricter least privilege.
+  has no last-consumed-step replay guard and no single-use recovery codes. Each
+  needs persistent per-account state.
+- **The operator token is not scoped (V4.1.3 least privilege).** A single
+  operator token authorizes every account's mail. This is by design (the
+  consumer is the operator/panel) and is not a cross-tenant leak; an API key
+  scoped to one account exists for JMAP and `/api/v1/send`.
 
 ---
 
@@ -292,10 +287,10 @@ surgical change and should be tracked as its own issue.
 | Chapter | Met | N/A | Gap |
 |---|---|---|---|
 | V1 Architecture | 9 | 0 | 0 |
-| V2 Authentication | 9 | 1 | 2 (both partial)\* |
+| V2 Authentication | 10 | 1 | 2 (both partial)\* |
 | V3 Session | 3 | 3 | 0 |
 | V4 Access Control | 7 | 0 | 1 (partial) |
-| V5 Validation | 6 | 0 | 0 |
+| V5 Validation | 8 | 0 | 0 |
 | V6 Cryptography | 6 | 0 | 0 (1 deferred note) |
 | V7 Error/Logging | 5 | 0 | 0 |
 | V8 Data Protection | 4 | 0 | 0 |

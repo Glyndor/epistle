@@ -575,8 +575,16 @@ async fn collect_events_filtered(
 		// Apply the filter. An empty filter (no `comp-filter`
 		// children) is a no-op, so the call is cheap.
 		let text = String::from_utf8_lossy(&bytes);
-		if !super::caldav_filter::matches(filter, &text) {
-			continue;
+		match super::caldav_filter::matches(filter, &text) {
+			Ok(true) => {}
+			Ok(false) => continue,
+			Err(_) => {
+				// The object could not be searched within the work bound:
+				// a series it holds may still fall inside the window, so
+				// it is answered on its own instead of being left out.
+				reply.too_large(&href);
+				continue;
+			}
 		}
 		let etag = super::carddav::etag(&metadata);
 		if reply.member(

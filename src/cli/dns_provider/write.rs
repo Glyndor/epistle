@@ -15,7 +15,7 @@ use std::process::ExitCode;
 use toml_edit::TableLike;
 
 use super::super::config_edit::{
-	ConfigDocument, FieldChange, Outcome, after_ports_change_reporting,
+	ConfigDocument, FieldChange, Outcome, after_credential_change_reporting,
 };
 use super::super::resource::{self, ResourceError};
 use super::super::stack::StackAction;
@@ -74,7 +74,39 @@ pub(super) fn run(
 		.into_iter()
 		.chain(args.token_env.as_deref())
 		.collect();
+	// The generated compose file is rewritten through the companion, so it
+	// is read and written under the lock that guards it. The common lock
+	// above was taken first and this one after it, in every command that
+	// takes both, so no two commands wait for each other.
+	let compose_lock = if dry_run {
+		None
+	} else {
+		super::compose::lock_compose(&current)?
+	};
 	let compose = super::compose::with_token(&current, &zone, source, &dropped)?;
+	// The variable the token lives in has to be visible where the container
+	// reads it. This command knows its name, so a variable it does not see
+	// is reported here, where the operator is still watching, instead of
+	// later in `dns provider test`. The configuration is written either
+	// way: the operator may set the variable afterwards.
+	if let Some(TokenSource::Env(name)) = source
+		&& !super::token_env::is_set(name)
+	{
+		crate::cli::style::warn_to(status, super::token_env::warning(name, compose.service));
+	}
+	// The services whose definition the compose change touches: each one of
+	// them has to be recreated, or its container keeps the mount it had.
+	let touched: Vec<&'static str> = compose
+		.update
+		.as_ref()
+		.map(|update| update.changed.clone())
+		.unwrap_or_default();
+	// The override the operator keeps beside the generated file can hand
+	// the credential back to the container the split took it away from, and
+	// nothing in the generated file says so.
+	for warning in &compose.warnings {
+		crate::cli::style::warn_to(status, format_args!("{warning}"));
+	}
 	let edit = resource::Edit {
 		label: "dns provider",
 		action: "provider set",
@@ -82,10 +114,13 @@ pub(super) fn run(
 		json,
 	};
 	if dry_run {
-		let change = compose.as_ref().map(|update| resource::CompanionChange {
-			companion: &update.companion,
-			lines: &update.lines,
-		});
+		let change = compose
+			.update
+			.as_ref()
+			.map(|update| resource::CompanionChange {
+				companion: &update.companion,
+				lines: &update.lines,
+			});
 		return resource::preview(&document, change, &edit, out);
 	}
 	if let (Some(destination), Some(token)) = (&destination, &token) {
@@ -94,9 +129,15 @@ pub(super) fn run(
 	// The compose file is staged and validated before the config is replaced,
 	// and a refused replacement restores the one that was there: the running
 	// container keeps the forwarding it had.
-	let outcome =
-		crate::cli::config_edit::commit_pair(document, compose.map(|update| update.companion))
-			.map_err(ResourceError::from)?;
+	let outcome = crate::cli::config_edit::commit_pair(
+		document,
+		compose.update.map(|update| update.companion),
+	)
+	.map_err(ResourceError::from)?;
+	// The generated file is written, so the lock that guarded it is free
+	// again: a command that waits for it does not wait for the container
+	// this one recreates.
+	drop(compose_lock);
 	let changed = outcome == Outcome::Changed;
 	writeln!(
 		status,
@@ -104,7 +145,8 @@ pub(super) fn run(
 		if changed { "saved" } else { "unchanged" }
 	)
 	.map_err(|error| error.to_string())?;
-	let (code, reload) = after_ports_change_reporting(&config, outcome, status, restart)?;
+	let (code, reload) =
+		after_credential_change_reporting(&config, outcome, status, restart, &touched)?;
 	if json {
 		let object =
 			super::super::json_out::change_object(edit.action, changed, edit.fields, Some(reload));

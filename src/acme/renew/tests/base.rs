@@ -45,3 +45,16 @@ fn corrupt_account_key_is_rejected() {
 	fs::write(&path, B64.encode(b"not a key")).expect("write");
 	assert!(load_or_create_account_key(dir.path()).is_err());
 }
+
+/// The certificates container keeps the key outside data_dir; the same file
+/// is loaded back rather than replaced.
+#[test]
+fn account_key_at_a_chosen_path_persists_and_reloads() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let path = dir.path().join("secrets").join("acme_account.key");
+	fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+	let a = load_or_create_account_key_at(&path).expect("create");
+	let b = load_or_create_account_key_at(&path).expect("reload");
+	assert_eq!(a.jwk(), b.jwk());
+	assert!(!account_key_path(dir.path()).exists());
+}

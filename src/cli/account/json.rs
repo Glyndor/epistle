@@ -21,8 +21,10 @@ pub(crate) fn protocols(allowed: Option<&Vec<Protocol>>) -> Value {
 	}
 }
 
-/// `account list --json`: every account, sorted by name.
-pub(crate) fn list(config: &Config, out: &mut impl std::io::Write) -> ExitCode {
+/// `account list --json`: every account, sorted by name. With `aliases`
+/// each account also carries an `aliases` array; without it the objects
+/// have no such key.
+pub(crate) fn list(config: &Config, aliases: bool, out: &mut impl std::io::Write) -> ExitCode {
 	let store = match AccountStore::open(
 		&config.data_dir,
 		config.domains.clone(),
@@ -37,17 +39,26 @@ pub(crate) fn list(config: &Config, out: &mut impl std::io::Write) -> ExitCode {
 	};
 	let mut views = store.account_views();
 	views.sort_by(|a, b| a.0.cmp(&b.0));
+	let attached = aliases.then(|| super::list_aliases::attach(config, &views));
 	let rows = views
 		.into_iter()
 		.map(|(name, addresses, dynamic)| {
 			let source = if dynamic { "dynamic" } else { "static" };
 			let display_name = store.display_name(&name);
-			json!({
+			let mut row = json!({
 				"name": name,
 				"source": source,
 				"display_name": display_name,
 				"addresses": addresses,
-			})
+			});
+			if let Some(attached) = &attached {
+				row["aliases"] = attached
+					.of(&name)
+					.iter()
+					.map(super::list_aliases::AliasRef::to_json)
+					.collect();
+			}
+			row
 		})
 		.collect();
 	crate::cli::json_out::print(out, &Value::Array(rows))

@@ -762,7 +762,7 @@ dependencies = [
 
 [[package]]
 name = "epistle"
-version = "0.12.6"
+version = "0.12.7"
 dependencies = [
  "anstream",
  "anstyle",
@@ -821,6 +821,7 @@ dependencies = [
 name = "epistle-fuzz"
 version = "0.0.0"
 dependencies = [
+ "argon2",
  "epistle",
  "libfuzzer-sys",
 ]

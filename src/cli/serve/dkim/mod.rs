@@ -19,9 +19,11 @@ pub(in crate::cli) struct SplitCompanions {
 	/// The split delivery sink, wrapped in an `Arc` by the caller.
 	pub split: SplitDelivery,
 	/// The default DKIM signer, present when `[dkim]` is configured.
-	/// The rotation task replaces it; per-domain overrides, when any
-	/// are configured, are loaded into the sink but not rotated.
+	/// The rotation task replaces it.
 	pub dkim_signer: Option<crate::dkim::ReloadableSigner>,
+	/// The signer of each `[[dkim.domain]]` entry, shared with the sink:
+	/// the rotation of each domain replaces its own.
+	pub domain_signers: Vec<crate::dkim::DomainSigner>,
 	/// The webhook dispatcher, present when `[webhook]` is configured.
 	pub webhook: Option<Arc<crate::webhook::Webhook>>,
 	/// The ARC sealer, present when `[arc]` is configured.
@@ -30,26 +32,29 @@ pub(in crate::cli) struct SplitCompanions {
 	pub evidence: super::evidence::Evidence,
 }
 
-/// Load every per-domain DKIM override from the configuration: each
-/// ed25519 key, plus the optional RSA pair. A bad path or unreadable
-/// key stops the start, the same way a bad configured `[dkim]` key
-/// does, so the misconfiguration cannot ship.
-fn load_per_domain_signers(
+/// Load every per-domain DKIM override: the keys each domain's rotation
+/// state names, or the entry's own keys for a domain that has not rotated
+/// ([`crate::dkim::domain_rotate::active_keys`]). A bad path, an unreadable
+/// key or a state that cannot be read stops the start, the same way a bad
+/// configured `[dkim]` key does, so the misconfiguration cannot ship.
+pub(in crate::cli) fn load_per_domain_signers(
 	dkim: &crate::config::Dkim,
+	data_dir: &std::path::Path,
 ) -> std::io::Result<Vec<crate::dkim::DomainSigner>> {
 	let mut loaded = Vec::with_capacity(dkim.domain.len());
 	for entry in &dkim.domain {
-		let mut signer = crate::dkim::Signer::load(&entry.selector, &entry.key_file)
+		let active = crate::dkim::domain_rotate::active_keys(entry, data_dir)
+			.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+		let mut signer = crate::dkim::Signer::load(&active.ed.selector, &active.ed.key_file)
 			.map_err(std::io::Error::other)?;
-		if let (Some(rsa_selector), Some(rsa_key_file)) = (&entry.rsa_selector, &entry.rsa_key_file)
-		{
+		if let Some(rsa) = &active.rsa {
 			signer = signer
-				.with_rsa(rsa_selector, rsa_key_file)
+				.with_rsa(&rsa.selector, &rsa.key_file)
 				.map_err(std::io::Error::other)?;
 		}
 		loaded.push(crate::dkim::DomainSigner {
 			domain: entry.name.to_ascii_lowercase(),
-			signer: Arc::new(signer),
+			signer: crate::dkim::ReloadableSigner::new(Arc::new(signer)),
 		});
 	}
 	Ok(loaded)
@@ -94,6 +99,7 @@ pub(in crate::cli) fn build_split_with_companions(
 		.with_identification(crate::smtp::identification::Policy::from_config(config))
 		.with_metrics(metrics.clone());
 	let mut dkim_signer: Option<crate::dkim::ReloadableSigner> = None;
+	let mut domain_signers = Vec::new();
 	if let Some(dkim) = &config.dkim {
 		// Two domains that publish one public key are refused before any
 		// listener binds, the way a key that does not load is.
@@ -114,26 +120,21 @@ pub(in crate::cli) fn build_split_with_companions(
 				.map_err(std::io::Error::other)?;
 		}
 		let reloadable = crate::dkim::ReloadableSigner::new(Arc::new(signer));
-		let overrides = load_per_domain_signers(dkim)?;
-		let per_domain = crate::dkim::PerDomainSigner::new(reloadable.clone(), overrides);
+		domain_signers = load_per_domain_signers(dkim, &config.data_dir)?;
+		let per_domain =
+			crate::dkim::PerDomainSigner::new(reloadable.clone(), domain_signers.clone());
 		split = split.with_signer(per_domain);
 		dkim_signer = Some(reloadable);
 	}
-	if let Some(secret) = &config.srs_secret {
-		let srs = crate::queue::srs::Srs::new(secret.as_bytes());
-		split = split.with_srs(srs, config.hostname.clone());
+	if config.srs_enabled() {
+		split = split.with_srs_keys(config.srs_keys(), config.hostname.clone());
 	}
-	// A destination the webhook client refuses leaves the server without a
-	// webhook and says so: the webhook is advisory, and a configuration that
-	// loaded before the destination policy must still start the server.
-	let webhook = match config.active_webhook().map(crate::webhook::poster) {
-		Some(Ok(webhook)) => Some(Arc::new(webhook.with_metrics(metrics.clone()))),
-		Some(Err(error)) => {
-			tracing::warn!(%error, "the webhook cannot be used and no event will be sent");
-			None
-		}
-		None => None,
-	};
+	// A destination the webhook client refuses leaves that webhook without a
+	// poster and says so (`webhook::from_config`): the webhook is advisory,
+	// and a configuration that loaded before the destination policy must
+	// still start the server.
+	let webhook = crate::webhook::from_config(config)
+		.map(|webhook| Arc::new(webhook.with_metrics(metrics.clone())));
 	if let Some(webhook) = &webhook {
 		split = split.with_webhook(Arc::clone(webhook));
 	}
@@ -144,6 +145,7 @@ pub(in crate::cli) fn build_split_with_companions(
 	Ok(SplitCompanions {
 		split,
 		dkim_signer,
+		domain_signers,
 		webhook,
 		arc_sealer,
 		evidence,

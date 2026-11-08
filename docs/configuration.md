@@ -50,17 +50,17 @@ a connection URL.
 | `dnsbl_url_zones` | list | `[]` | URI blocklist zones queried with the host of every URL found in the body (RFC 5782 §2.3). Empty disables the URL-host screen. |
 | `first_time_sender_delay_secs` | int | `0` | Delay a first-time (no-reputation) unauthenticated sender before accepting. Requires `[database]`. `0` disables. |
 | `greylist_delay_secs` | int | `0` | Seconds an unseen (client, sender, recipient) triplet is greylisted (451) before a retry is accepted. `0` disables. |
-| `srs_secret` | string | unset | Secret for Sender Rewriting Scheme on forwarded mail (SPF survives the next hop). Absent disables SRS. |
+| `srs_secret` | string | unset | Server-wide secret for Sender Rewriting Scheme on forwarded mail (SPF survives the next hop). Signs every domain that has no `[[srs_domain]]` of its own, and keeps verifying the addresses it signed. Absent disables SRS for those domains. See [`[[srs_domain]]`](#srs_domain). |
 | `quota_bytes` | int | 5 GiB | Default per-account mailbox quota (RFC 9208), used when an account has no per-account or per-domain quota. Absent means 5 GiB; `0` means no limit, here and in `domain_quotas` or an account's own `quota_bytes`. IMAP QUOTA, JMAP `Quota/get` and `epistle limits show` report the same limit (none when it is `0`). Enforced on every path, measured as IMAP QUOTA reports it (archived mail included): IMAP APPEND answers `NO [OVERQUOTA]`; SMTP refuses a full mailbox at `RCPT TO` with `452 4.2.2` for that recipient only, and a message that would overfill one is accepted for the other recipients with a DSN to the sender, or refused with `552 5.2.2` when it fits none; `POST /api/v1/send` answers `507 mailbox_full` and JMAP `EmailSubmission/set` `overQuota`, with nothing queued. |
 | `domain_quotas` | table | `{}` | `domain → bytes`: default mailbox quota for accounts in a domain (overridden by a per-account `quota_bytes`). `0` means no limit. |
 | `submission_rate_limit_per_min` | int | unset | Recipients an authenticated account may submit per minute, on SMTP, `POST /api/v1/send` and JMAP `EmailSubmission/set` together: one budget per account whatever the protocol, app password or sender address. A message costs one unit per recipient: on SMTP every `RCPT TO` the server accepted, on the API every `to`, `cc` and `bcc` address, on JMAP the envelope `rcptTo` or, without an envelope, the deduplicated `To`, `Cc` and `Bcc` (RFC 8621). It is charged once, when the message is accepted, all of it or none: a transaction ended by `RSET`, a message over the limit and one refused on the way out cost nothing. Over the limit: SMTP `450 4.7.1 sending rate limit exceeded; retry later` (at `MAIL FROM` once the budget is spent, at the end of the data when the message has more recipients than are left), REST `429` `rate_limited` with the message `sending rate limit exceeded; retry later`, JMAP `SetError` `rateLimit` with the same description. Absent disables it (the default); `epistle limits` refuses `0`, which the server reads as no limit. Changes apply when the server restarts. |
-| `new_recipients_per_day` | int | unset | Cap on first-time recipients an authenticated account may write to in a rolling 24h window. Refused: SMTP `450 4.7.1 too many new recipients today; retry tomorrow`, REST `429 rate_limited`, JMAP `tooManyRecipients`. Absent disables the cap (the default). The `init` scaffold later sets a default of 200. |
+| `new_recipients_per_day` | int | unset | Cap on first-time recipients an authenticated account may write to in a rolling 24h window. Refused: SMTP `450 4.7.1 too many new recipients today; retry tomorrow`, REST `429 rate_limited`, JMAP `tooManyRecipients`. Absent disables the cap (the default); it stays disabled until the operator sets it (`epistle limits set new-recipients-per-day <N>`). |
 | `default_feedback_id` | bool | `true` | Write a `Feedback-ID` of the sending domain and the class on a submission that carries none (`epistle:<class>:<domain>`). `false` leaves the field to the client. See [headers](headers.md#identification-headers). |
 | `default_list_unsubscribe` | bool | `true` | Give a bulk `transactional` submission a `mailto:` `List-Unsubscribe` naming the sender, when it has none. Marketing mail is left alone (it must carry a one-click unsubscribe) and personal mail never gets one. Nothing on the server answers the address it points at: it is the sender's own mailbox, and the sender's own tooling has to act on it. `false` turns it off for every class. |
 | `bulk_recipients` | int | `20` | Recipients above which a `transactional` submission counts as bulk for `default_list_unsubscribe`: `20`, the default, means twenty-one or more. A notice to a handful of people is correspondence, not bulk mail. Refused below `1`: it is a count of recipients, and zero would make every transactional submission bulk. For no unsubscribe at all, turn `default_list_unsubscribe` off. |
 | `default_list_id` | bool | `true` | Write the `List-Id`, `List-Post` and `List-Unsubscribe` of the list the envelope sender speaks for, when that sender is a `[[alias]]` with a `list_id`. The first two replace whatever the client wrote; a `List-Unsubscribe` the client already sent is kept, one-click included. `false` leaves them to the client. |
 | `system_auto_submitted` | bool | `true` | Write `Auto-Submitted: auto-generated` on the mail the server generates itself: bounces and delay notices, alert emails, DMARC and TLS-RPT reports. `false` leaves the field out of that mail, failure and delay notices among them, so nothing marks those as generated and the null return path is what keeps a bounce from looping. The abuse report builder does not read this switch and always writes `auto-generated`, and the report `epistle report-abuse` prints carries no `Auto-Submitted` at all. A vacation reply is always `auto-replied (vacation)` and is not affected. |
-| `x_epistle_header` | bool | `false` | Write `X-Epistle: 1` on every submission, on all three paths. The fixed value carries no version and no version field sits beside it. Off by default: no receiver acts on it. |
+| `x_epistle_header` | bool | `true` | Write `X-Epistle: 1` on every submission, on all three paths. It names the software the message left. The value is fixed: it carries no version and no version field sits beside it, and a client cannot write or change it. `false` leaves the field out. |
 | `organization_header` | bool | `true` | Write the `Organization` of the sending domain on a submission, using `domain_organization`. The configured value replaces whatever the client wrote. `false` leaves the field alone. |
 | `domain_organization` | table | `{}` | `domain → name`: the `Organization` each domain publishes (RFC 2369). The key is a DNS name, the value printable ASCII with no control character. A domain with no entry gets no `Organization` from the server. |
 | `domain_submission_limits` | table | `{}` | `domain → recipients/min`: per-domain override for `submission_rate_limit_per_min`, counted and refused the same way. An account picks up its own domain's entry when one is set; otherwise the server-wide default applies; otherwise no limit. The domain is taken from the account's own addresses (the same walk `domain_quotas` performs), not from the first configured domain; an account with addresses in several limited domains gets the strictest entry. Edited through `epistle limits set submission-rate --domain <NAME> <N>`. |
@@ -106,7 +106,7 @@ a connection URL.
 | `clamd_on_error` | `accept` or `defer` | `accept` | What a scan clamd could not run does. `accept` lets the message through unscanned; `defer` answers `451 4.7.1 content scan unavailable, try again later`, inbound and on submission, so the sender retries and nothing passes unscanned. A message clamd can never take (see `clamd_max_bytes`) is refused for good with `552 5.3.4`, not retried. `epistle init` writes `defer` into a new configuration with clamd; an existing configuration without the key keeps `accept`. |
 | `clamd_timeout_secs` | integer | `30` | Deadline in seconds for the entire connection, write, and reply exchange. |
 | `clamd_max_bytes` | integer | `26279936` (25 MiB + 64 KiB) | Messages above this size are not sent to clamd. With `clamd_on_error = "accept"` they are accepted unscanned; with `defer` they are refused with `552 5.3.4 message too large for the content scan`. The size counts the trace and authentication headers the server adds, so `defer` requires at least `max_message_size` + 64 KiB (the configuration is refused otherwise). A message exactly at the limit is scanned. |
-| `scan_authenticated` | boolean | `true` | Also scan what this server's own accounts send: SMTP submission after AUTH, `/api/v1/send` and JMAP `EmailSubmission/set`, to local and remote recipients alike. A detection is always refused, whatever `clamd_on_found` says. Only the antivirus runs on that mail, never the Bayesian filter, reputation, DNSBL or greylisting. Has an effect only with `clamd_socket` set. |
+| `scan_authenticated` | boolean | `true` | Also scan what this server's own accounts send: SMTP submission after AUTH, `/api/v1/send` and JMAP `EmailSubmission/set`, to local and remote recipients alike. A detection is always refused, whatever `clamd_on_found` says. Only the antivirus runs on that mail, never the Bayesian filter, reputation, DNSBL or greylisting. On the antivirus it has an effect only with `clamd_socket` set; the attachment policy applies to the submissions it covers with or without clamd. |
 | `bayes_junk_at` | float in `[0.0, 1.0]` | `0.95` | Score at or above which an unauthenticated message is delivered to the recipient's Junk mailbox with `X-Spam-Status: Yes` and the score in `X-Spam-Score`. Authenticated mail is never scored this way. A corpus below `MIN_TRUSTED_MESSAGES` (200) ham AND spam does not decide anything: a threshold acts only on a trained corpus: the account's own, or the shared one for an account with too little of its own, an alias or a list. |
 | `bayes_reject_at` | float in `[0.0, 1.0]` | unset | Score at or above which an unauthenticated message is refused during DATA with `550 5.7.1 message rejected as spam`. Absent disables the rejection path (default). When set, must be at least `bayes_junk_at` so the rejected band is a subset of the junked one. |
 
@@ -320,7 +320,7 @@ hostname. Supply that certificate and its private key with `--cert` and `--key`.
 ### `[tls]`
 TLS material, shared by all transports. Required by `submissions`/`imap`/`imaps`/`manage-sieve`; enables STARTTLS on `smtp`/`submission`.
 
-Without `[acme]` the pair is yours to renew (certbot, a Cloudflare origin certificate, one you made). The server looks at both files every minute and, when either changed, loads the new pair, checks that every certificate of the chain parses and that the key belongs to the certificate, and only then puts it in service on every listener: SMTP, submission, IMAP, POP3, ManageSieve, the HTTPS API and autoconfig, and DAV. Open connections keep the certificate they started with; no restart is needed. A pair that does not load (half written, a key from another certificate, a broken chain) is logged once and the certificate in service stays until the files form a valid pair. SCRAM-SHA-256-PLUS follows the new certificate. Replace the files by writing them beside and renaming them over the old ones when you can; the server retries a pair it caught mid-write as soon as the files change again.
+Without `[acme]` the pair is yours to renew (certbot, a Cloudflare origin certificate, one you made). The server looks at both files every minute and, when either changed, loads the new pair, checks that every certificate of the chain parses and that the key belongs to the certificate, and only then puts it in service on the listeners that take it: SMTP, submission, IMAP, POP3, ManageSieve and `autoconfigs`. The API, WebDAV, `autoconfig`, `acme` and `metrics` listeners carry plain HTTP and never take this pair (see the note above). Open connections keep the certificate they started with; no restart is needed. A pair that does not load (half written, a key from another certificate, a broken chain) is logged once and the certificate in service stays until the files form a valid pair. SCRAM-SHA-256-PLUS follows the new certificate. Replace the files by writing them beside and renaming them over the old ones when you can; the server retries a pair it caught mid-write as soon as the files change again.
 
 With `[acme]` the pair named here is the bootstrap `init` generates (`<data_dir>/keys/`): the server presents it until the authority issues the certificate, and the issued pair takes its place at `<data_dir>/acme/`. A server whose ACME certificate is not on disk yet starts with that bootstrap pair instead of exiting.
 
@@ -336,6 +336,8 @@ The DANE TLSA record (`_25._tcp.<hostname>`, `3 0 1 <sha256 of the certificate>`
 Outbound DKIM signing. Ed25519 is primary; an RSA selector is also required from version 0.10 on so receivers that verify RSA alone still see a valid signature. Until then the server warns at startup and on `epistle config-check` / `epistle verify-dns` when the RSA pair is missing; the warning names `epistle dkim-keygen --rsa` as the remedy.
 
 Key rotation is **automatic and always on** when a `[dns]` provider is configured: the server rotates the signing key every **90 days** and keeps the previous selector's TXT published for a **14-day overlap** so in-flight mail still verifies. A new key starts signing only after the system resolver shows its TXT record, with that key, for every signing domain; the server checks for about an hour, and if the record never shows it withdraws the new selector, keeps signing with the current key, and reports it in `epistle dkim show`, the log and the `dkim_rotation_failed` webhook event. The interval is a property of the server, not a per-deployment preference, and is fixed in code (aligned with the 90-day TLS certificate cycle). When `[dns]` is absent, rotation cannot publish the new selector's TXT and is therefore inactive; a notice is logged once at startup.
+
+With the certificates container on (`epistle stack certs enable`, see [splitting `mail` into containers](operations/container-split.md)), the rotation keeps running: the keys stay in `mail` and the records are written by the container that holds the DNS credential, through the hand-off directory `<data_dir>/dns-handoff` the two containers share. `mail` asks for a record to be published or withdrawn, `certs` performs it and answers whether it happened, and a request that is not answered within a minute is taken back: the rotation withdraws what it published, the key in service keeps signing, and the next tick finishes the rotation when the other container answers. The other container refuses anything that is not a DKIM key record of a domain this installation serves, so the request cannot be used to rewrite the zone.
 
 A rotation survives a crash or a kill at any step. It is written to `<data_dir>/dkim-rotation.json` as `pending` before its key exists, and the next tick (or start) either finishes it, reusing the key already written, or withdraws its TXT records and key file; the current key signs until the new one is committed. A rotation that never put a key in service leaves no state file behind: a `dkim-rotation.json` that names no key is read as an absent state, not as a corrupt one, and the configured key keeps signing. `epistle dkim show` lists a rotation in progress. Every save of the state is synced to disk and keeps the state it replaces as `dkim-rotation.json.bak`. If the state cannot be read, the server signs with the key the `.bak` names (its TXT is still published), logs a warning, `epistle status` reports it, and rotation stays stopped until the file is restored, for example by copying the `.bak` over it. Key files and TXT records that no rotation names, left by crashes in older releases, are logged when the rotation task starts and removed only through `epistle dkim cleanup`.
 
@@ -374,7 +376,7 @@ rsa_key_file = "/etc/epistle/dkim/example.net.rsa.pem"
 
 **Two domains never share a key.** An entry that names a key file another entry or `[dkim]` already names is a configuration error, and the message names both owners. When the server starts, and in `epistle config-check` and `epistle status`, the public keys inside the files are compared as well, so a copy of one key under two names, or a link to it, is refused the same way (`config-check` exits 1, `status` fails the `config` check, and `serve` does not start). The one sharing that is only a warning is the one older installs have: several domains with no entry, all signing with the `[dkim]` key. Nothing changes for them when the server is upgraded; `config-check`, `status`, the log at start and `epistle dkim show` list the domains on that key (`shared with` in `dkim show`), and `epistle dkim split` gives each its own.
 
-The keys are read when the server starts, like the default key: an unreadable or invalid file stops the start, and a changed key or a new entry takes effect after a restart. Per-domain keys are **not rotated**. Automatic rotation covers the `[dkim]` default only, and it neither publishes nor retires records of a domain listed here, so a listed domain outside the `[dns]` zone does not stop it. To replace a per-domain key, generate one (`epistle dkim-keygen`), publish its record under a new selector, point the entry at it and restart; `epistle dkim rotate --domain <name>` refuses and says the same. `epistle dkim cleanup` never offers a listed key or its record for removal.
+The keys are read when the server starts, like the default key: an unreadable or invalid file stops the start, and a changed key or a new entry takes effect after a restart. Per-domain keys rotate on their own, every 90 days with a 14-day overlap like the default, each domain with its own state in `<data_dir>/keys/dkim/<domain>/rotation.json`. A domain rotates when a `[dns]` entry can publish at it; one that no entry reaches keeps its key and is named once in the log at start, and it holds back neither the other domains nor the default key. The new key is made under `own<day>` (and `ownrsa<day>` when the entry dual-signs) in the domain's key directory, its record is published, and the domain signs with it only once a resolver shows the record with the new key; otherwise the rotation is withdrawn and the key in service keeps signing. The selector a rotation replaced stays published for 14 days and is then retired. The key the entry names is never retired and its file never removed, so the entry stays valid: its record stays published. A domain's first rotation counts its 90 days from the entry's key file, so a key `init`, `domain add` or `dkim split` just made is not replaced at once. A restart signs with the key the domain's rotation state names, and a state that cannot be read (and has no readable `rotation.json.bak`) stops the start. To rotate one domain now, run `epistle dkim rotate --domain <name>`. `epistle dkim cleanup` never offers a listed key or its record for removal. With the certificates container on, a per-domain rotation publishes through the same hand-off as the default key's, and the same rule holds: the record is written by the container that holds the DNS credential, and a request that is not answered in time is taken back while the key in service keeps signing.
 
 ### `[api]`
 Management API (consumed by `epistle-panel`). Serving requires an `api` listener
@@ -476,7 +478,7 @@ data, not only on the accounts routes:
 
 Before 0.12.2 these routes ignored the key's domains. If you handed out keys
 with `domains`, treat them as having had access to the whole server and rotate
-them. `src/api/tests/route_rules.rs` lists every route with the rule it
+them. `src/api/tests/keys/rules.rs` lists every route with the rule it
 follows, and fails when a route is added without one.
 
 ### What each key scope reaches
@@ -533,9 +535,12 @@ size that still fits 25 MiB once base64-encoded (about 18 MB).
 
 ### Uploaded blob storage
 
-JMAP uploads live under `<data_dir>/blobs/`, sharded two levels deep by the
-**last** four characters of the blob id: `blobs/ab/cd/<id>`, with the `.type`
-and `.owner` sidecars beside the payload.
+JMAP uploads live under `<data_dir>/blobs/accounts/<account>/`, sharded two
+levels deep by the **last** four characters of the blob id:
+`blobs/accounts/<account>/ab/cd/<id>`, with the `.type` and `.owner` sidecars
+beside the payload. The shared pool older versions wrote (`blobs/ab/cd/<id>`
+and the flat `blobs/<id>`) is still read, and the `.owner` sidecar ties each
+of those blobs to its account.
 
 The shard comes from the end of the id rather than the start because blob ids
 are UUIDv7, whose first 48 bits are a timestamp — every blob written in the
@@ -544,8 +549,8 @@ everything into one bucket while looking sharded.
 
 There is no migration. A blob written by an older version stays where it is
 and is still read, still counted against quota, and still reclaimed; only new
-blobs are written into the shards. Nothing needs to be moved and nothing needs
-configuring.
+blobs are written into the per-account partition. Nothing needs to be moved and
+nothing needs configuring.
 
 ### IMAP COMPRESS=DEFLATE
 
@@ -927,7 +932,7 @@ the shared corpus, where before it was not scored unless its first member had a
 trained corpus.
 
 Account deletion (`DELETE /api/v1/accounts/{name}`, `DELETE /Users/{id}`
-on SCIM, `epistle accounts remove`) calls `BayesStore::forget_scope` to
+on SCIM, `epistle account remove`) calls `BayesStore::forget_scope` to
 drop every per-scope row. Without this, a recreated account would
 inherit the previous user's training.
 
@@ -944,10 +949,11 @@ Automatic TLS certificates for the mail protocols (not the panel's web TLS).
 
 - `http-01`: the CA fetches a token from the `acme` listener on port 80.
 - `tls-alpn-01` (RFC 8737): the CA opens TLS to port 443 with the `acme-tls/1` ALPN. Requires a listener that terminates TLS on port 443 (`submissions`, `imaps` or `pop3s` with `port = 443`); the start is refused otherwise. While an order is pending that listener answers `acme-tls/1` with the challenge certificate; ordinary handshakes keep the normal certificate. TLS listeners then negotiate ALPN and offer `acme-tls/1`, `imap`, `pop3`, `managesieve` and `smtp`, so a client that offers only some other ALPN identifier is refused.
-- `dns-01`: the server publishes `_acme-challenge.<domain>` TXT through the `[dns]` provider, waits until every authoritative server of the zone returns it (up to 5 minutes, then the attempt fails with a message naming the record), asks the CA to validate, and removes the record afterwards whether the order succeeded or not. Requires a `[dns]` provider other than `manual`; the start is refused otherwise.
+- `dns-01`: the server publishes `_acme-challenge.<domain>` TXT through the `[dns]` provider, waits until every authoritative server of the zone returns it (up to 5 minutes, then the attempt fails with a message naming the record), asks the CA to validate, and removes the record afterwards whether the order succeeded or not. Requires a `[dns]` provider other than `manual`; the start is refused otherwise. Each record is written to `<data_dir>/acme/dns01-pending.json` before it is published and leaves that file once the provider removed it. On SIGTERM the server removes the records still published while connections drain, within the same deadline; a record it could not remove (killed, crashed, or past the deadline) is removed at the next start, from the zone the file names. A publish whose entry cannot be written to that file is not attempted.
 - The certificate the authority issues is written to `<data_dir>/acme/cert.pem` and its key to `<data_dir>/acme/key.pem`; the running server reloads it in memory and the next start presents it in place of the `[tls]` pair. Nothing else lives at that path. A certificate nobody vouches for (one that is its own issuer, such as the bootstrap an older `init` wrote there) is replaced on the next boot, however far its expiry is: no authority issues such a certificate, so the renewal loop asks for the real one instead of waiting for an expiry that never comes.
 - A server whose ACME pair cannot be used still comes up with the bootstrap pair `init` wrote in `<data_dir>/keys/` until the authority answers. A missing or unreadable certificate, a missing or invalid key, or a key that does not match the certificate makes issuance due without waiting for `renew_before_days`; a usable issued pair keeps its expiry-based renewal window.
 - A CA that refuses a request is reported with the reason it gave: the type and the detail of its problem document (RFC 8555 §6.7), such as `urn:ietf:params:acme:error:unauthorized` and the TXT record it did not find. An answer that is not a problem document (a proxy in front of the CA) is reported with its status and the first bytes of its body. A registration that created no account fails there, instead of going on with no account.
+- The URLs the authority names are checked before the client uses them: they must be `https` (plain `http` is admitted only when `directory_url` is plain `http` too, as in a local test CA), they may not point at the loopback interface, a private network or the cloud metadata address unless `directory_url` already names an address of that kind, and a redirect is never followed.
 
 ### `[arc]`
 ARC sealing of inbound mail (RFC 8617), so authentication survives forwarders.
@@ -1063,6 +1069,64 @@ it and otherwise ignore it:
 ```json
 {"event":"test","message":"epistle webhook test: connectivity check, no mail activity"}
 ```
+
+#### A webhook per tenant: `[tenant.webhook]`
+
+The `[webhook]` above is the default for every domain. A `[[tenant]]` can carry
+a `[tenant.webhook]` of its own, with the same four keys (`url`, `secret`,
+`enabled`, `allow_private_webhooks`), so each tenant's receiver gets the events
+of the tenant's domains and signs them with the tenant's secret:
+
+```toml
+[webhook]                          # the default, and the server's own events
+url = "https://ops.example/hook"
+secret = "…"
+
+[[tenant]]
+name = "acme"
+domains = ["acme.example"]
+
+[tenant.webhook]
+url = "https://acme.example/epistle-events"
+secret = "…"                       # signs only acme's events
+```
+
+- An event belongs to a hosted domain that the server decides, never the
+  envelope sender (`MAIL FROM`), which the sender writes and could set to
+  another tenant's domain. `message_received` belongs to the domain of the
+  local recipient. A queued message belongs to the domain of the account that
+  authenticated to send it; mail a local address forwards, and the bounces,
+  reports and vacation replies a local delivery produces, belong to the
+  domain of the local recipient. The owner is recorded in the queue entry
+  when it is queued; `delivered`, `delayed`, `delivery_failed`, `suppressed`,
+  `canceled` and `outbound_virus` follow it. An account whose addresses sit
+  in more than one domain, an entry queued before the owner was recorded, and
+  mail relayed for others have no owner and use the `[webhook]`. A domain
+  alias is its target's.
+- An event of a tenant's domain is posted to that tenant's webhook and to no
+  other, signed with that webhook's secret. It is never also posted to the
+  default.
+- A domain of no tenant, a tenant without a `[tenant.webhook]`, and the events
+  that belong to the server (`metric_alert`, `dkim_rotation_failed`, the warm-up
+  events, `test`, forwarded mail and bounces, whose sender is the null address or
+  the server's) use the `[webhook]`. An alert with `webhook = true` posts to it,
+  not to a tenant's.
+- A tenant whose webhook has `enabled = false`, or whose URL the client refuses,
+  posts nothing: its events do not fall back to the default or to another
+  tenant. A failed delivery is logged and dropped for that webhook alone.
+- Without `[webhook]`, the tenants that have one still post, and the other
+  domains' events go nowhere.
+- A tenant's URL passes the same checks as the default's: `https://` (or a
+  loopback `http://`), no redirect followed, no proxy of the environment, the
+  addresses its name resolves to judged too, and a private destination only
+  with that webhook's own `allow_private_webhooks = true` (it does not carry
+  over to the other webhooks).
+- The file is refused when a tenant webhook has no `domains` to receive for, when
+  two webhooks (a tenant's and another's, or the default) share a `secret`, or
+  when its URL breaks the rules above.
+- Each event is posted once, with no retry and no queue, so nothing is shared
+  between webhooks that one tenant's slow or failing receiver could hold up
+  for another.
 
 ### `[antispam_llm]`
 LLM-assisted screening for the **uncertain band** — the slice of mail where the
@@ -1338,6 +1402,8 @@ guide's "Data at rest".
 | `encrypt_at_rest` | Encrypt new message writes at rest (default `false`). Also encrypts the TOTP secrets in `accounts.toml`. |
 | `encryption_key_env` | Name of an env var holding the base64 32-byte key. |
 | `encryption_key_file` | Path to a file holding the base64 32-byte key (ideally outside `data_dir`); takes precedence over `encryption_key_env`. |
+| `tenant_keys` | Seal each account's new mail and JMAP blobs with the key of its `[[tenant]]` when every address of the account is in that one tenant and the tenant has an `encryption_key_file` (default `false`). Needs `encrypt_at_rest = true` and filesystem blobs. Rejected with `backend = "s3"` until a backend-aware migration exists. Mail already stored keeps its key until `epistle storage tenant-keys migrate`. See the security guide's "Keys per tenant". |
+| `retired_key_files` | Previous server keys, each a `0600` file, kept only to read what they sealed while `epistle storage tenant-keys migrate` moves it under the current key. Nothing is written with them, and one equal to the current key is refused. |
 | `deleted_retention_days` | Days to keep expunged messages in `<account>/.archive/` before the hourly sweeper removes them (default `0`). Setting this to a positive value moves expunged messages into the archive instead of deleting them; restore with `epistle archive restore` or `POST /api/v1/accounts/{name}/archive/{id}/restore`. Archived messages count toward the account's quota. |
 | `delivery_log_days` | Days to keep one line of per-recipient delivery state under `<data_dir>/deliverylog/YYYY-MM-DD.jsonl` (default `30`; `0` turns the log off). The log is metadata only; the hourly sweep removes files older than this window. Records cover delivered, deferred (one per recipient per message for each distinct reply, at most eight: a retry deferred for the same reason as the one before adds no record), failed, suppressed and canceled outcomes, each with the number of the attempt it came from, never the subject or body, and never a message body. Read with `epistle delivery list` or `GET /api/v1/deliveries`. |
 | _DMARC / TLS-RPT report retention_ | The constant `reports::RETENTION_DAYS` (90 days) controls how long ingested reports live under `data_dir/reports/{dmarc,tlsrpt}/YYYYMMDD/` before the hourly sweeper removes them. The retention ceiling is hard-coded: `epistle reports --days N` cannot read past it. The same sweep covers `data_dir/reports/tlsrpt-outbound/`, the TLS sessions of our own deliveries kept for the TLS-RPT reports we send (see `[queue] tlsrpt_reports`); a day there is normally deleted once its reports went out. |
@@ -1355,9 +1421,18 @@ format and the migration path.
 Where uploaded JMAP blobs (`POST /jmap/upload/{account}`) live. Absent (or
 `backend = "fs"`) keeps the historical default of `<data_dir>/blobs/`,
 sharded two levels by the **last** four characters of the blob id, with a
-fallback to the flat layout for blobs written by older versions. Setting
+partition per account (`blobs/accounts/<account>/ab/cd/<id>`) and a fallback
+to the shared and flat layouts for blobs written by older versions. Setting
 `backend = "s3"` redirects uploads to an S3-compatible bucket; the
 download handler and the `.owner` / `.type` sidecars follow the same path.
+
+S3 supports server-key-only writes. `[storage] tenant_keys = true` with S3 is
+rejected during configuration loading and crypto construction: remote tenant
+objects have no supported rotation or rollback path yet. The tenant-key
+migration command refuses S3 entirely, including `--rollback` and `--dry-run`,
+so a local file pass cannot certify remote data. Keep all keys needed by any
+existing S3 ciphertext and do not downgrade until a backend-aware migration is
+available. See [Keys per tenant](security.md#keys-per-tenant).
 
 | Key | Meaning |
 |---|---|
@@ -1387,10 +1462,12 @@ SDK dependency; the AWS SDK tree would be heavier than the four HTTP
 calls). A bucket that returns 401 or 403 surfaces as
 `BlobError::Auth`, never as "object not found", so an operator chasing
 wrong credentials is not led to chase a phantom missing blob. When
-`backend = "s3"` is set, blob-store reclaim (`reclaim_blobs`) and the
-`/api/v1/accounts/{name}/quota` path no longer walk the local filesystem
-— quota is enforced by the configured per-account limit and the operator
-manages bucket lifecycle on the S3 side.
+`backend = "s3"` is set, nothing new is written to the local filesystem, but
+the reclaim sweep (`reclaim_blobs`) and the `/api/v1/accounts/{name}/quota`
+path still walk the local blob tree, so blobs left on disk from before the
+switch keep counting against the quota. The quota itself is enforced by the
+configured per-account limit, and the operator manages bucket lifecycle on
+the S3 side.
 
 ### `[otel]`
 OpenTelemetry trace export. Present enables exporting tracing spans over OTLP/HTTP to a collector.
@@ -1476,7 +1553,10 @@ only the zone it was issued for. DKIM rotation, the TLSA refresh, the ACME
 - DKIM rotation publishes a signing domain through the table of its own zone,
   so a domain in a `manual` zone, or in one whose credential cannot be read,
   holds the rotation back like a domain outside every zone (the server logs
-  which).
+  which). With the certificates container on the credential is in that
+  container, so a table whose credential cannot be read *here* publishes
+  anyway, through the hand-off; only a `manual` table still holds the
+  rotation back.
 - `epistle init` run again keeps a `[[dns]]` list, mounts and forwards the
   credential of each table in the generated compose file, and warns that it
   ignored its own `dns` answers.
@@ -1535,9 +1615,10 @@ token = "your_api_token"        # or token_file / token_env
   provider requests `per_page=100` (the API maximum) and follows
   `pagination.total_pages`. Records are returned as FQDNs — the relative
   `name` from the API is joined to the configured zone.
-- **Unsupported kinds:** MX (priority is not modelled by epistle yet), SRV
-  (priority/weight/port), and TLSA (no structured-data field). The provider
-  returns `provider does not support writes` for these.
+- **Unsupported kinds:** TLSA (no structured-data field). The provider returns
+  `provider does not support writes` for it. MX and SRV are published, with
+  the priority (and weight and port for SRV) split into the fields the API
+  expects.
 - **API base:** `https://api.dnsimple.com/v2` — overridable through the
   provider's `with_base` for tests.
 #### `[dns]`: GoDaddy specifics
@@ -1722,7 +1803,8 @@ client_ip = "203.0.113.25"                # IPv4 on the API whitelist
   zone. epistle's upsert/delete is a read-modify-write (`getHosts` → mutate
   → `setHosts`), so if an operator also edits the zone by hand between
   those calls their changes are silently dropped. Pair with periodic drift
-  checks (`epistle dns-check`) for zones that are not fully epistle-owned.
+  checks (`epistle dns provider test`) for zones that are not fully
+  epistle-owned.
 
 #### `[dns]` — RFC 2136 specifics
 ```toml
@@ -1759,15 +1841,18 @@ algorithm = "hmac-sha256"     # default; "hmac-sha384" and "hmac-sha512" support
   answers NOERROR whether the RRset existed or not.
 - **`list` is not implemented.** RFC 2136 defines UPDATE only; reading
   the zone back would need AXFR or per-name queries that the provider
-  has no way to enumerate. Drift detection (`epistle dns-check`) will
+  has no way to enumerate. Drift detection (`epistle dns provider test`) will
   return `provider does not support writes` against an rfc2136 zone.
-- **Supported record kinds:** A, AAAA, TXT, CNAME, TLSA. MX and SRV are
-  rejected (`Unsupported`) because they carry extra fields
-  (preference, weight, port) that epistle does not currently build.
+- **Supported record kinds:** A, AAAA, TXT, CNAME, MX, SRV, TLSA and CAA (only
+  the `issue` CAA tag). The priority of an MX and the priority/weight/port of
+  an SRV are split out of the presentation form before they go on the wire.
 #### `[dns]` — Google Cloud DNS specifics
+```toml
+[dns]
 provider = "gcloud"
 token = "unused"                       # placeholder; auth is signature-based
 credentials_file = "/etc/epistle/dns/gcloud.json"
+```
 - **Auth is signature-based, not bearer-based.** `token` (and friends) is a
   placeholder; Google authenticates the service account with a JWT RS256
   signed with the private key from the credentials file. The bearer
@@ -1787,8 +1872,8 @@ credentials_file = "/etc/epistle/dns/gcloud.json"
   name cannot appear.
 - **Delete is idempotent.** Deleting an absent rrset is a no-op; the
   provider only submits a change when the rrset exists in the zone.
-- **TLSA is supported** via the structured `rrdatas` path. MX/SRV are not
-  emitted yet and return `provider does not support writes`.
+- **TLSA is supported** via the structured `rrdatas` path, and so are MX, SRV
+  and CAA.
 #### `[dns]` — Bunny specifics
 
 ```toml
@@ -1818,10 +1903,11 @@ token = "your-bunny-account-key"      # or token_file / token_env
 - **Delete is idempotent.** `DELETE` returns `404` for a record that is
   already gone (e.g. removed between our find and delete by another
   caller); epistle swallows the `404` and returns `Ok`.
-- **TLSA and SRV are not supported** — Bunny's API takes a `Type` integer
-  and the MX/SRV/TLSA wire formats need fields (`Priority`, `Port`,
-  `Flags`, `Tag`) epistle does not yet emit. epistle returns
-  `provider does not support writes` for those kinds and skips them.
+- **TLSA is not supported**: it needs the `Flags`, `Tag` and `Certificate`
+  fields epistle does not emit, so epistle returns `provider does not support
+  writes` for it and skips it. MX and SRV are published (types 4 and 8): an MX
+  travels as `<priority> <target>` and an SRV as `weight port target`, because
+  Bunny's API pins the SRV priority at 0.
 
 #### `[dns]` — Spaceship specifics
 
@@ -1857,8 +1943,35 @@ secret_key_env = "EPISTLE_SPACESHIP_SECRET"
 - **TXT values are unquoted.** Spaceship stores TXT content verbatim on
   the wire — epistle sends `value: "v=DMARC1; p=none"` rather than
   `"value: "\"v=DMARC1; p=none\""`.
-- **Supported record kinds:** A, AAAA, TXT, CNAME, TLSA. MX and SRV are
-  rejected (`Unsupported`) for the same reason as the other providers.
+- **Supported record kinds:** A, AAAAA, TXT, CNAME, MX, SRV, TLSA and CAA. The
+  priority of an MX and the priority/weight/port of an SRV travel in the
+  fields the API expects.
+
+### `[dns_publish]`
+
+How automatic mode keeps the DNS records true. With a `[dns]` provider other
+than `manual`, `epistle serve` compares the zones with the configuration every
+`interval_secs` and applies the difference with the same run as
+`epistle dns publish --yes`: it creates what is missing, repairs and retires
+only what epistle published (the ledger in `<data_dir>/dns-publish/`), and logs
+every record somebody else wrote that is in the way. In manual mode nothing
+runs. The first run is two minutes after the start.
+
+```toml
+[dns_publish]
+interval_secs = 21600   # six hours, the default; 0 turns the loop off
+```
+
+| Key | Default | Meaning |
+|---|---|---|
+| `interval_secs` | `21600` | Seconds between two runs. `0` turns the loop off; otherwise from `600` (ten minutes) to `604800` (one week). |
+
+A run that finds the ledger locked by `epistle dns publish` is skipped and the
+next one tries again. The provider is built from the configuration again on
+every run, so a credential that was rotated, or created after the server
+started, is picked up without a restart; when the build fails the provider of
+the last run keeps writing and the reason is logged (the credential itself
+never is). See [`dns.md`](dns.md#publishing-the-record-set).
 
 ### `[ldap]`
 LDAP or Active Directory backend. A login that no local or SQL account claims is checked with a bind against the directory, and its users are loaded for recipient resolution. Absent disables it. A malformed section aborts startup. The login is escaped (RFC 4515) before it goes into `user_filter`, and an unknown user and a wrong password get the same refusal.
@@ -1914,7 +2027,7 @@ A multi-target alias: one address that delivers to several local accounts.
 | `list_id` | Treat the alias as a **mailing list**: delivered copies gain `List-Id` (this value), `List-Post`, and `List-Unsubscribe` headers (RFC 2369/2919). Absent means a plain alias. The value is written between angle brackets as it stands, so it has to be an identifier those brackets can carry: a dot-atom of non-empty `atext` atoms joined by single dots, as in `team.example.org`. Anything else is refused at load, brackets and whitespace included; RFC 2919 puts a description outside the brackets (`Team List <team.example.org>`) and this server does not compose one |
 
 ### Masked email addresses
-Per-account disposable aliases, surfaced under `/api/v1/accounts/{name}/masked`. The server picks the random suffix (8 lowercase base32 chars from the CSPRNG); the client only supplies a human-readable label. The local part of every mask is `<label-slug>.<random>@<first configured domain>`. Disabled masks reject exactly like unknown users (no leak that one existed). The per-account cap is `masked_addresses_max` (default 100); going over returns `429`.
+Per-account disposable aliases, surfaced under `/api/v1/accounts/{name}/masked`. The server picks the random suffix (8 lowercase base32 chars from the CSPRNG); the client only supplies a human-readable label. The local part of every mask is `<label-slug>.<random>@<first configured domain>`. Disabled masks reject exactly like unknown users (no leak that one existed). The per-account cap is `masked_addresses_max` (default 100); going over returns `409 conflict`.
 
 ### `[[tenant]]`
 A tenant is a named group of domains with optional aggregate caps. Tenancy is what makes a resellable deployment work: each tenant gets its own per-account cap (already covered by `quota_bytes` / `domain_quotas`) plus aggregate caps the operator can promise to the tenant without having to revisit per-account limits. With no `[[tenant]]` block the server behaves exactly as it always has; the empty list is the identity.
@@ -1937,6 +2050,8 @@ submission_rate_limit_per_min = 200   # recipients per minute for the whole tena
 | `max_accounts` | Maximum number of accounts (static + dynamic) this tenant may hold. Absent means no cap. |
 | `max_domains` | Maximum number of domains this tenant may declare. Absent means no cap. The cap cannot be lower than `domains.len()` because that would make the tenant unloadable. |
 | `submission_rate_limit_per_min` | Aggregate submission rate ceiling for the tenant: recipients per minute, summed across every authenticated sender in every domain of the tenant. Applies on top of the per-account `submission_rate_limit_per_min`, not in place of it. |
+| `encryption_key_file` | Path to a `0600` file holding this tenant's own base64 32-byte at-rest key (`epistle storage-keygen`), ideally off the data disk. Needs `name` and a `[storage]` key. Read at start: a missing, unreadable or group-readable file stops the server, and two tenants (or a tenant and the server) with the same key are refused. Used for writes once `[storage] tenant_keys = true`. See the security guide's "Keys per tenant". |
+| `webhook` | A `[tenant.webhook]` table: where the events of the tenant's domains go, instead of the `[webhook]` default. See [a webhook per tenant](#a-webhook-per-tenant-tenantwebhook). |
 
 Rules:
 
@@ -1945,6 +2060,40 @@ Rules:
 - `max_accounts` is enforced on `POST /api/v1/accounts` as `409 Conflict` (not `429`): waiting will not lift it, the cap lifts when an account is deleted or the operator raises it.
 - `quota_bytes` is enforced on `POST /jmap/upload` alongside the per-account quota, with the JMAP limit problem type (`urn:ietf:params:jmap:error:limit`, `limit: "tenant_storage"`, HTTP `507`).
 - `submission_rate_limit_per_min` is enforced on SMTP submission, `POST /api/v1/send` and JMAP `EmailSubmission/set` with one counter per tenant shared by the three, counted and charged like the per-account limit (one unit per recipient, once, when the message is accepted, together with the per-account limit or not at all). An account with addresses in two tenants is charged by both. The refusal is the one the per-account limit gives and does not name the tenant.
+
+### `[[srs_domain]]`
+<a id="srs_domain"></a>
+A hosted domain's own Sender Rewriting Scheme secret. One `srs_secret` for the whole server means an address made for one domain is valid for all of them, and replacing it breaks the return of every bounce in flight at once. A domain with an entry signs the sender of the mail it forwards with that secret and verifies the bounce with the same secret and no other.
+
+```toml
+srs_secret = "…"          # optional once every domain has its own; see the rules below
+
+[[srs_domain]]
+name = "a.example"
+secret = "…"
+# previous_secret = "…"   # only while a rotation is in flight
+
+[[srs_domain]]
+name = "b.example"
+secret = "…"
+```
+
+| Key | Meaning |
+|---|---|
+| `name` | A domain in `domains`, once. |
+| `secret` | At least 16 characters. `epistle` writes 43 (32 random bytes, URL-safe base64). |
+| `previous_secret` | The secret `secret` replaced. It only verifies, so a bounce for mail forwarded just before a rotation still returns. Remove it after 14 days, the lifetime of a return address. |
+
+Rules:
+
+- An installation with only `srs_secret` behaves exactly as before: the same sender, signed the same way (`SRS0=<hash>=<ts>=<domain>=<local>@<hostname>`).
+- A domain with an entry puts its own name in the address, `SRS0.<hosted>=<hash>=<ts>=<domain>=<local>@<hostname>`, and the name is part of what is signed. The bounce selects the domain's secret by that name, then its `previous_secret`, and nothing else: another domain's secret and `srs_secret` never verify it. A domain's address retagged as another's does not verify, even under identical secrets.
+- An address in the first shape, made before a domain got its secret, verifies with `srs_secret` alone. Keep `srs_secret` for 14 days after `epistle srs split` so the bounces of mail forwarded before the split still return, then remove it. Removing it earlier drops those bounces; the sender is not told.
+- Two domains that share a secret fail to load, and so does a domain whose secret is `srs_secret` or another domain's `previous_secret`. The message names both.
+- While two or more hosted domains still sign with `srs_secret`, `epistle status` and `epistle config-check` warn about it.
+- An account that forwards needs `srs_secret` or an entry for each of its domains; without either the file fails to load.
+- `epistle domain add` writes the new domain's entry, `epistle domain remove` removes it, and a new `epistle init` writes one per domain. An existing installation moves with `epistle srs split` (every hosted domain without an entry) and `epistle srs rotate DOMAIN`.
+- Naming the hosted domain makes the return address longer. RFC 5321 limits a local part to 64 octets, and a receiver that enforces it refuses a longer sender, as it would refuse a long SRS address without the name.
 
 ### `[[transport]]`
 Outbound routing rules. Each rule matches by sender `account` (the envelope sender's local part) **or** recipient `domain`; a rule with neither is the catch-all. The most specific match wins (account > domain > catch-all). With no rule, mail is delivered directly via MX. Empty `[[transport]]` keeps that default.
@@ -2082,17 +2231,17 @@ runtime worker.
 |---|---|---|
 | Script size | 1 MiB (1048576 octets), also the ManageSieve literal limit | `maxSizeScript` |
 | Scripts per account | 50 | `maxNumberScripts` |
-| Script name | 128 characters and 200 octets; no control character (U+0000 to U+001F, U+007F to U+009F), no U+2028 or U+2029, no `/` or `\`, no bidirectional formatting character; no leading or trailing white space; Unicode normal form C | `maxSizeScriptName` (200) |
+| Script name | 128 characters and 512 octets; no control character (U+0000 to U+001F, U+007F to U+009F), no U+2028 or U+2029, no `/` or `\`, no bidirectional formatting character; no leading or trailing white space; Unicode normal form C | `maxSizeScriptName` (512) |
 | `redirect` actions per run of a script | 4, each address once | `maxNumberRedirects` |
 | `sieveExtensions` | `fileinto envelope vacation imap4flags relational variables reject ereject copy body date mailbox subaddress comparator-i;octet comparator-i;ascii-casemap comparator-i;ascii-numeric`, the list ManageSieve puts in `SIEVE` | `sieveExtensions` |
 
 `notificationMethods` and `externalLists` are `null`: `enotify` and
-`extlists` are not run. **Known deviations from RFC 9661:** `maxSizeScriptName`
-is 200 and not the 512 octets the RFC asks for, because a script name is a
-file name and 200 octets is what fits next to the staging file of an atomic
-write; and an empty script is accepted, as ManageSieve accepts it (the RFC
-asks for at least one character), so that the one check is the same for both
-protocols.
+`extlists` are not run. **Known deviations from RFC 9661:** an empty script is
+accepted, as ManageSieve accepts it (the RFC asks for at least one
+character), so that the one check is the same for both protocols. The 512
+octets the RFC asks for are all available: a name longer than 200 octets is
+stored under a hashed file name, with the name itself in a `.name` sidecar
+beside it.
 
 **Content is a blob.** A client uploads the script (`POST
 /jmap/upload/{accountId}`) and names the blob in `blobId` on `create` or

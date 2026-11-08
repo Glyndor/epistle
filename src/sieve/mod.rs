@@ -38,3 +38,7 @@ pub mod message;
 pub mod parser;
 pub mod vacation;
 mod vars;
+
+// Share the existing counting allocator with the hostile tests of other modules.
+#[cfg(test)]
+pub(crate) use tests::alloc_probe::peak_bytes as test_peak_bytes;

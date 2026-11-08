@@ -47,6 +47,19 @@ pub struct Tenant {
 	/// `submission_rate_limit_per_min` per-account limiter.
 	#[serde(default)]
 	pub submission_rate_limit_per_min: Option<u32>,
+	/// Path to a `0600` file holding this tenant's own base64 32-byte
+	/// at-rest encryption key (`epistle storage-keygen`), ideally off the
+	/// data disk. Requires `name`, which the key is known by, and a
+	/// `[storage]` key. Read at start: a missing or unreadable file stops
+	/// the server. It is a reference to the key, never the key itself.
+	#[serde(default)]
+	pub encryption_key_file: Option<std::path::PathBuf>,
+	/// Where this tenant's events go, instead of the server-wide
+	/// `[webhook]`: a tenant's receiver sees the events of the tenant's
+	/// domains and nobody else's, and signs with its own secret. Absent
+	/// keeps the tenant's events on the server-wide webhook.
+	#[serde(default)]
+	pub webhook: Option<crate::config::Webhook>,
 }
 
 #[cfg(test)]

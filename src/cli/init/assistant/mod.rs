@@ -317,6 +317,7 @@ pub fn run<R: BufRead>(
 			false,
 			out,
 		)?,
+		certs: false,
 	};
 	let image_line = ask_line(
 		reader,

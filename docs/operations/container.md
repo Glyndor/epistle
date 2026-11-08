@@ -104,10 +104,9 @@ podman run --rm \
   --userns=keep-id:uid=65532,gid=65532 \
   -p 25:25 -p 465:465 -p 587:587 \
   -p 143:143 -p 993:993 -p 995:995 \
-  -p 8080:8080 \
   -v /etc/glyndor/epistle:/etc/epistle:ro \
   -v /var/lib/glyndor/epistle/data:/var/lib/glyndor/epistle/data \
-  ghcr.io/glyndor/epistle:0.12.6
+  ghcr.io/glyndor/epistle:0.12.7
 ```
 
 The `/etc/glyndor/epistle` mount carries `mail.toml`; the
@@ -136,7 +135,7 @@ The compose form is the same flag under the `userns_mode:` key:
 ```yaml
 services:
   epistle:
-    image: ghcr.io/glyndor/epistle:0.12.6
+    image: ghcr.io/glyndor/epistle:0.12.7
     userns_mode: "keep-id:uid=65532,gid=65532"
     volumes:
       - /etc/glyndor/epistle:/etc/epistle:ro
@@ -186,14 +185,13 @@ keep two parallel sets of values in `mail.toml`, one for the host
 and one for the container, and would silently break the moment
 either side drifted.
 
-The management API listener is not configured by `init`: the
-assistant refuses `services.api = true` because there is no
-credential the operator can hand the stack without editing the
-generated config by hand. An operator who enables the API in
-the generated config binds it on `::` inside the container
-(the same dual-stack bind the mail listeners use); a loopback
-listener is not reachable through the pasta mapping, so the
-host-side reach is the operator's responsibility, not the
+The management API listener is not configured by `init` unless the answers
+file asks for it: `services.api = true` writes an API listener on loopback and
+an empty `[api]` section, and no static token is generated, so a key still has
+to be made with `epistle api-key create`. An operator who binds it on `::` in
+the generated config (the same dual-stack bind the mail listeners use) makes
+it reachable through the pasta mapping; a loopback listener is not reachable
+through it, so the host-side reach is the operator's responsibility, not the
 init stack's. Init keeps publishing a listener when the
 operator's keep-existing-listeners merge leaves it on a
 non-loopback address; where the host reaches it is the
@@ -245,6 +243,18 @@ address on the listener that has it. A wildcard renders as `PORT:PORT` in both
 families and publishes on every address the host owns either way; the family
 stays in the container bind, which is where the engine needs it.
 `epistle service list` shows the address in a `HOST` column.
+
+The engine warns about every published port that names no host address
+(`podup: warning: service 'mail': port 25 is published on every interface; use
+"127.0.0.1:25:25" to keep it on the host`). Several of those ports are
+published on purpose — inbound SMTP on port 25 has to answer the whole
+internet, and every mail listener binds the wildcard so the host reaches it on
+every address it owns — so `epistle stack up` replaces those warnings with one
+note that names the ports and the bind, while a warning about a port the stack
+does not publish on purpose (a listener on loopback that an override publishes
+wide, for example) stays exactly as the engine printed it. Port 80 is
+published only for the HTTP-01 challenge, so a configuration that renews with
+`dns-01` or `tls-alpn-01` does not publish it at all.
 
 A file from a release that published the listeners with no TLS transport wide
 is different: `8090:8090`, `0.0.0.0:8090:8090` and `[::]:8090:8090` all name the
@@ -307,6 +317,15 @@ services:
       - "993:993"
       - "10.0.0.1:8025:8025"
 ```
+
+An override that replaces the list decides where a port is published, so
+`epistle service set <name> --bind <address>` refuses when the override
+carries the port of that listener: the entry the command would write is never
+used, and the command says so instead of reporting a publication the stack
+does not make. It names the file, the line and the entry to change, and it
+leaves the configuration and the generated map alone. An override that merges
+with the generated map does not stop the change: the command publishes what it
+wrote and says how the two combine.
 
 [Exposing the API on a private interface](../api.md#exposing-the-api-on-a-private-interface)
 covers the API case, including what `--ip-cidr` sees when the container
@@ -470,7 +489,8 @@ differ. Backups do not carry these keys: save `secrets/` separately.
 I keep the DNS provider token in `secrets/dns_provider_token` beside `data_dir`,
 with mode `0600`. `epistle dns provider set <provider> --zone <zone> --store-token`
 moves an existing inline or environment token there, updates the generated
-Compose file to mount it read-only only in `mail`, and recreates that service.
+Compose file to mount it read-only only in `mail` (in `certs` when the stack
+runs the certificates container), and recreates that service.
 Supply any other settings required by your provider. For `init`, point
 `dns.token_file` in the answers at this file. See [DNS token storage](../dns.md#dns-provider-token-storage).
 
@@ -488,6 +508,33 @@ in the mounted configuration file. A token file mount exposes its path in
 container metadata rather than its contents. Remove old environment entries
 from Compose overrides and service configuration after migration, and save
 `secrets/` separately from data backups.
+
+### The certificates container
+
+Off by default. `sudo epistle stack certs enable` moves the ACME renewal, the
+TLSA refresh and the DNS credential out of `mail` into a `certs` service, so
+the process that takes SMTP from the internet can no longer rewrite the zone
+or sign an ACME order. It needs `[acme] challenge = "dns-01"` and a `[dns]`
+provider; `sudo epistle stack certs disable` returns to one `mail`.
+
+| | `certs` | `mail` |
+|---|---|---|
+| command | `epistle serve --role certs` | `epistle serve --role mail` |
+| DNS credential | read-only | not mounted |
+| ACME account key (`secrets/acme_account.key`) | read-only secret | not mounted |
+| `<data_dir>/acme` (certificate, key, renewal request) | read-write | read-only |
+| `<data_dir>/dns-tlsa` (TLSA retry state) | read-write | read-only |
+| `<data_dir>/compose` | not mounted | read-only |
+| rest of data_dir | not mounted | read-write |
+| ports | none | as before |
+
+`mail` picks a new certificate up from disk within a minute, without a
+restart. If `certs` stops, `mail` keeps serving the certificate it has until it
+expires; `epistle status` reports the container in its `tls` area with the
+days left. DKIM keys do not rotate while the split is on: rotation publishes
+through the credential `mail` no longer holds, and moves to its own service in
+a later step. The design and what is left are in
+[the split plan](container-split.md).
 
 ### The database roles
 
@@ -571,15 +618,15 @@ is absent (a bare host deployment without the container stack).
 The release job pushes per-arch images plus a multi-arch manifest list with
 three floating tags:
 
-- `ghcr.io/glyndor/epistle:0.12.6-amd64`, `…:0.12.6-arm64` per-arch, built
+- `ghcr.io/glyndor/epistle:0.12.7-amd64`, `…:0.12.7-arm64` per-arch, built
   natively on the matching runner.
-- `ghcr.io/glyndor/epistle:0.12.6` the full release.
-- `ghcr.io/glyndor/epistle:0.8` the latest patch release in the `0.8` line.
+- `ghcr.io/glyndor/epistle:0.12.7` the full release.
+- `ghcr.io/glyndor/epistle:0.12` the latest patch release in the `0.12` line.
 - `ghcr.io/glyndor/epistle:0` the latest minor release in the `0.x` line.
 
-`podman pull ghcr.io/glyndor/epistle:0.8` keeps getting patches;
+`podman pull ghcr.io/glyndor/epistle:0.12` keeps getting patches;
 `…:0` keeps getting minors. A consumer that wants to pin a specific build
-uses `gh attestation verify oci://ghcr.io/glyndor/epistle:0.12.6 …` (below);
+uses `gh attestation verify oci://ghcr.io/glyndor/epistle:0.12.7 …` (below);
 that command resolves the tag itself, so a separate digest lookup is
 not needed. `podman pull --quiet` only prints the local image id and is
 not a digest, so it has no place in the verification path.
@@ -591,7 +638,7 @@ Sigstore. The signed envelope is published as a GitHub attestation, so a
 consumer does not need a separate signer key:
 
 ```sh
-gh attestation verify oci://ghcr.io/glyndor/epistle:0.12.6 \
+gh attestation verify oci://ghcr.io/glyndor/epistle:0.12.7 \
   --repo Glyndor/epistle \
   --signer-workflow Glyndor/epistle/.github/workflows/release.yml \
   --deny-self-hosted-runners
@@ -601,7 +648,7 @@ A green `Verification succeeded` line proves four things and only four
 things:
 
 1. An attestation exists in `Glyndor/epistle` for the manifest list
-   that resolves from `oci://ghcr.io/glyndor/epistle:0.12.6`.
+   that resolves from `oci://ghcr.io/glyndor/epistle:0.12.7`.
 2. The signer workflow is `Glyndor/epistle/.github/workflows/release.yml`,
    identified by the `SubjectAlternativeName` of the Sigstore-issued
    certificate. Not just any workflow in this repository -- specifically

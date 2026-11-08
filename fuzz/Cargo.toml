@@ -9,6 +9,7 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
+argon2 = "0.6.0"
 epistle = { path = ".." }
 
 [[bin]]
@@ -157,6 +158,90 @@ bench = false
 [[bin]]
 name = "rules_match"
 path = "fuzz_targets/message/rules_match.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pop3_session"
+path = "fuzz_targets/mailbox/pop3_session.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "migrate_imap_response"
+path = "fuzz_targets/migrate/migrate_imap_response.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "backup_tar"
+path = "fuzz_targets/backup/backup_tar.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "webdav_report_body"
+path = "fuzz_targets/web/webdav_report_body.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "arf_report"
+path = "fuzz_targets/message/arf_report.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "imap_session"
+path = "fuzz_targets/mailbox/imap_session/main.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "smtp_session"
+path = "fuzz_targets/smtp/smtp_session/main.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "attachment_walk"
+path = "fuzz_targets/message/attachment_walk.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "smtp_bdat"
+path = "fuzz_targets/smtp/smtp_bdat.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sender_auth_records"
+path = "fuzz_targets/dns/sender_auth_records.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sasl_exchange"
+path = "fuzz_targets/smtp/sasl_exchange.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "srs_reverse"
+path = "fuzz_targets/queue/srs_reverse.rs"
 test = false
 doc = false
 bench = false

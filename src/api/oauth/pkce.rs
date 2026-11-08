@@ -24,6 +24,26 @@ use crate::util::constant_time;
 /// The grant-type identifier for the device-code flow (RFC 8628 §3.4).
 const DEVICE_CODE_GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
 
+/// The length of an S256 `code_challenge`: `BASE64URL(SHA256(code_verifier))`
+/// is 32 bytes, which base64url without padding writes as exactly 43
+/// characters (RFC 7636 §4.2). A challenge of any other length is not the
+/// digest of any verifier and is refused before it is stored.
+pub(super) const S256_CHALLENGE_CHARS: usize = 43;
+
+/// Authorization codes alive at once, over all accounts and clients. A code
+/// is a few hundred bytes, so this bounds the memory an authenticated caller
+/// can pin, and the scan every insert does under the lock.
+pub(super) const MAX_AUTH_CODES: usize = 10_000;
+/// Authorization codes alive at once for one account. A client redeems the
+/// code it just asked for; a hundred unredeemed ones from one identity are
+/// already abnormal.
+pub(super) const MAX_CODES_PER_ACCOUNT: usize = 100;
+/// Authorization codes alive at once for one client (an IPv4 address or an
+/// IPv6 /64), over every account that client authenticates. A shared office
+/// or carrier NAT serves several accounts, so this is looser than the
+/// per-account cap.
+pub(super) const MAX_CODES_PER_CLIENT: usize = 50;
+
 /// Current Unix time in seconds (0 on the impossible pre-epoch clock).
 fn now_secs() -> u64 {
 	SystemTime::now()
@@ -46,8 +66,9 @@ pub(crate) fn token_response(access_token: &str) -> Json<serde_json::Value> {
 /// account identity with `login`+`password` (form/JSON) or HTTP Basic.
 ///
 /// Fail-closed: only `code_challenge_method=S256` is accepted (plain is
-/// rejected); bad credentials and a missing/empty challenge are rejected; the
-/// issued code is single-use and short-lived.
+/// rejected); the challenge has to be the 43-character digest of RFC 7636
+/// §4.2; bad credentials are rejected; the issued code is single-use and
+/// short-lived, and the pool of codes waiting for a redemption is capped.
 pub async fn authorize(
 	State(state): State<ApiState>,
 	ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
@@ -65,8 +86,21 @@ pub async fn authorize(
 	if fields.get("code_challenge_method").map(String::as_str) != Some("S256") {
 		return oauth_error("invalid_request");
 	}
+	// This endpoint answers with JSON and never redirects, so a `redirect_uri`
+	// is only echoed by clients that always send one. It still has to be an
+	// absolute URI of a plain scheme, without control characters, or it is
+	// refused: nothing downstream should ever be handed a script URL or a
+	// header-splitting value.
+	if let Some(uri) = fields.get("redirect_uri")
+		&& !valid_redirect_uri(uri)
+	{
+		return oauth_error("invalid_request");
+	}
 	let code_challenge = fields.get("code_challenge").cloned().unwrap_or_default();
-	if code_challenge.is_empty()
+	// The challenge of an S256 flow is the digest of the verifier, so it has
+	// one exact shape (RFC 7636 §4.2). A megabyte of it is refused here,
+	// before it is stored and before the credential is even checked.
+	if !valid_challenge(&code_challenge)
 		|| fields
 			.get("client_id")
 			.map(String::is_empty)
@@ -90,23 +124,89 @@ pub async fn authorize(
 		return oauth_error("server_error");
 	};
 	let now = now_secs();
-	authz
-		.codes
-		.lock()
-		.unwrap_or_else(|p| p.into_inner())
-		.insert(
-			code.clone(),
-			AuthCode {
-				account,
-				code_challenge,
-				expires_at: now + CODE_TTL_SECS,
-			},
-		);
+	let grant = AuthCode {
+		account,
+		code_challenge,
+		expires_at: now + CODE_TTL_SECS,
+		redirect_uri: fields.get("redirect_uri").cloned(),
+		client: client_ip.map(super::device::client_bucket),
+	};
+	// The codes live until they are redeemed, so the pool is bounded: a cap
+	// that is reached refuses the request and stores nothing.
+	if let Err(seconds) = admit(&authz.codes, code.clone(), grant, now) {
+		return super::oauth_temporarily_unavailable(seconds);
+	}
 	let mut response = serde_json::json!({ "code": code });
 	if let Some(state_param) = fields.get("state") {
 		response["state"] = serde_json::Value::String(state_param.clone());
 	}
 	Json(response).into_response()
+}
+
+/// A `code_challenge` for S256 (RFC 7636 §4.2): exactly 43 characters of the
+/// base64url alphabet (`A-Z a-z 0-9 - _`), which is what
+/// `BASE64URL(SHA256(code_verifier))` writes. A shorter or longer string, or
+/// one carrying a character outside the alphabet, cannot be the digest of
+/// any verifier: it is refused before it is stored.
+fn valid_challenge(challenge: &str) -> bool {
+	challenge.len() == S256_CHALLENGE_CHARS
+		&& challenge
+			.bytes()
+			.all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+}
+
+/// Store `code` under the caps, or refuse and say how long to wait.
+///
+/// The policy, whole:
+/// 1. Expired codes are swept first. Nobody redeemed them, and they would
+///    otherwise count against the caps (and against memory) for as long as
+///    the server runs.
+/// 2. The pool holds at most [`MAX_AUTH_CODES`] codes, one account at most
+///    [`MAX_CODES_PER_ACCOUNT`] and one client at most
+///    [`MAX_CODES_PER_CLIENT`].
+/// 3. A cap that is reached refuses the request with the seconds until the
+///    codes counting against it expire. Nothing is stored.
+///
+/// Unlike the device flow, no code is evicted to make room: an authorization
+/// code is bound to one account, one challenge and one `redirect_uri`, so
+/// dropping one would hand its redemption to the wrong client.
+fn admit(
+	codes: &std::sync::Mutex<std::collections::HashMap<String, AuthCode>>,
+	code: String,
+	grant: AuthCode,
+	now: u64,
+) -> Result<(), u64> {
+	let mut codes = codes.lock().unwrap_or_else(|p| p.into_inner());
+	codes.retain(|_, c| c.expires_at > now);
+	let client = grant.client;
+	let mut per_account = 0usize;
+	let mut per_client = 0usize;
+	let mut account_wait = u64::MAX;
+	let mut client_wait = u64::MAX;
+	let mut pool_wait = u64::MAX;
+	for c in codes.values() {
+		let left = c.expires_at.saturating_sub(now);
+		pool_wait = pool_wait.min(left);
+		if c.account == grant.account {
+			per_account += 1;
+			account_wait = account_wait.min(left);
+		}
+		if c.client == client {
+			per_client += 1;
+			client_wait = client_wait.min(left);
+		}
+	}
+	if codes.len() >= MAX_AUTH_CODES {
+		return Err(pool_wait);
+	}
+	if per_account >= MAX_CODES_PER_ACCOUNT {
+		return Err(account_wait);
+	}
+	if per_client >= MAX_CODES_PER_CLIENT {
+		return Err(client_wait);
+	}
+	codes.insert(code, grant);
+	Ok(())
 }
 
 /// `POST /oauth/token` (public): dispatch on `grant_type` and return a signed
@@ -162,6 +262,19 @@ fn redeem_authorization_code(
 	if stored.expires_at <= now {
 		return oauth_error("invalid_grant");
 	}
+	// RFC 6749 section 4.1.3: a code issued for a redirect_uri is redeemed with
+	// the same one, byte for byte.
+	if let Some(bound) = &stored.redirect_uri
+		&& fields.get("redirect_uri") != Some(bound)
+	{
+		return oauth_error("invalid_grant");
+	}
+	// A verifier outside RFC 7636 section 4.1 cannot be the one the challenge
+	// came from, and it is refused before it is hashed. The code is already
+	// consumed, like on any other mismatch.
+	if !valid_verifier(verifier) {
+		return oauth_error("invalid_grant");
+	}
 	// BASE64URL(SHA256(code_verifier)) == code_challenge (RFC 7636 §4.6).
 	let digest = ring::digest::digest(&ring::digest::SHA256, verifier.as_bytes());
 	let computed = B64URL.encode(digest.as_ref());
@@ -172,4 +285,43 @@ fn redeem_authorization_code(
 		Some(token) => token_response(&token).into_response(),
 		None => oauth_error("server_error"),
 	}
+}
+
+/// A `code_verifier` as RFC 7636 section 4.1 writes it: 43 to 128 characters
+/// of the unreserved set. Anything longer or odder is refused before it is
+/// hashed, so a megabyte of verifier costs nothing.
+fn valid_verifier(verifier: &str) -> bool {
+	(43..=128).contains(&verifier.len())
+		&& verifier
+			.bytes()
+			.all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~'))
+}
+
+/// An absolute `http`, `https` or application URI (`scheme:` followed by
+/// something), short, with no control character, space or backslash. Not a
+/// scheme that runs code in a browser, and not a network-path reference.
+fn valid_redirect_uri(uri: &str) -> bool {
+	if uri.is_empty() || uri.len() > 2048 {
+		return false;
+	}
+	if uri
+		.bytes()
+		.any(|byte| byte <= b' ' || byte == 0x7f || byte == b'\\')
+	{
+		return false;
+	}
+	let Some((scheme, rest)) = uri.split_once(':') else {
+		return false;
+	};
+	let scheme_ok = scheme
+		.bytes()
+		.next()
+		.is_some_and(|first| first.is_ascii_alphabetic())
+		&& scheme
+			.bytes()
+			.all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'-' | b'.'));
+	let scheme = scheme.to_ascii_lowercase();
+	scheme_ok
+		&& !rest.is_empty()
+		&& !matches!(scheme.as_str(), "javascript" | "data" | "vbscript" | "file")
 }
