@@ -164,3 +164,63 @@ fn append_refuses_a_day_or_org_that_leaves_its_directory() {
 	assert!(!data.join("x").exists());
 	assert!(!data.join("reports/x.jsonl").exists());
 }
+
+/// Past `MAX_ORG_NAMES` distinct names in one day, a report of a new name is kept
+/// under `other`: the bytes stay and the files do not grow without a limit.
+#[test]
+fn names_past_the_cap_of_the_day_share_one_file() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let day = "20261108";
+	for n in 0..MAX_ORG_NAMES {
+		append(
+			dir.path(),
+			Kind::Dmarc,
+			day,
+			&format!("org{n}"),
+			&serde_json::json!({"n": n}),
+		)
+		.expect("append");
+	}
+	let day_dir = dir
+		.path()
+		.join("reports")
+		.join(Kind::Dmarc.dir_name())
+		.join(day);
+	assert_eq!(
+		std::fs::read_dir(&day_dir).expect("dir").count(),
+		MAX_ORG_NAMES
+	);
+	for n in 0..3 {
+		append(
+			dir.path(),
+			Kind::Dmarc,
+			day,
+			&format!("late{n}"),
+			&serde_json::json!({"late": n}),
+		)
+		.expect("append");
+	}
+	assert_eq!(
+		std::fs::read_dir(&day_dir).expect("dir").count(),
+		MAX_ORG_NAMES + 1,
+		"one more file, the shared one"
+	);
+	let shared =
+		std::fs::read_to_string(day_dir.join(format!("{OTHER_ORG}.jsonl"))).expect("shared");
+	assert_eq!(
+		shared.lines().count(),
+		3,
+		"all three late reports are kept: {shared}"
+	);
+	// A name that already has its file keeps it.
+	append(
+		dir.path(),
+		Kind::Dmarc,
+		day,
+		"org0",
+		&serde_json::json!({"again": 1}),
+	)
+	.expect("append");
+	let own = std::fs::read_to_string(day_dir.join("org0.jsonl")).expect("own");
+	assert_eq!(own.lines().count(), 2);
+}
