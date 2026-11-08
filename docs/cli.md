@@ -625,7 +625,8 @@ service account that runs the server.
 
 | Provider | Settings |
 |---|---|
-| cloudflare, bunny, desec, digitalocean, namecheap | `--token-env` or `--token-file` |
+| cloudflare, bunny, desec, digitalocean | `--token-env` or `--token-file` |
+| namecheap | token source, `--client-ip` (the IPv4 address Namecheap allows) |
 | dnsimple | token source, `--account-id` |
 | spaceship, godaddy, porkbun | `--access-key`, `--secret-key-env` |
 | ovh | `--access-key`, `--secret-key-env`, `--consumer-key-env`, optional `--endpoint ovh-eu\|ovh-ca\|ovh-us` |

@@ -104,7 +104,6 @@ podman run --rm \
   --userns=keep-id:uid=65532,gid=65532 \
   -p 25:25 -p 465:465 -p 587:587 \
   -p 143:143 -p 993:993 -p 995:995 \
-  -p 8080:8080 \
   -v /etc/glyndor/epistle:/etc/epistle:ro \
   -v /var/lib/glyndor/epistle/data:/var/lib/glyndor/epistle/data \
   ghcr.io/glyndor/epistle:0.12.6
@@ -622,10 +621,10 @@ three floating tags:
 - `ghcr.io/glyndor/epistle:0.12.6-amd64`, `…:0.12.6-arm64` per-arch, built
   natively on the matching runner.
 - `ghcr.io/glyndor/epistle:0.12.6` the full release.
-- `ghcr.io/glyndor/epistle:0.8` the latest patch release in the `0.8` line.
+- `ghcr.io/glyndor/epistle:0.12` the latest patch release in the `0.12` line.
 - `ghcr.io/glyndor/epistle:0` the latest minor release in the `0.x` line.
 
-`podman pull ghcr.io/glyndor/epistle:0.8` keeps getting patches;
+`podman pull ghcr.io/glyndor/epistle:0.12` keeps getting patches;
 `…:0` keeps getting minors. A consumer that wants to pin a specific build
 uses `gh attestation verify oci://ghcr.io/glyndor/epistle:0.12.6 …` (below);
 that command resolves the tag itself, so a separate digest lookup is
