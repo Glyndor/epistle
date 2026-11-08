@@ -156,7 +156,7 @@ fn private_key(value: &str, dir: &Path) -> Result<zeroize::Zeroizing<String>, St
 		.strip_prefix("%{file:")
 		.and_then(|rest| rest.strip_suffix("}%"))
 	{
-		let path = dir.join(file);
+		let path = super::source_path::inside(dir, "private-key", file)?;
 		return read_bounded(&path, keys::MAX_KEY_BYTES)
 			.map(zeroize::Zeroizing::new)
 			.map_err(|error| format!("reading {}: {error}", path.display()));
