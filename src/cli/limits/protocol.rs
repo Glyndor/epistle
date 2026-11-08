@@ -314,6 +314,11 @@ pub(super) const FIXED: &[FixedEntry] = &[
 	),
 	own!("sieve-variables", crate::sieve::MAX_VARS, "count"),
 	own!(
+		"caldav-query-work",
+		crate::webdav::caldav_filter::MAX_QUERY_WORK,
+		"count"
+	),
+	own!(
 		"caldav-freebusy-window",
 		crate::webdav::caldav_busy::MAX_WINDOW_SECS,
 		"seconds"

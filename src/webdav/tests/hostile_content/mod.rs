@@ -63,17 +63,17 @@ fn isolated_with_deadline(name: &str, deadline: Duration, work: impl FnOnce()) {
 	print!("{output}");
 }
 
-fn calendar(events: &str) -> String {
+pub(super) fn calendar(events: &str) -> String {
 	let text = format!("BEGIN:VCALENDAR\r\nVERSION:2.0\r\n{events}END:VCALENDAR\r\n");
 	assert!(text.len() as u64 <= crate::webdav::report_bounds::MAX_RESOURCE_BYTES);
 	text
 }
 
-fn event(rule: &str, extra: &str) -> String {
+pub(super) fn event(rule: &str, extra: &str) -> String {
 	format!("BEGIN:VEVENT\r\nDTSTART:20260101T000000Z\r\nRRULE:{rule}\r\n{extra}END:VEVENT\r\n")
 }
 
-fn query(from: &str, to: &str, extra: &str) -> String {
+pub(super) fn query(from: &str, to: &str, extra: &str) -> String {
 	format!(
 		"<C:calendar-query xmlns:D=\"DAV:\" xmlns:C=\"urn:ietf:params:xml:ns:caldav\">\
 		<D:prop><D:getetag/></D:prop><C:filter><C:comp-filter name=\"VCALENDAR\">\
@@ -82,8 +82,15 @@ fn query(from: &str, to: &str, extra: &str) -> String {
 	)
 }
 
-fn filter(from: &str, to: &str, extra: &str) -> CalendarQueryFilter {
+pub(super) fn filter(from: &str, to: &str, extra: &str) -> CalendarQueryFilter {
 	caldav_filter::parse(&query(from, to, extra)).expect("supported filter")
+}
+
+/// Whether the object matches the filter. The cases that pin an answer here
+/// stay well inside the work bound, so a search that ran out of work fails
+/// the case instead of answering it.
+fn matches(filter: &CalendarQueryFilter, ics: &str) -> bool {
+	caldav_filter::matches(filter, ics).expect("within the work bound")
 }
 
 fn measured<T>(work: impl FnOnce() -> T) -> T {

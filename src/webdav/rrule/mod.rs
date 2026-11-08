@@ -329,14 +329,8 @@ fn is_leap(year: i64) -> bool {
 	(year % 4 == 0 && year % 100 != 0) || year % 400 == 0
 }
 
-/// Expand a `VEVENT` into the epoch-second start times of every occurrence that
-/// falls within `[window_start, window_end)`; see [`expand_bounded`]. An
-/// expansion that outgrows [`DEFAULT_BUDGET`] is cut short.
-pub fn expand(dtstart: i64, rule: Option<&Rule>, window_start: i64, window_end: i64) -> Vec<i64> {
-	expand_bounded(dtstart, rule, window_start, window_end, DEFAULT_BUDGET).0
-}
-
-/// The most steps (periods walked plus occurrences produced) [`expand`] takes.
+/// The most steps (periods walked plus occurrences produced) one expansion
+/// takes when the caller names no budget of its own.
 pub const DEFAULT_BUDGET: usize = 100_000;
 
 /// Expand a `VEVENT` into the occurrences within `[window_start, window_end)`,
@@ -358,6 +352,23 @@ pub fn expand_bounded(
 	window_end: i64,
 	budget: usize,
 ) -> (Vec<i64>, bool) {
+	expand_shared(dtstart, rule, window_start, window_end, &mut { budget })
+}
+
+/// Expand while charging every walked period and produced occurrence to the
+/// caller's remaining work, including periods that yield no matching dates.
+///
+/// The flag is `true` when the caller's budget ran out before the expansion
+/// finished, so the occurrences are only the ones found: a caller that needs
+/// to know whether the series was covered reads the flag instead of assuming
+/// the vector is the whole answer.
+pub(super) fn expand_shared(
+	dtstart: i64,
+	rule: Option<&Rule>,
+	window_start: i64,
+	window_end: i64,
+	left: &mut usize,
+) -> (Vec<i64>, bool) {
 	let mut out = Vec::new();
 	let Some(rule) = rule else {
 		if dtstart >= window_start && dtstart < window_end {
@@ -378,15 +389,14 @@ pub fn expand_bounded(
 		|| !rule.by_month_day.is_empty()
 		|| !rule.by_month.is_empty()
 	{
-		return select::expand(dtstart, rule, window_start, window_end, budget);
+		return select::expand(dtstart, rule, window_start, window_end, left);
 	}
 	let first = first_index(dtstart, rule.freq, rule.interval, window_start);
-	let mut left = budget;
 	for n in first.. {
-		if left == 0 {
+		if *left == 0 {
 			return (out, true);
 		}
-		left -= 1;
+		*left -= 1;
 		if let Some(count) = rule.count
 			&& n >= count
 		{

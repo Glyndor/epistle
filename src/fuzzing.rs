@@ -67,7 +67,7 @@ pub fn attachment_inspect(content: &[u8]) {
 pub fn webdav_filter_rrule(input: &str) {
 	let input = &input[..floor_char_boundary(input, INPUT_CAP)];
 	if let Ok(filter) = crate::webdav::caldav_filter::parse(input) {
-		std::hint::black_box(crate::webdav::caldav_filter::matches(&filter, input));
+		let _ = std::hint::black_box(crate::webdav::caldav_filter::matches(&filter, input));
 	}
 	if let Ok(filter) = crate::webdav::carddav_filter::parse(input) {
 		std::hint::black_box(crate::webdav::carddav_filter::matches(&filter, input));
