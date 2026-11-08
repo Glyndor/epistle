@@ -1,3 +1,16 @@
+epistle (0.12.7) unstable; urgency=medium
+
+  * `epistle stack certs enable` and `disable` run the certificates container beside `mail`, off by default. `serve` can run the listeners and the certificate renewal as separate roles, `status` reports the container and the days the certificate has left, and a rotation of the DKIM keys hands the DNS write to the container that holds the credential.
+  * `epistle dns publish` writes the records a domain needs, with a ledger per zone and `--undo`. `init` can publish them in automatic mode, and a loop in `serve` keeps them true, one lock per zone, a broken zone no longer stopping the others, and a failed write backing off before it tries again. A record can be removed by its value.
+  * Each hosted domain rotates its own DKIM key on its own state, and `dkim split` names the cause when a record of a split does not show up.
+  * Storage keys per tenant: new mail is written under the tenant's own key, `storage tenant-keys migrate` re-encrypts stored mail and can be resumed, the server key rotates through `retired_key_files`, and `status` shows which key protects each tenant. A tenant can have its own webhook.
+  * SRS signs forwarded mail with a secret per hosted domain, every submission carries `X-Epistle: 1` by default, and `epistle account list --aliases` lists the aliases of an account.
+  * Hostile input is bounded further. OAuth authorization codes and PKCE challenges are validated and the pool of codes is capped, a SCIM PATCH is applied whole or not at all, the ACME client refuses redirects and addresses outside the operator's boundary, MTA-STS policies with several records are refused, a calendar query shares one work budget per object, `mail import` cuts every entry at the message size limit, and the S3 listing reads the XML that S3 answers with.
+  * ACME challenges of an order that is dropped are withdrawn at shutdown or at the next start, and a verified upgrade removes the images it no longer uses.
+  * The documentation was checked against the code: the container tags, the unit sample, the ASVS review and the threat model.
+
+ -- Glyndor <packages@glyndor.net>  Sun, 08 Nov 2026 12:00:00 +0000
+
 epistle (0.12.6) unstable; urgency=medium
 
   * The HTTP API no longer needs a static token: without `[api] token_hash` only the labelled keys in `api_keys.toml` authenticate, an absent hash never matches any bearer value, and `init` and `service enable` stop creating one.
