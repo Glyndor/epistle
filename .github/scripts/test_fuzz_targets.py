@@ -141,7 +141,8 @@ class SelectTests(unittest.TestCase):
         for path in (
             "src/util/header/mod.rs",
             "src/lib.rs",
-            "src/fuzzing.rs",
+            "src/fuzzing/mod.rs",
+            "src/fuzzing/smtp.rs",
             "Cargo.toml",
             "migrations/0009_new.sql",
             ".sqlx/query-1.json",
@@ -222,18 +223,23 @@ def target_source(target):
 
 
 def entry_point(name):
-    """The body of `pub fn <name>` in src/fuzzing.rs."""
-    with open(os.path.join(ROOT, "src", "fuzzing.rs"), encoding="utf-8") as handle:
-        text = handle.read()
-    found = re.search(rf"^pub fn {name}\(.*?^}}$", text, re.S | re.M)
-    if not found:
-        raise AssertionError(f"src/fuzzing.rs has no `pub fn {name}`")
-    return found.group(0)
+    """The body of `pub fn <name>` in the fuzz entry points."""
+    pattern = re.compile(rf"^pub fn {name}\(.*?^}}$", re.S | re.M)
+    root = os.path.join(ROOT, "src", "fuzzing")
+    for folder, _, names in os.walk(root):
+        for name_of_file in sorted(names):
+            if not name_of_file.endswith(".rs"):
+                continue
+            with open(os.path.join(folder, name_of_file), encoding="utf-8") as handle:
+                found = pattern.search(handle.read())
+            if found:
+                return found.group(0)
+    raise AssertionError(f"no `pub fn {name}` in src/fuzzing")
 
 
 def modules_reached(target):
     """Module paths a target calls directly: `epistle::a::b` in its own file,
-    and `crate::a::b` in the src/fuzzing.rs entry point it goes through."""
+    and `crate::a::b` in the src/fuzzing entry point it goes through."""
     text = target_source(target)
     reached = set()
     for name in re.findall(r"epistle::fuzzing::(\w+)", text):
