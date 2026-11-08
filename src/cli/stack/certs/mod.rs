@@ -72,8 +72,8 @@ pub(in crate::cli) fn runs_certs(compose: &Path) -> Result<bool, String> {
 /// certificates container reads it, since the container mounts it read-only
 /// and cannot create it.
 fn place_account_key(data_dir: &Path) -> Result<(), String> {
-	if let Some(line) = crate::cli::init::host_secrets::acme::place_for_certs(data_dir)? {
-		eprintln!("epistle: {line}");
+	if crate::cli::init::host_secrets::acme::place_for_certs(data_dir)?.is_some() {
+		eprintln!("epistle: put the ACME account key where the certificates container reads it");
 	}
 	Ok(())
 }

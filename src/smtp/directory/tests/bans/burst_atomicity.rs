@@ -82,15 +82,18 @@ async fn a_burst_from_one_client_over_every_listener_is_verified_up_to_the_thres
 		.map(|n| (PROTOCOLS[n % PROTOCOLS.len()], OPEN.to_string(), client))
 		.collect();
 	burst(&directory, attempts).await;
-	for subject in [
+	for (n, subject) in [
 		bans::subject_client(client.expect("ip")),
 		bans::subject_pair(OPEN, client),
 		bans::subject_account(OPEN),
-	] {
+	]
+	.into_iter()
+	.enumerate()
+	{
 		assert_eq!(
 			store.failure_count(&subject, 0),
 			5,
-			"{subject}: five guesses were verified, the other nineteen met the ban"
+			"subject {n}: five guesses were verified, the other nineteen met the ban"
 		);
 	}
 	let ban = store
@@ -253,15 +256,15 @@ async fn a_success_whose_check_was_in_flight_when_a_ban_was_armed_does_not_lift_
 		matches!(verdict, Verdict::Admitted { .. }),
 		"the check that began before the ban still decides on its own proof"
 	);
-	for subject in &subjects {
+	for (n, subject) in subjects.iter().enumerate() {
 		assert!(
 			inner.is_banned(subject, now()).await.is_some(),
-			"{subject}: the ban armed in flight is still in force after the success"
+			"subject {n}: the ban armed in flight is still in force after the success"
 		);
 		assert_eq!(
 			inner.failure_count(subject, 0),
 			4,
-			"{subject}: and the failures behind it were not wiped"
+			"subject {n}: and the failures behind it were not wiped"
 		);
 	}
 }
