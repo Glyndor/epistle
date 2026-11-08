@@ -511,7 +511,7 @@ pub async fn patch_user(
 	// RFC 7644 section 3.5.2: when one operation is not valid the whole request
 	// fails, so every operation is checked, and the passwords hashed, before
 	// the first one is written.
-	let mut plan = Vec::with_capacity(body.operations.len());
+	let mut plan = Vec::new();
 	for op in &body.operations {
 		plan.push(plan_operation(&state, op)?);
 	}

@@ -115,7 +115,7 @@ fn the_certificates_role_loads_without_the_database_password_file() {
 fn the_certificates_role_loads_without_the_tables_only_mail_reads() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let path = dir.path().join("mail.toml");
-	let hash = crate::smtp::auth::hash_password("a-password").expect("hash");
+	let hash = crate::smtp::auth::hash_password(crate::test_fixtures::password()).expect("hash");
 	let token = "0".repeat(64);
 	let data_dir = dir.path().join("data").display().to_string();
 	let storage_key = dir.path().join("storage.key").display().to_string();
