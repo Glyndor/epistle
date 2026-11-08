@@ -42,3 +42,6 @@ pub(crate) fn inside(dir: &Path, setting: &str, value: &str) -> Result<PathBuf, 
 fn refused(setting: &str) -> String {
 	format!("{setting} must be a relative path inside the configuration directory, without `..`")
 }
+
+#[cfg(test)]
+mod tests;

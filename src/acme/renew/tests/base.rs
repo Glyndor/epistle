@@ -58,3 +58,39 @@ fn account_key_at_a_chosen_path_persists_and_reloads() {
 	assert_eq!(a.jwk(), b.jwk());
 	assert!(!account_key_path(dir.path()).exists());
 }
+
+/// A key that cannot be read is not a key that does not exist: only a missing file
+/// makes a new key, any other error is reported and the good key is left alone.
+#[test]
+fn an_account_key_that_cannot_be_read_is_not_replaced() {
+	use std::os::unix::fs::PermissionsExt;
+	let dir = tempfile::tempdir().expect("tempdir");
+	let path = dir.path().join("account.key");
+	load_or_create_account_key_at(&path).expect("create");
+	let good = std::fs::read(&path).expect("read the key");
+	std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).expect("chmod");
+	if std::fs::read(&path).is_ok() {
+		// root reads anything: the case cannot be built here.
+		return;
+	}
+	assert!(
+		load_or_create_account_key_at(&path).is_err(),
+		"an unreadable key is an error"
+	);
+	std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("chmod back");
+	assert_eq!(
+		std::fs::read(&path).expect("read again"),
+		good,
+		"the good key was not replaced"
+	);
+}
+
+#[test]
+fn a_missing_account_key_is_created() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let path = dir.path().join("acme").join("account.key");
+	std::fs::create_dir_all(path.parent().unwrap()).expect("dir");
+	assert!(!path.exists());
+	load_or_create_account_key_at(&path).expect("create");
+	assert!(path.is_file());
+}
