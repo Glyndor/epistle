@@ -21,6 +21,7 @@ async fn api_send_queues_the_sender_and_every_recipient_in_lowercase() {
 			"from": "Alice@Example.ORG",
 			"to": ["Bob.Smith@Elsewhere.Example"],
 			"cc": ["CAROL@elsewhere.example"],
+			"reply_to": "Reply@Elsewhere.Example",
 			"bcc": ["Dave+Tag@Elsewhere.Example"],
 			"text": "x"
 		})),
@@ -29,6 +30,16 @@ async fn api_send_queues_the_sender_and_every_recipient_in_lowercase() {
 	assert_eq!(status, StatusCode::OK, "{body}");
 	let spool = FsSpool::open(dir.path()).expect("spool");
 	let entry = spool.load(spool.list().expect("list")[0]).expect("entry");
+	let head = String::from_utf8_lossy(&entry.data);
+	let head = head.split("\r\n\r\n").next().unwrap_or_default();
+	for line in [
+		"From: alice@example.org",
+		"To: bob.smith@elsewhere.example",
+		"Cc: carol@elsewhere.example",
+		"Reply-To: reply@elsewhere.example",
+	] {
+		assert!(head.contains(line), "{line:?} not in {head}");
+	}
 	assert_eq!(entry.envelope.reverse_path, "alice@example.org");
 	assert_eq!(
 		entry.envelope.recipients,
