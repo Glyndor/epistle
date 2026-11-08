@@ -410,3 +410,36 @@ fn the_class_is_kept_and_personal_is_left_out_of_the_line() {
 			.any(|r| r.class == crate::evidence::MailClass::Transactional)
 	);
 }
+
+#[test]
+fn writers_at_the_same_time_never_cut_each_others_lines() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let day = 1_700_000_000u64;
+	let root = dir.path().to_path_buf();
+	let handles: Vec<_> = (0..8)
+		.map(|writer| {
+			let root = root.clone();
+			std::thread::spawn(move || {
+				// Each writer opens the log itself, as the queue worker, the
+				// cancel handler and the CLI do.
+				let log = DeliveryLog::open(&root, 30);
+				for n in 0..100 {
+					let recipient = format!("writer{writer}-{n}@elsewhere.example");
+					log.append(&sample_record(day, &recipient, DeliveryOutcome::Delivered))
+						.expect("append");
+				}
+			})
+		})
+		.collect();
+	for handle in handles {
+		handle.join().expect("writer");
+	}
+	let body =
+		std::fs::read_to_string(log_root(dir.path()).join("2023-11-14.jsonl")).expect("file");
+	let lines: Vec<&str> = body.lines().collect();
+	assert_eq!(lines.len(), 800);
+	for line in lines {
+		serde_json::from_str::<serde_json::Value>(line)
+			.unwrap_or_else(|error| panic!("a cut line: {error}: {line:?}"));
+	}
+}
