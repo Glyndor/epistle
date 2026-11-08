@@ -120,18 +120,16 @@ where code goes:
    by responsibility, never by size.
 2. A module with more than one file becomes a folder with `mod.rs`, and its
    siblings are declared with a plain `mod <sibling>;`.
-3. The unit tests of a module live in a sibling file, not in an inline
-   block: `foo.rs` declares `#[cfg(test)] #[path = "foo_tests.rs"] mod tests;`
-   and a `mod.rs` uses `mod_tests.rs`.
-4. `#[path]` declares that sibling test module or reads a data file next to
-   the module. A `#[path]` that splits production code means a folder is
-   missing.
+3. The unit tests of a module live in a `tests/` folder beside it, not in an
+   inline block: `foo.rs` declares `#[cfg(test)] mod tests;` and the tests sit
+   in `foo/tests/`, and a `mod.rs` keeps them in its own `tests/` folder.
+4. `#[path]` reads a data file next to the module. A `#[path]` that splits
+   production code means a folder is missing.
 
 The tree is moving to this shape in batches (#1211), so many modules do not
 follow rules 1, 2 and 4 yet. Write new code in this shape, and leave a module
 you only edit where it is: its batch moves it. Moving the product code to
-`internal/` is a later, separate step, and whether each module's tests move
-into a folder of their own is still an open decision. A path cited in a doc
+`internal/` is a later, separate step. A path cited in a doc
 or a comment has to exist, and `tests/repository/repository_paths_exist.rs` fails on
 any that does not.
 
