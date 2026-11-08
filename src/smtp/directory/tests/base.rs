@@ -396,3 +396,18 @@ fn resolves_an_address_given_as_a_u_label_against_an_ascii_configured_domain() {
 		Resolution::Account("alice".to_string())
 	);
 }
+
+#[test]
+fn an_address_of_a_domain_that_is_not_hosted_is_owned_by_nobody() {
+	// A directory outside our control listed an address of another tenant's
+	// domain for its account: it must not become a sender address.
+	let dir = Directory::new(
+		["example.org".to_string()],
+		[
+			("alice@example.org".to_string(), "alice".to_string()),
+			("ceo@other-tenant.example".to_string(), "alice".to_string()),
+		],
+	);
+	assert!(dir.owns_address("alice", &parse("alice@example.org")));
+	assert!(!dir.owns_address("alice", &parse("ceo@other-tenant.example")));
+}

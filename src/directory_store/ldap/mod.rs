@@ -36,6 +36,8 @@ use std::thread::JoinHandle;
 use ldap3::{Ldap as LdapConnAsyncHandle, LdapConnAsync, LdapConnSettings, Scope, SearchEntry};
 
 use crate::config::Ldap;
+use crate::smtp::address::Address;
+use crate::util::address::normalize;
 use crate::util::path_component::{AccountName, DigestName};
 
 /// One authentication request handed to the worker thread: the login to look up,
@@ -247,6 +249,33 @@ fn first_value(entry: &SearchEntry, attribute: &str) -> Option<String> {
 		.cloned()
 }
 
+/// The delivered addresses of an entry: every value of the given attribute
+/// that is a valid mailbox, in the stored form (the local part and the
+/// domain lowercased).
+///
+/// The directory server is not ours, so the attribute it serves can carry
+/// anything. A value that is not a valid address is skipped with a warning
+/// that carries a pseudonym of it, never the value, so an injected address
+/// never reaches the directory.
+fn validated_addresses(entry: &SearchEntry, attribute: &str) -> Vec<String> {
+	entry
+		.attrs
+		.get(attribute)
+		.into_iter()
+		.flatten()
+		.filter_map(|raw| match Address::parse(raw) {
+			Ok(_) => Some(normalize(raw)),
+			Err(_) => {
+				tracing::warn!(
+					address = %DigestName::pseudonym(raw),
+					"ignoring an LDAP address that is not a valid mailbox",
+				);
+				None
+			}
+		})
+		.collect()
+}
+
 /// Substitute the escaped login for every `%s` placeholder in `template`. The
 /// login is escaped per RFC 4515 first, so the result is injection-safe.
 fn build_filter(template: &str, login: &str) -> String {
@@ -273,12 +302,14 @@ pub fn escape_filter(value: &str) -> String {
 }
 
 /// A directory account discovered by the LDAP search-load: the mapped account
-/// name and its delivered addresses (the mail attribute values).
+/// name and its delivered addresses (the mail attribute values that are valid
+/// mailboxes).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LdapAccount {
 	/// Account name; doubles as the mailbox directory name.
 	pub name: String,
-	/// Addresses delivered to this account (the mail attribute values).
+	/// Addresses delivered to this account: the valid mail attribute values,
+	/// in their stored form.
 	pub addresses: Vec<String>,
 }
 
@@ -302,7 +333,9 @@ pub fn load_ldap_accounts(config: &Ldap) -> ldap3::result::Result<Vec<LdapAccoun
 }
 
 /// The async core of [`load_ldap_accounts`]: service-bind, search every user
-/// (`%s` → `*`), and map each entry to an [`LdapAccount`].
+/// (`%s` → `*`), and map each entry to an [`LdapAccount`]. The mail attribute
+/// values that are not valid mailboxes are skipped, and the ones that are
+/// reach the account in their stored form (lowercased).
 async fn load_ldap_accounts_async(config: &Ldap) -> ldap3::result::Result<Vec<LdapAccount>> {
 	let mut conn = connect(config).await?;
 	conn.simple_bind(&config.bind_dn, &config.bind_password)
@@ -326,11 +359,7 @@ async fn load_ldap_accounts_async(config: &Ldap) -> ldap3::result::Result<Vec<Ld
 		.map(SearchEntry::construct)
 		.filter_map(|entry| {
 			let name = account_name(config, &entry)?;
-			let addresses = entry
-				.attrs
-				.get(&config.mail_attribute)
-				.cloned()
-				.unwrap_or_default();
+			let addresses = validated_addresses(&entry, &config.mail_attribute);
 			Some(LdapAccount { name, addresses })
 		})
 		.collect();

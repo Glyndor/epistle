@@ -340,6 +340,13 @@ impl Directory {
 		if self.domain_disabled(address.domain()) {
 			return false;
 		}
+		// An address of a domain this server does not host belongs to nobody
+		// here, whoever listed it: a directory the operator does not run could
+		// otherwise hand one of its accounts the right to send as another
+		// tenant's address.
+		if !self.hosts_domain(address.domain()) {
+			return false;
+		}
 		let key = normalize(&address.to_string());
 		if let Some(owner) = self.accounts_by_address.get(&key) {
 			return owner == account;
