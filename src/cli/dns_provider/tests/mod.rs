@@ -5,6 +5,8 @@ pub(super) mod base;
 pub(super) mod secret;
 pub(super) mod set;
 #[cfg(all(test, unix))]
+pub(super) mod split;
+#[cfg(all(test, unix))]
 pub(super) mod token_env;
 #[cfg(all(test, unix))]
 pub(super) mod write;

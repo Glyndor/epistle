@@ -219,7 +219,14 @@ runs it renders and runs exactly as before.
   writing them applied after the read-write mount of data_dir, so no later
   mount can shadow them.
 - `epistle dns provider set` and `unset` put the credential in `certs` and
-  recreate it when the stack runs it.
+  recreate it when the stack runs it, and take it out of `mail` when `mail`
+  still carried it: the credential belongs to the container that writes the
+  zone, and `mail` is the container that takes SMTP from the internet. An
+  override that hands the credential back to `mail` is named in a warning.
+- `epistle stack up` puts the account key where `certs` reads it before the
+  stack comes up, waits for `certs` with the same rule the switch uses, and
+  only then removes the copy under data_dir, so a `stack up` after a reboot
+  cannot report a stack that renews nothing.
 - `epistle status` reports the container in its `tls` area with the days the
   certificate has left, warns while it is down and fails when fewer than seven
   days are left. It judges the container the way `stack certs` does: two

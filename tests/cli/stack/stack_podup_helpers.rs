@@ -315,7 +315,7 @@ pub(crate) fn data_dir_with_compose(parent: &Path) -> PathBuf {
 	let data_dir = parent.join("data");
 	let compose = data_dir.join("compose/compose.yaml");
 	std::fs::create_dir_all(compose.parent().unwrap()).expect("mkdir compose");
-	std::fs::write(&compose, b"# empty compose fixture for stack tests\n").expect("write compose");
+	std::fs::write(&compose, b"{\"services\":{}}\n").expect("write compose");
 	data_dir
 }
 

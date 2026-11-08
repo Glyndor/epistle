@@ -64,30 +64,6 @@ fn a_failed_restore_after_the_new_layout_ran_names_the_copy_to_delete() {
 	assert!(error.contains("mail can read it"), "{error}");
 }
 
-/// `stack up` of a split stack removes a copy left under data_dir, and only
-/// on a split stack.
-#[test]
-fn stack_up_removes_a_leftover_copy_only_when_certs_runs() {
-	let dir = tempfile::tempdir().expect("tempdir");
-	let data_dir = dir.path().join("data");
-	std::fs::create_dir_all(&data_dir).expect("data_dir");
-	let compose = dir.path().join("compose.yaml");
-	crate::acme::renew::load_or_create_account_key(&data_dir).expect("key");
-	crate::cli::init::host_secrets::acme::place(&data_dir, true).expect("copy");
-	let copy = crate::acme::renew::account_key_path(&data_dir);
-
-	std::fs::write(&compose, Recorder::split_layout(false).compose).expect("whole");
-	retire_before_up(&data_dir, &compose).expect("up");
-	assert!(copy.exists(), "mail renews with it without the split");
-
-	std::fs::write(&compose, Recorder::split_layout(true).compose).expect("split");
-	retire_before_up(&data_dir, &compose).expect("up");
-	assert!(!copy.exists());
-
-	std::fs::write(&compose, "not json").expect("garbage");
-	assert!(retire_before_up(&data_dir, &compose).is_err());
-}
-
 #[test]
 fn a_copy_that_cannot_be_removed_is_named() {
 	let (_, error) = disable_failing(vec!["ready mail", "retire"]);
@@ -132,6 +108,21 @@ fn podup_that_changes(dir: &std::path::Path, first: &str, second: &str) -> Strin
 	podup.display().to_string()
 }
 
+/// [`upness`] with a stub podup. A stub written a moment ago can still be
+/// open for writing in a thread that forked, and the kernel then refuses to
+/// run it with `ETXTBSY`: the stub never ran, so the looks are asked again.
+fn looks(podup: &str, compose: &std::path::Path) -> Upness {
+	for _ in 0..20 {
+		match upness(podup, compose, "certs", std::time::Duration::ZERO) {
+			Upness::Unreadable(error) if error.contains("Text file busy") => {
+				std::thread::sleep(std::time::Duration::from_millis(50));
+			}
+			other => return other,
+		}
+	}
+	upness(podup, compose, "certs", std::time::Duration::ZERO)
+}
+
 fn rows(state: &str, started: &str) -> String {
 	format!(
 		r#"[{{"Service":"mail","State":"running"}},{{"Service":"certs","State":"{state}","StartedAt":"{started}"}}]"#
@@ -150,9 +141,9 @@ fn two_looks_that_disagree_leave_the_container_down() {
 		&rows("running", "2026-11-02T06:30:01Z"),
 		&rows("running", "2026-11-02T06:30:13Z"),
 	);
-	let upness = upness(&podup, &compose, "certs", std::time::Duration::ZERO);
+	let upness = looks(&podup, &compose);
 	let Upness::Unsteady(text) = upness else {
-		panic!("a container that restarted is not up");
+		panic!("a container that restarted is not up: {upness:?}");
 	};
 	assert!(text.contains("did not stay up"), "{text}");
 }
@@ -168,8 +159,5 @@ fn two_looks_that_agree_leave_the_container_up() {
 		&rows("running", "2026-11-02T06:30:01Z"),
 		&rows("running", "2026-11-02T06:30:01Z"),
 	);
-	assert_eq!(
-		upness(&podup, &compose, "certs", std::time::Duration::ZERO),
-		Upness::Up
-	);
+	assert_eq!(looks(&podup, &compose), Upness::Up);
 }

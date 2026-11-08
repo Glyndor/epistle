@@ -613,6 +613,12 @@ two entries share is mounted once and stays mounted while one of them reads it.
 (`.compose.yaml.lock`), the same one `stack update`, `stack resources set` and
 `stack certs` take, so one waits for the other and none loses the other's
 change.
+On a stack that runs the certificates container the credential goes into `certs`
+and never into `mail`: a `mail` service that still carried the token mount or
+forwarded the token variable loses it, and the container of every service the
+change touches is recreated, so the change takes effect at once. An override
+that hands the credential back to `mail` is named in a warning: the override is
+merged with the generated file, so what it carries is what the container has.
 `--store-token` keeps `secrets/dns_provider_token` for a configuration with one zone and
 uses `secrets/dns_provider_token_<zone>` (dots as underscores) once there are several, so
 replacing one token never overwrites another. `unset` removes every entry; `unset --zone`
@@ -1115,7 +1121,7 @@ sequence and its exit code becomes epistle's exit code.
 
 | Command | What it does |
 |---|---|
-| `sudo epistle stack up` | Runs `podup up -d`, then `podup autostart install` to enable and start the project's user service. It returns after starting; the service brings the stack back after reboot. |
+| `sudo epistle stack up` | Runs `podup up -d`, then `podup autostart install` to enable and start the project's user service. It returns after starting; the service brings the stack back after reboot. On a stack that runs the certificates container it also puts the ACME account key where that container reads it: a key that is nowhere, or two copies that differ, stops `up` with a message naming the paths instead of starting a container that cannot renew. Once the stack is up it waits for `certs` to settle, judged the way `stack certs` judges it (two `podup ps` looks fifteen seconds apart, with the same start in both); a failure says what the two looks saw and exits non-zero. The copy of the account key under `<data_dir>/acme`, which `mail` can read, is removed only once `certs` holds the key. |
 | `sudo epistle stack down` | Runs `podup autostart uninstall`, then `podup down`. Database volumes and bind-mounted data are kept. |
 | `sudo epistle stack ps [--json]` | Lists running services as a table or JSON. |
 | `sudo epistle stack logs [--follow] [SERVICE]` | Streams service logs. |

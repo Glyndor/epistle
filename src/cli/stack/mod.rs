@@ -207,6 +207,13 @@ pub(crate) enum StackAction {
 		/// The service to recreate.
 		service: String,
 	},
+	/// `podup -f <compose> up -d <service>`, once for each service: a
+	/// change that touches more than one of them has to reach both, and a
+	/// container that keeps the mount it had still has the credential.
+	RecreateServices {
+		/// The services to recreate, in the order they are recreated.
+		services: Vec<String>,
+	},
 }
 
 pub(super) mod certs;
@@ -404,6 +411,19 @@ pub(super) fn run(config: &Config, action: StackAction) -> ExitCode {
 		}
 		StackAction::Recreate { service } => {
 			run_inherited(podup, &compose, &["up", "-d", &service])
+		}
+		StackAction::RecreateServices { services } => {
+			// One `podup up -d <service>` for each: every one of them
+			// recreates exactly its own container, and the first that
+			// fails stops the rest.
+			let mut code = ExitCode::SUCCESS;
+			for service in &services {
+				code = run_inherited(podup, &compose, &["up", "-d", service]);
+				if code != ExitCode::SUCCESS {
+					break;
+				}
+			}
+			code
 		}
 		StackAction::Resources { action, json } => resources::run(
 			&compose,
