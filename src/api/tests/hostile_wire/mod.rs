@@ -5,7 +5,11 @@ use std::time::{Duration, Instant};
 
 const CHILD: &str = "EPISTLE_HOSTILE_HTTP_CHILD";
 const DEADLINE: Duration = Duration::from_secs(30);
-const MAX_RSS_KIB: u64 = 128 * 1024;
+/// The ceiling is for a worker that buffers without bound, not for the size
+/// of a healthy one. The isolated worker peaks near 80 MiB on a laptop and
+/// crossed 128 MiB once in CI, where a many-core runner gives the allocator
+/// more arenas, so the line sits at twice that.
+const MAX_RSS_KIB: u64 = 256 * 1024;
 
 /// Return true in the supervisor, false in the isolated test worker.
 /// A process deadline also catches synchronous handlers that never yield.
@@ -41,7 +45,7 @@ pub(in crate::api) fn supervised(module: &str, test: &str) -> bool {
 					.ok()
 			});
 			if peak.is_some_and(|kib| kib > MAX_RSS_KIB) {
-				violation = Some("HTTP worker exceeded 128 MiB peak RSS");
+				violation = Some("HTTP worker exceeded 256 MiB peak RSS");
 			}
 		}
 		if violation.is_some() {
