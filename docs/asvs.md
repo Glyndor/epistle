@@ -49,11 +49,11 @@ function name is the stable reference.
 | 2.1.x Character set | Met (deliberate deviation) | The accepted set is **printable ASCII** (0x20–0x7E: letters, digits, space, standard punctuation); control characters and non-ASCII/Unicode are rejected (`src/password::validate`). This is a deliberate deviation from 2.1.1's "accept Unicode" — a defined, keyboard-typeable set per the org policy — at the cost of Unicode passphrases. |
 | 2.1.7 Reject known-breached passwords | Met | Every set/change is checked against a bundled local breached / common-password list (`src/password/breached_common.txt`, loaded once into a set), rejecting known-weak passwords offline with no third-party call. The list is a curated starter set, meant to grow. |
 | 2.1.9 No composition rules | Met | No forced upper/lower/digit/special (ASVS v4 §2.1.9 / NIST 800-63B): `src/password::validate` enforces only length, character set and the breach list — length plus breach-rejection carry the strength. |
-| 2.2.1 Anti-automation / brute-force throttling | Partial / **Gap** | Per-connection 3-strikes close on SMTP (`src/smtp/session/mod.rs`), IMAP (`src/imap/session/auth/mod.rs`) and now ManageSieve (`src/managesieve/session/mod.rs`, fixed in this sweep); the API has a sliding-window failure budget (`src/api/state/mod.rs::AuthLimiter`). **No cross-connection per-IP/per-account ban** for the mail protocols — documented below (deferred — needs a persistent store). |
+| 2.2.1 Anti-automation / brute-force throttling | Partial / **Gap** | Per-connection 3-strikes close on SMTP (`src/smtp/session/mod.rs`), IMAP (`src/imap/session/auth/mod.rs`) and now ManageSieve (`src/managesieve/session/mod.rs`, fixed in this sweep); the API has a sliding-window failure budget (`src/api/state/mod.rs::AuthLimiter`). A persistent ban store is shared across connections and listeners: 5 failures in 15 minutes ban an IP, a client/account pair or an account, for 15 minutes first and doubling up to 24 hours (`src/antispam/bans/`, tables `auth_failure` and `auth_ban` in `migrations/0005_auth_bans.sql`, `docs/security.md`). It needs the PostgreSQL store; without it the per-connection limits are all there is. |
 | 2.2.3 Secure notification of auth events | Met | Auth failures are logged as counts (no credentials); delivery/security events flow to webhooks. |
 | 2.4.1 Passwords stored with an approved KDF (Argon2) | Met | argon2id PHC everywhere (`src/smtp/auth/mod.rs::hash_password`/`verify_password`); 16-byte CSPRNG salt via `ring::SystemRandom`. Config rejects any non-argon2id stored hash (`src/config/validate/mod.rs`). |
 | 2.5.x Credential recovery does not reveal the credential | Met | Verification returns a bare `false` on any error; no reset oracle in the server. |
-| 2.6 / 2.8 Look-up / OTP verifiers (TOTP) | Partial | TOTP verified with a constant-time compare and a bounded ±1 step window (`src/totp/mod.rs::verify`, `crate::util::constant_time::eq`). **No replay guard / no recovery codes / secret stored in cleartext** — documented below (deferred — needs persistent state and at-rest key management). |
+| 2.6 / 2.8 Look-up / OTP verifiers (TOTP) | Partial | TOTP verified with a constant-time compare and a bounded ±1 step window (`src/totp/mod.rs::verify`, `crate::util::constant_time::eq`). **No replay guard / no recovery codes.** The secret is sealed (`enc:v1:`) when `encrypt_at_rest` is on with an `encryption_key_file`, and stored as base32 otherwise (`src/directory_store/set_totp/mod.rs`). The first two are documented below (deferred — they need persistent state). |
 | 2.7 Out-of-band verifier | N/A | No SMS/email OOB second factor is offered. |
 | 2.9 Cryptographic verifier (SCRAM) | Met | SCRAM-SHA-256 / -SHA-256-PLUS: password never on the wire, channel binding to the cert (`tls-server-end-point`), downgrade flag rejected when -PLUS is offered (`src/smtp/scram/mod.rs`, `src/imap/session/auth/mod.rs`). |
 | 2.10.1 No user-enumeration oracle | Met | Unknown login and wrong password both resolve to `None` with an identical reply in every protocol (`src/smtp/directory/mod.rs::authenticate_with_ip`/`credentials`). |
@@ -79,7 +79,7 @@ function name is the stable reference.
 | Req (L3) | Status | Evidence |
 |---|---|---|
 | 4.1.1 Enforced at a trusted server layer | Met | Single `require_bearer_token` layer over the whole authenticated router; `/healthz` is the only unauthenticated route and returns a static body (`src/api/mod.rs`, `src/api/state/mod.rs`). |
-| 4.1.3 Least privilege | Partial | OS-level: privileges dropped irreversibly (`src/privdrop/mod.rs::verify` asserts `setuid(0)` fails). API-level: a single operator token authorizes all accounts (by design — the API consumer is the operator/panel); a scoped per-account API key would be stricter. Noted, not a cross-tenant leak. |
+| 4.1.3 Least privilege | Partial | OS-level: privileges dropped irreversibly (`src/privdrop/mod.rs::verify` asserts `setuid(0)` fails). API-level: a single operator token authorizes all accounts (by design — the API consumer is the operator/panel); an API key can be scoped to one account (`--account`, `src/api/api_keys/mod.rs`) for JMAP and `/api/v1/send`; the operator token stays unscoped. Noted, not a cross-tenant leak. |
 | 4.1.5 Fail closed on access-control errors | Met | Every auth/key check ANDs its conditions and rejects on malformed/missing input (`src/api/api_keys/mod.rs::admits`, `src/directory_store/app_passwords/mod.rs::admits`). |
 | 4.2.1 Object-level authZ / no IDOR | Met | JMAP blob ids parsed as UUIDs before any FS use; every data path uses the authenticated `self.account()` (`src/api/jmap/`); IMAP mailbox names allow-listed level by level and stored as one directory each (`src/util/mailbox_path/mod.rs::valid_folder`, `disk_name`). |
 | 4.2.2 State-changing ops protected | Met | All mutating API/JMAP routes sit behind the bearer middleware. |
@@ -120,9 +120,10 @@ function name is the stable reference.
 | 6.4.1 Secret key material protected at rest | Met (hardened in this sweep) | DKIM and ACME private keys are written `create_new` + `0o600` (atomic, no permissive window): ACME `src/acme/renew/mod.rs::write_secret`, manual keygen `src/cli/util.rs`, and DKIM **rotation** `src/dkim/rotate/mod.rs::write_key` (fixed in this sweep — previously wrote then chmod'd). |
 | 6.x DKIM/JWT algorithm hygiene | Met | DKIM accepts only rsa-sha256 / ed25519-sha256 (rsa-sha1 rejected), verify uses `RSA_PKCS1_1024_8192_SHA256_FOR_LEGACY_USE_ONLY` (≥1024-bit, per RFC 8301 §3.2) / ED25519 (`src/dkim/verify/mod.rs`). ARC accepts the same two algorithms and dispatches on the one the header declares: `a=ed25519-sha256` verifies with ED25519 over the SHA-256 digest of the signed data, `a=rsa-sha256` with `RSA_PKCS1_1024_8192_SHA256_FOR_LEGACY_USE_ONLY` (≥1024-bit) over a key whose modulus is read from the record, and a record whose `k=` type does not match the declared algorithm is refused (`src/arc/key.rs`). |
 
-> **Note (deferred):** the TOTP shared secret is stored as cleartext base32 in
-> the account store (`src/directory_store/mod.rs`). Encrypting it at rest needs a
-> key-management mechanism; documented as a gap below.
+> **Note:** the TOTP shared secret is stored as base32 in the account store
+> unless `encrypt_at_rest` is on with a `[storage] encryption_key_file`; then it
+> is sealed with ChaCha20-Poly1305 as `enc:v1:<base64>` and an unreadable value
+> fails closed (`src/directory_store/set_totp/mod.rs`).
 
 ---
 
@@ -271,19 +272,13 @@ Two further low-severity hardening fixes were applied:
 These are real ASVS L3 deficiencies, recorded honestly. Each needs more than a
 surgical change and should be tracked as its own issue.
 
-- **Cross-connection brute-force ban (V2.2.1).** Throttling is per-connection
-  (3-strikes) plus the API's in-memory budget; there is no persistent per-IP /
-  per-account failure tracker shared across connections, so an attacker can
-  reconnect and keep guessing. A correct fix is a persistent ban table (the
-  product context anticipates a PostgreSQL ban table).
 - **TOTP replay, recovery codes, and at-rest secret (V2.6/V2.8, V6.4).** The OTP
-  has no last-consumed-step replay guard, no single-use recovery codes, and the
-  shared secret is stored as cleartext base32. Each needs persistent per-account
-  state and (for the secret) an at-rest encryption key mechanism.
-- **Per-account-scoped API keys (V4.1.3 least privilege).** A single operator
-  token authorizes every account's mail. This is by design (the consumer is the
-  operator/panel) and is not a cross-tenant leak, but a scoped key would be
-  stricter least privilege.
+  has no last-consumed-step replay guard and no single-use recovery codes. Each
+  needs persistent per-account state.
+- **The operator token is not scoped (V4.1.3 least privilege).** A single
+  operator token authorizes every account's mail. This is by design (the
+  consumer is the operator/panel) and is not a cross-tenant leak; an API key
+  scoped to one account exists for JMAP and `/api/v1/send`.
 
 ---
 
