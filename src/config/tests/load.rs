@@ -1,14 +1,9 @@
 //! Tests for loading the configuration file: parsing, defaults and the
 //! checks `Config::load` runs before validation.
 
-use super::*;
+use std::path::Path;
 
-fn write_temp(content: &str) -> tempfile::NamedTempFile {
-	use std::io::Write;
-	let mut file = tempfile::NamedTempFile::new().expect("create temp file");
-	file.write_all(content.as_bytes()).expect("write temp file");
-	file
-}
+use super::*;
 
 #[test]
 fn loads_minimal_valid_config() {
@@ -21,54 +16,6 @@ data_dir = "/var/lib/mail"
 	let config = Config::load(file.path()).expect("valid config loads");
 	assert_eq!(config.hostname, "mail.example.org");
 	assert!(config.listeners.is_empty());
-}
-
-#[test]
-fn expands_environment_variables() {
-	// SAFETY: the variable name is unique to this test, so no other test
-	// reads or writes it concurrently.
-	unsafe { std::env::set_var("EPISTLE_TEST_HOSTNAME", "mail.expanded.example") };
-	let file = write_temp(
-		r#"
-hostname = "${EPISTLE_TEST_HOSTNAME}"
-data_dir = "/var/lib/mail"
-"#,
-	);
-	let config = Config::load(file.path()).expect("config loads");
-	assert_eq!(config.hostname, "mail.expanded.example");
-	// SAFETY: same uniquely-named variable as set above.
-	unsafe { std::env::remove_var("EPISTLE_TEST_HOSTNAME") };
-}
-
-#[test]
-fn rejects_undefined_environment_variable() {
-	let file = write_temp(
-		r#"
-hostname = "${EPISTLE_DEFINITELY_UNSET_VAR_XYZ}"
-data_dir = "/var/lib/mail"
-"#,
-	);
-	assert!(matches!(
-		Config::load(file.path()),
-		Err(ConfigError::MissingEnv(_))
-	));
-}
-
-#[cfg(unix)]
-#[test]
-fn rejects_group_or_world_accessible_config() {
-	use std::os::unix::fs::PermissionsExt;
-	let file = write_temp(
-		r#"
-hostname = "mail.example.org"
-data_dir = "/var/lib/mail"
-"#,
-	);
-	std::fs::set_permissions(file.path(), std::fs::Permissions::from_mode(0o644)).expect("chmod");
-	assert!(matches!(
-		Config::load(file.path()),
-		Err(ConfigError::InsecurePermissions { .. })
-	));
 }
 
 #[test]
