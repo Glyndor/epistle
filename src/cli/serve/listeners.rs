@@ -10,8 +10,7 @@ use tokio_rustls::TlsAcceptor;
 use crate::directory_store::DirectoryHandle;
 
 use super::connection_limits::MailboxLimits;
-
-type Task = tokio::task::JoinHandle<std::io::Result<()>>;
+use super::tasks::ListenerTask;
 
 fn require(acceptor: Option<&TlsAcceptor>, what: &str) -> std::io::Result<TlsAcceptor> {
 	acceptor
@@ -20,6 +19,9 @@ fn require(acceptor: Option<&TlsAcceptor>, what: &str) -> std::io::Result<TlsAcc
 }
 
 /// Serve POP3S (implicit TLS) on `listener`.
+///
+/// The serving future is returned, not spawned: `serve` starts it once the
+/// privileges are dropped.
 pub(super) fn pop3s(
 	listener: TcpListener,
 	data_dir: PathBuf,
@@ -28,7 +30,7 @@ pub(super) fn pop3s(
 	crypto: crate::storage::MessageCrypto,
 	max_conn: usize,
 	limits: &MailboxLimits,
-) -> std::io::Result<Task> {
+) -> std::io::Result<ListenerTask> {
 	let server = crate::pop3::server::Server::new(data_dir, directory, require(acceptor, "POP3S")?)
 		.with_crypto(crypto)
 		.with_max_connections(max_conn)
@@ -36,10 +38,13 @@ pub(super) fn pop3s(
 		.with_preauth_timeout(limits.preauth_timeout)
 		.with_per_account_counter(Arc::clone(&limits.per_account_counter));
 	let server = Arc::new(server);
-	Ok(tokio::spawn(server.serve(listener)))
+	Ok(Box::pin(server.serve(listener)))
 }
 
 /// Serve ManageSieve on `listener`.
+///
+/// The serving future is returned, not spawned: `serve` starts it once the
+/// privileges are dropped.
 pub(super) fn managesieve(
 	listener: TcpListener,
 	data_dir: PathBuf,
@@ -47,7 +52,7 @@ pub(super) fn managesieve(
 	acceptor: Option<&TlsAcceptor>,
 	max_conn: usize,
 	limits: &MailboxLimits,
-) -> std::io::Result<Task> {
+) -> std::io::Result<ListenerTask> {
 	let server = Arc::new(
 		crate::managesieve::server::Server::new(
 			data_dir,
@@ -58,5 +63,5 @@ pub(super) fn managesieve(
 		.with_max_connections_per_ip(limits.managesieve_per_ip)
 		.with_preauth_timeout(limits.preauth_timeout),
 	);
-	Ok(tokio::spawn(server.serve(listener)))
+	Ok(Box::pin(server.serve(listener)))
 }

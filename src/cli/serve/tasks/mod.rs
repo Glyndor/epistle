@@ -3,6 +3,15 @@
 
 use tokio::net::TcpListener;
 
+/// A listener's serving future, boxed so the different concrete servers can
+/// share one vector.
+///
+/// The future is built where the socket is bound but spawned later: `serve`
+/// holds every listener until the privileges are dropped, and only then
+/// starts them, so no connection is ever accepted or served as root.
+pub(super) type ListenerTask =
+	std::pin::Pin<Box<dyn std::future::Future<Output = std::io::Result<()>> + Send>>;
+
 /// Bind a listener's socket and log it. Thin wrapper over the
 /// `bind` module so the existing callers stay unchanged; the
 /// dual-stack switch for the IPv6-unspecified address lives in
@@ -14,14 +23,17 @@ pub(super) async fn bind(
 	bind::bind_listener(listener, ipv4_any_ports).await
 }
 
-/// Spawn an axum router on a bound listener, returning the serving task. Shared
+/// The future that serves an axum router on a bound listener. Shared
 /// by the plain-HTTP listener arms (autoconfig, ACME, WebDAV, metrics).
+///
+/// It is not spawned here: the caller holds it until the privileges are
+/// dropped and starts it after.
 pub(super) fn serve_http(
 	listener: TcpListener,
 	router: axum::Router,
 	limits: crate::net::http_serve::Limits,
-) -> tokio::task::JoinHandle<std::io::Result<()>> {
-	tokio::spawn(crate::net::http_serve::serve_with(listener, router, limits))
+) -> ListenerTask {
+	Box::pin(crate::net::http_serve::serve_with(listener, router, limits))
 }
 
 #[cfg(test)]

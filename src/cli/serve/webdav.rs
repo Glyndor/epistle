@@ -1,4 +1,4 @@
-//! Spawn the WebDAV listener. The `[api] trusted_proxies` list is shared
+//! The WebDAV listener. The `[api] trusted_proxies` list is shared
 //! with the API listener so a request that reached the server through a
 //! trusted reverse proxy is logged under the real client address, not the
 //! proxy's own socket peer. `[api] trusted_proxies = []` (no `[api]`
@@ -8,12 +8,16 @@ use crate::config::Config;
 use crate::directory_store::DirectoryHandle;
 use crate::net::http_serve::Limits;
 
-pub(super) fn spawn(
+/// The future that serves the WebDAV listener.
+///
+/// It is returned, not spawned: `serve` starts it once the privileges are
+/// dropped.
+pub(super) fn future(
 	listener: tokio::net::TcpListener,
 	config: &Config,
 	directory: DirectoryHandle,
 	http_limits: Limits,
-) -> tokio::task::JoinHandle<std::io::Result<()>> {
+) -> super::tasks::ListenerTask {
 	let trusted_proxies = config
 		.api
 		.as_ref()
@@ -23,7 +27,7 @@ pub(super) fn spawn(
 	// the key went away since: the listener then fails closed.
 	let crypto = match crate::storage::MessageCrypto::from_full_config(config) {
 		Ok(crypto) => crypto,
-		Err(error) => return tokio::spawn(async move { Err(std::io::Error::other(error)) }),
+		Err(error) => return Box::pin(async move { Err(std::io::Error::other(error)) }),
 	};
 	let quota_default = config
 		.quota_bytes
