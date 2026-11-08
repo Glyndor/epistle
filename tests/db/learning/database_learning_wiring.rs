@@ -17,10 +17,19 @@ use sqlx::PgPool;
 struct Trap {
 	pool: PgPool,
 	name: String,
+	/// Creating and dropping a trap takes an exclusive lock on
+	/// `bayes_learned`, and two tests doing it at once take the locks of
+	/// their three statements in opposite orders and deadlock. One trap
+	/// lives at a time, from `set` to `remove`.
+	_alone: tokio::sync::MutexGuard<'static, ()>,
 }
+
+/// One trap at a time in this process: see [`Trap::_alone`].
+static ONE_TRAP: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 impl Trap {
 	async fn set(pool: &PgPool, account: &str, event: &str, abandon: i64) -> Trap {
+		let alone = ONE_TRAP.lock().await;
 		let name = format!("trap_{}", uuid::Uuid::now_v7().simple());
 		// The identifiers are made here from a UUID, the account name is
 		// compared in the function body as a bound literal inside quotes
@@ -51,6 +60,7 @@ impl Trap {
 		Trap {
 			pool: pool.clone(),
 			name,
+			_alone: alone,
 		}
 	}
 
