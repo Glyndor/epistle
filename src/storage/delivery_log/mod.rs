@@ -193,9 +193,11 @@ impl DeliveryLog {
 			}
 		}
 		let mut file = options.open(&path)?;
-		let line = serde_json::to_vec(record).map_err(std::io::Error::other)?;
+		// The record and its newline go out in one write: `O_APPEND` makes a
+		// single write atomic against another writer of the same file, not two.
+		let mut line = serde_json::to_vec(record).map_err(std::io::Error::other)?;
+		line.push(b'\n');
 		file.write_all(&line)?;
-		file.write_all(b"\n")?;
 		file.sync_all()?;
 		Ok(())
 	}
