@@ -100,8 +100,9 @@ FOLDERS = {
     "src/spf/": ["sender_auth_records"],
 }
 
-# Files under src that the fuzz entry points go through directly.
-SHARED = ("src/fuzzing.rs",)
+# Folder of the files under src that the fuzz entry points go through
+# directly. A change in it can reach any target, so it runs all of them.
+SHARED = ("src/fuzzing/",)
 
 # Paths outside src that cannot change what a target builds or runs. The fuzz
 # crate is a workspace of its own with its own lockfile (fuzz/Cargo.lock), so
@@ -139,7 +140,7 @@ def select(event, changed):
     for path in changed:
         if unrelated(path):
             continue
-        if path in SHARED or not path.startswith("src/"):
+        if any(path.startswith(prefix) for prefix in SHARED) or not path.startswith("src/"):
             return list(ALL)
         for folder, targets in FOLDERS.items():
             if path.startswith(folder):
