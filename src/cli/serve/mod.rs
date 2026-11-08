@@ -204,7 +204,11 @@ async fn serve(config: Config, role: ServeRole) -> std::io::Result<()> {
 		acme_renewal,
 	} = tls::build_tls_for(&config, challenge_store.clone(), role)?;
 	let ipv4_any_ports = startup::ipv4_any_ports(&config);
-	let mut tasks = Vec::new();
+	// The sockets are bound before the privileges are dropped: that is the
+	// whole point of the drop, since the low ports need root to be bound.
+	// The serving futures are held here and started only after it, so no
+	// connection is ever accepted or served as root.
+	let mut tasks: Vec<tasks::ListenerTask> = Vec::new();
 	let drain = crate::shutdown::Drain::new();
 	for listener_config in &config.listeners {
 		match listener_config.kind {
@@ -282,7 +286,7 @@ async fn serve(config: Config, role: ServeRole) -> std::io::Result<()> {
 					.with_append_limit(max_message_size)
 					.with_per_account_counter(Arc::clone(&mailbox_limits.per_account_counter));
 				imap_server = imap_server.with_drain(Arc::clone(&drain));
-				tasks.push(tokio::spawn(Arc::new(imap_server).serve(listener)));
+				tasks.push(Box::pin(Arc::new(imap_server).serve(listener)));
 			}
 			ListenerKind::Pop3s => {
 				let listener = tasks::bind(listener_config, &ipv4_any_ports).await?;
@@ -312,11 +316,11 @@ async fn serve(config: Config, role: ServeRole) -> std::io::Result<()> {
 				let router = crate::autodiscovery::router_for(&config);
 				let serve =
 					crate::autodiscovery::serve(listener, router, tls, max_conn, http_limits);
-				tasks.push(tokio::spawn(serve));
+				tasks.push(Box::pin(serve));
 			}
 			ListenerKind::WebDav => {
 				let listener = tasks::bind(listener_config, &ipv4_any_ports).await?;
-				tasks.push(webdav::spawn(
+				tasks.push(webdav::future(
 					listener,
 					&config,
 					directory.clone(),
@@ -443,12 +447,18 @@ async fn serve(config: Config, role: ServeRole) -> std::io::Result<()> {
 				if let Some(budget) = memory_budget.as_ref() {
 					server = server.with_memory_budget(Arc::clone(budget));
 				}
-				tasks.push(tokio::spawn(Arc::new(server).serve(listener)));
+				tasks.push(Box::pin(Arc::new(server).serve(listener)));
 			}
 		}
 	}
+	// The drop comes before any listener starts: until this point the
+	// sockets are bound but nothing is served, so no request is ever handled
+	// with root's authority. A failure to drop aborts the start, and the
+	// bound sockets go with it.
 	crate::privdrop::drop_privileges(config.privileges.as_ref())?;
-	let stopped = wait::until_stopped(tasks, &drain, acme_renewal).await;
+	let handles: Vec<tokio::task::JoinHandle<std::io::Result<()>>> =
+		tasks.into_iter().map(tokio::spawn).collect();
+	let stopped = wait::until_stopped(handles, &drain, acme_renewal).await;
 	watcher.abort();
 	let _ = watcher.await;
 	crate::directory_store::remove_reload_status(&config.data_dir);

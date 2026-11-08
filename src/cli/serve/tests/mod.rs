@@ -11,6 +11,7 @@ mod exclusion;
 mod limits;
 mod mta_sts;
 mod oauth;
+mod privilege_order;
 mod ratelimit;
 mod ratelimit_charge;
 mod ratelimit_cross_protocol;
