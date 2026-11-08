@@ -27,6 +27,13 @@ on:
 
 permissions: {}
 
+# One release of a tag at a time. A second run on the same tag would build
+# and push the same image and write the same release, so it waits for the
+# first instead of cancelling it half way.
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
 jobs:
   # Gate every release on promoted, version-matched, advisory-free code.
   verify:

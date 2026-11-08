@@ -147,6 +147,29 @@ fn every_entry_lands_on_develop_weekly_with_labels_and_a_limit() {
 	}
 }
 
+/// A pull request carries one value of each single-valued dimension the
+/// repository labels by: `type:`, `prio:` and `effort:`. Two types on one
+/// bump, or none of the others, is what the pull request template forbids.
+#[test]
+fn every_entry_carries_one_type_one_priority_and_one_effort() {
+	for update in updates() {
+		let name = update["package-ecosystem"].as_str().expect("ecosystem");
+		let labels: Vec<&str> = update["labels"]
+			.as_vec()
+			.expect("labels")
+			.iter()
+			.map(|label| label.as_str().expect("a label is text"))
+			.collect();
+		for dimension in ["type:", "prio:", "effort:"] {
+			let count = labels.iter().filter(|l| l.starts_with(dimension)).count();
+			assert_eq!(
+				count, 1,
+				"{name}: {dimension} appears {count} times in {labels:?}"
+			);
+		}
+	}
+}
+
 /// `*` matches any run of characters, as in Dependabot's `patterns`.
 fn glob(pattern: &str, text: &str) -> bool {
 	match pattern.split_once('*') {

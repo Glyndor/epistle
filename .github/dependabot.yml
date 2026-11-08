@@ -11,7 +11,7 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
-    labels: ["type:deps", "type:ci"]
+    labels: ["type:ci", "area:ci", "prio:P3", "effort:XS"]
     open-pull-requests-limit: 5
     target-branch: "develop"
     cooldown:
@@ -45,7 +45,7 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
-    labels: ["type:deps"]
+    labels: ["type:deps", "area:deploy", "prio:P3", "effort:XS"]
     open-pull-requests-limit: 5
     target-branch: "develop"
     cooldown:
@@ -82,7 +82,7 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
-    labels: ["type:deps"]
+    labels: ["type:deps", "prio:P3", "effort:XS"]
     open-pull-requests-limit: 5
     target-branch: "develop"
     cooldown:
@@ -112,7 +112,7 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
-    labels: ["type:deps"]
+    labels: ["type:deps", "area:ci", "prio:P3", "effort:XS"]
     open-pull-requests-limit: 5
     target-branch: "develop"
     cooldown:
