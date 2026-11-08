@@ -23,6 +23,23 @@ pub(super) struct Sources<'a> {
 	pub(super) account: &'a str,
 	pub(super) crypto: &'a crate::storage::MessageCrypto,
 	pub(super) uploads: &'a Uploads,
+	/// What the parts of this one message may add up to, and what they have
+	/// added up to so far: a blob named many times is copied many times, and
+	/// the byte budget of the uploads counts it once.
+	pub(super) limit: usize,
+	pub(super) spent: std::cell::Cell<usize>,
+}
+
+impl Sources<'_> {
+	/// Take `bytes` out of the budget of this message, or refuse the part.
+	pub(super) fn charge(&self, bytes: usize) -> Result<(), Value> {
+		let total = self.spent.get().saturating_add(bytes);
+		if total > self.limit {
+			return Err(json!({"type": "tooLarge"}));
+		}
+		self.spent.set(total);
+		Ok(())
+	}
 }
 
 /// The message for `spec`, or the SetError to answer with.
