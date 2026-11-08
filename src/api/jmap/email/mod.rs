@@ -46,7 +46,14 @@ pub(super) fn email_copy(
 	let mut not_created = serde_json::Map::new();
 	if let Some(create) = args.get("create").and_then(Value::as_object) {
 		for (cid, spec) in create {
-			match copy_email(state.data_dir(), source, account, spec, state.crypto()) {
+			match copy_email(
+				state.data_dir(),
+				source,
+				account,
+				spec,
+				state.crypto(),
+				state.quota_for_account(account),
+			) {
 				Ok(info) => {
 					created.insert(cid.clone(), info);
 				}
@@ -74,6 +81,7 @@ fn copy_email(
 	account: &str,
 	spec: &Value,
 	crypto: &crate::storage::MessageCrypto,
+	quota: Option<u64>,
 ) -> Result<Value, &'static str> {
 	let id = spec.get("id").and_then(Value::as_str).ok_or("notFound")?;
 	let target = spec
@@ -83,6 +91,9 @@ fn copy_email(
 		.map(|(name, _)| name.clone())
 		.unwrap_or_else(|| "INBOX".to_string());
 	let raw = objects::find_email_raw(data_dir, source, id, crypto).ok_or("notFound")?;
+	if over_quota(data_dir, account, crypto, quota, raw.len()) {
+		return Err("overQuota");
+	}
 	let new_id = crate::imap::mailbox::append(data_dir, account, &target, &[], &raw, crypto)
 		.map_err(|_| "serverFail")?;
 	Ok(json!({
@@ -123,7 +134,12 @@ pub(super) fn email_set(
 				crypto: state.crypto(),
 				uploads,
 			};
-			match create_email(spec, &sources, state.max_message_size()) {
+			match create_email(
+				spec,
+				&sources,
+				state.max_message_size(),
+				state.quota_for_account(account),
+			) {
 				Ok(info) => {
 					created.insert(cid.clone(), info);
 				}
@@ -179,10 +195,27 @@ pub(super) fn email_set(
 /// Create a message from a JMAP Email object (Email/set create): build the
 /// RFC 5322 message (RFC 8621 section 4.6) and store it in the target
 /// mailbox. The error is the SetError to answer with.
+/// Whether storing `bytes` more would take `account` past its storage quota,
+/// counted as the upload and IMAP count it. `None` means the account has no
+/// limit.
+fn over_quota(
+	data_dir: &std::path::Path,
+	account: &str,
+	crypto: &crate::storage::MessageCrypto,
+	quota: Option<u64>,
+	bytes: usize,
+) -> bool {
+	quota.is_some_and(|limit| {
+		super::blobs::account_usage_bytes(data_dir, account, crypto).saturating_add(bytes as u64)
+			> limit
+	})
+}
+
 fn create_email(
 	spec: &Value,
 	sources: &super::email_build::Sources<'_>,
 	max_message_size: usize,
+	quota: Option<u64>,
 ) -> Result<Value, Value> {
 	let (data_dir, account, crypto) = (sources.data_dir, sources.account, sources.crypto);
 	let mailbox = spec
@@ -204,6 +237,9 @@ fn create_email(
 		out
 	};
 	let raw = super::email_build::build(spec, sources, max_message_size)?;
+	if over_quota(data_dir, account, crypto, quota, raw.len()) {
+		return Err(json!({ "type": "overQuota" }));
+	}
 	let id = crate::imap::mailbox::append(data_dir, account, &mailbox, &flags, &raw, crypto)
 		.map_err(|_| json!({ "type": "serverFail" }))?;
 	Ok(json!({
