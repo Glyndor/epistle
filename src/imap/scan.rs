@@ -1,9 +1,10 @@
 //! Mailbox scan: the authoritative slow path for [`super::mailbox::Snapshot::open_at`].
 //!
 //! Reads every `.eml` file in the mailbox directory, the matching `.flags`
-//! and `.modseq` sidecars, and assigns UIDs in UUID-sorted order. Also
-//! persists a fresh `.uid` counter when the scan observed a UID it did not
-//! know about.
+//! and `.modseq` sidecars, and assigns UIDs in UUID-sorted order. The
+//! assignment is serialised with the mailbox's UID lock, so two scans of one
+//! mailbox never hand the same UID to two messages; a scan that finds every
+//! UID already assigned takes no lock at all.
 
 use std::path::Path;
 
@@ -45,11 +46,12 @@ pub(super) fn scan_mailbox(
 		Err(error) => return Err(error),
 	}
 	ids.sort();
-	let initial_counter = super::uid::read_counter(account_dir);
-	let mut uid_counter = initial_counter;
+	// The UIDs of every message, the missing ones assigned under the
+	// mailbox's UID lock.
+	let uids = super::uid::resolve_uids(account_dir, &ids);
 	let mut messages = Vec::with_capacity(ids.len());
-	for id in &ids {
-		let path = message_file(account_dir, *id, MessageExt::Eml)?;
+	for (id, uid) in ids.iter().copied().zip(uids) {
+		let path = message_file(account_dir, id, MessageExt::Eml)?;
 		let meta = std::fs::metadata(&path);
 		// RFC822.SIZE must be the plaintext size a client sees, not the
 		// on-disk envelope size, so subtract the fixed crypto overhead for an
@@ -64,17 +66,14 @@ pub(super) fn scan_mailbox(
 			.and_then(|m| m.modified().ok())
 			.unwrap_or(std::time::SystemTime::UNIX_EPOCH);
 		messages.push(MessageRef {
-			uid: super::uid::assign_or_read(account_dir, *id, &mut uid_counter),
-			id: *id,
+			uid,
+			id,
 			size,
-			flags: super::flags::read_flags(account_dir, *id),
+			flags: super::flags::read_flags(account_dir, id),
 			internal_date,
-			internal_zone: super::internal_date::read_zone(account_dir, *id),
-			modseq: super::modseq::read_message(account_dir, *id),
+			internal_zone: super::internal_date::read_zone(account_dir, id),
+			modseq: super::modseq::read_message(account_dir, id),
 		});
-	}
-	if uid_counter > initial_counter {
-		let _ = super::uid::write_counter(account_dir, uid_counter);
 	}
 	Ok(messages)
 }
