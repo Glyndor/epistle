@@ -77,8 +77,11 @@ pub(super) async fn copy_move(
 		.and_then(|value| value.to_str().ok())
 		.map(|value| !value.eq_ignore_ascii_case("F"))
 		.unwrap_or(true);
-	let dest_meta = tokio::fs::symlink_metadata(&dest_path).await.ok();
-	if dest_meta.is_some() && !overwrite {
+	// A fast refusal, before the account's lock is taken: a request that must
+	// not overwrite anything is turned away without waiting for the lock. It
+	// is not what decides: the destination is read again under the lock,
+	// where it may have been created in the meantime.
+	if tokio::fs::symlink_metadata(&dest_path).await.is_ok() && !overwrite {
 		return StatusCode::PRECONDITION_FAILED.into_response();
 	}
 	let Some(parent) = dest_path.parent() else {
@@ -91,8 +94,6 @@ pub(super) async fn copy_move(
 	if parent_meta.file_type().is_symlink() || !parent_meta.is_dir() {
 		return StatusCode::CONFLICT.into_response();
 	}
-	let dest_was_dir = dest_meta.as_ref().map(|meta| meta.is_dir());
-	let dest_existed = dest_meta.is_some();
 	// A `COPY` adds the source's real size, a collection included, and frees
 	// what it replaces. A `MOVE` ends with no more bytes than it started with;
 	// it takes the account's lock so it cannot interleave with a `COPY`.
@@ -102,7 +103,10 @@ pub(super) async fn copy_move(
 		match quota
 			.admit(Change {
 				copies: Some(source.to_path_buf()),
-				replaces: dest_existed.then(|| dest_path.clone()),
+				// The destination is measured where it is, under the lock:
+				// what it frees is what it holds now, not what it held when
+				// this request read it before the lock.
+				replaces: Some(dest_path.clone()),
 				..Change::default()
 			})
 			.await
@@ -110,6 +114,35 @@ pub(super) async fn copy_move(
 			Ok(reservation) => reservation,
 			Err(response) => return *response,
 		}
+	};
+	// With the lock held, the destination is read again: another request of
+	// this account may have created it while this one waited for the lock,
+	// and the read from before the lock says nothing about it now. Every
+	// decision about the destination is taken from this read.
+	let dest_meta = tokio::fs::symlink_metadata(&dest_path).await.ok();
+	if dest_meta.is_some() && !overwrite {
+		reservation.invalidate();
+		return StatusCode::PRECONDITION_FAILED.into_response();
+	}
+	let dest_was_dir = dest_meta.as_ref().map(|meta| meta.is_dir());
+	let dest_existed = dest_meta.is_some();
+	// A `MOVE` reads the source again under the lock as well: the copy, the
+	// removal and the log must all agree on what the source is, and it may
+	// have been taken away while this request waited for the lock.
+	let source_meta = if remove {
+		match tokio::fs::symlink_metadata(source).await {
+			Ok(meta) if !meta.file_type().is_symlink() => meta,
+			Ok(_) => {
+				reservation.invalidate();
+				return StatusCode::FORBIDDEN.into_response();
+			}
+			Err(_) => {
+				reservation.invalidate();
+				return StatusCode::NOT_FOUND.into_response();
+			}
+		}
+	} else {
+		source_meta
 	};
 	// With the lock held, so the depth of the source cannot grow between this
 	// check and the copy.
