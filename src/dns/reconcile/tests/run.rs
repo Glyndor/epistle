@@ -4,12 +4,12 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::support::{holds, rec, txt};
+use super::support::{LostAnswer, holds, rec, txt};
 use super::*;
 use crate::config::Config;
 use crate::dns::lockdown::tests::support::Zone;
 use crate::dns::provider::DnsProvider;
-use crate::dns::publish::FakeGuardedProvider;
+use crate::dns::publish::{FakeGuardedProvider, OperationOutcome};
 use crate::dns::reconcile::survey::{Context, Survey, survey};
 use crate::dns::reconcile::{apply, store};
 use crate::dns::records::PublishRecord;
@@ -338,6 +338,52 @@ fn the_guarded_path_writes_the_exact_set_and_keeps_foreign_values() {
 	assert!(!read(&h, provider.as_ref(), &[spf(), mx()]).changes());
 }
 
+/// A guarded write whose answer was lost is resolved by the lookup of the
+/// operation: the change went through, and the run goes on.
+#[test]
+fn a_guarded_write_whose_answer_was_lost_is_resolved() {
+	let h = harness();
+	let provider = Arc::new(LostAnswer {
+		inner: FakeGuardedProvider::holding(Vec::new()),
+		outcome: OperationOutcome::Applied,
+	});
+	let report = publish(
+		&h,
+		provider.as_ref(),
+		read(&h, provider.as_ref(), &[spf(), mx()]),
+	);
+	assert!(report.failure.is_none(), "{:?}", report.failure);
+	let now = provider.inner.records();
+	assert!(holds(&now, &spf()) && holds(&now, &mx()));
+	let ledger = store::load(&h.config.data_dir, "example.org").expect("ledger");
+	assert!(
+		ledger.owns(&spf()) && ledger.owns(&mx()),
+		"the ledger claims what went out"
+	);
+}
+
+/// A guarded write the lookup of the operation does not confirm stops the
+/// run: nothing else is written until it is resolved.
+#[test]
+fn a_guarded_write_the_lookup_does_not_confirm_stops_the_run() {
+	let h = harness();
+	let provider = Arc::new(LostAnswer {
+		inner: FakeGuardedProvider::holding(Vec::new()),
+		outcome: OperationOutcome::NotApplied,
+	});
+	let report = publish(
+		&h,
+		provider.as_ref(),
+		read(&h, provider.as_ref(), &[spf(), mx()]),
+	);
+	let failure = report.failure.expect("the run stops");
+	assert!(failure.contains("did not confirm"), "{failure}");
+	assert!(
+		!holds(&provider.inner.records(), &mx()),
+		"nothing else is written until the lost answer is resolved"
+	);
+}
+
 #[test]
 fn a_published_tlsa_value_is_known_to_the_certificate_refresh() {
 	let h = harness();
@@ -365,21 +411,15 @@ fn a_run_with_an_incomplete_set_removes_nothing() {
 #[test]
 fn a_second_publisher_does_not_get_the_lock() {
 	let h = harness();
-	let held = store::lock(&h.config.data_dir, Duration::ZERO)
+	let held = store::lock(&h.config.data_dir)
 		.expect("lock")
 		.expect("free");
 	assert!(
-		store::lock(&h.config.data_dir, Duration::ZERO)
-			.expect("lock")
-			.is_none(),
+		store::lock(&h.config.data_dir).expect("lock").is_none(),
 		"the loop and the command must not write at once"
 	);
 	drop(held);
-	assert!(
-		store::lock(&h.config.data_dir, Duration::ZERO)
-			.expect("lock")
-			.is_some()
-	);
+	assert!(store::lock(&h.config.data_dir).expect("lock").is_some());
 }
 
 #[test]

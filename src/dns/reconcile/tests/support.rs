@@ -113,3 +113,54 @@ impl DnsProvider for Racing {
 		self.zone.list(zone)
 	}
 }
+
+/// A provider whose guarded write loses its answer: the change is applied
+/// but the receipt never arrives, so only the lookup of the operation can
+/// say what became of it.
+pub(crate) struct LostAnswer {
+	/// The zone and the operations live here.
+	pub(crate) inner: crate::dns::publish::FakeGuardedProvider,
+	/// What the lookup of the operation answers.
+	pub(crate) outcome: crate::dns::publish::OperationOutcome,
+}
+
+impl DnsProvider for LostAnswer {
+	fn upsert(&self, zone: &str, record: DnsRecord) -> crate::dns::provider::Op<'_> {
+		self.inner.upsert(zone, record)
+	}
+	fn delete(&self, zone: &str, record: DnsRecord) -> crate::dns::provider::Op<'_> {
+		self.inner.delete(zone, record)
+	}
+	fn list(&self, zone: &str) -> crate::dns::provider::ListOp<'_> {
+		self.inner.list(zone)
+	}
+	fn publish_snapshot<'a>(
+		&'a self,
+		zone: &'a str,
+	) -> crate::dns::publish::provider::SnapshotOp<'a> {
+		self.inner.publish_snapshot(zone)
+	}
+	fn apply_guarded<'a>(
+		&'a self,
+		zone: &'a str,
+		change: crate::dns::publish::Change,
+	) -> crate::dns::publish::provider::ReceiptOp<'a> {
+		let inner = &self.inner;
+		Box::pin(async move {
+			let receipt = inner.apply_guarded(zone, change).await;
+			assert!(
+				matches!(receipt, crate::dns::publish::Receipt::Applied { .. }),
+				"the change went through: {receipt:?}"
+			);
+			// The answer is lost on the way back.
+			crate::dns::publish::Receipt::Unknown
+		})
+	}
+	fn lookup_operation<'a>(
+		&'a self,
+		_operation_id: &'a str,
+	) -> crate::dns::publish::provider::OperationOp<'a> {
+		let outcome = self.outcome;
+		Box::pin(async move { Ok(outcome) })
+	}
+}

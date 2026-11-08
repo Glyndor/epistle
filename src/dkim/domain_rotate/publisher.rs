@@ -36,7 +36,9 @@ pub trait KeyPublisher: Send + Sync {
 /// write holds `writes`, which the server shares between the rotations of
 /// all domains, so two domains never write to one provider at once: a
 /// provider that rewrites a whole record set or zone could lose one of two
-/// concurrent changes.
+/// concurrent changes. Every write also holds the lock of the zone it goes
+/// to, which the reconcile loop takes too (see
+/// [`crate::dns::zone_lock`]).
 pub struct ProviderPublisher {
 	provider: Arc<dyn DnsProvider>,
 	zones: Vec<String>,
@@ -86,6 +88,9 @@ impl KeyPublisher for ProviderPublisher {
 		Box::pin(async move {
 			let zone = self.zone_for(name)?;
 			let _write = self.writes.lock().await;
+			// The lock of the zone: the reconcile loop publishes in the
+			// same zone, and the two must not write it at the same time.
+			let _zone = crate::dns::zone_lock::lock(zone).await;
 			self.provider
 				.upsert(zone, txt(name, value))
 				.await
@@ -97,6 +102,9 @@ impl KeyPublisher for ProviderPublisher {
 		Box::pin(async move {
 			let zone = self.zone_for(name)?;
 			let _write = self.writes.lock().await;
+			// The lock of the zone: the reconcile loop publishes in the
+			// same zone, and the two must not write it at the same time.
+			let _zone = crate::dns::zone_lock::lock(zone).await;
 			// An empty value removes the TXT set at the name, the way the
 			// `[dkim]` rotation retires a selector it made.
 			self.provider

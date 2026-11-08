@@ -40,7 +40,6 @@ pub(crate) fn flock_exclusive_blocking(fd: RawFd) -> std::io::Result<()> {
 /// other error is a real failure.
 ///
 /// [`flock`]: https://man7.org/linux/man-pages/man2/flock.2.html
-#[allow(dead_code)]
 pub(crate) fn flock_exclusive_nonblocking(fd: RawFd) -> std::io::Result<()> {
 	let result = unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) };
 	if result == 0 {
@@ -78,6 +77,7 @@ pub(crate) fn open_lock_file(path: &Path) -> std::io::Result<File> {
 /// An exclusive advisory lock on a sibling file. The lock is released
 /// when the guard drops (closing the `File` lets the kernel release the
 /// `flock(2)` lock; `LOCK_UN` is fire-and-forget and not required).
+#[derive(Debug)]
 pub struct FileLock {
 	file: File,
 }
@@ -135,7 +135,6 @@ impl FileLock {
 	/// Try to acquire an exclusive lock on `path` without blocking.
 	/// Returns `Ok(None)` when another holder keeps the lock; the
 	/// `Ok(Some(_))` arm means the caller now holds an exclusive lock.
-	#[allow(dead_code)]
 	pub fn try_acquire(path: &Path) -> std::io::Result<Option<Self>> {
 		let file = open_lock_file(path)?;
 		match flock_exclusive_nonblocking(file.as_raw_fd()) {

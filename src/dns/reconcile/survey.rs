@@ -30,6 +30,10 @@ pub struct ZoneRun {
 	pub ledger: Ledger,
 	/// The zone as the provider listed it.
 	pub snapshot: Snapshot,
+	/// The lock of the zone, taken before the zone was read and held
+	/// until the plan is applied. Nobody else writes the zone while this
+	/// run reads it and writes the difference.
+	pub lock: crate::dns::zone_lock::ZoneLock,
 }
 
 /// A zone that could not be read, and why it was left alone.
@@ -133,7 +137,15 @@ pub async fn survey(ctx: &Context<'_>) -> Result<Survey, String> {
 		}
 	}
 	let also_ours = tlsa_values(&config.data_dir, &config.hostname);
+	// The locks of the zones this run reads, held until their plans are
+	// applied.
+	let mut locks = crate::dns::zone_lock::Locks::default();
 	for (zone, needed) in zones {
+		// The lock of the zone is taken before the zone is read and held
+		// until the plan is applied: the rotation that publishes in the
+		// same zone waits, and the plan is made against a zone nobody
+		// else is writing.
+		let lock = locks.lock(&zone).await;
 		let snapshot = match within(ctx.timeout, ctx.provider.publish_snapshot(&zone)).await {
 			Ok(snapshot) => snapshot,
 			Err(error) => {
@@ -164,6 +176,7 @@ pub async fn survey(ctx: &Context<'_>) -> Result<Survey, String> {
 			plan,
 			ledger,
 			snapshot,
+			lock,
 		});
 	}
 	Ok(survey)

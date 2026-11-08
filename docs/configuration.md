@@ -1967,7 +1967,11 @@ interval_secs = 21600   # six hours, the default; 0 turns the loop off
 | `interval_secs` | `21600` | Seconds between two runs. `0` turns the loop off; otherwise from `600` (ten minutes) to `604800` (one week). |
 
 A run that finds the ledger locked by `epistle dns publish` is skipped and the
-next one tries again. See [`dns.md`](dns.md#publishing-the-record-set).
+next one tries again. The provider is built from the configuration again on
+every run, so a credential that was rotated, or created after the server
+started, is picked up without a restart; when the build fails the provider of
+the last run keeps writing and the reason is logged (the credential itself
+never is). See [`dns.md`](dns.md#publishing-the-record-set).
 
 ### `[ldap]`
 LDAP or Active Directory backend. A login that no local or SQL account claims is checked with a bind against the directory, and its users are loaded for recipient resolution. Absent disables it. A malformed section aborts startup. The login is escaped (RFC 4515) before it goes into `user_filter`, and an unknown user and a wrong password get the same refusal.

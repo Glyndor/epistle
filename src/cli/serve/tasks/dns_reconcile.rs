@@ -7,15 +7,25 @@
 //! In manual mode (no `[dns]`, or every entry `manual`) nothing is spawned,
 //! and an interval of 0 turns the loop off.
 //!
+//! The provider is built from the configuration again on every run: a
+//! credential that was rotated, or created after the server started, is
+//! picked up without a restart. When the build fails the provider of the
+//! last run is dropped and the loop writes nothing until a build works
+//! again: a credential the operator removed is a decision to stop, and a
+//! cached provider would keep writing with it. The reason is logged without
+//! the credential.
+//!
 //! A run that fails waits longer before the next one: the interval
 //! doubles, up to a cap, spread by a jitter so a fleet of servers that
 //! starts at once does not query the provider at the same instant. A run
 //! that goes through resets the wait to the configured interval.
 
 use std::future::Future;
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::config::Config;
+use crate::dns::provider::DnsProvider;
 
 /// How long one provider call may take inside the loop.
 const NET_TIMEOUT: Duration = Duration::from_secs(30);
@@ -106,15 +116,9 @@ pub fn spawn(config: &Config) {
 			return;
 		}
 	}
-	let Some(provider) = config.dns.build_for_host(&config.hostname) else {
-		tracing::warn!(
-			"the DNS reconcile loop is off: the [dns] credentials could not be read; run `epistle dns provider check`"
-		);
-		return;
-	};
 	let config = config.clone();
 	tokio::spawn(async move {
-		loop_with(&config, provider.as_ref(), &mut |delay| async move {
+		loop_with(&config, build_provider, &mut |delay| async move {
 			tokio::time::sleep(delay).await;
 			true
 		})
@@ -122,15 +126,48 @@ pub fn spawn(config: &Config) {
 	});
 }
 
+/// The provider of a run, built from the configuration.
+///
+/// The build is cheap: it reads the credential and puts a provider
+/// together. It happens again on every run, so a credential that was
+/// rotated, or created after the server started, is picked up without a
+/// restart. The reason a build failed names the piece that is missing and
+/// never the credential itself.
+pub(super) fn build_provider(config: &Config) -> Result<Arc<dyn DnsProvider>, String> {
+	match config.dns.build_for_host(&config.hostname) {
+		Some(provider) => Ok(provider),
+		None => Err(why_no_provider(config)),
+	}
+}
+
+/// Why no provider could be built from the configuration: the entries that
+/// cannot publish, and why.
+///
+/// The reason names the missing piece (the variable that is not set, the
+/// file that cannot be read), never the value of a credential.
+fn why_no_provider(config: &Config) -> String {
+	let reasons: Vec<String> = config
+		.dns
+		.iter()
+		.filter_map(|dns| dns.build_problem())
+		.collect();
+	if reasons.is_empty() {
+		"no [dns] entry can build a provider".to_string()
+	} else {
+		reasons.join("; ")
+	}
+}
+
 /// The loop: compare the zones, wait, compare again.
 ///
-/// `wait` is how the loop waits between two runs and says whether it
-/// goes on, so a test can drive the loop without waiting for real.
-pub async fn loop_with<F, Fut>(
-	config: &Config,
-	provider: &dyn crate::dns::provider::DnsProvider,
-	mut wait: F,
-) where
+/// `build` is how the provider of a run is built, and `wait` is how the
+/// loop waits between two runs and says whether it goes on, so a test can
+/// drive the loop without waiting for real. The provider is built again on
+/// every run; when the build fails the provider of the last run keeps
+/// writing.
+pub async fn loop_with<F, Fut, B>(config: &Config, mut build: B, mut wait: F)
+where
+	B: FnMut(&Config) -> Result<Arc<dyn DnsProvider>, String>,
 	F: FnMut(Duration) -> Fut,
 	Fut: Future<Output = bool>,
 {
@@ -144,15 +181,31 @@ pub async fn loop_with<F, Fut>(
 		if !wait(delay).await {
 			return;
 		}
-		match tick(config, provider).await {
-			// A run that went through resets the wait: the next one is
-			// the configured interval again.
-			Tick::Clean => failures = 0,
-			// A provider that fails is asked less often.
-			Tick::Failed => failures = failures.saturating_add(1),
-			// Another publish holds the ledger: the provider was
-			// never asked, so the wait does not change.
-			Tick::Skipped => {}
+		// A build that fails leaves no provider for this run: no credential,
+		// no writes.
+		let provider: Option<Arc<dyn DnsProvider>> = match build(config) {
+			Ok(fresh) => Some(fresh),
+			Err(reason) => {
+				tracing::warn!(
+					%reason,
+					"the DNS provider could not be built: the reconcile loop writes nothing until it can; run `epistle dns provider check`"
+				);
+				None
+			}
+		};
+		match provider.as_ref() {
+			Some(provider) => match tick(config, provider.as_ref()).await {
+				// A run that went through resets the wait: the next one is
+				// the configured interval again.
+				Tick::Clean => failures = 0,
+				// A provider that fails is asked less often.
+				Tick::Failed => failures = failures.saturating_add(1),
+				// Another publish holds the ledger: the provider was
+				// never asked, so the wait does not change.
+				Tick::Skipped => {}
+			},
+			// No provider at all: the run did not happen.
+			None => failures = failures.saturating_add(1),
 		}
 		delay = if failures == 0 {
 			every
@@ -165,7 +218,7 @@ pub async fn loop_with<F, Fut>(
 /// One run of the loop. A run that finds the ledger locked (an operator is
 /// running `epistle dns publish`) is skipped; the next tick tries again.
 pub async fn tick(config: &Config, provider: &dyn crate::dns::provider::DnsProvider) -> Tick {
-	let lock = match crate::dns::reconcile::store::lock(&config.data_dir, Duration::ZERO) {
+	let lock = match crate::dns::reconcile::store::lock(&config.data_dir) {
 		Ok(Some(lock)) => lock,
 		Ok(None) => {
 			tracing::info!("dns reconcile skipped: another publish holds the ledger");
