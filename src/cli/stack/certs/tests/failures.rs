@@ -108,6 +108,21 @@ fn podup_that_changes(dir: &std::path::Path, first: &str, second: &str) -> Strin
 	podup.display().to_string()
 }
 
+/// [`upness`] with a stub podup. A stub written a moment ago can still be
+/// open for writing in a thread that forked, and the kernel then refuses to
+/// run it with `ETXTBSY`: the stub never ran, so the looks are asked again.
+fn looks(podup: &str, compose: &std::path::Path) -> Upness {
+	for _ in 0..20 {
+		match upness(podup, compose, "certs", std::time::Duration::ZERO) {
+			Upness::Unreadable(error) if error.contains("Text file busy") => {
+				std::thread::sleep(std::time::Duration::from_millis(50));
+			}
+			other => return other,
+		}
+	}
+	upness(podup, compose, "certs", std::time::Duration::ZERO)
+}
+
 fn rows(state: &str, started: &str) -> String {
 	format!(
 		r#"[{{"Service":"mail","State":"running"}},{{"Service":"certs","State":"{state}","StartedAt":"{started}"}}]"#
@@ -126,9 +141,9 @@ fn two_looks_that_disagree_leave_the_container_down() {
 		&rows("running", "2026-11-02T06:30:01Z"),
 		&rows("running", "2026-11-02T06:30:13Z"),
 	);
-	let upness = upness(&podup, &compose, "certs", std::time::Duration::ZERO);
+	let upness = looks(&podup, &compose);
 	let Upness::Unsteady(text) = upness else {
-		panic!("a container that restarted is not up");
+		panic!("a container that restarted is not up: {upness:?}");
 	};
 	assert!(text.contains("did not stay up"), "{text}");
 }
@@ -144,8 +159,5 @@ fn two_looks_that_agree_leave_the_container_up() {
 		&rows("running", "2026-11-02T06:30:01Z"),
 		&rows("running", "2026-11-02T06:30:01Z"),
 	);
-	assert_eq!(
-		upness(&podup, &compose, "certs", std::time::Duration::ZERO),
-		Upness::Up
-	);
+	assert_eq!(looks(&podup, &compose), Upness::Up);
 }
