@@ -14,15 +14,19 @@ mod arc;
 mod attachments;
 mod auth;
 mod database;
+mod debug;
 mod dkim;
 mod dns;
 mod dns_publish;
+mod env;
 mod ldap;
 mod listener;
+mod load;
 mod mta_sts;
 mod oauth;
 mod oauth_pair;
 mod otel;
+mod permissions;
 mod privileges;
 mod queue;
 mod scanner;
@@ -72,8 +76,8 @@ pub use tls::Tls;
 pub use transport::{Transport, TransportKind, select as select_transport};
 pub use webhook::Webhook;
 
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use std::path::{Path, PathBuf};
+use std::net::{Ipv4Addr, Ipv6Addr};
+use std::path::PathBuf;
 
 use serde::Deserialize;
 
@@ -590,273 +594,6 @@ pub struct Config {
 	/// warn 1 s, fail 5 s).
 	#[serde(default)]
 	pub clock_external: Option<crate::clock::external::ClockExternal>,
-}
-
-impl std::fmt::Debug for Config {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		f.debug_struct("Config")
-			.field("hostname", &self.hostname)
-			.field("public_ipv4", &self.public_ipv4)
-			.field("public_ipv6", &self.public_ipv6)
-			.field("data_dir", &self.data_dir)
-			.field("domains", &self.domains)
-			.field("domain_aliases", &self.domain_aliases)
-			.field("disabled_domains", &self.disabled_domains)
-			.field("dnsbl_zones", &self.dnsbl_zones)
-			.field("dnsbl_domain_zones", &self.dnsbl_domain_zones)
-			.field("dnsbl_url_zones", &self.dnsbl_url_zones)
-			.field(
-				"first_time_sender_delay_secs",
-				&self.first_time_sender_delay_secs,
-			)
-			.field("greylist_delay_secs", &self.greylist_delay_secs)
-			.field("srs_secret", &self.srs_secret.as_ref().map(|_| "***"))
-			.field("srs_domain", &self.srs_domain)
-			.field("quota_bytes", &self.quota_bytes)
-			.field("queue_give_up_secs", &self.queue_give_up_secs)
-			.field("queue_retry_base_secs", &self.queue_retry_base_secs)
-			.field("queue_retry_cap_secs", &self.queue_retry_cap_secs)
-			.field("queue_delay_warning_secs", &self.queue_delay_warning_secs)
-			.field("rules", &self.rules)
-			.field("scanner_hook_url", &self.scanner_hook_url)
-			.field("antispam", &self.antispam)
-			.field("attachments", &self.attachments)
-			.field("antispam_llm", &self.antispam_llm)
-			.field("subjectpass", &self.subjectpass)
-			.field("listeners", &self.listeners)
-			.field("accounts", &self.accounts)
-			.field("tls", &self.tls)
-			.field("mta_sts", &self.mta_sts)
-			.field("dkim", &self.dkim)
-			.field("api", &self.api)
-			.field("database", &self.database)
-			.field("log_format", &self.log_format)
-			.field("acme", &self.acme)
-			.field("dns", &self.dns)
-			.field("domain_quotas", &self.domain_quotas)
-			.field("default_feedback_id", &self.default_feedback_id)
-			.field("default_list_unsubscribe", &self.default_list_unsubscribe)
-			.field("bulk_recipients", &self.bulk_recipients)
-			.field("default_list_id", &self.default_list_id)
-			.field("system_auto_submitted", &self.system_auto_submitted)
-			.field("x_epistle_header", &self.x_epistle_header)
-			.field("organization_header", &self.organization_header)
-			.field("domain_organization", &self.domain_organization)
-			.field(
-				"submission_rate_limit_per_min",
-				&self.submission_rate_limit_per_min,
-			)
-			.field("new_recipients_per_day", &self.new_recipients_per_day)
-			.field("domain_submission_limits", &self.domain_submission_limits)
-			.field(
-				"inbound_rate_limit_per_ip_per_min",
-				&self.inbound_rate_limit_per_ip_per_min,
-			)
-			.field(
-				"inbound_rate_limit_per_sender_per_min",
-				&self.inbound_rate_limit_per_sender_per_min,
-			)
-			.field(
-				"max_connections_per_listener",
-				&self.max_connections_per_listener,
-			)
-			.field("max_connections_per_ip", &self.max_connections_per_ip)
-			.field("max_recipients", &self.max_recipients)
-			.field("message_memory_budget", &self.message_memory_budget)
-			.field("min_data_rate", &self.min_data_rate)
-			.field("data_rate_grace", &self.data_rate_grace)
-			.field("junk_command_limit", &self.junk_command_limit)
-			.field("max_session_time", &self.max_session_time)
-			.field("preauth_timeout", &self.preauth_timeout)
-			.field(
-				"max_mailbox_connections_per_ip",
-				&self.max_mailbox_connections_per_ip,
-			)
-			.field(
-				"max_connections_per_account",
-				&self.max_connections_per_account,
-			)
-			.field(
-				"max_connections_per_account_per_ip",
-				&self.max_connections_per_account_per_ip,
-			)
-			.field(
-				"max_connections_per_account_total",
-				&self.max_connections_per_account_total,
-			)
-			.field("max_http_connections", &self.max_http_connections)
-			.field(
-				"max_http_connections_per_ip",
-				&self.max_http_connections_per_ip,
-			)
-			.field("transport", &self.transport)
-			.field("otel", &self.otel)
-			.field("alias", &self.alias)
-			.field("arc", &self.arc)
-			.field("oauth", &self.oauth)
-			.field("ldap", &self.ldap)
-			.field("webhook", &self.webhook)
-			.field("tenants", &self.tenants)
-			.field("privileges", &self.privileges)
-			.field("storage", &self.storage)
-			.field("queue", &self.queue)
-			.field("auth", &self.auth)
-			.field("alerts", &self.alerts)
-			.field("hold_outbound", &self.hold_outbound)
-			.field("clock_external", &self.clock_external)
-			.finish()
-	}
-}
-
-impl Config {
-	/// Load and validate a configuration file. Fails closed: insecure
-	/// permissions, a read, parse or validation error, or an undefined
-	/// referenced environment variable all abort loading.
-	///
-	/// Secrets should not be written into the file directly: any `${VAR}` in
-	/// the file is substituted from the process environment at load time, so
-	/// credentials (e.g. the database password) can stay in the environment or
-	/// a secret store rather than on disk.
-	pub fn load(path: &Path) -> Result<Self, ConfigError> {
-		check_permissions(path, "config file")?;
-		let raw = std::fs::read_to_string(path).map_err(|source| ConfigError::Read {
-			path: path.to_path_buf(),
-			source,
-			kind: "config file",
-		})?;
-		Self::parse_text(&raw, path)
-	}
-
-	/// [`load`](Self::load) with the named top-level tables taken out before
-	/// the file is parsed and validated, for a process that never uses them
-	/// and does not mount the files their validation reads: the
-	/// certificates container has no `[database]` password file. Every other
-	/// rule applies as in `load`; a file that does not parse as TOML fails
-	/// the same way.
-	pub(crate) fn load_without(path: &Path, tables: &[&str]) -> Result<Self, ConfigError> {
-		check_permissions(path, "config file")?;
-		let raw = std::fs::read_to_string(path).map_err(|source| ConfigError::Read {
-			path: path.to_path_buf(),
-			source,
-			kind: "config file",
-		})?;
-		let text = match raw.parse::<toml_edit::DocumentMut>() {
-			Ok(mut document) => {
-				for table in tables {
-					document.remove(table);
-				}
-				document.to_string()
-			}
-			Err(_) => raw,
-		};
-		Self::parse_text(&text, path)
-	}
-
-	/// [`load`](Self::load) for `epistle status` alone: it reports on an
-	/// installation, so a file the validation refuses is still read and the
-	/// reason is kept in [`Config::validation_error`] for the `config` area.
-	/// Every command that acts on the data (`backup`, `restore`, `stack
-	/// rollback`, `serve`) uses `load` and refuses such a file, because the
-	/// rules it breaks can be the ones that keep a dump off an unprotected
-	/// connection or a path inside the data directory. A file that cannot be
-	/// read or parsed still fails here.
-	pub(crate) fn load_lenient(path: &Path) -> Result<Self, ConfigError> {
-		check_permissions(path, "config file")?;
-		let raw = std::fs::read_to_string(path).map_err(|source| ConfigError::Read {
-			path: path.to_path_buf(),
-			source,
-			kind: "config file",
-		})?;
-		Self::parse_text_lenient(&raw, path)
-	}
-
-	/// The `[webhook]` section when it is there and switched on. Whatever
-	/// posts an event reads the section through this, so a webhook with
-	/// `enabled = false` posts nothing.
-	pub fn active_webhook(&self) -> Option<&Webhook> {
-		self.webhook.as_ref().filter(|webhook| webhook.enabled)
-	}
-
-	/// The hosted domains that are switched on: `domains` without
-	/// `disabled_domains`.
-	pub fn enabled_domains(&self) -> Vec<String> {
-		self.domains
-			.iter()
-			.filter(|domain| {
-				!self
-					.disabled_domains
-					.iter()
-					.any(|disabled| disabled.eq_ignore_ascii_case(domain))
-			})
-			.cloned()
-			.collect()
-	}
-
-	/// The loopback address listeners bind to unless explicitly configured.
-	pub const fn default_bind_addr() -> IpAddr {
-		IpAddr::V4(Ipv4Addr::LOCALHOST)
-	}
-
-	/// Whether the outbound queue worker should be started for this config.
-	/// `false` only when `hold_outbound` is `true`, a flag `epistle local`
-	/// sets to keep the harness from opening any outbound SMTP connection.
-	/// Pulled out so the `serve` startup path and the unit tests share the
-	/// same source of truth.
-	pub fn start_queue_worker(&self) -> bool {
-		!self.hold_outbound
-	}
-}
-
-/// Substitute every `${VAR}` in the raw config with its environment value.
-/// Fails closed: a referenced variable that is not set aborts the load, so a
-/// missing secret can never silently become an empty string.
-fn expand_env(raw: &str) -> Result<String, ConfigError> {
-	let mut out = String::with_capacity(raw.len());
-	let mut rest = raw;
-	while let Some(start) = rest.find("${") {
-		out.push_str(&rest[..start]);
-		let after = &rest[start + 2..];
-		let end = after
-			.find('}')
-			.ok_or_else(|| ConfigError::Invalid("unterminated ${...} in config".to_string()))?;
-		let var = &after[..end];
-		let value = std::env::var(var).map_err(|_| ConfigError::MissingEnv(var.to_string()))?;
-		out.push_str(&value);
-		rest = &after[end + 1..];
-	}
-	out.push_str(rest);
-	Ok(out)
-}
-
-/// Reject a file that is readable or writable by group or others: it may hold
-/// secrets, so it must be owner-only. `kind` labels the message the operator
-/// will read in the refusal (`"config file"` for the loader, `"[database]
-/// password_file"` for the database secret). Best effort on non-Unix platforms
-/// where the bit check is meaningless and the check passes through.
-#[cfg(unix)]
-pub(super) fn check_permissions(path: &Path, kind: &'static str) -> Result<(), ConfigError> {
-	use std::os::unix::fs::PermissionsExt;
-	let mode = std::fs::metadata(path)
-		.map_err(|source| ConfigError::Read {
-			path: path.to_path_buf(),
-			source,
-			kind: "config file",
-		})?
-		.permissions()
-		.mode();
-	if mode & 0o077 != 0 {
-		return Err(ConfigError::InsecurePermissions {
-			path: path.to_path_buf(),
-			mode: mode & 0o777,
-			kind,
-		});
-	}
-	Ok(())
-}
-
-#[cfg(not(unix))]
-fn check_permissions(_path: &Path) -> Result<(), ConfigError> {
-	Ok(())
 }
 
 #[cfg(test)]
