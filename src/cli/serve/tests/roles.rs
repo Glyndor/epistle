@@ -105,6 +105,54 @@ fn the_certificates_role_loads_without_the_database_password_file() {
 	assert!(error.to_string().contains("password_file"), "{error}");
 }
 
+/// The certificates container holds the DNS credential and the ACME account
+/// key, and nothing else it does not use. The tables only the mail
+/// container reads — the account password hashes, the API token hash, the
+/// OAuth configuration, the storage key and the DKIM key paths — are not
+/// read by the certificates role: the container mounts none of the files
+/// they name, and its configuration loads without them.
+#[test]
+fn the_certificates_role_loads_without_the_tables_only_mail_reads() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let path = dir.path().join("mail.toml");
+	let hash = crate::smtp::auth::hash_password("a-password").expect("hash");
+	let token = "0".repeat(64);
+	let data_dir = dir.path().join("data").display().to_string();
+	let storage_key = dir.path().join("storage.key").display().to_string();
+	let dkim_key = dir.path().join("dkim.pem").display().to_string();
+	std::fs::write(
+		&path,
+		format!(
+			"hostname = 'mail.example.org'\ndata_dir = '{data_dir}'\ndomains = ['example.org']\n\
+			 [[accounts]]\nname = 'alice'\naddresses = ['alice@example.org']\npassword_hash = '{hash}'\n\
+			 [api]\ntoken_hash = 'sha256:{token}'\n\
+			 [storage]\nencrypt_at_rest = true\nencryption_key_file = '{storage_key}'\n\
+			 [oauth]\nissuer = 'https://idp.example.org'\naudience = 'mail.example.org'\n\
+			 algorithm = 'RS256'\ndiscovery_url = 'https://idp.example.org/.well-known/openid-configuration'\n\
+			 [dkim]\nselector = 'mail'\nkey_file = '{dkim_key}'\n"
+		),
+	)
+	.expect("config");
+	use std::os::unix::fs::PermissionsExt;
+	std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("mode");
+	let config = super::super::load(&path, ServeRole::Certs).expect("certs loads");
+	assert!(config.accounts.is_empty(), "the accounts stay with mail");
+	assert!(config.api.is_none(), "the API token hash stays with mail");
+	assert!(config.storage.is_none(), "the storage key stays with mail");
+	assert!(
+		config.oauth.is_none(),
+		"the OAuth configuration stays with mail"
+	);
+	assert!(config.dkim.is_none(), "the DKIM key paths stay with mail");
+	// The same file read by the role that does use them.
+	let mail = super::super::load(&path, ServeRole::Mail).expect("mail loads");
+	assert_eq!(mail.accounts.len(), 1, "mail reads the accounts");
+	assert!(mail.api.is_some(), "mail reads the API token hash");
+	assert!(mail.storage.is_some(), "mail reads the storage key");
+	assert!(mail.oauth.is_some(), "mail reads the OAuth configuration");
+	assert!(mail.dkim.is_some(), "mail reads the DKIM key paths");
+}
+
 #[tokio::test]
 async fn the_certificates_role_refuses_to_start_without_acme() {
 	let dir = tempfile::tempdir().expect("tempdir");

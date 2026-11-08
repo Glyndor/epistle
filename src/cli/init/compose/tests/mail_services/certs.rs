@@ -5,7 +5,7 @@ use super::*;
 use crate::cli::init::answers::DnsAnswers;
 use serde_json::{Value, json};
 
-fn split_answers(token_file: &str) -> crate::cli::init::Answers {
+pub(super) fn split_answers(token_file: &str) -> crate::cli::init::Answers {
 	let mut answers = stack_answers();
 	answers.services.certs = true;
 	answers.dns = Some(DnsAnswers {

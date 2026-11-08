@@ -151,6 +151,10 @@ pub(super) struct Ctx {
 	pub(super) podup: String,
 	/// The host's `/proc/meminfo`, which `resources` reads `MemTotal` from.
 	pub(super) meminfo: PathBuf,
+	/// How long a container has to keep the same start before the check that
+	/// asks about it calls it up. The production window is the one the
+	/// switch uses; the tests shorten it.
+	pub(super) steady: Duration,
 }
 
 impl Ctx {
@@ -169,6 +173,7 @@ impl Ctx {
 			now: SystemTime::now(),
 			podup: "podup".to_string(),
 			meminfo: PathBuf::from("/proc/meminfo"),
+			steady: crate::cli::stack::certs::STEADY,
 		}
 	}
 }

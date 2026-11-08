@@ -19,6 +19,7 @@ async fn an_invalid_file_fails_the_config_area_with_the_reason() {
 		now: std::time::SystemTime::UNIX_EPOCH,
 		podup: "podup".to_string(),
 		meminfo: std::path::PathBuf::from("meminfo-absent"),
+		steady: std::time::Duration::ZERO,
 	};
 	let report = super::check(&ctx).await;
 	assert!(report.status == Level::Fail);

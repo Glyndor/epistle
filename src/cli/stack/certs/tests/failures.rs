@@ -112,3 +112,64 @@ fn a_container_that_restarted_between_two_looks_is_not_up() {
 	assert!(steady(&first, &at("exited", "2026-11-02T06:30:01Z"), "certs").is_err());
 	assert!(steady(&first, "[]", "certs").is_err());
 }
+
+/// A `podup` that answers `ps` with `first` the first time and `second` from
+/// the second time on.
+fn podup_that_changes(dir: &std::path::Path, first: &str, second: &str) -> String {
+	let counter = dir.join("podup.calls").display().to_string();
+	let podup = dir.join("podup");
+	std::fs::write(
+		&podup,
+		format!(
+			"#!/bin/sh\nn=0\nif [ -f \"{counter}\" ]; then n=$(cat \"{counter}\"); fi\nn=$((n + 1))\n\
+			 printf '%s' \"$n\" > \"{counter}\"\nif [ \"$n\" -eq 1 ]; then printf '%s' '{first}'; \
+			 else printf '%s' '{second}'; fi\n"
+		),
+	)
+	.expect("podup");
+	use std::os::unix::fs::PermissionsExt;
+	std::fs::set_permissions(&podup, std::fs::Permissions::from_mode(0o755)).expect("mode");
+	podup.display().to_string()
+}
+
+fn rows(state: &str, started: &str) -> String {
+	format!(
+		r#"[{{"Service":"mail","State":"running"}},{{"Service":"certs","State":"{state}","StartedAt":"{started}"}}]"#
+	)
+}
+
+/// The same rule the switch applies, with the two looks a stub podup
+/// answers: a container that restarts between them is not up.
+#[test]
+fn two_looks_that_disagree_leave_the_container_down() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let compose = dir.path().join("compose.yaml");
+	std::fs::write(&compose, "{}").expect("compose");
+	let podup = podup_that_changes(
+		dir.path(),
+		&rows("running", "2026-11-02T06:30:01Z"),
+		&rows("running", "2026-11-02T06:30:13Z"),
+	);
+	let upness = upness(&podup, &compose, "certs", std::time::Duration::ZERO);
+	let Upness::Unsteady(text) = upness else {
+		panic!("a container that restarted is not up");
+	};
+	assert!(text.contains("did not stay up"), "{text}");
+}
+
+/// A container that keeps the same start in both looks is up.
+#[test]
+fn two_looks_that_agree_leave_the_container_up() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let compose = dir.path().join("compose.yaml");
+	std::fs::write(&compose, "{}").expect("compose");
+	let podup = podup_that_changes(
+		dir.path(),
+		&rows("running", "2026-11-02T06:30:01Z"),
+		&rows("running", "2026-11-02T06:30:01Z"),
+	);
+	assert_eq!(
+		upness(&podup, &compose, "certs", std::time::Duration::ZERO),
+		Upness::Up
+	);
+}
