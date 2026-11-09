@@ -1,5 +1,9 @@
 [advisories]
 version = 2
+# See .cargo/audit.toml for the reason; the ignore leaves with #1696.
+ignore = [
+	{ id = "RUSTSEC-2026-0459", reason = "libsqlite3-sys is in the lockfile only through the optional sqlx-sqlite; epistle builds sqlx with postgres alone, so it is never compiled" },
+]
 
 [licenses]
 version = 2
