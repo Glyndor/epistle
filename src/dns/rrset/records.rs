@@ -20,7 +20,9 @@ pub fn is_null_mx(value: &str) -> bool {
 /// Whether two records are the same record: same name, same kind and the
 /// same value. TXT values compare by their logical text (quoting and
 /// 255-octet splitting do not count), MX by preference and target, so a
-/// provider that lists `0 .` as a bare `.` still matches.
+/// provider that lists `0 .` as a bare `.` still matches, and SRV by
+/// priority, weight, port and canonical target, so a provider that lists
+/// the target without its root dot still matches.
 pub fn same_record(a: &DnsRecord, b: &DnsRecord) -> bool {
 	if a.kind != b.kind || canonical_name(&a.name) != canonical_name(&b.name) {
 		return false;
@@ -32,6 +34,7 @@ pub fn same_record(a: &DnsRecord, b: &DnsRecord) -> bool {
 				|| (mx_preference(&a.value) == mx_preference(&b.value)
 					&& mx_target(&a.value) == mx_target(&b.value))
 		}
+		RecordKind::Srv => canonical_srv(&a.value) == canonical_srv(&b.value),
 		_ => a.value.trim() == b.value.trim(),
 	}
 }

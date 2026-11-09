@@ -11,7 +11,7 @@ pub(super) fn matches(stored: &RecordRef, record: &DnsRecord) -> bool {
 	{
 		return false;
 	}
-	let value = if record.kind == RecordKind::Mx {
+	let value = if matches!(record.kind, RecordKind::Mx | RecordKind::Srv) {
 		let Some(priority) = stored.priority else {
 			return false;
 		};
