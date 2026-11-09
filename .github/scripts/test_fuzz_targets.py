@@ -321,5 +321,22 @@ class VersionBumpTests(unittest.TestCase):
         self.assertFalse(ft.version_bump("deadbeef" * 5, "HEAD"))
 
 
+    def test_every_folder_the_selector_maps_starts_the_workflow(self):
+        """A folder that picks a target but is missing from the workflow's
+        `paths:` never starts the job: its change merges unfuzzed."""
+        workflow = os.path.join(
+            os.path.dirname(__file__), "..", "workflows", "fuzz.yml"
+        )
+        with open(workflow, encoding="utf-8") as handle:
+            text = handle.read()
+        listed = re.findall(r'^\s*- "([^"!][^"]*)/\*\*"', text, re.MULTILINE)
+        missing = [
+            folder
+            for folder in ft.FOLDERS
+            if not any(folder.startswith(f"{entry}/") for entry in listed)
+        ]
+        self.assertEqual(missing, [])
+
+
 if __name__ == "__main__":
     unittest.main()
