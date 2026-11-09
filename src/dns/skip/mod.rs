@@ -175,3 +175,6 @@ pub struct SkippedGroup {
 	/// The records the wanted set held for it.
 	pub records: Vec<PublishRecord>,
 }
+
+#[cfg(test)]
+mod tests;
