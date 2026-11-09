@@ -43,3 +43,24 @@ fn an_interval_inside_the_range_is_accepted_and_one_outside_is_refused() {
 fn an_unknown_key_is_refused() {
 	assert!(parse("[dns_publish]\nintervals = 60\n").is_err());
 }
+
+#[test]
+fn skip_is_empty_by_default_and_names_groups_when_set() {
+	let config = parse("").expect("config");
+	assert!(config.dns_publish.skip_set().is_empty());
+	let config = parse("[dns_publish]\nskip = ['client-locators', 'tlsa']\n").expect("config");
+	let set = config.dns_publish.skip_set();
+	assert!(set.contains(crate::dns::skip::SkipGroup::ClientLocators));
+	assert!(set.contains(crate::dns::skip::SkipGroup::Tlsa));
+	assert!(!set.contains(crate::dns::skip::SkipGroup::Caa));
+}
+
+#[test]
+fn an_unknown_skip_group_is_refused_naming_the_groups_that_exist() {
+	let error = parse("[dns_publish]\nskip = ['srv']\n").expect_err("a DNS type is no group");
+	let text = error.to_string();
+	assert!(
+		text.contains("client-locators") && text.contains("mta-sts"),
+		"{text}"
+	);
+}

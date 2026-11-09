@@ -177,6 +177,9 @@ async fn report(
 			}
 		};
 		let checks = dns::check_domain(domain, hostname, &selectors, dns).await;
+		// A record of a group the configuration skips is not published on
+		// purpose: it is not missing, and it is not drift.
+		let checks = crate::dns::skip::split_checks(checks, &config.dns_publish.skip_set());
 		steps.clear();
 		print_group(out, domain, &checks, " \u{2014}", decor);
 		for _ in &checks {
@@ -220,6 +223,7 @@ fn group_json(name: &str, checks: &[dns::Check]) -> serde_json::Value {
 				Status::Ok => "ok",
 				Status::Missing => "missing",
 				Status::LookupError => "error",
+				Status::Skipped => "skipped",
 			};
 			serde_json::json!({
 				"kind": check.kind, "name": check.name, "status": status, "detail": check.detail,
@@ -276,6 +280,9 @@ fn line(check: &dns::Check, separator: &str, decor: Decor) -> String {
 		Status::Ok => ("ok", term::Tone::Good),
 		Status::Missing => ("missing", term::Tone::Bad),
 		Status::LookupError => ("error", term::Tone::Warn),
+		// Off by choice: the configuration skips the group, so the record
+		// is not there on purpose.
+		Status::Skipped => ("skipped", term::Tone::Off),
 	};
 	let state = format!("{} {word}", tone.mark());
 	// Padded to the longest state, `✘ missing`, so the records line up.
@@ -292,6 +299,7 @@ fn symbol(status: &Status) -> &'static str {
 		Status::Ok => "ok  ",
 		Status::Missing => "MISS",
 		Status::LookupError => "err ",
+		Status::Skipped => "skip",
 	}
 }
 

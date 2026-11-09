@@ -290,6 +290,11 @@ So users configure a client from just their address and password:
   `https://autoconfig.example.org/mobileconfig?email=<address>` (or hand them
   the file from `epistle mobileconfig`). The profile carries no password.
 
+None of these records has to be public: a deployment that reaches its server
+another way (a webmail on the same host, for instance) can leave the client
+locators and the two names alone with `[dns_publish] skip =
+["client-locators"]` (see [`configuration.md`](configuration.md#dns_publish)).
+
 ## Publishing records through epistle
 
 If `[dns]` is configured (see [`configuration.md`](configuration.md) §`[dns]`),
@@ -345,6 +350,13 @@ Each record of the plan has one action:
 | `conflict` | A record epistle did not write is in the way. Nothing is written; fix it by hand. |
 | `gone` | A record epistle published is no longer in the zone; the ledger forgets it. |
 | `skipped` | The name is delegated, is not a valid DNS name, or is a DKIM key, which the key rotation retires. |
+
+A record of a group the configuration does not want published is not in the
+set at all: `[dns_publish] skip` names the group (see
+[`configuration.md`](configuration.md#dns_publish)), the plan lists it under
+"Skipped by configuration", and a record epistle published earlier is retired
+through the ledger like a record the configuration no longer needs. A record
+that is in the zone and was never in the ledger is left alone.
 
 What epistle wrote is kept in a ledger, one file per zone under
 `<data_dir>/dns-publish/<zone>.json`: the name, type, value, the release that

@@ -1960,11 +1960,38 @@ runs. The first run is two minutes after the start.
 ```toml
 [dns_publish]
 interval_secs = 21600   # six hours, the default; 0 turns the loop off
+skip = ["client-locators"]   # groups of records automatic mode does not publish
 ```
 
 | Key | Default | Meaning |
 |---|---|---|
 | `interval_secs` | `21600` | Seconds between two runs. `0` turns the loop off; otherwise from `600` (ten minutes) to `604800` (one week). |
+| `skip` | `[]` | The named groups of records automatic mode must not publish. An unknown name is refused when the file is read, and the error names the groups that exist. |
+
+`skip` names a group of records, not a DNS type: `autoconfig` is a CNAME and
+shares its type with the `mta-sts` name, which a deployment may want to keep.
+The groups are:
+
+| Group | Records it holds |
+|---|---|
+| `client-locators` | The SRV client locators (`_imap._tcp`, `_imaps._tcp`, `_submission._tcp`, `_submissions._tcp`, `_jmap._tcp` and the other locators the listeners enable) and the `autoconfig` and `autodiscover` names. |
+| `mta-sts` | The `_mta-sts` TXT record and the `mta-sts` CNAME it needs. |
+| `tls-rpt` | The `_smtp._tls` TXT record (TLS-RPT, RFC 8460). |
+| `tlsa` | The DANE TLSA record at `_25._tcp.<hostname>`. The certificate refresh publishes none either. |
+| `caa` | The CAA record that locks issuance to the CA. |
+
+The core records are in no group and are never skipped: MX, SPF, DKIM, DMARC
+and the A/AAAA records of the mail host.
+
+The list is global: the same groups are skipped for every domain the server
+hosts. A record of a skipped group is never published. A record epistle
+published earlier is in the ledger, and it is retired through the ledger like
+a record the configuration no longer needs: the next run removes it and
+forgets it (`epistle dns publish --dry-run` shows the removal first). A record
+that exists in the zone and was never in the ledger is left alone, as before.
+`epistle dns publish`, `epistle dns-records`, `epistle status` and
+`epistle dns publish --undo` name the skipped groups, so a record that is not
+published reads as skipped and not as missing.
 
 A run that finds the ledger locked by `epistle dns publish` is skipped and the
 next one tries again. The provider is built from the configuration again on

@@ -94,3 +94,31 @@ fn a_rotation_state_that_cannot_be_read_stops_the_set() {
 	let errors = from_config(&config).expect_err("a broken state must not fall back");
 	assert_eq!(errors.len(), 1);
 }
+
+#[test]
+fn a_skipped_group_is_out_of_the_set_and_reported_apart() {
+	let desired = from_config(&config(
+		"[dns_publish]\nskip = ['mta-sts', 'client-locators']\n[[listeners]]\nkind = 'imaps'\n",
+	))
+	.expect("the set is computed");
+	let names = names(&desired);
+	for gone in ["_mta-sts.example.org TXT", "mta-sts.example.org CNAME"] {
+		assert!(!names.contains(&gone.to_string()), "{gone}: {names:?}");
+	}
+	assert!(!names.iter().any(|n| n.starts_with("_imaps")), "{names:?}");
+	for kept in [
+		"example.org MX",
+		"_dmarc.example.org TXT",
+		"_smtp._tls.example.org TXT",
+	] {
+		assert!(names.contains(&kept.to_string()), "{kept}: {names:?}");
+	}
+	let groups: Vec<_> = desired.skipped.iter().map(|s| s.group).collect();
+	assert_eq!(
+		groups,
+		[
+			crate::dns::skip::SkipGroup::ClientLocators,
+			crate::dns::skip::SkipGroup::MtaSts
+		]
+	);
+}

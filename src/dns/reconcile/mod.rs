@@ -33,6 +33,7 @@ use serde::Serialize;
 use crate::dns::names::{canonical_name, in_domain, is_valid_name};
 use crate::dns::provider::{DnsRecord, RecordKind, txt_purpose};
 use crate::dns::rrset::{Cuts, same_record};
+use crate::dns::skip::SkipSet;
 
 pub mod apply;
 mod dmarc;
@@ -142,6 +143,10 @@ pub struct ZoneInput<'a> {
 	/// `needed`, and a record left out is not a record no longer needed. With
 	/// a reason here nothing is removed; the plan says why.
 	pub incomplete: Option<&'a str>,
+	/// The groups the configuration skips. A ledger record of one of them
+	/// is retired like a record the configuration no longer needs, and the
+	/// reason names the group.
+	pub skip: &'a SkipSet,
 }
 
 /// Plan `input`. Pure: nothing is read or written outside `input`.
@@ -165,7 +170,7 @@ pub fn plan_zone(input: &ZoneInput<'_>) -> ZonePlan {
 		{
 			continue;
 		}
-		let mut entry = retire(record, input.existing, &cuts);
+		let mut entry = retire(record, input.existing, &cuts, input.skip);
 		if entry.action == Action::Remove
 			&& let Some(why) = input.incomplete
 		{
@@ -422,7 +427,7 @@ fn plan_dmarc(
 }
 
 /// Plan a ledger record the configuration no longer needs.
-fn retire(record: &DnsRecord, existing: &[DnsRecord], cuts: &Cuts) -> Entry {
+fn retire(record: &DnsRecord, existing: &[DnsRecord], cuts: &Cuts, skip: &SkipSet) -> Entry {
 	let name = canonical_name(&record.name);
 	let kind = record.kind.as_str();
 	if !existing.iter().any(|r| same_record(r, record)) {
@@ -457,9 +462,7 @@ fn retire(record: &DnsRecord, existing: &[DnsRecord], cuts: &Cuts) -> Entry {
 		return entry(
 			Action::Remove,
 			record,
-			format!(
-				"{name} {kind} was published by epistle and the configuration no longer needs it"
-			),
+			skip.retirement_reason(record),
 			vec![],
 		);
 	}
