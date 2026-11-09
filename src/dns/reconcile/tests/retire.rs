@@ -4,6 +4,7 @@ use super::run::{harness, publish, read};
 use super::support::*;
 use super::*;
 use crate::dns::lockdown::tests::support::Zone;
+use crate::dns::skip::SkipSet;
 
 fn pop3() -> DnsRecord {
 	rec(
@@ -113,6 +114,7 @@ fn an_incomplete_set_retires_nothing() {
 		lockdown: &[],
 		retire_within: None,
 		incomplete: Some("cannot read certificate"),
+		skip: &SkipSet::default(),
 	});
 	assert_eq!(action_for(&plan, &pop3()), Action::Skipped);
 	assert!(plan.entries.iter().any(|e| e.reason.contains("incomplete")));
@@ -145,6 +147,7 @@ fn retiring_is_limited_to_the_domain_the_run_was_asked_for() {
 		lockdown: &[],
 		retire_within: Some("other.example.org"),
 		incomplete: None,
+		skip: &SkipSet::default(),
 	});
 	assert_eq!(action_for(&plan, &other), Action::Remove);
 	assert!(

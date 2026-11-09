@@ -77,12 +77,22 @@ pub(super) async fn evaluate(ctx: &Ctx, dns: &dyn crate::spf::DnsLookup) -> Area
 			},
 		),
 	];
-	items.extend(super::tls_tlsa::tlsa_item(&config.hostname, &leaf.chain, dns).await);
-	items.extend(super::tls_tlsa::pending_item(
-		&config.data_dir,
-		&config.hostname,
-		epoch(ctx.now),
-	));
+	if skips_tlsa(config) {
+		// The configuration skips the DANE association: the record is not
+		// published on purpose, so it is not a mismatch and nothing is owed.
+		items.push(Item::new(
+			"tlsa",
+			Level::Ok,
+			"skipped by configuration (the tlsa group)",
+		));
+	} else {
+		items.extend(super::tls_tlsa::tlsa_item(&config.hostname, &leaf.chain, dns).await);
+		items.extend(super::tls_tlsa::pending_item(
+			&config.data_dir,
+			&config.hostname,
+			epoch(ctx.now),
+		));
+	}
 	match &layout {
 		Layout::Split { upness, renewal } => {
 			items.push(certs::item(upness, renewal.as_ref(), remaining));
@@ -187,6 +197,16 @@ async fn orphan(ctx: &Ctx, compose: &std::path::Path) -> Option<Item> {
 /// `serve` and `epistle probe` resolve it ([`crate::tls::served_tls`]).
 fn served_certificate(config: &Config) -> Option<PathBuf> {
 	crate::tls::served_tls(config).map(|served| served.tls.cert_file)
+}
+
+/// Whether the configuration skips the TLSA record: the DANE association
+/// belongs to the `tlsa` group, so a configuration that skips it publishes
+/// none and owes none.
+fn skips_tlsa(config: &Config) -> bool {
+	config
+		.dns_publish
+		.skip_set()
+		.contains(crate::dns::skip::SkipGroup::Tlsa)
 }
 
 fn read_leaf(path: &std::path::Path) -> Result<Leaf, String> {

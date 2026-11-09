@@ -207,9 +207,10 @@ fn publish(
 		}
 	};
 	let printed = if request.json {
-		serde_json::to_string_pretty(&render::plan_json(&survey)).map(|text| text + "\n")
+		serde_json::to_string_pretty(&render::plan_json(&survey, &desired.skipped))
+			.map(|text| text + "\n")
 	} else {
-		Ok(render::plan_text(&survey))
+		Ok(render::plan_text(&survey, &desired.skipped))
 	};
 	match printed {
 		Ok(text) if out.write_all(text.as_bytes()).is_ok() => {}

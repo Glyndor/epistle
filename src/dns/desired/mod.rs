@@ -11,6 +11,7 @@ use std::path::Path;
 
 use crate::config::{Config, Dkim};
 use crate::dns::records::{self, DomainDkim, PublishRecord, ServiceRecords};
+use crate::dns::skip::SkippedGroup;
 
 /// The records a configuration needs, and what could not be read while
 /// computing them.
@@ -23,6 +24,10 @@ pub struct Desired {
 	/// certificate). The set can still be printed and its records created,
 	/// but it is incomplete: see [`Desired::incomplete`].
 	pub warnings: Vec<String>,
+	/// The groups the configuration skips, and the records they hold. They
+	/// are not in [`Desired::records`]: the wanted set is what epistle
+	/// publishes.
+	pub skipped: Vec<SkippedGroup>,
 }
 
 impl Desired {
@@ -95,7 +100,16 @@ pub fn from_config(config: &Config) -> Result<Desired, Vec<String>> {
 		config.public_ipv4,
 		config.public_ipv6,
 	);
-	Ok(Desired { records, warnings })
+	// The filter lives here, once: the reconcile loop and `epistle dns
+	// publish` read this set, so a record the configuration skips is out
+	// of both.
+	let (records, skipped) =
+		crate::dns::skip::split_records(records, &config.dns_publish.skip_set());
+	Ok(Desired {
+		records,
+		warnings,
+		skipped,
+	})
 }
 
 /// The default `[dkim]` selector, and its optional RSA partner, as

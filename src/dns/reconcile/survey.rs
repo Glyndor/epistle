@@ -171,6 +171,7 @@ pub async fn survey(ctx: &Context<'_>) -> Result<Survey, String> {
 			lockdown: &lockdown,
 			retire_within: ctx.domain,
 			incomplete: ctx.incomplete,
+			skip: &config.dns_publish.skip_set(),
 		});
 		survey.zones.push(ZoneRun {
 			plan,

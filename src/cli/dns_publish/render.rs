@@ -8,6 +8,7 @@ use crate::cli::term::sanitize;
 use crate::dns::provider::{DnsRecord, RecordKind};
 use crate::dns::reconcile::survey::Survey;
 use crate::dns::reconcile::undo::UndoReport;
+use crate::dns::skip::SkippedGroup;
 
 /// A record as a zone-file line: `name TTL IN KIND value`.
 fn record_line(record: &DnsRecord) -> String {
@@ -24,9 +25,9 @@ fn record_line(record: &DnsRecord) -> String {
 	)
 }
 
-/// The plan as text: one block per zone, then the zones left alone, then
-/// the records left to the operator.
-pub(super) fn plan_text(survey: &Survey) -> String {
+/// The plan as text: one block per zone, then the groups the configuration
+/// skips, then the zones left alone, then the records left to the operator.
+pub(super) fn plan_text(survey: &Survey, skipped: &[SkippedGroup]) -> String {
 	let mut text = String::new();
 	for zone in &survey.zones {
 		let _ = writeln!(text, "Zone {}", sanitize(&zone.plan.zone));
@@ -43,6 +44,16 @@ pub(super) fn plan_text(survey: &Survey) -> String {
 			let _ = writeln!(text, "           {}", sanitize(&entry.reason));
 			for value in &entry.current {
 				let _ = writeln!(text, "           now: {}", sanitize(value));
+			}
+		}
+		text.push('\n');
+	}
+	if !skipped.is_empty() {
+		text.push_str("Skipped by configuration (epistle publishes none of these):\n");
+		for entry in skipped {
+			let _ = writeln!(text, "  {}", sanitize(entry.group.name()));
+			for record in &entry.records {
+				let _ = writeln!(text, "    {}", record_line(&record.record));
 			}
 		}
 		text.push('\n');
@@ -66,14 +77,33 @@ pub(super) fn plan_text(survey: &Survey) -> String {
 }
 
 /// The plan as the JSON document `--json` prints.
-pub(super) fn plan_json(survey: &Survey) -> serde_json::Value {
+pub(super) fn plan_json(survey: &Survey, skipped: &[SkippedGroup]) -> serde_json::Value {
 	let zones: Vec<&crate::dns::reconcile::ZonePlan> =
 		survey.zones.iter().map(|z| &z.plan).collect();
 	serde_json::json!({
 		"zones": zones,
 		"by_hand": survey.by_hand,
 		"failures": survey.failures,
+		"skipped": skipped_json(skipped),
 	})
+}
+
+/// The groups the configuration skips, and the records they hold.
+fn skipped_json(skipped: &[SkippedGroup]) -> serde_json::Value {
+	serde_json::Value::Array(
+		skipped
+			.iter()
+			.map(|entry| {
+				serde_json::json!({
+					"group": entry.group.name(),
+					"records": entry.records.iter().map(|record| serde_json::json!({
+						"name": record.record.name, "ttl": record.record.ttl,
+						"type": record.record.kind.as_str(), "value": record.record.value,
+					})).collect::<Vec<_>>(),
+				})
+			})
+			.collect(),
+	)
 }
 
 /// The undo report, as text or JSON.

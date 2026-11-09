@@ -54,6 +54,21 @@ pub(super) fn run(config: &Config, json: bool, out: &mut impl std::io::Write) ->
 		super::style::error("no domains are configured");
 		return ExitCode::FAILURE;
 	}
+	// Every record of this command is a client locator: a configuration
+	// that skips the group publishes none of them, and none is printed.
+	if config
+		.dns_publish
+		.skip_set()
+		.contains(crate::dns::skip::SkipGroup::ClientLocators)
+	{
+		super::style::warn(format_args!(
+			"the configuration skips the client-locators group: no SRV record is printed"
+		));
+		if json {
+			return super::json_out::print(out, &serde_json::Value::Array(Vec::new()));
+		}
+		return ExitCode::SUCCESS;
+	}
 	let host = &config.hostname;
 	let mut rows: Vec<(String, String)> = Vec::new();
 	for domain in &config.domains {
