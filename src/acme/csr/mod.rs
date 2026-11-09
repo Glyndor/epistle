@@ -26,15 +26,18 @@ pub struct Csr {
 	pub key_pem: String,
 }
 
-/// Generate a CSR covering `domains` (the first is the subject CN; all are
-/// SANs), signed by a fresh ECDSA key pair.
+/// Generate a CSR covering `domains` (all are SANs), signed by a fresh ECDSA
+/// key pair. The subject is empty: the names the CA validates are the SANs, and
+/// `rcgen`'s default subject carries the common name `rcgen self signed cert`,
+/// which Let's Encrypt refuses at `finalize` as an invalid identifier.
 pub fn generate(domains: &[String]) -> Result<Csr, CsrError> {
 	if domains.is_empty() {
 		return Err(CsrError::Generate("no domains".into()));
 	}
 	let key = rcgen::KeyPair::generate().map_err(|e| CsrError::Generate(e.to_string()))?;
-	let params = rcgen::CertificateParams::new(domains.to_vec())
+	let mut params = rcgen::CertificateParams::new(domains.to_vec())
 		.map_err(|e| CsrError::Generate(e.to_string()))?;
+	params.distinguished_name = rcgen::DistinguishedName::new();
 	let request = params
 		.serialize_request(&key)
 		.map_err(|e| CsrError::Generate(e.to_string()))?;
