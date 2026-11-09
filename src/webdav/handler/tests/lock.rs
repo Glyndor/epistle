@@ -142,3 +142,89 @@ async fn two_moves_stay_within_the_depth_bound_with_a_quota() {
 async fn two_moves_stay_within_the_depth_bound_without_a_quota() {
 	two_moves_cannot_add_up_past_the_depth_bound(Some(0)).await;
 }
+
+/// Issues `copy_move` while another write holds the lock, lets the tree
+/// change, then releases the lock: the request must judge what is there now,
+/// not what was there when it arrived.
+async fn issue_then_change<F: FnOnce(&std::path::Path)>(
+	remove: bool,
+	overwrite: Option<&'static str>,
+	change: F,
+) -> (
+	axum::response::Response,
+	std::path::PathBuf,
+	tempfile::TempDir,
+) {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let root = dir.path().join("accounts/alice/dav");
+	std::fs::create_dir_all(&root).expect("dav");
+	std::fs::write(root.join("a.bin"), b"source").expect("file");
+	let quota = std::sync::Arc::new(quota_for(dir.path()));
+	let held = quota.exclusive().await;
+	let mut headers = headers_to("http://localhost/b.bin");
+	if let Some(value) = overwrite {
+		headers.insert("Overwrite", value.parse().expect("header"));
+	}
+	let pending = {
+		let (quota, root) = (std::sync::Arc::clone(&quota), root.clone());
+		tokio::spawn(async move {
+			copy_move(&root, &root.join("a.bin"), &headers, remove, &quota).await
+		})
+	};
+	tokio::time::sleep(Duration::from_millis(150)).await;
+	change(&root);
+	drop(held);
+	(pending.await.expect("request"), root, dir)
+}
+
+#[tokio::test]
+async fn copy_without_overwrite_sees_a_destination_created_while_it_waited() {
+	let (response, root, _dir) = issue_then_change(false, Some("F"), |root| {
+		std::fs::write(root.join("b.bin"), b"theirs").expect("created");
+	})
+	.await;
+	assert_eq!(response.status(), 412);
+	assert_eq!(std::fs::read(root.join("b.bin")).expect("kept"), b"theirs");
+}
+
+#[tokio::test]
+async fn move_without_overwrite_sees_a_destination_created_while_it_waited() {
+	let (response, root, _dir) = issue_then_change(true, Some("F"), |root| {
+		std::fs::write(root.join("b.bin"), b"theirs").expect("created");
+	})
+	.await;
+	assert_eq!(response.status(), 412);
+	assert_eq!(std::fs::read(root.join("b.bin")).expect("kept"), b"theirs");
+	assert!(root.join("a.bin").exists(), "the source stays");
+}
+
+#[tokio::test]
+async fn copy_over_a_destination_created_while_it_waited_replaces_it() {
+	let (response, root, _dir) = issue_then_change(false, None, |root| {
+		std::fs::write(root.join("b.bin"), b"theirs").expect("created");
+	})
+	.await;
+	assert_eq!(response.status(), 204, "it replaced something");
+	assert_eq!(std::fs::read(root.join("b.bin")).expect("copy"), b"source");
+}
+
+#[tokio::test]
+async fn move_whose_source_vanished_while_it_waited_is_not_found() {
+	let (response, root, _dir) = issue_then_change(true, None, |root| {
+		std::fs::remove_file(root.join("a.bin")).expect("removed");
+	})
+	.await;
+	assert_eq!(response.status(), 404);
+	assert!(!root.join("b.bin").exists());
+}
+
+#[tokio::test]
+async fn move_whose_source_became_a_link_while_it_waited_is_forbidden() {
+	let (response, root, _dir) = issue_then_change(true, None, |root| {
+		std::fs::remove_file(root.join("a.bin")).expect("removed");
+		std::os::unix::fs::symlink("/etc/hostname", root.join("a.bin")).expect("link");
+	})
+	.await;
+	assert_eq!(response.status(), 403);
+	assert!(!root.join("b.bin").exists());
+}
