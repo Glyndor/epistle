@@ -75,3 +75,12 @@ fn a_record_of_another_name_or_kind_is_another_record() {
 	other_kind.kind = RecordKind::Cname;
 	assert!(!same_typed_record(&ours, &other_kind));
 }
+
+#[test]
+fn same_record_compares_srv_by_value_and_not_by_spelling() {
+	let a = srv("0 1 4190 Mail.Example.ORG.");
+	let b = srv("0 1 4190 mail.example.org");
+	assert!(same_record(&a, &b), "case and the root dot do not count");
+	assert!(!same_record(&a, &srv("1 1 4190 mail.example.org")));
+	assert!(!same_record(&a, &srv("0 1 4191 mail.example.org")));
+}

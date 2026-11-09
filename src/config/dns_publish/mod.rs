@@ -4,10 +4,16 @@
 //! the configuration every `interval_secs` and applies the difference through
 //! the code `epistle dns publish` runs. Without one (manual mode) none of
 //! this runs and the section is only read by the command.
+//!
+//! The `skip` list names the groups of records automatic mode must not
+//! publish: the records of a group are never written, and a record epistle
+//! published earlier is retired through the ledger like a record the
+//! configuration no longer needs.
 
 use serde::Deserialize;
 
 use super::ConfigError;
+use crate::dns::skip::{SkipGroup, SkipSet};
 
 /// Six hours between two runs of the reconcile loop.
 pub const DEFAULT_INTERVAL_SECS: u64 = 21_600;
@@ -27,12 +33,17 @@ pub struct DnsPublish {
 	/// mode; `0` turns the loop off. Between 600 and 604800 otherwise.
 	#[serde(default = "default_interval")]
 	pub interval_secs: u64,
+	/// The named groups automatic mode must not publish. Empty by default:
+	/// every record the configuration needs is published.
+	#[serde(default)]
+	pub skip: Vec<SkipGroup>,
 }
 
 impl Default for DnsPublish {
 	fn default() -> Self {
 		DnsPublish {
 			interval_secs: DEFAULT_INTERVAL_SECS,
+			skip: Vec::new(),
 		}
 	}
 }
@@ -42,6 +53,11 @@ fn default_interval() -> u64 {
 }
 
 impl DnsPublish {
+	/// The groups to skip, as a set the record filter reads.
+	pub fn skip_set(&self) -> SkipSet {
+		SkipSet::new(self.skip.iter().copied())
+	}
+
 	/// Refuse an interval outside the accepted range.
 	pub(crate) fn validate(&self) -> Result<(), ConfigError> {
 		let secs = self.interval_secs;

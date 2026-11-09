@@ -74,3 +74,65 @@ async fn http_hook_fails_open_when_unreachable() {
 	let hook = HttpHook::new("http://127.0.0.1:1/scan").expect("hook");
 	assert_eq!(hook.scan(b"raw message").await, HookVerdict::Accept);
 }
+
+#[tokio::test]
+async fn http_hook_fails_open_on_an_answer_over_the_cap() {
+	let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+		.await
+		.expect("bind");
+	let addr = listener.local_addr().expect("addr");
+	// A quarantine verdict padded with spaces past the cap: if it were read and
+	// parsed it would quarantine, so Accept proves it was dropped at the cap.
+	let app = axum::Router::new().route(
+		"/scan",
+		axum::routing::post(|| async {
+			format!(r#"{{"action":"quarantine"}}{}"#, " ".repeat(200 * 1024))
+		}),
+	);
+	tokio::spawn(async move {
+		axum::serve(listener, app).await.expect("serve");
+	});
+	let hook = HttpHook::new(&format!("http://{addr}/scan")).expect("hook");
+	assert_eq!(hook.scan(b"raw message").await, HookVerdict::Accept);
+}
+
+/// A body that yields a verdict and then fifty chunks of padding, one by one.
+struct Padded(usize);
+
+impl futures_core::Stream for Padded {
+	type Item = Result<axum::body::Bytes, std::convert::Infallible>;
+
+	fn poll_next(
+		mut self: std::pin::Pin<&mut Self>,
+		_cx: &mut std::task::Context<'_>,
+	) -> std::task::Poll<Option<Self::Item>> {
+		let step = self.0;
+		self.0 += 1;
+		std::task::Poll::Ready(match step {
+			0 => Some(Ok(axum::body::Bytes::from_static(
+				br#"{"action":"quarantine"}"#,
+			))),
+			1..=50 => Some(Ok(axum::body::Bytes::from(vec![b' '; 8 * 1024]))),
+			_ => None,
+		})
+	}
+}
+
+/// The same padded verdict, sent in chunks with no length: only the cap on what
+/// is read, not the length header, can stop it.
+#[tokio::test]
+async fn http_hook_fails_open_on_a_chunked_answer_over_the_cap() {
+	let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+		.await
+		.expect("bind");
+	let addr = listener.local_addr().expect("addr");
+	let app = axum::Router::new().route(
+		"/scan",
+		axum::routing::post(|| async { axum::body::Body::from_stream(Padded(0)) }),
+	);
+	tokio::spawn(async move {
+		axum::serve(listener, app).await.expect("serve");
+	});
+	let hook = HttpHook::new(&format!("http://{addr}/scan")).expect("hook");
+	assert_eq!(hook.scan(b"raw message").await, HookVerdict::Accept);
+}

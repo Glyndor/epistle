@@ -691,6 +691,12 @@ what `--undo` withdraws. Without a provider it refuses and points at
 `epistle dns-records`. See
 [`docs/dns.md`](dns.md#publishing-the-record-set).
 
+A group of records `[dns_publish] skip` names (see
+[`configuration.md`](configuration.md#dns_publish)) is not published: the plan
+lists it under "Skipped by configuration", and a record epistle published
+earlier is removed from the zone and forgotten in the ledger, like a record
+the configuration no longer needs. `--undo` withdraws it too.
+
 ## Blob storage (`epistle storage blobs`)
 
 ```sh
@@ -1683,7 +1689,7 @@ scope here):
 
 | Command | What it does |
 |---|---|
-| `epistle dns-records [--json]` | Print the DNS records this deployment should publish: SPF, DKIM, DMARC, MTA-STS, MX, and a DANE TLSA record when a certificate is present. Reads the configuration only; nothing is queried or changed. |
+| `epistle dns-records [--json]` | Print the DNS records this deployment should publish: SPF, DKIM, DMARC, MTA-STS, MX, and a DANE TLSA record when a certificate is present. Reads the configuration only; nothing is queried or changed. A group `[dns_publish] skip` names is not published, so it holds no record in the list; the groups are named on stderr. |
 | `epistle verify-dns [--json]` | Look the same records up in DNS and report drift. Read-only. Exits 1 when a record is missing or differs. See [DNS](dns.md). |
 | `epistle probe [--json]` | Dial each enabled listener on loopback and read its greeting. Exits 0 when every listener answers and 1 when one is down or greets wrongly. It is the container healthcheck, and the `ports` area of `status` runs the same check. |
 
@@ -1996,7 +2002,7 @@ listener serves the Apple profile at `/mobileconfig?email=<address>`.
 
 | Command | What it does |
 |---|---|
-| `epistle srv-records` | Print the RFC 6186 SRV records to publish in DNS. |
+| `epistle srv-records` | Print the RFC 6186 SRV records to publish in DNS. A configuration that skips the `client-locators` group prints none of them. |
 | `epistle autoconfig [--domain D]` | Thunderbird autoconfig XML, host at `autoconfig.<domain>/mail/config-v1.1.xml`. |
 | `epistle autodiscover [--domain D]` | Microsoft Autodiscover v1 XML, host at `autodiscover.<domain>/autodiscover/autodiscover.xml`. |
 | `epistle mobileconfig --account N` | Apple `.mobileconfig` profile for a user to install on iOS/macOS. |

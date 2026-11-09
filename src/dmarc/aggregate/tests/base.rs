@@ -454,3 +454,64 @@ async fn a_queued_report_is_framed() {
 		&messages[0].data
 	));
 }
+
+/// The day directory takes at most `MAX_FILES_PER_DAY` files: a domain that is new
+/// past the cap is dropped, a domain that already has its file still gets its rows.
+#[test]
+fn the_journal_of_a_day_stops_at_its_file_cap_but_keeps_feeding_known_domains() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let day = "20261108";
+	let root = dir.path().join("dmarc-reports").join(day);
+	std::fs::create_dir_all(&root).expect("day");
+	for n in 0..MAX_FILES_PER_DAY {
+		std::fs::write(root.join(format!("d{n}.example.jsonl")), b"").expect("seed");
+	}
+	record_delivery(dir.path(), day, &sample_record("new.example"));
+	assert!(
+		!root.join("new.example.jsonl").exists(),
+		"a new domain past the cap is dropped"
+	);
+	assert_eq!(
+		std::fs::read_dir(&root).expect("dir").count(),
+		MAX_FILES_PER_DAY
+	);
+	// A domain that already has its file keeps being recorded.
+	record_delivery(dir.path(), day, &sample_record("d0.example"));
+	let body = std::fs::read_to_string(root.join("d0.example.jsonl")).expect("known domain file");
+	assert!(body.contains("d0.example"), "{body}");
+}
+
+/// One file takes at most `MAX_FILE_BYTES`: the rest of a flood is dropped.
+#[test]
+fn one_journal_file_stops_at_its_size_cap() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let day = "20261108";
+	let root = dir.path().join("dmarc-reports").join(day);
+	std::fs::create_dir_all(&root).expect("day");
+	let file = root.join("flood.example.jsonl");
+	std::fs::write(
+		&file,
+		vec![b'x'; usize::try_from(MAX_FILE_BYTES).expect("fits")],
+	)
+	.expect("seed");
+	record_delivery(dir.path(), day, &sample_record("flood.example"));
+	assert_eq!(
+		std::fs::metadata(&file).expect("meta").len(),
+		MAX_FILE_BYTES
+	);
+}
+
+/// The journal holds the source address and the verdict of mail that came in:
+/// the tree is for the owner alone.
+#[test]
+fn the_journal_is_private_to_the_owner() {
+	use std::os::unix::fs::PermissionsExt;
+	let dir = tempfile::tempdir().expect("tempdir");
+	let day = "20261108";
+	record_delivery(dir.path(), day, &sample_record("owner.example"));
+	let mode =
+		|p: &std::path::Path| std::fs::metadata(p).expect("meta").permissions().mode() & 0o777;
+	let day_dir = dir.path().join("dmarc-reports").join(day);
+	assert_eq!(mode(&day_dir), 0o700);
+	assert_eq!(mode(&day_dir.join("owner.example.jsonl")), 0o600);
+}

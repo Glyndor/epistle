@@ -4,6 +4,7 @@ use super::run::{harness, publish, read};
 use super::support::*;
 use super::*;
 use crate::dns::lockdown::tests::support::Zone;
+use crate::dns::skip::SkipSet;
 
 fn pop3() -> DnsRecord {
 	rec(
@@ -113,6 +114,7 @@ fn an_incomplete_set_retires_nothing() {
 		lockdown: &[],
 		retire_within: None,
 		incomplete: Some("cannot read certificate"),
+		skip: &SkipSet::default(),
 	});
 	assert_eq!(action_for(&plan, &pop3()), Action::Skipped);
 	assert!(plan.entries.iter().any(|e| e.reason.contains("incomplete")));
@@ -145,6 +147,7 @@ fn retiring_is_limited_to_the_domain_the_run_was_asked_for() {
 		lockdown: &[],
 		retire_within: Some("other.example.org"),
 		incomplete: None,
+		skip: &SkipSet::default(),
 	});
 	assert_eq!(action_for(&plan, &other), Action::Remove);
 	assert!(
@@ -200,4 +203,48 @@ fn a_record_another_account_wrote_in_the_meantime_is_not_removed_with_our_own() 
 		"a record another account wrote must survive: {:#?}",
 		now
 	);
+}
+
+#[test]
+fn a_ledger_record_of_a_skipped_group_is_removed_and_the_reason_names_the_group() {
+	let existing = [pop3()];
+	let ledger = ledger_of(&[pop3()]);
+	let skip = SkipSet::new([crate::dns::skip::SkipGroup::ClientLocators]);
+	let plan = plan_zone(&ZoneInput {
+		zone: ZONE,
+		needed: &[],
+		existing: &existing,
+		ledger: &ledger,
+		also_ours: &[],
+		lockdown: &[],
+		retire_within: None,
+		incomplete: None,
+		skip: &skip,
+	});
+	assert_eq!(action_for(&plan, &pop3()), Action::Remove);
+	assert!(
+		plan.entries
+			.iter()
+			.any(|e| e.reason.contains("skips the client-locators group")),
+		"{:#?}",
+		plan.entries
+	);
+}
+
+#[test]
+fn a_skipped_group_record_epistle_never_published_is_left_alone() {
+	let existing = [pop3()];
+	let skip = SkipSet::new([crate::dns::skip::SkipGroup::ClientLocators]);
+	let plan = plan_zone(&ZoneInput {
+		zone: ZONE,
+		needed: &[],
+		existing: &existing,
+		ledger: &Ledger::new(ZONE),
+		also_ours: &[],
+		lockdown: &[],
+		retire_within: None,
+		incomplete: None,
+		skip: &skip,
+	});
+	assert!(plan.entries.is_empty(), "{:#?}", plan.entries);
 }

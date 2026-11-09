@@ -82,6 +82,9 @@ pub fn print_domain_records(
 		config.public_ipv4,
 		config.public_ipv6,
 	);
+	// The groups the configuration skips hold no record to publish: the
+	// same filter `dns-records` applies.
+	let (recs, skipped) = crate::dns::skip::split_records(recs, &config.dns_publish.skip_set());
 	writeln!(out, "\nDNS records to publish for {domain}:")?;
 	for entry in &recs {
 		let r = &entry.record;
@@ -90,6 +93,14 @@ pub fn print_domain_records(
 			_ => r.value.clone(),
 		};
 		writeln!(out, "{} {} IN {} {}", r.name, r.ttl, r.kind.as_str(), value)?;
+	}
+	for group in &skipped {
+		writeln!(
+			out,
+			"skipped by configuration ({}): {} records are not published",
+			group.group.name(),
+			group.records.len()
+		)?;
 	}
 	Ok(())
 }
@@ -161,7 +172,11 @@ pub(super) fn commit(
 			let text = String::from_utf8_lossy(&printed);
 			let records: Vec<&str> = text
 				.lines()
-				.filter(|line| !line.is_empty() && !line.starts_with("DNS records to publish"))
+				.filter(|line| {
+					!line.is_empty()
+						&& !line.starts_with("DNS records to publish")
+						&& !line.starts_with("skipped by configuration")
+				})
 				.collect();
 			fields["records"] = records.into();
 		} else {

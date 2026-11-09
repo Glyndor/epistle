@@ -116,3 +116,69 @@ fn maildir_export_round_trips_through_import() {
 		"content preserved"
 	);
 }
+
+/// The export holds decrypted mail: the tree and the messages are for the owner
+/// alone, whatever the umask of the operator.
+#[test]
+fn maildir_export_is_private_to_the_owner() {
+	use std::os::unix::fs::PermissionsExt;
+	let dir = tempfile::tempdir().expect("tempdir");
+	deliver(dir.path(), "alice", b"Subject: one\r\n\r\nbody one\r\n");
+	let out = tempfile::tempdir().expect("out");
+	let target = out.path().join("export");
+	assert_eq!(
+		run_maildir(dir.path(), "alice", &MessageCrypto::disabled(), &target),
+		ExitCode::SUCCESS
+	);
+	let mode = |path: &Path| {
+		std::fs::metadata(path)
+			.expect("metadata")
+			.permissions()
+			.mode() & 0o777
+	};
+	assert_eq!(mode(&target.join("cur")), 0o700);
+	let file = std::fs::read_dir(target.join("cur"))
+		.expect("cur")
+		.flatten()
+		.next()
+		.expect("one message");
+	assert_eq!(mode(&file.path()), 0o600);
+}
+
+/// A second export into the same place must not leave the first one's looser
+/// modes in force: `mkdir`/`open` apply a mode only to what they create.
+#[test]
+fn a_repeated_export_tightens_what_was_already_there() {
+	use std::os::unix::fs::PermissionsExt;
+	let dir = tempfile::tempdir().expect("tempdir");
+	deliver(dir.path(), "alice", b"Subject: one\r\n\r\nbody one\r\n");
+	let out = tempfile::tempdir().expect("out");
+	let target = out.path().join("export");
+	assert_eq!(
+		run_maildir(dir.path(), "alice", &MessageCrypto::disabled(), &target),
+		ExitCode::SUCCESS
+	);
+	let loosen = |path: &Path, mode: u32| {
+		std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).expect("chmod");
+	};
+	let file = std::fs::read_dir(target.join("cur"))
+		.expect("cur")
+		.flatten()
+		.next()
+		.expect("one message")
+		.path();
+	loosen(&target.join("cur"), 0o755);
+	loosen(&file, 0o644);
+	assert_eq!(
+		run_maildir(dir.path(), "alice", &MessageCrypto::disabled(), &target),
+		ExitCode::SUCCESS
+	);
+	let mode = |path: &Path| {
+		std::fs::metadata(path)
+			.expect("metadata")
+			.permissions()
+			.mode() & 0o777
+	};
+	assert_eq!(mode(&target.join("cur")), 0o700);
+	assert_eq!(mode(&file), 0o600);
+}

@@ -201,3 +201,47 @@ fn a_failed_rename_removes_the_staging_temp() {
 	);
 	assert!(path.is_dir(), "the obstruction must be left untouched");
 }
+
+/// A certificate is world readable and a key is not: the final mode is the one asked for,
+/// whatever the umask, and no temporary file is left behind.
+#[test]
+fn write_with_mode_sets_the_asked_mode_and_leaves_nothing_behind() {
+	use std::os::unix::fs::PermissionsExt;
+	let dir = tempfile::tempdir().expect("tempdir");
+	for (name, mode) in [("cert.pem", 0o644u32), ("key.pem", 0o600u32)] {
+		let path = dir.path().join(name);
+		super::write_with_mode(&path, b"data", mode).expect("write");
+		assert_eq!(std::fs::read(&path).expect("read"), b"data");
+		assert_eq!(
+			std::fs::metadata(&path).expect("meta").permissions().mode() & 0o777,
+			mode
+		);
+	}
+	let names: Vec<String> = std::fs::read_dir(dir.path())
+		.expect("dir")
+		.flatten()
+		.map(|e| e.file_name().to_string_lossy().into_owned())
+		.collect();
+	assert_eq!(
+		names.len(),
+		2,
+		"only the two files, no temporary: {names:?}"
+	);
+}
+
+/// A write that fails does not leave its temporary file, and a writer that
+/// is at it at the same moment is not disturbed.
+#[test]
+fn a_failed_write_removes_its_temporary_file() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	// The destination is a directory: the rename cannot succeed.
+	let path = dir.path().join("target");
+	std::fs::create_dir(&path).expect("dir");
+	assert!(super::write_with_mode(&path, b"data", 0o600).is_err());
+	let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+		.expect("dir")
+		.flatten()
+		.filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+		.collect();
+	assert!(leftovers.is_empty(), "{leftovers:?}");
+}

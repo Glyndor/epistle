@@ -1,7 +1,8 @@
 //! Listing a Cloudflare zone: every page of `GET
 //! /zones/{id}/dns_records`, each record read back into the shape the rest
-//! of epistle uses (TXT as its logical value, MX as `priority target`, the
-//! orange-cloud `proxied` flag on the kinds Cloudflare can proxy).
+//! of epistle uses (TXT as its logical value, MX as `priority target`, SRV
+//! as `priority weight port target`, the orange-cloud `proxied` flag on the
+//! kinds Cloudflare can proxy).
 
 use super::{CloudflareProvider, ListRecords, RecordRef, TXT_FORM};
 use crate::dns::provider::{DnsRecord, ProviderError, RecordKind};
@@ -34,6 +35,10 @@ impl CloudflareProvider {
 					(RecordKind::Txt, _) => txt_decode(&r.content, TXT_FORM),
 					// `priority target`, the shape every MX value has.
 					(RecordKind::Mx, Some(priority)) => format!("{priority} {}", r.content),
+					// Cloudflare keeps the SRV priority apart from the
+					// rest too: the `content` holds `weight port
+					// target`, so the priority goes in front of it.
+					(RecordKind::Srv, Some(priority)) => format!("{priority} {}", r.content),
 					_ => r.content,
 				};
 				// Cloudflare only returns `proxied` for the kinds it can

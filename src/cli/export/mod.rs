@@ -69,7 +69,7 @@ pub(super) fn run_maildir(
 			dir.join(format!(".{}", name.replace('/', ".")))
 		};
 		let cur = folder.join("cur");
-		if std::fs::create_dir_all(&cur).is_err() {
+		if private_dirs(&cur).is_err() {
 			super::style::error(format_args!(
 				"creating {}",
 				super::staging::shown(&cur.display().to_string())
@@ -84,7 +84,7 @@ pub(super) fn run_maildir(
 				continue;
 			};
 			let filename = format!("{}:2,{}", message.id(), maildir_flags(&message.flags));
-			if std::fs::write(cur.join(filename), &data).is_err() {
+			if write_private(&cur.join(filename), &data).is_err() {
 				super::style::error(format_args!(
 					"writing message to {}",
 					super::staging::shown(&cur.display().to_string())
@@ -141,6 +141,35 @@ fn split_lines(data: &[u8]) -> impl Iterator<Item = &[u8]> {
 fn needs_quote(line: &[u8]) -> bool {
 	let stripped = line.iter().position(|&b| b != b'>').unwrap_or(line.len());
 	line[stripped..].starts_with(b"From ")
+}
+
+/// `path` and the directories above it that do not exist yet, owner only: the
+/// export holds decrypted mail, so it is not given more access than the store
+/// it came from.
+fn private_dirs(path: &Path) -> std::io::Result<()> {
+	use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+	std::fs::DirBuilder::new()
+		.recursive(true)
+		.mode(0o700)
+		.create(path)?;
+	// The mode above only applies to what was created: a directory left by an
+	// earlier export keeps its own, so it is set here as well.
+	std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+}
+
+/// Write `data` to `path` readable by the owner only.
+fn write_private(path: &Path, data: &[u8]) -> std::io::Result<()> {
+	use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+	let mut file = std::fs::OpenOptions::new()
+		.write(true)
+		.create(true)
+		.truncate(true)
+		.mode(0o600)
+		.open(path)?;
+	// Same as for the directories: a file that was already there keeps its mode
+	// through `open`, so it is set on the handle before the mail is written.
+	file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+	file.write_all(data)
 }
 
 #[cfg(test)]

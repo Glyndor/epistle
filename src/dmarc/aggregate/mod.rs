@@ -2,7 +2,9 @@
 //!
 //! Records are written as JSONL to
 //! `{data_dir}/dmarc-reports/{YYYYMMDD}/{from_domain}.jsonl`
-//! by `record_delivery()` during inbound SMTP processing.
+//! by `record_delivery()` during inbound SMTP processing. The day
+//! directory holds at most [`MAX_FILES_PER_DAY`] files and each file at
+//! most [`MAX_FILE_BYTES`]: a record past either cap is dropped.
 //!
 //! `flush_pending` reads completed-day directories, generates XML reports
 //! and queues one message per `mailto:` `rua=` through the [`Sender`]'s
@@ -10,6 +12,7 @@
 
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
+use std::sync::{LazyLock, Mutex};
 use std::time::SystemTime;
 
 use crate::smtp::session::AcceptedMessage;
@@ -23,6 +26,28 @@ use super::report::{DeliveryRecord, build_email, build_xml};
 /// attempt. A day older than this is dropped regardless: the report is
 /// stale and the data has been kept as long as the spec advises.
 const MAX_AGE_DAYS: u64 = 7;
+
+/// Most journal files one day directory may hold.
+///
+/// Every file is one `From:` domain, and that domain comes from an
+/// unauthenticated sender: a day of mail from N domains would otherwise
+/// create N files, and the hourly flush would look up N DNS records and
+/// build N reports out of them. Past the cap a record for a domain that
+/// has no file yet is dropped; a domain that already has one keeps
+/// receiving records.
+pub const MAX_FILES_PER_DAY: usize = 2000;
+
+/// Largest a journal file may grow, in bytes.
+///
+/// The file is read whole when its report is built, so this bounds the
+/// memory one domain's report costs as well as the disk it takes. Past
+/// the cap the record is dropped.
+pub const MAX_FILE_BYTES: u64 = 4 * 1024 * 1024;
+
+/// The days whose drops were already reported, so a flood of dropped
+/// records leaves one debug line per day and not one per message. The
+/// table keeps a handful of days: it only has to outlive a day boundary.
+static REPORTED_DROPS: LazyLock<Mutex<Vec<String>>> = LazyLock::new(|| Mutex::new(Vec::new()));
 
 /// Where the reports go and who signs them.
 pub struct Sender<'a> {
@@ -49,27 +74,87 @@ pub struct Sender<'a> {
 }
 
 /// Write one delivery record to the per-domain JSONL file for today.
-/// Errors are logged but not propagated — losing a few records is
-/// preferable to blocking the delivery path.
+///
+/// The day directory holds at most [`MAX_FILES_PER_DAY`] files and a
+/// file at most [`MAX_FILE_BYTES`]: past either cap the record is
+/// dropped, so a sender that invents a domain per message cannot make
+/// the journal grow without bound. Errors are logged but not propagated
+/// — losing a few records is preferable to blocking the delivery path.
 pub fn record_delivery(data_dir: &Path, today: &str, record: &DeliveryRecord) {
 	let dir = data_dir.join("dmarc-reports").join(today);
-	let _ = std::fs::create_dir_all(&dir);
+	if let Err(error) = crate::storage::create_private_dir(&dir) {
+		tracing::warn!(path = %dir.display(), %error, "cannot create dmarc record directory");
+		return;
+	}
 	let path = record_path(&dir, &record.header_from);
-	let Ok(mut file) = std::fs::OpenOptions::new()
-		.create(true)
-		.append(true)
-		.open(&path)
-	else {
+	let line = match serde_json::to_string(record) {
+		Ok(line) => line,
+		Err(error) => {
+			tracing::warn!(%error, "cannot serialize dmarc record");
+			return;
+		}
+	};
+	match std::fs::metadata(&path) {
+		// The domain already has its file: it keeps receiving records as
+		// long as the file stays under the size cap.
+		Ok(metadata) => {
+			if metadata.len() + line.len() as u64 + 1 > MAX_FILE_BYTES {
+				report_drop(today, "the file reached the size cap");
+				return;
+			}
+		}
+		// A new domain needs a new file, and the day directory holds a
+		// bounded number of them.
+		Err(_) => {
+			if count_files(&dir) >= MAX_FILES_PER_DAY {
+				report_drop(today, "the day directory reached the file cap");
+				return;
+			}
+		}
+	}
+	let mut options = std::fs::OpenOptions::new();
+	options.create(true).append(true);
+	#[cfg(unix)]
+	{
+		use std::os::unix::fs::OpenOptionsExt;
+		options.mode(0o600);
+	}
+	let Ok(mut file) = options.open(&path) else {
 		tracing::warn!(path = %path.display(), "cannot open dmarc record file");
 		return;
 	};
-	match serde_json::to_string(record) {
-		Ok(line) => {
-			use std::io::Write;
-			let _ = writeln!(file, "{line}");
-		}
-		Err(e) => tracing::warn!(%e, "cannot serialize dmarc record"),
+	use std::io::Write;
+	let _ = writeln!(file, "{line}");
+}
+
+/// How many files the day directory holds. The count stops at
+/// [`MAX_FILES_PER_DAY`]: the answer is only used to know whether the
+/// cap is reached.
+fn count_files(dir: &Path) -> usize {
+	let Ok(entries) = std::fs::read_dir(dir) else {
+		return 0;
+	};
+	entries
+		.flatten()
+		.filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+		.take(MAX_FILES_PER_DAY)
+		.count()
+}
+
+/// Report a dropped record at debug level, once per day.
+fn report_drop(today: &str, reason: &'static str) {
+	let mut reported = REPORTED_DROPS
+		.lock()
+		.unwrap_or_else(|poison| poison.into_inner());
+	if reported.iter().any(|day| day == today) {
+		return;
 	}
+	if reported.len() >= 8 {
+		reported.remove(0);
+	}
+	reported.push(today.to_string());
+	drop(reported);
+	tracing::debug!(day = today, reason, "dmarc delivery record dropped");
 }
 
 /// Generate and queue reports for every completed reporting day that has

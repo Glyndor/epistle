@@ -14,6 +14,11 @@
 //! `organization-name` / `org_name` from the parsed document, so a slash
 //! in an org name still produces a single-segment filename.
 //!
+//! That name is chosen by the server that sent the report, so the number
+//! of names one day directory may hold is capped: past [`MAX_ORG_NAMES`]
+//! every further report is stored under [`OTHER_ORG`], which keeps the
+//! bytes and stops the number of files.
+//!
 //! [`prune`] drops day directories whose `YYYYMMDD` is older than
 //! `days`. The hourly storage-maintenance task in `src/cli/serve/tasks/mod.rs` calls
 //! it with the retention constant from `crate::reports::RETENTION_DAYS`.
@@ -23,6 +28,19 @@ use std::path::Path;
 
 use super::Kind;
 use crate::util::path_containment::{contained, contained_child, contained_subdir};
+
+/// Most distinct organisation names one day directory may hold.
+///
+/// The name of a received report is the organisation the sending server
+/// wrote in the document, and that server is not authenticated: a day of
+/// reports with an invented name each would otherwise leave an unbounded
+/// number of files in the day directory.
+pub const MAX_ORG_NAMES: usize = 500;
+
+/// The file name that holds the reports of every organisation past
+/// [`MAX_ORG_NAMES`]: the bytes are kept, only the number of files stops
+/// growing.
+pub const OTHER_ORG: &str = "other";
 
 /// Append `report` as one JSON line to
 /// `{data_dir}/reports/{kind}/{day}/{org}.jsonl`. `org` must come from
@@ -57,7 +75,7 @@ pub(crate) fn append_to(
 	set_owner_only_dir(&dir)?;
 	set_owner_only_dir(dir.parent().expect("kind dir"))?;
 	set_owner_only_dir(dir.parent().and_then(|p| p.parent()).expect("reports dir"))?;
-	let path = contained_child(&dir, &format!("{org}.jsonl"))?;
+	let path = report_path(bucket, &dir, org)?;
 	let mut line = serde_json::to_vec(report)
 		.map_err(|e| std::io::Error::other(format!("serialize report: {e}")))?;
 	line.push(b'\n');
@@ -72,6 +90,44 @@ pub(crate) fn append_to(
 	// Hold the file lock through all writes, including partial-write retries.
 	file.lock()?;
 	file.write_all(&line)
+}
+
+/// The file a report of `org` is stored under.
+///
+/// The name of a received report is the organisation the sending server
+/// wrote in the document, and that server is not authenticated. A day of
+/// reports with an invented name each would leave an unbounded number of
+/// files in the day directory, so past [`MAX_ORG_NAMES`] names every
+/// further report is stored under [`OTHER_ORG`]: the bytes are kept and
+/// the number of files stops growing. A name that already has its file
+/// keeps it.
+///
+/// The outbound TLS-RPT journal is ours and is not capped: it holds one
+/// file per recipient domain, and the report built from that file names
+/// the domain its sessions belong to, so two domains cannot share a file.
+fn report_path(bucket: &str, dir: &Path, org: &str) -> std::io::Result<std::path::PathBuf> {
+	let path = contained_child(dir, &format!("{org}.jsonl"))?;
+	if bucket == OUTBOUND_TLSRPT || path.exists() || count_names(dir) < MAX_ORG_NAMES {
+		return Ok(path);
+	}
+	contained_child(dir, &format!("{OTHER_ORG}.jsonl"))
+}
+
+/// How many organisation files the day directory holds.
+fn count_names(dir: &Path) -> usize {
+	let Ok(entries) = std::fs::read_dir(dir) else {
+		return 0;
+	};
+	entries
+		.flatten()
+		.filter(|entry| {
+			entry
+				.path()
+				.extension()
+				.and_then(|extension| extension.to_str())
+				== Some("jsonl")
+		})
+		.count()
 }
 
 /// Force the directory mode to `0700`. A directory that already existed

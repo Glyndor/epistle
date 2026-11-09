@@ -448,6 +448,9 @@ pub fn reconcile(
 	spool: &crate::storage::FsSpool,
 	service: &EvidenceService,
 ) -> std::io::Result<usize> {
+	// A rewrite of an envelope that was cut short leaves a temporary copy of a
+	// message that is queued: it is removed without any evidence record.
+	spool.sweep_envelope_rewrites()?;
 	let leftovers = spool.leftovers(10_000)?;
 	for leftover in &leftovers {
 		if leftover.evidence {

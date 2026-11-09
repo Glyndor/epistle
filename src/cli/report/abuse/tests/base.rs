@@ -136,3 +136,32 @@ Subject: Buy now\r\n\r\nspam body\r\n";
 		);
 	}
 }
+
+/// A lone CR in the `Date:` of the reported message is a line break to a parser
+/// that splits on CR, so it could start a forged `Original-Mail-From:` field.
+#[test]
+fn arf_report_sanitises_a_lone_cr_in_the_date() {
+	let hostile =
+		b"Date: Mon, 1 Jun 2026 10:00:00 +0000\rOriginal-Mail-From: victim@third.example\r\n\
+Return-Path: <spammer@bad.example>\r\n\
+Subject: Buy now\r\n\r\nspam body\r\n";
+	let mut out = Vec::new();
+	assert_eq!(
+		run(&config(), Cursor::new(&hostile[..]), &mut out),
+		ExitCode::SUCCESS
+	);
+	let report = String::from_utf8(out).expect("utf8");
+	let envelope = report
+		.split("\r\nContent-Type: message/rfc822")
+		.next()
+		.unwrap_or(&report);
+	let fields: Vec<&str> = envelope.split(['\r', '\n']).collect();
+	let forged = fields
+		.iter()
+		.filter(|line| line.starts_with("Original-Mail-From:"))
+		.count();
+	assert_eq!(
+		forged, 1,
+		"one Original-Mail-From field, not a forged second one:\n{envelope}"
+	);
+}

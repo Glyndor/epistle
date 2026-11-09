@@ -132,6 +132,6 @@ impl Pending {
 			std::fs::create_dir_all(parent)?;
 		}
 		let bytes = serde_json::to_vec(entries).map_err(std::io::Error::other)?;
-		super::super::renew::write_atomic(path, &bytes, 0o600)
+		crate::storage::write_secret(path, &bytes)
 	}
 }

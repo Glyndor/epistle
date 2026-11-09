@@ -10,6 +10,7 @@ pub(super) mod jmap_disabled;
 pub(super) mod jmap_e;
 pub(super) mod jmap_e2;
 pub(super) mod jmap_email_create;
+pub(super) mod jmap_email_quota;
 pub(super) mod jmap_encoded_words;
 pub(super) mod jmap_eventsource;
 pub(super) mod jmap_f;

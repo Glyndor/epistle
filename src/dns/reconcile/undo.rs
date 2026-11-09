@@ -22,6 +22,7 @@ use crate::config::Config;
 use crate::dns::names::{canonical_name, in_domain};
 use crate::dns::provider::{DnsProvider, DnsRecord, ProviderError};
 use crate::dns::rrset::{Cuts, same_record};
+use crate::dns::skip::SkipSet;
 
 /// One ledger record and what undoing does with it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -78,6 +79,7 @@ pub async fn undo(
 		read.push((zone, ledger, listing));
 	}
 	let mut report = UndoReport::default();
+	let skip = config.dns_publish.skip_set();
 	for (zone, mut ledger, listing) in read {
 		let cuts = Cuts::new(&canonical_name(&zone), &listing);
 		let held: Vec<DnsRecord> = ledger.records().into_iter().rev().collect();
@@ -86,7 +88,7 @@ pub async fn undo(
 			if domain.is_some_and(|d| !in_domain(&name, d)) {
 				continue;
 			}
-			let (outcome, reason) = decide(&record, &name, &listing, &cuts);
+			let (outcome, reason) = decide(&record, &name, &listing, &cuts, &skip);
 			if outcome == "remove"
 				&& !dry_run && let Err(error) = remove(provider, &zone, &record, timeout).await
 			{
@@ -129,6 +131,7 @@ fn decide(
 	name: &str,
 	listing: &[DnsRecord],
 	cuts: &Cuts,
+	skip: &SkipSet,
 ) -> (&'static str, String) {
 	let kind = record.kind.as_str();
 	if let Some(cut) = cuts.above(name) {
@@ -152,7 +155,17 @@ fn decide(
 	match slot.as_slice() {
 		[] => ("absent", format!("{name} {kind} is no longer in the zone")),
 		[only] if same_record(only, record) => {
-			("remove", format!("{name} {kind} was published by epistle"))
+			// A record of a group the configuration skips is withdrawn like
+			// any other: the ledger forgets it, and the publisher would
+			// retire it anyway.
+			let reason = match skip.group_of(record) {
+				Some(group) => format!(
+					"{name} {kind} was published by epistle; the configuration skips the {} group",
+					group.name()
+				),
+				None => format!("{name} {kind} was published by epistle"),
+			};
+			("remove", reason)
 		}
 		_ if !slot.iter().any(|r| same_record(r, record)) => (
 			"absent",

@@ -18,6 +18,7 @@ pub mod records;
 pub mod router;
 pub mod rrset;
 pub mod service_records;
+pub mod skip;
 #[cfg(test)]
 mod tests;
 pub mod tlsa;
@@ -37,6 +38,9 @@ pub enum Status {
 	Missing,
 	/// A lookup error (treated as inconclusive, not a hard failure).
 	LookupError,
+	/// The record belongs to a group the configuration skips: it is not
+	/// published on purpose, so it is not missing.
+	Skipped,
 }
 
 /// One checked record and its outcome.
@@ -82,6 +86,13 @@ impl Check {
 			status: Status::LookupError,
 			detail: "lookup failed (temporary)".to_string(),
 		}
+	}
+
+	/// Mark the check as belonging to a group the configuration skips: the
+	/// record is not published on purpose, so it is not missing.
+	pub(crate) fn mark_skipped(&mut self, group: crate::dns::skip::SkipGroup) {
+		self.status = Status::Skipped;
+		self.detail = format!("skipped by configuration (the {} group)", group.name());
 	}
 }
 

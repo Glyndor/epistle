@@ -335,3 +335,24 @@ fn a_crash_between_the_evidence_and_the_queue_leaves_a_recoverable_state() {
 	);
 	assert!(spool.leftovers(10).expect("leftovers").is_empty());
 }
+
+/// The temporary copy of an envelope rewrite is removed at start-up and does
+/// not get an `abandoned` record: its message is queued.
+#[test]
+fn start_up_removes_an_envelope_rewrite_copy_without_an_abandoned_record() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let spool = FsSpool::open(dir.path()).expect("spool");
+	let tmp = dir.path().join("spool/tmp");
+	std::fs::create_dir_all(&tmp).expect("tmp");
+	let copy = tmp.join(format!(
+		"{}.{}.json",
+		uuid::Uuid::now_v7(),
+		uuid::Uuid::now_v7()
+	));
+	std::fs::write(&copy, b"x").expect("copy");
+	let (_, service) = sink(dir.path());
+	let reconciled = crate::evidence::service::reconcile(&spool, &service).expect("reconcile");
+	assert_eq!(reconciled, 0, "it is not an abandoned submission");
+	assert!(!copy.exists(), "the copy was not removed");
+	assert!(records(dir.path()).is_empty(), "no evidence record");
+}

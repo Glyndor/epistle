@@ -4,6 +4,7 @@ use super::*;
 use crate::dns::lockdown::tests::support::Zone;
 use crate::dns::provider::DnsProvider;
 use crate::dns::rrset::same_record;
+use crate::dns::skip::SkipSet;
 
 pub(crate) const ZONE: &str = "example.org";
 
@@ -35,6 +36,7 @@ pub(crate) fn plan(needed: &[DnsRecord], existing: &[DnsRecord], ledger: &Ledger
 		lockdown: &[],
 		retire_within: None,
 		incomplete: None,
+		skip: &SkipSet::default(),
 	})
 }
 

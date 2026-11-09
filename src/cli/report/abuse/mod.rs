@@ -67,7 +67,7 @@ fn build_report(config: &Config, message: &[u8]) -> String {
 			.or_else(|| header(&headers, "from"))
 			.unwrap_or_else(|| "unknown".to_string()),
 	);
-	let arrival = header(&headers, "date").unwrap_or_else(|| date.clone());
+	let arrival = sanitize_header_value(&header(&headers, "date").unwrap_or_else(|| date.clone()));
 	let source_ip = received_ip(&headers).map(|ip| sanitize_header_value(&ip));
 	let version = env!("CARGO_PKG_VERSION");
 

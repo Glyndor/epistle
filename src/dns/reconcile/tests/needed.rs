@@ -3,6 +3,7 @@
 
 use super::support::*;
 use super::*;
+use crate::dns::skip::SkipSet;
 
 #[test]
 fn an_empty_zone_gets_every_needed_record() {
@@ -165,6 +166,7 @@ fn the_tlsa_value_the_certificate_refresh_published_counts_as_epistles_own() {
 			lockdown: &[],
 			retire_within: None,
 			incomplete: None,
+			skip: &SkipSet::default(),
 		})
 	};
 	assert_eq!(

@@ -13,6 +13,10 @@ use crate::dns::records::{PublishRecord, txt_zone_form};
 /// "value"}` objects, the TXT values unsplit. The set is
 /// [`crate::dns::desired::from_config`], computed in one place so that
 /// what is printed and what is published cannot drift apart.
+///
+/// A group the configuration skips holds no record in the list: it is not
+/// published, so it is not missing either. The groups are named on stderr,
+/// so the list itself stays the records to publish and nothing else.
 pub fn run(config: &Config, json: bool, out: &mut impl std::io::Write) -> ExitCode {
 	let desired = match crate::dns::desired::from_config(config) {
 		Ok(desired) => desired,
@@ -25,6 +29,13 @@ pub fn run(config: &Config, json: bool, out: &mut impl std::io::Write) -> ExitCo
 	};
 	for warning in &desired.warnings {
 		super::style::warn(format_args!("{warning}"));
+	}
+	for group in &desired.skipped {
+		super::style::warn(format_args!(
+			"the configuration skips the {} group: {} records are not published",
+			group.group.name(),
+			group.records.len()
+		));
 	}
 	if json {
 		return super::json_out::print(out, &records_json(&desired.records));

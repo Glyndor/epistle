@@ -345,6 +345,8 @@ pub enum StateFile {
 	UidValidityLast,
 	/// Per-account lock serialising UIDVALIDITY allocation.
 	UidValidityLock,
+	/// Per-mailbox lock serialising UID assignment.
+	UidLock,
 	/// Mod-sequence counter.
 	ModseqCounter,
 	/// Expunge log (QRESYNC).
@@ -367,6 +369,7 @@ impl StateFile {
 			Self::UidValidity => ".uidvalidity",
 			Self::UidValidityLast => ".uidvalidity_last",
 			Self::UidValidityLock => ".uidvalidity_lock",
+			Self::UidLock => ".uid_lock",
 			Self::ModseqCounter => ".modseqctr",
 			Self::Vanished => ".vanished",
 			Self::Index => ".index",

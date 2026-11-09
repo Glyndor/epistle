@@ -89,7 +89,7 @@ pub(super) fn build_tls_for(
 		if let Some(end_point) = &channel_binding {
 			watcher = watcher.with_end_point(end_point.clone());
 		}
-		if publishes_tlsa(role) {
+		if publishes_tlsa(role) && !skips_tlsa(config) {
 			let provider = config.dns.build_for_host(&config.hostname);
 			tokio::spawn(crate::tls::watch::run(
 				watcher,
@@ -101,6 +101,8 @@ pub(super) fn build_tls_for(
 			// The mail role neither publishes TLSA nor writes the TLSA state
 			// in data_dir: the certificates container reads that state, and
 			// it must not act on anything this process could have written.
+			// The same holds when the configuration skips the TLSA record:
+			// nothing is published, so nothing is owed either.
 			tokio::spawn(crate::tls::watch::follow(watcher));
 		}
 	}
@@ -129,11 +131,16 @@ pub(super) fn build_tls_for(
 		match &reloadable_tls {
 			Some(reloadable) => {
 				// When a DNS provider is configured, refresh the TLSA record on
-				// every certificate rotation.
-				let tlsa = config
-					.dns
-					.build_for_host(&config.hostname)
-					.map(|provider| (provider, config.hostname.clone()));
+				// every certificate rotation. The configuration may skip the
+				// record: then the rotation publishes nothing.
+				let tlsa = if skips_tlsa(config) {
+					None
+				} else {
+					config
+						.dns
+						.build_for_host(&config.hostname)
+						.map(|provider| (provider, config.hostname.clone()))
+				};
 				let responder = responder(config, challenge_store, alpn_store)?;
 				let (acme, data_dir, reloadable) =
 					(acme.clone(), config.data_dir.clone(), reloadable.clone());
@@ -184,6 +191,16 @@ pub(super) fn publishes_tlsa(role: ServeRole) -> bool {
 /// listeners of a stack whose certificates container renews.
 pub(super) fn follows_acme_files(config: &Config, role: ServeRole) -> bool {
 	config.acme.is_some() && role == ServeRole::Mail
+}
+
+/// Whether the configuration skips the TLSA record. The DANE association
+/// belongs to the `tlsa` group, so a configuration that skips it publishes
+/// no TLSA record, not on a certificate rotation either.
+fn skips_tlsa(config: &Config) -> bool {
+	config
+		.dns_publish
+		.skip_set()
+		.contains(crate::dns::skip::SkipGroup::Tlsa)
 }
 
 /// The responder for the configured `[acme] challenge`. Validation already

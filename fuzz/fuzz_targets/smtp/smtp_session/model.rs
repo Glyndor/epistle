@@ -49,13 +49,10 @@ fn path(line: &str) -> &str {
 	&line[open..close]
 }
 
-/// An address as the session spells it: the local part as sent, the domain
-/// in lower case.
+/// An address as the session spells it: in lower case, local part and
+/// domain alike, whatever case the client wrote it in.
 fn spelled(address: &str) -> String {
-	match address.rsplit_once('@') {
-		Some((local, domain)) => format!("{local}@{}", domain.to_ascii_lowercase()),
-		None => address.to_string(),
-	}
+	address.to_lowercase()
 }
 
 impl<'a> Model<'a> {

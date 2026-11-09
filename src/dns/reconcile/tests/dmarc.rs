@@ -2,6 +2,7 @@
 
 use super::support::*;
 use super::*;
+use crate::dns::skip::SkipSet;
 
 const NAME: &str = "_dmarc.example.org";
 
@@ -97,6 +98,7 @@ fn a_policy_dns_lockdown_is_ramping_is_left_to_it() {
 			lockdown,
 			retire_within: None,
 			incomplete: None,
+			skip: &SkipSet::default(),
 		})
 	};
 	assert_eq!(

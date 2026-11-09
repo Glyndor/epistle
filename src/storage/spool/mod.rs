@@ -13,6 +13,8 @@ use crate::util::path_component::{MessageExt, message_file};
 use crate::util::path_containment::contained;
 
 use super::crypto::MessageCrypto;
+mod durability;
+use durability::sync_dir_of;
 mod permissions;
 pub(super) use permissions::write_sync;
 use permissions::{FILE_MODE, audit_permissions, count_loose_permissions, create_spool_dir};
@@ -226,9 +228,11 @@ impl FsSpool {
 	///
 	/// Both files are first written and fsynced under `tmp/`, then renamed
 	/// into `new/` , envelope last, so a visible envelope guarantees a
-	/// complete message file next to it. `account` is the local account that
-	/// submitted the message (used by the delivery log); pass `None` for the
-	/// SMTP relay hop that has none. The caller-supplied `extra` correlation
+	/// complete message file next to it. The directory that holds the new
+	/// names is synced after each rename, so a power cut cannot bring an
+	/// entry back under its previous name. `account` is the local account
+	/// that submitted the message (used by the delivery log); pass `None` for
+	/// the SMTP relay hop that has none. The caller-supplied `extra` correlation
 	/// map is the `extra` object the API path may attach to a submission;
 	/// the delivery log and webhooks copy it onto every record they emit,
 	/// but it is never written into the message itself.
@@ -295,10 +299,11 @@ impl FsSpool {
 	/// synced under `tmp/` first. Then the evidence hook, when there is one,
 	/// runs on the exact bytes queued: it writes the acceptance record, and
 	/// only when it succeeds are the files renamed into `new/`, envelope last,
-	/// where the worker can see them. A hook failure removes the staged files
-	/// and is returned, so nothing is queued that has no record. A crash
-	/// between the hook and the renames leaves the staged files for
-	/// [`FsSpool::leftovers`] to find at the next start.
+	/// where the worker can see them. The directory that holds the new names
+	/// is synced after each rename, so the names survive a power cut. A hook
+	/// failure removes the staged files and is returned, so nothing is queued
+	/// that has no record. A crash between the hook and the renames leaves the
+	/// staged files for [`FsSpool::leftovers`] to find at the next start.
 	pub fn store_with(
 		&self,
 		message: &AcceptedMessage,
@@ -369,7 +374,9 @@ impl FsSpool {
 			std::process::abort();
 		}
 		fs::rename(&tmp_message, &final_message)?;
+		sync_dir_of(&final_message)?;
 		fs::rename(&tmp_envelope, &final_envelope)?;
+		sync_dir_of(&final_envelope)?;
 		Ok(id)
 	}
 
@@ -430,8 +437,10 @@ impl FsSpool {
 	/// on `<root>/lock`, so two edits cannot interleave their load and write
 	/// (a lost update), and an edit cannot resurrect an envelope a removal just
 	/// deleted. The new envelope goes to a uniquely named file under `tmp/` and
-	/// is renamed over the old one, so a reader never sees a partial file. A
-	/// missing entry is reported as `NotFound` and nothing is written.
+	/// is renamed over the old one, so a reader never sees a partial file, and
+	/// the directory that holds the name is synced after the rename, so a
+	/// power cut cannot bring the previous envelope back. A missing entry is
+	/// reported as `NotFound` and nothing is written.
 	pub fn update_envelope(
 		&self,
 		id: Uuid,
@@ -452,8 +461,10 @@ impl FsSpool {
 		)?;
 		let bytes = serde_json::to_vec(envelope).map_err(std::io::Error::other)?;
 		let sealed = self.crypto.encode_with_aad(&bytes, id.as_bytes())?;
+		let final_envelope = self.entry_file(SpoolDir::New, id, MessageExt::Json)?;
 		let written = write_sync(&tmp, &sealed)
-			.and_then(|()| fs::rename(&tmp, self.entry_file(SpoolDir::New, id, MessageExt::Json)?));
+			.and_then(|()| fs::rename(&tmp, &final_envelope))
+			.and_then(|()| sync_dir_of(&final_envelope));
 		if let Err(error) = written {
 			let _ = fs::remove_file(&tmp);
 			return Err(error);
@@ -499,7 +510,9 @@ impl FsSpool {
 	/// encrypted in place. The rewrite goes through `tmp/<uuid>.<uuid>.json`
 	/// and is renamed over the old one, so a reader that happens to look at
 	/// the file mid-rewrite sees either the old plaintext or the new sealed
-	/// envelope, never a half-written file.
+	/// envelope, never a half-written file. The directory that holds the name
+	/// is synced after the rename, so the sealed envelope is what a power cut
+	/// leaves behind.
 	fn maybe_migrate_envelope(&self, id: Uuid, plain: &[u8]) -> std::io::Result<()> {
 		if !self.crypto.enabled() {
 			return Ok(());
@@ -521,8 +534,10 @@ impl FsSpool {
 			&Path::new(SpoolDir::Tmp.name()).join(format!("{id}.{}.json", Uuid::now_v7())),
 		)?;
 		let sealed = self.crypto.encode_with_aad(plain, id.as_bytes())?;
+		let final_envelope = self.entry_file(SpoolDir::New, id, MessageExt::Json)?;
 		let written = write_sync(&tmp, &sealed)
-			.and_then(|()| fs::rename(&tmp, self.entry_file(SpoolDir::New, id, MessageExt::Json)?));
+			.and_then(|()| fs::rename(&tmp, &final_envelope))
+			.and_then(|()| sync_dir_of(&final_envelope));
 		if let Err(error) = written {
 			let _ = fs::remove_file(&tmp);
 			return Err(error);

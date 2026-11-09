@@ -65,6 +65,9 @@ async fn evaluate(config: &Config, dns: &dyn DnsLookup) -> AreaReport {
 			.unwrap_or_else(|_| default_selectors.clone());
 		records.extend(dns::check_domain(domain, &config.hostname, &selectors, dns).await);
 	}
+	// A record of a group the configuration skips is not published on
+	// purpose: it is not missing, and the operator is told so.
+	let records = crate::dns::skip::split_checks(records, &config.dns_publish.skip_set());
 	// Cloudflare's orange cloud breaks delivery to every mail name:
 	// SMTP / IMAP / POP3 / submission all need direct traffic, and the
 	// proxy only forwards HTTP(S). The check lives behind the configured
@@ -74,6 +77,7 @@ async fn evaluate(config: &Config, dns: &dyn DnsLookup) -> AreaReport {
 	let ok = count(&records, &Status::Ok);
 	let missing = count(&records, &Status::Missing);
 	let inconclusive = count(&records, &Status::LookupError);
+	let skipped = count(&records, &Status::Skipped);
 
 	let mut mismatches = 0;
 	for domain in &config.domains {
@@ -128,6 +132,12 @@ async fn evaluate(config: &Config, dns: &dyn DnsLookup) -> AreaReport {
 		&Status::LookupError,
 		inconclusive,
 		"inconclusive",
+	));
+	summary.push_str(&named(
+		&records,
+		&Status::Skipped,
+		skipped,
+		"skipped by configuration",
 	));
 	for (count, what) in [
 		(mismatches, "DKIM key mismatch"),
@@ -184,6 +194,9 @@ fn record_item(check: &Check) -> Item {
 		Status::Ok => Level::Ok,
 		Status::Missing => Level::Fail,
 		Status::LookupError => Level::Warn,
+		// A record the configuration skips is not published on purpose: it
+		// is not a failure.
+		Status::Skipped => Level::Ok,
 	};
 	Item::new(
 		format!("{} {}", check.kind, check.name),

@@ -166,7 +166,16 @@ impl Conn {
 		let code: u16 = reply
 			.get(..3)
 			.and_then(|head| head.parse().ok())
-			.ok_or_else(|| DeliveryError::Transient(format!("malformed reply: {reply}")))?;
+			.ok_or_else(|| {
+				// The text is the remote's: it goes into the error, and from there
+				// into the log, as one bounded line.
+				let line: String = reply
+					.chars()
+					.map(|c| if c.is_control() { ' ' } else { c })
+					.take(200)
+					.collect();
+				DeliveryError::Transient(format!("malformed reply: {line}"))
+			})?;
 		self.last_reply = reply.clone();
 		Ok((code, reply))
 	}

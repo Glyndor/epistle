@@ -89,15 +89,39 @@ impl MailHook for HttpHook {
 					return HookVerdict::Accept;
 				}
 			};
-			match response.bytes().await {
-				Ok(bytes) => parse_verdict(&bytes),
-				Err(error) => {
-					tracing::warn!(%error, "scanner hook read failed; accepting");
+			match read_capped(response).await {
+				Some(bytes) => parse_verdict(&bytes),
+				None => {
+					tracing::warn!("scanner hook answer too large or unreadable; accepting");
 					HookVerdict::Accept
 				}
 			}
 		})
 	}
+}
+
+/// The most a scanner may answer: a verdict is a few bytes of JSON, and the
+/// endpoint is a service the mail server trusts to be small, not to be well
+/// behaved.
+const MAX_ANSWER: usize = 64 * 1024;
+
+/// The body of `response` when it fits [`MAX_ANSWER`], read in pieces so a
+/// body without an end is dropped at the cap and never held whole.
+async fn read_capped(mut response: reqwest::Response) -> Option<Vec<u8>> {
+	if response
+		.content_length()
+		.is_some_and(|n| n > MAX_ANSWER as u64)
+	{
+		return None;
+	}
+	let mut body = Vec::new();
+	while let Ok(Some(chunk)) = response.chunk().await {
+		if body.len() + chunk.len() > MAX_ANSWER {
+			return None;
+		}
+		body.extend_from_slice(&chunk);
+	}
+	Some(body)
 }
 
 #[cfg(test)]
