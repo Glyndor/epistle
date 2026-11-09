@@ -126,8 +126,13 @@ jobs:
           RUST_TARGET: ${{ inputs.rust-target }}
         run: |
           set -euo pipefail
-          curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs \
-            | sh -s -- -y --profile minimal --default-toolchain "$RUST_TOOLCHAIN"
+          # Download the installer whole, with retries, then run it: a pipe
+          # into sh would run a script cut short by a failed download.
+          installer="$(mktemp)"
+          curl --proto '=https' --tlsv1.2 -fsSL --retry 5 --retry-delay 5 --retry-all-errors \
+            -o "$installer" https://sh.rustup.rs
+          sh "$installer" -y --profile minimal --default-toolchain "$RUST_TOOLCHAIN"
+          rm -f "$installer"
           . "$HOME/.cargo/env"
           if [ -n "$RUST_TARGET" ]; then
             rustup target add "$RUST_TARGET" --toolchain "$RUST_TOOLCHAIN"
@@ -248,8 +253,13 @@ jobs:
           RUST_TARGET: ${{ inputs.rust-target }}
         run: |
           set -euo pipefail
-          curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs \
-            | sh -s -- -y --profile minimal --default-toolchain "$RUST_TOOLCHAIN"
+          # Download the installer whole, with retries, then run it: a pipe
+          # into sh would run a script cut short by a failed download.
+          installer="$(mktemp)"
+          curl --proto '=https' --tlsv1.2 -fsSL --retry 5 --retry-delay 5 --retry-all-errors \
+            -o "$installer" https://sh.rustup.rs
+          sh "$installer" -y --profile minimal --default-toolchain "$RUST_TOOLCHAIN"
+          rm -f "$installer"
           . "$HOME/.cargo/env"
           if [ -n "$RUST_TARGET" ]; then
             rustup target add "$RUST_TARGET" --toolchain "$RUST_TOOLCHAIN"
