@@ -67,6 +67,30 @@ impl FsSpool {
 		Some(envelope.evidence)
 	}
 
+	/// Remove the temporary files a rewrite of an envelope left under `tmp/`
+	/// (`<uuid>.<uuid>.json`: the message id and a unique suffix). The message
+	/// is queued and its evidence is recorded, so these are not abandoned
+	/// submissions: the file is only a copy that was never renamed over the
+	/// envelope, and nothing else removes it. Same condition as
+	/// [`Self::leftovers`]: call it before the server takes submissions.
+	/// Returns how many it removed.
+	pub fn sweep_envelope_rewrites(&self) -> std::io::Result<usize> {
+		let dir = self.path_in(Path::new(SpoolDir::Tmp.name()))?;
+		let mut removed = 0;
+		for entry in crate::util::fs_walk::read_dir(&dir)? {
+			let entry = entry?;
+			let name = entry.file_name();
+			if name.to_str().is_some_and(is_envelope_rewrite) {
+				match fs::remove_file(entry.path()) {
+					Ok(()) => removed += 1,
+					Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+					Err(error) => return Err(error),
+				}
+			}
+		}
+		Ok(removed)
+	}
+
 	/// Remove the staged files of `id`.
 	pub fn discard_leftover(&self, id: Uuid) -> std::io::Result<()> {
 		for ext in [MessageExt::Json, MessageExt::Eml] {
@@ -78,4 +102,16 @@ impl FsSpool {
 		}
 		Ok(())
 	}
+}
+
+/// Whether `name` is `<uuid>.<uuid>.json`, the temporary name of an envelope
+/// rewrite.
+fn is_envelope_rewrite(name: &str) -> bool {
+	let Some(stem) = name.strip_suffix(".json") else {
+		return false;
+	};
+	let Some((id, suffix)) = stem.split_once('.') else {
+		return false;
+	};
+	Uuid::parse_str(id).is_ok() && Uuid::parse_str(suffix).is_ok()
 }
