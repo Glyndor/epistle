@@ -80,7 +80,16 @@ pub(super) fn resolve_uids(account_dir: &Path, ids: &[Uuid]) -> Vec<u32> {
 			None
 		}
 	};
-	let mut counter = read_counter(account_dir);
+	// The counter is written after the sidecars, and a write that failed or
+	// a process that died in between leaves it behind them: a UID that is
+	// already in a sidecar is never handed out again, so the counter starts
+	// from the largest one these messages hold.
+	let held = ids
+		.iter()
+		.filter_map(|id| read_message(account_dir, *id))
+		.max()
+		.unwrap_or(0);
+	let mut counter = read_counter(account_dir).max(held);
 	let mut assigned = false;
 	for (id, uid) in ids.iter().zip(uids.iter_mut()) {
 		if uid.is_some() {
