@@ -112,7 +112,13 @@ fn read_domain(doc: &Doc, dir: &Path, raw: &str, plan: &mut Plan) {
 			plan.skip(item, "no PrivateKeyFile");
 			continue;
 		};
-		let file = dir.join(file);
+		let file = match super::source_path::inside(dir, "PrivateKeyFile", file) {
+			Ok(file) => file,
+			Err(reason) => {
+				plan.skip(item, reason);
+				continue;
+			}
+		};
 		let key = read_bounded(&file, keys::MAX_KEY_BYTES)
 			.map_err(|error| format!("reading {}: {error}", file.display()))
 			.and_then(|pem| keys::normalize(&pem, None).map_err(|error| error.to_string()));

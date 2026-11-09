@@ -52,13 +52,35 @@ pub fn load_or_create_account_key(data_dir: &Path) -> Result<AccountKey, AcmeErr
 /// [`load_or_create_account_key`] for a key kept at `path`. The certificates
 /// container reads its key from a read-only mount outside data_dir, where a
 /// missing key cannot be created and the write fails instead.
+///
+/// Only a missing key is created. A key that is there is read as it is,
+/// through the descriptor it was opened with, without following a symlink
+/// (`read_unshared` in `storage::unshared`). Any other
+/// read error is an error, never a new key: a new key is a new ACME account,
+/// which the authority rate limits and the operator cannot recover.
 pub fn load_or_create_account_key_at(path: &Path) -> Result<AccountKey, AcmeError> {
 	let path = path.to_path_buf();
-	if let Ok(encoded) = fs::read_to_string(&path) {
-		let der = B64
-			.decode(encoded.trim())
-			.map_err(|e| AcmeError::Protocol(format!("account key: {e}")))?;
-		return AccountKey::from_pkcs8(&der).map_err(|e| AcmeError::Protocol(e.to_string()));
+	match crate::storage::unshared::read_unshared(&path) {
+		Ok(Some(bytes)) => {
+			let encoded = String::from_utf8(bytes).map_err(|_| {
+				AcmeError::Protocol(format!(
+					"the ACME account key {} is not text",
+					path.display()
+				))
+			})?;
+			let der = B64
+				.decode(encoded.trim())
+				.map_err(|e| AcmeError::Protocol(format!("account key: {e}")))?;
+			return AccountKey::from_pkcs8(&der).map_err(|e| AcmeError::Protocol(e.to_string()));
+		}
+		// Nothing there: the key is created below.
+		Ok(None) => {}
+		Err(error) => {
+			return Err(AcmeError::Transport(format!(
+				"reading the ACME account key {}: {error}",
+				path.display()
+			)));
+		}
 	}
 	let (key, der) = AccountKey::generate().map_err(|e| AcmeError::Protocol(e.to_string()))?;
 	if let Some(parent) = path.parent() {
