@@ -443,21 +443,36 @@ pub async fn upload(
 	// hit, distinguishing an over-quota rejection from the per-request
 	// `maxSizeUpload` one above. The HTTP status is 507 Insufficient Storage,
 	// the closest standard code for "would exceed the account's storage".
-	if let Some(limit) = state.quota_for_account(&account) {
-		let usage = blobs::account_usage_bytes(state.data_dir(), &account, state.crypto());
-		if usage.saturating_add(body.len() as u64) > limit {
-			return (
-				StatusCode::INSUFFICIENT_STORAGE,
-				Json(json!({
-					"type": "urn:ietf:params:jmap:error:limit",
-					"limit": "storage",
-					"status": 507,
-					"detail": "upload would exceed the account storage quota",
-				})),
-			)
-				.into_response();
+	//
+	// The check reserves the bytes it admits instead of locking the account
+	// over the write: the reservation counts against the next check of the
+	// same account, so two uploads at the same moment cannot both pass it.
+	// It is released when the upload ends, stored the blob or not, and
+	// nothing is held while the blob is written — the backend may be remote
+	// and slow, and a lock across it would hold up every delivery to the
+	// account.
+	let size = body.len() as u64;
+	let reservation = match state.quota_for_account(&account) {
+		Some(limit) => {
+			// Reserve, then read the usage, in that order: see `reserve`.
+			let reservation = crate::smtp::quota::reserve(state.data_dir(), &account, size);
+			let usage = blobs::account_usage_bytes(state.data_dir(), &account, state.crypto());
+			if usage.saturating_add(reservation.reserved()) > limit {
+				return (
+					StatusCode::INSUFFICIENT_STORAGE,
+					Json(json!({
+						"type": "urn:ietf:params:jmap:error:limit",
+						"limit": "storage",
+						"status": 507,
+						"detail": "upload would exceed the account storage quota",
+					})),
+				)
+					.into_response();
+			}
+			Some(reservation)
 		}
-	}
+		None => None,
+	};
 	// Per-tenant aggregate storage cap (RFC 8620 §6.1; the same JMAP limit
 	// type as the per-account quota above). Sits on top of the per-account
 	// limit; either can fail and the rejection looks the same to the client.
@@ -473,7 +488,7 @@ pub async fn upload(
 		state.data_dir(),
 		state.crypto(),
 		&account_addresses,
-		body.len() as u64,
+		size,
 	) {
 		return (
 			StatusCode::INSUFFICIENT_STORAGE,
@@ -535,6 +550,9 @@ pub async fn upload(
 			"cannot store blob",
 		);
 	}
+	// The blob is stored: the bytes it took are the account's now, and the
+	// reservation is no longer needed.
+	drop(reservation);
 	(
 		StatusCode::OK,
 		Json(json!({

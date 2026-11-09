@@ -120,3 +120,25 @@ fn listeners_share_admission_only_for_the_same_mail_store() {
 		"the shared account must be available after release"
 	);
 }
+
+#[test]
+fn a_reservation_counts_for_the_delivery_check_until_it_is_dropped() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let quota = MailboxQuota::on_disk(dir.path().to_path_buf(), MessageCrypto::disabled(), 1000);
+	let directory = directory();
+	assert!(!quota.would_overflow(&directory, "bob", 600));
+	let held = reserve(dir.path(), "bob", 600);
+	assert_eq!(held.reserved(), 600);
+	assert_eq!(reserved_bytes(dir.path(), "bob"), 600);
+	// 600 reserved and 600 more would be 1200 of 1000: delivery refuses it.
+	assert!(quota.would_overflow(&directory, "bob", 600));
+	// Another account of the same store is not charged.
+	assert!(!quota.would_overflow(&directory, "carol", 600));
+	// The second reservation sees the first one, the first never saw the second.
+	let second = reserve(dir.path(), "bob", 600);
+	assert_eq!(second.reserved(), 1200);
+	drop(held);
+	drop(second);
+	assert_eq!(reserved_bytes(dir.path(), "bob"), 0);
+	assert!(!quota.would_overflow(&directory, "bob", 600));
+}

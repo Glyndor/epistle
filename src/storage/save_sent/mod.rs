@@ -390,9 +390,20 @@ pub fn store_copy(
 	quota: Option<u64>,
 ) -> Result<u32, SaveError> {
 	// The copy is stored mail like any other: it counts against the
-	// account's quota, and one that would not fit is not stored.
+	// account's quota, and one that would not fit is not stored. The
+	// check and the write are one step, under the account's admission
+	// lock — the same one the delivery path takes — so two submissions
+	// of one account at the same moment cannot both pass the check and
+	// leave the account over its quota.
+	let lock = crate::smtp::quota::delivery_lock_for(data_dir, account);
+	let _admission = lock.lock().unwrap_or_else(|e| e.into_inner());
+	// The reservations of uploads first, the usage after: see
+	// `crate::smtp::quota::reserve`.
+	let reserved = crate::smtp::quota::reserved_bytes(data_dir, account);
 	if let Some(limit) = quota
-		&& mailbox::account_usage(data_dir, account, crypto).saturating_add(data.len() as u64)
+		&& mailbox::account_usage(data_dir, account, crypto)
+			.saturating_add(reserved)
+			.saturating_add(data.len() as u64)
 			> limit
 	{
 		return Err(SaveError::OverQuota);
