@@ -21,7 +21,10 @@ fn sha256(data: &[u8]) -> Vec<u8> {
 #[test]
 fn no_records_is_opportunistic() {
 	let (der, _) = self_signed("mx.example.org");
-	assert_eq!(verify_chain(&[], &[der]), DaneOutcome::NoRecords);
+	assert_eq!(
+		verify_chain(&[], &[der], "mx.example.org"),
+		DaneOutcome::NoRecords
+	);
 }
 
 #[test]
@@ -29,7 +32,10 @@ fn dane_ee_spki_match_authenticates() {
 	let (der, spki) = self_signed("mx.example.org");
 	// 3 1 1: DANE-EE, SPKI selector, SHA-256.
 	let record = TlsaRecord::from_parts(3, 1, 1, sha256(&spki)).expect("record");
-	assert_eq!(verify_chain(&[record], &[der]), DaneOutcome::Authenticated);
+	assert_eq!(
+		verify_chain(&[record], &[der], "mx.example.org"),
+		DaneOutcome::Authenticated
+	);
 }
 
 #[test]
@@ -37,7 +43,10 @@ fn dane_ee_full_cert_match_authenticates() {
 	let (der, _) = self_signed("mx.example.org");
 	// 3 0 1: DANE-EE, full-certificate selector, SHA-256.
 	let record = TlsaRecord::from_parts(3, 0, 1, sha256(&der)).expect("record");
-	assert_eq!(verify_chain(&[record], &[der]), DaneOutcome::Authenticated);
+	assert_eq!(
+		verify_chain(&[record], &[der], "mx.example.org"),
+		DaneOutcome::Authenticated
+	);
 }
 
 #[test]
@@ -45,20 +54,30 @@ fn wrong_association_is_mismatch() {
 	let (der, _) = self_signed("mx.example.org");
 	// A record for a different key: present but never matches -> fail closed.
 	let record = TlsaRecord::from_parts(3, 1, 1, sha256(b"some other key")).expect("record");
-	assert_eq!(verify_chain(&[record], &[der]), DaneOutcome::Mismatch);
+	assert_eq!(
+		verify_chain(&[record], &[der], "mx.example.org"),
+		DaneOutcome::Mismatch
+	);
 }
 
 #[test]
 fn records_present_but_empty_chain_is_mismatch() {
 	let record = TlsaRecord::from_parts(3, 1, 1, sha256(b"key")).expect("record");
-	assert_eq!(verify_chain(&[record], &[]), DaneOutcome::Mismatch);
+	assert_eq!(
+		verify_chain(&[record], &[], "mx.example.org"),
+		DaneOutcome::Mismatch
+	);
 }
 
 #[test]
 fn records_present_but_unparseable_chain_is_mismatch() {
 	let record = TlsaRecord::from_parts(3, 1, 1, sha256(b"key")).expect("record");
 	assert_eq!(
-		verify_chain(&[record], &[b"not a certificate".to_vec()]),
+		verify_chain(
+			&[record],
+			&[b"not a certificate".to_vec()],
+			"mx.example.org"
+		),
 		DaneOutcome::Mismatch
 	);
 }

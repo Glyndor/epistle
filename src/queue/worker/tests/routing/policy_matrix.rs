@@ -111,7 +111,7 @@ fn certs() -> &'static Certs {
 
 /// DANE-EE SPKI SHA-256 record for a leaf.
 fn tlsa_for(leaf: &CertificateDer<'_>) -> TlsaRecord {
-	let spki = crate::dane::verify::spki_of(leaf).expect("spki");
+	let spki = crate::dane::cert::spki_of(leaf).expect("spki");
 	let hash = ring::digest::digest(&ring::digest::SHA256, &spki);
 	TlsaRecord::from_parts(3, 1, 1, hash.as_ref().to_vec()).expect("record")
 }
