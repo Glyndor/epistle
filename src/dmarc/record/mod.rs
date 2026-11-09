@@ -112,6 +112,12 @@ fn parse_alignment(value: &str) -> Option<Alignment> {
 	}
 }
 
+/// The most report addresses taken from a `rua=` or `ruf=` list. RFC 7489
+/// section 6.2 asks a receiver to support two and lets it set a limit; a record
+/// of a domain we do not control must not turn one message into hundreds of
+/// outgoing reports.
+const MAX_DURIS: usize = 5;
+
 /// Parse a DURI list (`rua=`/`ruf=`) into a list of URI strings.
 /// Strips optional `!maxsize` suffixes (RFC 7489 §6.3) and ignores blanks.
 fn parse_duri_list(value: &str) -> Vec<String> {
@@ -133,6 +139,7 @@ fn parse_duri_list(value: &str) -> Vec<String> {
 				Some(uri.to_ascii_lowercase())
 			}
 		})
+		.take(MAX_DURIS)
 		.collect()
 }
 

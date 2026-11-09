@@ -110,3 +110,15 @@ fn malformed_values_are_errors() {
 	assert_eq!(parse("v=DMARC1; p=none; adkim=x"), Some(Err(())));
 	assert_eq!(parse("v=DMARC1; p"), Some(Err(())));
 }
+
+#[test]
+fn a_report_address_list_is_cut_at_five() {
+	let uris: Vec<String> = (0..40)
+		.map(|n| format!("mailto:r{n}@example.org"))
+		.collect();
+	let record = parse(&format!("v=DMARC1; p=none; rua={}", uris.join(",")))
+		.expect("is dmarc")
+		.expect("valid");
+	assert_eq!(record.rua.len(), 5);
+	assert_eq!(record.rua[0], "mailto:r0@example.org");
+}
