@@ -205,3 +205,29 @@ fn every_walked_path_is_rebuilt_under_the_root_and_exists() {
 		assert_eq!(path, &read_path(dir.path(), *id, ""));
 	}
 }
+
+#[cfg(unix)]
+#[test]
+fn a_blob_root_that_is_a_link_out_of_the_data_dir_is_not_walked() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let data = dir.path().join("data");
+	let outside = dir.path().join("elsewhere");
+	std::fs::create_dir_all(&data).expect("data");
+	std::fs::create_dir_all(&outside).expect("outside");
+	std::fs::write(outside.join(id("dead").to_string()), b"theirs").expect("outside payload");
+	std::os::unix::fs::symlink(&outside, blob_root(&data)).expect("symlink");
+	assert!(
+		walk_shared(&data).is_empty(),
+		"a pool that resolves outside the data dir is not read"
+	);
+	// The same layout inside the data dir is walked as before.
+	let inside = tempfile::tempdir().expect("inside");
+	let kept = id("1111");
+	std::fs::create_dir_all(blob_root(inside.path())).expect("root");
+	std::fs::write(blob_root(inside.path()).join(kept.to_string()), b"ours").expect("flat");
+	let found: Vec<Uuid> = walk_shared(inside.path())
+		.into_iter()
+		.map(|(id, _)| id)
+		.collect();
+	assert_eq!(found, vec![kept]);
+}
