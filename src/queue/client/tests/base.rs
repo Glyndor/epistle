@@ -121,6 +121,21 @@ async fn malformed_greeting_is_transient() {
 	);
 }
 
+/// The text of a reply that is not a reply is the remote's: it reaches the
+/// error as one line without control characters, however long it is.
+#[tokio::test]
+async fn a_malformed_reply_reaches_the_error_as_one_bounded_line() {
+	let mut canned = b"zz1 fake log line\r\nINFO forged entry\r\n".to_vec();
+	canned.extend(std::iter::repeat_n(b'x', 5000));
+	canned.extend_from_slice(b"\r\n");
+	let Err(DeliveryError::Transient(text)) = deliver_against(Vec::leak(canned)).await else {
+		panic!("a transient error");
+	};
+	assert!(text.starts_with("malformed reply: "), "{text}");
+	assert!(!text.contains(['\r', '\n']), "{text:?}");
+	assert!(text.len() < 300, "{}", text.len());
+}
+
 #[tokio::test]
 async fn relay_auth_without_tls_is_permanent() {
 	// Greeting then an EHLO reply offering no STARTTLS.
