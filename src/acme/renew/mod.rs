@@ -64,48 +64,9 @@ pub fn load_or_create_account_key_at(path: &Path) -> Result<AccountKey, AcmeErro
 	if let Some(parent) = path.parent() {
 		fs::create_dir_all(parent).map_err(|e| AcmeError::Transport(e.to_string()))?;
 	}
-	write_secret(&path, B64.encode(&der).as_bytes())
+	crate::storage::write_secret(&path, B64.encode(&der).as_bytes())
 		.map_err(|e| AcmeError::Transport(e.to_string()))?;
 	Ok(key)
-}
-
-/// Write a secret file owner-only (0600) without a readable window: create a
-/// sibling temp file `0600` up front, write and fsync it, then atomically
-/// rename it onto the target. Best effort (plain write) on non-Unix.
-fn write_secret(path: &Path, contents: &[u8]) -> std::io::Result<()> {
-	write_atomic(path, contents, 0o600)
-}
-
-/// The same write with the file mode the caller names: the certificate chain
-/// is public and keeps `0644`, the key keeps `0600`.
-pub(in crate::acme) fn write_atomic(
-	path: &Path,
-	contents: &[u8],
-	mode: u32,
-) -> std::io::Result<()> {
-	#[cfg(unix)]
-	{
-		use std::io::Write;
-		use std::os::unix::fs::OpenOptionsExt;
-		let tmp = path.with_extension("tmp");
-		// Clear any stale temp so create_new (which guarantees a fresh 0600
-		// file) cannot fail on a leftover from a crashed write.
-		let _ = fs::remove_file(&tmp);
-		let mut file = fs::OpenOptions::new()
-			.write(true)
-			.create_new(true)
-			.mode(mode)
-			.open(&tmp)?;
-		file.write_all(contents)?;
-		file.sync_all()?;
-		fs::rename(&tmp, path)?;
-		Ok(())
-	}
-	#[cfg(not(unix))]
-	{
-		let _ = mode;
-		fs::write(path, contents)
-	}
 }
 
 /// Whether the ACME pair is usable and what its leaf certificate is.
@@ -187,9 +148,13 @@ fn install(
 	let acceptor = crate::tls::acceptor_from_pem(chain.as_bytes(), key_pem.as_bytes())
 		.map_err(|e| AcmeError::Protocol(e.to_string()))?;
 	fs::create_dir_all(data_dir.join("acme")).map_err(|e| AcmeError::Transport(e.to_string()))?;
-	write_atomic(&cert_path(data_dir), chain.as_bytes(), 0o644)
+	// The chain is public and keeps 0644; the key is a secret and keeps
+	// 0600. Both go through a unique staging file that is removed when
+	// the write fails, so a failed renewal leaves no copy of the key
+	// beside the pair.
+	crate::storage::write_with_mode(&cert_path(data_dir), chain.as_bytes(), 0o644)
 		.map_err(|e| AcmeError::Transport(e.to_string()))?;
-	write_secret(&key_path(data_dir), key_pem.as_bytes())
+	crate::storage::write_secret(&key_path(data_dir), key_pem.as_bytes())
 		.map_err(|e| AcmeError::Transport(e.to_string()))?;
 	if let Some(reloadable) = reloadable {
 		reloadable.reload(acceptor);
