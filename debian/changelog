@@ -1,3 +1,13 @@
+epistle (0.12.8) unstable; urgency=medium
+
+  * The certificate request sent to the CA at `finalize` has an empty subject. It carried a library default name that Let's Encrypt refuses, so no issuance or renewal could finish on 0.12.7; the certificate already in place kept being served.
+  * `[dns_publish] skip` names record groups that automatic mode leaves alone: `client-locators`, `mta-sts`, `tls-rpt`, `tlsa` and `caa`. The core records can never be skipped, and a skipped record that epistle published earlier is retired through the ledger with `--dry-run` showing it first.
+  * `dns publish` recognises the SRV records it published on Cloudflare: the priority is read back and SRV records are compared by value.
+  * WebDAV `COPY` and `MOVE` decide from the destination as it is once the account lock is held, and the UIDs of one IMAP mailbox are assigned under a lock.
+  * The listener tasks of `serve` start only after the privileges are dropped.
+
+ -- Glyndor <packages@glyndor.net>  Mon, 09 Nov 2026 12:00:00 +0000
+
 epistle (0.12.7) unstable; urgency=medium
 
   * `epistle stack certs enable` and `disable` run the certificates container beside `mail`, off by default. `serve` can run the listeners and the certificate renewal as separate roles, `status` reports the container and the days the certificate has left, and a rotation of the DKIM keys hands the DNS write to the container that holds the credential.
