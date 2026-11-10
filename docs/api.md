@@ -585,13 +585,15 @@ key does not cover answers a `forbidden` method error inside a `200`.
 - `GET /jmap/ws` is JMAP over WebSocket. It accepts the upgrade but does not
   answer the `jmap` subprotocol, and the bearer goes in the `Authorization`
   header of the upgrade, so a browser cannot use it. Push is connection-scoped.
+  A credential may hold 4 sockets open; the next upgrade is a `429`. A socket
+  that sends no frame (a ping counts) for 300 seconds is closed with 1001.
 - `GET /jmap/eventsource?types=Email,Mailbox&closeafter=no&ping=30` streams
   `state` and `ping` events for changes made by any protocol; there is no
   replay, so catch up with `/changes`.
 
 Limits, also in the Session: 10,000,000 octets per request, 16 calls, 500
 objects per `/get` or `/set`, 4 requests and 4 uploads in flight per
-credential, 4 event streams per credential, `maxSizeUpload` equal to the
+credential, 4 event streams and 4 WebSockets per credential, `maxSizeUpload` equal to the
 message size limit. Past the size of a request or its number of calls the answer is
 `400` or `413` with a `urn:ietf:params:jmap:error:limit` problem naming the
 limit; past the in-flight limits it is a `429` with such a problem; past 500
