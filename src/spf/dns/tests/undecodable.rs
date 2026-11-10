@@ -43,3 +43,25 @@ async fn a_resolver_that_fails_is_still_a_temporary_failure() {
 		Err(DnsFailure::Temporary)
 	);
 }
+
+#[tokio::test]
+async fn an_internationalized_name_is_still_asked_for_under_its_punycode_form() {
+	let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+	let seen = std::sync::Arc::clone(&asked);
+	let port = server::spawn(move |query: &Message| {
+		if let Some(question) = query.queries.first() {
+			seen.lock()
+				.expect("lock")
+				.push(question.name().to_ascii().to_ascii_lowercase());
+		}
+		Reply::Answers(Vec::new())
+	})
+	.await;
+	let dns = server::resolver(port);
+	assert_eq!(dns.txt("bücher.example").await, Ok(Vec::new()));
+	let asked = asked.lock().expect("lock");
+	assert!(
+		asked.iter().any(|name| name.contains("xn--bcher-kva")),
+		"the server was asked for {asked:?}"
+	);
+}

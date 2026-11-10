@@ -203,8 +203,10 @@ impl SystemDns {
 		use hickory_resolver::net::{DnsError, NetError};
 		// A name that cannot be put on the wire never reaches a server, and a
 		// retry cannot change that: it is an absence (RFC 7208 section 4.3
-		// reads a malformed domain as `none`), not a temporary failure.
-		let Ok(fqdn) = hickory_resolver::proto::rr::Name::from_ascii(format!("{name}.")) else {
+		// reads a malformed domain as `none`), not a temporary failure. The
+		// conversion is the one the resolver applies to a string, so an
+		// internationalized name is still looked up under its punycode form.
+		let Ok(fqdn) = hickory_resolver::proto::rr::Name::from_utf8(format!("{name}.")) else {
 			return Ok(Vec::new());
 		};
 		match self.resolver.lookup(fqdn, record_type).await {
