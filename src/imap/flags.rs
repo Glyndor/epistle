@@ -57,3 +57,6 @@ fn contains_keyword_aware(set: &[Flag], flag: &Flag) -> bool {
 	set.iter()
 		.any(|existing| crate::imap::mailbox::flag_key(existing) == needle)
 }
+
+#[cfg(test)]
+mod tests;

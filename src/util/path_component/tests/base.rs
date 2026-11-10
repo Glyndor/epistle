@@ -218,10 +218,12 @@ fn message_and_state_files_have_fixed_names() {
 			message_file(dir, id, ext).expect("message file"),
 			dir.join(format!("{id}{suffix}"))
 		);
-		assert_eq!(
-			message_tmp_file(dir, id, ext).expect("tmp file"),
-			dir.join(format!("{id}{suffix}.tmp"))
-		);
+		// The staging name carries a fresh token, so two writes of one
+		// sidecar never stage into the same file.
+		let tmp = message_tmp_file(dir, id, ext).expect("tmp file");
+		let staged = tmp.file_name().expect("tmp name").to_string_lossy();
+		assert!(staged.starts_with(&format!("{id}{suffix}.")), "{staged}");
+		assert!(staged.ends_with(".tmp"), "{staged}");
 	}
 	let states = [
 		(StateFile::UidNext, ".uidnext"),
@@ -232,10 +234,10 @@ fn message_and_state_files_have_fixed_names() {
 	];
 	for (file, name) in states {
 		assert_eq!(state_file(dir, file).expect("state file"), dir.join(name));
-		assert_eq!(
-			state_tmp_file(dir, file).expect("state tmp file"),
-			dir.join(format!("{name}.tmp"))
-		);
+		let tmp = state_tmp_file(dir, file).expect("state tmp file");
+		let staged = tmp.file_name().expect("tmp name").to_string_lossy();
+		assert!(staged.starts_with(&format!("{name}.")), "{staged}");
+		assert!(staged.ends_with(".tmp"), "{staged}");
 	}
 }
 
