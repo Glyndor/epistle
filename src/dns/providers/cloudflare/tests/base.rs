@@ -28,6 +28,11 @@ struct MockState {
 	/// The zone the lookup refuses to answer about: Cloudflare answers 403
 	/// for it, as it does for a zone the token may not read.
 	zone_denied: Option<String>,
+	/// How many listings still come back with a total that does not add up
+	/// (a paged read right after a write).
+	inconsistent_reads: u32,
+	/// Set on every delete: how many listings after it are inconsistent.
+	inconsistent_after_write: u32,
 }
 
 type Shared = Arc<Mutex<MockState>>;
@@ -78,7 +83,10 @@ async fn records_collection(
 	if method == axum::http::Method::GET {
 		let result = s.records.clone();
 		let mut body = serde_json::json!({ "result": result, "success": true });
-		if let Some(total_pages) = s.total_pages {
+		if s.inconsistent_reads > 0 {
+			s.inconsistent_reads -= 1;
+			body["result_info"] = serde_json::json!({ "total_pages": 1, "total_count": result.len().saturating_sub(1) });
+		} else if let Some(total_pages) = s.total_pages {
 			body["result_info"] = serde_json::json!({ "total_pages": total_pages });
 		}
 		(ok, axum::Json(body))
@@ -102,6 +110,16 @@ async fn record_item(
 ) -> (axum::http::StatusCode, axum::Json<serde_json::Value>) {
 	let mut s = state.lock().unwrap();
 	s.calls.push(format!("{method} {}", uri.path()));
+	if method == axum::http::Method::DELETE {
+		let id = uri
+			.path()
+			.rsplit('/')
+			.next()
+			.unwrap_or_default()
+			.to_string();
+		s.records.retain(|r| r["id"] != id.as_str());
+		s.inconsistent_reads = s.inconsistent_after_write;
+	}
 	if method == axum::http::Method::PUT {
 		if s.reject_tags && body.contains("\"tags\"") {
 			return tags_refused();
@@ -303,3 +321,47 @@ mod host_tags;
 mod record_bodies;
 
 mod exact;
+
+fn srv_record(id: &str) -> serde_json::Value {
+	serde_json::json!({
+		"id": id, "type": "SRV", "name": format!("_{id}._tcp.example.org"),
+		"content": "1 143 mail.example.org", "priority": 10, "ttl": 3600
+	})
+}
+
+fn srv(id: &str) -> DnsRecord {
+	DnsRecord::new(
+		format!("_{id}._tcp.example.org"),
+		RecordKind::Srv,
+		"10 1 143 mail.example.org".to_string(),
+		3600,
+	)
+}
+
+#[tokio::test]
+async fn removals_survive_a_listing_that_is_inconsistent_after_each_write() {
+	let (provider, state) = mock(vec![srv_record("a"), srv_record("b"), srv_record("c")]).await;
+	state.lock().unwrap().inconsistent_after_write = 3;
+	for id in ["a", "b", "c"] {
+		provider
+			.delete_exact("example.org", srv(id))
+			.await
+			.unwrap_or_else(|e| panic!("removing {id}: {e}"));
+	}
+	assert!(state.lock().unwrap().records.is_empty());
+}
+
+#[tokio::test]
+async fn a_listing_that_stays_inconsistent_ends_in_an_error_after_the_attempts() {
+	let (provider, state) = mock(vec![srv_record("a")]).await;
+	state.lock().unwrap().inconsistent_reads = u32::MAX;
+	let error = provider
+		.delete_exact("example.org", srv("a"))
+		.await
+		.expect_err("a listing that never settles is refused");
+	assert!(error.to_string().contains("is inconsistent"), "{error}");
+	let s = state.lock().unwrap();
+	let reads = s.calls.iter().filter(|c| *c == "GET /dns_records").count();
+	assert_eq!(reads, 5, "{:?}", s.calls);
+	assert_eq!(s.records.len(), 1);
+}
