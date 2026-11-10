@@ -126,9 +126,9 @@ fn domain_list_is_aligned_under_a_bold_header() {
 	assert_eq!(
 		lines.iter().map(|line| visible(line)).collect::<Vec<_>>(),
 		[
-			"DOMAIN       ALIASES TO  ALIASES FROM",
-			"example.org  -           -",
-			"example.net  -           -",
+			"DOMAIN       ROLE  ALIASES TO  ALIASES FROM",
+			"example.org  full  -           -",
+			"example.net  full  -           -",
 		]
 	);
 	assert!(lines[0].starts_with("\x1b[1m"), "{lines:#?}");

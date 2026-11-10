@@ -34,6 +34,30 @@ published record always reaches a port the server answers on. The
 published only when a listener serves the client setup documents, and the
 JMAP locator only when the configuration carries the API that serves it.
 
+## Send-only domains
+
+A hosted domain has a role: `full` (the default) or `send-only`. A send-only
+domain is one that only sends mail through this server, with no mailboxes of
+its own to receive in or set up clients for. It needs SPF, DKIM, DMARC and MX,
+and none of the MTA-STS, TLS-RPT, SRV, `autoconfig` and `autodiscover`
+records. Its DMARC record carries no `rua=`: `domain add` does not create a
+`postmaster@` address on a hosted domain, so a report address there would only
+bounce.
+
+```sh
+epistle domain add notifications.example.org --send-only
+epistle domain set example.net --send-only
+epistle domain set example.net --full
+```
+
+The role is one of the inputs of the record set, so every command reads the
+same answer: `dns-records`, `domain add`, `srv-records`, `verify-dns`,
+`status` and the publisher. `verify-dns` reports the omitted records as
+`skipped`, not as missing. Changing the role changes what is expected; in
+automatic mode the publisher then retires, through its ledger, the records it
+had written for the groups the new role leaves out, and never a record it did
+not write. `epistle domain list` and `domain show` name the role.
+
 ## The essential four
 
 These decide whether your mail is delivered at all.

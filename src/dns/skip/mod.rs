@@ -11,9 +11,11 @@
 
 mod classify;
 mod filter;
+mod role;
 
 pub use classify::{group_of_check, group_of_record};
 pub use filter::{split_checks, split_records};
+pub use role::{DomainRole, Roles};
 
 use std::collections::BTreeSet;
 
@@ -116,6 +118,9 @@ impl<'de> Deserialize<'de> for SkipGroup {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SkipSet {
 	groups: BTreeSet<SkipGroup>,
+	/// The role of each hosted domain: a group a role omits is skipped for
+	/// the records of the domains with that role only.
+	roles: Roles,
 }
 
 impl SkipSet {
@@ -123,7 +128,21 @@ impl SkipSet {
 	pub fn new(groups: impl IntoIterator<Item = SkipGroup>) -> Self {
 		SkipSet {
 			groups: groups.into_iter().collect(),
+			roles: Roles::default(),
 		}
+	}
+
+	/// The same set, also skipping what the role of each hosted domain omits.
+	pub fn with_roles(mut self, roles: Roles) -> Self {
+		self.roles = roles;
+		self
+	}
+
+	/// Whether `group` is skipped for the record or check named `name`:
+	/// the configuration skips it everywhere, or the role of the domain
+	/// `name` is in omits it.
+	pub fn skips(&self, group: SkipGroup, name: &str) -> bool {
+		self.groups.contains(&group) || self.roles.of_name(name).omits().contains(&group)
 	}
 
 	/// Whether the set skips nothing.
@@ -146,7 +165,7 @@ impl SkipSet {
 
 	/// The group `record` belongs to, when the set skips it.
 	pub fn group_of(&self, record: &DnsRecord) -> Option<SkipGroup> {
-		group_of_record(record).filter(|group| self.groups.contains(group))
+		group_of_record(record).filter(|group| self.skips(*group, &record.name))
 	}
 
 	/// Why a ledger record of the set is retired: epistle published it and

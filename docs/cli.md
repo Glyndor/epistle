@@ -848,10 +848,11 @@ epistle domain show example.org
 epistle domain show example.org --json
 epistle domain add new.example.org
 epistle domain add new.example.org --dry-run
+epistle domain add notifications.example.org --send-only
 epistle domain remove old.example.org [--yes|-y]
 epistle domain disable example.net [--yes|-y] [--dry-run]
 epistle domain enable example.net [--dry-run]
-epistle domain set example.org [--quota 10G | --no-quota] [--submission-rate 50 | --no-submission-rate] [--dry-run]
+epistle domain set example.org [--quota 10G | --no-quota] [--submission-rate 50 | --no-submission-rate] [--send-only | --full] [--dry-run]
 epistle domain alias add alias.example.org example.org
 epistle domain alias remove alias.example.org [--yes|-y]
 ```
@@ -860,8 +861,9 @@ epistle domain alias remove alias.example.org [--yes|-y]
 (`ALIASES TO`) and the domains it targets (`ALIASES FROM`). `show` writes
 the alias edges plus the accounts and aliases that route mail through
 the domain, so the operator can see what depends on it before removing
-it. JSON records contain `domain`, `enabled`, `aliases_to`, `aliases_from`,
-`accounts` and `aliases`.
+it. Both name the domain's role (`ROLE`; `full` or `send-only`). JSON records
+contain `domain`, `enabled`, `role`, `aliases_to`, `aliases_from`, `accounts`
+and `aliases`.
 
 `disable` switches a domain off without removing it: the name goes into
 `disabled_domains`, and after the restart mail for it is rejected at RCPT
@@ -889,11 +891,23 @@ per-domain submission rate in messages per minute
 (`domain_submission_limits`), the same overrides `limits set quota --domain`
 and `limits set submission-rate --domain` write and `limits show` lists. Name
 at least one of `--quota`, `--no-quota`, `--submission-rate`,
-`--no-submission-rate`; a flag left out keeps its value, and `--no-…` removes
-the override. A zero rate is refused (it would lift the limit; use
+`--no-submission-rate`, `--send-only` or `--full`; a flag left out keeps its
+value, and `--no-…` removes the override. `--send-only` and `--full` set the
+domain's role (see below); they cannot be given together. A zero rate is refused (it would lift the limit; use
 `--no-submission-rate`), and so is an unknown domain. The JSON result carries
-`domain` and the overrides it touched (`quota`, `submission_rate`; `null`
-once removed). `show` prints both overrides.
+`domain` and what it touched (`quota`, `submission_rate`; `null` once
+removed; `role`). `show` prints both overrides.
+
+A domain has a role, `full` by default. `add --send-only` and `set
+--send-only` write the name into `send_only_domains`; `set --full` takes it
+out. A send-only domain only sends mail, so its DNS is SPF, DKIM, DMARC
+(without `rua=`) and MX: no MTA-STS, TLS-RPT, SRV, `autoconfig` or
+`autodiscover` record. `dns-records`, `domain add`, `srv-records`,
+`verify-dns`, `status` and the automatic publisher all read the same set, so
+what is printed is what is checked and what is written; `verify-dns` shows the
+omitted records as `skipped`. Changing the role changes what is expected, and
+the publisher retires only the records its ledger says it wrote. `domain
+remove` drops the role with the domain. See [`dns.md`](dns.md#send-only-domains).
 
 `add` validates the name (`validate_dns_name`, same rules the loader
 uses), appends it to `[domains]` and prints the DNS records the operator

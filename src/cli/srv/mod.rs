@@ -71,7 +71,12 @@ pub(super) fn run(config: &Config, json: bool, out: &mut impl std::io::Write) ->
 	}
 	let host = &config.hostname;
 	let mut rows: Vec<(String, String)> = Vec::new();
+	let skip = config.skip_set();
 	for domain in &config.domains {
+		// A send-only domain carries no client locator.
+		if skip.skips(crate::dns::skip::SkipGroup::ClientLocators, domain) {
+			continue;
+		}
 		for service in SERVICES {
 			rows.push((
 				format!("{}.{domain}.", service.label),

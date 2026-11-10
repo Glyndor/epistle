@@ -19,74 +19,24 @@ pub fn print_domain_records(
 	domain: &str,
 	out: &mut impl Write,
 ) -> std::io::Result<()> {
-	// One domain is printed, so its own key (a `[[dkim.domain]]` override
-	// when it has one, the `[dkim]` default otherwise) is the only one.
-	let mut dkim_owned: Vec<(String, String)> = Vec::new();
-	if let Some(dkim) = &config.dkim {
-		// The key the server signs this domain with: its own entry, or the
-		// `[dkim]` key in service, which is the one a rotation moved to and
-		// not the file the configuration still names.
-		let keys: Result<_, String> = match dkim.override_for(domain) {
-			Some(entry) => Ok((
-				entry.selector.clone(),
-				entry.key_file.clone(),
-				entry.rsa_selector.clone().zip(entry.rsa_key_file.clone()),
-			)),
-			None => crate::dkim::rotate::active_ed25519(dkim, &config.data_dir)
-				.and_then(|ed| {
-					crate::dkim::rotate::active_rsa(dkim, &config.data_dir).map(|rsa| {
-						(
-							ed.selector,
-							ed.key_file,
-							rsa.map(|r| (r.selector, r.key_file)),
-						)
-					})
-				})
-				.map_err(|error| error.to_string()),
-		};
-		match keys {
-			Ok((selector, key_file, rsa)) => {
-				if let Ok(signer) = crate::dkim::Signer::load(&selector, &key_file) {
-					dkim_owned.push((selector.clone(), signer.dns_record_value()));
-				}
-				if let Some((rsa_selector, rsa_key_file)) = rsa
-					&& let Ok(value) = crate::dkim::rsa_record_value(&rsa_key_file)
-				{
-					dkim_owned.push((rsa_selector, value));
-				}
-			}
-			Err(why) => writeln!(
+	// The records come from the same function `dns-records`, `verify-dns`
+	// and the publisher read, restricted to this domain: its role and the
+	// `skip` groups leave out the same records everywhere.
+	let desired = match crate::dns::desired::for_domains(config, &[domain.to_string()]) {
+		Ok(desired) => desired,
+		Err(errors) => {
+			return writeln!(
 				out,
-				"\nThe DKIM records are not listed: the key in service cannot be read ({why})."
-			)?,
+				"\nThe DNS records are not listed: {}.",
+				errors.join("; ")
+			);
 		}
+	};
+	for warning in &desired.warnings {
+		writeln!(out, "\nNot listed: {warning}.")?;
 	}
-	// The TLSA association names the certificate in service: the pair
-	// the authority issued when there is one, the `[tls]` pair
-	// otherwise. The record has to match what the listeners present.
-	let tlsa = crate::tls::served_tls(config)
-		.as_ref()
-		.and_then(|served| std::fs::read_to_string(&served.tls.cert_file).ok())
-		.and_then(|pem| dns_records::tlsa_full_cert(&pem));
-	let recs = dns_records::build_records(
-		&[domain.to_string()],
-		&config.hostname,
-		&dkim_owned,
-		&dns_records::DomainDkim::new(),
-		tlsa.as_deref(),
-		&dns_records::mta_sts_id(config),
-		// The SRV locators follow the configuration: a service the
-		// operator turned off gets no locator.
-		dns_records::ServiceRecords::from_config(config),
-		config.acme.as_ref().map(|a| a.directory_url.as_str()),
-		config.public_ipv4,
-		config.public_ipv6,
-	);
-	// The groups the configuration skips hold no record to publish: the
-	// same filter `dns-records` applies.
-	let (recs, skipped) = crate::dns::skip::split_records(recs, &config.dns_publish.skip_set());
 	writeln!(out, "\nDNS records to publish for {domain}:")?;
-	for entry in &recs {
+	for entry in &desired.records {
 		let r = &entry.record;
 		let value = match r.kind {
 			RecordKind::Txt => dns_records::txt_zone_form(&r.value),
@@ -94,7 +44,7 @@ pub fn print_domain_records(
 		};
 		writeln!(out, "{} {} IN {} {}", r.name, r.ttl, r.kind.as_str(), value)?;
 	}
-	for group in &skipped {
+	for group in &desired.skipped {
 		writeln!(
 			out,
 			"skipped by configuration ({}): {} records are not published",

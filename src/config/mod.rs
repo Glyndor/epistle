@@ -18,6 +18,7 @@ mod debug;
 mod dkim;
 mod dns;
 mod dns_publish;
+mod domain_role;
 mod env;
 mod ldap;
 mod listener;
@@ -204,6 +205,12 @@ pub struct Config {
 	/// may send as an address in it. Each entry must also be in `domains`.
 	#[serde(default)]
 	pub disabled_domains: Vec<String>,
+	/// Entries of `domains` that only send mail (the `send-only` role): the
+	/// DNS they need is SPF, DKIM, DMARC and MX, with no MTA-STS, TLS-RPT,
+	/// SRV, `autoconfig` or `autodiscover` records. Every other domain is
+	/// `full`. Each entry must also be in `domains`.
+	#[serde(default)]
+	pub send_only_domains: Vec<String>,
 	/// DNS blocklist zones (RFC 5782) screened against unauthenticated
 	/// clients. Empty disables DNSBL screening (the default).
 	#[serde(default)]

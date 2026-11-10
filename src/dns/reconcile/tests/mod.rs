@@ -7,6 +7,7 @@ pub(super) mod ledger;
 pub(super) mod lock;
 pub(super) mod needed;
 pub(super) mod retire;
+mod role;
 pub(super) mod run;
 pub(super) mod store;
 pub(super) mod support;
