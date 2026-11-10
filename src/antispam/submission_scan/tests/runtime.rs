@@ -150,3 +150,41 @@ fn flag_mode_never_inspects_a_submission() {
 	assert!(refused(submit(&sink)));
 	assert_eq!(inspected.load(Ordering::SeqCst), 1);
 }
+
+/// A scan that waits on clamd must not hold a worker of the server's
+/// runtime: with one worker, a task that ticks keeps ticking meanwhile.
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn waiting_for_clamd_does_not_hold_the_runtime_worker() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let socket = dir.path().join("clamd.sock");
+	let listener = std::os::unix::net::UnixListener::bind(&socket).expect("bind");
+	// Accept and never answer.
+	std::thread::spawn(move || {
+		let held: Vec<_> = listener.incoming().take(1).collect();
+		std::thread::sleep(std::time::Duration::from_secs(3));
+		drop(held);
+	});
+	let clamd = Arc::new(
+		crate::antispam::clamd::ClamdHook::new(socket)
+			.with_timeout(std::time::Duration::from_millis(600)),
+	);
+	let inner = Arc::new(MemorySink::new());
+	let sink = ScanningSink::wrap(true, inner, Some(clamd), None, None).expect("sink");
+	let ticks = Arc::new(AtomicUsize::new(0));
+	let counted = Arc::clone(&ticks);
+	let ticker = tokio::spawn(async move {
+		loop {
+			tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+			counted.fetch_add(1, Ordering::SeqCst);
+		}
+	});
+	tokio::task::yield_now().await;
+	let scanning = tokio::spawn(async move { submit(&sink) });
+	scanning.await.expect("task").expect("fails open");
+	ticker.abort();
+	assert!(
+		ticks.load(Ordering::SeqCst) >= 10,
+		"the runtime was held while clamd was awaited: {} ticks",
+		ticks.load(Ordering::SeqCst)
+	);
+}
