@@ -115,6 +115,7 @@ fn an_incomplete_set_retires_nothing() {
 		retire_within: None,
 		incomplete: Some("cannot read certificate"),
 		skip: &SkipSet::default(),
+		flattens_apex_cname: false,
 	});
 	assert_eq!(action_for(&plan, &pop3()), Action::Skipped);
 	assert!(plan.entries.iter().any(|e| e.reason.contains("incomplete")));
@@ -148,6 +149,7 @@ fn retiring_is_limited_to_the_domain_the_run_was_asked_for() {
 		retire_within: Some("other.example.org"),
 		incomplete: None,
 		skip: &SkipSet::default(),
+		flattens_apex_cname: false,
 	});
 	assert_eq!(action_for(&plan, &other), Action::Remove);
 	assert!(
@@ -220,6 +222,7 @@ fn a_ledger_record_of_a_skipped_group_is_removed_and_the_reason_names_the_group(
 		retire_within: None,
 		incomplete: None,
 		skip: &skip,
+		flattens_apex_cname: false,
 	});
 	assert_eq!(action_for(&plan, &pop3()), Action::Remove);
 	assert!(
@@ -245,6 +248,7 @@ fn a_skipped_group_record_epistle_never_published_is_left_alone() {
 		retire_within: None,
 		incomplete: None,
 		skip: &skip,
+		flattens_apex_cname: false,
 	});
 	assert!(plan.entries.is_empty(), "{:#?}", plan.entries);
 }

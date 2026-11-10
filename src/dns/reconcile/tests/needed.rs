@@ -167,6 +167,7 @@ fn the_tlsa_value_the_certificate_refresh_published_counts_as_epistles_own() {
 			retire_within: None,
 			incomplete: None,
 			skip: &SkipSet::default(),
+			flattens_apex_cname: false,
 		})
 	};
 	assert_eq!(
