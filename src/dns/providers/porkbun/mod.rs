@@ -376,10 +376,7 @@ impl PorkbunProvider {
 					return None;
 				}
 				let value = if kind == RecordKind::Srv {
-					let packed: u32 = r.prio.parse().ok()?;
-					let priority = (packed >> 16) as u16;
-					let weight = (packed & 0xFFFF) as u16;
-					format!("{priority} {weight} 0 {}", r.content.trim_end_matches('.'))
+					exact::stored_srv(&r.content, &r.prio)?
 				} else if kind == RecordKind::Txt {
 					txt_decode(&r.content, TXT_FORM)
 				} else if kind == RecordKind::Mx && r.prio.parse::<u16>().is_ok() {
