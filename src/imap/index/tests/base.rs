@@ -306,3 +306,37 @@ fn internal_zone_survives_the_index_round_trip() {
 	assert!(parse_record(&format!("{id} 1 2 3.0@0 4 ")).is_none());
 	assert!(parse_record(&format!("{id} 1 2 3.0@x 4 ")).is_none());
 }
+
+/// A delete and a delivery leave the `.eml` count where it was and the
+/// mod-sequence does not move, which is how POP3 and the delivery change the
+/// files. The index must not be served for that mailbox: the message that was
+/// deleted would stay listed and the new one would not exist for the client.
+#[test]
+fn a_delete_and_a_delivery_with_the_same_count_invalidate_the_index() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let gone = deliver(dir.path(), "alice", b"first\r\n");
+	deliver(dir.path(), "alice", b"second\r\n");
+	let _ = Snapshot::open(dir.path(), "alice", "INBOX", &MessageCrypto::disabled()).expect("open");
+	let before = current_generation(&inbox(dir.path(), "alice"));
+	assert!(
+		load(&inbox(dir.path(), "alice"), before).is_some(),
+		"the index is fresh before the change"
+	);
+	std::fs::remove_file(inbox(dir.path(), "alice").join(format!("{gone}.eml"))).expect("delete");
+	let arrived = deliver(dir.path(), "alice", b"third\r\n");
+	let after = current_generation(&inbox(dir.path(), "alice"));
+	assert_eq!(
+		(before.0, before.1),
+		(after.0, after.1),
+		"the mod-sequence and the count are the same, as the bug needs"
+	);
+	assert!(
+		load(&inbox(dir.path(), "alice"), after).is_none(),
+		"the names differ, so the stored index is stale"
+	);
+	let reopened =
+		Snapshot::open(dir.path(), "alice", "INBOX", &MessageCrypto::disabled()).expect("open");
+	assert!(!reopened.loaded_from_index());
+	let ids: Vec<Uuid> = reopened.messages().map(|m| m.id).collect();
+	assert!(ids.contains(&arrived) && !ids.contains(&gone), "{ids:?}");
+}
