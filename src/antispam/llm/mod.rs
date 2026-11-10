@@ -116,7 +116,6 @@ fn extract_safe_headers(raw: &[u8]) -> Vec<String> {
 		// Empty line ends the header block.
 		if line.is_empty() {
 			if let Some(prev) = current.take() {
-				total += prev.len();
 				kept.push(prev);
 			}
 			break;
