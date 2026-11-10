@@ -19,5 +19,7 @@ mod harness;
 mod keywords;
 #[path = "hostile_imap/mailboxes.rs"]
 mod mailboxes;
+#[path = "hostile_imap/metadata.rs"]
+mod metadata;
 #[path = "hostile_imap/search.rs"]
 mod search;
