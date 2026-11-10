@@ -1,15 +1,27 @@
 //! The recipient cap a listener is given reaches every session it opens:
 //! the connection advertises it and `RCPT TO` enforces it on the wire.
 
-use super::rate::tests_data_rate::{Client, reply_codes, test_directory};
+use super::rate::tests_data_rate::{Client, reply_codes};
 use super::*;
 use crate::smtp::sink::MemorySink;
+
+/// A directory with `count` distinct mailboxes: a recipient named twice is
+/// kept once, so the cap is only reached by distinct addresses.
+fn directory_of(count: usize) -> crate::directory_store::DirectoryHandle {
+	let entries: Vec<(String, String)> = (0..count)
+		.map(|index| (format!("r{index}@example.org"), "bob".to_string()))
+		.collect();
+	crate::directory_store::DirectoryHandle::new(crate::smtp::directory::Directory::new(
+		["example.org".to_string()],
+		entries,
+	))
+}
 
 fn server_with_cap(cap: usize) -> Arc<Server> {
 	let sink = Arc::new(MemorySink::new());
 	Arc::new(
 		Server::new("mail.example.org", sink as Arc<dyn MessageSink>)
-			.with_directory(test_directory())
+			.with_directory(directory_of(cap + 1))
 			.with_max_recipients(cap),
 	)
 }
@@ -19,7 +31,9 @@ async fn a_listener_cap_is_advertised_and_enforced_on_the_wire() {
 	let server = server_with_cap(120);
 	let mut client = Client::connect(&server);
 	let mut commands = b"EHLO client.example.org\r\nMAIL FROM:<a@example.net>\r\n".to_vec();
-	commands.extend_from_slice(&b"RCPT TO:<bob@example.org>\r\n".repeat(121));
+	for index in 0..121 {
+		commands.extend_from_slice(format!("RCPT TO:<r{index}@example.org>\r\n").as_bytes());
+	}
 	commands.extend_from_slice(b"QUIT\r\n");
 	client.send(&commands).await;
 	let output = client.finish().await;
