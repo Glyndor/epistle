@@ -459,6 +459,18 @@ pub(super) const FIXED: &[FixedEntry] = &[
 		Own,
 		"no standard mandate"
 	),
+	own!(
+		"jmap-websockets-per-caller",
+		crate::api::jmap::websocket::bounds::MAX_SOCKETS_PER_CALLER,
+		"count"
+	),
+	seconds!(
+		"jmap-websocket-idle-timeout",
+		crate::api::jmap::websocket::bounds::IDLE_TIMEOUT,
+		"seconds",
+		Own,
+		"no standard mandate"
+	),
 	number!(
 		"jmap-push-subscriptions-per-caller",
 		crate::api::jmap::push_subscription::MAX_PER_CALLER,
