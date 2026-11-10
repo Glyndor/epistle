@@ -19,6 +19,10 @@
 //! mailbox. Such a frame is answered with a `forbidden` `RequestError` and the
 //! socket is closed with 1008 (policy violation).
 //!
+//! A caller may hold at most [`bounds::MAX_SOCKETS_PER_CALLER`] sockets open
+//! (the next upgrade is refused with a `429`), and a socket that sends no
+//! frame for [`bounds::IDLE_TIMEOUT`] is closed with 1001.
+//!
 //! When push is enabled, a `Request` whose dispatch changed an account's state
 //! is followed by a `StateChange` frame describing the new state. The push is
 //! **connection-scoped**: it is sent on the same socket to the client that made
@@ -33,7 +37,7 @@ use std::collections::HashMap;
 
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade, close_code};
 use axum::extract::{Extension, State};
-use axum::response::IntoResponse;
+use axum::response::{IntoResponse, Response};
 use serde_json::{Value, json};
 
 use super::Principal;
@@ -41,6 +45,7 @@ use super::Request;
 use super::caller_slots::{CallerSlot, Work};
 use super::event_source::{TYPES, changed_states, positions};
 use crate::api::state::{ApiState, MatchedAuth};
+use bounds::{recv_or_idle, take_slot};
 
 /// `GET /jmap/ws` (RFC 8887 §3): upgrade to a WebSocket. Auth is already enforced
 /// by the bearer-token middleware on the authenticated router; the captured
@@ -50,7 +55,14 @@ pub async fn ws_upgrade(
 	State(state): State<ApiState>,
 	Extension(auth): Extension<MatchedAuth>,
 	upgrade: WebSocketUpgrade,
-) -> impl IntoResponse {
+) -> Response {
+	// A caller holds a bounded number of sockets (see [`bounds`]); the slot
+	// lives as long as the socket does.
+	let principal = Principal::for_token(&state, &auth);
+	let slot = match take_slot(&state, &principal) {
+		Ok(slot) => slot,
+		Err(refusal) => return refusal,
+	};
 	// The transport's own defaults let one message grow to tens of megabytes
 	// before any JMAP check sees it. A request may be at most
 	// `maxSizeRequest` octets, so a message is refused at that size, with a
@@ -59,19 +71,20 @@ pub async fn ws_upgrade(
 	upgrade
 		.max_message_size(cap)
 		.max_frame_size(cap)
-		.on_upgrade(move |socket| serve(socket, state, auth))
+		.on_upgrade(move |socket| serve(socket, state, auth, slot))
+		.into_response()
 }
 
 /// Per-connection loop: read text frames, answer each, and emit any in-band push
 /// frames. Binary frames are rejected with a `RequestError`; close/ping/pong are
 /// left to the transport. A text frame arriving after the credential stopped
 /// being valid is refused and ends the connection.
-async fn serve(mut socket: WebSocket, state: ApiState, auth: MatchedAuth) {
+async fn serve(mut socket: WebSocket, state: ApiState, auth: MatchedAuth, _slot: CallerSlot) {
 	// The principal the socket was opened as. Every frame is checked against
 	// it again, see `credential_still_valid`.
 	let principal = Principal::for_token(&state, &auth);
 	let mut push = PushState::default();
-	while let Some(Ok(message)) = socket.recv().await {
+	while let Some(message) = recv_or_idle(&mut socket).await {
 		let text = match message {
 			Message::Text(text) => text.to_string(),
 			Message::Binary(_) => {
@@ -342,5 +355,6 @@ fn request_error(kind: &str, detail: &str) -> Value {
 	})
 }
 
+pub(crate) mod bounds;
 #[cfg(test)]
 mod tests;

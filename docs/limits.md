@@ -169,6 +169,8 @@ the log.
 | `jmap-event-source-min-ping` | 1 | seconds | own | RFC 8620 §7.3 (ping interval) |
 | `jmap-event-source-max-ping` | 300 | seconds | own | RFC 8620 §7.3 (ping interval) |
 | `jmap-event-streams-per-caller` | 4 | count | own | no standard mandate |
+| `jmap-websockets-per-caller` | 4 | count | own | no standard mandate |
+| `jmap-websocket-idle-timeout` | 300 | seconds | own | no standard mandate |
 | `jmap-push-subscriptions-per-caller` | 16 | count | own | no standard mandate |
 | `spf-max-dns-lookups` | 10 | count | must | RFC 7208 §4.6.4 (max 10 DNS-querying terms) |
 | `spf-max-void-lookups` | 2 | count | should | RFC 7208 §4.6.4 (void lookups limited to 2) |

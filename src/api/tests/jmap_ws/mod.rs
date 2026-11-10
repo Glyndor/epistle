@@ -2,6 +2,7 @@
 
 pub use super::*;
 
+pub(super) mod bounds;
 pub(super) mod frames;
 pub(super) mod revoke;
 pub(super) mod size;
