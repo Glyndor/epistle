@@ -2,10 +2,12 @@
 //!
 //! A provider offers it only when removing one value cannot take a record that
 //! is not ours with it, even while somebody else writes the zone. deSEC and
-//! Route 53 rewrite the whole record set from what they read, and Namecheap
-//! rewrites the zone: a record added or changed between their read and their
-//! write would be lost, so they answer `Unsupported` and the ordinary delete is
-//! what remains. The providers that delete a record by its id (Cloudflare,
+//! GoDaddy replace the whole record set with what they read, and Namecheap
+//! rewrites the zone, none of them with a precondition: a record added or
+//! changed between their read and their write would be lost, so they answer
+//! `Unsupported` and the ordinary delete is what remains. Route 53 deletes
+//! the set as read and creates it again in one batch, which fails if the set
+//! changed in between (`route53/tests/exact.rs`). The providers that delete a record by its id (Cloudflare,
 //! DigitalOcean, DNSimple, OVH, Porkbun, Spaceship, Bunny) match the value in
 //! their own listing first and remove that one id, so a record somebody else
 //! adds in between survives; only a value edited in place between the read and
@@ -37,10 +39,10 @@ async fn the_providers_that_cannot_make_the_delete_atomic_refuse() {
 	let secret = || ScopedSecret::new("example.org", "token");
 	assert!(refuses(&crate::dns::providers::desec::DesecProvider::new(secret())).await);
 	assert!(
-		refuses(&crate::dns::providers::route53::Route53Provider::new(
-			"AKIA".into(),
+		refuses(&crate::dns::providers::godaddy::GodaddyProvider::new(
+			"key".into(),
 			"secret".into(),
-			"Z123".into()
+			"example.org".into()
 		))
 		.await
 	);

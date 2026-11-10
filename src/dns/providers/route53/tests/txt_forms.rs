@@ -88,7 +88,7 @@ async fn txt_publish_read_compare_round_trip_reports_no_change() {
 </ResourceRecords></ResourceRecordSet></ResourceRecordSets>\
 </ListResourceRecordSetsResult>"
 		);
-		let rrset = parse_txt_rrset(&xml, "sel._domainkey.example.org").expect("rrset");
+		let rrset = parse_rrset(&xml, "sel._domainkey.example.org", "TXT").expect("rrset");
 		let read: Vec<String> = rrset.values.iter().map(|v| txt_read(v)).collect();
 		assert_eq!(read[0], logical, "read value of {value}");
 		assert!(same_txt_value(&read[0], &value), "{value}");

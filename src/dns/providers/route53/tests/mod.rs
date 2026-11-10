@@ -2,6 +2,7 @@ pub use super::*;
 
 pub(super) mod base;
 pub(super) mod contract;
+pub(super) mod exact;
 pub(super) mod pagination;
 pub(super) mod path;
 pub(super) mod txt;
