@@ -169,3 +169,64 @@ async fn a_failed_first_fetch_is_retried_on_the_next_call() {
 		.expect("second fetch");
 	assert_eq!(policy.map(|policy| policy.mode), Some(Mode::Enforce));
 }
+
+/// A policy published by the domain we deliver to must not be able to stop the
+/// delivery of every other domain: its `max_age` is bounded, and even a
+/// duration that does not fit never panics with the cache locked.
+struct HostileFetcher;
+
+impl PolicyFetcher for HostileFetcher {
+	fn fetch(&self, _domain: &str) -> FetchFuture<'_> {
+		let body =
+			"version: STSv1\nmode: enforce\nmx: mx.evil.example\nmax_age: 10000000000000000000\n";
+		Box::pin(async move { Ok(body.to_string()) })
+	}
+}
+
+#[tokio::test]
+async fn a_hostile_max_age_is_refused_and_the_next_lookup_still_works() {
+	let state = Arc::new(AtomicU8::new(OK));
+	let store = PolicyStore::new(Box::new(HostileFetcher));
+	let result = store.policy(&World(state), "evil.example").await;
+	assert!(
+		matches!(result, Err(PolicyError::Malformed(_))),
+		"{result:?}"
+	);
+	assert!(
+		store.cache.lock().is_ok(),
+		"the cache mutex is not poisoned"
+	);
+}
+
+#[test]
+fn a_duration_that_does_not_fit_neither_panics_nor_poisons_the_cache() {
+	let state = Arc::new(AtomicU8::new(OK));
+	let store = PolicyStore::new(Box::new(Fetcher(state)));
+	store.remember("evil.example", None, None, Duration::MAX, Duration::MAX);
+	assert!(
+		store.cache.lock().is_ok(),
+		"the cache mutex is not poisoned"
+	);
+}
+
+#[tokio::test]
+async fn a_poisoned_cache_mutex_does_not_stop_the_next_lookup() {
+	let state = Arc::new(AtomicU8::new(OK));
+	let store = PolicyStore::new(Box::new(Fetcher(Arc::clone(&state))));
+	// A panic with the cache locked, as a bug elsewhere could cause.
+	let poisoner = std::thread::scope(|scope| {
+		scope
+			.spawn(|| {
+				let _held = store.cache.lock().expect("lock");
+				panic!("a panic with the cache locked");
+			})
+			.join()
+	});
+	assert!(poisoner.is_err());
+	assert!(store.cache.lock().is_err(), "the mutex is poisoned now");
+	let policy = store
+		.policy(&World(state), "example.org")
+		.await
+		.expect("a lookup of any domain still works");
+	assert_eq!(policy.map(|p| p.mode), Some(Mode::Enforce));
+}

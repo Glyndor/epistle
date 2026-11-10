@@ -42,6 +42,17 @@ fn rejects_malformed_policies() {
 }
 
 #[test]
+fn max_age_is_at_most_one_year() {
+	let at =
+		|seconds: &str| format!("version: STSv1\nmode: enforce\nmx: a.example\nmax_age: {seconds}");
+	assert!(parse(&at("31557600")).is_ok());
+	assert!(parse(&at("31557601")).is_err());
+	// A value that would overflow `Instant + Duration` is refused, not stored.
+	assert!(parse(&at("10000000000000000000")).is_err());
+	assert!(parse(&at("18446744073709551615")).is_err());
+}
+
+#[test]
 fn mode_none_needs_no_mx() {
 	let policy = parse("version: STSv1\nmode: none\nmax_age: 60").expect("valid");
 	assert_eq!(policy.mode, Mode::None);
