@@ -125,7 +125,10 @@ async fn hrefs_extracts_values_in_order() {
 		<D:href>/alice/book/a.vcf</D:href>\
 		<D:href> /alice/book/b.vcf </D:href>\
 		</C:addressbook-multiget>";
-	assert_eq!(hrefs(body), vec!["/alice/book/a.vcf", "/alice/book/b.vcf"]);
+	assert_eq!(
+		hrefs(body).collect::<Vec<_>>(),
+		vec!["/alice/book/a.vcf", "/alice/book/b.vcf"]
+	);
 }
 
 #[tokio::test]

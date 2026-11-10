@@ -341,6 +341,17 @@ fn a_private_tenant_url_alone_makes_no_poster_until_the_operator_allows_it() {
 }
 
 #[tokio::test]
+async fn the_test_event_without_a_server_wide_webhook_is_an_error_not_a_panic() {
+	let url = "http://169.254.169.254/latest/meta-data";
+	let webhook = from_config(&alpha_to(url, true, None)).expect("a tenant poster");
+	let error = webhook
+		.send_test()
+		.await
+		.expect_err("no endpoint to post to");
+	assert!(matches!(error, WebhookError::NoEndpoint), "{error:?}");
+}
+
+#[tokio::test]
 async fn one_tenant_allowing_private_destinations_does_not_allow_them_for_the_others() {
 	let (private_url, _) = signed_receiver().await;
 	// Alpha may post to a private address; the server-wide webhook may not.

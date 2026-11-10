@@ -77,7 +77,11 @@ impl Refusal {
 /// The hrefs of a multiget in document order, a resource named twice (by
 /// the same text or by two spellings that resolve to the same path) kept
 /// once, or [`Refusal::TooManyHrefs`] when there are more than `max`.
-pub fn distinct_hrefs(root: &Path, hrefs: Vec<String>, max: usize) -> Result<Vec<String>, Refusal> {
+pub fn distinct_hrefs(
+	root: &Path,
+	hrefs: impl IntoIterator<Item = String>,
+	max: usize,
+) -> Result<Vec<String>, Refusal> {
 	let mut seen = std::collections::HashSet::new();
 	let mut out = Vec::new();
 	for href in hrefs {
