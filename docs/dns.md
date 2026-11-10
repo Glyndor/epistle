@@ -645,6 +645,16 @@ underscores), and replaces `dns.token` and `dns.token_env` with
 `--token-env NAME` or `--token-file /absolute/path`, it imports that source
 instead. A different existing destination is refused.
 
+### Rotating the credential
+
+The reconcile loop and the DKIM rotation build the provider again on every run,
+so a token I replace in the `token_file` is the one the next run writes with,
+with no restart. A `token_env` is a variable of the server process: replacing
+it in the environment, or in the compose file, changes nothing until the server
+restarts. The same holds for the TLSA publication and the `dns-01` challenge,
+which build their provider once at start. A `token_file` is the way to rotate a
+credential without a restart.
+
 For a generated stack, the command removes the old token environment entry and
 the read-only mount of a token file the configuration no longer names, adds the
 mount of the new source only to `mail`, and recreates `mail`. A stack that runs

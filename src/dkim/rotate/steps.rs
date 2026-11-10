@@ -149,6 +149,7 @@ impl Rotator {
 			let _lock = crate::dns::zone_lock::lock(zone).await;
 			for selector in pending_selectors(&pending) {
 				self.provider
+					.get()
 					.delete(zone, txt_record(&Self::record_name(selector, domain), ""))
 					.await
 					.map_err(|error| RotateError(format!("withdraw from {domain}: {error}")))?;
@@ -171,7 +172,12 @@ impl Rotator {
 				let _lock = crate::dns::zone_lock::lock(zone).await;
 				for (selector, value, step) in records {
 					let name = Self::record_name(selector, domain);
-					if let Err(error) = self.provider.upsert(zone, txt_record(&name, value)).await {
+					if let Err(error) = self
+						.provider
+						.get()
+						.upsert(zone, txt_record(&name, value))
+						.await
+					{
 						refused = Some(format!("publish {name}: {error}"));
 						break;
 					}
@@ -268,7 +274,12 @@ impl Rotator {
 				let _lock = crate::dns::zone_lock::lock(zone).await;
 				for selector in pending_selectors(pending) {
 					let name = Self::record_name(selector, domain);
-					if let Err(error) = self.provider.delete(zone, txt_record(&name, "")).await {
+					if let Err(error) = self
+						.provider
+						.get()
+						.delete(zone, txt_record(&name, ""))
+						.await
+					{
 						failed = Some(format!("delete {name}: {error}"));
 					}
 				}
@@ -322,7 +333,12 @@ impl Rotator {
 				let _lock = crate::dns::zone_lock::lock(zone).await;
 				for selector in &selectors {
 					let name = Self::record_name(selector, domain);
-					if let Err(error) = self.provider.delete(zone, txt_record(&name, "")).await {
+					if let Err(error) = self
+						.provider
+						.get()
+						.delete(zone, txt_record(&name, ""))
+						.await
+					{
 						last_error = Some(format!("delete {name}: {error}"));
 					}
 				}
