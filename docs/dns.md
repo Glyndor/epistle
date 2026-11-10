@@ -368,6 +368,20 @@ values the certificate refresh published count as epistle's own too. So:
   replaces the whole set of an MX, SRV, CAA, TLSA, A, AAAA or CNAME on a write,
   so a set that holds a foreign value is a conflict, and so is a second SPF or
   DMARC record at a name.
+- That promise holds against the listing the plan was made from. No provider
+  API takes a condition on a write, so a record another account adds or
+  changes between that listing and the write is not always seen. Cloudflare
+  reads the name and type again right before it writes, stops with `the zone
+  changed since it was read` when the set is not the one that was planned, and
+  addresses records by id, so it only updates or deletes records the plan
+  listed; a change made in the moment between that read and the write is
+  still not detected. The other providers write with the ordinary upsert and
+  delete, which read the set again and replace it as they find it: a record
+  added to a name where epistle replaces the whole set (MX, SRV, CAA, TLSA, A,
+  AAAA, CNAME) in that moment is removed with it, and deSEC, GoDaddy, Route 53
+  and Namecheap, which write a whole set back from what they read, can lose
+  a record added to that set in the same way. Nothing here has been run
+  against a real provider account.
 - A DMARC record is never replaced by a weaker one: `p=`, `sp=`, `np=` and
   the `adkim=s` / `aspf=s` alignment are compared tag by tag.
 - A record that differs only in TTL or description is not rewritten.
