@@ -58,6 +58,12 @@ impl SplitDelivery {
 	/// The `d=` for an outbound message: the domain of its single From
 	/// header when the key is published for it, so DMARC aligns with the
 	/// domain the reader sees; otherwise the envelope domain.
+	///
+	/// Mail the server writes itself (DMARC and TLS-RPT reports) is from and
+	/// for the host name, which is not a hosted domain and has no key. When
+	/// the From and the envelope are that same unhosted domain and a hosted
+	/// domain is its parent, `d=` is that parent: the key is published and
+	/// relaxed alignment still holds with the From.
 	pub(super) fn signing_domain(&self, message: &AcceptedMessage) -> Option<String> {
 		let envelope = message
 			.reverse_path
@@ -68,6 +74,12 @@ impl SplitDelivery {
 				if self.directory.current().hosts_domain(&from) =>
 			{
 				Some(from)
+			}
+			crate::dmarc::author::AuthorDomain::One(from)
+				if envelope.as_deref() == Some(from.as_str())
+					&& let Some(parent) = self.hosted_parent(&from) =>
+			{
+				Some(parent)
 			}
 			crate::dmarc::author::AuthorDomain::One(from) => {
 				if let Some(envelope) = &envelope {
@@ -81,5 +93,18 @@ impl SplitDelivery {
 			}
 			_ => envelope,
 		}
+	}
+
+	/// The nearest hosted domain above `domain`, if any.
+	fn hosted_parent(&self, domain: &str) -> Option<String> {
+		let directory = self.directory.current();
+		let mut rest = domain;
+		while let Some((_, parent)) = rest.split_once('.') {
+			if directory.hosts_domain(parent) {
+				return Some(parent.to_ascii_lowercase());
+			}
+			rest = parent;
+		}
+		None
 	}
 }
