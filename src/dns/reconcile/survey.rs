@@ -102,6 +102,10 @@ pub async fn survey(ctx: &Context<'_>) -> Result<Survey, String> {
 	let mut survey = Survey::default();
 	let mut zones: BTreeMap<String, Vec<DnsRecord>> = BTreeMap::new();
 	let mut resolved: BTreeMap<String, String> = BTreeMap::new();
+	// Set when a needed name was left out because its zone could not be
+	// found: the needed set is then incomplete, and a record of epistle's
+	// own for that name must not be retired as if nothing needed it.
+	let mut unresolved: Option<String> = None;
 	for needed in ctx.needed {
 		let name = canonical_name(&needed.record.name);
 		if ctx.domain.is_some_and(|d| !in_domain(&name, d)) {
@@ -118,10 +122,24 @@ pub async fn survey(ctx: &Context<'_>) -> Result<Survey, String> {
 		let zone = match resolved.get(&key) {
 			Some(zone) => zone.clone(),
 			None => {
-				let zone = within(ctx.timeout, crate::dns::zone::resolve(ctx.provider, &key))
+				let zone = match within(ctx.timeout, crate::dns::zone::resolve(ctx.provider, &key))
 					.await
-					.map_err(|error| format!("finding the zone of {key} failed: {error}"))?;
-				let zone = canonical_name(&zone);
+				{
+					Ok(zone) => canonical_name(&zone),
+					Err(error) => {
+						// Same as a zone that cannot be listed: this
+						// name is left alone and the others go on.
+						unresolved
+							.get_or_insert_with(|| format!("the zone of {key} could not be found"));
+						if !survey.failures.iter().any(|f| f.zone == key) {
+							survey.failures.push(ZoneFailure {
+								zone: key.clone(),
+								reason: format!("finding the zone of {key} failed: {error}"),
+							});
+						}
+						continue;
+					}
+				};
 				resolved.insert(key, zone.clone());
 				zone
 			}
@@ -170,7 +188,7 @@ pub async fn survey(ctx: &Context<'_>) -> Result<Survey, String> {
 			also_ours: &also_ours,
 			lockdown: &lockdown,
 			retire_within: ctx.domain,
-			incomplete: ctx.incomplete,
+			incomplete: ctx.incomplete.or(unresolved.as_deref()),
 			skip: &config.dns_publish.skip_set(),
 		});
 		survey.zones.push(ZoneRun {
