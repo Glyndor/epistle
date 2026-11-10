@@ -5,3 +5,6 @@ mod quota_names;
 
 #[cfg(test)]
 mod quota_zero;
+
+#[cfg(test)]
+mod quota_race;

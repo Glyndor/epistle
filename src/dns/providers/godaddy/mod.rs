@@ -511,11 +511,13 @@ impl GodaddyProvider {
 impl DnsProvider for GodaddyProvider {
 	fn upsert(&self, _zone: &str, record: DnsRecord) -> Op<'_> {
 		Box::pin(crate::dns::providers::within(async move {
+			let _turn = lock::hold(&self.api_key, &self.zone).await;
 			self.upsert_inner(record).await
 		}))
 	}
 	fn delete(&self, _zone: &str, record: DnsRecord) -> Op<'_> {
 		Box::pin(crate::dns::providers::within(async move {
+			let _turn = lock::hold(&self.api_key, &self.zone).await;
 			self.delete_inner(record).await
 		}))
 	}
@@ -608,6 +610,8 @@ fn check(response: reqwest::Response) -> Result<(), ProviderError> {
 		Err(ProviderError::Remote(format!("HTTP {status}")))
 	}
 }
+
+mod lock;
 
 #[cfg(test)]
 mod tests;
