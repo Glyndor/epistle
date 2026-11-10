@@ -37,6 +37,7 @@ pub(crate) fn plan(needed: &[DnsRecord], existing: &[DnsRecord], ledger: &Ledger
 		retire_within: None,
 		incomplete: None,
 		skip: &SkipSet::default(),
+		flattens_apex_cname: false,
 	})
 }
 

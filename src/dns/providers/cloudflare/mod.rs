@@ -221,6 +221,11 @@ impl CloudflareProvider {
 }
 
 impl DnsProvider for CloudflareProvider {
+	/// Cloudflare flattens a CNAME at the apex and accepts other record
+	/// types next to it.
+	fn flattens_apex_cname(&self, _zone: &str) -> bool {
+		true
+	}
 	fn check_access<'a>(
 		&'a self,
 		_: &'a str,
