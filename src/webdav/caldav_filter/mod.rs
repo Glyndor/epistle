@@ -222,6 +222,12 @@ fn prop_filter(element: &Element<'_>) -> Result<PropFilter, Unsupported> {
 /// many series cannot multiply the bound.
 pub const MAX_QUERY_WORK: usize = 100_000;
 
+/// The most work one whole `calendar-query` request may cost, summed over
+/// every object it searches. [`MAX_QUERY_WORK`] bounds one object, so on its
+/// own a collection of many objects multiplies it; this is the share the
+/// request as a whole draws from.
+pub const MAX_REQUEST_WORK: usize = 2_000_000;
+
 /// The search could not tell whether the object matches: it ran out of work.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TooMuchWork;
@@ -245,21 +251,32 @@ pub enum Verdict {
 /// caller has to say the object could not be searched, because a series that
 /// was not expanded may still hold an occurrence inside the window.
 pub fn matches(filter: &CalendarQueryFilter, ics: &str) -> Result<bool, TooMuchWork> {
+	let mut left = MAX_QUERY_WORK;
+	matches_within(filter, ics, &mut left)
+}
+
+/// [`matches()`] under the budget `left` instead of a fresh [`MAX_QUERY_WORK`]:
+/// what the search spends is taken out of `left`, so a caller that searches
+/// many objects can make them share one bound.
+pub fn matches_within(
+	filter: &CalendarQueryFilter,
+	ics: &str,
+	left: &mut usize,
+) -> Result<bool, TooMuchWork> {
 	if filter.components.is_empty() {
 		return Ok(true);
 	}
-	let mut left = MAX_QUERY_WORK;
 	let components = super::caldav_filter_ical::top_level(ics);
 	for comp_filter in &filter.components {
 		let mut matched = false;
 		let mut unknown = false;
 		for comp in components.iter().filter(|c| c.name == comp_filter.name) {
-			left = left.checked_sub(1).ok_or(TooMuchWork)?;
+			*left = left.checked_sub(1).ok_or(TooMuchWork)?;
 			if comp_filter.is_not_defined {
 				// The object holds such a component, so it cannot be absent.
 				return Ok(false);
 			}
-			match component_matches(comp_filter, comp, &mut left)? {
+			match component_matches(comp_filter, comp, left)? {
 				Verdict::Matched => {
 					matched = true;
 					break;
