@@ -18,10 +18,14 @@ mod framing;
 mod handshake;
 #[path = "hostile_smtp/harness.rs"]
 mod harness;
+#[path = "hostile_smtp/oauth.rs"]
+mod oauth;
 #[path = "hostile_smtp/scram.rs"]
 mod scram;
 #[path = "hostile_smtp/tls.rs"]
 mod tls;
+#[path = "hostile_smtp/tls_abuse.rs"]
+mod tls_abuse;
 
 fn enabled() -> bool {
 	if std::env::var_os("GITHUB_ACTIONS").is_some()
