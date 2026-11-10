@@ -1,6 +1,7 @@
 pub use super::*;
 
 pub(super) mod apex_cname;
+pub(super) mod changed_zone;
 pub(super) mod dmarc;
 pub(super) mod ledger;
 pub(super) mod lock;

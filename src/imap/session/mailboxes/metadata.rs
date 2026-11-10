@@ -2,6 +2,7 @@
 //! empty mailbox name; mailbox annotations require an existing mailbox.
 
 use crate::imap::metadata;
+use crate::imap::session::commands::utf8::astring;
 
 use super::super::mailbox;
 use super::super::{Output, Session};
@@ -24,7 +25,13 @@ impl Session {
 		for entry in entries {
 			if let Some(value) = metadata::get(&self.data_dir, &account, mailbox, entry) {
 				// Literal form carries arbitrary bytes safely.
-				pairs.push_str(&format!(" \"{entry}\" {{{}}}\r\n{value}", value.len()));
+				// The entry is quoted with `"` and `\` escaped: it came from a
+				// quoted string that allowed both.
+				pairs.push_str(&format!(
+					" {} {{{}}}\r\n{value}",
+					astring(entry, self.utf8_names()),
+					value.len()
+				));
 			}
 		}
 		let untagged = if pairs.is_empty() {

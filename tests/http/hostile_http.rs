@@ -11,6 +11,8 @@ mod harness;
 mod headers;
 #[path = "hostile_http/jmap.rs"]
 mod jmap;
+#[path = "hostile_http/jmap_set_limits.rs"]
+mod jmap_set_limits;
 #[path = "hostile_http/jmap_wire.rs"]
 mod jmap_wire;
 #[path = "hostile_http/webdav.rs"]
