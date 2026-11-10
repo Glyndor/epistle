@@ -142,6 +142,7 @@ the log.
 | `sieve-variables-total-bytes` | 65536 | octets | own | no standard mandate |
 | `sieve-variables` | 128 | count | own | no standard mandate |
 | `caldav-query-work` | 100000 | count | own | no standard mandate |
+| `caldav-query-request-work` | 2000000 | count | own | no standard mandate |
 | `caldav-freebusy-window` | 34560000 | seconds | own | no standard mandate |
 | `caldav-freebusy-items` | 50000 | count | own | no standard mandate |
 | `caldav-freebusy-file-size` | 8388608 | octets | own | no standard mandate |
@@ -191,7 +192,10 @@ more than a fixed amount of work or memory:
 - A `calendar-query` object may cost 100000 component visits and recurrence
   steps, which every component of the object shares; an object that exhausts
   that budget is answered with its own `507` inside the `207` reply, and the
-  request goes on with the other objects.
+  request goes on with the other objects. The objects of one request share a
+  further budget of 2000000, so a large collection cannot multiply the bound;
+  a request that exhausts it ends with a `507` on the collection carrying
+  `DAV:number-of-matches-within-limits` and keeps the results found so far.
 - A `calendar-query`, `addressbook-query` or `free-busy-query` body is read up
   to 64 KiB; more is `413`.
 - The body of a report reply is at most 24 MiB and 64 KiB, counted after escaping.
