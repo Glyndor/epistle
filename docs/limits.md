@@ -185,7 +185,12 @@ more than a fixed amount of work or memory:
 
 - A request body for `PROPFIND`, `REPORT`, `MKCOL` or the scheduling outbox
   is read up to 1 MiB; more is `413`. A file `PUT` is read up to 50 MiB,
-  except a `.ics` or `.vcf`, which is held to 4 MiB (`413`).
+  except a `.ics` or `.vcf`, which is held to 4 MiB (`413`). A `GET` serves
+  a file of at most 50 MiB; a longer one is `413`.
+- A `PROPFIND` with `Depth: 1` answers within the same reply budget as a report
+  (below); a listing that does not fit is `507` with
+  `DAV:number-of-matches-within-limits`, and the client asks for a smaller
+  collection or for the resources it needs by name.
 - A `calendar-multiget` or `addressbook-multiget` may name 1000 distinct
   resources. Two spellings of one resource count once. More is `413`.
 - A `calendar-query` object may cost 100000 component visits and recurrence

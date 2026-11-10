@@ -33,7 +33,7 @@ fn dir_entry() -> Entry {
 
 #[test]
 fn file_response_has_length_and_no_collection() {
-	let body = multistatus(&[file_entry()]);
+	let body = multistatus(&[file_entry()], u64::MAX).expect("within budget");
 	assert!(body.contains("<D:multistatus xmlns:D=\"DAV:\""));
 	assert!(body.contains("<D:resourcetype/>"));
 	assert!(body.contains("<D:getcontentlength>42</D:getcontentlength>"));
@@ -44,7 +44,7 @@ fn file_response_has_length_and_no_collection() {
 
 #[test]
 fn collection_response_marks_resourcetype() {
-	let body = multistatus(&[dir_entry()]);
+	let body = multistatus(&[dir_entry()], u64::MAX).expect("within budget");
 	assert!(body.contains("<D:resourcetype><D:collection/></D:resourcetype>"));
 	// Collections carry no content length.
 	assert!(!body.contains("getcontentlength"));
@@ -52,7 +52,7 @@ fn collection_response_marks_resourcetype() {
 
 #[test]
 fn depth_one_lists_multiple_entries() {
-	let body = multistatus(&[dir_entry(), file_entry()]);
+	let body = multistatus(&[dir_entry(), file_entry()], u64::MAX).expect("within budget");
 	assert_eq!(body.matches("<D:response>").count(), 2);
 }
 
@@ -84,7 +84,7 @@ fn escapes_special_characters_in_name() {
 		etag: String::new(),
 		sync_token: String::new(),
 	};
-	let body = multistatus(&[entry]);
+	let body = multistatus(&[entry], u64::MAX).expect("within budget");
 	assert!(body.contains("a&amp;b&lt;c&gt;"));
 	assert!(body.contains("<D:href>/a&amp;b</D:href>"));
 }

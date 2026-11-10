@@ -100,7 +100,12 @@ pub(super) async fn propfind(target: &Path, uri_path: &str, request: Request) ->
 		}
 	}
 	let rendered: Vec<propfind::Entry> = entries.into_iter().map(|(e, _)| e).collect();
-	xml_multistatus(propfind::multistatus(&rendered))
+	// The same reply budget a report has: a listing that does not fit is
+	// refused whole, and the client lists a smaller collection.
+	match propfind::multistatus(&rendered, report_bounds::MAX_REPORT_BYTES) {
+		Some(body) => xml_multistatus(body),
+		None => report_bounds::Refusal::TooManyMembers.response(),
+	}
 }
 
 /// Answer a `PROPFIND` whose `Depth` is missing or `infinity` with
