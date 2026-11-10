@@ -23,3 +23,5 @@ mod mailboxes;
 mod metadata;
 #[path = "hostile_imap/search.rs"]
 mod search;
+#[path = "hostile_imap/shared_ban.rs"]
+mod shared_ban;

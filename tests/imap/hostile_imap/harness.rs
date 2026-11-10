@@ -63,7 +63,30 @@ pub struct Harness {
 }
 
 impl Harness {
+	/// The directory every listener of a test starts from: one account whose
+	/// password is [`PASSWORD`].
+	pub fn fixture_directory() -> Directory {
+		// Hash once, then give each listener an independent directory and store.
+		static HASH: OnceLock<String> = OnceLock::new();
+		let hash = HASH.get_or_init(|| {
+			epistle::smtp::auth::hash_password(&PASSWORD).expect("fixture password hash")
+		});
+		Directory::new(
+			["epistle.test".to_string()],
+			[("tester@epistle.test".to_string(), "tester".to_string())],
+		)
+		.with_password_hashes([("tester".to_string(), hash.clone())])
+	}
+
 	pub async fn start(configure: impl FnOnce(Server) -> Server) -> Self {
+		Self::with_directory(DirectoryHandle::new(Self::fixture_directory()), configure).await
+	}
+
+	/// Start on a directory the caller keeps, so another listener can share it.
+	pub async fn with_directory(
+		directory: DirectoryHandle,
+		configure: impl FnOnce(Server) -> Server,
+	) -> Self {
 		epistle::tls::ensure_crypto_provider();
 		let cert = rcgen::generate_simple_self_signed(vec!["mail.epistle.test".into()])
 			.expect("self-signed certificate");
@@ -79,21 +102,11 @@ impl Harness {
 		let config = ClientConfig::builder()
 			.with_root_certificates(roots)
 			.with_no_client_auth();
-		// Hash once, then give each listener an independent directory and store.
-		static HASH: OnceLock<String> = OnceLock::new();
-		let hash = HASH.get_or_init(|| {
-			epistle::smtp::auth::hash_password(&PASSWORD).expect("fixture password hash")
-		});
-		let directory = Directory::new(
-			["epistle.test".to_string()],
-			[("tester@epistle.test".to_string(), "tester".to_string())],
-		)
-		.with_password_hashes([("tester".to_string(), hash.clone())]);
 		let data = tempfile::tempdir().expect("isolated mail store");
 		let server = configure(Server::new(
 			"mail.epistle.test",
 			data.path().to_path_buf(),
-			DirectoryHandle::new(directory),
+			directory,
 			acceptor,
 			TlsMode::StartTls,
 		));
