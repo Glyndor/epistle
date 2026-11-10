@@ -52,3 +52,49 @@ fn selects_only_requested_value() {
 		}
 	}
 }
+
+/// An SRV record epistle wrote is read back whole, port included, and an
+/// exact delete finds it; the same record as the panel holds it (the plain
+/// priority in `prio`, the rest in `content`) is found too, and a sibling
+/// with another port is not.
+#[tokio::test]
+async fn an_srv_record_round_trips_and_is_found_by_the_exact_delete() {
+	let own = "0 1 465 mail.example.org";
+	let name = "_submissions._tcp.example.org";
+	let mut written = stored("1", name, "SRV", own);
+	written["prio"] = "0".into();
+	let mut panel = stored("2", name, "SRV", "1 465 mail.example.org");
+	panel["prio"] = "0".into();
+	let mut sibling = stored("3", name, "SRV", "0 1 587 mail.example.org");
+	sibling["prio"] = "0".into();
+	let (provider, state) = mock(serde_json::json!([written, panel, sibling])).await;
+	let listed = provider.list("example.org").await.expect("list");
+	let values: Vec<_> = listed.iter().map(|r| r.value.as_str()).collect();
+	assert_eq!(
+		values,
+		vec![
+			"0 1 465 mail.example.org",
+			"0 1 465 mail.example.org",
+			"0 1 587 mail.example.org"
+		],
+		"the port survives the listing"
+	);
+	provider
+		.delete_exact(
+			"example.org",
+			DnsRecord::new(name, RecordKind::Srv, own, 60),
+		)
+		.await
+		.expect("exact deletion");
+	let state = state.lock().unwrap();
+	let deletes: Vec<_> = state
+		.paths()
+		.into_iter()
+		.filter(|p| p.starts_with("/dns/delete/"))
+		.collect();
+	assert_eq!(
+		deletes,
+		vec!["/dns/delete/example.org/1", "/dns/delete/example.org/2"],
+		"both spellings of the record go, the sibling stays"
+	);
+}
