@@ -121,9 +121,14 @@ impl Client {
 	}
 
 	pub(in super::super) async fn send(&mut self, frame: &Value) {
-		let payload = frame.to_string().into_bytes();
+		self.send_frame(0x1, frame.to_string().as_bytes()).await;
+	}
+
+	/// One masked frame with `opcode` (1 text, 2 binary) and `payload`, which
+	/// must fit a 16-bit length.
+	pub(in super::super) async fn send_frame(&mut self, opcode: u8, payload: &[u8]) {
 		let mask = [0x11u8, 0x22, 0x33, 0x44];
-		let mut out = vec![0x81u8];
+		let mut out = vec![0x80 | opcode];
 		match payload.len() {
 			len @ 0..=125 => out.push(0x80 | len as u8),
 			len => {
