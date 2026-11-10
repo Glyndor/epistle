@@ -13,12 +13,12 @@ use super::{caldav_hrefs, carddav, propfind, report_bounds, sync, sync_report};
 /// When a reader breaks what it promises. That is what the fuzz target
 /// looks for.
 pub(crate) fn report_body_for_fuzzing(body: &str) {
-	let hrefs = caldav_hrefs::hrefs(body);
+	let hrefs = caldav_hrefs::hrefs(body).collect::<Vec<_>>();
 	// The CardDAV report reads its hrefs with its own copy of the scanner;
 	// the two must agree.
 	assert_eq!(
 		hrefs,
-		carddav::hrefs(body),
+		carddav::hrefs(body).collect::<Vec<_>>(),
 		"CalDAV and CardDAV hrefs differ"
 	);
 	// `<href>` and one byte of value is the shortest href a body can carry.

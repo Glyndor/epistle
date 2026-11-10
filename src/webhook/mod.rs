@@ -189,6 +189,8 @@ pub enum WebhookError {
 	Transport(reqwest::Error),
 	/// The destination is one this server may not post to.
 	Destination(String),
+	/// There is no server-wide webhook to post to.
+	NoEndpoint,
 }
 
 impl std::fmt::Display for WebhookError {
@@ -196,11 +198,32 @@ impl std::fmt::Display for WebhookError {
 		match self {
 			WebhookError::Transport(error) => write!(f, "{error}"),
 			WebhookError::Destination(reason) => write!(f, "{reason}"),
+			WebhookError::NoEndpoint => write!(f, "no server-wide webhook is configured"),
 		}
 	}
 }
 
 impl std::error::Error for WebhookError {}
+
+impl WebhookError {
+	/// The message with the destination URL left out, for output a person reads.
+	pub(crate) fn without_url(self) -> String {
+		match self {
+			WebhookError::Transport(error) => error.without_url().to_string(),
+			other => other.to_string(),
+		}
+	}
+
+	/// Whether the transport gave up waiting for the endpoint.
+	pub fn is_timeout(&self) -> bool {
+		matches!(self, WebhookError::Transport(error) if error.is_timeout())
+	}
+
+	/// Whether the request could not be built at all.
+	pub fn is_builder(&self) -> bool {
+		matches!(self, WebhookError::Transport(error) if error.is_builder())
+	}
+}
 
 impl From<reqwest::Error> for WebhookError {
 	fn from(error: reqwest::Error) -> Self {
@@ -304,15 +327,12 @@ impl Webhook {
 	/// Post the `test` event and report what the endpoint answered. Unlike
 	/// [`Webhook::notify`] this surfaces failures and the HTTP status, and it
 	/// does not touch the delivery metrics.
-	pub async fn send_test(&self) -> Result<reqwest::StatusCode, reqwest::Error> {
+	pub async fn send_test(&self) -> Result<reqwest::StatusCode, WebhookError> {
 		let event = WebhookEvent::Test {
 			message: TEST_MESSAGE.into(),
 		};
 		let body = serde_json::to_vec(&event).expect("a test event always serializes");
-		let endpoint = self
-			.default
-			.as_ref()
-			.expect("a poster made from a [webhook] section has its endpoint");
+		let endpoint = self.default.as_ref().ok_or(WebhookError::NoEndpoint)?;
 		Ok(endpoint.request(body).send().await?.status())
 	}
 }
