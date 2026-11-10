@@ -593,8 +593,8 @@ key does not cover answers a `forbidden` method error inside a `200`.
 
 Limits, also in the Session: 10,000,000 octets per request, 16 calls, 500
 objects per `/get` or `/set`, 4 requests and 4 uploads in flight per
-credential, 4 event streams and 4 WebSockets per credential, `maxSizeUpload` equal to the
-message size limit. Past the size of a request or its number of calls the answer is
+credential, 4 event streams per credential, 4 WebSockets per credential, `maxSizeUpload`
+equal to the message size limit. Past the size of a request or its number of calls the answer is
 `400` or `413` with a `urn:ietf:params:jmap:error:limit` problem naming the
 limit; past the in-flight limits it is a `429` with such a problem; past 500
 objects in a `/get` or `/set` it is a `200` whose method response is the error
