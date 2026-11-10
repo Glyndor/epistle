@@ -5,6 +5,8 @@ use crate::queue::reply::parse_enhanced;
 use crate::smtp::identification::SYSTEM_AUTO_SUBMITTED as SYSTEM;
 use crate::smtp::session::AcceptedMessage;
 
+mod delivery_report;
+
 /// Whether the report is a permanent failure or a transient-delay warning.
 #[derive(Clone, Copy)]
 enum Kind {
@@ -174,8 +176,9 @@ fn build_report(
 	now: std::time::SystemTime,
 	auto_submitted: bool,
 ) -> Option<AcceptedMessage> {
-	if original_reverse_path.is_empty() {
-		// Never bounce a bounce.
+	if original_reverse_path.is_empty() || delivery_report::is_delivery_report(original_data) {
+		// Never bounce a bounce: the null reverse-path marks the ones this
+		// server writes, and the content type marks the ones other hosts do.
 		return None;
 	}
 	// The failed recipient is written into the `Final-Recipient` field and
@@ -190,12 +193,10 @@ fn build_report(
 	}
 
 	let date = clock::rfc5322(now);
-	let boundary = format!(
-		"=_dsn_{}",
-		now.duration_since(std::time::UNIX_EPOCH)
-			.map(|d| d.as_secs())
-			.unwrap_or(0)
-	);
+	// The headers of the original are quoted verbatim, so a boundary the
+	// sender could guess (the clock was the only input) would let a header
+	// line of theirs open a part of the report.
+	let boundary = format!("=_dsn_{}", uuid::Uuid::now_v7().simple());
 	let (subject, intro, closing) = match kind {
 		Kind::Failed => (
 			"Undelivered Mail Returned to Sender",
