@@ -17,6 +17,8 @@ use crate::common::TLS_PROBE_IO_TIMEOUT;
 pub(super) struct Tls {
 	acceptor: epistle::tls::ReloadableAcceptor,
 	connector: TlsConnector,
+	cert_pem: String,
+	key_pem: String,
 }
 
 impl Tls {
@@ -24,11 +26,9 @@ impl Tls {
 		epistle::tls::ensure_crypto_provider();
 		let cert = rcgen::generate_simple_self_signed(vec!["mx.epistle.test".into()])
 			.expect("self-signed certificate");
-		let acceptor = epistle::tls::acceptor_from_pem(
-			cert.cert.pem().as_bytes(),
-			cert.signing_key.serialize_pem().as_bytes(),
-		)
-		.expect("TLS acceptor");
+		let (cert_pem, key_pem) = (cert.cert.pem(), cert.signing_key.serialize_pem());
+		let acceptor = epistle::tls::acceptor_from_pem(cert_pem.as_bytes(), key_pem.as_bytes())
+			.expect("TLS acceptor");
 		let mut roots = RootCertStore::empty();
 		roots
 			.add(cert.cert.der().clone())
@@ -39,11 +39,22 @@ impl Tls {
 		Self {
 			acceptor: epistle::tls::ReloadableAcceptor::new(acceptor),
 			connector: TlsConnector::from(Arc::new(config)),
+			cert_pem,
+			key_pem,
 		}
 	}
 
 	pub(super) fn server(&self, server: Server) -> Server {
 		server.with_tls(self.acceptor.clone(), TlsMode::Opportunistic)
+	}
+
+	/// Swap in a fresh acceptor built from the same files, as the reload
+	/// watcher does when they change.
+	pub(super) fn reload(&self) {
+		let fresh =
+			epistle::tls::acceptor_from_pem(self.cert_pem.as_bytes(), self.key_pem.as_bytes())
+				.expect("TLS acceptor");
+		self.acceptor.reload(fresh);
 	}
 
 	async fn upgrade(&self, tcp: TcpStream) -> tokio_rustls::client::TlsStream<TcpStream> {
