@@ -4,6 +4,7 @@
 pub(crate) mod imap;
 pub(crate) mod import;
 pub(crate) mod mox;
+pub(crate) mod source_path;
 pub(crate) mod stalwart;
 
 #[cfg(test)]

@@ -42,7 +42,12 @@ jobs:
         run: |
           set -euo pipefail
           url="https://github.com/editorconfig-checker/editorconfig-checker/releases/download/v${ECLINT_VERSION}/ec-linux-amd64.tar.gz"
-          curl -fsSL "$url" | tar -xz
+          # GitHub answers a release download with a 504 now and then: retry,
+          # and extract only a file that arrived whole.
+          archive="$(mktemp)"
+          curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors -o "$archive" "$url"
+          tar -xzf "$archive"
+          rm -f "$archive"
           ./bin/ec-linux-amd64 --version
           # Mechanical rules only: charset, line endings, final newline,
           # trailing whitespace. Indentation is deliberately not enforced here.

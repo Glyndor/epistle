@@ -165,11 +165,16 @@ pub(crate) fn walk(data_dir: &Path) -> Vec<(Uuid, PathBuf)> {
 
 /// The payloads in the shared pool older versions wrote: flat, and two
 /// shard levels down.
+///
+/// The root is resolved and must stay under `data_dir`, as the account
+/// partitions are: a link at `blobs` that points elsewhere reads as an empty
+/// pool and is not walked.
 pub(crate) fn walk_shared(data_dir: &Path) -> Vec<(Uuid, PathBuf)> {
-	let root = blob_root(data_dir);
 	let mut out = Vec::new();
-	collect(&root, &mut out);
-	collect_sharded(&root, &mut out);
+	if let Ok(root) = contained(data_dir, &blob_root(data_dir)) {
+		collect(&root, &mut out);
+		collect_sharded(&root, &mut out);
+	}
 	out
 }
 

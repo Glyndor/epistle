@@ -124,20 +124,15 @@ fn check_signed_in(output: &Output, me: usize, accounts: &[Account], model: &Mod
 			"a reply carries the other account's mail"
 		);
 	}
-	// Everything outside the signed-in account stays as it was. Server
-	// annotations (SETMETADATA on the empty mailbox name) are kept in one
-	// file at the data root for every account, so this check leaves that
-	// file out.
+	// Everything outside the signed-in account stays as it was. The
+	// server-level annotations (SETMETADATA on the empty mailbox name) live
+	// in the account's own directory, so they are inside it too.
 	let mine = dir.account(accounts[me].name);
-	let server = dir.0.join(".metadata-server");
-	let outside = fixture::picture(&dir.0, &[mine.clone(), server.clone()]);
+	let outside = fixture::picture(&dir.0, &[mine.clone()]);
 	let was: Picture = model
 		.before
 		.iter()
-		.filter(|(path, _)| {
-			let path = dir.0.join(path);
-			!path.starts_with(&mine) && path != server
-		})
+		.filter(|(path, _)| !dir.0.join(path).starts_with(&mine))
 		.map(|(p, v)| (p.clone(), v.clone()))
 		.collect();
 	assert!(
