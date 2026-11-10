@@ -147,11 +147,17 @@ impl<'a> Model<'a> {
 				"relayed for a stranger"
 			);
 		}
+		// A recipient named again is accepted and kept once, without a place
+		// under the limit.
+		let spelled = spelled(path);
+		if self.transaction.recipients.contains(&spelled) {
+			return;
+		}
 		assert!(
 			self.transaction.recipients.len() < 4,
 			"more recipients than the limit"
 		);
-		self.transaction.recipients.push(spelled(path));
+		self.transaction.recipients.push(spelled);
 	}
 
 	/// DATA lines until the lone dot, then the message is checked against

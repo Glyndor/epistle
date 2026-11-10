@@ -234,6 +234,23 @@ impl Session {
 				chunking,
 				..
 			} if body.is_empty() && !*chunking => {
+				// The same address named again is accepted and kept once: two
+				// entries would be delivered, reported and recorded twice,
+				// and a report would carry two blocks for one recipient.
+				if recipients
+					.iter()
+					.any(|known| known.eq_ignore_ascii_case(&forward_path))
+				{
+					// A stricter notice request is not lost on the way.
+					if suppresses_dsn
+						&& !no_dsn
+							.iter()
+							.any(|known| known.eq_ignore_ascii_case(&forward_path))
+					{
+						no_dsn.push(forward_path);
+					}
+					return Action::Continue(Reply::ok());
+				}
 				if recipients.len() >= self.max_recipients {
 					return Action::Continue(Reply::single(452, "4.5.3 too many recipients"));
 				}

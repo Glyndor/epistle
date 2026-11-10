@@ -91,16 +91,29 @@ async fn recipient_101_gets_452_and_only_100_reach_delivery() {
 	if !super::enabled() {
 		return;
 	}
-	let server = Harness::start(|s| s).await;
+	// A recipient named twice is kept once, so the cap is reached with
+	// distinct mailboxes.
+	let entries: Vec<(String, String)> = (0..=100)
+		.map(|index| (format!("r{index}@epistle.test"), "tester".to_string()))
+		.collect();
+	let server = Harness::with_directory(
+		epistle::smtp::directory::Directory::new(["epistle.test".to_string()], entries),
+		|s| s,
+	)
+	.await;
 	let mut client = server.connect().await;
 	helo(&mut client).await;
 	send(&mut client, b"MAIL FROM:<sender@remote.test>\r\n").await;
 	expect(&mut client, OK).await;
-	for _ in 0..100 {
-		send(&mut client, b"RCPT TO:<tester@epistle.test>\r\n").await;
+	for index in 0..100 {
+		send(
+			&mut client,
+			format!("RCPT TO:<r{index}@epistle.test>\r\n").as_bytes(),
+		)
+		.await;
 		expect(&mut client, OK).await;
 	}
-	send(&mut client, b"RCPT TO:<tester@epistle.test>\r\n").await;
+	send(&mut client, b"RCPT TO:<r100@epistle.test>\r\n").await;
 	expect(&mut client, "452 4.5.3 too many recipients\r\n").await;
 	send(&mut client, b"DATA\r\n").await;
 	expect(
