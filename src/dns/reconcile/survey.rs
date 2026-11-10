@@ -118,10 +118,22 @@ pub async fn survey(ctx: &Context<'_>) -> Result<Survey, String> {
 		let zone = match resolved.get(&key) {
 			Some(zone) => zone.clone(),
 			None => {
-				let zone = within(ctx.timeout, crate::dns::zone::resolve(ctx.provider, &key))
+				let zone = match within(ctx.timeout, crate::dns::zone::resolve(ctx.provider, &key))
 					.await
-					.map_err(|error| format!("finding the zone of {key} failed: {error}"))?;
-				let zone = canonical_name(&zone);
+				{
+					Ok(zone) => canonical_name(&zone),
+					Err(error) => {
+						// Same as a zone that cannot be listed: this
+						// name is left alone and the others go on.
+						if !survey.failures.iter().any(|f| f.zone == key) {
+							survey.failures.push(ZoneFailure {
+								zone: key.clone(),
+								reason: format!("finding the zone of {key} failed: {error}"),
+							});
+						}
+						continue;
+					}
+				};
 				resolved.insert(key, zone.clone());
 				zone
 			}
