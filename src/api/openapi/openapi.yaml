@@ -1073,8 +1073,8 @@ paths:
         "403":
           description: |-
             `forbidden_from`: the sender is not an address the credential may
-            act for. Also `forbidden` when the bound account is disabled or
-            gone.
+            act for. `sending_off`: the account's send switch is off. Also
+            `forbidden` when the bound account is disabled or gone.
           content:
             application/json:
               schema:
@@ -2375,7 +2375,7 @@ components:
               type: string
               description: |-
                 Stable, for programs. One of `unauthenticated` (401),
-                `forbidden` and `forbidden_from` (403), `not_found` (404),
+                `forbidden`, `forbidden_from` and `sending_off` (403), `not_found` (404),
                 `invalid_input` (400), `conflict` (409), `message_too_large`
                 and `scan_too_large` (413), `virus_detected`,
                 `attachment_refused`, `too_many_header_fields` and

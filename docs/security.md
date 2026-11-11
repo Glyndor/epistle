@@ -219,6 +219,13 @@ Configured SHA-256 comparisons and legacy argon2id verification are unchanged.
   refused account gets the same `accountNotFound` (HTTP 404 on upload and
   download) as one that does not exist, and the Session lists only the
   accounts the principal reaches.
+- An account whose `send` switch is off sends by no door: SMTP submission
+  refuses it at `MAIL FROM`, `/api/v1/send` answers `403 sending_off`,
+  `EmailSubmission/set` answers `forbiddenToSend`, and its forwards, Sieve
+  redirects and rejects and vacation replies are dropped at delivery (the
+  message stays in its mailbox). `VacationResponse/set` and `SieveScript/set`
+  refuse to set up what would send. Reading and signing in follow `disabled`
+  and `protocols`, not this switch.
 - `/api/v1/send` acts for the bound account, or for the account that owns
   `from` if the principal reaches it. `from` must be owned by that account,
   the same check `EmailSubmission/set` applies to `mailFrom`; otherwise

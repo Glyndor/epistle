@@ -12,7 +12,7 @@
 use serde_json::{Value, json};
 
 use super::Principal;
-use crate::api::api_keys::Scope;
+use super::send_gate::SendGate;
 use crate::api::state::ApiState;
 use crate::storage::vacation_store::{
 	self, MAX_BODY_BYTES, VacationSetting, read as read_setting, write as write_setting,
@@ -110,9 +110,7 @@ pub(crate) fn set(state: &ApiState, principal: &Principal, args: &Value, call_id
 			not_destroyed.insert(id.to_string(), forbidden_value());
 		}
 	}
-	let can_send = state
-		.require_scope_for_principal(principal, Scope::Send)
-		.is_ok();
+	let gate = SendGate::of(state, principal, &account);
 	let mut updated = serde_json::Map::new();
 	if let Some(updates) = args.get("update").and_then(Value::as_object) {
 		for (id, patch) in updates {
@@ -127,12 +125,12 @@ pub(crate) fn set(state: &ApiState, principal: &Principal, args: &Value, call_id
 				// on, or changing one that is on, takes `send`, as storing a
 				// script that replies does. Switching it off, or editing one
 				// that stays off, takes only `write`.
-				Ok(next) if next.is_enabled && next != current && !can_send => {
+				Ok(next) if next.is_enabled && next != current && !gate.is_open() => {
 					not_updated.insert(
 						id.clone(),
 						json!({
 							"type": "forbidden",
-							"description": "a vacation reply that is on needs the send scope",
+							"description": gate.describe("a vacation reply that is on"),
 						}),
 					);
 				}

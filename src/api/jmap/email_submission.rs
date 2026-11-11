@@ -55,6 +55,14 @@ fn submit_email(
 	addresses: &[String],
 	submission: &Value,
 ) -> Result<String, Refusal> {
+	// An account whose sending is switched off submits nothing, whatever
+	// the envelope says (RFC 8621 section 7.5.2, `forbiddenToSend`).
+	if !state.can_send(account) {
+		return Err(Refusal {
+			kind: "forbiddenToSend",
+			description: Some("sending is turned off for this account".to_string()),
+		});
+	}
 	let email_id = submission
 		.get("emailId")
 		.and_then(Value::as_str)

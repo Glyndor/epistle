@@ -8,6 +8,7 @@
 
 use serde_json::{Map, Value, json};
 
+use super::send_gate::SendGate;
 use super::sieve_blob;
 use super::sieve_content::set_error;
 use super::uploads::Uploads;
@@ -20,8 +21,8 @@ const NAME_ATTEMPTS: usize = 5;
 /// What one `/set` call works on.
 pub(super) struct Edit<'a> {
 	pub(super) account: &'a str,
-	/// Whether the credential has the `send` scope.
-	pub(super) can_send: bool,
+	/// Whether the credential has the `send` scope and the account may send.
+	pub(super) gate: SendGate,
 	pub(super) uploads: &'a Uploads,
 }
 
@@ -39,22 +40,24 @@ fn created_object(script: &ScriptInfo) -> Value {
 	})
 }
 
-/// The SetError for a script that sends mail, from a credential that may not.
-fn needs_send() -> Value {
+/// The SetError for a script that sends mail, from a credential or an
+/// account that may not.
+fn needs_send(gate: SendGate) -> Value {
 	json!({
 		"type": "forbidden",
-		"description": "a script that redirects, replies or rejects needs the send scope",
+		"description": gate.describe("a script that redirects, replies or rejects"),
 	})
 }
 
 impl Edit<'_> {
 	/// `Err` when the script sends mail and the credential has no `send`
-	/// scope: `write` stores a filter, and does not originate mail.
+	/// scope (`write` stores a filter, and does not originate mail) or the
+	/// account's sending is switched off.
 	fn allowed(&self, sends: bool) -> Result<(), Value> {
-		if self.can_send || !sends {
+		if self.gate.is_open() || !sends {
 			Ok(())
 		} else {
-			Err(needs_send())
+			Err(needs_send(self.gate))
 		}
 	}
 
