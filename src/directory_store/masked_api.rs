@@ -97,7 +97,7 @@ impl AccountStore {
 			.touch_last_used(account, address, now);
 	}
 
-	/// Set the per-account cap on masked email addresses. 0 disables the cap.
+	/// Set the per-account cap on masked email addresses. 0 disables masked addresses entirely.
 	/// Called once at startup with the configured value; the directory is
 	/// rebuilt so the next resolution cycle reflects the new limit on reads.
 	pub fn with_masked_max(self, max: usize) -> Self {

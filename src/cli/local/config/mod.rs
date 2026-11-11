@@ -97,7 +97,6 @@ pub(super) fn write_mail_toml_replace(
          dnsbl_domain_zones = []\n\
          dnsbl_url_zones = []\n\
          first_time_sender_delay_secs = 0\n\
-         masked_addresses_max = 0\n\
          {}\n\
          [tls]\n\
          cert_file = {}\n\

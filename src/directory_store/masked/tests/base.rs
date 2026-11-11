@@ -294,3 +294,14 @@ fn a_refused_label_is_echoed_escaped_and_cut() {
 		assert!(message.len() < 300, "{message}");
 	}
 }
+
+#[test]
+fn a_limit_of_zero_refuses_every_address() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut store = MaskedAddressStore::open(dir.path())
+		.expect("open")
+		.with_max_per_account(0);
+	let result = store.add("alice", "A", "example.org", 1);
+	assert!(matches!(result, Err(StoreError::LimitReached { max: 0 })));
+	assert_eq!(store.entries().count(), 0);
+}
