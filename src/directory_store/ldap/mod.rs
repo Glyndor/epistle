@@ -61,8 +61,10 @@ const QUEUE_DEPTH: usize = 32;
 /// differ in what the client cost the directory.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LdapBusy {
-	/// The request never reached the directory: the queue was full, or it
-	/// expired while it waited. The client has cost nothing.
+	/// The request cost the directory nothing: the queue was full, it
+	/// expired while it waited, or no connection could be made (refused,
+	/// unresolvable, or not accepted in time). A directory that is down
+	/// is no reason to count its clients' attempts against them.
 	NotSent,
 	/// The worker took the request and opened a connection to the directory,
 	/// which then did not answer in time or broke off. The attempt was
