@@ -128,8 +128,9 @@ impl AccountStore {
 		except: Option<&str>,
 		raw: &str,
 	) -> bool {
+		let forms = claim_forms(raw);
 		let wanted = normalize(raw);
-		let same = |address: &String| normalize(address) == wanted;
+		let same = |address: &String| forms.contains(&normalize(address));
 		let used_by_account = self
 			.static_accounts
 			.iter()
@@ -312,4 +313,29 @@ impl AccountStore {
 	pub fn dynamic_accounts(&self) -> Vec<DynamicAccount> {
 		self.dynamic.read().expect("store lock").clone()
 	}
+}
+
+/// The held addresses that block a claim on `raw`, normalized: the address
+/// itself and, when it carries a `+tag`, the address without it.
+/// `alice+tag@host` delivers to `alice@host` unless it is held itself, so a
+/// claim on the tagged form would divert the mail of whoever holds the base
+/// address. Every check of a claim against an existing holder uses this, so
+/// they cannot disagree about which claims collide.
+pub(super) fn claim_forms(raw: &str) -> Vec<String> {
+	let exact = normalize(raw);
+	let mut forms = Vec::with_capacity(2);
+	if let Some(base) = base_address(&exact) {
+		forms.push(base);
+	}
+	forms.push(exact);
+	forms
+}
+
+/// `local@domain` without a `+tag` in the local part, or `None` when the
+/// address carries no tag. Delivery strips the same tag (see
+/// `Directory::resolve`).
+fn base_address(normalized: &str) -> Option<String> {
+	let (local, domain) = normalized.rsplit_once('@')?;
+	let cut = local.find('+').filter(|cut| *cut > 0)?;
+	Some(format!("{}@{domain}", &local[..cut]))
 }

@@ -77,3 +77,24 @@ fn replace_and_add_address_refuse_a_directory_address() {
 	let added = store.add_address("bob", "sql-user@example.org");
 	assert!(matches!(added, Err(StoreError::Duplicate(_))));
 }
+
+#[test]
+fn a_tagged_form_of_a_directory_address_is_taken_too() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let store = open_store(dir.path());
+	with_directory_accounts(&store);
+	let result = store.add(dynamic("intruder", "ldap-user+shop@example.org"));
+	assert!(matches!(result, Err(StoreError::Duplicate(_))));
+	store
+		.add(dynamic("bob", "bob@example.org"))
+		.expect("add bob");
+	let replaced = store.replace_account("bob", dynamic("bob", "sql-user+x@example.org"));
+	assert!(matches!(replaced, Err(StoreError::Duplicate(_))));
+	let added = store.add_address("bob", "Ldap-User+Shop@example.org");
+	assert!(matches!(added, Err(StoreError::Duplicate(_))));
+	let resolved = store
+		.handle()
+		.current()
+		.resolve(&Address::parse("ldap-user+shop@example.org").expect("address"));
+	assert_eq!(resolved, Resolution::Account("ldap-user".to_string()));
+}
