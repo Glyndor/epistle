@@ -42,7 +42,7 @@
 //! Line 1 is the magic + format version; an unknown version is ignored. Line 2
 //! is the generation stamp: the mailbox's highest mod-sequence, the `.eml`
 //! file count and a digest of the `.eml` names at build time. The remaining lines are the message records in the
-//! same sequence order `Snapshot::open` produces (UUID-sorted). Flags are
+//! same sequence order `Snapshot::open` produces (UID-sorted). Flags are
 //! comma-joined: system flag tokens carry their lowercase wire form without the
 //! leading backslash (e.g. `seen`), user keywords carry a `k:` prefix and the
 //! raw atom (e.g. `k:Junk`); an empty flag set is a trailing empty field.
