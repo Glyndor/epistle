@@ -405,8 +405,10 @@ keys are left too, since they may still sign mail; `epistle dkim cleanup`
 retires keys. The removal takes the record epistle published and nothing
 else: the provider is asked for the exact removal, so a record another account
 wrote between the listing and the removal is still there. A provider that
-cannot remove one value (its API rewrites the whole set of the name) removes
-the record the ordinary way. If the ledger cannot be saved after a removal,
+cannot remove one value without a precondition (deSEC, GoDaddy and Namecheap
+replace the whole set of the name, or the whole zone, with what they read, so
+a record added between the read and the write would be lost) removes the
+record the ordinary way, and that window stays open for it. If the ledger cannot be saved after a removal,
 the report of what was removed is printed and the command fails: the record is
 out of the zone and the ledger still lists it, so the next run withdraws it
 again.
