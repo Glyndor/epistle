@@ -1,7 +1,7 @@
 use clap::Parser;
 
 use super::super::super::MigrateCli;
-use super::super::super::report::{bytes, plan};
+use super::super::super::report::{bytes, facts, plan};
 use super::*;
 use crate::cli::{Cli, Command};
 use crate::migrate::imap::{FolderReport, Skipped};
@@ -199,4 +199,30 @@ fn the_recovery_body_limit_uses_the_configured_message_size() {
 			"use the local configuration for recovery"
 		);
 	}
+}
+
+#[test]
+fn a_folder_line_names_the_messages_left_out_for_size() {
+	let mut report = FolderReport {
+		too_large: 2,
+		too_large_uids: vec![7, 9],
+		..FolderReport::default()
+	};
+	assert!(
+		facts(&report).contains("2 too large (UID 7, 9)"),
+		"{}",
+		facts(&report)
+	);
+	report.too_large = 30;
+	assert!(
+		facts(&report).contains("(UID 7, 9, ...)"),
+		"{}",
+		facts(&report)
+	);
+	report.too_large_uids.clear();
+	assert!(
+		facts(&report).ends_with("30 too large"),
+		"{}",
+		facts(&report)
+	);
 }

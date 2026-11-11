@@ -172,6 +172,14 @@ pub(super) async fn folder(
 					.copied()
 					.collect();
 				report.too_large += (batch.len() - wanted.len()) as u64;
+				for item in batch
+					.iter()
+					.filter(|item| item.size > settings.limits.literal as u64)
+				{
+					if report.too_large_uids.len() < super::MAX_REPORTED_UIDS {
+						report.too_large_uids.push(item.uid);
+					}
+				}
 				let mut fetched = if wanted.is_empty() {
 					Vec::new()
 				} else {

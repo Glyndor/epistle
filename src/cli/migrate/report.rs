@@ -99,7 +99,7 @@ fn title(report: &FolderReport) -> String {
 }
 
 /// `120 messages, 4.2 MB, 1.1 MB/s` plus what was left out.
-fn facts(report: &FolderReport) -> String {
+pub(super) fn facts(report: &FolderReport) -> String {
 	let mut text = format!(
 		"{} {}, {}",
 		report.copied,
@@ -110,11 +110,12 @@ fn facts(report: &FolderReport) -> String {
 		let rate = (report.bytes as f64 / report.seconds) as u64;
 		text.push_str(&format!(", {}/s", bytes(rate)));
 	}
+	let too_large = too_large(report);
 	for (count, what) in [
 		(report.duplicates, "already here"),
 		(report.confirmed, "confirmed earlier"),
 		(report.deleted, "marked deleted"),
-		(report.too_large, "too large"),
+		(report.too_large, too_large.as_str()),
 		(report.vanished, "gone before fetching"),
 	] {
 		if count > 0 {
@@ -125,6 +126,21 @@ fn facts(report: &FolderReport) -> String {
 		text.push_str(" (UIDVALIDITY changed, checked against what was copied)");
 	}
 	text
+}
+
+/// `too large`, with the UIDs of the messages left out when they are known:
+/// the server declared the sizes, so the operator may want to look at them.
+fn too_large(report: &FolderReport) -> String {
+	if report.too_large_uids.is_empty() {
+		return "too large".to_string();
+	}
+	let uids: Vec<String> = report.too_large_uids.iter().map(u32::to_string).collect();
+	let more = if report.too_large > report.too_large_uids.len() as u64 {
+		", ..."
+	} else {
+		""
+	};
+	format!("too large (UID {}{more})", uids.join(", "))
 }
 
 /// `word` with an `s` unless `count` is one.

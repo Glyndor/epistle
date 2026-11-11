@@ -49,6 +49,11 @@ async fn a_literal_just_inside_the_limit_is_accepted() {
 		summary.folders[0].too_large, 1,
 		"an honest oversize message is skipped, not fatal"
 	);
+	assert_eq!(
+		summary.folders[0].too_large_uids.len(),
+		1,
+		"the skipped message is named by its UID"
+	);
 }
 
 #[tokio::test]
