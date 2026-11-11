@@ -1,11 +1,20 @@
 use std::io::Write;
 use std::process::ExitCode;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::Outcome;
 use crate::cli::json_out::Reload;
 use crate::cli::resource::ResourceError;
 use crate::cli::{init, stack};
 use crate::config::Config;
+
+/// Set once at start-up by `--no-restart`.
+static DEFER: AtomicBool = AtomicBool::new(false);
+
+/// Make every change of this run leave the stack's services as they are.
+pub(crate) fn defer_restarts(on: bool) {
+	DEFER.store(on, Ordering::Relaxed);
+}
 
 /// Restart the stack mail service after a change through `restart`, or
 /// report that a manual restart is needed.
@@ -94,11 +103,41 @@ fn apply(
 	run: impl FnOnce(&Config, stack::StackAction) -> ExitCode,
 	action: stack::StackAction,
 ) -> Result<(ExitCode, Reload), ResourceError> {
+	apply_deferring(
+		DEFER.load(Ordering::Relaxed),
+		config,
+		outcome,
+		needs_restart,
+		status,
+		run,
+		action,
+	)
+}
+
+/// [`apply`] with `defer` given: the stack is left alone and the notice
+/// says how to apply the change.
+pub(super) fn apply_deferring(
+	defer: bool,
+	config: &Config,
+	outcome: Outcome,
+	needs_restart: bool,
+	status: &mut impl Write,
+	run: impl FnOnce(&Config, stack::StackAction) -> ExitCode,
+	action: stack::StackAction,
+) -> Result<(ExitCode, Reload), ResourceError> {
 	if outcome == Outcome::Unchanged || !needs_restart {
 		return Ok((ExitCode::SUCCESS, Reload::None));
 	}
 	let compose = init::compose_file_path(&config.data_dir);
 	match std::fs::metadata(&compose) {
+		Ok(_) if defer => {
+			writeln!(
+				status,
+				"Not restarted (--no-restart): the change takes effect at the next restart; run `epistle stack apply` to apply it."
+			)
+			.map_err(|error| ResourceError::Failure(error.to_string()))?;
+			Ok((ExitCode::SUCCESS, Reload::Deferred))
+		}
 		Ok(_) => {
 			let code = run(config, action);
 			let reload = if code == ExitCode::SUCCESS {

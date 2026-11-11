@@ -114,6 +114,7 @@ const SKIPPED: &[(&str, &str)] = &[
 		"needs the stack; tests/cli/json/cli_json/operator/stack.rs",
 	),
 	("stack up", "tests/cli/json/cli_json/operator/stack.rs"),
+	("stack apply", "tests/cli/json/cli_json/operator/stack.rs"),
 	("stack down", "tests/cli/json/cli_json/operator/stack.rs"),
 	(
 		"stack ps",

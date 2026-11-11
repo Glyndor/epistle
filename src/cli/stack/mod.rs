@@ -33,6 +33,10 @@ pub enum StackCli {
 	Update,
 	/// Start the stack in the background.
 	Up,
+	/// Apply what `--no-restart` left waiting.
+	///
+	/// Recreates what changed, then restarts mail once.
+	Apply,
 	/// Stop the stack.
 	///
 	/// The compose volumes are not removed: the database lives in one of them.
@@ -118,6 +122,7 @@ impl From<StackCli> for StackAction {
 		match value {
 			StackCli::Update => StackAction::Update,
 			StackCli::Up => StackAction::Up,
+			StackCli::Apply => StackAction::Apply,
 			StackCli::Down => StackAction::Down,
 			StackCli::Ps { json } => StackAction::Ps { as_json: json },
 			StackCli::Logs { follow, service } => StackAction::Logs { follow, service },
@@ -148,6 +153,9 @@ pub(crate) enum StackAction {
 	Update,
 	/// `podup -f <compose> up -d`, start the stack in the background.
 	Up,
+	/// `podup -f <compose> up -d`, then `restart mail`: what a run of
+	/// commands with `--no-restart` left waiting, applied once.
+	Apply,
 	/// `podup -f <compose> down`, stop the stack. Volumes are never
 	/// removed (`-v`/`--volumes` are deliberately not exposed): the
 	/// PostgreSQL data lives in a named volume and the operator must
@@ -258,6 +266,7 @@ pub(super) fn run_reporting(config: &Config, cli: StackCli, json: bool) -> ExitC
 		}
 		StackCli::Update => ("update", None),
 		StackCli::Up => ("up", None),
+		StackCli::Apply => ("apply", None),
 		StackCli::Down => ("down", None),
 		StackCli::Restart { service } => ("restart", service.clone()),
 		StackCli::Stop { service } => ("stop", service.clone()),
@@ -338,6 +347,7 @@ pub(super) fn run(config: &Config, action: StackAction) -> ExitCode {
 			published.note(&mut out);
 			code
 		}
+		StackAction::Apply => run_sequence(podup, &compose, &[&["up", "-d"], &["restart", "mail"]]),
 		StackAction::Down => {
 			run_sequence(podup, &compose, &[&["autostart", "uninstall"], &["down"]])
 		}

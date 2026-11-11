@@ -66,6 +66,44 @@ fn a_config_edit_that_restarts_mail_keeps_stdout_clean() {
 }
 
 #[test]
+fn no_restart_writes_the_change_and_leaves_the_stack_alone() {
+	let env = env("");
+	let bin = chatty_podup(&env);
+	let output = epistle_in(
+		&[
+			"relay",
+			"--config",
+			&env.config,
+			"add",
+			"--domain",
+			"example.net",
+			"--host",
+			"relay.example.net",
+			"--no-restart",
+			"--json",
+		],
+		b"",
+		Some(&bin),
+	);
+	assert_eq!(
+		json(&output),
+		(
+			0,
+			json!({
+				"result": "saved", "action": "add", "account": null, "domain": "example.net",
+				"host": "relay.example.net", "reload": "deferred",
+			})
+		)
+	);
+	let stderr = String::from_utf8_lossy(&output.stderr);
+	assert!(
+		!stderr.contains("podup says:"),
+		"podup must not run: {stderr}"
+	);
+	assert!(stderr.contains("epistle stack apply"), "{stderr}");
+}
+
+#[test]
 fn stack_logs_refuses_json() {
 	let env = env("");
 	let bin = chatty_podup(&env);
@@ -86,10 +124,14 @@ fn stack_logs_refuses_json() {
 fn up_down_stop_and_start_print_one_object_each() {
 	let env = env("");
 	let bin = chatty_podup(&env);
-	let cases: [(&[&str], serde_json::Value); 6] = [
+	let cases: [(&[&str], serde_json::Value); 7] = [
 		(
 			&["up"],
 			json!({"result": "done", "action": "up", "service": null}),
+		),
+		(
+			&["apply"],
+			json!({"result": "done", "action": "apply", "service": null}),
 		),
 		(
 			&["down"],
