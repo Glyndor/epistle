@@ -330,7 +330,10 @@ pub(super) const ADJUSTABLE: &[Adjustable] = &[
 	},
 ];
 
-pub(super) use super::protocol::FIXED;
+/// Every hard-coded limit row, in print order.
+pub(super) fn fixed() -> impl Iterator<Item = &'static FixedEntry> {
+	super::protocol::CORE.iter().chain(super::protocol::MORE)
+}
 
 /// The default value of every adjustable key. The docs page uses this to
 /// print the same numbers the server reports.
@@ -364,7 +367,7 @@ pub struct DocsRow {
 #[doc(hidden)]
 #[allow(dead_code)]
 pub fn docs_snapshot() -> Vec<DocsRow> {
-	let mut rows = Vec::with_capacity(ADJUSTABLE.len() + FIXED.len());
+	let mut rows = Vec::with_capacity(ADJUSTABLE.len() + fixed().count());
 	for entry in ADJUSTABLE {
 		rows.push(DocsRow {
 			name: entry.key.name(),
@@ -377,7 +380,7 @@ pub fn docs_snapshot() -> Vec<DocsRow> {
 			value: None,
 		});
 	}
-	for fixed in FIXED {
+	for fixed in fixed() {
 		rows.push(DocsRow {
 			name: fixed.name,
 			kind: kind_label(Kind::Fixed),

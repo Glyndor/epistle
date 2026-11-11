@@ -72,15 +72,14 @@ const RFC: &[(&str, Class, Pin)] = &[
 
 #[test]
 fn the_rows_a_standard_ties_hold_the_class_and_number_the_rfc_gives() {
-	let tied: BTreeSet<&str> = catalog::FIXED
-		.iter()
+	let tied: BTreeSet<&str> = catalog::fixed()
 		.filter(|entry| entry.class != Class::Own)
 		.map(|entry| entry.name)
 		.collect();
 	let pinned: BTreeSet<&str> = RFC.iter().map(|(name, _, _)| *name).collect();
 	assert_eq!(tied, pinned, "every MUST or SHOULD row needs its RFC pin");
 	for (name, class, pin) in RFC {
-		let entry = catalog::FIXED.iter().find(|e| e.name == *name).unwrap();
+		let entry = catalog::fixed().find(|e| e.name == *name).unwrap();
 		assert_eq!(entry.class, *class, "{name}: class");
 		match pin {
 			Pin::Exactly(text) => assert_eq!(&entry.value.render(), text, "{name}"),
@@ -97,7 +96,7 @@ fn the_rows_a_standard_ties_hold_the_class_and_number_the_rfc_gives() {
 #[test]
 fn fixed_rows_are_unique_and_not_settable() {
 	let mut names = BTreeSet::new();
-	for fixed in catalog::FIXED {
+	for fixed in catalog::fixed() {
 		assert!(names.insert(fixed.name), "duplicate row `{}`", fixed.name);
 		assert!(
 			Key::from_str(fixed.name, false).is_err(),
@@ -154,7 +153,7 @@ fn show_json_gives_every_row_its_class() {
 			entry.key.name()
 		);
 	}
-	for fixed in catalog::FIXED {
+	for fixed in catalog::fixed() {
 		assert_eq!(
 			json[fixed.name]["class"],
 			fixed.class.label(),
