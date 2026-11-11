@@ -51,6 +51,7 @@ fn config_path(command: &Command) -> Option<&Path> {
 		| Command::Dns { config, .. }
 		| Command::Storage { config, .. }
 		| Command::Srs { config, .. }
+		| Command::Rotate { config, .. }
 		| Command::Webhook { config, .. }
 		| Command::Alert { config, .. }
 		| Command::Antispam { config, .. }
@@ -71,7 +72,6 @@ fn config_path(command: &Command) -> Option<&Path> {
 		| Command::StorageKeygen { .. }
 		| Command::OauthKeygen { .. }
 		| Command::TokenHash { .. }
-		| Command::Rotate { .. }
 		| Command::Local { .. }
 		| Command::Completions { .. }
 		| Command::Manpages { .. }

@@ -559,6 +559,10 @@ pub enum Command {
 	/// one, what epistle does and what stays with the operator outside the
 	/// server. `--dry-run` changes nothing and is the only mode so far.
 	Rotate {
+		/// Configuration file; accepted before or after the action. The
+		/// listing does not read it.
+		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
+		config: PathBuf,
 		/// Go through every secret and credential.
 		#[arg(long)]
 		all: bool,
