@@ -673,7 +673,7 @@ spans several lines is hidden whole.
 ## DNS lockdown (`epistle dns lockdown`)
 
 ```sh
-epistle dns lockdown [<domain>] [--dry-run] [--yes] [--json] [--dmarc reject]
+epistle dns lockdown [<domain>] [--dry-run] [--yes] [--json] [--dmarc reject] [--strict-alignment]
 epistle dns lockdown [<domain>] --undo [--dry-run] [--yes]
 ```
 
@@ -682,7 +682,8 @@ default): DMARC one step stricter per run, a null SPF and null MX on
 every name that is not declared as sending (any depth, any record type, the
 parents of names, the apex; `[dns_publish] senders` declares the senders),
 and a wildcard null SPF. Subdomains delegated to
-other nameservers (NS records) are left alone. It asks first; `--yes`
+other nameservers (NS records) are left alone. `--strict-alignment` also sets
+`adkim=s` and `aspf=s` in the DMARC record. It asks first; `--yes`
 skips the question. `--undo` removes what earlier runs published. See
 [`docs/dns.md`](dns.md#locking-the-zone-against-spoofing).
 

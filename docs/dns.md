@@ -186,7 +186,7 @@ line, the alert engine can watch `dmarc_report_rows_failing`, and
 
 ### Locking the zone against spoofing
 
-`epistle dns lockdown [<domain>] [--yes] [--json] [--undo] [--dmarc reject]`
+`epistle dns lockdown [<domain>] [--yes] [--json] [--undo] [--dmarc reject] [--strict-alignment]`
 (and the `dns` flag `--dry-run`) makes sure nobody can send mail as the
 domain or a name under it from somewhere else. It reads the zone through
 the `[dns]` provider, prints the plan (`--json` prints the same plan as
@@ -197,7 +197,11 @@ JSON), asks, and publishes:
   already there stays), `np=reject`
   (DMARCbis, names that do not exist) is set at once, `pct` is dropped,
   and every other tag (`rua`, `ruf`, `adkim`, `aspf`, `fo`, `ri`) stays as
-  written. `--dmarc reject` goes straight to `reject`. A DMARC record
+  written (`adkim=r` and `aspf=r` stay relaxed, and an absent tag stays
+  absent). `--strict-alignment` also sets `adkim=s` and `aspf=s`, so a
+  message from a subdomain no longer aligns with the organizational domain;
+  a record that already has both is `unchanged`. `--dmarc reject` goes
+  straight to `reject`. A DMARC record
   that cannot be read, a second one, or a CNAME at `_dmarc` is left alone
   and reported.
 - `v=spf1 -all` (sends no mail) and `MX 0 .` (RFC 7505, accepts no mail)

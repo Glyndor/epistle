@@ -72,6 +72,9 @@ pub struct DmarcInputs {
 	pub has_reports: bool,
 	/// The sources that failed DMARC in those reports.
 	pub failing_sources: Vec<FailingSource>,
+	/// `--strict-alignment`: set `adkim=s` and `aspf=s`. Without it those
+	/// tags stay as written, never set.
+	pub strict_alignment: bool,
 }
 
 /// What this run does with the DMARC record.
@@ -191,16 +194,22 @@ pub fn rewrite_dmarc(
 	existing: Option<&DmarcTags>,
 	policy: DmarcStep,
 	subdomains: DmarcStep,
+	strict_alignment: bool,
 ) -> String {
 	let mut value = format!(
 		"v=DMARC1; p={}; sp={}; np=reject",
 		policy.as_str(),
 		subdomains.as_str()
 	);
+	if strict_alignment {
+		value.push_str("; adkim=s; aspf=s");
+	}
 	for (name, tag_value) in existing.map(|t| t.tags.as_slice()).unwrap_or_default() {
 		if ["v", "p", "sp", "np", "pct"]
 			.iter()
 			.any(|skip| name.eq_ignore_ascii_case(skip))
+			|| (strict_alignment
+				&& (name.eq_ignore_ascii_case("adkim") || name.eq_ignore_ascii_case("aspf")))
 		{
 			continue;
 		}
@@ -281,12 +290,16 @@ pub fn plan_dmarc(
 			&& target("sp") == Some(plan.sp)
 			&& target("np") == Some(DmarcStep::Reject)
 			&& tags.get("pct").is_none()
+			&& (!inputs.strict_alignment
+				|| ["adkim", "aspf"]
+					.iter()
+					.all(|tag| tags.get(tag).is_some_and(|m| m.eq_ignore_ascii_case("s"))))
 		{
 			plan.action = DmarcAction::Unchanged;
 			return (plan, None);
 		}
 	}
-	let value = rewrite_dmarc(tags.as_ref(), plan.next, plan.sp);
+	let value = rewrite_dmarc(tags.as_ref(), plan.next, plan.sp, inputs.strict_alignment);
 	let reason = match plan.current {
 		None => format!(
 			"{name} has no DMARC record; publish p={next} with sp={next} and np=reject",
@@ -308,6 +321,11 @@ pub fn plan_dmarc(
 			current = current.as_str(),
 			next = plan.next.as_str()
 		),
+	};
+	let reason = if inputs.strict_alignment {
+		format!("{reason}; adkim=s and aspf=s (strict alignment)")
+	} else {
+		reason
 	};
 	// A DMARC record this command already rewrote is not the operator's:
 	// the journal keeps the one it replaced the first time.
