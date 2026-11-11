@@ -40,6 +40,8 @@ fn write_config(toml: &str) -> tempfile::NamedTempFile {
 pub(in crate::cli) fn build() -> Harness {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let static_account = Account {
+		send: None,
+		receive: None,
 		display_name: None,
 		name: STATIC_NAME.to_string(),
 		addresses: vec![format!("{STATIC_NAME}@{DOMAIN}")],

@@ -5,6 +5,8 @@ use super::super::super::*;
 
 fn store(dir: &std::path::Path) -> AccountStore {
 	let carol = Account {
+		send: None,
+		receive: None,
 		name: "carol".to_string(),
 		addresses: vec!["carol@example.org".to_string()],
 		password_hash: None,

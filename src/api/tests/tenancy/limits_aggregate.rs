@@ -41,6 +41,8 @@ async fn aggregate_quota_blocks_an_over_cap_upload() {
 	drop(key_store);
 	let domains = vec!["a.example".to_string()];
 	let account = |name: &str, addresses: &[&str]| crate::config::Account {
+		send: None,
+		receive: None,
 		display_name: None,
 		name: name.to_string(),
 		addresses: addresses.iter().map(|a| (*a).to_string()).collect(),
@@ -117,6 +119,8 @@ async fn aggregate_rate_blocks_a_second_send_within_the_window() {
 	drop(key_store);
 	let domains = vec!["a.example".to_string()];
 	let account = |name: &str, addresses: &[&str]| crate::config::Account {
+		send: None,
+		receive: None,
 		display_name: None,
 		name: name.to_string(),
 		addresses: addresses.iter().map(|a| (*a).to_string()).collect(),
@@ -204,6 +208,8 @@ async fn aggregate_rate_charges_per_recipient() {
 	drop(key_store);
 	let domains = vec!["a.example".to_string()];
 	let account = |name: &str, addresses: &[&str]| crate::config::Account {
+		send: None,
+		receive: None,
 		display_name: None,
 		name: name.to_string(),
 		addresses: addresses.iter().map(|a| (*a).to_string()).collect(),

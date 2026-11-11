@@ -50,6 +50,8 @@ fn test_app_with_trusted_and_ban_store(
 	use crate::antispam::bans::BanPolicy;
 	use crate::antispam::bans::tests::base::FakeBanStore;
 	let account = |name: &str, pw: &str| crate::config::Account {
+		send: None,
+		receive: None,
 		display_name: None,
 		name: name.to_string(),
 		addresses: vec![format!("{name}@example.org")],

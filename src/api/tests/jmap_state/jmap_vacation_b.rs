@@ -60,6 +60,8 @@ fn ann_only(dir: &std::path::Path) -> (Router, String) {
 	.expect("add key");
 	drop(keys);
 	let account = |name: &str, address: &str| crate::config::Account {
+		send: None,
+		receive: None,
 		display_name: None,
 		name: name.to_string(),
 		addresses: vec![address.to_string()],

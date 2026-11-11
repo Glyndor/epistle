@@ -47,6 +47,8 @@ pub mod scram_upgrade;
 mod password_policy_settings;
 mod scram_settings;
 mod set_totp;
+mod switches;
+pub use switches::Switch;
 
 /// Watcher that reloads the dynamic stores when a sibling process
 /// (the CLI) writes them out of band. See [`file_watcher::FileWatcher`].
@@ -172,6 +174,16 @@ pub struct DynamicAccount {
 	/// account-wide setting.
 	#[serde(default)]
 	pub save_sent: Option<bool>,
+	/// Whether the account may send mail. `None` (the default and the value
+	/// on `accounts.toml` files written before the field existed) means it
+	/// may; `Some(false)` turns sending off. Never `Some(true)` on disk:
+	/// switching back on clears the field so an untouched file gains no key.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub send: Option<bool>,
+	/// Whether mail addressed to the account is accepted. Same encoding as
+	/// [`DynamicAccount::send`].
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub receive: Option<bool>,
 }
 
 impl DynamicAccount {
@@ -219,6 +231,8 @@ impl DynamicAccount {
 			catch_all: Vec::new(),
 			display_name: None,
 			save_sent: None,
+			send: None,
+			receive: None,
 		})
 	}
 }

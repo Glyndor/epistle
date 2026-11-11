@@ -16,6 +16,8 @@ fn seed_dynamic_account(dir: &std::path::Path) {
 	)
 	.expect("open store");
 	let alice = DynamicAccount {
+		send: None,
+		receive: None,
 		name: "alice".to_string(),
 		addresses: vec!["alice@example.org".to_string()],
 		password_hash: "$argon2id$secret".to_string(),

@@ -71,8 +71,8 @@ fn account_list_json_is_an_array_sorted_by_name() {
 			}
 		),
 		json!([
-			{ "name": "bob", "source": "dynamic", "display_name": null, "addresses": ["bob@example.org"] },
-			{ "name": "postmaster", "source": "static", "display_name": null, "addresses": ["postmaster@example.org"] },
+			{ "name": "bob", "source": "dynamic", "display_name": null, "addresses": ["bob@example.org"], "send": true, "receive": true },
+			{ "name": "postmaster", "source": "static", "display_name": null, "addresses": ["postmaster@example.org"], "send": true, "receive": true },
 		])
 	);
 }
@@ -100,8 +100,8 @@ fn account_show_json_has_the_same_keys_for_both_sources() {
 		bob,
 		json!({
 			"name": "bob", "log_id": null, "source": "dynamic", "display_name": null,
-			"addresses": ["bob@example.org"], "disabled": false, "quota_bytes": null,
-			"protocols": null, "two_factor": true,
+			"addresses": ["bob@example.org"], "disabled": false, "send": true, "receive": true,
+			"quota_bytes": null, "protocols": null, "two_factor": true,
 			"forward": ["out@example.com"], "catch_all": ["example.org"],
 			"encryption_key": "none (encrypt_at_rest is off)",
 		})

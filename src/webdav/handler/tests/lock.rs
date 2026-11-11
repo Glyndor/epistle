@@ -18,6 +18,8 @@ fn quota_for(dir: &std::path::Path) -> Quota {
 
 fn quota_with(dir: &std::path::Path, quota_bytes: Option<u64>) -> Quota {
 	let account = crate::config::Account {
+		send: None,
+		receive: None,
 		display_name: None,
 		name: "alice".to_string(),
 		addresses: vec!["alice@example.org".to_string()],

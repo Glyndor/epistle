@@ -31,7 +31,7 @@ forward). Policy refusals exited `2` before they had their own code.
 
 | Resource | Actions | Older flat form (hidden, still works) |
 |---|---|---|
-| `account` | `list`, `show`, `add`, `remove`, `password`, `enable`, `disable`, `address add\|remove`, `quota`, `protocols`, `save-sent`, `find-log-id` | `accounts`, `account-add`, `account-remove` |
+| `account` | `list`, `show`, `add`, `remove`, `password`, `enable`, `disable`, `address add\|remove`, `quota`, `protocols`, `set`, `save-sent`, `find-log-id` | `accounts`, `account-add`, `account-remove` |
 | `account forward` | `list`, `add`, `remove` | |
 | `account catch-all` | `list`, `add`, `remove` | |
 | `account 2fa` | `show`, `disable` | |
@@ -1795,8 +1795,9 @@ Only `epistle init` turns one into the other: it derives the name from the addre
 | `epistle account quota N SIZE\|none` | Storage quota (`500M`, `10G`, `1T`); `none` falls back to the domain, then the server default. |
 | `epistle account protocols N LIST\|all` | Restrict sign-in to some protocols (`imap,smtp,api,webdav`); `all` clears it. |
 | `epistle account set N --default-class CLASS` | The [mail class](evidence.md) granted to the account's mail when neither the request nor the credential names one: `transactional`, `marketing`, `personal`, or `none` to clear it. |
+| `epistle account set N [--send on\|off] [--receive on\|off]` | Turn sending and receiving on or off for the account, independent of `disable` (sign-in) and of `protocols`. Both are on by default, and a switch left out keeps its state. `--default-class` does not combine with them. Dynamic accounts only; a static one carries `send` and `receive` keys in the configuration. `show` and `list --json` report both. |
 | `epistle account save-sent N on\|off` | Save a copy of every message the account sends into its `Sent` folder. Default on; `off` is the per-account opt-out. The app-password override (`app-password create --save-sent`) wins when set. |
-| `epistle account show N [--json]` | Public view: log id, addresses, disabled, quota, protocols, and the at-rest key that protects its new mail (owner and key id, with the reason when a tenant account stays on the server key). Works for static accounts. Never a secret. |
+| `epistle account show N [--json]` | Public view: log id, addresses, disabled, send, receive, quota, protocols, and the at-rest key that protects its new mail (owner and key id, with the reason when a tenant account stays on the server key). Works for static accounts. Never a secret. |
 | `epistle account find-log-id acct-…` | Map a log pseudonym back to its account. |
 | `epistle account forward list\|add\|remove N [ADDR]` | Also send the account's mail to `ADDR`. Refuses the account's own addresses, an invalid address, and any forward while neither `srs_secret` nor an `[[srs_domain]]` is set (without SRS the copy fails SPF at the next hop). |
 | `epistle account catch-all list\|add\|remove N [DOMAIN]` | Deliver mail for unknown users of `DOMAIN` to the account. `DOMAIN` must be a configured domain (not an alias) that no other account catches. |

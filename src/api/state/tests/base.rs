@@ -123,6 +123,8 @@ fn owns_address_is_fail_closed_without_directory() {
 fn owns_address_consults_attached_directory() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let accounts = crate::config::Account {
+		send: None,
+		receive: None,
 		display_name: None,
 		name: "alice".to_string(),
 		addresses: vec!["alice@example.org".to_string()],

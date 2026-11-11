@@ -13,6 +13,8 @@ async fn limit_returns_409_not_429() {
 			vec!["example.org".to_string()],
 			std::collections::HashMap::new(),
 			vec![crate::config::Account {
+				send: None,
+				receive: None,
 				display_name: None,
 				name: "alice".to_string(),
 				addresses: vec!["alice@example.org".to_string()],

@@ -12,6 +12,8 @@ use crate::smtp::directory::Resolution;
 
 fn static_account(name: &str, address: &str, password: Option<&str>) -> Account {
 	Account {
+		send: None,
+		receive: None,
 		display_name: None,
 		name: name.to_string(),
 		addresses: vec![address.to_string()],

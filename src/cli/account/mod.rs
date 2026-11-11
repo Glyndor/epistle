@@ -33,6 +33,7 @@ pub(super) mod json;
 pub(super) mod list_aliases;
 pub(super) mod name;
 pub(super) mod reload;
+mod switches;
 mod two_factor;
 #[allow(unused_imports)]
 pub(super) use actions::{
@@ -172,13 +173,32 @@ pub enum Subcommand {
 	///
 	/// `--default-class` sets the class granted to the account's mail when
 	/// neither the request nor the credential names one (`none` clears it).
+	/// `--send` and `--receive` switch sending and receiving on or off, each
+	/// independent of `account disable` and of `account protocols`; a switch
+	/// left out keeps its state, and both are on by default.
+	#[command(group(
+		clap::ArgGroup::new("setting")
+			.required(true)
+			.multiple(true)
+			.args(["default_class", "send", "receive"])
+	))]
 	Set {
 		/// The account login name.
 		#[arg(value_name = "NAME", value_parser = crate::cli::account::name::parse)]
 		name: String,
 		/// `transactional`, `marketing`, `personal`, or `none`.
-		#[arg(long = "default-class", value_name = "CLASS")]
-		default_class: String,
+		#[arg(
+			long = "default-class",
+			value_name = "CLASS",
+			conflicts_with_all = ["send", "receive"]
+		)]
+		default_class: Option<String>,
+		/// `on` or `off`: whether the account may send mail.
+		#[arg(long, value_name = "STATE")]
+		send: Option<String>,
+		/// `on` or `off`: whether mail addressed to the account is accepted.
+		#[arg(long, value_name = "STATE")]
+		receive: Option<String>,
 	},
 	/// Set whether the server saves a Sent copy of every send.
 	SaveSent {
@@ -523,8 +543,28 @@ pub(super) fn run(
 		}
 		Subcommand::Set {
 			name,
-			default_class,
-		} => crate::cli::account::class::set(config_path, &name, &default_class, json, out),
+			default_class: Some(class),
+			..
+		} => crate::cli::account::class::set(config_path, &name, &class, json, out),
+		Subcommand::Set {
+			name,
+			send,
+			receive,
+			..
+		} => {
+			let send = match switches::parse(&name, "send", send.as_deref()) {
+				Ok(send) => send,
+				Err(code) => return code,
+			};
+			let receive = match switches::parse(&name, "receive", receive.as_deref()) {
+				Ok(receive) => receive,
+				Err(code) => return code,
+			};
+			match prepare(config_path, &name) {
+				Ok(store) => switches::set(&store, &name, send, receive, out, json),
+				Err(code) => code,
+			}
+		}
 		Subcommand::SaveSent { name, state } => {
 			let value = match parse_on_off(&state) {
 				Ok(value) => value,

@@ -30,6 +30,8 @@ fn state_with_carol(dir: &std::path::Path) -> ApiState {
 	state
 		.store()
 		.add(crate::directory_store::DynamicAccount {
+			send: None,
+			receive: None,
 			display_name: None,
 			name: "carol".to_string(),
 			addresses: vec!["carol@example.org".to_string()],

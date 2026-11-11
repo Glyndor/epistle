@@ -2041,6 +2041,8 @@ Addresses and domains here are used in lowercase (`config-check` names any writt
 | `forward` | External addresses this account's mail is also forwarded to (SRS-rewritten; bounces and looping mail are never forwarded). Empty disables forwarding. Each target needs a domain with at least one dot. |
 | `forward_keep_local` | Keep the local copy when forwarding (default `true`). Set `false` for pure forwarding. |
 | `allowed_protocols` | Protocols this account may sign in through, from `smtp`, `submission`, `submissions`, `api`, `imap`, `imaps`, `pop3s`, `manage-sieve`, `web-dav`. Absent means every protocol; with a list, any other password-based sign-in is refused like an unknown login. |
+| `send` | Whether the account may send mail. Default `true`. Independent of `allowed_protocols`, which only limits where it signs in. |
+| `receive` | Whether mail addressed to the account is accepted. Default `true`. |
 | `display_name` | The person's name used as sender name, kept as written (at most 128 characters, no line breaks). |
 | `save_sent` | Dynamic accounts only (`epistle account save-sent`); a `[[accounts]]` block in the file does not take it and the file is refused with it. Whether the server saves a copy of every message the account submits into its `Sent` folder. Absent or unset means "on" (the default); `true` enables the save explicitly, `false` opts the account out. Per-request overrides (`POST /api/v1/send`'s `save_sent` field, JMAP `EmailSubmission/saveSent`) and per-credential overrides (an app password's `save_sent`) win over this setting. |
 

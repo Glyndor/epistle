@@ -154,6 +154,8 @@ async fn patch_unknown_address_is_404() {
 fn two_domain_state(dir: &std::path::Path) -> ApiState {
 	let domains = vec!["first.example".to_string(), "second.example".to_string()];
 	let accounts = vec![crate::config::Account {
+		send: None,
+		receive: None,
 		display_name: None,
 		name: "bob".to_string(),
 		addresses: vec!["bob@second.example".to_string()],

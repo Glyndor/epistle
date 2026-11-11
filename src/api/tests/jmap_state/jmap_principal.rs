@@ -41,6 +41,8 @@ fn two_tenant_state(dir: &std::path::Path) -> (Router, String) {
 	drop(key_store);
 
 	let account = |name: &str, addresses: &[&str]| crate::config::Account {
+		send: None,
+		receive: None,
 		display_name: None,
 		name: name.to_string(),
 		addresses: addresses.iter().map(|a| (*a).to_string()).collect(),
@@ -94,6 +96,8 @@ fn single_account_key_state(dir: &std::path::Path) -> (Router, String) {
 	drop(key_store);
 
 	let account = |name: &str, addresses: &[&str]| crate::config::Account {
+		send: None,
+		receive: None,
 		display_name: None,
 		name: name.to_string(),
 		addresses: addresses.iter().map(|a| (*a).to_string()).collect(),

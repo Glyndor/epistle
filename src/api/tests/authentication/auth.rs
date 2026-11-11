@@ -368,6 +368,8 @@ async fn confined_verify_checks_the_effective_owner_after_authentication() {
 	]
 	.into_iter()
 	.map(|(name, addresses)| crate::config::Account {
+		send: None,
+		receive: None,
 		name: name.into(),
 		addresses: addresses.into_iter().map(String::from).collect(),
 		password_hash: Some(hash_password(test_password())),

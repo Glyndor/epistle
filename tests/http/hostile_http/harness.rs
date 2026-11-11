@@ -68,6 +68,8 @@ impl Harness {
 			.expect("fixture directory inside worktree");
 		let domains = vec!["example.test".to_string()];
 		let accounts = ["alice", "bob"].map(|name| epistle::config::Account {
+			send: None,
+			receive: None,
 			display_name: None,
 			name: name.to_string(),
 			addresses: vec![format!("{name}@example.test")],
