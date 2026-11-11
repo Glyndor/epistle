@@ -38,7 +38,7 @@ fn parse_dmarc_jump(value: &str) -> Result<DmarcStep, String> {
 }
 
 /// `epistle dns lockdown [<DOMAIN>] [--yes] [--json] [--undo] [--dmarc
-/// reject]`; `--dry-run` is the `dns` flag.
+/// reject] [--strict-alignment]`; `--dry-run` is the `dns` flag.
 #[derive(Debug, Args)]
 pub struct LockdownArgs {
 	/// The domain to lock down. Defaults to the `[dns]` zone, or the first
@@ -57,6 +57,10 @@ pub struct LockdownArgs {
 	/// `--dmarc reject`: go straight to p=reject instead of one step.
 	#[arg(long, value_name = "POLICY", value_parser = parse_dmarc_jump, conflicts_with = "undo")]
 	dmarc: Option<DmarcStep>,
+	/// Also set `adkim=s` and `aspf=s`: strict alignment, so a message from
+	/// a subdomain does not align with the organizational domain.
+	#[arg(long, conflicts_with = "undo")]
+	strict_alignment: bool,
 }
 
 /// The provider `[dns]` configures, `None` without one (or with
@@ -274,6 +278,7 @@ fn dmarc_inputs(config: &Config, domain: &str, args: &LockdownArgs, now: u64) ->
 		lockdown::recent_dmarc_failures(&config.data_dir, domain, now);
 	DmarcInputs {
 		jump_to: args.dmarc,
+		strict_alignment: args.strict_alignment,
 		has_reports,
 		failing_sources,
 	}
