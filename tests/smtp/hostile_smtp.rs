@@ -26,6 +26,8 @@ mod scram;
 mod tls;
 #[path = "hostile_smtp/tls_abuse.rs"]
 mod tls_abuse;
+#[path = "hostile_smtp/tls_early_data.rs"]
+mod tls_early_data;
 
 fn enabled() -> bool {
 	if std::env::var_os("GITHUB_ACTIONS").is_some()
