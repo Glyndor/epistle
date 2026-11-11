@@ -24,7 +24,8 @@
 //!
 //! - Fail closed: any LDAP error, a missing entry, or a failed user bind maps to
 //!   `None`. There is no distinction between "unknown user" and "wrong password"
-//!   — both return `None`, so there is no user-enumeration oracle.
+//!   — both return `None`, and both cost the same number of connections and
+//!   binds, so there is no user-enumeration oracle in the count of round trips.
 //! - Filter injection is prevented by escaping the login per RFC 4515 before it
 //!   is substituted into the configured search filter.
 //! - Plaintext `ldap://` is supported but discouraged: credentials cross the
@@ -180,12 +181,19 @@ async fn authenticate_once(
 	let filter = build_filter(&config.user_filter, login);
 
 	// (1)+(2): service-bind, then search for the login's entry.
-	let entry = search_entry(config, limits, &filter).await?;
+	let Some(entry) = search_entry(config, limits, &filter).await else {
+		spend_the_user_bind(config, password).await;
+		return None;
+	};
 
 	// (3): map the entry to an account name and recover its DN for the bind.
-	let account = account_name(config, &entry)?;
+	let Some(account) = account_name(config, &entry) else {
+		spend_the_user_bind(config, password).await;
+		return None;
+	};
 	let user_dn = entry.dn;
 	if user_dn.is_empty() {
+		spend_the_user_bind(config, password).await;
 		return None;
 	}
 
@@ -199,6 +207,20 @@ async fn authenticate_once(
 		.is_some();
 	let _ = user_conn.unbind().await;
 	bound.then_some(account)
+}
+
+/// Make the round trips of step (4) for a login that has no entry: a fresh
+/// connection and a bind that cannot succeed. A login the directory knows
+/// costs a connection and a bind for the user on top of the search; without
+/// this one an unknown login would end a connection early and the count of
+/// round trips would say which logins exist. The answer is discarded.
+async fn spend_the_user_bind(config: &Ldap, password: &str) {
+	let Ok(mut conn) = connect(config).await else {
+		return;
+	};
+	let unused_dn = format!("cn=unknown-login,{}", config.base_dn);
+	let _ = conn.simple_bind(&unused_dn, password).await;
+	let _ = conn.unbind().await;
 }
 
 /// Open a fresh connection, service-bind, and search for the single entry
