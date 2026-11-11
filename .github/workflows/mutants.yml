@@ -29,8 +29,8 @@ jobs:
           # cargo-mutants with the same dependency floor and build flags the
           # gate uses, so its surviving-mutant report has to come from the
           # compiler the gate compiles.
-          rustup toolchain install 1.99 --profile minimal
-          rustup default 1.99
+          rustup toolchain install 1.99.1 --profile minimal
+          rustup default 1.99.1
 
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:

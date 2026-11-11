@@ -94,8 +94,8 @@ jobs:
           # systemd, and submits and retrieves a message over SMTP and IMAP,
           # so the SBOM it produces must name the same compiler that built
           # the artifact the .deb ships.
-          rustup toolchain install 1.99 --profile minimal
-          rustup default 1.99
+          rustup toolchain install 1.99.1 --profile minimal
+          rustup default 1.99.1
 
       - name: Build release binary
         run: cargo build --locked --release
