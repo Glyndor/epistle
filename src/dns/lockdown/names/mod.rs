@@ -21,6 +21,9 @@ pub(super) enum Verdict {
 	Skip(String),
 	/// The name gets the null SPF, the null MX, or both.
 	Add { spf: bool, mx: bool },
+	/// The name already has the null records this command published. Told
+	/// apart from `Skip` because they are still wanted there.
+	Done(String),
 }
 
 /// How a name came to be a candidate, for the reason printed in the plan.
@@ -188,7 +191,7 @@ pub(super) fn decide(
 	let spf = !records.iter().any(|r| is_spf(r));
 	let mx = !records.iter().any(|r| r.kind == RecordKind::Mx);
 	if !spf && !mx {
-		return Some(Verdict::Skip(format!(
+		return Some(Verdict::Done(format!(
 			"{name} already has the null SPF and null MX this command published"
 		)));
 	}

@@ -38,6 +38,7 @@ use crate::dns::skip::SkipSet;
 pub mod apply;
 mod dmarc;
 mod ledger;
+mod null_records;
 pub mod once;
 mod remove;
 mod slot;

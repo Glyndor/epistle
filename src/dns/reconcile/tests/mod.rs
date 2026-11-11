@@ -6,6 +6,7 @@ pub(super) mod dmarc;
 pub(super) mod ledger;
 pub(super) mod lock;
 pub(super) mod needed;
+mod null_records;
 pub(super) mod retire;
 mod role;
 pub(super) mod run;

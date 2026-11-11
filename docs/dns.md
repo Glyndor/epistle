@@ -237,6 +237,15 @@ JSON), asks, and publishes:
   that cannot list it (`route53`, `rfc2136`) makes the command stop
   before it writes anything.
 
+With `[dns_publish] null_records = true`, automatic mode keeps the null SPF,
+the null MX and the wildcard true with the same decision, as records of the
+ledger: a name added to the zone is covered on the next run, and a name that
+becomes a sender (`senders`), gets an SPF or MX of its own or is delegated
+loses the records epistle published, and only those. A domain inside a
+delegation gets none. `epistle status` lists, under `Null records <domain>`,
+the names a hosted domain has that are not covered yet, whether the option
+is on or not. The DMARC policy still moves only when you run the command.
+
 Before a step up, the plan lists the senders that failed DMARC in the
 aggregate reports epistle received for the domain in the last 30 days
 (`data_dir/reports/dmarc/`), or says there are none. Authorise the ones

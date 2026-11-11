@@ -46,6 +46,12 @@ pub struct DnsPublish {
 	/// null MX unless it has records of its own. Empty by default.
 	#[serde(default)]
 	pub senders: Vec<String>,
+	/// Keep the null SPF and null MX `dns lockdown` publishes true in
+	/// automatic mode: a name added to the zone later is covered on the
+	/// next run, and one that becomes a sender or gets records of its own
+	/// loses them. Off by default.
+	#[serde(default)]
+	pub null_records: bool,
 }
 
 impl Default for DnsPublish {
@@ -54,6 +60,7 @@ impl Default for DnsPublish {
 			interval_secs: DEFAULT_INTERVAL_SECS,
 			skip: Vec::new(),
 			senders: Vec::new(),
+			null_records: false,
 		}
 	}
 }
