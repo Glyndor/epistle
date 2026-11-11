@@ -88,7 +88,7 @@ fn a_tagged_form_of_a_directory_address_is_taken_too() {
 	store
 		.add(dynamic("bob", "bob@example.org"))
 		.expect("add bob");
-	let replaced = store.replace_account("bob", dynamic("bob", "sql-user+x@example.org"));
+	let replaced = store.replace_account("bob", dynamic("bob", "sql-user+x@example.org"), None);
 	assert!(matches!(replaced, Err(StoreError::Duplicate(_))));
 	let added = store.add_address("bob", "Ldap-User+Shop@example.org");
 	assert!(matches!(added, Err(StoreError::Duplicate(_))));
@@ -108,5 +108,83 @@ fn a_directory_name_in_another_case_is_taken_too() {
 		addresses: vec!["jsmith@example.org".to_string()],
 	}]);
 	let result = store.add(dynamic("alice", "fresh@example.org"));
-	assert!(matches!(result, Err(StoreError::Duplicate(_))), "{result:?}");
+	assert!(
+		matches!(result, Err(StoreError::Duplicate(_))),
+		"{result:?}"
+	);
+}
+
+#[test]
+fn a_directory_that_lists_an_address_later_keeps_it() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let store = open_store(dir.path());
+	// The dynamic account was created before the directory refreshed.
+	store
+		.add(dynamic("bob", "shared@example.org"))
+		.expect("add bob");
+	store.set_ldap_accounts(vec![LdapAccount {
+		name: "ldap-user".to_string(),
+		addresses: vec!["Shared@example.org".to_string()],
+	}]);
+	let resolved = store
+		.handle()
+		.current()
+		.resolve(&Address::parse("shared@example.org").expect("address"));
+	assert_eq!(resolved, Resolution::Account("ldap-user".to_string()));
+}
+
+fn resolve(store: &AccountStore, address: &str) -> Resolution {
+	store
+		.handle()
+		.current()
+		.resolve(&Address::parse(address).expect("address"))
+}
+
+#[test]
+fn a_dynamic_claim_on_the_tagged_form_of_a_listed_address_is_dropped() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let store = open_store(dir.path());
+	store
+		.add(dynamic("bob", "shared+x@example.org"))
+		.expect("add bob");
+	store.set_ldap_accounts(vec![LdapAccount {
+		name: "ldap-user".to_string(),
+		addresses: vec!["shared@example.org".to_string()],
+	}]);
+	assert_eq!(
+		resolve(&store, "shared+x@example.org"),
+		Resolution::Account("ldap-user".to_string())
+	);
+}
+
+#[test]
+fn a_static_claim_on_the_tagged_form_of_a_listed_address_is_kept() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let store = AccountStore::open(
+		dir.path(),
+		vec!["example.org".to_string()],
+		std::collections::HashMap::new(),
+		vec![crate::config::Account {
+			send: None,
+			receive: None,
+			name: "carol".to_string(),
+			addresses: vec!["shared+x@example.org".to_string()],
+			password_hash: None,
+			catch_all: Vec::new(),
+			quota_bytes: None,
+			forward: Vec::new(),
+			forward_keep_local: true,
+			display_name: None,
+			allowed_protocols: None,
+		}],
+	)
+	.expect("open store");
+	store.set_ldap_accounts(vec![LdapAccount {
+		name: "ldap-user".to_string(),
+		addresses: vec!["shared@example.org".to_string()],
+	}]);
+	assert_eq!(
+		resolve(&store, "shared+x@example.org"),
+		Resolution::Account("carol".to_string())
+	);
 }
