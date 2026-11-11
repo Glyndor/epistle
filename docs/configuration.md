@@ -1961,12 +1961,14 @@ runs. The first run is two minutes after the start.
 [dns_publish]
 interval_secs = 21600   # six hours, the default; 0 turns the loop off
 skip = ["client-locators"]   # groups of records automatic mode does not publish
+senders = ["news.example.org"]   # names that send mail, besides the hosted domains
 ```
 
 | Key | Default | Meaning |
 |---|---|---|
 | `interval_secs` | `21600` | Seconds between two runs. `0` turns the loop off; otherwise from `600` (ten minutes) to `604800` (one week). |
 | `skip` | `[]` | The named groups of records automatic mode must not publish. An unknown name is refused when the file is read, and the error names the groups that exist. |
+| `senders` | `[]` | Names that send mail besides the hosted domains. `epistle dns lockdown` leaves each of them its own SPF and gives every other name under a hosted domain, at any depth, a null SPF and a null MX (except a name with an SPF or MX of its own, a CNAME or a delegation). Each entry is an ASCII DNS name, once, at or under a hosted domain; only the exact name is a sender, not the names under it. |
 
 `skip` names a group of records, not a DNS type: `autoconfig` is a CNAME and
 shares its type with the `mta-sts` name, which a deployment may want to keep.

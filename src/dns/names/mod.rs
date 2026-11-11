@@ -4,7 +4,7 @@
 //! Every name epistle reads or writes goes through [`canonical_name`], and
 //! every name that reaches a provider API goes through [`is_valid_name`].
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::dns::provider::{DnsRecord, RecordKind};
 
@@ -114,6 +114,8 @@ pub fn mx_target(value: &str) -> Option<String> {
 #[derive(Debug, Clone, Default)]
 pub struct ServedNames {
 	roles: BTreeMap<String, String>,
+	/// The names the configuration declares as sending, canonical.
+	senders: BTreeSet<String>,
 }
 
 impl ServedNames {
@@ -150,6 +152,19 @@ impl ServedNames {
 			}
 		}
 		served
+	}
+
+	/// These names plus the names `senders` lists (`[dns_publish] senders`):
+	/// they send mail, so the lockdown leaves them their own SPF.
+	pub fn with_senders(mut self, senders: &[String]) -> Self {
+		self.senders
+			.extend(senders.iter().map(|name| canonical_name(name)));
+		self
+	}
+
+	/// Whether canonical `name` is declared as sending.
+	pub fn sends(&self, name: &str) -> bool {
+		self.senders.contains(name)
 	}
 
 	fn insert(&mut self, name: &str, role: String) {

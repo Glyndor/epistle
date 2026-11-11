@@ -16,10 +16,11 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::dns::names::{mx_target, shortened};
-use crate::dns::provider::{DnsRecord, RecordKind, txt_purpose};
+use crate::dns::provider::{DnsRecord, RecordKind};
 
 mod apply;
 mod dmarc;
+mod names;
 mod reports;
 
 pub use apply::{PublishFailure, UndoChanged, UndoFailure, UndoReport, publish_plan, undo_journal};
@@ -204,8 +205,21 @@ pub fn build_plan(input: &PlanInput<'_>) -> Plan {
 		.collect();
 	let mut entries: Vec<PlanEntry> = dmarc_entry.into_iter().collect();
 	let exchanges = mx_owners(input.existing);
-	for (name, records) in address_names(input.domain, input.existing) {
+	let ours = |record: &DnsRecord| journal.owns(record);
+	let scope = names::Scope {
+		served: input.served,
+		exchanges: &exchanges,
+		ours: &ours,
+		cuts: &cuts,
+	};
+	for (name, (presence, records)) in names::candidates(input.domain, input.existing) {
 		if !is_valid_name(&name) {
+			// Only a name that looks like a host (an address record) is
+			// reported; any other record under an odd name is not planned
+			// and stays out of the output.
+			if !matches!(presence, names::Presence::Address) {
+				continue;
+			}
 			skipped.push(SkipEntry {
 				name: shortened(&name),
 				reason: format!(
@@ -215,17 +229,18 @@ pub fn build_plan(input: &PlanInput<'_>) -> Plan {
 			});
 			continue;
 		}
-		if cuts.above(&name).is_some() {
+		let Some(verdict) = names::decide(&name, presence, &records, &scope) else {
 			continue;
-		}
-		match classify(&name, &records, input.served, &exchanges, journal) {
-			Verdict::Skip(reason) => skipped.push(SkipEntry { name, reason }),
-			Verdict::Add { spf, mx } => {
+		};
+		match verdict {
+			names::Verdict::Skip(reason) => skipped.push(SkipEntry { name, reason }),
+			names::Verdict::Add { spf, mx } => {
+				let what = presence.describe();
 				if spf {
 					entries.push(PlanEntry {
 						record: DnsRecord::new(name.clone(), RecordKind::Txt, NULL_SPF, TTL),
 						reason: format!(
-							"{name} has an address record and no SPF; v=spf1 -all says it sends no mail"
+							"{name} {what} and no SPF; v=spf1 -all says it sends no mail"
 						),
 						replaces: None,
 					});
@@ -234,7 +249,7 @@ pub fn build_plan(input: &PlanInput<'_>) -> Plan {
 					entries.push(PlanEntry {
 						record: DnsRecord::new(name.clone(), RecordKind::Mx, NULL_MX, TTL),
 						reason: format!(
-							"{name} has an address record and no MX; MX 0 . (RFC 7505) says it accepts no mail"
+							"{name} {what} and no MX; MX 0 . (RFC 7505) says it accepts no mail"
 						),
 						replaces: None,
 					});
@@ -275,29 +290,6 @@ pub fn build_plan(input: &PlanInput<'_>) -> Plan {
 	}
 }
 
-/// The names at or under `domain` that carry an A, AAAA or CNAME, with
-/// every record each one holds, sorted, without wildcards (the wildcard has
-/// its own decision). One pass over the zone: the cost does not depend on
-/// how many names there are.
-fn address_names<'a>(
-	domain: &str,
-	existing: &'a [DnsRecord],
-) -> BTreeMap<String, Vec<&'a DnsRecord>> {
-	let mut names: BTreeMap<String, Vec<&DnsRecord>> = BTreeMap::new();
-	for record in existing {
-		let name = canonical_name(&record.name);
-		if in_domain(&name, domain) && !name.starts_with("*.") {
-			names.entry(name).or_default().push(record);
-		}
-	}
-	names.retain(|_, records| {
-		records
-			.iter()
-			.any(|r| matches!(r.kind, RecordKind::A | RecordKind::Aaaa | RecordKind::Cname))
-	});
-	names
-}
-
 /// Why a name inside a delegation is left alone.
 fn delegated_reason(cut: &str) -> String {
 	format!("{cut} is delegated to other nameservers; left as is")
@@ -314,68 +306,6 @@ fn mx_owners(existing: &[DnsRecord]) -> BTreeMap<String, String> {
 		}
 	}
 	owners
-}
-
-enum Verdict {
-	Skip(String),
-	Add { spf: bool, mx: bool },
-}
-
-/// Decide what one name with an address record gets. The order matters:
-/// a name epistle serves is reported as such even when it is a CNAME.
-fn classify(
-	name: &str,
-	records: &[&DnsRecord],
-	served: &ServedNames,
-	exchanges: &BTreeMap<String, String>,
-	journal: &Journal,
-) -> Verdict {
-	if let Some(role) = served.role(name) {
-		return Verdict::Skip(format!("epistle serves {name} ({role}); left as is"));
-	}
-	if name.split('.').any(|label| label.starts_with('_')) {
-		return Verdict::Skip(format!(
-			"{name} is a service name (a label starts with an underscore), not a host that sends mail; left as is"
-		));
-	}
-	if records.iter().any(|r| r.kind == RecordKind::Cname) {
-		return Verdict::Skip(format!(
-			"{name} is a CNAME, and no other record may sit next to a CNAME (RFC 1034 section 3.6.2); a null SPF and null MX belong at the name it points to; left as is"
-		));
-	}
-	let own_spf = records.iter().any(|r| is_spf(r) && !journal.owns(r));
-	let own_mx = records
-		.iter()
-		.any(|r| r.kind == RecordKind::Mx && !journal.owns(r));
-	match (own_spf, own_mx) {
-		(true, true) => {
-			return Verdict::Skip(format!("{name} has its own SPF and MX records; left as is"));
-		}
-		(true, false) => {
-			return Verdict::Skip(format!("{name} has its own SPF record; left as is"));
-		}
-		(false, true) => {
-			return Verdict::Skip(format!("{name} has its own MX record; left as is"));
-		}
-		(false, false) => {}
-	}
-	if let Some(owner) = exchanges.get(name) {
-		return Verdict::Skip(format!(
-			"{name} is an MX target of {owner}, so it is a mail server and may send as itself; left as is"
-		));
-	}
-	let spf = !records.iter().any(|r| is_spf(r));
-	let mx = !records.iter().any(|r| r.kind == RecordKind::Mx);
-	if !spf && !mx {
-		return Verdict::Skip(format!(
-			"{name} already has the null SPF and null MX this command published"
-		));
-	}
-	Verdict::Add { spf, mx }
-}
-
-fn is_spf(record: &DnsRecord) -> bool {
-	record.kind == RecordKind::Txt && txt_purpose(&record.value) == Some("v=spf1")
 }
 
 /// Add `*.<domain>` `v=spf1 -all` only when the zone has no wildcard of

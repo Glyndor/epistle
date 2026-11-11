@@ -11,6 +11,7 @@ mod validate_tenants;
 mod validate_database;
 
 mod validate_disabled_domains;
+mod validate_dns_senders;
 
 mod validate_identification;
 
@@ -30,6 +31,7 @@ impl Config {
 		self.validate_disabled_domains()?;
 		self.dns.validate()?;
 		self.dns_publish.validate()?;
+		self.validate_dns_senders()?;
 		self.validate_accounts()?;
 		self.validate_srs()?;
 		self.validate_api()?;
