@@ -20,7 +20,7 @@ fn checked_paths<'a>(
 	entries: &'a [(String, u32, Vec<u8>)],
 	data_dir: &Path,
 ) -> io::Result<Vec<&'a Path>> {
-	entries
+	let paths = entries
 		.iter()
 		.filter_map(|(name, _, _)| {
 			// `database.sql` is the database dump; it goes to the
@@ -44,7 +44,32 @@ fn checked_paths<'a>(
 				Err(error) => Some(Err(error)),
 			}
 		})
-		.collect::<io::Result<Vec<_>>>()
+		.collect::<io::Result<Vec<_>>>()?;
+	refuse_colliding(&paths)?;
+	Ok(paths)
+}
+
+/// Refuse entries that cannot all be laid down: the same path twice, or a
+/// path that sits under another entry's path (a file cannot also be a
+/// directory). Found here, before the database is loaded, rather than when
+/// the write fails with the database already committed.
+fn refuse_colliding(paths: &[&Path]) -> io::Result<()> {
+	let distinct: std::collections::HashSet<&Path> = paths.iter().copied().collect();
+	if distinct.len() != paths.len() {
+		return Err(io::Error::other("archive names the same path twice"));
+	}
+	for path in paths {
+		if path
+			.ancestors()
+			.skip(1)
+			.any(|parent| distinct.contains(parent))
+		{
+			return Err(io::Error::other(
+				"archive has a path that lies under another entry's path",
+			));
+		}
+	}
+	Ok(())
 }
 
 pub(super) fn lay_files(entries: &[(String, u32, Vec<u8>)], data_dir: &Path) -> io::Result<()> {
