@@ -139,6 +139,30 @@ pub fn build_records(
 	public_ipv4: Option<Ipv4Addr>,
 	public_ipv6: Option<Ipv6Addr>,
 ) -> Vec<PublishRecord> {
+	build_records_for_roles(
+		domains,
+		hostname,
+		(dkim_default, dkim_per_domain),
+		(tlsa, mta_sts_id, services),
+		(caa_directory, public_ipv4, public_ipv6),
+		&crate::dns::skip::Roles::default(),
+	)
+}
+
+/// [`build_records`] for a deployment whose domains have roles. A
+/// `send-only` domain has nobody to read aggregate reports at its own
+/// `postmaster@` (the address does not exist on a hosted domain unless
+/// someone creates it), so its DMARC record carries no `rua=`: the policy
+/// still applies, and no report bounces. The groups a role leaves out are
+/// taken out by the filter in [`crate::dns::desired`], not here.
+pub fn build_records_for_roles(
+	domains: &[String],
+	hostname: &str,
+	(dkim_default, dkim_per_domain): (&[(String, String)], &DomainDkim),
+	(tlsa, mta_sts_id, services): (Option<&str>, &str, ServiceRecords),
+	(caa_directory, public_ipv4, public_ipv6): (Option<&str>, Option<Ipv4Addr>, Option<Ipv6Addr>),
+	roles: &crate::dns::skip::Roles,
+) -> Vec<PublishRecord> {
 	let mut records = Vec::new();
 	// Hostname address records: A and AAAA at the hostname, in the zone of the
 	// hostname's parent domain. Order matters: every MX below points at this
@@ -196,10 +220,15 @@ pub fn build_records(
 		// SRS-rewritten; see `config::validate` for the matching check that
 		// rejects `forward` without `srs_secret`.
 		records.push(txt(domain.clone(), "v=spf1 mx -all".to_string()));
-		// DMARC: a protective default that reports to postmaster.
+		// DMARC: a protective default that reports to postmaster, except on
+		// a domain that only sends: nobody reads that mailbox there.
+		let reports = match roles.of_name(domain) {
+			crate::dns::skip::DomainRole::SendOnly => String::new(),
+			crate::dns::skip::DomainRole::Full => format!(" rua=mailto:postmaster@{domain};"),
+		};
 		records.push(txt(
 			format!("_dmarc.{domain}"),
-			format!("v=DMARC1; p=quarantine; rua=mailto:postmaster@{domain}; adkim=s; aspf=s"),
+			format!("v=DMARC1; p=quarantine;{reports} adkim=s; aspf=s"),
 		));
 		// MTA-STS discovery record (the policy itself is served over HTTPS).
 		records.push(txt(

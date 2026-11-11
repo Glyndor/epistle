@@ -57,7 +57,7 @@ pub fn split_checks(checks: Vec<crate::dns::Check>, skip: &SkipSet) -> Vec<crate
 		.into_iter()
 		.map(|mut check| {
 			if let Some(group) = group_of_check(&check.kind, &check.name)
-				&& skip.contains(group)
+				&& skip.skips(group, &check.name)
 			{
 				check.mark_skipped(group);
 			}

@@ -67,7 +67,7 @@ async fn evaluate(config: &Config, dns: &dyn DnsLookup) -> AreaReport {
 	}
 	// A record of a group the configuration skips is not published on
 	// purpose: it is not missing, and the operator is told so.
-	let records = crate::dns::skip::split_checks(records, &config.dns_publish.skip_set());
+	let records = crate::dns::skip::split_checks(records, &config.skip_set());
 	// Cloudflare's orange cloud breaks delivery to every mail name:
 	// SMTP / IMAP / POP3 / submission all need direct traffic, and the
 	// proxy only forwards HTTP(S). The check lives behind the configured

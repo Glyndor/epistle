@@ -189,7 +189,7 @@ pub async fn survey(ctx: &Context<'_>) -> Result<Survey, String> {
 			lockdown: &lockdown,
 			retire_within: ctx.domain,
 			incomplete: ctx.incomplete.or(unresolved.as_deref()),
-			skip: &config.dns_publish.skip_set(),
+			skip: &config.skip_set(),
 			flattens_apex_cname: ctx.provider.flattens_apex_cname(&zone),
 		});
 		survey.zones.push(ZoneRun {

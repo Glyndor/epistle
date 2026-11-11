@@ -1,9 +1,11 @@
-//! `epistle domain set`: the per-domain storage quota and submission rate.
-//! They are the `domain_quotas` and `domain_submission_limits` maps that
+//! `epistle domain set`: the per-domain storage quota, submission rate and
+//! role. The first two are the `domain_quotas` and `domain_submission_limits` maps that
 //! `limits set --domain` edits; both commands parse values the same way.
 
 use crate::cli::config_edit::ConfigDocument;
 use crate::cli::limits::{Key, domain_map, parse_override};
+
+use crate::dns::skip::DomainRole;
 
 use super::writers::Commit;
 
@@ -13,6 +15,8 @@ use super::writers::Commit;
 pub(super) struct Change {
 	pub quota: Option<Option<u64>>,
 	pub submission_rate: Option<Option<u64>>,
+	/// The role the domain is given, `None` to leave it.
+	pub role: Option<DomainRole>,
 }
 
 /// Turn one `--flag VALUE` / `--no-flag` pair into a [`Change`] entry.
@@ -46,7 +50,14 @@ impl Change {
 		Ok(Change {
 			quota: parse(Key::Quota, "quota", quota, no_quota)?,
 			submission_rate: parse(Key::SubmissionRate, "submission-rate", rate, no_rate)?,
+			role: None,
 		})
+	}
+
+	/// The same change, also giving the domain a role.
+	pub(super) fn with_role(mut self, role: Option<DomainRole>) -> Self {
+		self.role = role;
+		self
 	}
 
 	/// Write the change into `document` for `domain`.
@@ -65,6 +76,9 @@ impl Change {
 				None => document.remove_map_entry(map, domain)?,
 			}
 		}
+		if let Some(role) = self.role {
+			super::role::apply(document, domain, role)?;
+		}
 		Ok(())
 	}
 }
@@ -77,6 +91,9 @@ pub(super) fn commit<'a>(domain: &str, change: &Change) -> Commit<'a> {
 	}
 	if let Some(rate) = change.submission_rate {
 		fields["submission_rate"] = rate.into();
+	}
+	if let Some(role) = change.role {
+		fields["role"] = role.name().into();
 	}
 	Commit {
 		subject: format!("domain {domain}"),

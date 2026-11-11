@@ -79,7 +79,7 @@ pub async fn undo(
 		read.push((zone, ledger, listing));
 	}
 	let mut report = UndoReport::default();
-	let skip = config.dns_publish.skip_set();
+	let skip = config.skip_set();
 	for (zone, mut ledger, listing) in read {
 		let cuts = Cuts::new(&canonical_name(&zone), &listing);
 		let held: Vec<DnsRecord> = ledger.records().into_iter().rev().collect();
