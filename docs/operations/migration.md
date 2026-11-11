@@ -42,7 +42,9 @@ follows the configuration format of Mox v0.0.17. It imports:
 - the DKIM keys of the selectors listed under `Sign`, with the same selectors.
 
 Mox's DMARC and TLS report addresses, MTA-STS policy, routes, rulesets and web
-handlers are not imported; the output lists the ones it found.
+handlers are not imported; the output lists the ones it found. A
+configuration file larger than 16 MiB, or with more than 500000 entries
+(values and empty blocks, list items included), is refused.
 
 ## From Stalwart
 
