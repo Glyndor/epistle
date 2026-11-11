@@ -137,3 +137,26 @@ async fn a_wrong_local_password_counts_even_when_the_directory_is_down() {
 		"five refused local passwords ban the client, with the directory up or down"
 	);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn only_a_checked_credential_is_a_failed_login_in_the_audit_counters() {
+	let metrics = Arc::new(crate::metrics::Metrics::new());
+	let directory = directory_with(ldap_that_is_down()).with_metrics(metrics.clone());
+	let failed = || {
+		metrics
+			.snapshot()
+			.get("auth_login_failed")
+			.copied()
+			.unwrap_or(0)
+	};
+	assert_eq!(
+		attempt(&directory, "nobody-here", fixtures::wrong_password()),
+		Verdict::Busy
+	);
+	assert_eq!(failed(), 0, "nothing was checked for a login nobody holds");
+	assert_eq!(
+		attempt(&directory, OPEN, fixtures::wrong_password()),
+		Verdict::Busy
+	);
+	assert_eq!(failed(), 1, "a local password was checked and refused");
+}

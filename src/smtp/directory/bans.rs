@@ -264,8 +264,8 @@ impl Directory {
 				// that never left the queue cost nothing and counts for
 				// nothing.
 				Some(Err(busy)) => {
-					self.record_auth_outcome(login, None, ip, protocol);
 					if self.credentials(login).is_some() {
+						self.record_auth_outcome(login, None, ip, protocol);
 						// A local credential was checked just above and did
 						// not match. That failure counts like any other
 						// wrong password, whatever the directory says.
