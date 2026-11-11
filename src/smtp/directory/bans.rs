@@ -265,7 +265,19 @@ impl Directory {
 				// nothing.
 				Some(Err(busy)) => {
 					self.record_auth_outcome(login, None, ip, protocol);
-					if busy == crate::directory_store::LdapBusy::Reached {
+					if self.credentials(login).is_some() {
+						// A local credential was checked just above and did
+						// not match. That failure counts like any other
+						// wrong password, whatever the directory says.
+						self.record_ban_outcome(
+							login,
+							resolved_account.as_deref(),
+							false,
+							bypassed,
+							ip,
+							protocol,
+						);
+					} else if busy == crate::directory_store::LdapBusy::Reached {
 						self.record_client_failure(ip, protocol);
 					}
 					self.note_gate_rejection(protocol);

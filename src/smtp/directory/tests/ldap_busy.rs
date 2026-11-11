@@ -121,3 +121,19 @@ async fn attempts_that_never_reached_the_directory_ban_nobody() {
 		}
 	);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_wrong_local_password_counts_even_when_the_directory_is_down() {
+	let directory = directory_with(ldap_that_is_down());
+	for _ in 0..5 {
+		assert_eq!(
+			attempt(&directory, OPEN, fixtures::wrong_password()),
+			Verdict::Busy
+		);
+	}
+	assert_eq!(
+		attempt(&directory, OPEN, fixtures::password()),
+		Verdict::Refused,
+		"five refused local passwords ban the client, with the directory up or down"
+	);
+}
