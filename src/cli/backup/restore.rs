@@ -145,6 +145,12 @@ fn restore_summarising(
 	}
 	summary.entries = entries.len();
 	if dry_run {
+		// The preview answers for the same checks the restore makes before it
+		// writes, so an archive it would refuse does not read as a green run.
+		if let Err(error) = check_files(&entries, &config.data_dir) {
+			crate::cli::style::error(format_args!("laying down files: {error}"));
+			return ExitCode::FAILURE;
+		}
 		let _ = writeln!(out, "would restore {} entries:", entries.len());
 		for (name, _mode, content) in &entries {
 			if name == DATABASE_SQL_NAME {
