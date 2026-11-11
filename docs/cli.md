@@ -1388,7 +1388,11 @@ compose directory away, or point `url` at the stack's database.
 
 The archive's `database.sql` has to end with the closing marker `pg_dump`
 writes, as the backup requires; a restore refuses one that does not before it
-touches anything. The database is loaded before the files are laid down, and
+touches anything. The marker only catches a truncated dump: it is plain text,
+so whoever writes an archive can write it too. The SQL is replayed as it is,
+by `psql`, with the rights of the `epistle` database role (and `psql` runs its
+own backslash commands from the file), so restore only archives you made or
+that come from a source you trust. The database is loaded before the files are laid down, and
 the archive is checked against `data_dir` first. A dump that `psql` rejects
 therefore leaves both the database and the files as they were. When the load
 ends without a `psql` exit (the exec was cut), the message says it is not
