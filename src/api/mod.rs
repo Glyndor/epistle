@@ -21,7 +21,9 @@ pub mod tenant_limits;
 pub mod v1;
 
 pub use api_keys::{ApiKey, ApiKeySet, ApiKeySetSnapshot, ApiKeyStore};
-pub use audit::{AuditEvent, log_auth_attempt, log_privilege_change, log_send_limited};
+pub use audit::{
+	AuditEvent, log_auth_attempt, log_auth_busy, log_privilege_change, log_send_limited,
+};
 pub use authorization::{Credential, Principal};
 pub use jmap::reclaim_blobs;
 pub use state::{ApiState, ClientIp};

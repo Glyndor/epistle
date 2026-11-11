@@ -64,6 +64,22 @@ impl std::fmt::Debug for FakeBanStore {
 }
 
 impl FakeBanStore {
+	/// What has been recorded, without the names: each failure subject
+	/// reduced to its kind (`ip`, `pair`, `account`) with its count, sorted.
+	/// Two attempts that wrote the same rows have the same shape.
+	pub fn failure_shape(&self) -> Vec<(String, usize)> {
+		let failures = self.failures.lock().expect("failures lock");
+		let mut shape: Vec<(String, usize)> = failures
+			.iter()
+			.map(|(subject, times)| {
+				let kind = subject.split(':').next().unwrap_or_default().to_string();
+				(kind, times.len())
+			})
+			.collect();
+		shape.sort();
+		shape
+	}
+
 	/// Build a fake with `policy`. The policy is read but not enforced
 	/// inside the fake; the unit tests below are the enforcement.
 	pub fn new(policy: BanPolicy) -> Self {

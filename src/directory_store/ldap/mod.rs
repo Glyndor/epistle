@@ -28,6 +28,13 @@
 //!   `None`. There is no distinction between "unknown user" and "wrong password"
 //!   — both return `None`, and both cost the same number of connections and
 //!   binds, so there is no user-enumeration oracle in the count of round trips.
+//! - Design tradeoff when the directory cannot answer (busy, down, slow): the
+//!   login gets the temporary failure, with the same `auth.busy` event for
+//!   every login. A refused local password still counts against its account
+//!   and the client, so an attacker can try the local passwords of known
+//!   accounts at the usual strike rate; any other login counts against the
+//!   client address alone, so an outage cannot lock out accounts whose
+//!   passwords are right.
 //! - Filter injection is prevented by escaping the login per RFC 4515 before it
 //!   is substituted into the configured search filter.
 //! - Plaintext `ldap://` is supported but discouraged: credentials cross the

@@ -264,11 +264,23 @@ impl Directory {
 				// that never left the queue cost nothing and counts for
 				// nothing.
 				Some(Err(busy)) => {
+					// The password check above ran and refused, and the
+					// directory could not decide. What counts depends on what
+					// was decided:
+					// - A local credential was checked and refused: a failed
+					//   login like any other, against the account and the
+					//   client, so downing or saturating the directory is no
+					//   way to guess its password for free.
+					// - Nothing else was decided (a login only the directory
+					//   holds, or nobody): it counts against the client alone,
+					//   never the account, or an outage would lock out people
+					//   whose passwords are right.
+					// `auth.busy` is written for every login, with the same
+					// fields.
+					let reached = busy == crate::directory_store::LdapBusy::Reached;
+					crate::api::log_auth_busy(login, ip, protocol, reached);
 					if self.credentials(login).is_some() {
 						self.record_auth_outcome(login, None, ip, protocol);
-						// A local credential was checked just above and did
-						// not match. That failure counts like any other
-						// wrong password, whatever the directory says.
 						self.record_ban_outcome(
 							login,
 							resolved_account.as_deref(),
@@ -277,10 +289,9 @@ impl Directory {
 							ip,
 							protocol,
 						);
-					} else if busy == crate::directory_store::LdapBusy::Reached {
+					} else {
 						self.record_client_failure(ip, protocol);
 					}
-					self.note_gate_rejection(protocol);
 					return hash_gate::Verdict::Busy;
 				}
 			},
@@ -523,7 +534,8 @@ impl Directory {
 	}
 
 	/// Count one failure against the client's address alone, for an attempt
-	/// that cost the server something but gave no verdict on the credential.
+	/// that cost the server a password check but decided nothing about any
+	/// account. See [`Self::record_ban_outcome`] for the full record.
 	pub fn record_client_failure(
 		&self,
 		ip: Option<std::net::IpAddr>,

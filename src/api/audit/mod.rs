@@ -47,6 +47,10 @@ pub enum AuditEvent {
 	/// disabled, the password did not match, an app-password CIDR did not
 	/// admit the peer, or an LDAP bind failed.
 	LoginFailed,
+	/// A password-based attempt could not be decided because the LDAP
+	/// directory was busy or unreachable. Written the same way for every
+	/// login, so the log shows the attempts without saying which logins exist.
+	AuthBusy,
 	/// A submission was refused because the account would exceed the
 	/// rolling 24h cap on first-time recipients
 	/// (`Config::new_recipients_per_day`). The fast-evolving exfiltration
@@ -68,6 +72,7 @@ impl AuditEvent {
 			AuditEvent::MaskedRemoved => "masked.removed",
 			AuditEvent::LoginSucceeded => "auth.login_succeeded",
 			AuditEvent::LoginFailed => "auth.login_failed",
+			AuditEvent::AuthBusy => "auth.busy",
 			AuditEvent::SendLimited => "send.new_recipients_limited",
 		}
 	}
@@ -182,6 +187,24 @@ pub fn log_auth_attempt(
 		client_ip = %client_ip,
 		protocol = protocol.as_str(),
 		"authentication attempt"
+	);
+}
+
+/// Emit `auth.busy`: an attempt the LDAP directory could not decide.
+/// `reached` says whether the bind went out to the directory. The fields
+/// are the same for every login.
+pub fn log_auth_busy(login: &str, client_ip: Option<IpAddr>, protocol: Protocol, reached: bool) {
+	let client_ip = client_ip
+		.map(|ip| ip.to_string())
+		.unwrap_or_else(|| "unknown".to_string());
+	tracing::info!(
+		target: "epistle::auth",
+		event = AuditEvent::AuthBusy.as_str(),
+		login = %crate::log_id::account(login),
+		client_ip = %client_ip,
+		protocol = protocol.as_str(),
+		reached = reached,
+		"authentication attempt left undecided by the directory"
 	);
 }
 
