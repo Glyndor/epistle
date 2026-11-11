@@ -153,7 +153,10 @@ pub(super) fn read_entries(tar: &[u8]) -> io::Result<Vec<Entry>> {
 					.unwrap_or(data.len());
 				long_name = Some(String::from_utf8_lossy(&data[..end]).into_owned());
 			}
-			b'g' | b'5' => {}
+			b'g' => {}
+			// A PAX or GNU name belongs to the member right after it, a
+			// directory included: it must not carry over to the next file.
+			b'5' => long_name = None,
 			kind => {
 				return Err(io::Error::other(format!(
 					"archive member of type '{}' is not a regular file",
