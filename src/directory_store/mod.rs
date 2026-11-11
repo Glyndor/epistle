@@ -224,7 +224,10 @@ impl AccountStore {
 				.iter()
 				.map(|existing| existing.name.as_str())
 				.chain(state.accounts.iter().map(|existing| existing.name.as_str()))
-				.any(|existing| existing == account.name);
+				.any(|existing| existing == account.name)
+				|| self
+					.directory_names()
+					.any(|existing| existing == account.name);
 			if name_taken {
 				return Err(StoreError::Duplicate(account.name.clone()));
 			}

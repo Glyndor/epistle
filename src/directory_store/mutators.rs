@@ -97,10 +97,31 @@ impl AccountStore {
 		Ok(previous.expect("closure ran"))
 	}
 
+	/// Every address held by an account the SQL or LDAP backend loaded.
+	pub(super) fn directory_addresses(&self) -> impl Iterator<Item = String> {
+		let sql = self.sql_accounts.read().unwrap_or_else(|p| p.into_inner());
+		let ldap = self.ldap_accounts.read().unwrap_or_else(|p| p.into_inner());
+		let mut all: Vec<String> = Vec::new();
+		all.extend(sql.iter().flat_map(|a| a.addresses.iter().cloned()));
+		all.extend(ldap.iter().flat_map(|a| a.addresses.iter().cloned()));
+		all.into_iter()
+	}
+
+	/// Every account name the SQL or LDAP backend loaded.
+	pub(super) fn directory_names(&self) -> impl Iterator<Item = String> {
+		let sql = self.sql_accounts.read().unwrap_or_else(|p| p.into_inner());
+		let ldap = self.ldap_accounts.read().unwrap_or_else(|p| p.into_inner());
+		let mut all: Vec<String> = Vec::new();
+		all.extend(sql.iter().map(|a| a.name.clone()));
+		all.extend(ldap.iter().map(|a| a.name.clone()));
+		all.into_iter()
+	}
+
 	/// Whether `raw` already routes somewhere: a static account, a dynamic
-	/// account other than `except`, a static `[[alias]]`, or a masked
-	/// address. Callers are inside the locked mutate closure, so the
-	/// check and the following write see the same accounts.
+	/// account other than `except`, an account from the SQL or LDAP
+	/// directory, a static `[[alias]]`, or a masked address. Callers are
+	/// inside the locked mutate closure, so the check and the following
+	/// write see the same accounts.
 	pub(super) fn address_taken(
 		&self,
 		dynamic: &[DynamicAccount],
@@ -120,6 +141,7 @@ impl AccountStore {
 					.flat_map(|existing| existing.addresses.iter()),
 			)
 			.any(same);
+		let used_by_directory = self.directory_addresses().any(|address| same(&address));
 		let used_by_alias = self.aliases.iter().any(|alias| same(&alias.address));
 		let used_by_masked = self
 			.masked
@@ -127,7 +149,7 @@ impl AccountStore {
 			.unwrap_or_else(|poisoned| poisoned.into_inner())
 			.get(&wanted)
 			.is_some();
-		used_by_account || used_by_alias || used_by_masked
+		used_by_account || used_by_directory || used_by_alias || used_by_masked
 	}
 
 	/// Add an address to a dynamic account. Runs the same domain check
