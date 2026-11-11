@@ -36,7 +36,7 @@ pub mod sql;
 pub use sql::{SqlAccount, load_sql_accounts};
 
 pub mod ldap;
-pub use ldap::{LdapAccount, LdapAuthenticator, load_ldap_accounts};
+pub use ldap::{LdapAccount, LdapAuthenticator, LdapBusy, load_ldap_accounts};
 
 mod account;
 mod build;

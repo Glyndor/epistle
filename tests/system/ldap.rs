@@ -67,7 +67,7 @@ fn known_user_binds_and_resolves_to_the_expected_account() {
 	let auth = LdapAuthenticator::new(config);
 	assert_eq!(
 		auth.authenticate(&user, &password),
-		Some(expected),
+		Ok(Some(expected)),
 		"a known user with the right password authenticates to the mapped account"
 	);
 }
@@ -82,7 +82,7 @@ fn wrong_password_returns_none() {
 	let auth = LdapAuthenticator::new(config);
 	assert_eq!(
 		auth.authenticate(&user, &fixtures::fresh_secret()),
-		None,
+		Ok(None),
 		"a wrong password fails closed"
 	);
 }
@@ -96,7 +96,7 @@ fn unknown_user_returns_none() {
 	let auth = LdapAuthenticator::new(config);
 	assert_eq!(
 		auth.authenticate("no-such-user-xyz", &fixtures::fresh_secret()),
-		None,
+		Ok(None),
 		"an unknown user fails closed, indistinguishable from a bad password"
 	);
 }
