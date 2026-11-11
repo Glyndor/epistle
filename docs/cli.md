@@ -14,8 +14,8 @@ array, a show an object. A change prints one object with `result` (`saved`,
 `done` once a stack command finished, `passed` for a test), `action`, the
 fields naming what changed (an account, an address, a label, a new secret
 shown once) and `reload` when the command waits for the server: `loaded`,
-`no-server`, `timed-out`, `restarted`, `restart-failed`, `restart-needed`
-or `none`. Notes and errors stay on stderr, and so does the output of the
+`no-server`, `timed-out`, `restarted`, `restart-failed`, `restart-needed`,
+`deferred` (`--no-restart` was given) or `none`. Notes and errors stay on stderr, and so does the output of the
 podup run a command starts, so a failure leaves stdout empty. The commands
 whose stdout already is the product take no `--json`: `serve`, `local` and
 `mta-sts-serve` (they run until stopped), `export` and `backup` (the mbox
@@ -62,6 +62,16 @@ epistle completions fish > ~/.config/fish/completions/epistle.fish
 
 Every change is validated before it is written, keeps the comments in
 `mail.toml`, accepts `--dry-run`, and restarts `mail` only when it has to.
+
+To run several of them in a row without a restart after each, give every one
+`--no-restart` (it works before or after the subcommand). The change is
+written and the command says it takes effect at the next restart; its `--json`
+result carries `"reload": "deferred"`. Then `sudo epistle stack apply` once:
+it recreates the services whose definition changed (published ports, the DNS
+credential) and restarts `mail`, so the live SMTP and IMAP connections drop
+once instead of once per command. Without a compose stack the option changes
+nothing: the command already only says the server must be restarted. Commands
+that never restart accept the option and ignore it.
 
 | I want to… | Command |
 |---|---|
@@ -1132,6 +1142,7 @@ sequence and its exit code becomes epistle's exit code.
 | `sudo epistle stack ps [--json]` | Lists running services as a table or JSON. |
 | `sudo epistle stack logs [--follow] [SERVICE]` | Streams service logs. |
 | `sudo epistle stack restart [SERVICE]` | Restarts the stack or one service. |
+| `sudo epistle stack apply` | Applies what commands run with `--no-restart` left waiting: `podup up -d` to recreate what changed, then one restart of `mail`. |
 | `sudo epistle stack stop [SERVICE]` / `sudo epistle stack start [SERVICE]` | Stop or start the whole stack, or one service, without removing containers or the autostart unit. `stack stop mail` is how to take the mail server down for `epistle restore` while the database stays up to receive the dump. |
 | `sudo epistle stack update` | Renders `compose.yaml` again with this release's code, shows what changed and replaces it, then runs `podup up -d` so only changed services are recreated. In default mode it also restarts `mail` when its definition did not change, so it runs the host binary the new .deb installed; in custom image mode it runs `podup pull` first. Before any of that it dumps the stack's database to `<data_dir>/backups/pre-<version>-<timestamp>.sql.gz` (mode 0600, the newest three `pre-*` dumps kept while the update runs), because the new server migrates the schema when it starts; a failed dump stops the update before anything changes. Afterwards it waits up to five minutes for `mail` to report healthy and runs the `config`, `ports` and `db` checks of `epistle status`; on a stack that runs the certificates container it also waits for `certs` to settle, judged the way `stack certs` judges it (two `podup ps` looks fifteen seconds apart, with the same start in both), and runs the `tls` check as well, since that is the check that reports the container; a failure names the area and exits non-zero, and the apt upgrade prints it framed with the rollback command. When all of that passes, it deletes the `pre-<version>-*` dumps it took (a dump `db upgrade` took stays) and the images the previous compose file named and the new one does not, such as an older ClamAV digest or the version-tagged epistle image of a stack created by an earlier release. An image is removed only when no container of the service account uses it, so one that is still in use, or that carries another name, stays and the update says so; a failed update keeps the dumps and the images. Data and volumes are kept. Before it writes the new file it moves the storage and OAuth signing keys out of data_dir, and once `db` runs it takes SUPERUSER away from an `epistle` role an older release created (see [the container stack](operations/container.md#the-database-roles)). |
 | `sudo epistle stack resources [--json]` | Lists each service's `mem_limit` and `pids_limit` from `compose.yaml`, and their sum. Does not run `podup`. |

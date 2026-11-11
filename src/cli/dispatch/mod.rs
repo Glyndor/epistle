@@ -42,6 +42,7 @@ pub(super) fn with_config<F: FnOnce(&Config) -> ExitCode>(path: &Path, f: F) -> 
 impl Cli {
 	/// Execute the parsed command.
 	pub fn run(self) -> ExitCode {
+		crate::cli::config_edit::defer_restarts(self.no_restart);
 		if self.command.requires_service_user() {
 			match super::rootless::reexecute() {
 				Ok(Some(code)) => return code,

@@ -45,6 +45,9 @@ pub(crate) enum Reload {
 	RestartFailed,
 	/// There is no stack to restart: the operator restarts the server.
 	RestartNeeded,
+	/// `--no-restart` was given: the change waits for the next restart,
+	/// which `epistle stack apply` makes.
+	Deferred,
 	/// Nothing to apply: the change was empty or takes effect without a
 	/// restart.
 	None,
@@ -60,6 +63,7 @@ impl Reload {
 			Reload::Restarted => "restarted",
 			Reload::RestartFailed => "restart-failed",
 			Reload::RestartNeeded => "restart-needed",
+			Reload::Deferred => "deferred",
 			Reload::None => "none",
 		}
 	}
