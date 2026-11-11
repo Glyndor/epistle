@@ -89,7 +89,8 @@ pub async fn refresh(
 	state.intend(&value, &known);
 	store(&state, target);
 	match write::publish(provider, target.hostname, &value, &known).await {
-		Ok(()) => {
+		Ok(left) => {
+			state.settle(&left);
 			state.pending = None;
 			store(&state, target);
 			Outcome::Published { value }

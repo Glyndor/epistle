@@ -42,12 +42,14 @@ impl From<ProviderError> for Refused {
 
 /// Publish `value` at `_25._tcp.<hostname>`, leaving every record that is
 /// not in `known` (the values this instance wrote, newest first) as it is.
+/// Returns the values of `known` the zone holds after the write, `value`
+/// among them.
 pub(super) async fn publish(
 	provider: &dyn DnsProvider,
 	hostname: &str,
 	value: &str,
 	known: &[String],
-) -> Result<(), Refused> {
+) -> Result<Vec<String>, Refused> {
 	let name = format!("_25._tcp.{hostname}");
 	let zone = crate::dns::zone::resolve(provider, hostname).await?;
 	// The lock of the zone is taken before the zone is read and held until
@@ -60,7 +62,8 @@ pub(super) async fn publish(
 		// A provider that cannot read its zone cannot be asked who wrote
 		// what; it keeps the whole-set write the operator configured.
 		Err(ProviderError::Unsupported) => {
-			return Ok(provider.upsert(&zone, record).await?);
+			provider.upsert(&zone, record).await?;
+			return Ok(vec![value.to_string()]);
 		}
 		Err(error) => return Err(error.into()),
 	};
@@ -76,15 +79,22 @@ pub(super) async fn publish(
 		.collect();
 	let set: Vec<DnsRecord> = observed.iter().map(|o| o.record.clone()).collect();
 	let (foreign, overlap) = match decide(&set, value, known) {
-		Decision::Present { .. } => return Ok(()),
+		// Nothing is written, so whatever of ours the zone holds stays.
+		Decision::Present { .. } => {
+			let owned: Vec<String> = known.iter().cloned().chain([value.to_string()]).collect();
+			return Ok(left(&set, &owned));
+		}
 		Decision::Write { foreign, overlap } => (foreign, overlap),
 	};
 	if snapshot.guard == Guard::Unchecked {
 		if !foreign.is_empty() {
 			return Err(Refused::Failed(foreign_refusal(&name, &foreign)));
 		}
-		return Ok(provider.upsert(&zone, record).await?);
+		provider.upsert(&zone, record).await?;
+		return Ok(vec![value.to_string()]);
 	}
+	let mut left = vec![value.to_string()];
+	left.extend(overlap.iter().map(|record| record.value.clone()));
 	let mut after = foreign;
 	after.push(record);
 	after.extend(overlap);
@@ -130,7 +140,19 @@ pub(super) async fn publish(
 				.into(),
 		));
 	}
-	Ok(())
+	Ok(left)
+}
+
+/// The values of `known` that `set` holds.
+fn left(set: &[DnsRecord], known: &[String]) -> Vec<String> {
+	set.iter()
+		.filter(|record| {
+			known
+				.iter()
+				.any(|value| normal(value) == normal(&record.value))
+		})
+		.map(|record| record.value.clone())
+		.collect()
 }
 
 /// The refusal to replace records that are not epistle's.
