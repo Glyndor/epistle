@@ -182,6 +182,9 @@ pub struct Session {
 	/// is [`super::super::command::DEFAULT_APPEND_LIMIT`]; raised or
 	/// lowered by [`Session::with_append_limit`].
 	pub(super) append_limit: usize,
+	/// Octets of FETCH data one command builds before it answers
+	/// `NO [LIMIT]`: [`super::super::bounds::MAX_FETCH_RESPONSE_OCTETS`].
+	pub(super) fetch_response_limit: usize,
 	/// Shared per-account counter. `Some` when the listener was built
 	/// with a counter; the session claims one slot on every successful
 	/// authentication and releases it on every disconnect path. `None`
@@ -280,6 +283,7 @@ impl Session {
 			training: None,
 			scram_enabled: true,
 			append_limit: super::super::command::DEFAULT_APPEND_LIMIT,
+			fetch_response_limit: super::super::bounds::MAX_FETCH_RESPONSE_OCTETS,
 			per_account_counter: None,
 			per_account_slot: None,
 		}

@@ -221,6 +221,13 @@ pub(super) const FIXED: &[FixedEntry] = &[
 		"no standard mandate (NAME_MAX of the common filesystems)"
 	),
 	number!(
+		"imap-fetch-response-octets",
+		crate::imap::bounds::MAX_FETCH_RESPONSE_OCTETS,
+		"octets",
+		Own,
+		"no standard mandate (FETCH data a session builds before it answers NO [LIMIT]; the first message of an answer is sent whole, so a larger message can still be fetched alone)"
+	),
+	number!(
 		"imap-search-depth",
 		crate::imap::command::MAX_SEARCH_DEPTH,
 		"count",

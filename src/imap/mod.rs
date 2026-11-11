@@ -3,6 +3,7 @@
 pub mod acl;
 pub mod archive;
 mod binary_append;
+pub mod bounds;
 pub(crate) mod changelog;
 pub mod command;
 mod compress;
