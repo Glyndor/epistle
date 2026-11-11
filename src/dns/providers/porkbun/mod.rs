@@ -26,6 +26,7 @@ use crate::dns::provider::{
 	same_txt_purpose, unwrap_quotes,
 };
 use crate::dns::providers::transport;
+use crate::dns::publish::provider::{Change, ReceiptOp, SnapshotOp};
 use crate::dns::txt::{TxtForm, same_txt_value, txt_decode, txt_encode};
 
 /// How Porkbun takes a TXT `content` and lists it back; see `upsert_inner`.
@@ -238,80 +239,7 @@ impl PorkbunProvider {
 	async fn upsert_inner(&self, record: DnsRecord) -> Result<(), ProviderError> {
 		self.authorize(&record)?;
 		let kind = Self::api_kind(&record.kind)?;
-		// The API documents `content` only as "The record value", with
-		// no word on quoting, length or escaping for TXT
-		// (<https://porkbun.com/api/json/v3/spec>, read 2026-10-12). The
-		// logical value is the form that is the same bytes every time it
-		// is sent, and it is the one other clients of this API send
-		// (dnscontrol, lego, libdns).
-		let content = if record.kind == RecordKind::Txt {
-			txt_encode(&record.value, TXT_FORM)
-		} else {
-			record.value.clone()
-		};
-		let mut fields = serde_json::json!({
-			"name": self.label(&record.name),
-			"type": kind,
-			"content": content,
-			"ttl": record.ttl.max(MIN_TTL),
-			// Free-text note shown in the Porkbun panel; edit replaces it.
-			"notes": record_description(),
-		});
-		if record.kind == RecordKind::Srv {
-			// Porkbun's SRV payload: the value carries the full presentation
-			// form (`prio weight port target`) verbatim in `content`, and the
-			// `prio` field is the plain preference (here, the priority, since
-			// weight and port are part of the value already). We still validate
-			// the value with parse_srv so a malformed SRV never reaches the API.
-			let _ = Self::sr_prio(&record)?;
-			if let Some(map) = fields.as_object_mut() {
-				map.insert(
-					"prio".to_string(),
-					parse_srv(&record.value)
-						.map(|(p, _w, _port, _target)| p)
-						.unwrap_or(0)
-						.into(),
-				);
-			}
-		}
-		if record.kind == RecordKind::Caa {
-			// Porkbun's CAA payload: `content` carries the CA value verbatim,
-			// and the `caa_tag` field holds the tag ("issue", "issuewild",
-			// "iodef"). We split the presentation form to surface malformed
-			// input as a `Remote` error rather than letting Porkbun reject it.
-			let mut parts = record.value.splitn(3, ' ');
-			let _flags = parts.next();
-			let tag = parts
-				.next()
-				.ok_or_else(|| ProviderError::Remote("CAA needs flags tag value".into()))?
-				.to_string();
-			let value = parts
-				.next()
-				.ok_or_else(|| ProviderError::Remote("CAA needs flags tag value".into()))?
-				.trim_matches('"')
-				.to_string();
-			if let Some(map) = fields.as_object_mut() {
-				map.insert("caa_tag".to_string(), tag.into());
-				map.insert("content".to_string(), value.into());
-			}
-		}
-		if record.kind == RecordKind::Mx {
-			// Porkbun's MX payload: `content` carries the target, `prio`
-			// carries the preference as an integer.
-			let mut parts = record.value.split_whitespace();
-			let priority: u16 = parts
-				.next()
-				.and_then(|p| p.parse().ok())
-				.ok_or_else(|| ProviderError::Remote("MX needs priority target".into()))?;
-			let target = parts
-				.next()
-				.ok_or_else(|| ProviderError::Remote("MX needs priority target".into()))?;
-			let target = crate::dns::provider::mx_target_for_api(target).to_string();
-			if let Some(map) = fields.as_object_mut() {
-				map.insert("prio".to_string(), priority.into());
-				map.insert("content".to_string(), target.into());
-			}
-		}
+		let fields = self.record_fields(&record, kind)?;
 		let existing = self.matching_ids(&record, kind).await?;
 		match existing.split_first() {
 			// Replace in place, then drop any duplicate left at the same
@@ -366,34 +294,38 @@ impl PorkbunProvider {
 		Ok(self
 			.retrieve()
 			.await?
-			.into_iter()
-			.filter_map(|r| {
-				let kind = RecordKind::from_token(&r.kind);
-				// SRV records Porkbun returns without a usable `prio` are
-				// malformed: drop them so the rest of the list does not
-				// carry a misleading empty value.
-				if kind == RecordKind::Srv && r.prio.is_empty() {
-					return None;
-				}
-				let value = if kind == RecordKind::Srv {
-					exact::stored_srv(&r.content, &r.prio)?
-				} else if kind == RecordKind::Txt {
-					txt_decode(&r.content, TXT_FORM)
-				} else if kind == RecordKind::Mx && r.prio.parse::<u16>().is_ok() {
-					format!("{} {}", r.prio, r.content)
-				} else {
-					unwrap_quotes(&r.content).to_string()
-				};
-				Some(DnsRecord {
-					name: r.name.trim_end_matches('.').to_string(),
-					kind,
-					value,
-					ttl: r.ttl.parse().unwrap_or(MIN_TTL),
-					proxied: None,
-				})
-			})
+			.iter()
+			.filter_map(record_of)
 			.collect())
 	}
+}
+
+/// The record a retrieved entry stands for, read back into the shape the rest
+/// of epistle uses; `None` for an SRV it cannot read.
+fn record_of(r: &Record) -> Option<DnsRecord> {
+	let kind = RecordKind::from_token(&r.kind);
+	// SRV records Porkbun returns without a usable `prio` are
+	// malformed: drop them so the rest of the list does not
+	// carry a misleading empty value.
+	if kind == RecordKind::Srv && r.prio.is_empty() {
+		return None;
+	}
+	let value = if kind == RecordKind::Srv {
+		exact::stored_srv(&r.content, &r.prio)?
+	} else if kind == RecordKind::Txt {
+		txt_decode(&r.content, TXT_FORM)
+	} else if kind == RecordKind::Mx && r.prio.parse::<u16>().is_ok() {
+		format!("{} {}", r.prio, r.content)
+	} else {
+		unwrap_quotes(&r.content).to_string()
+	};
+	Some(DnsRecord {
+		name: r.name.trim_end_matches('.').to_string(),
+		kind,
+		value,
+		ttl: r.ttl.parse().unwrap_or(MIN_TTL),
+		proxied: None,
+	})
 }
 
 impl DnsProvider for PorkbunProvider {
@@ -417,6 +349,12 @@ impl DnsProvider for PorkbunProvider {
 		Box::pin(crate::dns::providers::listing(zone_name, async move {
 			self.list_inner().await
 		}))
+	}
+	fn publish_snapshot<'a>(&'a self, zone: &'a str) -> SnapshotOp<'a> {
+		Box::pin(crate::dns::providers::within(self.snapshot_inner(zone)))
+	}
+	fn apply_guarded<'a>(&'a self, zone: &'a str, change: Change) -> ReceiptOp<'a> {
+		Box::pin(crate::dns::providers::guarded::apply(self, zone, change))
 	}
 }
 
@@ -448,6 +386,8 @@ async fn decode(response: reqwest::Response) -> Result<Reply, ProviderError> {
 }
 
 mod exact;
+mod fields;
+mod guarded;
 
 #[cfg(test)]
 mod tests;
