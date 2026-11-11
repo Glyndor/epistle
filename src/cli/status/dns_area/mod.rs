@@ -6,6 +6,8 @@ use std::net::IpAddr;
 use std::sync::Arc;
 
 use super::dns_dkim::{SigningKey, compare, signing_keys, state_item};
+mod uncovered;
+
 use super::report::{AreaReport, Item, Level};
 use super::{Ctx, NET_TIMEOUT};
 use crate::config::Config;
@@ -73,6 +75,7 @@ async fn evaluate(config: &Config, dns: &dyn DnsLookup) -> AreaReport {
 	// proxy only forwards HTTP(S). The check lives behind the configured
 	// provider so other providers keep their existing surface.
 	findings.extend(proxied_items(config, proxy_provider(config)).await);
+	findings.extend(uncovered::items(config, uncovered::provider(config)).await);
 	let mut items: Vec<Item> = records.iter().map(record_item).collect();
 	let ok = count(&records, &Status::Ok);
 	let missing = count(&records, &Status::Missing);

@@ -180,6 +180,16 @@ pub async fn survey(ctx: &Context<'_>) -> Result<Survey, String> {
 		let ledger = store::load(&config.data_dir, &zone)?;
 		let lockdown = lockdown_records(config, &zone)?;
 		let existing: Vec<DnsRecord> = snapshot.records.iter().map(|o| o.record.clone()).collect();
+		let mut needed = needed;
+		if config.dns_publish.null_records {
+			needed.extend(super::null_records::needed(
+				config,
+				&zone,
+				ctx.domain,
+				&existing,
+				&[ledger.records(), lockdown.clone()].concat(),
+			));
+		}
 		let plan = plan_zone(&ZoneInput {
 			zone: &zone,
 			needed: &needed,
@@ -256,7 +266,7 @@ fn tlsa_values(data_dir: &Path, hostname: &str) -> Vec<DnsRecord> {
 /// The records `dns lockdown` published for the hosted domains in `zone`.
 /// A journal that cannot be read stops the run: without it the publisher
 /// could replace a policy the lockdown is moving.
-fn lockdown_records(config: &Config, zone: &str) -> Result<Vec<DnsRecord>, String> {
+pub(crate) fn lockdown_records(config: &Config, zone: &str) -> Result<Vec<DnsRecord>, String> {
 	let mut records = Vec::new();
 	for domain in &config.domains {
 		let domain = canonical_name(domain);

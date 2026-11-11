@@ -21,6 +21,7 @@ use crate::dns::provider::{DnsRecord, RecordKind};
 mod apply;
 mod dmarc;
 mod names;
+mod null_set;
 mod reports;
 
 pub use apply::{PublishFailure, UndoChanged, UndoFailure, UndoReport, publish_plan, undo_journal};
@@ -28,6 +29,7 @@ pub use dmarc::{
 	DmarcAction, DmarcInputs, DmarcPlan, DmarcStep, DmarcTags, FailingSource, parse_dmarc,
 	plan_dmarc, rewrite_dmarc,
 };
+pub use null_set::{NullSet, hosted_in_zone, null_set};
 pub use reports::{REPORT_WINDOW_DAYS, recent_dmarc_failures};
 
 pub use crate::dns::names::{
@@ -233,7 +235,9 @@ pub fn build_plan(input: &PlanInput<'_>) -> Plan {
 			continue;
 		};
 		match verdict {
-			names::Verdict::Skip(reason) => skipped.push(SkipEntry { name, reason }),
+			names::Verdict::Skip(reason) | names::Verdict::Done(reason) => {
+				skipped.push(SkipEntry { name, reason })
+			}
 			names::Verdict::Add { spf, mx } => {
 				let what = presence.describe();
 				if spf {
@@ -296,7 +300,7 @@ fn delegated_reason(cut: &str) -> String {
 }
 
 /// Every MX target in the zone, with the first name that points at it.
-fn mx_owners(existing: &[DnsRecord]) -> BTreeMap<String, String> {
+pub(super) fn mx_owners(existing: &[DnsRecord]) -> BTreeMap<String, String> {
 	let mut owners = BTreeMap::new();
 	for record in existing.iter().filter(|r| r.kind == RecordKind::Mx) {
 		if let Some(target) = mx_target(&record.value).filter(|t| !t.is_empty()) {
@@ -310,7 +314,7 @@ fn mx_owners(existing: &[DnsRecord]) -> BTreeMap<String, String> {
 
 /// Add `*.<domain>` `v=spf1 -all` only when the zone has no wildcard of
 /// its own at or under `domain`.
-fn wildcard_decision(
+pub(super) fn wildcard_decision(
 	domain: &str,
 	existing: &[DnsRecord],
 	journal: &Journal,
