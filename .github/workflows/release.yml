@@ -113,8 +113,8 @@ jobs:
           # metadata and runs the audit, so the version matters less here - but a
           # release workflow where two jobs disagree about the compiler is a
           # question nobody wants to answer later.
-          rustup toolchain install 1.99.0 --profile minimal
-          rustup default 1.99.0
+          rustup toolchain install 1.99.1 --profile minimal
+          rustup default 1.99.1
 
       - name: Tag matches the crate version
         run: |
@@ -328,8 +328,8 @@ jobs:
           # and unlike CI, a release bakes that in permanently, because releases
           # are immutable. Bump this with ci.yml's toolchain input, deliberately,
           # in the same change.
-          rustup toolchain install 1.99.0 --profile minimal
-          rustup default 1.99.0
+          rustup toolchain install 1.99.1 --profile minimal
+          rustup default 1.99.1
 
       - name: Build release binary
         run: cargo build --release --locked
