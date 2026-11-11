@@ -71,6 +71,7 @@ fn config_path(command: &Command) -> Option<&Path> {
 		| Command::StorageKeygen { .. }
 		| Command::OauthKeygen { .. }
 		| Command::TokenHash { .. }
+		| Command::Rotate { .. }
 		| Command::Local { .. }
 		| Command::Completions { .. }
 		| Command::Manpages { .. }
