@@ -177,12 +177,19 @@ JSON), asks, and publishes:
   that cannot be read, a second one, or a CNAME at `_dmarc` is left alone
   and reported.
 - `v=spf1 -all` (sends no mail) and `MX 0 .` (RFC 7505, accepts no mail)
-  at every name with an A, AAAA or CNAME, except: names epistle serves
-  (each hosted domain, the mail hostname, `autoconfig`, `autodiscover`,
-  `mta-sts`), service names (`_dmarc`, `_domainkey` and DKIM selectors,
-  `_mta-sts`, `_smtp._tls`), MX targets, CNAMEs (no record may sit next
-  to a CNAME, RFC 1034 section 3.6.2), and names with an SPF or MX of
-  their own. Each is listed as left as is, with the reason.
+  at every name under the domain that is not declared as sending, at any
+  depth. A name counts when it owns any record (an A, a TXT, an SRV, not
+  only an address), when it is the parent of a name that does (an empty
+  non-terminal: the wildcard never answers for it, because it exists), and
+  for the apex of the domain even when the zone has no address record
+  there. The exceptions: names epistle serves (each hosted domain, the mail
+  hostname, `autoconfig`, `autodiscover`, `mta-sts`), the names `[dns_publish]
+  senders` lists (see [`configuration.md`](configuration.md#dns_publish);
+  only the exact name, not the names under it), service names (`_dmarc`,
+  `_domainkey` and DKIM selectors, `_mta-sts`, `_smtp._tls`), MX targets,
+  CNAMEs (no record may sit next to a CNAME, RFC 1034 section 3.6.2), and
+  names with an SPF or MX of their own. Each is listed as left as is, with
+  the reason.
 - `*.<domain>` `v=spf1 -all`, only when the zone has no wildcard. It
   covers names that do not exist; a wildcard never applies to a name
   with records of its own.

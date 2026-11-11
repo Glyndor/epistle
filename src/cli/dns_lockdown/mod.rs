@@ -328,7 +328,8 @@ fn publish(
 			return ExitCode::FAILURE;
 		}
 	};
-	let served = ServedNames::new(&config.domains, &config.hostname, &existing);
+	let served = ServedNames::new(&config.domains, &config.hostname, &existing)
+		.with_senders(&config.dns_publish.senders);
 	let dmarc = dmarc_inputs(config, target.domain, args, deps.now);
 	let plan = lockdown::build_plan(&PlanInput {
 		zone: target.zone,
@@ -428,7 +429,8 @@ fn manual(
 			return ExitCode::FAILURE;
 		}
 	};
-	let served = ServedNames::new(&config.domains, &config.hostname, &existing);
+	let served = ServedNames::new(&config.domains, &config.hostname, &existing)
+		.with_senders(&config.dns_publish.senders);
 	let dmarc = dmarc_inputs(config, domain, args, deps.now);
 	let plan = lockdown::build_plan(&PlanInput {
 		zone: domain,

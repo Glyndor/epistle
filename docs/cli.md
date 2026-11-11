@@ -668,7 +668,9 @@ epistle dns lockdown [<domain>] --undo [--dry-run] [--yes]
 
 Publishes the anti-spoofing records for the domain (the `[dns]` zone by
 default): DMARC one step stricter per run, a null SPF and null MX on
-names that send no mail, and a wildcard null SPF. Subdomains delegated to
+every name that is not declared as sending (any depth, any record type, the
+parents of names, the apex; `[dns_publish] senders` declares the senders),
+and a wildcard null SPF. Subdomains delegated to
 other nameservers (NS records) are left alone. It asks first; `--yes`
 skips the question. `--undo` removes what earlier runs published. See
 [`docs/dns.md`](dns.md#locking-the-zone-against-spoofing).
