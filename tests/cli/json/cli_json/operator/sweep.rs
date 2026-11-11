@@ -159,6 +159,7 @@ const CASES: &[(&str, &[&str], Expect)] = &[
 	("verify", &[], Done),
 	("srv-records", &[], Done),
 	("token-hash", &[], Done),
+	("rotate", &["--all", "--dry-run"], Done),
 	("reports", &[], Done),
 	("suppression list", &[], Done),
 	("suppression add", &["gone@example.net"], Done),

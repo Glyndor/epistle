@@ -251,6 +251,9 @@ impl Cli {
 				dry_run,
 				json,
 			} => crate::cli::srs::run(&config, action, dry_run, json),
+			Command::Rotate {
+				all, dry_run, json, ..
+			} => crate::cli::rotate::run(all, dry_run, json),
 			Command::Webhook {
 				config,
 				action,

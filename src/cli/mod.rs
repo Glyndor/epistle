@@ -43,6 +43,7 @@ mod relay;
 mod reports;
 mod resource;
 mod role_addresses;
+mod rotate;
 mod serve;
 mod service;
 mod srv;

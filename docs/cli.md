@@ -93,6 +93,7 @@ that never restart accept the option and ignore it.
 | [DNS provider for DKIM and TLSA](#dns-provider-epistle-dns-provider) | `epistle dns provider …` |
 | [Webhook and alerts](#webhook-epistle-webhook) | `epistle webhook …`, `epistle alert …` |
 | [SRS secret of each domain](#srs-epistle-srs) | `epistle srs show\|split\|rotate` |
+| [Every secret and how it is rotated](#secrets-and-credentials-epistle-rotate) | `epistle rotate --all --dry-run` |
 | [Blob storage (filesystem or S3)](#blob-storage-epistle-storage-blobs) | `epistle storage blobs …` |
 | [Keys per tenant and key rotation](#tenant-keys-epistle-storage-tenant-keys) | `epistle storage tenant-keys migrate` |
 | [Rotate DKIM, renew TLS, rotate an API key](#rotations-epistle-dkim-epistle-tls-epistle-api-key) | `epistle dkim rotate`, `epistle dkim cleanup`, `epistle tls renew`, `epistle api-key rotate` |
@@ -848,6 +849,20 @@ Each hosted domain signs the sender of the mail it forwards with a secret of its
 - `rotate DOMAIN` replaces that domain's secret and keeps the old one as `previous_secret`, which still verifies the addresses it signed; remove it after 14 days. Refused for a domain with no secret of its own.
 
 `domain add` and a first `init` write the new domain's secret; `domain remove` removes it.
+
+## Secrets and credentials (`epistle rotate`)
+
+```sh
+epistle rotate --all --dry-run [--json]
+```
+
+Lists every kind of secret and credential the server holds, so that nobody has to read ten pages to know which ones exist after a compromise. For each one it says where it is stored, how it is rotated and how it is revoked, and who does it:
+
+- `epistle`: one command of `epistle` does it on this server, and the row names it.
+- `operator`: the operator does it, by hand or at the provider (a DNS token, the database password, the relay password). `epistle` cannot mint or revoke those.
+- `not supported yet`: `epistle` cannot do it yet. The row links the issue and says what to do meanwhile. Today that is the storage key (re-encrypting the existing mail under a new key), the mass reset of account passwords and second factors, and the TOTP seeds, which `accounts.toml` keeps in the clear while `[storage]` encryption is off.
+
+The list is a registry in the code, and a test fails the build when a secret field is added to the configuration without an entry in it, so a new secret cannot be left out of the procedure. `--dry-run` changes nothing and reads no configuration, so it works on a server whose configuration does not load. It is the only mode so far; without it the command refuses and exits 3. `--all` is required. `--json` prints one object with an `entries` array.
 
 ## Domains (`epistle domain`)
 
