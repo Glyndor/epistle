@@ -127,6 +127,7 @@ the log.
 | `imap-mailbox-depth` | 16 | count | own | no standard mandate |
 | `imap-mailbox-name-length` | 255 | octets | own | no standard mandate (NAME_MAX of the common filesystems) |
 | `imap-search-depth` | 64 | count | own | no standard mandate |
+| `imap-vanished-log-octets` | 4194304 | octets | own | no standard mandate (the expunge log of one mailbox, which answers VANISHED (EARLIER); past it the oldest entries are dropped, so a client whose last known mod-sequence is older than the oldest entry kept is told the expunges from that entry on) |
 | `managesieve-script-size` | 1048576 | octets | own | no standard mandate |
 | `managesieve-scripts-per-account` | 50 | count | own | RFC 9661 (maxNumberScripts capability) |
 | `managesieve-script-name-length` | 128 | characters | must | RFC 5804 §1.6 (names of up to 128 characters) |

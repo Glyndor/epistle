@@ -73,7 +73,7 @@ pub(super) fn next_counter(account_dir: &Path) -> std::io::Result<u64> {
 ///
 /// The name cannot be a message file: a message's files are `<id><ext>`, and
 /// this one starts with a dot.
-fn lock(account_dir: &Path) -> std::io::Result<std::fs::File> {
+pub(super) fn lock(account_dir: &Path) -> std::io::Result<std::fs::File> {
 	let file = std::fs::OpenOptions::new()
 		.create(true)
 		.truncate(false)
