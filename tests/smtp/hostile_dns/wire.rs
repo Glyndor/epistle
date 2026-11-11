@@ -28,6 +28,11 @@ pub enum Reply {
 	Servfail,
 }
 
+/// Lookups after which the TCP authority gives up on a client as a storm.
+/// Above what a screen capped at 50 hosts needs: two lookups per host, each
+/// asking for A and AAAA.
+const STORM: usize = 512;
+
 pub struct Wire {
 	pub dns: SystemDns,
 	queries: Arc<AtomicUsize>,
@@ -120,12 +125,38 @@ impl Wire {
 	}
 
 	pub fn assert_queries(&self) {
-		let count = self.queries.load(Ordering::Relaxed);
-		assert!(
-			(1..=64).contains(&count),
-			"expected bounded real DNS traffic, got {count}"
-		);
+		check_queries(&self.queries);
 	}
+
+	/// Hand the resolver to a listener, which needs to own it. The authority
+	/// keeps running for as long as the returned guard lives.
+	pub fn shared(self) -> (Arc<SystemDns>, Authority) {
+		let authority = Authority {
+			queries: self.queries,
+			_task: self._task,
+		};
+		(Arc::new(self.dns), authority)
+	}
+}
+
+/// The running authority of a `Wire` whose resolver was handed away.
+pub struct Authority {
+	queries: Arc<AtomicUsize>,
+	_task: AbortOnDrop,
+}
+
+impl Authority {
+	pub fn queries(&self) -> usize {
+		self.queries.load(Ordering::Relaxed)
+	}
+}
+
+fn check_queries(queries: &AtomicUsize) {
+	let count = queries.load(Ordering::Relaxed);
+	assert!(
+		(1..=64).contains(&count),
+		"expected bounded real DNS traffic, got {count}"
+	);
 }
 
 fn resolver(port: u16, udp: bool) -> SystemDns {
@@ -158,7 +189,7 @@ async fn serve(mut stream: TcpStream, reply: Reply, count: Arc<AtomicUsize>) {
 		}
 		let query = Message::from_vec(&body).expect("decode query");
 		assert!(
-			count.fetch_add(1, Ordering::Relaxed) < 64,
+			count.fetch_add(1, Ordering::Relaxed) < STORM,
 			"DNS query storm"
 		);
 		let bytes = response(&query, reply).to_vec().expect("encode response");

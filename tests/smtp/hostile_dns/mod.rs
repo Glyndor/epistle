@@ -11,6 +11,7 @@ mod smtp_harness;
 
 mod allocation;
 mod harness;
+mod listener;
 mod negative;
 mod payloads;
 mod wire;
