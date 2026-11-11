@@ -105,6 +105,9 @@ impl Settings {
 	}
 }
 
+/// How many skipped UIDs a folder's report names.
+pub(crate) const MAX_REPORTED_UIDS: usize = 20;
+
 /// What happened to one folder.
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub(crate) struct FolderReport {
@@ -129,6 +132,10 @@ pub(crate) struct FolderReport {
 	pub(crate) confirmed: u64,
 	/// Messages over the local size limit, not carried over.
 	pub(crate) too_large: u64,
+	/// The UIDs of the first of them, at most [`MAX_REPORTED_UIDS`], so the
+	/// operator can look at what was left out. The size is what the server
+	/// declared, which nothing here can check without fetching the message.
+	pub(crate) too_large_uids: Vec<u32>,
 	/// Messages that disappeared between listing and fetching.
 	pub(crate) vanished: u64,
 	/// The remote UIDVALIDITY changed, so the folder was copied again with
