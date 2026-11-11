@@ -296,7 +296,10 @@ change (ACME renewal or a replaced `[tls]` pair):
   and leaves the previous value next to the new one until the next rotation. A
   provider that can only replace the whole set does not write while foreign
   records are there: the refresh stays pending and `status` names them.
-  Replacing everything needs you to remove them or publish by hand.
+  Replacing everything needs you to remove them or publish by hand. A value
+  stays known as this instance's until a write that went through leaves it
+  out, so refreshes the provider refused in between do not turn an old value
+  into one that is kept for good.
 - **Zone.** The zone the credential sees is not assumed to serve the name. If
   the zone lists an NS delegation at or above `_25._tcp.<hostname>` the write
   is refused. Providers that cannot list their zone (`route53`, `rfc2136`)
