@@ -40,7 +40,7 @@ fn every_fixed_limit_appears_in_show_text() {
 	let mut out = Vec::new();
 	show(&config, &mut out).unwrap();
 	let printed = String::from_utf8(out).unwrap();
-	for fixed in catalog::FIXED {
+	for fixed in catalog::fixed() {
 		let row = format!("{}\t{} {}", fixed.name, fixed.value.render(), fixed.unit);
 		assert!(
 			printed.lines().any(|line| line.starts_with(&row)),
@@ -138,7 +138,7 @@ fn fixed_limits_cannot_be_overridden_by_set() {
 		.iter()
 		.map(|entry| entry.key.name())
 		.collect();
-	for fixed in catalog::FIXED {
+	for fixed in catalog::fixed() {
 		assert!(
 			!table.contains(fixed.name),
 			"fixed entry `{}` must not also be a configurable Key",

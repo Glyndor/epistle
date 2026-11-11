@@ -19,6 +19,7 @@ impl Session {
 		vanished: bool,
 	) -> Output {
 		let uidonly = self.uidonly;
+		let response_limit = self.fetch_response_limit;
 		// Capture the SEARCHRES `$` set before the immutable borrow of
 		// `self.state`. The set is keyed by UID; the resolver maps through
 		// the snapshot to current seqnos (non-UID) or returns UIDs directly
@@ -62,6 +63,7 @@ impl Session {
 				bytes.extend_from_slice(line.as_bytes());
 			}
 		}
+		let mut answered = 0usize;
 		for sequence_number in 1..=total {
 			let Some(message) = snapshot.by_sequence(sequence_number) else {
 				continue;
@@ -74,6 +76,23 @@ impl Session {
 			if changed_since.is_some_and(|since| message.modseq <= since) {
 				continue;
 			}
+			// The answer is built in memory: past the cap the client is told to
+			// ask for the rest in another command. The first message is always
+			// sent, whatever its size.
+			if answered > 0 && bytes.len() >= response_limit {
+				return Output {
+					bytes: [
+						bytes,
+						format!(
+							"{tag} NO [LIMIT] FETCH answer too large, fetch the remaining messages in another command\r\n"
+						)
+						.into_bytes(),
+					]
+					.concat(),
+					..Output::text(String::new())
+				};
+			}
+			answered += 1;
 
 			let seen_changed =
 				!*read_only && items.iter().any(sets_seen) && !message.flags.contains(&Flag::Seen);

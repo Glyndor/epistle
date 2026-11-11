@@ -126,6 +126,7 @@ the log.
 | `imap-keyword-length` | 64 | octets | own | no standard mandate |
 | `imap-mailbox-depth` | 16 | count | own | no standard mandate |
 | `imap-mailbox-name-length` | 255 | octets | own | no standard mandate (NAME_MAX of the common filesystems) |
+| `imap-fetch-response-octets` | 33554432 | octets | own | no standard mandate (FETCH data a session builds before it answers NO [LIMIT]; the first message of an answer is sent whole, so a larger message can still be fetched alone) |
 | `imap-search-depth` | 64 | count | own | no standard mandate |
 | `imap-vanished-log-octets` | 4194304 | octets | own | no standard mandate (the expunge log of one mailbox, which answers VANISHED (EARLIER); past it the oldest entries are dropped, so a client whose last known mod-sequence is older than the oldest entry kept is told the expunges from that entry on) |
 | `managesieve-script-size` | 1048576 | octets | own | no standard mandate |
