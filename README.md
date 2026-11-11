@@ -75,6 +75,7 @@ network at all and are reached only through Unix sockets.
 | [IP warm-up](docs/operations/warmup.md) | Ramping a new sending address up per receiver group |
 | [Attachments](docs/attachments.md) | What the attachment policy detects, its defaults and limits |
 | [Evidence of sending](docs/evidence.md) | Mail classes, the signed and timestamped evidence log, bundles a third party can check |
+| [Recovery after a compromise](docs/operations/recovery.md) | What rotating keys fixes and does not, the order to work in, what to tell users |
 | [Migration](docs/operations/migration.md) | Moving from Mox, Stalwart or any IMAP server |
 | [Container stack](docs/operations/container.md) | What `epistle stack` runs and how it is built |
 | [Security](docs/security.md) and [threat model](docs/threat-model.md) | The controls, what they protect and what they assume |
