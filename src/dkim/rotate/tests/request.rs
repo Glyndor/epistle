@@ -10,8 +10,8 @@ use crate::dns::provider::ProviderError;
 const DAY: u64 = 86_400;
 
 #[derive(Default)]
-struct Dns {
-	upserts: Mutex<Vec<String>>,
+pub(super) struct Dns {
+	pub(super) upserts: Mutex<Vec<String>>,
 	deletes: Mutex<Vec<String>>,
 	fail: AtomicBool,
 }
@@ -42,15 +42,15 @@ impl DnsProvider for Dns {
 	}
 }
 
-struct Fixture {
-	dir: tempfile::TempDir,
-	dns: Arc<Dns>,
-	signer: ReloadableSigner,
-	rotator: Rotator,
+pub(super) struct Fixture {
+	pub(super) dir: tempfile::TempDir,
+	pub(super) dns: Arc<Dns>,
+	pub(super) signer: ReloadableSigner,
+	pub(super) rotator: Rotator,
 }
 
 /// Active selector `ed0` rotated on day 0, optionally with a previous `ed-old`.
-fn fixture(with_previous: bool) -> Fixture {
+pub(super) fn fixture(with_previous: bool) -> Fixture {
 	let dir = tempfile::tempdir().expect("dir");
 	let data = dir.path();
 	let (pem, _) = crate::dkim::generate_key().expect("key");
