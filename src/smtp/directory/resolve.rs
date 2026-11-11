@@ -76,7 +76,7 @@ impl Directory {
 	/// not handed to another account by falling through to a catch-all. An
 	/// alias loses those members; one left with none by that is unknown.
 	///
-	/// A login by address is not a recipient: see [`Directory::resolve_identity`].
+	/// A login by address is not a recipient: see `Directory::resolve_identity`.
 	pub fn resolve(&self, address: &Address) -> Resolution {
 		match self.resolve_identity(address) {
 			Resolution::Account(account) if !self.receives(&account) => Resolution::UnknownUser,
