@@ -37,6 +37,7 @@ use crate::config::Database;
 mod db_dump_container;
 mod db_dump_host_temp;
 mod db_dump_marker;
+mod db_dump_target;
 
 use db_dump_container::load_dump_container_with;
 pub(crate) use db_dump_container::{
@@ -47,6 +48,7 @@ use db_dump_container::{container_rm_temp_spec, leftover_note};
 #[cfg(test)]
 use db_dump_host_temp::{RestoreHostTemp, SQL_FILE_NAME};
 pub(in crate::cli::backup) use db_dump_marker::output_ends_with_pg_dump_complete;
+use db_dump_target::ensure_stack_database;
 
 #[cfg(test)]
 mod tests;
@@ -103,6 +105,10 @@ pub enum BackupError {
 	/// A held stop signal (the number) came before the restore wrote the
 	/// database or the files, so it stopped without writing either.
 	Interrupted(i32),
+	/// A compose stack is present but `[database] url` is not the stack's own
+	/// database, so the stack's dump and replay would act on a different
+	/// database from the configured one.
+	DatabaseNotInStack,
 }
 
 impl std::fmt::Display for BackupError {
@@ -140,6 +146,10 @@ impl std::fmt::Display for BackupError {
 				f,
 				"stopped by {} before the database or the files were written",
 				super::restore_signals::signal_name(*signal)
+			),
+			BackupError::DatabaseNotInStack => write!(
+				f,
+				"a compose stack is present, but [database] url is not the stack's database (postgres://epistle@%2Frun%2Fpostgresql/epistle), so the backup and the restore would act on the stack's database instead of the configured one; point url at the stack, or move the compose directory away if the database is external"
 			),
 		}
 	}
@@ -280,6 +290,7 @@ pub(crate) fn load_dump_with(
 	resolver: &dyn Fn(&str) -> Option<PathBuf>,
 ) -> Result<(), BackupError> {
 	if compose_file_path(data_dir).exists() {
+		ensure_stack_database(db)?;
 		load_dump_container_with(&compose_file_path(data_dir), sql, resolver)
 	} else {
 		let spec = host_psql_load_spec(db, sql)?;
@@ -307,6 +318,7 @@ pub(crate) fn load_dump_with(
 pub(crate) fn pg_dump_spec(db: &Database, data_dir: &Path) -> Result<CommandSpec, BackupError> {
 	let compose = compose_file_path(data_dir);
 	if compose.exists() {
+		ensure_stack_database(db)?;
 		container_pg_dump_spec(&compose)
 	} else {
 		host_pg_dump_spec(db)
@@ -329,6 +341,7 @@ pub(crate) fn psql_load_spec(
 ) -> Result<CommandSpec, BackupError> {
 	let compose = compose_file_path(data_dir);
 	if compose.exists() {
+		ensure_stack_database(db)?;
 		container_psql_load_spec(&compose, in_container_path, sql)
 	} else {
 		host_psql_load_spec(db, sql)

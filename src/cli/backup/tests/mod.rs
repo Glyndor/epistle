@@ -14,3 +14,4 @@ pub(super) mod restore_guards;
 pub(super) mod restore_run;
 
 pub(super) mod source;
+pub(super) mod stack_database;

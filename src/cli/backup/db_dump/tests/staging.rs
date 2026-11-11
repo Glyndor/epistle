@@ -318,7 +318,7 @@ pub(in super::super) fn restore_at(
 	use crate::config::Config;
 	let data_dir = compose.parent().unwrap().parent().unwrap();
 	let toml = format!(
-		"hostname = \"mail.example.org\"\ndata_dir = \"{}\"\n\n[database]\nurl = \"postgres://epistle@localhost/epistle\"\n",
+		"hostname = \"mail.example.org\"\ndata_dir = \"{}\"\n\n[database]\nurl = \"postgres://epistle@%2Frun%2Fpostgresql/epistle\"\n",
 		data_dir.display()
 	);
 	let config: Config = toml::from_str(&toml).expect("config");

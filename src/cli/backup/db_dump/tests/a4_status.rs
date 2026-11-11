@@ -29,7 +29,7 @@ fn write_stub(dest: &Path, body: &str, exit_code: i32) {
 /// A `Database` with a URL and no password file, so the host branch builds
 /// a plain `pg_dump` invocation.
 fn database() -> Database {
-	toml::from_str(r#"url = "postgres://epistle@localhost/epistle""#).expect("database")
+	toml::from_str(r#"url = "postgres://epistle@%2Frun%2Fpostgresql/epistle""#).expect("database")
 }
 
 /// Lay down the compose layout so the container branch is selected, and
@@ -159,7 +159,7 @@ fn failed_dump_leaves_the_backup_stream_untouched() {
 
 	let config: crate::config::Config = toml::from_str(&format!(
 		"hostname = \"mail.example.org\"\ndata_dir = \"{}\"\n\
-		 [database]\nurl = \"postgres://epistle@localhost/epistle\"\n",
+		 [database]\nurl = \"postgres://epistle@%2Frun%2Fpostgresql/epistle\"\n",
 		data_dir.path().display()
 	))
 	.expect("config");
