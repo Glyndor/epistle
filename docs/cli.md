@@ -1379,6 +1379,13 @@ works on the host and inside the container deployment:
   when the replay worked, a warning) says which path in the container is left
   and how to remove it.
 
+With a compose file present, both commands act on the stack's own database
+(role and database `epistle` over the socket of `db`) and nothing else. If
+`[database] url` names any other database, `backup` and `restore` refuse with
+an error before they touch anything, instead of dumping or overwriting the
+stack's database in its place. To back up an external database, move the
+compose directory away, or point `url` at the stack's database.
+
 The archive's `database.sql` has to end with the closing marker `pg_dump`
 writes, as the backup requires; a restore refuses one that does not before it
 touches anything. The database is loaded before the files are laid down, and
