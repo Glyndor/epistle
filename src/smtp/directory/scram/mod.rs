@@ -22,7 +22,7 @@ impl Directory {
 		self.record_scram_lookup();
 		let account = if login.contains('@') {
 			let address = Address::parse(login).ok()?;
-			match self.resolve(&address) {
+			match self.resolve_identity(&address) {
 				Resolution::Account(account) => account,
 				_ => return None,
 			}
