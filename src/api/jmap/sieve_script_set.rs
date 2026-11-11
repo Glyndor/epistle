@@ -13,12 +13,12 @@ use serde_json::{Map, Value, json};
 
 use super::super::Principal;
 use super::super::state::ApiState;
+use super::send_gate::SendGate;
 use super::sieve_blob;
 use super::sieve_content::set_error;
 use super::sieve_script::{method_error, state_string, store_failure};
 use super::sieve_script_edit::Edit;
 use super::uploads::Uploads;
-use crate::api::api_keys::Scope;
 use crate::managesieve::store::{StoreError, Tx};
 
 /// The parts of the response, as they are filled in.
@@ -146,12 +146,10 @@ fn run(
 		Some(_) => return Err(method_error("invalidArguments", call_id)),
 	};
 
-	let can_send = state
-		.require_scope_for_principal(principal, Scope::Send)
-		.is_ok();
+	let gate = SendGate::of(state, principal, &account);
 	let edit = Edit {
 		account: &account,
-		can_send,
+		gate,
 		uploads,
 	};
 	// The whole call is one step under the account's lock: the state it
@@ -161,7 +159,7 @@ fn run(
 		let old_state = tx.state();
 		// Activating a script that already sends mail takes the `send` scope
 		// too, and is refused before the call changes anything.
-		if !can_send
+		if !gate.is_open()
 			&& let Some(id) = activate.filter(|id| !id.starts_with('#'))
 			&& let Some(script) = tx.scripts().into_iter().find(|script| script.id == id)
 			&& tx

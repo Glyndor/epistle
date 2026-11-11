@@ -247,6 +247,7 @@ curl -s -H "Authorization: Bearer $KEY" "$API/api/v1/status"
 | `401` `unauthenticated` | No header, an unknown or expired key, a key pinned to another network, **or a key whose scopes do not cover the route**. The four look the same |
 | `403` `forbidden` | The key is bound to one account and the route is administrative, or the bound account is disabled or gone |
 | `403` `forbidden_from` | `POST /api/v1/send` from an address the credential may not act for |
+| `403` `sending_off` | `POST /api/v1/send` for an account whose sending is switched off (`epistle account set NAME --send off`) |
 | `429` `rate_limited` | The client address made 20 requests with credentials that did not hold in the last 60 seconds. Every request from it is refused, valid or not, until the window passes. The `Retry-After` header gives the remaining window in seconds, rounded up |
 
 A valid call does not use up the budget, and it does not clear failures already
@@ -319,7 +320,7 @@ the status. The codes the API itself sends:
 | Code | Status | Meaning |
 |---|---|---|
 | `unauthenticated` | 401 | See above |
-| `forbidden`, `forbidden_from` | 403 | See above, and a confined key on the global suppression list |
+| `forbidden`, `forbidden_from`, `sending_off` | 403 | See above, and a confined key on the global suppression list |
 | `not_found` | 404 | The thing is not there, or is outside the key's reach |
 | `invalid_input` | 400 | The message says which field |
 | `conflict` | 409 | A limit that waiting will not lift: the tenant is at `max_accounts`, the account at its masked-address cap, a queue entry with evidence still to write |
@@ -394,6 +395,14 @@ for the account that owns `from`, provided the key reaches it. In every other
 case the answer is `403 forbidden_from`, the same whether the address belongs
 to another account or to nobody, so it says nothing about which addresses
 exist. The envelope sender is the `from` as written; its letter case is kept.
+
+**An account that does not send.** An account whose `send` switch is off
+(`epistle account set NAME --send off`) sends nothing through the API: a key
+bound to it, or any other key whose `from` names one of its addresses, gets
+`403 sending_off`, whatever the sender, before any rate limit is spent. The
+refusal names the account's own state and tells nothing about other addresses.
+Signing in and reading mail are not affected. The same switch is what SMTP
+submission, JMAP and the account's own forwarding and auto-replies follow.
 
 ### Class and evidence
 
@@ -580,6 +589,12 @@ key does not cover answers a `forbidden` method error inside a `200`.
   `unknownMethod`.
 - `EmailSubmission/set` accepts `epistle:class`, with the same rule as the
   REST `class`.
+- For an account whose `send` switch is off, `EmailSubmission/set` answers
+  `forbiddenToSend` ("sending is turned off for this account") in
+  `notCreated`, and `VacationResponse/set` and `SieveScript/set` refuse, with
+  `forbidden`, to turn a reply on or to store or activate a script that
+  redirects, replies or rejects: those would send for the account. Mail
+  already in the account's mailbox and every read are untouched.
 - Upload with `POST /jmap/upload/{accountId}` (scope `write`) and download with
   `GET /jmap/download/{accountId}/{blobId}/{name}`.
 - `GET /jmap/ws` is JMAP over WebSocket. It accepts the upgrade but does not
@@ -646,6 +661,7 @@ RFC 6749 and 8628. Wrong credentials and a wrong code give the same answer.
 | `429` with a correct key | Your address made 20 failed attempts in a minute (perhaps another program behind the same NAT). Wait a minute |
 | `403` on `/api/v1/accounts` | The key is bound to one account; use a key without `--account` |
 | `403 forbidden_from` | `from` or `sender` is not an address of the account the key acts for |
+| `403 sending_off` | The account's `send` switch is off; turn it on with `epistle account set NAME --send on` |
 | `422` with text/plain and `missing field` | The body lacks a required field (`from`, `to`; for SCIM, `userName`, `active`) |
 | `400` with text/plain | The JSON is malformed, or a UUID in the path is not one |
 | `413` JSON vs plain text | JSON `message_too_large`: the message built from your fields is over the limit. Plain text: the request body itself is |

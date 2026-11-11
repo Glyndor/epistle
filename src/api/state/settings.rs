@@ -228,6 +228,17 @@ impl ApiState {
 		}
 	}
 
+	/// Whether `account` may send mail: the per-account send switch, the one
+	/// SMTP submission reads. Only an account that was switched off is
+	/// refused. With no directory attached nothing is switched off here, and
+	/// `owns_address` still fails closed, so no sender is ever accepted.
+	pub fn can_send(&self, account: &str) -> bool {
+		match &self.inner.directory {
+			None => true,
+			Some(handle) => handle.current().can_send(account),
+		}
+	}
+
 	/// Set the server default per-account storage quota in bytes, the
 	/// configured `quota_bytes` (0 = unlimited). Without this call the
 	/// documented 5 GiB default applies, as in IMAP.

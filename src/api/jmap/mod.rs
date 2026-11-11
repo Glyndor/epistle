@@ -47,6 +47,7 @@ mod methods;
 mod objects;
 pub(crate) use objects::email_body_for_fuzzing;
 pub(crate) mod push_subscription;
+mod send_gate;
 mod sieve_blob;
 mod sieve_capability;
 mod sieve_content;
