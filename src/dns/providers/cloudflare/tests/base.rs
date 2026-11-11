@@ -321,6 +321,7 @@ mod host_tags;
 mod record_bodies;
 
 mod exact;
+mod guarded;
 
 fn srv_record(id: &str) -> serde_json::Value {
 	serde_json::json!({

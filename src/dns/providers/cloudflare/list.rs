@@ -50,6 +50,39 @@ impl From<ProviderError> for ReadError {
 	}
 }
 
+/// The record a listed entry stands for, read back into the shape the rest
+/// of epistle uses.
+pub(super) fn record_of(r: &RecordRef) -> DnsRecord {
+	let kind = RecordKind::from_token(&r.kind);
+	// The read form is not documented. A record written by the API comes
+	// back quoted (possibly re-split), one an older release wrote unquoted
+	// comes back as it was; `txt_decode` reads both as the logical value.
+	let value = match (&kind, r.priority) {
+		(RecordKind::Txt, _) => txt_decode(&r.content, TXT_FORM),
+		// `priority target`, the shape every MX value has.
+		(RecordKind::Mx, Some(priority)) => format!("{priority} {}", r.content),
+		// Cloudflare keeps the SRV priority apart from the rest too: the
+		// `content` holds `weight port target`, so the priority goes in
+		// front of it.
+		(RecordKind::Srv, Some(priority)) => format!("{priority} {}", r.content),
+		_ => r.content.clone(),
+	};
+	// Cloudflare only returns `proxied` for the kinds it can proxy (A,
+	// AAAA, CNAME). Other kinds leave it `None`, which the rest of epistle
+	// treats as "not applicable".
+	let proxied = match &kind {
+		RecordKind::A | RecordKind::Aaaa | RecordKind::Cname => r.proxied,
+		_ => None,
+	};
+	DnsRecord {
+		name: r.name.clone(),
+		kind,
+		value,
+		ttl: r.ttl,
+		proxied,
+	}
+}
+
 impl CloudflareProvider {
 	pub(super) async fn list_inner(&self, zone: &str) -> Result<Vec<DnsRecord>, ProviderError> {
 		let zone_id = self.zone_id(zone).await?;
@@ -57,37 +90,7 @@ impl CloudflareProvider {
 			.list_refs(&zone_id, zone)
 			.await?
 			.into_iter()
-			.map(|r| {
-				let kind = RecordKind::from_token(&r.kind);
-				// The read form is not documented. A record written by
-				// the API comes back quoted (possibly re-split), one an
-				// older release wrote unquoted comes back as it was;
-				// `txt_decode` reads both as the logical value.
-				let value = match (&kind, r.priority) {
-					(RecordKind::Txt, _) => txt_decode(&r.content, TXT_FORM),
-					// `priority target`, the shape every MX value has.
-					(RecordKind::Mx, Some(priority)) => format!("{priority} {}", r.content),
-					// Cloudflare keeps the SRV priority apart from the
-					// rest too: the `content` holds `weight port
-					// target`, so the priority goes in front of it.
-					(RecordKind::Srv, Some(priority)) => format!("{priority} {}", r.content),
-					_ => r.content,
-				};
-				// Cloudflare only returns `proxied` for the kinds it can
-				// proxy (A, AAAA, CNAME). Other kinds leave it `None`,
-				// which the rest of epistle treats as "not applicable".
-				let proxied = match &kind {
-					RecordKind::A | RecordKind::Aaaa | RecordKind::Cname => r.proxied,
-					_ => None,
-				};
-				DnsRecord {
-					name: r.name,
-					kind,
-					value,
-					ttl: r.ttl,
-					proxied,
-				}
-			})
+			.map(|r| record_of(&r))
 			.collect())
 	}
 	/// All pages with record IDs retained for value-exact deletion. A
