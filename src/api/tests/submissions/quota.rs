@@ -10,6 +10,8 @@ use axum::http::StatusCode;
 /// alice has no quota of her own; bob has 64 bytes.
 fn state(dir: &std::path::Path) -> ApiState {
 	let account = |name: &str, quota_bytes: Option<u64>| crate::config::Account {
+		send: None,
+		receive: None,
 		name: name.to_string(),
 		addresses: vec![format!("{name}@example.org")],
 		password_hash: Some("$argon2id$secret".to_string()),

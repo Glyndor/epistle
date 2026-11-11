@@ -13,6 +13,8 @@ use tower::ServiceExt;
 /// Two accounts on one domain, reached with the configured token.
 fn two_accounts(dir: &std::path::Path) -> crate::api::ApiState {
 	let account = |name: &str| crate::config::Account {
+		send: None,
+		receive: None,
 		display_name: None,
 		name: name.to_string(),
 		addresses: vec![format!("{name}@example.org")],

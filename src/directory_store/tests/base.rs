@@ -8,6 +8,8 @@ use crate::test_fixtures as fixtures;
 
 fn static_account() -> Account {
 	Account {
+		send: None,
+		receive: None,
 		name: "alice".to_string(),
 		addresses: vec!["alice@example.org".to_string()],
 		password_hash: None,
@@ -287,6 +289,8 @@ fn disabled_alias_falls_through_to_catch_all_in_account_store() {
 		vec!["example.org".to_string()],
 		std::collections::HashMap::new(),
 		vec![crate::config::Account {
+			send: None,
+			receive: None,
 			name: "alice".to_string(),
 			addresses: vec!["alice@example.org".to_string()],
 			password_hash: None,
@@ -352,6 +356,8 @@ fn static_allowed_protocols_propagates_to_directory() {
 	use crate::config::Protocol;
 	let dir = tempfile::tempdir().expect("tempdir");
 	let static_account = Account {
+		send: None,
+		receive: None,
 		name: "service".to_string(),
 		addresses: vec!["service@example.org".to_string()],
 		password_hash: Some(crate::smtp::auth::tests::base::hash(fixture_password())),

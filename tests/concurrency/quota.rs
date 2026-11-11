@@ -302,6 +302,8 @@ async fn incoming_submission_and_rest_share_final_copy_admission() {
 			vec!["epistle.test".into()],
 			std::collections::HashMap::new(),
 			vec![epistle::config::Account {
+				send: None,
+				receive: None,
 				name: "tester".into(),
 				addresses: vec!["tester@epistle.test".into()],
 				password_hash: Some(hash.clone()),

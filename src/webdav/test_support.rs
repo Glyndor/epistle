@@ -60,6 +60,8 @@ pub fn test_app(dir: &std::path::Path) -> Router {
 /// no limit).
 pub fn test_app_with_quota(dir: &std::path::Path, quota_bytes: Option<u64>) -> Router {
 	let account = |name: &str, pw: &str| crate::config::Account {
+		send: None,
+		receive: None,
 		display_name: None,
 		name: name.to_string(),
 		addresses: vec![format!("{name}@example.org")],

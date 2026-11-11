@@ -131,8 +131,8 @@ fn json_without_the_flag_has_no_aliases_key() {
 	assert_eq!(
 		as_json(&env, &[]),
 		json!([
-			{ "name": "bob", "source": "dynamic", "display_name": null, "addresses": ["bob@example.org"] },
-			{ "name": "carol", "source": "dynamic", "display_name": null, "addresses": ["carol@example.org"] },
+			{ "name": "bob", "source": "dynamic", "display_name": null, "addresses": ["bob@example.org"], "send": true, "receive": true },
+			{ "name": "carol", "source": "dynamic", "display_name": null, "addresses": ["carol@example.org"], "send": true, "receive": true },
 		])
 	);
 }
@@ -146,7 +146,7 @@ fn json_with_the_flag_adds_aliases_to_each_account() {
 		json!([
 			{
 				"name": "bob", "source": "dynamic", "display_name": null,
-				"addresses": ["bob@example.org"],
+				"addresses": ["bob@example.org"], "send": true, "receive": true,
 				"aliases": [
 					{ "address": "sales@example.org", "enabled": false, "hidden": false },
 					{ "address": "team@example.org", "enabled": true, "hidden": true },
@@ -154,7 +154,7 @@ fn json_with_the_flag_adds_aliases_to_each_account() {
 			},
 			{
 				"name": "carol", "source": "dynamic", "display_name": null,
-				"addresses": ["carol@example.org"],
+				"addresses": ["carol@example.org"], "send": true, "receive": true,
 				"aliases": [{ "address": "team@example.org", "enabled": true, "hidden": true }],
 			},
 		])

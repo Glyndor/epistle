@@ -25,6 +25,8 @@ password_hash = "$argon2id$x"
 fn store(dir: &std::path::Path) -> AccountStore {
 	std::fs::write(dir.join("accounts.toml"), ACCOUNTS_TOML).expect("write");
 	let ana = Account {
+		send: None,
+		receive: None,
 		display_name: None,
 		name: "ana".to_string(),
 		addresses: vec!["ana@example.org".to_string()],

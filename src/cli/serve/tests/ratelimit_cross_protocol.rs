@@ -154,6 +154,8 @@ fn jmap_state_with_tenant_limits(
 	let token_hash = crate::smtp::auth::tests::base::hash(crate::test_fixtures::api_token());
 	let spool = crate::storage::FsSpool::open(dir).expect("open spool");
 	let accounts = vec![crate::config::Account {
+		send: None,
+		receive: None,
 		display_name: None,
 		name: "alice".to_string(),
 		addresses: vec!["alice@example.org".to_string()],

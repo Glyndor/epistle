@@ -31,6 +31,8 @@ fn read_key(secret: &str) -> crate::api::ApiKey {
 /// has something to reload against.
 fn account_store(dir: &std::path::Path) -> Arc<crate::directory_store::AccountStore> {
 	let accounts = crate::config::Account {
+		send: None,
+		receive: None,
 		display_name: None,
 		name: "alice".to_string(),
 		addresses: vec!["alice@example.org".to_string()],
