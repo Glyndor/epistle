@@ -69,8 +69,37 @@ impl Directory {
 		}
 	}
 
-	/// Resolve a validated address.
+	/// Resolve a validated address as a recipient: what the mail addressed to
+	/// it reaches. An account whose receiving is switched off resolves like an
+	/// address that does not exist, whichever way the address named it (its own
+	/// address, a sub-address, a masked address, a catch-all), so the mail is
+	/// not handed to another account by falling through to a catch-all. An
+	/// alias loses those members; one left with none by that is unknown.
+	///
+	/// A login by address is not a recipient: see [`Directory::resolve_identity`].
 	pub fn resolve(&self, address: &Address) -> Resolution {
+		match self.resolve_identity(address) {
+			Resolution::Account(account) if !self.receives(&account) => Resolution::UnknownUser,
+			Resolution::Alias(accounts) => {
+				let kept: Vec<String> = accounts
+					.iter()
+					.filter(|account| self.receives(account))
+					.cloned()
+					.collect();
+				if kept.is_empty() && !accounts.is_empty() {
+					Resolution::UnknownUser
+				} else {
+					Resolution::Alias(kept)
+				}
+			}
+			other => other,
+		}
+	}
+
+	/// Resolve a validated address to what it names, whatever the receiving
+	/// switch says. For identity (a login by address, SCRAM), where an account
+	/// that sends and does not receive must still sign in as itself.
+	pub(super) fn resolve_identity(&self, address: &Address) -> Resolution {
 		let local = address.local_part();
 		// A domain alias resolves as its target domain.
 		let domain = self
@@ -156,7 +185,7 @@ impl Directory {
 						.filter_map(|member| {
 							let member = normalize(member);
 							let account = self.accounts_by_address.get(&member)?;
-							Some((account.clone(), member))
+							self.receives(account).then(|| (account.clone(), member))
 						})
 						.collect(),
 				)

@@ -5,3 +5,4 @@ pub(super) mod base;
 pub(super) mod cross_handle;
 pub(super) mod lowercase;
 pub(super) mod paused;
+pub(super) mod switches;

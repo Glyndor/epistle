@@ -75,6 +75,14 @@ impl Session {
 					));
 				}
 				match (&self.authenticated, Address::parse(&reverse_path)) {
+					// An account whose sending is switched off may sign in
+					// and read, but not submit.
+					(Some(account), _) if !self.directory.can_send(account) => {
+						return Action::Continue(Reply::single(
+							550,
+							"5.7.1 sending is turned off for this account",
+						));
+					}
 					// Authenticated senders must use one of their own
 					// addresses — no spoofing, no null path.
 					(Some(account), Ok(address))

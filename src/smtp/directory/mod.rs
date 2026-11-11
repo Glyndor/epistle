@@ -90,6 +90,12 @@ pub struct Directory {
 	/// Hosted domains switched off: mail for them is rejected like mail for
 	/// an unknown user and nobody may send as an address in them.
 	disabled_domains: HashSet<String>,
+	/// Accounts whose sending is switched off: they may sign in and read, but
+	/// no address they hold may be used as a sender (lowercased).
+	send_off: HashSet<String>,
+	/// Accounts whose receiving is switched off: mail addressed to them
+	/// resolves like an address that does not exist (lowercased).
+	receive_off: HashSet<String>,
 	/// SCRAM credentials per account name, for SCRAM-SHA-256 authentication.
 	scram: HashMap<String, super::scram::ScramStored>,
 	/// Base32 TOTP secret per account name, for two-factor auth (RFC 6238).
@@ -205,6 +211,8 @@ impl Directory {
 			catch_all: HashMap::new(),
 			domain_aliases: HashMap::new(),
 			disabled_domains: HashSet::new(),
+			send_off: HashSet::new(),
+			receive_off: HashSet::new(),
 			scram: HashMap::new(),
 			totp: HashMap::new(),
 			disabled: HashSet::new(),
@@ -320,7 +328,7 @@ impl Directory {
 	pub fn credentials(&self, login: &str) -> Option<(String, &str)> {
 		let account = if login.contains('@') {
 			let address = Address::parse(login).ok()?;
-			match self.resolve(&address) {
+			match self.resolve_identity(&address) {
 				Resolution::Account(account) => account,
 				_ => return None,
 			}
@@ -337,6 +345,12 @@ impl Directory {
 
 	/// Whether `address` belongs to `account`.
 	pub fn owns_address(&self, account: &str, address: &Address) -> bool {
+		// An account that may not send owns no sender address, so every path
+		// that asks (SMTP submission, the API, JMAP) refuses it, as an alias
+		// member too.
+		if !self.can_send(account) {
+			return false;
+		}
 		if self.domain_disabled(address.domain()) {
 			return false;
 		}
@@ -377,6 +391,7 @@ impl Directory {
 
 mod access;
 mod builder;
+mod switches;
 
 mod limits;
 

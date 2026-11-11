@@ -20,3 +20,6 @@ pub(super) mod tests_oauth;
 
 #[cfg(test)]
 pub(super) mod tests_send_as;
+
+#[cfg(test)]
+pub(super) mod tests_switches;

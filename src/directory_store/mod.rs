@@ -645,6 +645,7 @@ impl AccountStore {
 		// work runs. The set rebuilds on every directory swap, mirroring
 		// how totp, scram and quotas are wired.
 		let disabled = build::disabled(&dynamic);
+		let (send_off, receive_off) = build::switches_off(&self.static_accounts, &dynamic);
 		// Quotas feed into the directory as (name, bytes) pairs. Static
 		// chains first so a dynamic quota can overwrite a static one when
 		// the names collide (the directory's HashMap keeps the last writer,
@@ -695,6 +696,7 @@ impl AccountStore {
 			.with_scram(scram)
 			.with_totp(totp)
 			.with_disabled(disabled)
+			.with_switches(send_off, receive_off)
 			.with_account_quotas(account_quotas)
 			.with_domain_quotas(self.domain_quotas.clone())
 			.with_domain_submission_limits(self.domain_submission_limits.clone())
