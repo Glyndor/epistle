@@ -98,3 +98,15 @@ fn a_tagged_form_of_a_directory_address_is_taken_too() {
 		.resolve(&Address::parse("ldap-user+shop@example.org").expect("address"));
 	assert_eq!(resolved, Resolution::Account("ldap-user".to_string()));
 }
+
+#[test]
+fn a_directory_name_in_another_case_is_taken_too() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let store = open_store(dir.path());
+	store.set_ldap_accounts(vec![LdapAccount {
+		name: "Alice".to_string(),
+		addresses: vec!["jsmith@example.org".to_string()],
+	}]);
+	let result = store.add(dynamic("alice", "fresh@example.org"));
+	assert!(matches!(result, Err(StoreError::Duplicate(_))), "{result:?}");
+}
