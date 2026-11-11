@@ -357,8 +357,7 @@ fn limit_constants(source: &str) -> Vec<&str> {
 
 /// The paths the rows read their values from, without `crate::`.
 fn row_sources() -> BTreeSet<String> {
-	catalog::FIXED
-		.iter()
+	catalog::fixed()
 		.map(|row| row.source.trim_start_matches("crate::").to_string())
 		.collect()
 }
@@ -414,7 +413,7 @@ fn every_row_names_a_constant_the_scan_finds() {
 				.collect::<Vec<_>>()
 		})
 		.collect();
-	for row in catalog::FIXED {
+	for row in catalog::fixed() {
 		if row.source.is_empty() || row.source.starts_with("tls::") {
 			continue;
 		}
