@@ -26,4 +26,4 @@ pub mod special_use;
 mod subscriptions;
 mod uid;
 mod uidvalidity;
-mod vanished;
+pub(crate) mod vanished;

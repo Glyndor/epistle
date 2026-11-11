@@ -228,6 +228,13 @@ pub(super) const FIXED: &[FixedEntry] = &[
 		"no standard mandate"
 	),
 	number!(
+		"imap-vanished-log-octets",
+		crate::imap::vanished::MAX_LOG_OCTETS,
+		"octets",
+		Own,
+		"no standard mandate (the expunge log of one mailbox, which answers VANISHED (EARLIER); past it the oldest entries are dropped, so a client whose last known mod-sequence is older than the oldest entry kept is told the expunges from that entry on)"
+	),
+	number!(
 		"managesieve-script-size",
 		crate::managesieve::store::MAX_SCRIPT_BYTES,
 		"octets",
