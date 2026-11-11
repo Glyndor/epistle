@@ -15,8 +15,11 @@ use std::io::{self, Read};
 /// How many times its compressed size an archive may expand.
 pub(super) const MAX_RATIO: u64 = 100;
 
-/// The ceiling for any archive, however small: 1 GiB.
-pub(super) const FLOOR: u64 = 1 << 30;
+/// The ceiling for any archive, however small: 64 MiB. A tiny archive may
+/// expand a thousand times, so a floor in the gigabytes would let a megabyte
+/// of input hold that much memory, twice over once the tar members are copied.
+/// The ratio applies from about 640 KiB of archive up.
+pub(super) const FLOOR: u64 = 64 << 20;
 
 /// The most bytes the decompression of an archive of `compressed` bytes may
 /// produce.

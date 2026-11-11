@@ -49,3 +49,14 @@ fn the_restore_reads_through_the_ceiling() {
 	// A damaged stream is an error, not a panic or an empty archive.
 	assert!(gunzip_archive(b"\x1f\x8b not gzip").is_err());
 }
+
+#[test]
+fn a_small_archive_cannot_expand_past_the_floor() {
+	// About 64 KiB of archive that holds 65 MiB of zeros: past the floor, and
+	// far past what a hundred times its size allows.
+	let bomb = gzip(&vec![0u8; (FLOOR as usize) + (1 << 20)]);
+	assert!(bomb.len() < (1 << 20), "the bomb is small: {}", bomb.len());
+	let error = gunzip_archive(&bomb).expect_err("refused");
+	assert!(error.to_string().contains("expands past"), "{error}");
+	assert_eq!(FLOOR, 64 << 20);
+}
