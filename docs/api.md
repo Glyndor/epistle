@@ -627,7 +627,10 @@ checked before the first is applied) and
 `DELETE` (`204`, queued mail is kept). `id` is the account name. Only
 API-managed accounts appear. `totalResults` is the number of users on the
 page, not the number that match. `/Groups` answers `501`. A `POST` and `PUT`
-need `active`; without it the answer is a plain-text `422`. A SCIM key
+need `active`; without it the answer is a plain-text `422`. A `PUT` replaces
+what SCIM models (`active`, `emails`, `displayName`, `password` when sent) and
+leaves the quota, forwards, catch-all and the other account settings as they
+were. A SCIM key
 cannot be bound to an account.
 
 ## OAuth
