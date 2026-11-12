@@ -14,6 +14,7 @@ fn init_reports_the_limits_it_picked_for_the_host() {
 		detector: &Scripted::found(None, None),
 		resolver: &|| None,
 		meminfo: &meminfo,
+		panel_manifest: std::path::Path::new("/nonexistent/epistle-panel/image"),
 		clock: &|| crate::clock::sync::HostClock::Synced,
 	};
 	let mut out = Vec::new();

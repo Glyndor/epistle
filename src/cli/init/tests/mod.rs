@@ -5,6 +5,7 @@ mod base;
 mod clock;
 mod detect;
 mod first_account;
+mod panel;
 mod parse_privacy;
 mod ptr;
 mod sizing;

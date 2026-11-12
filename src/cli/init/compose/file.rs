@@ -36,6 +36,11 @@ pub(in crate::cli::init) struct ComposeFile {
 		skip_serializing_if = "Option::is_none"
 	)]
 	antivirus: Option<bool>,
+	/// The operator's `services.panel` choice, which `stack update` reads
+	/// back: `false` keeps the panel out of a stack that has the package,
+	/// `true` demands it. Absent leaves the package to decide.
+	#[serde(rename = "x-epistle-panel", skip_serializing_if = "Option::is_none")]
+	panel: Option<bool>,
 	/// The limits the answers set, which `stack update` reads back.
 	#[serde(
 		rename = "x-epistle-resources",
@@ -152,6 +157,7 @@ impl ComposeFile {
 			name: "epistle".to_string(),
 			managed_image: answers.image.is_none(),
 			antivirus: (!antivirus).then_some(false),
+			panel: answers.services.panel,
 			resources: answers.resources.clone(),
 			services,
 			secrets,

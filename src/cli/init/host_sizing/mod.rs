@@ -192,7 +192,7 @@ pub(super) fn fill(answers: &mut Answers, meminfo: &Path) -> Vec<String> {
 }
 
 /// Take what the operator did not answer from the compose file an earlier
-/// `init` wrote: whether it runs clamav, and the limits it recorded.
+/// `init` wrote: whether it runs clamav, the panel choice, and the limits it recorded.
 /// Services it recorded nothing for keep the fixed defaults, as `stack
 /// update` renders them.
 fn keep_existing(answers: &mut Answers, compose: &Path) {
@@ -205,6 +205,12 @@ fn keep_existing(answers: &mut Answers, compose: &Path) {
 	if answers.services.antivirus.is_none() {
 		let off = document.get("x-epistle-antivirus") == Some(&serde_json::Value::Bool(false));
 		answers.services.antivirus = Some(!off);
+	}
+	// The panel choice an earlier `init` recorded stands until the answers say otherwise.
+	if answers.services.panel.is_none() {
+		answers.services.panel = document
+			.get("x-epistle-panel")
+			.and_then(serde_json::Value::as_bool);
 	}
 	// A stack whose certificates container runs keeps it: the answers file
 	// cannot turn it on or off (`epistle stack certs` does).

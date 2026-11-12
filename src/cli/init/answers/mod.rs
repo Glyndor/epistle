@@ -110,6 +110,18 @@ pub struct Services {
 	/// (left out below 4 GiB) or keep what an existing stack runs.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub antivirus: Option<bool>,
+	/// The panel service. Absent runs the panel when the `epistle-panel`
+	/// package is installed and the management API is on; `false` keeps it out
+	/// of a stack that has the package; `true` demands it and makes `init`
+	/// fail when the package is missing. `stack update` reads the choice back
+	/// from `x-epistle-panel` in the compose file.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub panel: Option<bool>,
+	/// The panel image the pin file named, once `init` or `stack update` has
+	/// decided the stack runs the panel. Never an answers-file key: the
+	/// package, not the operator, says which release to run.
+	#[serde(skip)]
+	pub panel_image: Option<String>,
 	/// The certificates container: ACME renewal and the TLSA refresh run in
 	/// `certs`, which alone mounts the DNS credential and the ACME account
 	/// key, and `mail` reads its certificate from disk. Off unless the stack
@@ -135,6 +147,8 @@ impl Default for Services {
 		// explicitly.
 		Self {
 			antivirus: None,
+			panel: None,
+			panel_image: None,
 			imap: true,
 			submission: true,
 			pop3: false,
@@ -300,7 +314,8 @@ impl Answers {
 		 # webdav = false\n\
 		 # api = false                      # labelled API keys only; no static token generated\n\
 		 database = false                  # bring up the stack's PostgreSQL (directory, bans, antispam); init must state this explicitly, no default\n\
-		 # antivirus = true                 # clamav and freshclam; left out, off below 4 GiB of memory\n\n\
+		 # antivirus = true                 # clamav and freshclam; left out, off below 4 GiB of memory\n\
+		 # panel = false                    # the web panel; left out, it runs when the epistle-panel package is installed and api is true\n\n\
 		 # [first_account]                  # optional first mailbox; with password_file = \"-\" the password comes from stdin\n\
 		 # address = \"alice@example.org\"   # in one of the domains; the local part is the account name\n\
 		 # display_name = \"Alice Liddell\"  # optional\n\

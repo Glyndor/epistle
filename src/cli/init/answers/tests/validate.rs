@@ -198,6 +198,8 @@ fn disabling_both_imap_and_submission_warns() {
 	let mut answers = minimal(Manual);
 	answers.services = Services {
 		antivirus: None,
+		panel: None,
+		panel_image: None,
 		imap: false,
 		submission: false,
 		pop3: false,

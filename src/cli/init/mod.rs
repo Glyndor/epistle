@@ -85,6 +85,7 @@ pub fn run(args: Args) -> ExitCode {
 		detector: &detect::LiveDetector,
 		resolver: &ptr::system_resolver,
 		meminfo: std::path::Path::new("/proc/meminfo"),
+		panel_manifest: std::path::Path::new(compose::panel_package::MANIFEST),
 		clock: &crate::clock::sync::probe,
 	};
 	run_with(args, &probes, &mut crate::cli::style::stderr())
@@ -99,6 +100,8 @@ struct Probes<'a> {
 	resolver: &'a dyn Fn() -> Option<Box<dyn crate::spf::DnsLookup>>,
 	/// The host's `/proc/meminfo`, which sizes the containers.
 	meminfo: &'a std::path::Path,
+	/// The pin file the `epistle-panel` package installs.
+	panel_manifest: &'a std::path::Path,
 	/// Whether the host keeps its clock synchronised.
 	clock: &'a dyn Fn() -> crate::clock::sync::HostClock,
 }
@@ -140,8 +143,25 @@ fn run_with(args: Args, probes: &Probes, out: &mut dyn Write) -> ExitCode {
 			Err(()) => return ExitCode::from(EXIT_INVALID),
 		},
 	};
+	// Only a `true` the answers file itself gave is a demand `init` refuses to
+	// leave unmet. One copied from an existing stack's compose file below is
+	// an earlier choice, and the package may have been removed since.
+	let demanded = answers.services.panel == Some(true);
 	for note in host_sizing::fill(&mut answers, probes.meminfo) {
 		let _ = writeln!(out, "{note}");
+	}
+	// After the sizing, which keeps the panel choice an existing stack recorded.
+	let api = answers.services.api;
+	match compose::panel_package::resolve(&mut answers, probes.panel_manifest, api, demanded) {
+		Ok(notes) => {
+			for note in notes {
+				let _ = writeln!(out, "{note}");
+			}
+		}
+		Err(error) => {
+			crate::cli::style::error(error);
+			return ExitCode::from(EXIT_INVALID);
+		}
 	}
 	warn_unsynced_clock(&(probes.clock)(), out);
 	compose::warn_low_nofile(compose::host_hard_nofile(), out);

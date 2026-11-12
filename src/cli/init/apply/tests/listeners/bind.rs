@@ -55,6 +55,8 @@ fn build_config_writes_exactly_one_listener_when_every_optional_service_is_off()
 	answers.hostname = "mail.example.local".to_string();
 	answers.services = Services {
 		antivirus: None,
+		panel: None,
+		panel_image: None,
 		imap: false,
 		submission: false,
 		pop3: false,
@@ -92,6 +94,8 @@ fn build_config_with_every_service_on_uses_mail_addr_for_every_mail_listener_and
 	let mut answers = answers_minimal();
 	answers.services = Services {
 		antivirus: None,
+		panel: None,
+		panel_image: None,
 		imap: true,
 		submission: true,
 		pop3: true,
@@ -247,6 +251,8 @@ fn build_config_with_api_writes_api_listener_on_loopback() {
 	let mut answers = answers_minimal();
 	answers.services = Services {
 		antivirus: None,
+		panel: None,
+		panel_image: None,
 		imap: false,
 		submission: false,
 		pop3: false,

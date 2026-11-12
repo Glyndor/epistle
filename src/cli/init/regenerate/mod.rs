@@ -15,10 +15,10 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use super::answers::{DnsAnswers, Mode, Services};
-use super::compose::{ComposeFile, render_document};
+use super::compose::{ComposeFile, panel_package, render_document};
 use super::compose_publish::{hosts, narrowed, ports, published};
 use crate::cli::init::Answers;
-use crate::config::Listener;
+use crate::config::{Listener, ListenerKind};
 
 /// A re-rendered compose file.
 #[derive(Debug)]
@@ -49,6 +49,23 @@ pub(crate) fn regenerate_with(
 	listeners: &[Listener],
 	existing: &str,
 	certs: Option<bool>,
+) -> Result<Regenerated, String> {
+	regenerate_in(
+		data_dir,
+		listeners,
+		existing,
+		certs,
+		Path::new(panel_package::MANIFEST),
+	)
+}
+
+/// [`regenerate_with`], reading the panel package's pin file at `manifest`.
+pub(super) fn regenerate_in(
+	data_dir: &Path,
+	listeners: &[Listener],
+	existing: &str,
+	certs: Option<bool>,
+	manifest: &Path,
 ) -> Result<Regenerated, String> {
 	let document: Value = serde_json::from_str(existing)
 		.map_err(|error| format!("compose.yaml is not the JSON epistle init writes: {error}"))?;
@@ -84,7 +101,7 @@ pub(crate) fn regenerate_with(
 		.get("certs")
 		.filter(|certs| certs.is_object());
 	let forwarding = dns_forwarding(running_certs.unwrap_or(mail), &config_dir, data_dir);
-	let answers = Answers {
+	let mut answers = Answers {
 		mode: Mode::Manual,
 		hostname: String::new(),
 		domains: Vec::new(),
@@ -108,11 +125,19 @@ pub(crate) fn regenerate_with(
 				.get("x-epistle-antivirus")
 				.and_then(Value::as_bool)
 				.filter(|on| !on),
+			// The operator's choice survives the update; whether the panel runs
+			// is decided below from the package and the listeners.
+			panel: document.get("x-epistle-panel").and_then(Value::as_bool),
+			panel_image: None,
 		},
 		image,
 		first_account: None,
 		resources,
 	};
+	let serves_api = listeners
+		.iter()
+		.any(|listener| listener.kind == ListenerKind::Api);
+	let panel_notes = panel_package::resolve(&mut answers, manifest, serves_api, false)?;
 	// The host address `epistle service set` narrowed one mapping to is the
 	// operator's decision, not a function of the listeners, so the existing
 	// file is the only place it lives. Regenerating without it would put
@@ -127,7 +152,7 @@ pub(crate) fn regenerate_with(
 	let published_ports = published(listeners, &narrow, None, challenge);
 	let composed = ComposeFile::build(&answers, published_ports.clone(), database);
 	let mut text = render_document(&composed).map_err(|error| error.to_string())?;
-	let mut notes = Vec::new();
+	let mut notes = panel_notes;
 	// A publication this release takes off every address of the host is named
 	// in the notes: the operator loses reachability on this upgrade and the
 	// note is where they read which port went.

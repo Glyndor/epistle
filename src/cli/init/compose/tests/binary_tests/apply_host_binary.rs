@@ -22,6 +22,8 @@ fn answers_with_image(image: Option<&str>) -> Answers {
 		dns: None,
 		services: AnswersServices {
 			antivirus: None,
+			panel: None,
+			panel_image: None,
 			imap: true,
 			submission: true,
 			pop3: false,
