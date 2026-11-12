@@ -25,8 +25,9 @@ pub(super) trait UpdateHost {
 	/// older install still has it; `true` when it did.
 	fn harden_database(&mut self) -> Result<bool, String>;
 	/// Move the keys the compose file mounts out of data_dir and create
-	/// any that are missing; one line per thing done.
-	fn prepare_keys(&mut self) -> Result<Vec<String>, String>;
+	/// any that are missing, the panel's among them when `panel` says the
+	/// new stack runs it; one line per thing done.
+	fn prepare_keys(&mut self, panel: bool) -> Result<Vec<String>, String>;
 	/// Replace the compose file atomically.
 	fn write_compose(&mut self, text: &str) -> Result<(), String>;
 	/// Run one podup step.
@@ -67,7 +68,7 @@ pub(super) fn execute(host: &mut impl UpdateHost, plan: &UpdatePlan) -> Result<(
 	}
 	// The compose file mounts the keys from outside data_dir, so they have
 	// to be there before podup reads it.
-	for line in host.prepare_keys()? {
+	for line in host.prepare_keys(plan.panel)? {
 		host.log(&line);
 	}
 	if let Some(text) = &plan.rewrite {

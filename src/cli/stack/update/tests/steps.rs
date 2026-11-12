@@ -158,3 +158,47 @@ fn added_removed_and_nested_changes_are_named() {
 		]
 	);
 }
+
+/// A pin file holding `content` (or none), and the listeners with the API.
+fn panel_inputs(
+	content: Option<&str>,
+	api: bool,
+) -> (tempfile::TempDir, std::path::PathBuf, Vec<Listener>) {
+	let dir = tempfile::tempdir().unwrap();
+	let manifest = dir.path().join("image");
+	if let Some(content) = content {
+		std::fs::write(&manifest, content).unwrap();
+	}
+	let mut listeners = listeners();
+	if api {
+		listeners
+			.push(toml::from_str("kind = \"api\"\naddr = \"127.0.0.1\"\nport = 8025\n").unwrap());
+	}
+	(dir, manifest, listeners)
+}
+
+fn panel_plan(content: Option<&str>, api: bool) -> bool {
+	let (dir, manifest, listeners) = panel_inputs(content, api);
+	let compose = dir.path().join("compose.yaml");
+	std::fs::write(
+		&compose,
+		rendered_for_tests(std::path::Path::new("/var/lib/epistle"), None),
+	)
+	.unwrap();
+	super::plan_update_in(
+		&compose,
+		std::path::Path::new("/var/lib/epistle"),
+		&listeners,
+		&manifest,
+	)
+	.unwrap()
+	.panel
+}
+
+#[test]
+fn the_plan_says_the_new_stack_runs_the_panel_only_with_the_package_and_the_api() {
+	let good = Some("ghcr.io/glyndor/epistle-panel:0.3.1\n");
+	assert!(panel_plan(good, true));
+	assert!(!panel_plan(None, true), "no package");
+	assert!(!panel_plan(good, false), "no API listener");
+}

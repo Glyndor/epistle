@@ -195,6 +195,18 @@ the class included; `epistle api-key revoke LABEL` removes the key;
 account, never the key. The expiry is printed as an RFC 3339 instant, with
 `(expired)` after one that has passed; `--json` keeps the epoch.
 
+### The panel's key
+
+When the stack runs the web panel, `epistle init` and `epistle stack update`
+create a key labelled `panel` for it, with the scopes `read` and `write` only,
+no `--domain` and no `--account`, and a 365-day expiry. It is an
+administrator-grade key: the panel acts for every domain. The secret is written
+to `secrets/panel_api_token` beside the data directory with mode `0600` and is
+never printed. `stack update` creates the key when it is absent, replaces the
+secret when the file was lost, and renews the secret and the expiry when fewer
+than 30 days remain. A key labelled `panel` with any other scopes, domains or
+account is refused, not rewritten: revoke it and run the command again.
+
 ### Expiry is opt-in
 
 No key expires unless it is given an expiry. There is no default lifetime: a

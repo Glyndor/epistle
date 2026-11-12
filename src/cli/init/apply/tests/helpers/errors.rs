@@ -41,6 +41,7 @@ pub(in crate::cli::init::apply::tests) fn apply_error_name(error: &ApplyError) -
 		ApplyError::FirstAccount(_) => "FirstAccount",
 		ApplyError::KeyMove(_) => "KeyMove",
 		ApplyError::AnswersFile(..) => "AnswersFile",
+		ApplyError::PanelKey(_) => "PanelKey",
 		ApplyError::HostBinaryInvalid(_) => "HostBinaryInvalid",
 	}
 }

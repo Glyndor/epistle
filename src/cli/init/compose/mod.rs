@@ -37,6 +37,7 @@ pub(super) mod challenge;
 mod dns_credentials;
 mod host_binary;
 pub(super) mod panel_package;
+pub(super) mod panel_secrets;
 
 #[cfg(not(test))]
 pub(super) use host_binary::validate_host_binary_for;

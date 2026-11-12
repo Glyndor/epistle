@@ -47,6 +47,24 @@ fn key(text: &str) -> Option<serde_json::Value> {
 }
 
 #[test]
+fn the_result_says_whether_the_stack_runs_the_panel() {
+	let good = manifest(Some(GOOD));
+	let none = manifest(None);
+	for (panel, api, case, runs) in [
+		(None, true, &good, true),
+		(Some(true), true, &good, true),
+		(None, true, &none, false),
+		(Some(false), true, &good, false),
+		(None, false, &good, false),
+	] {
+		let answers = answers(panel, api);
+		let written = render_for(&answers, true).expect("render");
+		let result = again(&answers, &written, case).expect("regenerate");
+		assert_eq!(result.panel, runs, "panel {panel:?}, api {api}");
+	}
+}
+
+#[test]
 fn no_choice_writes_no_key_and_stays_byte_identical() {
 	let answers = answers(None, true);
 	let written = render_for(&answers, true).expect("render");

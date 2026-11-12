@@ -20,6 +20,8 @@ struct Fake {
 	logged: Vec<String>,
 	/// Whether the harden step finds a superuser to take apart.
 	superuser: bool,
+	/// What the update asked `prepare_keys` for, as to the panel.
+	panel_asked: Option<bool>,
 }
 
 impl Fake {
@@ -61,7 +63,8 @@ impl UpdateHost for Fake {
 		self.call("harden", String::new())?;
 		Ok(self.superuser)
 	}
-	fn prepare_keys(&mut self) -> Result<Vec<String>, String> {
+	fn prepare_keys(&mut self, panel: bool) -> Result<Vec<String>, String> {
+		self.panel_asked = Some(panel);
 		self.call("keys", String::new())?;
 		Ok(vec!["moved a key".to_string()])
 	}
@@ -104,6 +107,7 @@ fn plan(rewrite: bool) -> UpdatePlan {
 			Step(vec!["restart".into(), "mail".into()]),
 		],
 		config_path: PathBuf::from("/etc/epistle/mail.toml"),
+		panel: false,
 		images: Change {
 			retired: vec!["ghcr.io/glyndor/epistle:0.12.5".to_string()],
 			current: vec!["gcr.io/distroless/static-debian13:nonroot@sha256:new".to_string()],

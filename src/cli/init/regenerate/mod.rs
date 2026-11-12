@@ -29,11 +29,16 @@ pub(crate) struct Regenerated {
 	pub(crate) notes: Vec<String>,
 	/// The config path the `mail` service serves.
 	pub(crate) config_path: PathBuf,
+	/// Whether the stack runs the panel: the package is installed, the
+	/// operator did not decline it and the API is on. `stack update` creates
+	/// the panel's secrets before it writes this compose file.
+	pub(crate) panel: bool,
 }
 
 /// Re-render `existing` for an install whose config has `data_dir` and
 /// `listeners`. Fails when the existing file is not one `epistle init`
 /// wrote, rather than guessing.
+#[cfg(test)]
 pub(crate) fn regenerate(
 	data_dir: &Path,
 	listeners: &[Listener],
@@ -60,7 +65,7 @@ pub(crate) fn regenerate_with(
 }
 
 /// [`regenerate_with`], reading the panel package's pin file at `manifest`.
-pub(super) fn regenerate_in(
+pub(crate) fn regenerate_in(
 	data_dir: &Path,
 	listeners: &[Listener],
 	existing: &str,
@@ -185,6 +190,7 @@ pub(super) fn regenerate_in(
 		text,
 		notes,
 		config_path: answers.config_path,
+		panel: answers.services.panel_image.is_some(),
 	})
 }
 

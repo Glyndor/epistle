@@ -224,6 +224,19 @@ pub fn apply(answers: &Answers) -> ApplyOutcome {
 			error: Some(error),
 		};
 	}
+	// The panel's API key goes in `data_dir/api_keys.toml` and its session
+	// secret beside data_dir, both before the compose file that mounts them.
+	if answers.services.panel_image.is_some()
+		&& let Err(error) = super::compose::panel_secrets::ensure(
+			&answers.data_dir,
+			super::compose::panel_secrets::now(),
+			&mut report,
+		) {
+		return ApplyOutcome {
+			report,
+			error: Some(error),
+		};
+	}
 	// `build_config` cannot fail from any caller: the apply phase always
 	// supplies Some for `dkim_ed25519_path`, and the (None, _) arm in
 	// `build_config` is now `unreachable!()`. The `.expect` documents

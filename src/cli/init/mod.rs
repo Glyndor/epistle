@@ -34,6 +34,7 @@ pub use answers::Answers;
 pub(crate) use apply::prepare_keys_for_update;
 pub(crate) use compose::MAIL_STOP_GRACE_SECS;
 pub use compose::compose_file_path;
+pub(crate) use compose::panel_package::MANIFEST as PANEL_MANIFEST;
 pub(crate) use compose::{DATABASE_NAME, DATABASE_PASSWORD_FILE, DATABASE_USER, HOST_EPISTLE_PATH};
 pub(crate) use compose_publish::{
 	CONTAINER_BIND, CONTAINER_BIND_DUAL, Narrowed, OverrideEntry, OverridePorts,
@@ -42,8 +43,10 @@ pub(crate) use compose_publish::{
 	prepare as prepare_published_ports, preview as preview_published_ports,
 };
 #[cfg(test)]
+pub(crate) use regenerate::regenerate;
+#[cfg(test)]
 pub(crate) use regenerate::rendered_for_tests;
-pub(crate) use regenerate::{regenerate, regenerate_with};
+pub(crate) use regenerate::{regenerate_in, regenerate_with};
 
 use std::io::Write;
 use std::path::PathBuf;

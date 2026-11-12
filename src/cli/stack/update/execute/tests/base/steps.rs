@@ -104,3 +104,25 @@ fn a_failed_harden_names_the_rollback() {
 	);
 	assert!(!host.calls.iter().any(|call| call.starts_with("healthy")));
 }
+
+#[test]
+fn the_panel_secrets_are_asked_for_only_when_the_new_stack_runs_the_panel() {
+	for panel in [false, true] {
+		let mut host = Fake::default();
+		let mut plan = plan(true);
+		plan.panel = panel;
+		execute(&mut host, &plan).unwrap();
+		assert_eq!(host.panel_asked, Some(panel));
+	}
+}
+
+#[test]
+fn the_panel_secrets_are_in_place_before_the_compose_file_is_written() {
+	let mut host = Fake::default();
+	let mut plan = plan(true);
+	plan.panel = true;
+	execute(&mut host, &plan).unwrap();
+	let keys = host.calls.iter().position(|call| call == "keys").unwrap();
+	let write = host.calls.iter().position(|call| call == "write").unwrap();
+	assert!(keys < write, "{:?}", host.calls);
+}
