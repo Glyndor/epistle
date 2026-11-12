@@ -10,7 +10,7 @@ fn directory() -> DirectoryHandle {
 	))
 }
 
-fn message(recipients: &[&str]) -> AcceptedMessage {
+pub(super) fn message(recipients: &[&str]) -> AcceptedMessage {
 	AcceptedMessage {
 		reverse_path: "alice@example.org".into(),
 		recipients: recipients.iter().map(|r| r.to_string()).collect(),
@@ -333,7 +333,7 @@ fn relayed_mail_is_dkim_signed() {
 }
 
 /// A throwaway ARC sealer signing under `domain`.
-fn arc_sealer(domain: &str) -> std::sync::Arc<crate::arc::sealer::ArcSealer> {
+pub(super) fn arc_sealer(domain: &str) -> std::sync::Arc<crate::arc::sealer::ArcSealer> {
 	use ring::signature::Ed25519KeyPair;
 	let rng = ring::rand::SystemRandom::new();
 	let pkcs8 = Ed25519KeyPair::generate_pkcs8(&rng).expect("generate");
@@ -342,7 +342,7 @@ fn arc_sealer(domain: &str) -> std::sync::Arc<crate::arc::sealer::ArcSealer> {
 }
 
 /// Configure a Sieve redirect for alice and return the (account-rooted) sink.
-fn redirect_sink(dir: &std::path::Path) -> SplitDelivery {
+pub(super) fn redirect_sink(dir: &std::path::Path) -> SplitDelivery {
 	let account_dir = dir.join("accounts").join("alice");
 	fs::create_dir_all(&account_dir).expect("mkdir");
 	fs::write(
@@ -354,7 +354,7 @@ fn redirect_sink(dir: &std::path::Path) -> SplitDelivery {
 }
 
 /// AMS refuses to sign without a From header, so forwarded test mail carries one.
-const FORWARD_BODY: &[u8] = b"From: bob@example.net\r\nSubject: hi\r\n\r\nbody\r\n";
+pub(super) const FORWARD_BODY: &[u8] = b"From: bob@example.net\r\nSubject: hi\r\n\r\nbody\r\n";
 
 #[test]
 fn forwarded_mail_gains_an_arc_seal() {
