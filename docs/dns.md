@@ -458,13 +458,23 @@ values the certificate refresh published count as epistle's own too. So:
   the set is not the one that was planned, and address records by id, so they
   only update or delete records the plan listed; a change made in the moment
   between that read and the write is still not detected. (OVH publishes the
-  zone once after the writes, as it only does so on request.) Spaceship
-  removes by name, type and value and, for every type but TXT, removes the
-  whole set at the name before it adds the new one, without reading the set
-  again under a condition. deSEC, GoDaddy, Route 53 and Namecheap write a
-  whole set back from what they read, so a record added to that set in that
-  moment is lost with it. Nothing here has been run against a real provider
-  account.
+  zone once after the writes, as it only does so on request.) Spaceship has no
+  ids, but it removes a record by its type, name and value, so it gets the same
+  check: it reads the name and type again, stops when the set is not the one
+  that was planned, and only ever names records the plan listed (a replaced
+  record is added first and removed after, and a save is never forced, so a
+  conflict Spaceship finds is refused instead of resolved by dropping a
+  record). Google Cloud DNS reads the set again too, but does not rely on that
+  read: it applies a change atomically and its documentation says the
+  deletions of a change must match the live record set exactly, so a change
+  whose deletions no longer match is refused and nothing is written. epistle
+  deletes the set as it read it and adds the new one in one change, so a
+  change by another account in the moment between the read and the write is
+  detected too (the status code of that refusal is not documented, so epistle
+  treats 412 and 409 as a failed precondition and any other refusal as a
+  refusal of the change). deSEC, GoDaddy, Route 53 and Namecheap write a whole
+  set back from what they read, so a record added to that set in that moment
+  is lost with it. Nothing here has been run against a real provider account.
 - A DMARC record is never replaced by a weaker one: `p=`, `sp=`, `np=` and
   the `adkim=s` / `aspf=s` alignment are compared tag by tag.
 - A record that differs only in TTL or description is not rewritten.
