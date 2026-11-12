@@ -1591,7 +1591,7 @@ The command shapes are:
 | Command | What it does |
 |---|---|
 | `epistle init` | Interactive: walk through every question. |
-| `epistle init --answers FILE` | Non-interactive: read the answers from a TOML file. |
+| `epistle init --answers FILE` | Non-interactive: read the answers from a TOML file. It must be a regular file, not a symlink, and a file with an inline `dns.token` must not be readable by group or others (mode `0600`); prefer `dns.token_file`. |
 | `epistle init --answers FILE --dry-run` | Print the plan, write nothing. |
 | `epistle init --print-answers` | Print the answers template on stdout. |
 

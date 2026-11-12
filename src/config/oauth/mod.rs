@@ -147,7 +147,7 @@ impl Oauth {
 		let Some(path) = &self.signing_key_file else {
 			return Ok(None);
 		};
-		let text = std::fs::read_to_string(path).map_err(|error| {
+		let text = read_private_file(path).map_err(|error| {
 			std::io::Error::new(
 				error.kind(),
 				format!(
@@ -158,6 +158,31 @@ impl Oauth {
 		})?;
 		Ok(Some(text.trim().to_string()))
 	}
+}
+
+/// The contents of a key file, read without waiting on a fifo and only when
+/// it is a regular file that group and others cannot reach. The mode is the
+/// one of the descriptor that is read, not of a path that may change.
+fn read_private_file(path: &std::path::Path) -> std::io::Result<String> {
+	use std::io::Read;
+	use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+	let mut file = std::fs::OpenOptions::new()
+		.read(true)
+		.custom_flags(libc::O_NONBLOCK)
+		.open(path)?;
+	let metadata = file.metadata()?;
+	if !metadata.is_file() {
+		return Err(std::io::Error::other("it is not a regular file"));
+	}
+	let mode = metadata.permissions().mode() & 0o777;
+	if mode & 0o077 != 0 {
+		return Err(std::io::Error::other(format!(
+			"it is group/world-accessible (mode {mode:#o}); restrict it to 0600"
+		)));
+	}
+	let mut text = String::new();
+	file.read_to_string(&mut text)?;
+	Ok(text)
 }
 
 impl std::fmt::Debug for Oauth {

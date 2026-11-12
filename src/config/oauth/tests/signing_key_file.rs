@@ -10,11 +10,17 @@ fn oauth(extra: &str) -> Oauth {
 	.expect("parse")
 }
 
+fn set_mode(path: &std::path::Path, mode: u32) {
+	use std::os::unix::fs::PermissionsExt;
+	std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+}
+
 #[test]
 fn the_key_is_read_from_the_file_and_trimmed() {
 	let dir = tempfile::tempdir().unwrap();
 	let path = dir.path().join("oauth_signing.key");
 	std::fs::write(&path, "BASE64PRIV\n").unwrap();
+	set_mode(&path, 0o600);
 	let oauth = oauth(&format!(
 		"signing_key_file = {:?}\n",
 		path.display().to_string()
@@ -67,4 +73,46 @@ fn a_key_file_needs_the_static_public_key_too() {
 		oauth.validate(),
 		Err(OauthConfigError::SigningKeyWithoutPublicKey)
 	);
+}
+
+#[test]
+fn a_key_file_others_can_read_is_refused() {
+	let dir = tempfile::tempdir().unwrap();
+	let path = dir.path().join("oauth_signing.key");
+	std::fs::write(&path, "BASE64PRIV\n").unwrap();
+	for mode in [0o644, 0o640, 0o604] {
+		set_mode(&path, mode);
+		let error = oauth(&format!(
+			"signing_key_file = {:?}\n",
+			path.display().to_string()
+		))
+		.signing_key_material()
+		.unwrap_err();
+		let text = error.to_string();
+		assert!(text.contains("group/world-accessible"), "{mode:#o}: {text}");
+		assert!(!text.contains("BASE64PRIV"), "{text}");
+	}
+}
+
+#[test]
+fn a_key_file_that_is_not_a_regular_file_is_refused_not_waited_on() {
+	let dir = tempfile::tempdir().unwrap();
+	let error = oauth(&format!(
+		"signing_key_file = {:?}\n",
+		dir.path().display().to_string()
+	))
+	.signing_key_material()
+	.unwrap_err();
+	assert!(error.to_string().contains("regular file"), "{error}");
+	let fifo = dir.path().join("fifo");
+	let c_path = std::ffi::CString::new(fifo.to_str().unwrap()).unwrap();
+	// SAFETY: the path is a valid NUL-terminated string.
+	assert_eq!(unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) }, 0);
+	let error = oauth(&format!(
+		"signing_key_file = {:?}\n",
+		fifo.display().to_string()
+	))
+	.signing_key_material()
+	.unwrap_err();
+	assert!(error.to_string().contains("regular file"), "{error}");
 }
