@@ -76,6 +76,7 @@ class SelectTests(unittest.TestCase):
     def test_the_parsers_of_one_folder_run_their_own_target(self):
         for path, target in (
             ("src/arc/signature.rs", "arc_headers"),
+            ("src/config/load.rs", "config_parse"),
             ("src/jwt/mod.rs", "jwt_decode"),
             ("src/queue/client/conn/mod.rs", "smtp_reply"),
             ("src/queue/srs/mod.rs", "srs_reverse"),

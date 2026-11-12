@@ -41,6 +41,7 @@ on:
       - "src/antispam/attachments/**"
       - "src/webdav/**"
       - "src/arc/**"
+      - "src/config/**"
       - "src/jwt/**"
       - "src/queue/client/**"
       - "src/queue/srs/**"

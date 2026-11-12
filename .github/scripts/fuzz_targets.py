@@ -51,6 +51,7 @@ ALL = [
     "attachment_walk",
     "sender_auth_records",
     "sasl_exchange",
+    "config_parse",
 ]
 
 # Folder of the source -> the targets that exercise it and nothing else.
@@ -86,6 +87,7 @@ FOLDERS = {
     "src/antispam/attachments/": ["attachment_inspect", "attachment_walk"],
     "src/webdav/": ["webdav_filter_rrule", "webdav_report_body"],
     "src/arc/": ["arc_headers"],
+    "src/config/": ["config_parse"],
     "src/jwt/": ["jwt_decode"],
     "src/queue/client/": ["smtp_reply"],
     "src/queue/srs/": ["srs_reverse"],

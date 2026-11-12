@@ -482,6 +482,10 @@ name = "hostile_outbound"
 path = "tests/outbound/hostile_outbound.rs"
 
 [[test]]
+name = "hostile_config"
+path = "tests/config/hostile_config.rs"
+
+[[test]]
 name = "webhook_proxy"
 path = "tests/http/webhook_proxy.rs"
 

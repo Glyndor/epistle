@@ -245,3 +245,10 @@ path = "fuzz_targets/queue/srs_reverse.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "config_parse"
+path = "fuzz_targets/config/config_parse.rs"
+test = false
+doc = false
+bench = false

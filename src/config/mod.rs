@@ -13,6 +13,7 @@ mod api;
 mod arc;
 mod attachments;
 mod auth;
+mod clip;
 mod database;
 mod debug;
 mod dkim;
@@ -30,6 +31,7 @@ mod otel;
 mod permissions;
 mod privileges;
 mod queue;
+mod read;
 mod scanner;
 mod srs;
 mod storage;
@@ -106,7 +108,7 @@ pub enum ConfigError {
 	/// The file was read but its contents are not valid TOML, or they contain
 	/// an unknown key (the schema is `deny_unknown_fields`). Carries the path
 	/// and the parser error.
-	#[error("invalid TOML in {path}: {source}")]
+	#[error("invalid TOML in {path}: {}", clip::lines(&.source.to_string()))]
 	Parse {
 		/// Path of the file that failed to parse.
 		path: PathBuf,

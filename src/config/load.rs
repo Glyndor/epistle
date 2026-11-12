@@ -18,11 +18,7 @@ impl Config {
 	/// a secret store rather than on disk.
 	pub fn load(path: &Path) -> Result<Self, ConfigError> {
 		check_permissions(path, "config file")?;
-		let raw = std::fs::read_to_string(path).map_err(|source| ConfigError::Read {
-			path: path.to_path_buf(),
-			source,
-			kind: "config file",
-		})?;
+		let raw = super::read::text(path)?;
 		Self::parse_text(&raw, path)
 	}
 
@@ -34,11 +30,7 @@ impl Config {
 	/// the same way.
 	pub(crate) fn load_without(path: &Path, tables: &[&str]) -> Result<Self, ConfigError> {
 		check_permissions(path, "config file")?;
-		let raw = std::fs::read_to_string(path).map_err(|source| ConfigError::Read {
-			path: path.to_path_buf(),
-			source,
-			kind: "config file",
-		})?;
+		let raw = super::read::text(path)?;
 		let text = match raw.parse::<toml_edit::DocumentMut>() {
 			Ok(mut document) => {
 				for table in tables {
@@ -61,11 +53,7 @@ impl Config {
 	/// read or parsed still fails here.
 	pub(crate) fn load_lenient(path: &Path) -> Result<Self, ConfigError> {
 		check_permissions(path, "config file")?;
-		let raw = std::fs::read_to_string(path).map_err(|source| ConfigError::Read {
-			path: path.to_path_buf(),
-			source,
-			kind: "config file",
-		})?;
+		let raw = super::read::text(path)?;
 		Self::parse_text_lenient(&raw, path)
 	}
 
