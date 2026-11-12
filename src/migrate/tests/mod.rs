@@ -1,5 +1,6 @@
 //! Hostile remote peers. LDAP and S3 exercise the existing backends, since
-//! migrate currently has no LDAP/S3 remote import clients.
+//! migrate currently has no LDAP/S3 remote import clients. Each peer is a
+//! loopback fake; a case must end in an error, with bounded memory and time.
 
 mod ldap;
 mod s3;
