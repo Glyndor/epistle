@@ -10,7 +10,7 @@ use super::*;
 use crate::directory_store::{AccountStore, DynamicAccount, NoopScramUpgrader, ScramUpgrader};
 use crate::smtp::auth::tests::base::hash;
 use crate::smtp::scram::{SCRAM_ITERATIONS, ScramCredentials, ScramStored};
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 
 #[test]
 fn fresh_salt_uses_the_current_iteration_count() {

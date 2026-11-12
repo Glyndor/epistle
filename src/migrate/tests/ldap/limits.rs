@@ -57,7 +57,7 @@ async fn silent_server_does_not_hold_the_login_worker() {
 	let (tx, rx) = tokio::sync::oneshot::channel();
 	let worker = std::thread::spawn(move || {
 		let auth = LdapAuthenticator::with_limits(config(&url), limits());
-		let password = crate::test_fixtures::password();
+		let password = crate::test_support::fixtures::password();
 		// The second login only runs if the first one gave the worker back.
 		let first = auth.authenticate("alice", password);
 		let second = auth.authenticate("bob", password);

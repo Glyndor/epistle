@@ -90,12 +90,12 @@ fn the_password_file_gives_its_first_line() {
 	let file = dir.path().join("pw");
 	std::fs::write(
 		&file,
-		format!("{}\nignored\n", crate::test_fixtures::password()),
+		format!("{}\nignored\n", crate::test_support::fixtures::password()),
 	)
 	.expect("write");
 	assert_eq!(
 		password(Some(&file)).expect("read").as_str(),
-		crate::test_fixtures::password()
+		crate::test_support::fixtures::password()
 	);
 	std::fs::write(&file, "\n").expect("write");
 	assert!(password(Some(&file)).is_err(), "an empty file is refused");
@@ -166,7 +166,7 @@ fn an_unknown_account_is_refused_before_any_connection() {
 	let alice = crate::directory_store::DynamicAccount::with_password(
 		"alice".into(),
 		vec!["alice@example.org".into()],
-		crate::test_fixtures::password(),
+		crate::test_support::fixtures::password(),
 		&crate::password::Policy::from_config(&config.auth),
 		false,
 	)

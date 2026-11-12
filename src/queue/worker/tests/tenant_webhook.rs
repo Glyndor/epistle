@@ -8,7 +8,7 @@ use super::*;
 use crate::queue::tests::test_remote::{FakeRemote, Script};
 use crate::smtp::session::AcceptedMessage;
 use crate::smtp::sink::{MemorySink, MessageSink};
-use crate::test_fixtures::fresh_secret;
+use crate::test_support::fixtures::fresh_secret;
 use crate::webhook::tests::support::{bodies, quiet, settle, signed_receiver, tenant_config};
 
 fn from_to(sender: &str, recipient: &str) -> AcceptedMessage {

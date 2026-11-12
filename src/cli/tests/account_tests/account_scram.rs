@@ -31,7 +31,7 @@ fn harness(auth_section: &str) -> (tempfile::TempDir, tempfile::NamedTempFile) {
 			password_hash: hash(fixture_password()),
 			scram: Some(ScramStored::from_credentials(&ScramCredentials::derive(
 				fixture_password(),
-				crate::test_fixtures::salt(),
+				crate::test_support::fixtures::salt(),
 				4096,
 			))),
 			totp_secret: None,
@@ -58,7 +58,7 @@ fn harness(auth_section: &str) -> (tempfile::TempDir, tempfile::NamedTempFile) {
 /// left on disk.
 fn change_password(dir: &std::path::Path, config: &std::path::Path) -> Option<ScramStored> {
 	let store = account::prepare(config, NAME).expect("prepare");
-	let new_password = crate::test_fixtures::second_password();
+	let new_password = crate::test_support::fixtures::second_password();
 	assert_eq!(
 		account::password_with_store(
 			&store,

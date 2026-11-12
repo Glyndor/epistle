@@ -28,7 +28,7 @@ async fn hostile_redirect_uri_is_rejected_on_wire() {
 				"/oauth/authorize",
 				json!({
 					"client_id": "cli", "login": "alice@example.org",
-					"password": crate::test_fixtures::password(),
+					"password": crate::test_support::fixtures::password(),
 					"code_challenge_method": "S256", "code_challenge": "A".repeat(43),
 					"redirect_uri": uri
 				}),
@@ -51,7 +51,7 @@ async fn hostile_redirect_uri_is_rejected_on_wire() {
 			"/oauth/authorize",
 			json!({
 				"client_id": "cli", "login": "alice@example.org",
-				"password": crate::test_fixtures::password(),
+				"password": crate::test_support::fixtures::password(),
 				"code_challenge_method": "S256", "code_challenge": "A".repeat(43),
 				"redirect_uri": "https://app.example/callback"
 			}),

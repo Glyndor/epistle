@@ -217,7 +217,7 @@ fn unknown_permission_never_establishes_scope() {
 
 #[tokio::test]
 async fn zone_report_never_reflects_credential_fragments() {
-	let token = crate::test_fixtures::bytes::<20>()
+	let token = crate::test_support::fixtures::bytes::<20>()
 		.iter()
 		.map(|b| format!("{b:02x}"))
 		.collect::<String>();

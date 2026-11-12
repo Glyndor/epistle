@@ -1,6 +1,6 @@
 //! WebDAV request-bound regression tests.
 
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 use std::os::unix::fs::symlink;
 
 use crate::webdav::router;

@@ -1,5 +1,5 @@
 use super::*;
-use crate::test_fixtures::fresh_secret;
+use crate::test_support::fixtures::fresh_secret;
 
 const OUR: &str = "relay.example";
 const NOW: u64 = 19_000;

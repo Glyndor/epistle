@@ -1,5 +1,5 @@
 use super::*;
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 
 #[test]
 fn accepts_a_strong_in_range_ascii_password() {

@@ -27,7 +27,7 @@ use super::text;
 use super::*;
 use crate::antispam::bans::tests::base::FakeBanStore;
 use crate::antispam::bans::{BanInfo, BanPolicy, BanStore};
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
 

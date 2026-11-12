@@ -1,4 +1,4 @@
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 
 pub(in super::super) fn assert_totp_secret(secret: &str) {
 	assert!(

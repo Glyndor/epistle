@@ -109,7 +109,7 @@ async fn failed_basic_logins_are_counted_against_the_client_address() {
 	use crate::antispam::bans::BanPolicy;
 	use crate::antispam::bans::tests::base::FakeBanStore;
 	use crate::smtp::directory::gate_fixture::{OPEN, gate_directory};
-	use crate::test_fixtures as fixtures;
+	use crate::test_support::fixtures;
 
 	let store = FakeBanStore::new(BanPolicy::default());
 	let handle =

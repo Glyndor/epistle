@@ -4,7 +4,7 @@
 //! parser and matcher; the tests here drive the filter through the
 //! WebDAV handler to make sure the integration holds.
 
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 use crate::webdav::router;
 
 const MKCOL_CALENDAR: &[u8] = br#"<?xml version="1.0" encoding="utf-8"?>

@@ -16,7 +16,7 @@
 
 use super::*;
 use crate::smtp::auth::tests::base::{fixture_password, hash};
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 
 fn directory_with_totp(secret: &[u8]) -> Directory {
 	let password = fixture_password().to_string();

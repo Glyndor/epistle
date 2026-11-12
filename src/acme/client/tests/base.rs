@@ -1,7 +1,7 @@
 //! Tests for the ACME client flow.
 
 use super::*;
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 use std::collections::HashMap;
 
 /// Transport returning canned responses keyed by URL, recording POSTs.

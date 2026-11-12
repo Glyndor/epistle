@@ -9,7 +9,7 @@
 //! destination the policy refuses.
 
 use super::*;
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 use base64::Engine;
 use std::collections::HashMap;
 use std::sync::Arc;

@@ -34,7 +34,7 @@ fn bindings_round_trip_and_name_credentials_by_their_hash() {
 
 #[test]
 fn api_keys_are_named_by_the_stored_digest_of_their_token() {
-	let token = crate::test_fixtures::fresh_secret();
+	let token = crate::test_support::fixtures::fresh_secret();
 	let stored = format!("sha256:{}", to_hex(&sha256(token.as_bytes())));
 	assert_eq!(api_key_key_of_token(&token), api_key_key(&stored));
 }

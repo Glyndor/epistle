@@ -7,7 +7,7 @@ use serde_json::json;
 use super::base::{TOKEN, request, request_with_body};
 use super::fixtures::{tenant_key, world};
 use super::*;
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 
 #[tokio::test]
 async fn masked_addresses_of_another_tenants_account_are_out_of_reach() {

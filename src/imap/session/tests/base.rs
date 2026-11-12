@@ -1,6 +1,6 @@
 use super::helpers::format_internaldate;
 use super::*;
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 use std::collections::HashMap;
 use std::sync::Arc;
 

@@ -25,7 +25,7 @@ fn fixture_hashes_use_independent_salts() {
 
 #[test]
 fn runtime_credentials_have_distinct_roles_and_valid_passwords() {
-	use crate::test_fixtures as fixtures;
+	use crate::test_support::fixtures;
 	let values = [
 		fixtures::password(),
 		fixtures::second_password(),

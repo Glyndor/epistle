@@ -3,7 +3,7 @@
 use super::auth_bans::{decode_server_first, scram_directory_with_ban_store, valid_client_final};
 use super::text;
 use super::*;
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
 

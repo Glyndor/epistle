@@ -89,7 +89,7 @@ fn is_v4(addr: &std::net::SocketAddr) -> bool {
 /// port than the IPv4 bind.
 #[tokio::test]
 async fn v6_any_and_v4_any_listeners_on_the_same_port_coexist() {
-	let port = crate::test_fixtures::free_port();
+	let port = crate::test_support::fixtures::free_port();
 
 	// The IPv4 listener: build the production `Listener` shape
 	// (with kind = Smtp so `bind_listener` takes the same path

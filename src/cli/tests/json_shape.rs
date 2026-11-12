@@ -166,7 +166,9 @@ fn app_password_list_json() {
 			"bob",
 			AppPassword {
 				label: "phone".to_string(),
-				hash: crate::smtp::auth::tests::base::hash(crate::test_fixtures::password()),
+				hash: crate::smtp::auth::tests::base::hash(
+					crate::test_support::fixtures::password(),
+				),
 				expires_at: Some(99),
 				ip_cidr: None,
 				save_sent: None,

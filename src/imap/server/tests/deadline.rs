@@ -4,7 +4,7 @@
 
 use super::base::{directory, read_until};
 use super::*;
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 use tokio::time::Instant;
 use tokio_rustls::TlsConnector;
 use tokio_rustls::rustls::pki_types::{CertificateDer, ServerName};

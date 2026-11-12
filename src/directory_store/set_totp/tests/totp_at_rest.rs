@@ -6,7 +6,7 @@ use crate::config::Protocol;
 use crate::directory_store::{AccountStore, DynamicAccount};
 use crate::smtp::auth::tests::base::{fixture_password, hash};
 use crate::storage::MessageCrypto;
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 
 fn open(dir: &std::path::Path, crypto: &MessageCrypto) -> AccountStore {
 	AccountStore::open(

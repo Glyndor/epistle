@@ -8,7 +8,7 @@ use crate::config::Protocol;
 use crate::smtp::address::Address;
 use crate::smtp::auth::tests::base::hash;
 use crate::smtp::scram::{ScramCredentials, ScramStored};
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 
 fn parse(raw: &str) -> Address {
 	Address::parse(raw).expect("valid address")

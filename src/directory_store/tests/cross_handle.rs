@@ -277,7 +277,9 @@ fn cli_write_round_trips_to_a_fresh_directory_handle() {
 	let _ = server.set_password_hash(
 		"carol",
 		"$argon2id$upgraded".to_string(),
-		Some(ScramStored::with_fresh_salt(crate::test_fixtures::password()).expect("scram")),
+		Some(
+			ScramStored::with_fresh_salt(crate::test_support::fixtures::password()).expect("scram"),
+		),
 	);
 	assert_eq!(
 		handle

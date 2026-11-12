@@ -1,5 +1,5 @@
 use super::*;
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 use ring::signature::{ECDSA_P256_SHA256_FIXED, UnparsedPublicKey};
 
 #[test]

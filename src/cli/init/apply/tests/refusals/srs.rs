@@ -65,7 +65,7 @@ fn init_over_an_existing_file_does_not_add_secrets_to_it() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let answers = answers_for(dir.path(), &["a.example"]);
 	let path: PathBuf = answers.config_path.clone();
-	let secret = crate::test_fixtures::fresh_secret();
+	let secret = crate::test_support::fixtures::fresh_secret();
 	std::fs::write(
 		&path,
 		format!(

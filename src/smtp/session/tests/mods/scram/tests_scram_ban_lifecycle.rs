@@ -13,7 +13,7 @@ use super::tests_scram_bans::{
 	decode_server_first, scram_challenge_text, scram_directory_with_ban_store, valid_client_final,
 };
 use super::*;
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 
 /// A malformed client-first sent from an already-banned IP does not
 /// extend the ban and does not add a strike. The previous behaviour

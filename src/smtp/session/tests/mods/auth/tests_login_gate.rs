@@ -6,7 +6,7 @@ use super::super::scram::tests_scram::{b64, finish_scram, reply_code};
 use super::super::scram::tests_scram_bans::{decode_server_first, scram_challenge_text};
 use super::*;
 use crate::smtp::directory::gate_fixture::*;
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 
 fn session(directory: Arc<Directory>) -> Session {
 	let mut session = Session::new("mail.example.org")

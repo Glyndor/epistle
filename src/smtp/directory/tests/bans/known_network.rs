@@ -13,7 +13,7 @@ use crate::antispam::bans::BanPolicy;
 use crate::antispam::bans::tests::base::FakeBanStore;
 use crate::config::Protocol;
 use crate::smtp::directory::hash_gate::Verdict;
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 
 fn directory_with(store: std::sync::Arc<FakeBanStore>) -> Directory {
 	gate_directory().with_ban_store(store)

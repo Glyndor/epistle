@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::smtp::sink::{MessageSink, Submission};
-use crate::test_fixtures::fresh_secret;
+use crate::test_support::fixtures::fresh_secret;
 
 fn two_domains() -> DirectoryHandle {
 	DirectoryHandle::new(crate::smtp::directory::Directory::new(

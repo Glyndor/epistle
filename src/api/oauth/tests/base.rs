@@ -7,7 +7,7 @@
 
 use crate::api::{ApiState, router};
 use crate::oauth::OauthVerifier;
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use base64::Engine;

@@ -136,7 +136,7 @@ async fn a_wrong_password_is_refused_without_echoing_it() {
 	let server = FakeServer::start(Mode::Tls, '.', folders()).await;
 	let dir = tempfile::tempdir().expect("tempdir");
 	let mut source = source(&server, Security::Tls);
-	source.password = Zeroizing::new(crate::test_fixtures::wrong_password().to_string());
+	source.password = Zeroizing::new(crate::test_support::fixtures::wrong_password().to_string());
 	let mut target = target(dir.path());
 	let (_, error) = run(&source, &mut target, &settings(), &mut Quiet::default()).await;
 	let error = error.expect("refused");

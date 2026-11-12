@@ -2,7 +2,7 @@
 //! `ApiState` a test drives and the request helpers.
 
 use super::*;
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use std::collections::BTreeMap;

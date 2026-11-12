@@ -1,7 +1,7 @@
 //! `config-check` says when hosted domains still share one SRS secret.
 
 use crate::cli::config::check::tests::*;
-use crate::test_fixtures::fresh_secret;
+use crate::test_support::fixtures::fresh_secret;
 use std::io::Write;
 
 fn check(body: &str) -> (ExitCode, String) {

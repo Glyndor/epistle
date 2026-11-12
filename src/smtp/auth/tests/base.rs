@@ -1,6 +1,6 @@
 use super::*;
 use crate::password::Policy;
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 
 pub(crate) fn hash(password: &str) -> String {
 	super::hash_password(password).expect("fixture password hash")
@@ -106,7 +106,7 @@ fn unicode_policy_normalises_before_hashing_and_verifying() {
 	// another, and the contract here is that the same `Cow<str>` flowed
 	// in on both paths.
 	let policy = Policy::unicode();
-	let tail = crate::test_fixtures::printable_ascii(crate::password::MIN_LENGTH);
+	let tail = crate::test_support::fixtures::printable_ascii(crate::password::MIN_LENGTH);
 	let nfc = format!("contrase\u{00F1}a{tail}");
 	let nfd = format!("contrase\u{006E}\u{0303}a{tail}");
 	assert_ne!(
@@ -133,6 +133,6 @@ fn unicode_policy_normalises_before_hashing_and_verifying() {
 	assert!(verify_password(&phc_from_nfd, prepared_nfc.as_ref()));
 	assert!(verify_password(&phc_from_nfd, prepared_nfd.as_ref()));
 	// A wrong password still fails, even after the policy prepare.
-	let wrong = crate::test_fixtures::printable_ascii(crate::password::MIN_LENGTH + 2);
+	let wrong = crate::test_support::fixtures::printable_ascii(crate::password::MIN_LENGTH + 2);
 	assert!(!verify_password(&phc, &wrong));
 }

@@ -3,7 +3,7 @@
 use super::*;
 use crate::smtp::address::Address;
 use crate::smtp::directory::Resolution;
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 
 pub(super) fn static_account() -> Account {
 	Account {

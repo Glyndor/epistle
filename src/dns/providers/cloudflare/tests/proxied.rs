@@ -80,7 +80,7 @@ async fn proxied_mock(records: Vec<serde_json::Value>) -> (CloudflareProvider, P
 	});
 	let provider = CloudflareProvider::new(ScopedSecret::new(
 		"example.org",
-		crate::test_fixtures::api_token(),
+		crate::test_support::fixtures::api_token(),
 	))
 	.with_base(crate::net::HttpsUrl::loopback_http(&format!("http://{addr}")).unwrap());
 	(provider, state)
@@ -225,7 +225,7 @@ async fn list_reads_every_page_and_keeps_the_mx_priority() {
 	.await;
 	let provider = CloudflareProvider::new(ScopedSecret::new(
 		"example.org",
-		crate::test_fixtures::api_token(),
+		crate::test_support::fixtures::api_token(),
 	))
 	.with_base(base);
 	let records = provider.list("example.org").await.expect("list");

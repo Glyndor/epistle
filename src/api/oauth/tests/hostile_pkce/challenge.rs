@@ -36,7 +36,7 @@ async fn a_challenge_that_is_not_a_digest_is_refused_on_wire() {
 				"/oauth/authorize",
 				json!({
 					"client_id": "cli", "login": "alice@example.org",
-					"password": crate::test_fixtures::password(),
+					"password": crate::test_support::fixtures::password(),
 					"code_challenge_method": "S256", "code_challenge": challenge
 				}),
 			)
@@ -59,7 +59,7 @@ async fn a_challenge_that_is_not_a_digest_is_refused_on_wire() {
 			"/oauth/authorize",
 			json!({
 				"client_id": "cli", "login": "alice@example.org",
-				"password": crate::test_fixtures::password(),
+				"password": crate::test_support::fixtures::password(),
 				"code_challenge_method": "S256", "code_challenge": CHALLENGE
 			}),
 		)
@@ -78,7 +78,7 @@ async fn a_two_mebibyte_challenge_is_refused() {
 		"client_id=cli&code_challenge={}&code_challenge_method=S256\
 		 &login=alice@example.org&password={}",
 		"a".repeat(2 * 1024 * 1024),
-		crate::test_fixtures::password()
+		crate::test_support::fixtures::password()
 	);
 	let mut request = axum::http::Request::builder()
 		.method("POST")
@@ -128,7 +128,7 @@ async fn a_megabyte_challenge_is_refused_before_it_is_stored() {
 			"/oauth/authorize",
 			json!({
 				"client_id": "cli", "login": "alice@example.org",
-				"password": crate::test_fixtures::password(),
+				"password": crate::test_support::fixtures::password(),
 				"code_challenge_method": "S256", "code_challenge": "a".repeat(1024 * 1024)
 			}),
 		)

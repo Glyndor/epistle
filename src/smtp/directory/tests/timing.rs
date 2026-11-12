@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use super::gate_fixture::*;
 use crate::config::Protocol;
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 
 /// The median of `rounds` timings of one failed password check for `login`.
 fn failed_check(directory: &super::Directory, login: &str, rounds: usize) -> Duration {

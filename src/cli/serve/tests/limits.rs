@@ -146,7 +146,9 @@ async fn third_is_refused(name: &str, port: u16, expected: &str) {
 #[tokio::test]
 async fn serve_applies_the_client_caps_to_every_listener() {
 	let dir = tempfile::tempdir().expect("tempdir");
-	let ports: Vec<u16> = (0..5).map(|_| crate::test_fixtures::free_port()).collect();
+	let ports: Vec<u16> = (0..5)
+		.map(|_| crate::test_support::fixtures::free_port())
+		.collect();
 	let listeners = [
 		("imap", ports[0]),
 		("pop3s", ports[1]),
@@ -182,7 +184,7 @@ async fn serve_applies_the_client_caps_to_every_listener() {
 #[tokio::test]
 async fn serve_applies_the_http_listener_cap() {
 	let dir = tempfile::tempdir().expect("tempdir");
-	let port = crate::test_fixtures::free_port();
+	let port = crate::test_support::fixtures::free_port();
 	let settings = "max_http_connections = 2";
 	let server = tokio::spawn(serve(config(dir.path(), &[("metrics", port)], settings)));
 	third_is_refused("metrics", port, "HTTP/1.1 503 Service Unavailable").await;
@@ -192,7 +194,9 @@ async fn serve_applies_the_http_listener_cap() {
 #[tokio::test]
 async fn serve_applies_the_http_caps_to_api_webdav_and_autoconfig() {
 	let dir = tempfile::tempdir().expect("tempdir");
-	let ports: Vec<u16> = (0..3).map(|_| crate::test_fixtures::free_port()).collect();
+	let ports: Vec<u16> = (0..3)
+		.map(|_| crate::test_support::fixtures::free_port())
+		.collect();
 	let listeners = [
 		("api", ports[0]),
 		("web-dav", ports[1]),
@@ -210,7 +214,7 @@ async fn serve_applies_the_http_caps_to_api_webdav_and_autoconfig() {
 #[tokio::test]
 async fn serve_applies_the_managesieve_default_of_40() {
 	let dir = tempfile::tempdir().expect("tempdir");
-	let port = crate::test_fixtures::free_port();
+	let port = crate::test_support::fixtures::free_port();
 	let server = tokio::spawn(serve(config(dir.path(), &[("manage-sieve", port)], "")));
 	let mut kept = Vec::new();
 	let mut last = String::new();

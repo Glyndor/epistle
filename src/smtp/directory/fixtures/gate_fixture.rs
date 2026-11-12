@@ -14,7 +14,7 @@ use ring::signature::{ECDSA_P256_SHA256_FIXED_SIGNING, EcdsaKeyPair, KeyPair};
 use crate::directory_store::AppPassword;
 use crate::smtp::directory::Directory;
 use crate::smtp::scram::{ScramCredentials, ScramStored};
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 
 /// The domain switched off in [`gate_directory`].
 pub(crate) const OFF_DOMAIN: &str = "off.example";

@@ -1,7 +1,7 @@
 //! IMAP session IDLE and NOTIFY command tests.
 
 use super::*;
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 
 #[test]
 fn idle_flow() {

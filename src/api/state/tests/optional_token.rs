@@ -27,7 +27,7 @@ fn state(hash: Option<&str>) -> (tempfile::TempDir, ApiState) {
 #[tokio::test]
 async fn absent_static_hash_never_matches_any_bearer_or_cached_digest() {
 	let (_dir, state) = state(None);
-	let real = crate::test_fixtures::api_token();
+	let real = crate::test_support::fixtures::api_token();
 	// The digest prefix is read off a computed hash, not written as a literal.
 	let prefix = sha256_hash(real).split_once(':').unwrap().0.to_owned() + ":";
 	for token in [&real[..0], prefix.as_str(), real] {
@@ -42,7 +42,7 @@ async fn absent_static_hash_never_matches_any_bearer_or_cached_digest() {
 #[tokio::test]
 async fn every_scope_key_is_not_the_static_identity() {
 	let (dir, mut state) = state(None);
-	let token = crate::test_fixtures::api_key();
+	let token = crate::test_support::fixtures::api_key();
 	let mut keys = ApiKeyStore::open(dir.path()).unwrap();
 	keys.add(ApiKey {
 		label: "all-scopes".into(),
@@ -76,7 +76,7 @@ async fn every_scope_key_is_not_the_static_identity() {
 
 #[tokio::test]
 async fn configured_hashes_keep_matching_and_missing() {
-	let token = crate::test_fixtures::api_token();
+	let token = crate::test_support::fixtures::api_token();
 	for hash in [
 		sha256_hash(token),
 		crate::smtp::auth::tests::base::hash(token),
@@ -102,7 +102,7 @@ async fn configured_hashes_keep_matching_and_missing() {
 #[tokio::test]
 async fn absent_hash_miss_does_no_argon2_work() {
 	let (_dir, absent) = state(None);
-	let hash = crate::smtp::auth::tests::base::hash(crate::test_fixtures::api_token());
+	let hash = crate::smtp::auth::tests::base::hash(crate::test_support::fixtures::api_token());
 	let (_configured_dir, configured) = state(Some(&hash));
 	for (label, state) in [("absent", &absent), ("configured argon2 miss", &configured)] {
 		let started = std::time::Instant::now();
@@ -116,7 +116,7 @@ async fn absent_hash_miss_does_no_argon2_work() {
 	}
 	assert_eq!(absent.argon2_stats(), (0, 0));
 	assert_eq!(configured.argon2_stats().0, 1);
-	let hash = sha256_hash(crate::test_fixtures::api_token());
+	let hash = sha256_hash(crate::test_support::fixtures::api_token());
 	let (_digest_dir, digest_state) = state(Some(&hash));
 	for (label, state) in [
 		("absent", &absent),

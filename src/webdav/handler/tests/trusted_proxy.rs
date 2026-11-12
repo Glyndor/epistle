@@ -6,7 +6,7 @@
 //! used to claim another address.
 
 use super::super::super::router_with_trusted;
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 use axum::Router;
 use axum::body::Body;
 use axum::extract::ConnectInfo;

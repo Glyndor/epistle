@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::api::api_keys::{ApiKey, ApiKeyStore, Scope};
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 
 fn ip(text: &str) -> std::net::IpAddr {
 	text.parse().expect("ip")

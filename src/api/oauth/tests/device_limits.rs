@@ -275,7 +275,7 @@ async fn a_grant_already_approved_cannot_be_approved_again_by_anyone() {
 		.header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
 		.body(Body::from(format!(
 			"user_code=BCDF-GHJK&login=alice@example.org&password={}",
-			crate::test_fixtures::password()
+			crate::test_support::fixtures::password()
 		)))
 		.expect("request");
 	request

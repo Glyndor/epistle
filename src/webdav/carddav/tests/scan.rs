@@ -1,6 +1,6 @@
 //! Linear-scan regression tests for the REPORT body scan in CardDAV and CalDAV.
 
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 use std::sync::atomic::Ordering;
 
 use super::*;
