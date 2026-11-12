@@ -8,13 +8,13 @@
 //! a From with several authors would need a Sender, which no client of
 //! this server sends).
 
-use super::{Address, Reply, Session};
 use crate::dmarc::author::{Author, author};
 use crate::smtp::identification::reject_ambiguous_headers;
+use crate::smtp::session::{Address, Reply, Session};
 
 /// `None` when `data` may be sent by the authenticated account, else the
 /// refusal. Unauthenticated sessions are not submissions and pass.
-pub(super) fn check(session: &Session, data: &[u8]) -> Option<Reply> {
+pub(in crate::smtp::session) fn check(session: &Session, data: &[u8]) -> Option<Reply> {
 	let account = session.authenticated.as_deref()?;
 	if let Err(refusal) = reject_ambiguous_headers(data) {
 		return Some(refusal.smtp_reply());

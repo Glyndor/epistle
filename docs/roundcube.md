@@ -45,7 +45,7 @@ listener for webmail. IMAPS and implicit-TLS submission require TLS material;
 SMTP authentication is refused before TLS even on loopback. Sources:
 [listeners](configuration.md#listeners), [service commands](cli.md#service-listeners),
 [transport security](security.md#transport), and
-[`src/smtp/session/auth_dispatch.rs`](../src/smtp/session/auth_dispatch.rs).
+[`src/smtp/session/auth/auth_dispatch.rs`](../src/smtp/session/auth/auth_dispatch.rs).
 
 For a same-host installation, a listener can be published on `127.0.0.1`.
 For a separate webmail host, use the mail hostname and a reachable listener.
@@ -87,7 +87,7 @@ epistle enables SCRAM by default. The SMTP server sends the server-final
 signature (`v=...`, base64 encoded on the wire) in a **334 challenge**. The
 client verifies it and replies with an empty line; only then does epistle
 return `235 2.7.0 authentication successful`. This is implemented in
-[`src/smtp/session/scram.rs`](../src/smtp/session/scram.rs), in
+[`src/smtp/session/auth/scram.rs`](../src/smtp/session/auth/scram.rs), in
 `scram_client_final` and `scram_server_final`, and covered by
 [`src/smtp/session/tests/mods/scram/tests_scram_final.rs`](../src/smtp/session/tests/mods/scram/tests_scram_final.rs).
 Those tests have not been run for this guide.
@@ -232,10 +232,10 @@ UI wording is **not verified**.
 |---|---|---|
 | Cannot connect to IMAP or SMTP | Check enabled listener, port and host/container bind. A loopback listener is not reachable from another host. | [Listeners](cli.md#service-listeners) |
 | Certificate verification fails | Check the configured mail name, chain and trust store; `init` starts with a self-signed pair. PHP's exact failure is not verified. | [Initial certificate](cli.md#why-a-self-signed-cert) |
-| `538 5.7.11 encryption required for auth` | SMTP AUTH was attempted before TLS. Use implicit TLS on 465 or STARTTLS on 587. | [`auth_dispatch.rs`](../src/smtp/session/auth_dispatch.rs) |
-| `504 5.5.4 mechanism not supported` | The selected mechanism is unknown or unavailable. In particular, `[auth] scram = false` makes SCRAM unavailable. | [`auth_dispatch.rs`](../src/smtp/session/auth_dispatch.rs), [Auth configuration](configuration.md#auth) |
-| SCRAM ends at `334`, or `501 5.5.2 invalid authentication response` | The server-final requires an empty-line acknowledgement. A nonempty response is refused. Check client support or explicitly select PLAIN/LOGIN over TLS. | [`scram.rs`](../src/smtp/session/scram.rs) |
-| `535 5.7.8 authentication credentials invalid` | Check password, protocol permissions, disabled account/domain, TOTP and ban subjects. A ban deliberately looks like bad credentials. | [Authentication](security.md#authentication), [`auth_dispatch.rs`](../src/smtp/session/auth_dispatch.rs) |
+| `538 5.7.11 encryption required for auth` | SMTP AUTH was attempted before TLS. Use implicit TLS on 465 or STARTTLS on 587. | [`auth_dispatch.rs`](../src/smtp/session/auth/auth_dispatch.rs) |
+| `504 5.5.4 mechanism not supported` | The selected mechanism is unknown or unavailable. In particular, `[auth] scram = false` makes SCRAM unavailable. | [`auth_dispatch.rs`](../src/smtp/session/auth/auth_dispatch.rs), [Auth configuration](configuration.md#auth) |
+| SCRAM ends at `334`, or `501 5.5.2 invalid authentication response` | The server-final requires an empty-line acknowledgement. A nonempty response is refused. Check client support or explicitly select PLAIN/LOGIN over TLS. | [`scram.rs`](../src/smtp/session/auth/scram.rs) |
+| `535 5.7.8 authentication credentials invalid` | Check password, protocol permissions, disabled account/domain, TOTP and ban subjects. A ban deliberately looks like bad credentials. | [Authentication](security.md#authentication), [`auth_dispatch.rs`](../src/smtp/session/auth/auth_dispatch.rs) |
 | Folders exist but are absent from a subscribed listing | Compare subscriptions with `LIST`; migration now subscribes the folders it copies. | [Migration](operations/migration.md#copying-mail-over-imap) |
 | `552 5.3.4 message exceeds maximum size` | The complete submitted message exceeded `max_message_size`. | [Size cap](configuration.md#top-level-keys) |
 | `452 4.3.1 insufficient system resources; try again later` | The shared message-memory budget is exhausted. | [Memory budget](configuration.md#top-level-keys) |

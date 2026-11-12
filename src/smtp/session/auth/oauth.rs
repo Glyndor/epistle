@@ -6,9 +6,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 
-use super::super::directory::bearer_proof;
-use super::super::reply::Reply;
-use super::{Action, Session};
+use crate::smtp::directory::bearer_proof;
+use crate::smtp::reply::Reply;
+use crate::smtp::session::{Action, Session};
 
 impl Session {
 	/// Attach an OAuth token verifier (enables OAUTHBEARER/XOAUTH2).
@@ -19,7 +19,7 @@ impl Session {
 
 	/// The advertised `AUTH` capability line, including the OAuth mechanisms
 	/// when a verifier is configured.
-	pub(super) fn auth_capability(&self) -> String {
+	pub(in crate::smtp::session) fn auth_capability(&self) -> String {
 		// Shared mechanism set: -PLUS only with a bound certificate hash, the
 		// OAuth mechanisms only with a configured verifier.
 		let mut mechs = String::from("AUTH");
@@ -37,7 +37,11 @@ impl Session {
 
 	/// Authenticate with an OAUTHBEARER/XOAUTH2 bearer token. The token must be
 	/// supplied as the initial SASL response (SASL-IR).
-	pub(super) fn oauth_bearer(&mut self, _mechanism: &str, initial: Option<String>) -> Action {
+	pub(in crate::smtp::session) fn oauth_bearer(
+		&mut self,
+		_mechanism: &str,
+		initial: Option<String>,
+	) -> Action {
 		let Some(verifier) = self.oauth.clone() else {
 			return Action::Continue(Reply::single(504, "5.5.4 mechanism not supported"));
 		};
@@ -76,7 +80,7 @@ impl Session {
 		}
 	}
 
-	fn oauth_failure(&mut self) -> Action {
+	pub(in crate::smtp::session) fn oauth_failure(&mut self) -> Action {
 		self.auth_failures += 1;
 		// The attempt is recorded at the default level. The account is
 		// not named: a refused attempt never says which account it tried

@@ -11,6 +11,15 @@ pub use super::*;
 mod tests_basic;
 
 #[cfg(test)]
+mod tests_basic_bdat;
+
+#[cfg(test)]
+mod tests_basic_limits;
+
+#[cfg(test)]
+mod tests_basic_recipients;
+
+#[cfg(test)]
 mod tests_enhanced;
 
 #[cfg(test)]

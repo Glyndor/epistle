@@ -131,7 +131,7 @@ function name is the stable reference.
 
 | Req (L3) | Status | Evidence |
 |---|---|---|
-| 7.1.1 No secrets/PII in logs | Met | All the `tracing` call sites (about 360 outside the test modules) audited: none interpolate a password, hash, token, API key, SCRAM proof, private key or raw SASL blob. Auth failures log a **count** only (`src/smtp/session/scram.rs`, `src/imap/session/auth/mod.rs`). |
+| 7.1.1 No secrets/PII in logs | Met | All the `tracing` call sites (about 360 outside the test modules) audited: none interpolate a password, hash, token, API key, SCRAM proof, private key or raw SASL blob. Auth failures log a **count** only (`src/smtp/session/auth/scram.rs`, `src/imap/session/auth/mod.rs`). |
 | 7.1.2 No credentials in logs even on the failure path | Met | The decoded PLAIN/LOGIN/SCRAM bytes never reach a log macro; no protocol logs its raw command line. |
 | 7.4.1 Generic error to the client; details server-side | Met | API errors return fixed strings (`src/api/error/mod.rs::internal` → "Internal error."); underlying errors dropped via `.map_err(|_| …)`; JMAP errors are static. No stack trace, file path, SQL text or version reaches a client. |
 | 7.4.x No version/internal banner to unauthenticated clients | Met | SMTP/POP3/IMAP/ManageSieve greetings carry no version, IMAP `ID` returns `NIL`, and no HTTP `Server` header is sent. The `/status` version is behind the closed API. |

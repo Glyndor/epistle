@@ -12,15 +12,13 @@ pub use super::diskspace::DiskGuard;
 pub use super::memory_budget::{MemoryBudget, Reservation};
 pub use super::reply::Reply;
 
-mod author;
+mod auth;
 mod bdat;
 pub mod cap;
 mod finalise;
 mod junk;
-mod login;
-mod oauth;
-pub(crate) use oauth::parse_bearer;
-mod scram;
+pub(crate) use auth::oauth::parse_bearer;
+use auth::{author, scram};
 mod time;
 use time::unix_now;
 
@@ -32,7 +30,6 @@ mod limits;
 mod test_hooks;
 pub use limits::*;
 
-mod auth_dispatch;
 mod transaction_policy;
 mod types;
 pub use junk::DEFAULT_JUNK_COMMAND_LIMIT;
