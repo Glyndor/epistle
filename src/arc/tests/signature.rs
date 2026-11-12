@@ -111,3 +111,22 @@ fn folding_whitespace_stripped_in_values() {
 use super::super::ams;
 #[allow(unused_imports)]
 use super::super::seal;
+
+#[test]
+fn a_header_with_more_tags_than_the_bound_is_refused() {
+	let padding: String = (0..64).map(|n| format!(" x{n}=1;")).collect();
+	let value = format!("i=1; a=rsa-sha256; d=e.org; s=s; h=from; bh=aGFzaA==; b=c2ln;{padding}");
+	assert!(parse_message_signature(&value).is_err());
+	let seal = format!("i=1; a=rsa-sha256; d=e.org; s=s; cv=none; b=c2ln;{padding}");
+	assert!(parse_seal(&seal).is_err());
+}
+
+#[test]
+fn h_naming_more_headers_than_the_bound_is_refused() {
+	let names = vec!["x"; 257].join(":");
+	let value = format!("i=1; a=rsa-sha256; d=e.org; s=s; h=from:{names}; bh=aGFzaA==; b=c2ln");
+	assert!(parse_message_signature(&value).is_err());
+	let at_bound = vec!["x"; 255].join(":");
+	let value = format!("i=1; a=rsa-sha256; d=e.org; s=s; h=from:{at_bound}; bh=aGFzaA==; b=c2ln");
+	assert!(parse_message_signature(&value).is_ok());
+}

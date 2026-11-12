@@ -66,18 +66,34 @@ pub(crate) enum VerificationKey {
 }
 
 impl KeyRecord {
-	/// The record the DNS publishes for the key: the first string with a
-	/// `p=` tag, which RFC 6376 section 3.6.1 tells the verifier to use.
-	/// The key type is read from that same string.
-	pub(crate) fn first(texts: &[String]) -> Result<Self, KeyError> {
-		for text in texts {
-			match Self::parse(text)? {
-				Some(record) => return Ok(record),
-				// A string with no `p=` tag is not a key record.
-				None => continue,
+	/// The key the answer publishes for `algorithm`: the first record that
+	/// carries a key this algorithm can verify with. A string that is not a
+	/// key record, one with a key type this verifier does not know, one that
+	/// is revoked or malformed, and one that publishes the other algorithm's
+	/// key are skipped, so a selector that publishes an Ed25519 and an RSA
+	/// record serves a header of either kind. When none fits, the error is
+	/// the one the best candidate gave.
+	pub(crate) fn select(
+		texts: &[String],
+		algorithm: Algorithm,
+	) -> Result<VerificationKey, KeyError> {
+		let mut error = KeyError::Missing;
+		for record in texts
+			.iter()
+			.filter_map(|text| Self::parse(text).ok().flatten())
+		{
+			match record.verification_key(algorithm) {
+				Ok(key) => return Ok(key),
+				// A record of the other type never outranks a usable
+				// candidate, and says less than one of this type.
+				Err(KeyError::TypeMismatch) if error == KeyError::Missing => {
+					error = KeyError::TypeMismatch;
+				}
+				Err(KeyError::TypeMismatch) => {}
+				Err(other) => error = other,
 			}
 		}
-		Err(KeyError::Missing)
+		Err(error)
 	}
 
 	/// Read one DNS string as a key record. `Ok(None)` when the string
@@ -121,10 +137,7 @@ impl KeyRecord {
 
 	/// The key to verify `algorithm` with, in the shape that primitive
 	/// expects, or why this record cannot be used with it.
-	pub(crate) fn verification_key(
-		&self,
-		algorithm: Algorithm,
-	) -> Result<VerificationKey, KeyError> {
+	fn verification_key(&self, algorithm: Algorithm) -> Result<VerificationKey, KeyError> {
 		match (algorithm, self.key_type) {
 			(Algorithm::Ed25519Sha256, KeyType::Ed25519) => {
 				if self.key.len() != ED25519_KEY_LEN {
