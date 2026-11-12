@@ -26,6 +26,8 @@ mod sigv4;
 
 pub use fs_backend::FsBackend;
 pub use s3_backend::S3Backend;
+#[cfg(test)]
+pub(crate) use s3_backend::limits::Limits as S3Limits;
 
 use std::pin::Pin;
 

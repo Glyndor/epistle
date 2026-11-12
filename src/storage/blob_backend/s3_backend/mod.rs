@@ -22,6 +22,9 @@ use uuid::Uuid;
 use super::BlobError;
 use super::sigv4;
 use super::{BlobAccount, BlobBackend};
+use limits::{Limits, read_capped};
+
+pub(crate) mod limits;
 
 /// `Send + Sync` future alias specific to this module. Uses `'static` (with
 /// the per-call state cloned into the `async move`) so the four verbs have
@@ -33,6 +36,7 @@ type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, BlobError>> + Send
 #[derive(Clone)]
 struct Inner {
 	client: reqwest::Client,
+	limits: Limits,
 	endpoint: String,
 	bucket: String,
 	region: String,
@@ -61,9 +65,30 @@ impl S3Backend {
 		access_key_id: String,
 		secret_access_key: String,
 	) -> Self {
+		Self::with_limits(
+			endpoint,
+			bucket,
+			region,
+			access_key_id,
+			secret_access_key,
+			Limits::DEFAULT,
+		)
+	}
+
+	/// [`S3Backend::new`] with an explicit budget for what the endpoint may
+	/// make this process spend.
+	pub(crate) fn with_limits(
+		endpoint: String,
+		bucket: String,
+		region: String,
+		access_key_id: String,
+		secret_access_key: String,
+		limits: Limits,
+	) -> Self {
 		S3Backend {
 			inner: Arc::new(Inner {
-				client: reqwest::Client::new(),
+				client: limits.client(),
+				limits,
 				endpoint,
 				bucket,
 				region,
@@ -199,11 +224,7 @@ impl S3Backend {
 			if !status.is_success() {
 				return Err(BlobError::Remote(format!("HTTP {status}")));
 			}
-			let bytes = response
-				.bytes()
-				.await
-				.map_err(|error| BlobError::Remote(error.to_string()))?;
-			Ok(Some(bytes.to_vec()))
+			Ok(Some(read_capped(response, inner.limits.object).await?))
 		})
 	}
 
@@ -306,7 +327,15 @@ impl BlobBackend for S3Backend {
 			// same JSON shape.
 			let mut next_continuation: Option<String> = None;
 			let mut out = Vec::new();
+			let mut pages = 0usize;
 			loop {
+				pages += 1;
+				if pages > inner.limits.pages {
+					return Err(BlobError::Remote(format!(
+						"the listing is longer than {} pages",
+						inner.limits.pages
+					)));
+				}
 				let host_header = Self::host_header(&inner);
 				let (url_with_query, canonical_query) = match &next_continuation {
 					Some(token) => (
@@ -369,10 +398,7 @@ impl BlobBackend for S3Backend {
 				if !response.status().is_success() {
 					return Err(BlobError::Remote(format!("HTTP {}", response.status())));
 				}
-				let body_bytes = response
-					.bytes()
-					.await
-					.map_err(|error| BlobError::Remote(error.to_string()))?;
+				let body_bytes = read_capped(response, inner.limits.listing).await?;
 				let body = parse_list(&body_bytes)?;
 				for entry in body.contents {
 					// Sidecars end with `.type` or `.owner`; skip them so
@@ -387,10 +413,23 @@ impl BlobBackend for S3Backend {
 					// shared keys are the bare id.
 					let name = entry.key.rsplit('/').next().unwrap_or_default();
 					if let Ok(id) = Uuid::parse_str(name) {
+						if out.len() >= inner.limits.keys {
+							return Err(BlobError::Remote(format!(
+								"the listing holds more than {} objects",
+								inner.limits.keys
+							)));
+						}
 						out.push(id);
 					}
 				}
 				match body.next_continuation_token {
+					// A token the peer hands back unchanged is a page that
+					// never advances: the walk would not end.
+					Some(token) if next_continuation.as_ref() == Some(&token) => {
+						return Err(BlobError::Remote(
+							"the listing repeats its continuation token".to_string(),
+						));
+					}
 					Some(token) if !token.is_empty() => next_continuation = Some(token),
 					_ => break,
 				}
