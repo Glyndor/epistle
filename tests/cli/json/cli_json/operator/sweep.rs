@@ -91,7 +91,7 @@ const SKIPPED: &[(&str, &str)] = &[
 	),
 	(
 		"evidence key rotate",
-		"refused in the first half hour of a UTC day, so the result depends on the hour; src/cli/evidence/tests/key.rs",
+		"refused in the first half hour of a UTC day, so the result depends on the hour; src/cli/evidence/tests/key_rotation.rs",
 	),
 	("dns provider test", "calls the DNS provider"),
 	("webhook test", "posts to the endpoint"),
