@@ -156,7 +156,7 @@ fn backfill_scales_linearly_with_corpus() {
 
 	let names: Vec<String> = accounts.iter().map(|s| s.to_string()).collect();
 	let start = std::time::Instant::now();
-	let stats = super::super::jmap::backfill_blob_ownership(path, &names);
+	let stats = super::super::super::jmap::backfill_blob_ownership(path, &names);
 	let backfill_ms = start.elapsed().as_millis();
 	eprintln!(
 		"[bench] backfill: scanned={} written={} skipped={} conflicts={} errors={} in {backfill_ms} ms",
@@ -172,7 +172,7 @@ fn backfill_scales_linearly_with_corpus() {
 
 	// Re-run: should be a no-op (already-correct sidecars).
 	let start = std::time::Instant::now();
-	let stats2 = super::super::jmap::backfill_blob_ownership(path, &names);
+	let stats2 = super::super::super::jmap::backfill_blob_ownership(path, &names);
 	let rerun_ms = start.elapsed().as_millis();
 	eprintln!(
 		"[bench] backfill (second run): scanned={} written={} skipped={} in {rerun_ms} ms",

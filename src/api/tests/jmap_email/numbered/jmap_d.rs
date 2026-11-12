@@ -15,7 +15,9 @@ use crate::storage::FsSpool;
 
 /// Build an [`ApiState`] with two static accounts (alice and bob) so tests can
 /// exercise the cross-account download gate.
-pub(in super::super) fn state_with_two_accounts(dir: &std::path::Path) -> crate::api::ApiState {
+pub(in super::super::super) fn state_with_two_accounts(
+	dir: &std::path::Path,
+) -> crate::api::ApiState {
 	let spool = FsSpool::open(dir).expect("open spool");
 	let accounts = vec![
 		crate::config::Account {
@@ -65,7 +67,7 @@ pub(in super::super) fn state_with_two_accounts(dir: &std::path::Path) -> crate:
 
 /// `POST` a raw body with an optional `Content-Type`, returning the status
 /// and parsed JSON body.
-pub(in super::super) async fn post_raw(
+pub(in super::super::super) async fn post_raw(
 	app: &Router,
 	path: &str,
 	token: Option<&str>,
@@ -94,7 +96,7 @@ pub(in super::super) async fn post_raw(
 
 /// `GET` a raw path, returning the status and the response body bytes plus the
 /// recorded `Content-Type`.
-pub(in super::super) async fn get_raw(
+pub(in super::super::super) async fn get_raw(
 	app: &Router,
 	path: &str,
 	token: Option<&str>,
@@ -157,7 +159,7 @@ async fn alice_uploads_then_downloads_her_own_blob() {
 	// The `.owner` sidecar carries the uploader's account name — this is what
 	// the per-account gate reads, so verifying it here makes the control
 	// explicit instead of relying on the test "just happening to work".
-	let owner = super::super::jmap::read_blob_owner(state.blob_backend(), "alice", &blob_id)
+	let owner = super::super::super::jmap::read_blob_owner(state.blob_backend(), "alice", &blob_id)
 		.await
 		.expect("upload must write the owner sidecar");
 	assert_eq!(
@@ -288,7 +290,7 @@ async fn backfill_writes_owner_sidecar_for_referenced_blob() {
 	assert!(!crate::api::jmap::blob_path::read_path(path, id, ".owner").exists());
 
 	// Run the backfill the way `ApiState::new` does.
-	let stats = super::super::jmap::backfill_blob_ownership(path, &["alice".to_string()]);
+	let stats = super::super::super::jmap::backfill_blob_ownership(path, &["alice".to_string()]);
 	assert_eq!(
 		stats.scanned, 1,
 		"exactly the one stored message should be scanned"
@@ -322,7 +324,7 @@ async fn backfill_is_idempotent_on_unchanged_ownership() {
 	std::fs::create_dir_all(&blobs).expect("mkdir");
 	std::fs::write(blobs.join(id.to_string()), b"p").expect("write");
 
-	let stats1 = super::super::jmap::backfill_blob_ownership(path, &["alice".to_string()]);
+	let stats1 = super::super::super::jmap::backfill_blob_ownership(path, &["alice".to_string()]);
 	assert_eq!(stats1.written, 1);
 	let owner_path = crate::api::jmap::blob_path::read_path(path, id, ".owner");
 	let mtime1 = std::fs::metadata(&owner_path)
@@ -340,7 +342,7 @@ async fn backfill_is_idempotent_on_unchanged_ownership() {
 		.modified()
 		.expect("msg mtime");
 
-	let stats2 = super::super::jmap::backfill_blob_ownership(path, &["alice".to_string()]);
+	let stats2 = super::super::super::jmap::backfill_blob_ownership(path, &["alice".to_string()]);
 	assert_eq!(stats2.scanned, 1, "the message must still be scanned");
 	assert_eq!(
 		stats2.written, 0,
@@ -389,7 +391,7 @@ async fn backfill_does_not_overwrite_conflicting_sidecar() {
 	)
 	.expect("write sidecar");
 
-	let stats = super::super::jmap::backfill_blob_ownership(
+	let stats = super::super::super::jmap::backfill_blob_ownership(
 		path,
 		&["alice".to_string(), "bob".to_string()],
 	);
@@ -437,7 +439,7 @@ async fn backfill_survives_per_mailbox_errors() {
 	std::fs::create_dir_all(&blobs).expect("mkdir blobs");
 	std::fs::write(blobs.join(good.to_string()), b"p").expect("write payload");
 
-	let stats = super::super::jmap::backfill_blob_ownership(path, &["alice".to_string()]);
+	let stats = super::super::super::jmap::backfill_blob_ownership(path, &["alice".to_string()]);
 	assert_eq!(
 		stats.errors, 0,
 		"skipped junk files must not count as errors"
@@ -474,7 +476,7 @@ fn reclaim_blobs_drops_owner_sidecar_with_payload() {
 	f.set_modified(old).expect("set mtime");
 
 	let removed =
-		super::super::jmap::reclaim_blobs(path, std::time::Duration::from_secs(24 * 3600));
+		super::super::super::jmap::reclaim_blobs(path, std::time::Duration::from_secs(24 * 3600));
 	assert_eq!(removed, 1);
 	assert!(!blobs.join(id.to_string()).exists(), "payload reclaimed");
 	assert!(

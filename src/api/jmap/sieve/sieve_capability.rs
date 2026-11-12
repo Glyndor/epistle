@@ -11,11 +11,11 @@ use crate::managesieve::store::{MAX_NAME_BYTES, MAX_SCRIPT_BYTES, MAX_SCRIPTS};
 use crate::sieve::interp::MAX_REDIRECTS;
 
 /// The capability URN.
-pub(super) const SIEVE_CAPABILITY: &str = "urn:ietf:params:jmap:sieve";
+pub(in crate::api::jmap) const SIEVE_CAPABILITY: &str = "urn:ietf:params:jmap:sieve";
 
 /// The value in the Session's `capabilities`: the implementation, by name and
 /// version.
-pub(super) fn session_value() -> Value {
+pub(in crate::api::jmap) fn session_value() -> Value {
 	json!({ "implementation": concat!("epistle ", env!("CARGO_PKG_VERSION")) })
 }
 
@@ -24,7 +24,7 @@ pub(super) fn session_value() -> Value {
 /// `maxSizeScriptName` is below the 512 octets RFC 9661 asks for: a script
 /// name is a file name, and 200 octets is the most that fits next to the
 /// staging name of an atomic write.
-pub(super) fn account_value() -> Value {
+pub(in crate::api::jmap) fn account_value() -> Value {
 	json!({
 		"maxSizeScriptName": MAX_NAME_BYTES,
 		"maxSizeScript": MAX_SCRIPT_BYTES,

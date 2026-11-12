@@ -18,7 +18,7 @@ fn account_usage_bytes_sums_mail_and_blobs() {
 	std::fs::write(blobs.join(uuid::Uuid::now_v7().to_string()), b"0123456789").expect("write");
 
 	assert_eq!(
-		super::super::jmap::account_usage_bytes(
+		super::super::super::jmap::account_usage_bytes(
 			path,
 			"alice",
 			&crate::storage::MessageCrypto::disabled()
@@ -56,7 +56,7 @@ fn reclaim_blobs_drops_stale_keeps_fresh_and_spares_mail() {
 	std::fs::write(&msg, b"keep me").expect("write");
 
 	let removed =
-		super::super::jmap::reclaim_blobs(path, std::time::Duration::from_secs(24 * 3600));
+		super::super::super::jmap::reclaim_blobs(path, std::time::Duration::from_secs(24 * 3600));
 	assert_eq!(removed, 1);
 	assert!(
 		!blobs.join(stale.to_string()).exists(),

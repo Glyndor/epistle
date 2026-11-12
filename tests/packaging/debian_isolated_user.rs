@@ -388,28 +388,28 @@ mod sysctl;
 #[path = "debian/stubs.rs"]
 mod stubs;
 
-#[path = "debian/subid.rs"]
+#[path = "debian/subid/subid.rs"]
 mod subid;
 
-#[path = "debian/subid_purge.rs"]
+#[path = "debian/subid/subid_purge.rs"]
 mod subid_purge;
 
 #[path = "debian/completions.rs"]
 mod completions;
 
-#[path = "debian/subid_move.rs"]
+#[path = "debian/subid/subid_move.rs"]
 mod subid_move;
 
-#[path = "debian/preinst.rs"]
+#[path = "debian/preinst/preinst.rs"]
 mod preinst;
 
-#[path = "debian/preinst_publish.rs"]
+#[path = "debian/preinst/preinst_publish.rs"]
 mod preinst_publish;
 
 #[path = "debian/store_paths.rs"]
 mod store_paths;
 
-#[path = "debian/preinst_mutants.rs"]
+#[path = "debian/preinst/preinst_mutants.rs"]
 mod preinst_mutants;
 
 #[path = "debian/purge_safety.rs"]
@@ -421,14 +421,14 @@ mod configure_sysctl;
 #[path = "debian/purge_lifecycle.rs"]
 mod purge_lifecycle;
 
-#[path = "debian/races.rs"]
+#[path = "debian/races/races.rs"]
 mod races;
 
-#[path = "debian/races_account.rs"]
+#[path = "debian/races/races_account.rs"]
 mod races_account;
 
-#[path = "debian/races_manager.rs"]
+#[path = "debian/races/races_manager.rs"]
 mod races_manager;
 
-#[path = "debian/races_review.rs"]
+#[path = "debian/races/races_review.rs"]
 mod races_review;

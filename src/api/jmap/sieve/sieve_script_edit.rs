@@ -19,11 +19,11 @@ use crate::managesieve::store::{ScriptInfo, StoreError, Tx, Validated, is_valid_
 const NAME_ATTEMPTS: usize = 5;
 
 /// What one `/set` call works on.
-pub(super) struct Edit<'a> {
-	pub(super) account: &'a str,
+pub(in crate::api::jmap) struct Edit<'a> {
+	pub(in crate::api::jmap) account: &'a str,
 	/// Whether the credential has the `send` scope and the account may send.
-	pub(super) gate: SendGate,
-	pub(super) uploads: &'a Uploads,
+	pub(in crate::api::jmap) gate: SendGate,
+	pub(in crate::api::jmap) uploads: &'a Uploads,
 }
 
 fn invalid_properties(names: &[&str]) -> Value {
@@ -102,7 +102,11 @@ impl Edit<'_> {
 
 	/// One `create` entry: a name (or none, and the server picks one) and
 	/// the blob with the content. `id` and `isActive` are the server's.
-	pub(super) fn create(&self, tx: &mut Tx<'_>, spec: &Value) -> Result<Value, Value> {
+	pub(in crate::api::jmap) fn create(
+		&self,
+		tx: &mut Tx<'_>,
+		spec: &Value,
+	) -> Result<Value, Value> {
 		let Some(object) = spec.as_object() else {
 			return Err(json!({"type": "invalidProperties"}));
 		};
@@ -146,7 +150,12 @@ impl Edit<'_> {
 	/// One `update` entry: a new `name`, a new `blobId`, or both. What the
 	/// server changed beyond the request is the result: a new content has a
 	/// new blob id.
-	pub(super) fn update(&self, tx: &mut Tx<'_>, id: &str, patch: &Value) -> Result<Value, Value> {
+	pub(in crate::api::jmap) fn update(
+		&self,
+		tx: &mut Tx<'_>,
+		id: &str,
+		patch: &Value,
+	) -> Result<Value, Value> {
 		let Some(object) = patch.as_object() else {
 			return Err(json!({"type": "invalidPatch"}));
 		};

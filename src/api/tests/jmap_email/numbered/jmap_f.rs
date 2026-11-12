@@ -136,7 +136,10 @@ fn tenant_state(dir: &std::path::Path, per_min: u32) -> super::ApiState {
 /// Seed the alice mailbox with a stored email whose body lists every
 /// recipient. Used by the JMAP rate-limit and recipient-cap tests so
 /// the envelope-only `rcptTo` and the body header `To` agree.
-pub(in super::super) fn seed_email(dir: &std::path::Path, recipients: &[String]) -> uuid::Uuid {
+pub(in super::super::super) fn seed_email(
+	dir: &std::path::Path,
+	recipients: &[String],
+) -> uuid::Uuid {
 	let path = dir.join("accounts").join("alice").join("new");
 	std::fs::create_dir_all(&path).expect("mkdir");
 	let id = uuid::Uuid::now_v7();
@@ -164,7 +167,7 @@ fn seed_email_with_all_kinds(dir: &std::path::Path, headers: &[(&str, &str)]) ->
 	id
 }
 
-pub(in super::super) fn submission_request(
+pub(in super::super::super) fn submission_request(
 	email_id: &uuid::Uuid,
 	rcpt_to: &[String],
 ) -> serde_json::Value {
