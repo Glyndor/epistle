@@ -362,8 +362,13 @@ pub(crate) fn prepare_keys_for_update(
 	// reader that refuses what is not a regular file.
 	let text = crate::cli::config_edit::read_through_link(config_path)?;
 	if let Some(text) = host_secrets::repoint_config(&text, data_dir)? {
-		crate::storage::write_secret(config_path, text.as_bytes())
-			.map_err(|error| format!("cannot write {}: {error}", config_path.display()))?;
+		// The rename inside `write_secret` replaces whatever is at the path it
+		// is given, so it gets the file behind a link: the link stays, and
+		// the file it points at is the one that changes.
+		let target = fs::canonicalize(config_path)
+			.map_err(|error| format!("cannot resolve {}: {error}", config_path.display()))?;
+		crate::storage::write_secret(&target, text.as_bytes())
+			.map_err(|error| format!("cannot write {}: {error}", target.display()))?;
 		lines.push(format!(
 			"pointed {} at the keys in {}",
 			config_path.display(),
