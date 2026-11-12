@@ -222,7 +222,7 @@ const NOT_A_ROW: &[(&str, &str)] = &[
 		"internal: how deep a blob reference is followed",
 	),
 	(
-		"api::jmap::sieve_script_query::MAX_COMPARATORS",
+		"api::jmap::sieve::sieve_script_query::MAX_COMPARATORS",
 		"internal: the comparators a script query inspects",
 	),
 	(

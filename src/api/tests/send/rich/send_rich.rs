@@ -11,7 +11,10 @@ use mail_parser::MessageParser;
 use serde_json::{Value, json};
 
 /// Send `extra` merged into a minimal request; the status and the body.
-pub(in super::super) async fn send(dir: &std::path::Path, extra: Value) -> (StatusCode, Value) {
+pub(in super::super::super) async fn send(
+	dir: &std::path::Path,
+	extra: Value,
+) -> (StatusCode, Value) {
 	let mut request = json!({"from": "alice@example.org", "to": ["bob@elsewhere.example"]});
 	if let (Some(base), Some(extra)) = (request.as_object_mut(), extra.as_object()) {
 		base.extend(extra.clone());
@@ -28,7 +31,7 @@ pub(in super::super) async fn send(dir: &std::path::Path, extra: Value) -> (Stat
 }
 
 /// The one queued message: its envelope recipients and its bytes.
-pub(in super::super) fn queued(dir: &std::path::Path) -> (Vec<String>, Vec<u8>) {
+pub(in super::super::super) fn queued(dir: &std::path::Path) -> (Vec<String>, Vec<u8>) {
 	let spool = FsSpool::open(dir).expect("spool");
 	let ids = spool.list().expect("list");
 	assert_eq!(ids.len(), 1, "exactly one queued message");

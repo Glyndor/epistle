@@ -7,33 +7,33 @@
 
 use serde_json::{Value, json};
 
-use super::super::Principal;
-use super::super::state::ApiState;
+use super::super::super::Principal;
+use super::super::super::state::ApiState;
 use super::sieve_blob;
 use crate::managesieve::store::{ScriptInfo, StoreError};
 
 /// The properties of a `SieveScript` (RFC 9661 section 2.1).
-pub(super) const PROPERTIES: [&str; 4] = ["id", "name", "blobId", "isActive"];
+pub(in crate::api::jmap) const PROPERTIES: [&str; 4] = ["id", "name", "blobId", "isActive"];
 
-pub(super) fn method_error(kind: &str, call_id: &str) -> Value {
+pub(in crate::api::jmap) fn method_error(kind: &str, call_id: &str) -> Value {
 	json!(["error", { "type": kind }, call_id])
 }
 
 /// The state string for the store's change counter.
-pub(super) fn state_string(counter: u64) -> String {
+pub(in crate::api::jmap) fn state_string(counter: u64) -> String {
 	counter.to_string()
 }
 
 /// A failure of the script store, as a method error. The cause stays in the
 /// log: it is a path or an OS message, not something a client can act on.
-pub(super) fn store_failure(error: &StoreError, call_id: &str) -> Value {
+pub(in crate::api::jmap) fn store_failure(error: &StoreError, call_id: &str) -> Value {
 	tracing::warn!(?error, "the Sieve script store failed a JMAP call");
 	method_error("serverFail", call_id)
 }
 
 /// The `properties` argument: every property when absent or null, `None`
 /// when it is not a list of known names.
-pub(super) fn requested_properties(args: &Value) -> Option<Vec<&'static str>> {
+pub(in crate::api::jmap) fn requested_properties(args: &Value) -> Option<Vec<&'static str>> {
 	match args.get("properties") {
 		None | Some(Value::Null) => Some(PROPERTIES.to_vec()),
 		Some(Value::Array(names)) => names
@@ -48,7 +48,7 @@ pub(super) fn requested_properties(args: &Value) -> Option<Vec<&'static str>> {
 }
 
 /// A script as a JMAP object, keeping `id` and the requested properties.
-pub(super) fn object(script: &ScriptInfo, properties: &[&str]) -> Value {
+pub(in crate::api::jmap) fn object(script: &ScriptInfo, properties: &[&str]) -> Value {
 	let mut object = json!({
 		"id": script.id,
 		"name": script.name,

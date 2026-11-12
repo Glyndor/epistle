@@ -77,7 +77,7 @@ fn script_text(found: Found<'_>) -> Result<String, Unusable> {
 
 /// A store refusal as a SetError. `AlreadyExists` has no `existingId` here:
 /// only the caller can look it up.
-pub(super) fn set_error(error: &StoreError) -> Value {
+pub(in crate::api::jmap) fn set_error(error: &StoreError) -> Value {
 	match error {
 		StoreError::InvalidName => json!({"type": "invalidProperties", "properties": ["name"]}),
 		StoreError::NoSuchScript => json!({"type": "notFound"}),

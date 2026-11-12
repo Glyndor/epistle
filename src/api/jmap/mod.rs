@@ -48,14 +48,12 @@ mod objects;
 pub(crate) use objects::email_body_for_fuzzing;
 pub(crate) mod push_subscription;
 mod send_gate;
+mod sieve;
 mod sieve_blob;
-mod sieve_capability;
-mod sieve_content;
-mod sieve_script;
-mod sieve_script_edit;
-mod sieve_script_query;
-mod sieve_script_set;
-mod sieve_script_validate;
+use sieve::{
+	sieve_capability, sieve_content, sieve_script, sieve_script_query, sieve_script_set,
+	sieve_script_validate,
+};
 mod vacation_response;
 pub mod websocket;
 

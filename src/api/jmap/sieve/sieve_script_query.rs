@@ -11,8 +11,8 @@ use std::cmp::Ordering;
 
 use serde_json::{Value, json};
 
-use super::super::Principal;
-use super::super::state::ApiState;
+use super::super::super::Principal;
+use super::super::super::state::ApiState;
 use super::sieve_blob;
 use super::sieve_script::{method_error, state_string, store_failure};
 use crate::managesieve::store::ScriptInfo;
