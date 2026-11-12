@@ -32,3 +32,23 @@ jobs:
     # `dco / Signed-off-by present on every commit`, which the develop ruleset
     # requires character for character.
     uses: ./.github/workflows/reusable-dco.yml
+
+  # Same range as the job above, one extra job instead of an edit to the
+  # byte-identical reusable. A personal address in an author or sign-off line
+  # cannot be rewritten once it is on develop, so it is refused before the
+  # merge. Not part of the required `dco` check.
+  noreply:
+    name: author and sign-off use a GitHub noreply address
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check author and trailer addresses
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
+        run: bash .github/scripts/check_noreply_signoff.sh "$BASE_SHA" "$HEAD_SHA"
