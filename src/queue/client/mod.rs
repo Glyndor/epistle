@@ -45,6 +45,10 @@ pub enum DeliveryError {
 	Permanent(String),
 }
 
+/// Longest reason kept from a remote reply, in characters: the bound the
+/// envelope's own last error already has.
+const REASON_MAX: usize = 512;
+
 impl DeliveryError {
 	/// The error for a reply that was not the one expected. `raw` is the
 	/// whole reply as received; the reason keeps it as one line. Whether it
@@ -53,7 +57,12 @@ impl DeliveryError {
 	fn from_reply(code: u16, raw: &str) -> Self {
 		let reason = super::reply::normalize(code, raw);
 		let text = reason.get(4..).unwrap_or_default();
-		if code >= 500 && super::reply::classify(code, text).permanent {
+		let permanent = code >= 500 && super::reply::classify(code, text).permanent;
+		// The reply can run to 64 KiB, and the reason is stored for every
+		// recipient it covers, rewritten on every attempt and sent in the
+		// webhook events.
+		let reason: String = reason.chars().take(REASON_MAX).collect();
+		if permanent {
 			DeliveryError::Permanent(reason)
 		} else {
 			DeliveryError::Transient(reason)
@@ -324,6 +333,10 @@ where
 				let reply = super::reply::normalize(250, conn.last_reply());
 				trace.facts.reply = Some(reply.chars().take(998).collect());
 			}
+			// No reply to the final dot within its limit (or a connection that
+			// broke after it): whether the remote kept the message is unknowable,
+			// and the recipients are retried. A possible second copy is the lesser
+			// harm than a message lost (RFC 5321 section 4.5.3.2.6).
 			Err(error) => {
 				for (_, outcome) in results.iter_mut().filter(|(_, outcome)| outcome.is_ok()) {
 					*outcome = Err(error.clone());
