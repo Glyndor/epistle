@@ -1,3 +1,19 @@
+epistle (0.12.9) unstable; urgency=medium
+
+  * Accounts have switches to turn sending and receiving off (`account set N --send on|off --receive on|off`). They are enforced in SMTP submission and delivery, the HTTP API, JMAP, Sieve and vacation replies, so an account can be send-only or receive-only.
+  * Hosted domains have a role, `full` or `send-only`, and `dns lockdown` covers every name under a domain, honors a list of senders and can set strict DMARC alignment. With `[dns_publish] null_records` the null SPF and null MX are kept true in automatic mode, and `status` lists the names not covered.
+  * `--no-restart` defers the restart of any command that changes configuration, and `epistle stack apply` applies the pending changes at once.
+  * `rotate --all --dry-run` lists every secret with its age, and `docs/operations/recovery.md` is a guide to recover after a compromise.
+  * DNS providers: Cloudflare, DigitalOcean, Bunny and Porkbun write by record id under a precondition, Route 53 removes one value atomically, deSEC read-modify-write is serialized per zone, a Cloudflare listing whose pages do not add up is read again, and a name whose zone cannot be found no longer aborts the whole read. A TLSA value stays known as ours until a write withdraws it.
+  * Backup: the restore preview checks archive paths before the database is touched, a database the compose stack would ignore is refused, and the restore expansion floor is 64 MiB.
+  * IMAP: a FETCH answer stops at 32 MiB with `NO [LIMIT]`, messages are numbered by UID, the expunge log is bounded, and the UID counter starts after the largest UID the sidecars hold.
+  * WebDAV and CalDAV bound what a GET, a PROPFIND, a calendar-query and a multiget hold in memory or work on. The HTTP API bounds the sockets one account can hold open.
+  * DKIM signs server-written mail for the hosted domain, and every rotation cycle builds the DNS provider again.
+  * SMTP keeps a recipient named twice once, treats an SPF name that cannot be encoded as no record, and writes no report for a delivery status report. The queue, MTA-STS policy age and the language model band's forwarded headers are bounded.
+  * `migrate` names the messages a folder skips for their declared size and caps the entries of a Mox configuration file.
+
+ -- Glyndor <packages@glyndor.net>  Wed, 11 Nov 2026 12:00:00 +0000
+
 epistle (0.12.8) unstable; urgency=medium
 
   * The certificate request sent to the CA at `finalize` has an empty subject. It carried a library default name that Let's Encrypt refuses, so no issuance or renewal could finish on 0.12.7; the certificate already in place kept being served.
