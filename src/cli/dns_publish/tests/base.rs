@@ -181,3 +181,43 @@ fn undo_withdraws_what_publish_wrote() {
 	assert_eq!(undo.code, ExitCode::SUCCESS, "{}", undo.err);
 	assert_eq!(setup.zone.snapshot(), vec![theirs]);
 }
+
+#[test]
+fn a_provider_without_a_precondition_is_named_in_the_plan_and_in_the_json() {
+	let setup = setup(CLOUDFLARE, vec![]);
+	let text = run(&setup, &["--dry-run"]);
+	assert!(
+		text.out.contains("takes no precondition on a write"),
+		"{}",
+		text.out
+	);
+	let json = run(&setup, &["--json", "--dry-run"]);
+	let value: serde_json::Value = serde_json::from_str(&json.out).expect("one JSON document");
+	assert_eq!(value["unguarded"], serde_json::json!(["example.org"]));
+}
+
+#[test]
+fn a_provider_that_checks_a_precondition_carries_no_such_note() {
+	let setup = setup(CLOUDFLARE, vec![]);
+	let provider: Arc<dyn DnsProvider> =
+		Arc::new(crate::dns::publish::FakeGuardedProvider::holding(vec![]));
+	let text = run_with(&setup, &["--dry-run"], Some(provider.clone()));
+	assert_eq!(text.code, ExitCode::SUCCESS, "{}", text.err);
+	assert!(!text.out.contains("no precondition"), "{}", text.out);
+	let json = run_with(&setup, &["--json", "--dry-run"], Some(provider));
+	let value: serde_json::Value = serde_json::from_str(&json.out).expect("one JSON document");
+	assert_eq!(value["unguarded"], serde_json::json!([]));
+}
+
+#[test]
+fn undo_says_when_the_provider_could_only_remove_by_name() {
+	let setup = setup(CLOUDFLARE, vec![]);
+	assert_eq!(run(&setup, &["--yes"]).code, ExitCode::SUCCESS);
+	let undo = run(&setup, &["--undo", "--yes"]);
+	assert_eq!(undo.code, ExitCode::SUCCESS, "{}", undo.err);
+	assert!(
+		undo.err.contains("went without a precondition"),
+		"{}",
+		undo.err
+	);
+}

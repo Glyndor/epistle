@@ -23,18 +23,22 @@ use crate::dns::provider::{DnsProvider, DnsRecord, ProviderError};
 /// record of somebody else's alone. A provider that cannot match by value
 /// refuses it, and the ordinary delete removes the record the way the
 /// provider's own contract says.
+///
+/// The answer says whether the removal was the exact one. It is not when the
+/// provider could not match by value: the record went out without a
+/// precondition, and one another account added in that moment went with it.
 pub(super) async fn remove(
 	provider: &dyn DnsProvider,
 	zone: &str,
 	record: &DnsRecord,
 	timeout: Duration,
-) -> Result<(), ProviderError> {
+) -> Result<bool, ProviderError> {
 	match within(timeout, provider.delete_exact(zone, record.clone())).await {
 		// The provider cannot remove one value: the ordinary delete is
 		// the removal it offers.
-		Err(ProviderError::Unsupported) => {
-			within(timeout, provider.delete(zone, record.clone())).await
-		}
-		outcome => outcome,
+		Err(ProviderError::Unsupported) => within(timeout, provider.delete(zone, record.clone()))
+			.await
+			.map(|()| false),
+		outcome => outcome.map(|()| true),
 	}
 }

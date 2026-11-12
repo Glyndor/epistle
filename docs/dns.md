@@ -472,9 +472,21 @@ values the certificate refresh published count as epistle's own too. So:
   change by another account in the moment between the read and the write is
   detected too (the status code of that refusal is not documented, so epistle
   treats 412 and 409 as a failed precondition and any other refusal as a
-  refusal of the change). deSEC, GoDaddy, Route 53 and Namecheap write a whole
-  set back from what they read, so a record added to that set in that moment
-  is lost with it. Nothing here has been run against a real provider account.
+  refusal of the change). deSEC, GoDaddy and Namecheap take no precondition at
+  all: their APIs document no ETag, revision or conditional request, and none
+  removes one value by itself (deSEC and GoDaddy replace the whole record set
+  with the list they are sent, Namecheap rewrites the whole host list of the
+  zone). A record added to that set between the read and the write is lost
+  with it, and nothing epistle can send closes that window. For those
+  providers `epistle dns publish` says so under the zone (`note: this
+  provider takes no precondition on a write...`, and the zone in `unguarded`
+  with `--json`), and after a real `--undo` it says how many records went that way (`N of
+  them went without a precondition`; `without_precondition` marks each one in
+  the `--json` report). RFC 2136 and Route 53 cannot list a zone (Route 53's API can, but the
+  provider does not parse its XML yet), so the command does not run against
+  them at all; both remove one value exactly (an UPDATE that names the RDATA,
+  and one batch that deletes the record set as read and creates it again
+  without the value). Nothing here has been run against a real provider account.
 - A DMARC record is never replaced by a weaker one: `p=`, `sp=`, `np=` and
   the `adkim=s` / `aspf=s` alignment are compared tag by tag.
 - A record that differs only in TTL or description is not rewritten.
