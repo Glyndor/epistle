@@ -65,7 +65,16 @@ async fn evaluate(config: &Config, dns: &dyn DnsLookup) -> AreaReport {
 		// override replaces the default, otherwise the default applies.
 		let selectors = crate::cli::verify::dns::dkim_selectors_for(config, domain)
 			.unwrap_or_else(|_| default_selectors.clone());
-		records.extend(dns::check_domain(domain, &config.hostname, &selectors, dns).await);
+		records.extend(
+			dns::check_domain_for_role(
+				domain,
+				&config.hostname,
+				&selectors,
+				config.domain_role(domain),
+				dns,
+			)
+			.await,
+		);
 	}
 	// A record of a group the configuration skips is not published on
 	// purpose: it is not missing, and the operator is told so.
@@ -91,6 +100,10 @@ async fn evaluate(config: &Config, dns: &dyn DnsLookup) -> AreaReport {
 			.as_ref()
 			.and_then(|dkim| dkim.override_for(domain))
 			.map(|entry| entry.name.to_ascii_lowercase());
+		// A domain that sends nothing has no key in DNS to compare.
+		if !config.domain_role(domain).sends() {
+			continue;
+		}
 		for key in keys.iter().filter(|key| key.domain == own) {
 			if let Some(item) = key_item(&key.key, domain, dns).await {
 				mismatches += usize::from(item.status == Level::Fail);

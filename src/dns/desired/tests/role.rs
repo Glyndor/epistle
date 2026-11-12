@@ -137,3 +137,93 @@ fn a_send_only_domain_has_no_report_address_that_nobody_reads() {
 		"v=DMARC1; p=quarantine; rua=mailto:postmaster@example.org; adkim=s; aspf=s"
 	);
 }
+
+fn value(desired: &Desired, name: &str, kind: crate::dns::provider::RecordKind) -> Vec<String> {
+	desired
+		.records
+		.iter()
+		.filter(|r| r.record.name == name && r.record.kind == kind)
+		.map(|r| r.record.value.clone())
+		.collect()
+}
+
+const RECEIVE_ONLY: &str =
+	"receive_only_domains = ['example.net']\n[[listeners]]\nkind = 'imaps'\n";
+const DISABLED: &str = "disabled_domains = ['example.net']\n[[listeners]]\nkind = 'imaps'\n";
+
+#[test]
+fn a_receive_only_domain_has_the_null_spf_a_reject_policy_and_no_key() {
+	use crate::dns::provider::RecordKind::{Mx, Txt};
+	let desired = from_config(&config(RECEIVE_ONLY)).expect("set");
+	assert_eq!(value(&desired, "example.net", Txt), ["v=spf1 -all"]);
+	assert_eq!(value(&desired, "example.net", Mx), ["10 mail.example.org"]);
+	assert_eq!(
+		dmarc(&desired, "example.net"),
+		"v=DMARC1; p=reject; rua=mailto:postmaster@example.net; adkim=s; aspf=s"
+	);
+	// The domain that sends keeps its SPF and its policy.
+	assert_eq!(value(&desired, "example.org", Txt), ["v=spf1 mx -all"]);
+	assert!(dmarc(&desired, "example.org").contains("p=quarantine"));
+	let names = names(&desired);
+	assert!(
+		names.contains(&"_mta-sts.example.net TXT".to_string()),
+		"{names:?}"
+	);
+	assert!(
+		names.contains(&"_imaps._tcp.example.net SRV".to_string()),
+		"{names:?}"
+	);
+}
+
+#[test]
+fn a_disabled_domain_has_the_null_spf_the_null_mx_and_none_of_the_groups() {
+	use crate::dns::provider::RecordKind::{Mx, Txt};
+	let desired = from_config(&config(DISABLED)).expect("set");
+	assert_eq!(value(&desired, "example.net", Txt), ["v=spf1 -all"]);
+	assert_eq!(value(&desired, "example.net", Mx), ["0 ."]);
+	assert_eq!(
+		dmarc(&desired, "example.net"),
+		"v=DMARC1; p=reject; adkim=s; aspf=s"
+	);
+	let names = names(&desired);
+	for omitted in OMITTED {
+		assert!(
+			!names.contains(&omitted.to_string()),
+			"{omitted}: {names:?}"
+		);
+	}
+	assert_eq!(value(&desired, "example.org", Mx), ["10 mail.example.org"]);
+}
+
+#[test]
+fn a_domain_that_sends_nothing_publishes_no_key_however_it_is_configured() {
+	use crate::dns::provider::RecordKind::Txt;
+	use crate::dns::records::{DomainDkim, ServiceRecords, build_records_for_roles};
+	let pairs = [("sel".to_string(), "v=DKIM1; k=ed25519; p=AAAA".to_string())];
+	for (extra, signs) in [
+		("", true),
+		("send_only_domains = ['example.net']", true),
+		("receive_only_domains = ['example.net']", false),
+		("disabled_domains = ['example.net']", false),
+	] {
+		let config = config(extra);
+		let records = build_records_for_roles(
+			&config.domains,
+			&config.hostname,
+			(&pairs, &DomainDkim::new()),
+			(None, "1", ServiceRecords::default()),
+			(None, None, None),
+			&config.roles(),
+		);
+		let found = records
+			.iter()
+			.any(|r| r.record.name == "sel._domainkey.example.net" && r.record.kind == Txt);
+		assert_eq!(found, signs, "{extra:?}");
+		assert!(
+			records
+				.iter()
+				.any(|r| r.record.name == "sel._domainkey.example.org"),
+			"the other domain keeps its key"
+		);
+	}
+}

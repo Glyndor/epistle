@@ -149,12 +149,14 @@ pub fn build_records(
 	)
 }
 
-/// [`build_records`] for a deployment whose domains have roles. A
-/// `send-only` domain has nobody to read aggregate reports at its own
-/// `postmaster@` (the address does not exist on a hosted domain unless
-/// someone creates it), so its DMARC record carries no `rua=`: the policy
-/// still applies, and no report bounces. The groups a role leaves out are
-/// taken out by the filter in [`crate::dns::desired`], not here.
+/// [`build_records`] for a deployment whose domains have roles. A domain
+/// with no mailbox to read aggregate reports at its own `postmaster@` (the
+/// address does not exist on a hosted domain unless someone creates it) has
+/// a DMARC record with no `rua=`: the policy still applies, and no report
+/// bounces. A domain that sends nothing has the null SPF, no DKIM key and a
+/// `reject` DMARC policy; a domain that is switched off also has the null
+/// MX. The groups a role leaves out are taken out by the filter in
+/// [`crate::dns::desired`], not here.
 pub fn build_records_for_roles(
 	domains: &[String],
 	hostname: &str,
@@ -219,16 +221,22 @@ pub fn build_records_for_roles(
 		// (`-all`). The hard-fail depends on every forwarded message being
 		// SRS-rewritten; see `config::validate` for the matching check that
 		// rejects `forward` without `srs_secret`.
-		records.push(txt(domain.clone(), "v=spf1 mx -all".to_string()));
+		// A domain that sends nothing carries the null SPF instead.
+		let role = roles.of_name(domain);
+		records.push(txt(domain.clone(), role.spf().to_string()));
 		// DMARC: a protective default that reports to postmaster, except on
-		// a domain that only sends: nobody reads that mailbox there.
-		let reports = match roles.of_name(domain) {
-			crate::dns::skip::DomainRole::SendOnly => String::new(),
-			crate::dns::skip::DomainRole::Full => format!(" rua=mailto:postmaster@{domain};"),
+		// a domain with no mailbox to read the reports there.
+		let reports = if role.receives() {
+			format!(" rua=mailto:postmaster@{domain};")
+		} else {
+			String::new()
 		};
 		records.push(txt(
 			format!("_dmarc.{domain}"),
-			format!("v=DMARC1; p=quarantine;{reports} adkim=s; aspf=s"),
+			format!(
+				"v=DMARC1; p={};{reports} adkim=s; aspf=s",
+				role.dmarc_policy()
+			),
 		));
 		// MTA-STS discovery record (the policy itself is served over HTTPS).
 		records.push(txt(
@@ -250,7 +258,7 @@ pub fn build_records_for_roles(
 			record: DnsRecord {
 				name: domain.clone(),
 				kind: RecordKind::Mx,
-				value: format!("10 {hostname}"),
+				value: role.mx(hostname),
 				ttl: TTL,
 				proxied: None,
 			},
@@ -266,7 +274,8 @@ pub fn build_records_for_roles(
 				Some(pairs) => pairs.as_slice(),
 				None => dkim_default,
 			};
-		for (selector, value) in dkim_for_domain {
+		// A domain that sends nothing has no key in DNS.
+		for (selector, value) in dkim_for_domain.iter().filter(|_| role.sends()) {
 			records.push(txt(
 				format!("{selector}._domainkey.{domain}"),
 				value.clone(),

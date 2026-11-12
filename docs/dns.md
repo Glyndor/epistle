@@ -34,10 +34,44 @@ published record always reaches a port the server answers on. The
 published only when a listener serves the client setup documents, and the
 JMAP locator only when the configuration carries the API that serves it.
 
+## Domain roles
+
+A hosted domain has a role: `full` (the default), `send-only`, `receive-only`
+or `disabled`. The role says what the domain does with mail, and the DNS
+follows it:
+
+| Role | Where it comes from | MX | SPF | DKIM | DMARC | MTA-STS, TLS-RPT, SRV, autoconfig |
+|---|---|---|---|---|---|---|
+| `full` | the default | the mail host | `v=spf1 mx -all` | published | `quarantine`, `rua=` | published |
+| `send-only` | `send_only_domains` | the mail host | `v=spf1 mx -all` | published | `quarantine`, no `rua=` | left out |
+| `receive-only` | `receive_only_domains` | the mail host | `v=spf1 -all` | left out | `reject`, `rua=` | published |
+| `disabled` | `disabled_domains` | `0 .` (null MX) | `v=spf1 -all` | left out | `reject`, no `rua=` | left out |
+
+`disabled` is the domain that neither sends nor receives, and it wins over the
+other two lists. A domain cannot be in both `send_only_domains` and
+`receive_only_domains`. A receive-only domain keeps the client locators and
+`autoconfig`: they are one group, the mailboxes of the domain are read through
+them, and a submission locator there points at a server that refuses to send as
+the domain. A message that claims a domain that sends nothing has no
+legitimate sender, so its DMARC policy is `reject` from the start; `dns
+lockdown` still ramps a record that is at a weaker policy, and never weakens a
+stricter one. Receive-only and disabled domains also refuse to send: nobody
+owns an address in them, whichever way the mail is submitted.
+
+Disabling a domain therefore changes its DNS. In automatic mode the publisher
+retires, through its ledger, the DKIM, MTA-STS and other records it had
+written, and replaces the MX and SPF it owns; `domain enable` puts them back,
+except the DMARC record: the publisher never replaces a DMARC record with a
+weaker one, so it stays at `p=reject` without `rua=` until you edit it by hand.
+A message already in flight that was signed with the key loses it from DNS
+before it is verified, so disable a domain once its outbound queue is empty.
+`verify-dns` and `status` expect the same records: the null SPF and null MX are
+the ones that pass, and the DKIM key of a domain that sends nothing is
+`skipped`, not missing.
+
 ## Send-only domains
 
-A hosted domain has a role: `full` (the default) or `send-only`. A send-only
-domain is one that only sends mail through this server, with no mailboxes of
+A send-only domain is one that only sends mail through this server, with no mailboxes of
 its own to receive in or set up clients for. It needs SPF, DKIM, DMARC and MX,
 and none of the MTA-STS, TLS-RPT, SRV, `autoconfig` and `autodiscover`
 records. Its DMARC record carries no `rua=`: `domain add` does not create a
@@ -48,6 +82,7 @@ bounce.
 epistle domain add notifications.example.org --send-only
 epistle domain set example.net --send-only
 epistle domain set example.net --full
+epistle domain set example.net --receive-only
 ```
 
 The role is one of the inputs of the record set, so every command reads the

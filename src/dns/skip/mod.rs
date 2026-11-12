@@ -145,6 +145,13 @@ impl SkipSet {
 		self.groups.contains(&group) || self.roles.of_name(name).omits().contains(&group)
 	}
 
+	/// Whether the domain `name` is in sends nothing (`receive-only` or
+	/// `disabled`): its DKIM keys have no use, so the publisher may retire
+	/// the ones it wrote, which the key rotation otherwise owns.
+	pub fn sends_nothing(&self, name: &str) -> bool {
+		!self.roles.of_name(name).sends()
+	}
+
 	/// Whether the set skips nothing.
 	pub fn is_empty(&self) -> bool {
 		self.groups.is_empty()

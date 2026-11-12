@@ -16,6 +16,7 @@ impl std::fmt::Debug for Config {
 			.field("domain_aliases", &self.domain_aliases)
 			.field("disabled_domains", &self.disabled_domains)
 			.field("send_only_domains", &self.send_only_domains)
+			.field("receive_only_domains", &self.receive_only_domains)
 			.field("dnsbl_zones", &self.dnsbl_zones)
 			.field("dnsbl_domain_zones", &self.dnsbl_domain_zones)
 			.field("dnsbl_url_zones", &self.dnsbl_url_zones)

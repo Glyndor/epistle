@@ -396,3 +396,37 @@ fn the_line_names_the_first_two_missing_records_and_counts_the_rest() {
 		""
 	);
 }
+
+/// A configuration with the DKIM key and `role` written as top-level keys.
+fn config_with_role(dir: &Path, key: &Path, role: &str) -> Config {
+	let extra = format!(
+		"{role}\n[dkim]\nselector = \"mail\"\nkey_file = {:?}\n",
+		key.display().to_string()
+	);
+	ctx(dir, &extra).config.expect("config")
+}
+
+#[tokio::test]
+async fn the_dkim_key_of_a_domain_that_sends_nothing_is_not_compared() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let (key, _txt) = dkim_key(dir.path(), "dkim.pem");
+	let (_other, stale) = dkim_key(dir.path(), "other.pem");
+	let mut dns = FakeDns::healthy();
+	publish(&mut dns, "mail", &stale);
+	let full = config_with_role(dir.path(), &key, "");
+	let item = |report: &crate::cli::status::report::AreaReport| {
+		report
+			.items
+			.iter()
+			.any(|i| i.name == "DKIM key mail example.org")
+	};
+	assert!(
+		item(&evaluate(&full, &dns).await),
+		"a full domain is compared"
+	);
+	let receive_only = config_with_role(dir.path(), &key, "receive_only_domains = ['example.org']");
+	assert!(
+		!item(&evaluate(&receive_only, &dns).await),
+		"a receive-only domain has no key in DNS to compare"
+	);
+}

@@ -200,9 +200,11 @@ pub struct Config {
 	#[serde(default)]
 	pub domain_aliases: std::collections::HashMap<String, String>,
 	/// Entries of `domains` that are switched off: the domain stays
-	/// configured (DNS records, DKIM, accounts and mailboxes are kept), but
-	/// mail for it is rejected like mail for an unknown user and no account
-	/// may send as an address in it. Each entry must also be in `domains`.
+	/// configured (accounts, mailboxes and DKIM keys are kept), but mail for
+	/// it is rejected like mail for an unknown user and no account may send
+	/// as an address in it. Its DNS says the same: null SPF, null MX, a
+	/// `reject` DMARC policy and no DKIM, MTA-STS, TLS-RPT or client
+	/// locator. Each entry must also be in `domains`.
 	#[serde(default)]
 	pub disabled_domains: Vec<String>,
 	/// Entries of `domains` that only send mail (the `send-only` role): the
@@ -211,6 +213,13 @@ pub struct Config {
 	/// `full`. Each entry must also be in `domains`.
 	#[serde(default)]
 	pub send_only_domains: Vec<String>,
+	/// Entries of `domains` that only receive mail (the `receive-only`
+	/// role): nothing is sent as the domain, so its DNS carries the null SPF
+	/// and a `reject` DMARC policy and no DKIM key, and no account may send
+	/// as an address in it. Each entry must also be in `domains` and not in
+	/// `send_only_domains`.
+	#[serde(default)]
+	pub receive_only_domains: Vec<String>,
 	/// DNS blocklist zones (RFC 5782) screened against unauthenticated
 	/// clients. Empty disables DNSBL screening (the default).
 	#[serde(default)]

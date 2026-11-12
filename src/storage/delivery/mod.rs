@@ -300,7 +300,10 @@ impl LocalDelivery {
 		// An account whose sending is off sends nothing on its own either: no
 		// forward, no Sieve redirect or reject, no vacation reply. What would
 		// have gone out is dropped and the message is kept in the mailbox.
-		let may_send = self.directory.current().can_send(account);
+		// So does the mail that reached an address of a domain that only
+		// receives: nothing leaves as that domain.
+		let directory = self.directory.current();
+		let may_send = directory.can_send(account) && directory.address_may_send(delivered_to);
 		// Admin-configured external forwarding, independent of the user filter.
 		let (forwards, keep_local) = if may_send {
 			self.account_forwards(account, message)

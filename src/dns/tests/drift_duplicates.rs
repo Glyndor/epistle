@@ -14,9 +14,9 @@ use std::net::IpAddr;
 use std::pin::Pin;
 
 #[derive(Default)]
-struct FakeDns {
-	txt: HashMap<String, Vec<String>>,
-	mx: HashMap<String, Vec<String>>,
+pub(super) struct FakeDns {
+	pub(super) txt: HashMap<String, Vec<String>>,
+	pub(super) mx: HashMap<String, Vec<String>>,
 	addresses: HashMap<String, Vec<IpAddr>>,
 	ptr: HashMap<IpAddr, Vec<String>>,
 	fail: bool,
