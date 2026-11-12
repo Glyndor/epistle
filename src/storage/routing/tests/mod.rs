@@ -1,5 +1,6 @@
 pub use super::*;
 
+pub(super) mod arc_forward;
 pub(super) mod base;
 pub(super) mod dkim_domain;
 pub(super) mod dkim_per_domain;

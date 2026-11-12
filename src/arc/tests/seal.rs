@@ -228,6 +228,66 @@ bh=aGFzaA==; b=BBBB==";
 	);
 }
 
+/// The first instance and a second one sealed with `cv=fail`, as the seal
+/// value and the chain they form.
+fn failed_second_instance(key: &Ed25519KeyPair) -> (String, Vec<Instance>) {
+	let seal1 = value_of(&build(
+		key,
+		&params(1, ChainValidation::None),
+		&[],
+		AAR,
+		AMS,
+	));
+	let inst1 = Instance {
+		instance: 1,
+		auth_results: AAR.to_string(),
+		message_signature: AMS.to_string(),
+		seal: seal1,
+	};
+	let aar2 = "i=2; relay.example; arc=fail";
+	let seal2 = value_of(&build(
+		key,
+		&params(2, ChainValidation::Fail),
+		std::slice::from_ref(&inst1),
+		aar2,
+		AMS,
+	));
+	let inst2 = Instance {
+		instance: 2,
+		auth_results: aar2.to_string(),
+		message_signature: AMS.to_string(),
+		seal: seal2.clone(),
+	};
+	(seal2, vec![inst1, inst2])
+}
+
+#[test]
+fn a_failed_seal_covers_only_its_own_set() {
+	let key = key();
+	let (seal2, chain) = failed_second_instance(&key);
+	let alone = value_of(&build(
+		&key,
+		&params(2, ChainValidation::Fail),
+		&[],
+		&chain[1].auth_results,
+		AMS,
+	));
+	// Ed25519 is deterministic: the same covered bytes give the same value.
+	assert_eq!(seal2, alone, "the prior set must not be covered");
+}
+
+#[tokio::test]
+async fn a_failed_seal_verifies_over_its_own_set() {
+	let key = key();
+	let (seal2, chain) = failed_second_instance(&key);
+	let parsed = parse_seal(&seal2).expect("parse");
+	let dns = dns_for(&key, false);
+	assert_eq!(
+		verify(&dns, &parsed, &seal2, &chain).await,
+		DkimOutcome::Pass
+	);
+}
+
 #[tokio::test]
 async fn tampered_auth_results_breaks_seal() {
 	let key = key();

@@ -61,7 +61,14 @@ pub fn build(
 	);
 
 	let mut input = String::new();
-	for inst in sorted(prior) {
+	// RFC 8617 section 5.1.2: a seal with `cv=fail` covers only the set it
+	// adds, as if that set were the only one present.
+	let covered = if params.chain_validation == ChainValidation::Fail {
+		&[]
+	} else {
+		prior
+	};
+	for inst in sorted(covered) {
 		append_instance(&mut input, &inst.auth_results, &inst.message_signature);
 		input.push_str(&canon::header(Canon::Relaxed, "ARC-Seal", &inst.seal));
 	}
@@ -86,7 +93,13 @@ pub async fn verify(
 ) -> DkimOutcome {
 	let mut input = String::new();
 	for inst in sorted(instances) {
-		if inst.instance > seal.instance {
+		// A `cv=fail` seal covers only its own set (RFC 8617 section 5.1.2).
+		let first_covered = if seal.chain_validation == ChainValidation::Fail {
+			seal.instance
+		} else {
+			0
+		};
+		if inst.instance > seal.instance || inst.instance < first_covered {
 			continue;
 		}
 		append_instance(&mut input, &inst.auth_results, &inst.message_signature);

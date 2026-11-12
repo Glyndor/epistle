@@ -97,6 +97,29 @@ async fn second_hop_seals_over_the_first() {
 }
 
 #[test]
+fn a_chain_whose_newest_seal_reports_fail_is_not_extended() {
+	let (key, _dns) = key_and_dns();
+	let sealer = ArcSealer::new(key, DOMAIN, SELECTOR);
+	let first = sealer
+		.seal(MESSAGE, "spf=pass", &[], ChainValidation::None)
+		.expect("first");
+	let after_first = prepend(&first, MESSAGE);
+	let prior = extract(&after_first).expect("structural").expect("present");
+	let failed = sealer
+		.seal(MESSAGE, "spf=pass", &prior, ChainValidation::Fail)
+		.expect("a failed chain is still recorded once");
+	let after_failed = prepend(&failed, &after_first);
+	let prior = extract(&after_failed)
+		.expect("structural")
+		.expect("present");
+	assert!(
+		sealer
+			.seal(MESSAGE, "spf=pass", &prior, ChainValidation::Fail)
+			.is_none()
+	);
+}
+
+#[test]
 fn message_without_from_cannot_be_sealed() {
 	let (key, _dns) = key_and_dns();
 	let sealer = ArcSealer::new(key, DOMAIN, SELECTOR);

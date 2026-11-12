@@ -44,7 +44,8 @@ impl ArcSealer {
 	/// hop's authentication results, and the chain-validation status the
 	/// verifier computed for `prior`. Returns the three ARC header lines
 	/// (newest first) to prepend, or `None` if the message cannot be signed
-	/// (no From header) or the chain is already full.
+	/// (no From header), the chain is already full or its newest seal
+	/// reports `cv=fail`.
 	pub fn seal(
 		&self,
 		raw_message: &[u8],
@@ -52,6 +53,11 @@ impl ArcSealer {
 		prior: &[Instance],
 		chain_validation: ChainValidation,
 	) -> Option<String> {
+		// RFC 8617 section 5.1.1: once the newest seal reports `cv=fail`
+		// the chain is closed, and nothing is added to it.
+		if super::chain::chain_status(prior) == Some(ChainValidation::Fail) {
+			return None;
+		}
 		let instance = next_instance(prior)?;
 
 		let ams_line = ams::build(
