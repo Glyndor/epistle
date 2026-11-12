@@ -222,7 +222,7 @@ CI is split by responsibility rather than gathered in one file:
 | file | what fails there |
 |---|---|
 | `ci.yml` | format, clippy, test, coverage, MSRV, dependabot freshness |
-| `dco.yml` | a `Signed-off-by:` trailer on every commit |
+| `dco.yml` | a `Signed-off-by:` trailer on every commit, and only a `users.noreply.github.com` address in authors and sign-offs |
 | `line-limit.yml` | a file's code lines past the soft/hard limit |
 | `debian.yml` | the package builds and `Build-Depends` is satisfiable |
 | `db.yml` | the database integration test against a live Postgres |
@@ -233,6 +233,15 @@ CI is split by responsibility rather than gathered in one file:
 | `rust-audit.yml` | `cargo audit` against current RUSTSEC |
 | `supply-chain.yml` | SBOM and license set |
 | `merge-group-triggers.yml` | a required check that would not report in the merge queue, see `docs/operations/merge-queue.md` |
+| `container.yml` | the image builds and passes three smoke checks: version, `config-check` with no network, runtime user |
+| `editorconfig.yml` | a file that breaks `.editorconfig` |
+| `folder-limit.yml` | a folder with more files than the ceiling |
+| `scripts.yml` | the Python helper scripts and their tests |
+| `ldap.yml` | the LDAP code path against a real OpenLDAP |
+| `imaptest.yml` | Dovecot's imaptest scripts against a server built from the commit |
+| `upgrade.yml` | the newest published binary's data opens with this build |
+| `mutants.yml` | weekly mutation testing, never a gate on a pull request |
+| `dependabot-security-watch.yml` | a Dependabot security update that opened against `main` and sits stuck |
 | `main-guard.yml` | a pull request into `main` whose head is not `develop` |
 | `release.yml` | the tag, the changelog, the audit and the signing |
 
