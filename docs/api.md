@@ -244,7 +244,8 @@ curl -s -H "Authorization: Bearer $KEY" "$API/api/v1/status"
 
 | Answer | Cause |
 |---|---|
-| `401` `unauthenticated` | No header, an unknown or expired key, a key pinned to another network, **or a key whose scopes do not cover the route**. The four look the same |
+| `401` `unauthenticated` | No header, an unknown or expired key, or a key pinned to another network. The three look the same |
+| `403` `forbidden` | A valid key whose scopes do not cover the route. It does not count towards the authentication failure limit |
 | `403` `forbidden` | The key is bound to one account and the route is administrative, or the bound account is disabled or gone |
 | `403` `forbidden_from` | `POST /api/v1/send` from an address the credential may not act for |
 | `403` `sending_off` | `POST /api/v1/send` for an account whose sending is switched off (`epistle account set NAME --send off`) |
@@ -660,7 +661,7 @@ RFC 6749 and 8628. Wrong credentials and a wrong code give the same answer.
 | Symptom | Likely cause |
 |---|---|
 | `401` on a route that worked yesterday | The key expired (`--expires-at`), was rotated or revoked, or the client moved outside `--ip-cidr` |
-| `401` on one route and `200` on another with the same key | The key lacks the scope of the first. A missing scope is `401`, not `403` |
+| `401` on one route and `200` on another with the same key | The key lacks the scope of the first; that answer is `403 forbidden` |
 | `429` with a correct key | Your address made 20 failed attempts in a minute (perhaps another program behind the same NAT). Wait a minute |
 | `403` on `/api/v1/accounts` | The key is bound to one account; use a key without `--account` |
 | `403 forbidden_from` | `from` or `sender` is not an address of the account the key acts for |

@@ -140,6 +140,13 @@ impl ApiKey {
 		now: u64,
 		acceptable_scopes: &[Scope],
 	) -> bool {
+		self.admits_credential(presented, client_ip, now) && self.covers_any(acceptable_scopes)
+	}
+
+	/// Whether `presented` is this key's secret and the key is usable from
+	/// `client_ip` right now: not expired, and inside its network. Says
+	/// nothing about scopes; [`Self::admits_any`] adds that.
+	pub fn admits_credential(&self, presented: &str, client_ip: Option<IpAddr>, now: u64) -> bool {
 		let hash_ok = sha256_token_matches(&self.hash, presented);
 		let time_ok = self.expires_at.is_none_or(|expiry| now < expiry);
 		let ip_ok = match &self.ip_cidr {
@@ -149,13 +156,17 @@ impl ApiKey {
 				_ => false,
 			},
 		};
-		// Empty `scopes` = legacy key = admit any scope (preserve behaviour).
-		// A scoped key must list at least one of the acceptable scopes.
-		let scope_ok = self.scopes.is_empty()
+		hash_ok && time_ok && ip_ok
+	}
+
+	/// Whether the key's scopes include one of `acceptable_scopes`. Empty
+	/// `scopes` is a legacy key and covers every scope (preserves behaviour);
+	/// a scoped key must list at least one of them.
+	pub fn covers_any(&self, acceptable_scopes: &[Scope]) -> bool {
+		self.scopes.is_empty()
 			|| acceptable_scopes
 				.iter()
-				.any(|scope| self.scopes.iter().any(|s| s == scope.as_str()));
-		hash_ok && time_ok && ip_ok && scope_ok
+				.any(|scope| self.scopes.iter().any(|s| s == scope.as_str()))
 	}
 }
 

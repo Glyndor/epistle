@@ -234,7 +234,7 @@ async fn the_event_source_needs_read_and_valid_arguments() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = router(es_state(dir.path()));
 	let (status, _) = open(&app, SENDER, "types=*&closeafter=no&ping=0").await;
-	assert_eq!(status, StatusCode::UNAUTHORIZED, "a send-only key");
+	assert_eq!(status, StatusCode::FORBIDDEN, "a send-only key");
 	for query in [
 		"types=*&closeafter=maybe&ping=0",
 		"types=*&closeafter=no&ping=soon",

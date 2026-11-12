@@ -25,8 +25,9 @@ info:
     `/oauth/*` needs `Authorization: Bearer <token>`: the optional static token whose hash is
     `[api] token_hash`, or an API key made with `epistle api-key create`.
     A key carries scopes (`read`, `write`, `send`, `scim`); a request the
-    scopes do not cover is answered `401 unauthenticated`, the same as an
-    unknown token, not `403`. `x-epistle-scope` on each operation names the
+    scopes do not cover is answered `403 forbidden` and does not count as a
+    failed authentication; an unknown token is `401 unauthenticated`.
+    `x-epistle-scope` on each operation names the
     scope it needs. Without `token_hash`, only labelled keys in `api_keys.toml`
     authenticate bearer-protected routes. No current route becomes unreachable:
     SCIM accepts `scim` keys, and OAuth uses account credentials or grant codes.

@@ -212,7 +212,7 @@ async fn key_without_scim_scope_is_forbidden() {
 		None,
 	)
 	.await;
-	assert_eq!(status, StatusCode::UNAUTHORIZED);
+	assert_eq!(status, StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]
