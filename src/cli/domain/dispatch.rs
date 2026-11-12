@@ -175,6 +175,7 @@ pub(super) fn execute(path: &Path, action: DomainCli, dry_run: bool, json: bool)
 			domain,
 			shared_dkim_key,
 			send_only,
+			receive_only,
 		} => {
 			let mut document = match open(path) {
 				Ok(document) => document,
@@ -183,8 +184,13 @@ pub(super) fn execute(path: &Path, action: DomainCli, dry_run: bool, json: bool)
 			if let Err(error) = add_domain(&config, &mut document, &domain) {
 				return Outcome::Error(error);
 			}
-			if send_only
-				&& let Err(error) = role::apply(&mut document, &domain, DomainRole::SendOnly)
+			let role = match (send_only, receive_only) {
+				(true, _) => Some(DomainRole::SendOnly),
+				(false, true) => Some(DomainRole::ReceiveOnly),
+				(false, false) => None,
+			};
+			if let Some(role) = role
+				&& let Err(error) = role::apply(&mut document, &domain, role)
 			{
 				return Outcome::Error(error);
 			}
@@ -248,6 +254,7 @@ pub(super) fn execute(path: &Path, action: DomainCli, dry_run: bool, json: bool)
 			submission_rate,
 			no_submission_rate,
 			send_only,
+			receive_only,
 			full,
 		} => {
 			if !known_domain(&config, &domain) {
@@ -260,10 +267,11 @@ pub(super) fn execute(path: &Path, action: DomainCli, dry_run: bool, json: bool)
 				Ok(change) => change,
 				Err(error) => return refused(error),
 			};
-			let role = match (send_only, full) {
-				(true, _) => Some(DomainRole::SendOnly),
-				(false, true) => Some(DomainRole::Full),
-				(false, false) => None,
+			let role = match (send_only, receive_only, full) {
+				(true, _, _) => Some(DomainRole::SendOnly),
+				(false, true, _) => Some(DomainRole::ReceiveOnly),
+				(false, false, true) => Some(DomainRole::Full),
+				(false, false, false) => None,
 			};
 			let change = change.with_role(role);
 			let domain = domain.trim().to_ascii_lowercase();

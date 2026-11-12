@@ -27,6 +27,7 @@ pub mod zone;
 pub mod zone_lock;
 
 use crate::dns::provider::txt_purpose;
+use crate::dns::skip::DomainRole;
 use crate::spf::DnsLookup;
 
 /// The outcome of checking one expected record.
@@ -90,6 +91,13 @@ impl Check {
 
 	/// Mark the check as belonging to a group the configuration skips: the
 	/// record is not published on purpose, so it is not missing.
+	/// Mark the check as one a role leaves out: a domain that sends nothing
+	/// has no DKIM key in DNS, so the record is not missing.
+	pub(crate) fn mark_unsent(&mut self, role: crate::dns::skip::DomainRole) {
+		self.status = Status::Skipped;
+		self.detail = format!("not published: the domain is {}", role.name());
+	}
+
 	pub(crate) fn mark_skipped(&mut self, group: crate::dns::skip::SkipGroup) {
 		self.status = Status::Skipped;
 		self.detail = format!("skipped by configuration (the {} group)", group.name());
@@ -104,10 +112,26 @@ pub async fn check_domain(
 	dkim_selectors: &[String],
 	dns: &dyn DnsLookup,
 ) -> Vec<Check> {
+	check_domain_for_role(domain, hostname, dkim_selectors, DomainRole::Full, dns).await
+}
+
+/// [`check_domain`] for a domain with a role. A domain that sends nothing
+/// has the null SPF and no DKIM key, so its DKIM checks are skipped, not
+/// missing; a domain that is switched off has the null MX instead of the
+/// mail host.
+pub async fn check_domain_for_role(
+	domain: &str,
+	hostname: &str,
+	dkim_selectors: &[String],
+	role: DomainRole,
+	dns: &dyn DnsLookup,
+) -> Vec<Check> {
 	let mut checks = Vec::new();
 
-	// MX: at least one exchange should be the mail hostname.
+	// MX: at least one exchange should be the mail hostname, or the null MX
+	// alone for a domain that accepts no mail.
 	match dns.mx(domain).await {
+		Ok(hosts) if role == DomainRole::Disabled => checks.push(null_mx_check(domain, &hosts)),
 		Ok(hosts) if hosts.iter().any(|h| h.eq_ignore_ascii_case(hostname)) => {
 			checks.push(Check::ok("MX", domain, format!("→ {hostname}")));
 		}
@@ -122,16 +146,48 @@ pub async fn check_domain(
 		Err(_) => checks.push(Check::error("MX", domain)),
 	}
 
-	checks.push(txt_check("SPF", domain, "v=spf1", dns).await);
+	let mut spf = txt_check("SPF", domain, "v=spf1", dns).await;
+	// A domain that sends nothing must say so: an SPF that still names the
+	// mail host lets a message claiming the domain pass.
+	if !role.sends() && spf.status == Status::Ok && spf.detail.trim() != role.spf() {
+		spf = Check::missing(
+			"SPF",
+			domain,
+			format!("expected {}, found {}", role.spf(), spf.detail),
+		);
+	}
+	checks.push(spf);
 	checks.push(txt_check("DMARC", &format!("_dmarc.{domain}"), "v=DMARC1", dns).await);
 	checks.push(txt_check("MTA-STS", &format!("_mta-sts.{domain}"), "v=STSv1", dns).await);
 
 	for selector in dkim_selectors {
 		let name = format!("{selector}._domainkey.{domain}");
-		checks.push(txt_check(&format!("DKIM {selector}"), &name, "v=DKIM1", dns).await);
+		let mut check = txt_check(&format!("DKIM {selector}"), &name, "v=DKIM1", dns).await;
+		if !role.sends() {
+			check.mark_unsent(role);
+		}
+		checks.push(check);
 	}
 
 	checks
+}
+
+/// The MX check of a domain that accepts no mail: the null MX (RFC 7505)
+/// and nothing else. The resolver trims the trailing dot, so the root name
+/// arrives as an empty string.
+fn null_mx_check(domain: &str, hosts: &[String]) -> Check {
+	let is_null = |host: &String| host.is_empty() || host == ".";
+	if !hosts.is_empty() && hosts.iter().all(is_null) {
+		Check::ok("MX", domain, "null MX (accepts no mail)")
+	} else if hosts.is_empty() {
+		Check::missing("MX", domain, "no MX records, expected the null MX")
+	} else {
+		Check::missing(
+			"MX",
+			domain,
+			format!("expected the null MX, found: {}", hosts.join(", ")),
+		)
+	}
 }
 
 /// Whether all checks passed (no missing records). Lookup errors are

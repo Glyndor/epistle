@@ -6,18 +6,17 @@ use crate::dns::skip::{DomainRole, Roles, SkipSet};
 use super::Config;
 
 impl Config {
-	/// The role of `domain`: `send-only` when `send_only_domains` lists it,
-	/// `full` otherwise.
+	/// The role of `domain`: `disabled` when `disabled_domains` lists it
+	/// (whatever else does), then `send-only` or `receive-only` when the
+	/// list of that role has it, `full` otherwise.
 	pub fn domain_role(&self, domain: &str) -> DomainRole {
-		if self
-			.send_only_domains
-			.iter()
-			.any(|listed| listed.eq_ignore_ascii_case(domain))
-		{
-			DomainRole::SendOnly
-		} else {
-			DomainRole::Full
-		}
+		self.roles().of_name(domain)
+	}
+
+	/// The roles of every hosted domain.
+	pub fn roles(&self) -> Roles {
+		Roles::new(&self.domains, &self.send_only_domains)
+			.with_others(&self.receive_only_domains, &self.disabled_domains)
 	}
 
 	/// The groups of records the configuration leaves out: the
@@ -26,8 +25,6 @@ impl Config {
 	/// `verify-dns`, `status` and the publisher all filter with this set, so
 	/// what is printed is what is checked and what is written.
 	pub fn skip_set(&self) -> SkipSet {
-		self.dns_publish
-			.skip_set()
-			.with_roles(Roles::new(&self.domains, &self.send_only_domains))
+		self.dns_publish.skip_set().with_roles(self.roles())
 	}
 }

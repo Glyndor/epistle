@@ -90,6 +90,9 @@ pub struct Directory {
 	/// Hosted domains switched off: mail for them is rejected like mail for
 	/// an unknown user and nobody may send as an address in them.
 	disabled_domains: HashSet<String>,
+	/// Hosted domains that only receive (`receive_only_domains`): nobody may
+	/// send as an address in them (lowercased).
+	send_off_domains: HashSet<String>,
 	/// Accounts whose sending is switched off: they may sign in and read, but
 	/// no address they hold may be used as a sender (lowercased).
 	send_off: HashSet<String>,
@@ -211,6 +214,7 @@ impl Directory {
 			catch_all: HashMap::new(),
 			domain_aliases: HashMap::new(),
 			disabled_domains: HashSet::new(),
+			send_off_domains: HashSet::new(),
 			send_off: HashSet::new(),
 			receive_off: HashSet::new(),
 			scram: HashMap::new(),
@@ -351,7 +355,7 @@ impl Directory {
 		if !self.can_send(account) {
 			return false;
 		}
-		if self.domain_disabled(address.domain()) {
+		if self.domain_disabled(address.domain()) || self.domain_send_off(address.domain()) {
 			return false;
 		}
 		// An address of a domain this server does not host belongs to nobody

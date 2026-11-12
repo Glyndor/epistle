@@ -11,7 +11,7 @@ use std::path::Path;
 
 use crate::config::{Config, Dkim};
 use crate::dns::records::{self, DomainDkim, PublishRecord, ServiceRecords};
-use crate::dns::skip::{Roles, SkippedGroup};
+use crate::dns::skip::SkippedGroup;
 
 /// The records a configuration needs, and what could not be read while
 /// computing them.
@@ -110,7 +110,7 @@ pub fn for_domains(config: &Config, domains: &[String]) -> Result<Desired, Vec<S
 			config.public_ipv4,
 			config.public_ipv6,
 		),
-		&Roles::new(&config.domains, &config.send_only_domains),
+		&config.roles(),
 	);
 	// The filter lives here, once: the reconcile loop and `epistle dns
 	// publish` read this set, so a record the configuration skips is out

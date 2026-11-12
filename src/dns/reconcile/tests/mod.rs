@@ -7,6 +7,7 @@ pub(super) mod ledger;
 pub(super) mod lock;
 pub(super) mod needed;
 mod null_records;
+mod receive_only;
 pub(super) mod retire;
 mod role;
 pub(super) mod run;

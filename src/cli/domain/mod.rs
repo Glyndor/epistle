@@ -68,8 +68,12 @@ pub enum DomainCli {
 		shared_dkim_key: bool,
 		/// The domain only sends mail: its DNS carries SPF, DKIM, DMARC and
 		/// MX, and no MTA-STS, TLS-RPT, SRV, autoconfig or autodiscover record.
-		#[arg(long)]
+		#[arg(long, conflicts_with = "receive_only")]
 		send_only: bool,
+		/// The domain only receives mail: nothing is sent as it, so its DNS
+		/// carries the null SPF, a `reject` DMARC policy and no DKIM key.
+		#[arg(long)]
+		receive_only: bool,
 	},
 	/// Remove a domain from `domains`.
 	///
@@ -91,10 +95,11 @@ pub enum DomainCli {
 	///
 	/// The quota and rate are the per-domain overrides `limits set --domain`
 	/// writes. A flag that is left out keeps its value; `--no-quota` and
-	/// `--no-submission-rate` remove the override. `--send-only` and `--full`
-	/// change the role: which DNS records the domain needs.
+	/// `--no-submission-rate` remove the override. `--send-only`,
+	/// `--receive-only` and `--full` change the role: which DNS records the
+	/// domain needs and who may send as it.
 	#[command(group(clap::ArgGroup::new("change").required(true).multiple(true)
-		.args(["quota", "no_quota", "submission_rate", "no_submission_rate", "send_only", "full"])))]
+		.args(["quota", "no_quota", "submission_rate", "no_submission_rate", "send_only", "receive_only", "full"])))]
 	Set {
 		/// Domain to change.
 		#[arg(value_name = "DOMAIN")]
@@ -118,8 +123,12 @@ pub enum DomainCli {
 		no_submission_rate: bool,
 		/// The domain only sends mail: SPF, DKIM, DMARC and MX, nothing
 		/// else in DNS.
-		#[arg(long, conflicts_with = "full")]
+		#[arg(long, conflicts_with_all = ["full", "receive_only"])]
 		send_only: bool,
+		/// The domain only receives mail: the null SPF, a `reject` DMARC
+		/// policy, no DKIM key, and nobody may send as it.
+		#[arg(long, conflicts_with = "full")]
+		receive_only: bool,
 		/// The domain receives mail and sets clients up: every record
 		/// (the default role).
 		#[arg(long)]

@@ -875,10 +875,11 @@ epistle domain show example.org --json
 epistle domain add new.example.org
 epistle domain add new.example.org --dry-run
 epistle domain add notifications.example.org --send-only
+epistle domain add inbound.example.org --receive-only
 epistle domain remove old.example.org [--yes|-y]
 epistle domain disable example.net [--yes|-y] [--dry-run]
 epistle domain enable example.net [--dry-run]
-epistle domain set example.org [--quota 10G | --no-quota] [--submission-rate 50 | --no-submission-rate] [--send-only | --full] [--dry-run]
+epistle domain set example.org [--quota 10G | --no-quota] [--submission-rate 50 | --no-submission-rate] [--send-only | --receive-only | --full] [--dry-run]
 epistle domain alias add alias.example.org example.org
 epistle domain alias remove alias.example.org [--yes|-y]
 ```
@@ -887,7 +888,7 @@ epistle domain alias remove alias.example.org [--yes|-y]
 (`ALIASES TO`) and the domains it targets (`ALIASES FROM`). `show` writes
 the alias edges plus the accounts and aliases that route mail through
 the domain, so the operator can see what depends on it before removing
-it. Both name the domain's role (`ROLE`; `full` or `send-only`). JSON records
+it. Both name the domain's role (`ROLE`; `full`, `send-only`, `receive-only` or `disabled`). JSON records
 contain `domain`, `enabled`, `role`, `aliases_to`, `aliases_from`, `accounts`
 and `aliases`.
 
@@ -895,8 +896,11 @@ and `aliases`.
 `disabled_domains`, and after the restart mail for it is rejected at RCPT
 exactly like mail for an unknown user (a permanent 550, so senders get a
 bounce, not a retry), and no account may send as an address in it (SMTP
-submission, the API and JMAP all refuse). Accounts, mailboxes, aliases, DNS
-records and DKIM keys stay. A mailbox is still reachable by the account's own
+submission, the API and JMAP all refuse). Accounts, mailboxes, aliases and DKIM
+keys stay. Its DNS changes to say the same: the publisher replaces the MX with
+the null MX and the SPF with `v=spf1 -all`, sets the DMARC policy to `reject`
+and retires the DKIM, MTA-STS, TLS-RPT and client-locator records it wrote
+(see [`dns.md`](dns.md#domain-roles)); `enable` puts them back. A mailbox is still reachable by the account's own
 name over IMAP and POP3, but logging in with an address in the disabled domain
 fails, because that address no longer resolves. Mail already in the outbound
 queue with a sender in the domain is accepted mail and is still delivered; the
@@ -917,9 +921,10 @@ per-domain submission rate in messages per minute
 (`domain_submission_limits`), the same overrides `limits set quota --domain`
 and `limits set submission-rate --domain` write and `limits show` lists. Name
 at least one of `--quota`, `--no-quota`, `--submission-rate`,
-`--no-submission-rate`, `--send-only` or `--full`; a flag left out keeps its
-value, and `--no-…` removes the override. `--send-only` and `--full` set the
-domain's role (see below); they cannot be given together. A zero rate is refused (it would lift the limit; use
+`--no-submission-rate`, `--send-only`, `--receive-only` or `--full`; a flag left
+out keeps its value, and `--no-…` removes the override. `--send-only`,
+`--receive-only` and `--full` set the domain's role (see below); they cannot be
+given together. A zero rate is refused (it would lift the limit; use
 `--no-submission-rate`), and so is an unknown domain. The JSON result carries
 `domain` and what it touched (`quota`, `submission_rate`; `null` once
 removed; `role`). `show` prints both overrides.
@@ -933,7 +938,16 @@ out. A send-only domain only sends mail, so its DNS is SPF, DKIM, DMARC
 what is printed is what is checked and what is written; `verify-dns` shows the
 omitted records as `skipped`. Changing the role changes what is expected, and
 the publisher retires only the records its ledger says it wrote. `domain
-remove` drops the role with the domain. See [`dns.md`](dns.md#send-only-domains).
+remove` drops the role with the domain. See [`dns.md`](dns.md#domain-roles).
+
+`add --receive-only` and `set --receive-only` write the name into
+`receive_only_domains` and take it out of `send_only_domains`, and the other
+way round: a domain has one role. A receive-only domain only receives mail, so
+its DNS carries the null SPF (`v=spf1 -all`), a `reject` DMARC policy and no
+DKIM key, and nobody may send as an address in it: SMTP submission, the API and
+JMAP refuse, and a forward, a Sieve redirect or a vacation reply for mail to it
+is dropped. A domain that neither sends nor receives is not a role: use
+`disable`, which wins over both lists and also gives it the null MX.
 
 `add` validates the name (`validate_dns_name`, same rules the loader
 uses), appends it to `[domains]` and prints the DNS records the operator

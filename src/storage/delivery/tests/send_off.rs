@@ -1,11 +1,12 @@
 //! An account whose sending is off sends nothing on its own either: what its
 //! forwards, its Sieve filter and its vacation reply would put on the outbound
-//! side is dropped, and the message stays in its mailbox.
+//! side is dropped, and the message stays in its mailbox. So does mail that
+//! reaches an address of a receive-only domain, whoever the account is.
 
 use super::*;
 use crate::storage::vacation_store::{VacationSetting, write as write_setting};
 
-fn directory(send_off: bool, forward: Option<bool>) -> DirectoryHandle {
+fn directory(send_off: bool, domain_off: bool, forward: Option<bool>) -> DirectoryHandle {
 	let base = crate::smtp::directory::Directory::new(
 		["example.org".to_string()],
 		[("alice@example.org".to_string(), "alice".to_string())],
@@ -18,7 +19,14 @@ fn directory(send_off: bool, forward: Option<bool>) -> DirectoryHandle {
 		None => base,
 	};
 	let off: Vec<String> = send_off.then(|| "alice".to_string()).into_iter().collect();
-	DirectoryHandle::new(base.with_switches(off, Vec::new()))
+	let domains: Vec<String> = domain_off
+		.then(|| "example.org".to_string())
+		.into_iter()
+		.collect();
+	DirectoryHandle::new(
+		base.with_switches(off, Vec::new())
+			.with_send_off_domains(domains),
+	)
 }
 
 fn deliver(
@@ -27,8 +35,19 @@ fn deliver(
 	script: Option<&str>,
 	vacation: bool,
 ) -> (Delivered, usize) {
+	deliver_in(false, send_off, forward, script, vacation)
+}
+
+fn deliver_in(
+	domain_off: bool,
+	send_off: bool,
+	forward: Option<bool>,
+	script: Option<&str>,
+	vacation: bool,
+) -> (Delivered, usize) {
 	let dir = tempfile::tempdir().expect("tempdir");
-	let delivery = LocalDelivery::new(dir.path(), directory(send_off, forward)).expect("delivery");
+	let delivery =
+		LocalDelivery::new(dir.path(), directory(send_off, domain_off, forward)).expect("delivery");
 	let account = dir.path().join("accounts").join("alice");
 	fs::create_dir_all(&account).expect("mkdir");
 	if let Some(script) = script {
@@ -129,4 +148,38 @@ fn the_same_account_with_sending_on_does_all_of_it() {
 	let script = "require \"vacation\";\nvacation :days 1 \"away\";";
 	let (sieve_replied, _) = deliver(false, None, Some(script), false);
 	assert_eq!(sieve_replied.replies.len(), 1);
+}
+
+#[test]
+fn nothing_leaves_for_an_address_of_a_receive_only_domain() {
+	let (forwarded, inbox) = deliver_in(true, false, Some(false), None, false);
+	assert!(forwarded.redirects.is_empty(), "{:?}", forwarded.redirects);
+	assert_eq!(inbox, 1, "the copy stays");
+	let (redirected, _) = deliver_in(
+		true,
+		false,
+		None,
+		Some("redirect \"x@target.example\";"),
+		false,
+	);
+	assert!(redirected.redirects.is_empty());
+	let (rejected, inbox) = deliver_in(
+		true,
+		false,
+		None,
+		Some("require \"reject\";\nreject \"no\";"),
+		false,
+	);
+	assert!(rejected.reject.is_none());
+	assert_eq!(inbox, 1);
+	let (replied, _) = deliver_in(true, false, None, None, true);
+	assert!(replied.replies.is_empty());
+}
+
+#[test]
+fn the_same_account_in_a_domain_that_sends_does_all_of_it() {
+	let (forwarded, _) = deliver_in(false, false, Some(true), None, false);
+	assert_eq!(forwarded.redirects.len(), 1);
+	let (replied, _) = deliver_in(false, false, None, None, true);
+	assert_eq!(replied.replies.len(), 1);
 }

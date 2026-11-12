@@ -109,3 +109,78 @@ fn the_check_of_a_send_only_domain_is_marked_skipped() {
 	let kept = split_checks(checks, &set(&["example.org"], &[]));
 	assert_eq!(kept[0].status, crate::dns::Status::Missing);
 }
+
+fn roles_of(receive_only: &[&str], disabled: &[&str]) -> Roles {
+	let own = |names: &[&str]| names.iter().map(|n| n.to_string()).collect::<Vec<_>>();
+	Roles::new(
+		&own(&["example.org", "example.net", "example.com"]),
+		&own(&["example.net"]),
+	)
+	.with_others(&own(receive_only), &own(disabled))
+}
+
+#[test]
+fn every_role_has_its_name() {
+	let roles = roles_of(&["example.org"], &["example.com"]);
+	assert_eq!(roles.of_name("example.net"), DomainRole::SendOnly);
+	assert_eq!(roles.of_name("example.org"), DomainRole::ReceiveOnly);
+	assert_eq!(roles.of_name("example.com"), DomainRole::Disabled);
+	assert_eq!(roles.of_name("example.org").name(), "receive-only");
+	assert_eq!(roles.of_name("example.com").name(), "disabled");
+}
+
+#[test]
+fn a_switched_off_domain_is_disabled_whatever_else_lists_it() {
+	let roles = roles_of(&["example.org"], &["example.org", "example.net"]);
+	assert_eq!(roles.of_name("example.org"), DomainRole::Disabled);
+	assert_eq!(roles.of_name("example.net"), DomainRole::Disabled);
+}
+
+#[test]
+fn what_each_role_sends_and_receives() {
+	assert!(DomainRole::Full.sends() && DomainRole::Full.receives());
+	assert!(DomainRole::SendOnly.sends() && !DomainRole::SendOnly.receives());
+	assert!(!DomainRole::ReceiveOnly.sends() && DomainRole::ReceiveOnly.receives());
+	assert!(!DomainRole::Disabled.sends() && !DomainRole::Disabled.receives());
+}
+
+#[test]
+fn a_domain_that_sends_nothing_has_the_null_spf_and_a_reject_policy() {
+	assert_eq!(DomainRole::Full.spf(), "v=spf1 mx -all");
+	assert_eq!(DomainRole::SendOnly.spf(), "v=spf1 mx -all");
+	assert_eq!(DomainRole::ReceiveOnly.spf(), "v=spf1 -all");
+	assert_eq!(DomainRole::Disabled.spf(), "v=spf1 -all");
+	assert_eq!(DomainRole::Full.dmarc_policy(), "quarantine");
+	assert_eq!(DomainRole::SendOnly.dmarc_policy(), "quarantine");
+	assert_eq!(DomainRole::ReceiveOnly.dmarc_policy(), "reject");
+	assert_eq!(DomainRole::Disabled.dmarc_policy(), "reject");
+}
+
+#[test]
+fn only_a_switched_off_domain_has_the_null_mx() {
+	assert_eq!(
+		DomainRole::Full.mx("mail.example.org"),
+		"10 mail.example.org"
+	);
+	assert_eq!(
+		DomainRole::SendOnly.mx("mail.example.org"),
+		"10 mail.example.org"
+	);
+	assert_eq!(
+		DomainRole::ReceiveOnly.mx("mail.example.org"),
+		"10 mail.example.org"
+	);
+	assert_eq!(DomainRole::Disabled.mx("mail.example.org"), "0 .");
+}
+
+#[test]
+fn a_receive_only_domain_keeps_every_group_and_a_disabled_one_skips_the_receiving_ones() {
+	let roles = roles_of(&["example.org"], &["example.com"]);
+	let skip = SkipSet::default().with_roles(roles);
+	for extra in extras("example.org") {
+		assert_eq!(skip.group_of(&extra), None, "{extra:?}");
+	}
+	for extra in extras("example.com") {
+		assert!(skip.group_of(&extra).is_some(), "{extra:?}");
+	}
+}

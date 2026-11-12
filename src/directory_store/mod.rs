@@ -291,6 +291,8 @@ pub struct AccountStore {
 	domain_aliases: std::collections::HashMap<String, String>,
 	/// Hosted domains switched off (`disabled_domains` in the configuration).
 	disabled_domains: Vec<String>,
+	/// Hosted domains that only receive (`receive_only_domains`).
+	send_off_domains: Vec<String>,
 	static_accounts: Vec<Account>,
 	/// Default storage quota (bytes) per domain.
 	domain_quotas: std::collections::HashMap<String, u64>,
@@ -384,6 +386,7 @@ impl AccountStore {
 			domains,
 			domain_aliases,
 			disabled_domains: Vec::new(),
+			send_off_domains: Vec::new(),
 			static_accounts,
 			domain_quotas: std::collections::HashMap::new(),
 			domain_submission_limits: std::collections::HashMap::new(),
@@ -410,6 +413,14 @@ impl AccountStore {
 	/// Switch off hosted domains and rebuild the directory.
 	pub fn with_disabled_domains(mut self, domains: Vec<String>) -> Self {
 		self.disabled_domains = domains;
+		self.handle.replace(self.build_directory());
+		self
+	}
+
+	/// Set the hosted domains nobody may send as (`receive_only_domains`)
+	/// and rebuild the directory.
+	pub fn with_send_off_domains(mut self, domains: Vec<String>) -> Self {
+		self.send_off_domains = domains;
 		self.handle.replace(self.build_directory());
 		self
 	}
@@ -693,6 +704,7 @@ impl AccountStore {
 			.with_catch_all(catch_all)
 			.with_domain_aliases(self.domain_aliases.clone())
 			.with_disabled_domains(self.disabled_domains.iter().cloned())
+			.with_send_off_domains(self.send_off_domains.iter().cloned())
 			.with_scram(scram)
 			.with_totp(totp)
 			.with_disabled(disabled)

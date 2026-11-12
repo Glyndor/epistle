@@ -483,7 +483,7 @@ fn retire(record: &DnsRecord, existing: &[DnsRecord], cuts: &Cuts, skip: &SkipSe
 			vec![],
 		);
 	}
-	if is_dkim(record) {
+	if is_dkim(record) && !skip.sends_nothing(&name) {
 		return entry(
 			Action::Skipped,
 			record,

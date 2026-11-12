@@ -12,6 +12,7 @@ mod validate_database;
 
 mod validate_disabled_domains;
 mod validate_dns_senders;
+mod validate_receive_only_domains;
 mod validate_send_only_domains;
 
 mod validate_identification;
@@ -31,6 +32,7 @@ impl Config {
 		self.validate_domains()?;
 		self.validate_disabled_domains()?;
 		self.validate_send_only_domains()?;
+		self.validate_receive_only_domains()?;
 		self.dns.validate()?;
 		self.dns_publish.validate()?;
 		self.validate_dns_senders()?;
