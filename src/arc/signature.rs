@@ -11,6 +11,10 @@ use crate::dkim::{Algorithm, Canon};
 
 use super::chain::ChainValidation;
 
+/// The most tags an ARC header may carry before it is refused. The same
+/// bound DKIM puts on its signatures.
+const MAX_TAGS: usize = 64;
+
 /// A parsed `ARC-Message-Signature` header value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MessageSignature {
@@ -83,6 +87,9 @@ impl Tags {
 			if tag.is_empty() {
 				continue;
 			}
+			if tags.len() == MAX_TAGS {
+				return Err(SignatureError(format!("more than {MAX_TAGS} tags")));
+			}
 			let (name, raw) = tag
 				.split_once('=')
 				.ok_or_else(|| SignatureError(format!("malformed tag \"{tag}\"")))?;
@@ -154,11 +161,20 @@ pub fn parse_message_signature(value: &str) -> Result<MessageSignature, Signatur
 	let tags = Tags::parse(value)?;
 	let instance = parse_instance(tags.require("i")?)?;
 	let algorithm = parse_algorithm(tags.require("a")?)?;
+	// The list is read only up to the DKIM bound, so a very long `h=` is
+	// refused without being built.
+	let max_names = crate::dkim::signature::MAX_SIGNED_HEADER_NAMES;
 	let signed_headers: Vec<String> = tags
 		.require("h")?
 		.split(':')
+		.take(max_names + 1)
 		.map(|h| h.to_ascii_lowercase())
 		.collect();
+	if signed_headers.len() > max_names {
+		return Err(SignatureError(format!(
+			"h= lists more than {max_names} header names"
+		)));
+	}
 	// The From header must be signed, as in DKIM (RFC 8617 §4.1.2).
 	if !signed_headers.iter().any(|h| h == "from") {
 		return Err(SignatureError("h= does not cover From".into()));

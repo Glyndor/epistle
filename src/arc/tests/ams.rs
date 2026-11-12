@@ -17,9 +17,9 @@ use std::pin::Pin;
 type Fut<'a, T> = Pin<Box<dyn Future<Output = Result<T, DnsFailure>> + Send + 'a>>;
 
 /// A DNS mock that serves a fixed TXT map and can simulate a temp failure.
-struct MockDns {
-	txt: HashMap<String, Vec<String>>,
-	temp_fail: bool,
+pub(super) struct MockDns {
+	pub(super) txt: HashMap<String, Vec<String>>,
+	pub(super) temp_fail: bool,
 }
 
 impl DnsLookup for MockDns {
@@ -39,16 +39,16 @@ impl DnsLookup for MockDns {
 	}
 }
 
-const DOMAIN: &str = "example.org";
-const SELECTOR: &str = "arc1";
+pub(super) const DOMAIN: &str = "example.org";
+pub(super) const SELECTOR: &str = "arc1";
 
-fn key() -> Ed25519KeyPair {
+pub(super) fn key() -> Ed25519KeyPair {
 	let rng = ring::rand::SystemRandom::new();
 	let pkcs8 = Ed25519KeyPair::generate_pkcs8(&rng).expect("generate");
 	Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).expect("parse")
 }
 
-fn dns_for(key: &Ed25519KeyPair, temp_fail: bool) -> MockDns {
+pub(super) fn dns_for(key: &Ed25519KeyPair, temp_fail: bool) -> MockDns {
 	let record = format!(
 		"v=DKIM1; k=ed25519; p={}",
 		BASE64.encode(key.public_key().as_ref())
@@ -63,12 +63,12 @@ fn dns_with(record: String, temp_fail: bool) -> MockDns {
 	MockDns { txt, temp_fail }
 }
 
-const MESSAGE: &[u8] =
+pub(super) const MESSAGE: &[u8] =
 	b"From: alice@example.org\r\nTo: bob@example.net\r\nSubject: hi\r\n\r\nHello ARC\r\n";
 
 /// Extract the header value (after the colon, no trailing CRLF) from a built
 /// ARC-Message-Signature line.
-fn value_of(line: &str) -> String {
+pub(super) fn value_of(line: &str) -> String {
 	let after = line.split_once(':').expect("colon").1;
 	after.strip_suffix("\r\n").unwrap_or(after).to_string()
 }
@@ -122,7 +122,7 @@ fn body_hash() -> String {
 /// An ARC-Message-Signature that declares `a=rsa-sha256` and carries an RSA
 /// signature over the signed headers themselves, which is what an RSA
 /// signature covers: the hash goes inside the PKCS#1 padding.
-fn rsa_ams(key: &RsaKeyPair) -> String {
+pub(super) fn rsa_ams(key: &RsaKeyPair) -> String {
 	let value = format!(
 		" i=1; a=rsa-sha256; c=relaxed/relaxed; d={DOMAIN}; s={SELECTOR}; h=from:to:subject; bh={}; b=",
 		body_hash()

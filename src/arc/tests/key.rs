@@ -98,9 +98,8 @@ fn a_record_without_a_key_type_is_an_rsa_record() {
 	// RFC 6376 section 3.6.1 makes rsa the default when the tag is absent.
 	let spki = crate::dkim::spki_for_rsa(&rsa_public_key_with_modulus_bits(2048));
 	let record = format!("v=DKIM1; p={}", BASE64.encode(spki));
-	let record = KeyRecord::first(&[record]).expect("record");
 	assert!(
-		record.verification_key(Algorithm::RsaSha256).is_ok(),
+		KeyRecord::select(&[record], Algorithm::RsaSha256).is_ok(),
 		"a record without a k= tag is an RSA record"
 	);
 }
@@ -109,70 +108,102 @@ fn a_record_without_a_key_type_is_an_rsa_record() {
 fn an_unknown_key_type_is_ignored() {
 	// RFC 6376 section 3.6.1 tells the verifier to ignore such a record.
 	let record = "v=DKIM1; k=dsa; p=AAAA";
-	assert!(KeyRecord::first(&[record.to_string()]).is_err());
+	assert!(KeyRecord::select(&[record.to_string()], Algorithm::RsaSha256).is_err());
 }
 
 #[test]
 fn a_string_without_a_key_is_not_a_key_record() {
-	assert!(KeyRecord::first(&["v=DKIM1".to_string()]).is_err());
+	assert!(KeyRecord::select(&["v=DKIM1".to_string()], Algorithm::RsaSha256).is_err());
 }
 
 #[test]
 fn a_string_without_a_key_does_not_hide_the_record_that_has_one() {
 	let record = rsa_record_with_modulus_bits(2048);
 	let texts = vec!["v=DKIM1".to_string(), record];
-	assert!(KeyRecord::first(&texts).is_ok());
+	assert!(KeyRecord::select(&texts, Algorithm::RsaSha256).is_ok());
 }
 
 #[test]
-fn the_first_record_that_publishes_a_key_is_the_one_used() {
-	let first = rsa_record_with_modulus_bits(2048);
-	let second = rsa_record_with_modulus_bits(2048);
-	let texts = vec![first, second];
-	assert!(KeyRecord::first(&texts).is_ok());
+fn the_first_record_that_publishes_a_usable_key_is_the_one_used() {
+	let texts = vec![
+		rsa_record_with_modulus_bits(2048),
+		rsa_record_with_modulus_bits(2048),
+	];
+	assert!(KeyRecord::select(&texts, Algorithm::RsaSha256).is_ok());
+}
+
+#[test]
+fn an_rsa_header_uses_the_rsa_record_published_after_an_ed25519_one() {
+	let texts = vec![
+		ed25519_record(&[7u8; 32]),
+		rsa_record_with_modulus_bits(2048),
+	];
+	assert!(
+		KeyRecord::select(&texts, Algorithm::RsaSha256).is_ok(),
+		"the Ed25519 record comes first but does not fit an RSA header"
+	);
+}
+
+#[test]
+fn an_ed25519_header_uses_the_ed25519_record_published_after_an_rsa_one() {
+	let texts = vec![
+		rsa_record_with_modulus_bits(2048),
+		ed25519_record(&[7u8; 32]),
+	];
+	assert!(KeyRecord::select(&texts, Algorithm::Ed25519Sha256).is_ok());
+}
+
+#[test]
+fn a_record_that_cannot_be_used_does_not_hide_the_one_that_can() {
+	let texts = vec![
+		"v=DKIM1; k=dsa; p=AAAA".to_string(),
+		"v=DKIM1; k=rsa; p=".to_string(),
+		"v=DKIM1; k=ed25519; p=%%%".to_string(),
+		ed25519_record(&[7u8; 32]),
+	];
+	assert!(KeyRecord::select(&texts, Algorithm::Ed25519Sha256).is_ok());
 }
 
 #[test]
 fn an_ed25519_header_refuses_a_record_that_publishes_an_rsa_key() {
-	let record = KeyRecord::first(&[rsa_record_with_modulus_bits(2048)]).expect("record");
 	assert!(
-		record.verification_key(Algorithm::Ed25519Sha256).is_err(),
+		KeyRecord::select(
+			&[rsa_record_with_modulus_bits(2048)],
+			Algorithm::Ed25519Sha256
+		)
+		.is_err(),
 		"an Ed25519 header must not use an RSA key"
 	);
 }
 
 #[test]
 fn an_rsa_header_refuses_a_record_that_publishes_an_ed25519_key() {
-	let record = KeyRecord::first(&[ed25519_record(&[7u8; 32])]).expect("record");
 	assert!(
-		record.verification_key(Algorithm::RsaSha256).is_err(),
+		KeyRecord::select(&[ed25519_record(&[7u8; 32])], Algorithm::RsaSha256).is_err(),
 		"an RSA header must not use an Ed25519 key"
 	);
 }
 
 #[test]
 fn an_ed25519_key_of_the_wrong_length_is_refused() {
-	let record = KeyRecord::first(&[ed25519_record(&[7u8; 31])]).expect("record");
 	assert!(
-		record.verification_key(Algorithm::Ed25519Sha256).is_err(),
+		KeyRecord::select(&[ed25519_record(&[7u8; 31])], Algorithm::Ed25519Sha256).is_err(),
 		"an Ed25519 key is 32 bytes"
 	);
 }
 
 #[test]
 fn an_rsa_key_of_a_modulus_below_1024_bits_is_refused() {
-	let record = KeyRecord::first(&[rsa_record_with_modulus_bits(1023)]).expect("record");
 	assert!(
-		record.verification_key(Algorithm::RsaSha256).is_err(),
+		KeyRecord::select(&[rsa_record_with_modulus_bits(1023)], Algorithm::RsaSha256).is_err(),
 		"a modulus below 1024 bits is refused"
 	);
 }
 
 #[test]
 fn an_rsa_key_of_a_modulus_of_1024_bits_is_accepted() {
-	let record = KeyRecord::first(&[rsa_record_with_modulus_bits(1024)]).expect("record");
 	assert!(
-		record.verification_key(Algorithm::RsaSha256).is_ok(),
+		KeyRecord::select(&[rsa_record_with_modulus_bits(1024)], Algorithm::RsaSha256).is_ok(),
 		"a modulus of 1024 bits is the smallest this verifier accepts"
 	);
 }
@@ -181,10 +212,9 @@ fn an_rsa_key_of_a_modulus_of_1024_bits_is_accepted() {
 fn a_record_that_claims_an_rsa_key_and_publishes_another_shape_is_refused() {
 	// The record says k=rsa, but what it publishes is the 32 bytes of an
 	// Ed25519 key.
-	let record = KeyRecord::first(&[format!("v=DKIM1; k=rsa; p={}", BASE64.encode([9u8; 32]))])
-		.expect("record");
+	let record = format!("v=DKIM1; k=rsa; p={}", BASE64.encode([9u8; 32]));
 	assert!(
-		record.verification_key(Algorithm::RsaSha256).is_err(),
+		KeyRecord::select(&[record], Algorithm::RsaSha256).is_err(),
 		"a key that is not an RSA key is refused"
 	);
 }

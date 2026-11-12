@@ -102,13 +102,9 @@ pub async fn verify(
 		Ok(texts) => texts,
 		Err(DnsFailure::Temporary) => return DkimOutcome::TempError,
 	};
-	let record = match KeyRecord::first(&texts) {
-		Ok(record) => record,
-		Err(_) => return DkimOutcome::PermError,
-	};
 	// The algorithm the seal declares decides the primitive and the shape of
 	// the key, and the record has to publish a key of that type.
-	let key = match record.verification_key(seal.algorithm) {
+	let key = match KeyRecord::select(&texts, seal.algorithm) {
 		Ok(key) => key,
 		Err(_) => return DkimOutcome::PermError,
 	};
