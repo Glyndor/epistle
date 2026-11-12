@@ -21,11 +21,21 @@ src/imap/mailbox/         mailboxes on disk: flags, hierarchy, journal
 (`src/lib.rs`), so the integration tests, the benches and the fuzz targets
 reach the same code the binary runs.
 
-Many domains still keep dozens of files side by side. The tree is moving to
-this shape in batches, tracked in #1211, and those domains are what the
-batches split. Moving the product code from `src/` to `internal/`, as the
-organisation's layout standard asks, is a separate step that has not been
-taken yet.
+`src/` itself holds only `lib.rs` and `main.rs`; every other file sits in a
+domain folder. Two helpers that used to sit loose now have a folder of their
+own:
+
+```text
+src/sasl/                 the SASL mechanisms and which ones are offered when
+src/cli/util/             shared CLI helpers: stdin, token hash, secrets, key generation
+src/test_support/         credentials and process stubs shared by the unit tests
+```
+
+The folders under `src/cli/` are the command groups. The few files that still
+sit directly in `src/cli/` (`delegation.rs`, `disabled_domain.rs`, `json_out.rs`,
+`resource.rs`, `role_addresses.rs`) wait for the module map tracked in #1211.
+Moving the product code from `src/` to `internal/`, as the organisation's
+layout standard asks, is a separate step that has not been taken yet.
 
 ## The four rules
 
@@ -51,7 +61,10 @@ tree keeps.
 file are split by topic as `tests/<topic>.rs`, each declared the same way.
 
 The integration suite is separate: `tests/`, one file per flow, with shared
-helpers in `tests/common/` and fixtures in `tests/fixtures/`.
+helpers in `tests/common/` and fixtures in `tests/fixtures/`. The helpers the
+unit tests share with it are declared once in `src/test_support/mod.rs`, which
+reads `tests/common/executable.rs` and `tests/common/reaped_group.rs` with
+`#[path]` and holds the runtime credentials in `src/test_support/fixtures.rs`.
 
 ## Naming
 

@@ -4,7 +4,7 @@
 use super::*;
 use crate::queue::srs::{Srs, SrsKeys};
 use crate::smtp::sink::{MessageSink, Submission};
-use crate::test_fixtures::fresh_secret;
+use crate::test_support::fixtures::fresh_secret;
 
 /// `multi` has addresses in two domains, so it has no single owner.
 fn directory() -> DirectoryHandle {

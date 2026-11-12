@@ -35,7 +35,7 @@ async fn manual_provider_never_claims_read_capability() {
 
 #[test]
 fn text_and_json_have_the_same_facts_without_remote_errors_or_secret_fragments() {
-	let secret = crate::test_fixtures::fresh_secret();
+	let secret = crate::test_support::fixtures::fresh_secret();
 	let error = ProviderError::Remote(format!("remote reflected {secret}"));
 	let mut report = AccessReport::failed(failure_cause(&error));
 	report.expiry = Finding::verified("expires at 2026-10-25T00:00:00Z; expires within seven days");
@@ -130,7 +130,7 @@ async fn default_inspection_proves_only_reading_and_keeps_failures_secret() {
 	] {
 		assert_eq!(finding.status, Outcome::NotVerifiable);
 	}
-	let secret = crate::test_fixtures::fresh_secret();
+	let secret = crate::test_support::fixtures::fresh_secret();
 	for error in [
 		ProviderError::Auth,
 		ProviderError::Remote(secret.clone()),
@@ -160,7 +160,7 @@ async fn default_inspection_proves_only_reading_and_keeps_failures_secret() {
 fn malformed_config_never_discloses_credentials() {
 	const ENV: &str = "EPISTLE_DNS_CHECK_PARSE_SECRET";
 	if std::env::var_os(ENV).is_none() {
-		let secret = crate::test_fixtures::fresh_secret();
+		let secret = crate::test_support::fixtures::fresh_secret();
 		let result = std::process::Command::new(std::env::current_exe().unwrap())
 			.args([
 				"--exact",

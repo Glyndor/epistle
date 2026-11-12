@@ -5,7 +5,7 @@ use std::sync::Arc;
 use crate::directory_store::{AccountStore, SqlAccount};
 use crate::smtp::auth::tests::base::hash as hash_password;
 use crate::storage::FsSpool;
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 use axum::http::StatusCode;
 use serde_json::json;
 

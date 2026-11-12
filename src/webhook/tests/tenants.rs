@@ -3,7 +3,7 @@
 
 use super::support::{Received, bodies, quiet, settle, signed_receiver, tenant_config};
 use super::*;
-use crate::test_fixtures::fresh_secret;
+use crate::test_support::fixtures::fresh_secret;
 
 fn received_for(account: &str) -> WebhookEvent {
 	WebhookEvent::MessageReceived {

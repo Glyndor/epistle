@@ -95,7 +95,7 @@ fn a_role_address_a_dynamic_account_holds_is_left_alone() {
 	let holder = DynamicAccount::with_password(
 		"postmaster".to_string(),
 		vec!["Postmaster@EXAMPLE.org".to_string()],
-		crate::test_fixtures::password(),
+		crate::test_support::fixtures::password(),
 		&crate::password::Policy::from_config(&config.auth),
 		config.auth.scram,
 	)

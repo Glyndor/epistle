@@ -191,7 +191,7 @@ async fn api_post_status(port: u16, path: &str, body: &[u8]) -> u16 {
 	let head = format!(
 		"POST {path} HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {}\r\n\
 Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-		crate::test_fixtures::api_token(),
+		crate::test_support::fixtures::api_token(),
 		body.len()
 	);
 	stream.write_all(head.as_bytes()).await.expect("head");
@@ -210,7 +210,7 @@ async fn serve_applies_max_message_size_to_the_api() {
 	// The configured cap must reach the REST send body limit, not only the
 	// SMTP listeners: a 72 KiB body under a 64 KiB cap is refused with 413
 	// before it is parsed.
-	let port = crate::test_fixtures::free_port();
+	let port = crate::test_support::fixtures::free_port();
 	let dir = tempfile::tempdir().expect("tempdir");
 	let listener: Listener =
 		toml::from_str(&format!("kind = \"api\"\nport = {port}")).expect("listener config");
@@ -219,7 +219,7 @@ async fn serve_applies_max_message_size_to_the_api() {
 	config.api = Some(
 		toml::from_str(&format!(
 			"token_hash = \"{}\"",
-			crate::smtp::auth::tests::base::hash(crate::test_fixtures::api_token())
+			crate::smtp::auth::tests::base::hash(crate::test_support::fixtures::api_token())
 		))
 		.expect("api config"),
 	);
@@ -239,7 +239,7 @@ async fn serve_applies_the_rate_floor_to_smtp() {
 	// the kernel, so a reply still in flight could find the server timed
 	// out. One second of real time, and a minute of margin before the
 	// built-in grace would be the one that cut.
-	let port = crate::test_fixtures::free_port();
+	let port = crate::test_support::fixtures::free_port();
 	let dir = tempfile::tempdir().expect("tempdir");
 	let listener: Listener = toml::from_str(&format!(
 		"kind = \"smtp\"\naddr = \"127.0.0.1\"\nport = {port}"
@@ -286,7 +286,7 @@ async fn serve_applies_the_rate_floor_to_smtp() {
 async fn serve_applies_the_junk_command_limit_to_smtp() {
 	// With the limit at 10 the listener `serve` builds cuts the 11th NOOP,
 	// not the 101st.
-	let port = crate::test_fixtures::free_port();
+	let port = crate::test_support::fixtures::free_port();
 	let dir = tempfile::tempdir().expect("tempdir");
 	let listener: Listener = toml::from_str(&format!(
 		"kind = \"smtp\"\naddr = \"127.0.0.1\"\nport = {port}"

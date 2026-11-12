@@ -58,7 +58,7 @@ fn write_shell_stub(path: &std::path::Path, body: &[u8]) {
 	if let Some(parent) = path.parent() {
 		std::fs::create_dir_all(parent).expect("mkdir stub parent");
 	}
-	crate::test_executable::write_executable(path, body);
+	crate::test_support::executable::write_executable(path, body);
 }
 
 #[test]

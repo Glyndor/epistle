@@ -144,7 +144,7 @@ async fn the_account_default_applies_and_a_held_gate_answers_503() {
 #[test]
 fn the_class_bound_to_an_api_key_is_found_by_its_token() {
 	let dir = tempfile::tempdir().expect("tempdir");
-	let token = crate::test_fixtures::fresh_secret();
+	let token = crate::test_support::fixtures::fresh_secret();
 	update(dir.path(), |bindings| {
 		bindings
 			.credentials

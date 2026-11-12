@@ -1,6 +1,6 @@
 //! A child started with `GroupChild` does not survive a test that panics.
 
-use crate::test_reaped_group::{GroupChild, bounded_loop};
+use crate::test_support::reaped_group::{GroupChild, bounded_loop};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::process::Command;
 use std::time::{Duration, Instant};

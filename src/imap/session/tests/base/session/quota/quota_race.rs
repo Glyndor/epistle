@@ -4,7 +4,7 @@
 //! its quota.
 
 use super::*;
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 
 const MESSAGE_BYTES: usize = 2_000;
 const FITS: usize = 3;

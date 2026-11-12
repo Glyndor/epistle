@@ -12,7 +12,7 @@ use crate::storage::FsSpool;
 
 /// A key for alice that may send, with `class` bound to it.
 fn bound_key(dir: &std::path::Path, class: MailClass) -> String {
-	let secret = crate::test_fixtures::fresh_secret();
+	let secret = crate::test_support::fixtures::fresh_secret();
 	let mut store = crate::api::ApiKeyStore::open(dir).expect("key store");
 	store
 		.add(crate::api::api_keys::ApiKey {

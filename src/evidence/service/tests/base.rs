@@ -88,7 +88,7 @@ fn personal_mail_keeps_nothing_by_default_and_a_tenant_rule_applies() {
 #[test]
 fn a_full_retention_keeps_the_exact_bytes_sealed() {
 	let dir = tempfile::tempdir().expect("tempdir");
-	let key = MessageCrypto::for_test(&crate::test_fixtures::bytes::<32>());
+	let key = MessageCrypto::for_test(&crate::test_support::fixtures::bytes::<32>());
 	let service = EvidenceService::open(dir.path(), Vec::new(), key.clone()).expect("open");
 	let data = b"Subject: kept\r\n\r\nbody\r\n";
 	let recipients = vec!["a@example.net".to_string()];

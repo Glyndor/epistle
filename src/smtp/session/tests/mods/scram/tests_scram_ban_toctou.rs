@@ -29,7 +29,7 @@ use super::tests_scram_bans::{
 use super::*;
 use crate::antispam::bans::tests::base::FakeBanStore;
 use crate::antispam::bans::{BanInfo, BanPolicy, BanStore};
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 
 /// Build a `BanInfo` with a far-future expiry so the `FakeBanStore`'s
 /// `is_banned` filter (`info.until_secs > now_secs`) keeps treating it

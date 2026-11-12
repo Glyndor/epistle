@@ -83,7 +83,7 @@ fn source() -> super::super::super::Source {
 			verify: super::super::super::Verify::Skip,
 		},
 		user: "alice".into(),
-		password: Zeroizing::new(crate::test_fixtures::password().into()),
+		password: Zeroizing::new(crate::test_support::fixtures::password().into()),
 	}
 }
 

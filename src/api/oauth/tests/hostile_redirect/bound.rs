@@ -13,7 +13,7 @@ fn challenge(verifier: &str) -> String {
 async fn code(peer: &Peer, verifier: &str, redirect_uri: Option<&str>) -> String {
 	let mut request = json!({
 		"client_id": "cli", "login": "alice@example.org",
-		"password": crate::test_fixtures::password(),
+		"password": crate::test_support::fixtures::password(),
 		"code_challenge_method": "S256", "code_challenge": challenge(verifier)
 	});
 	if let Some(uri) = redirect_uri {

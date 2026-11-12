@@ -8,7 +8,7 @@
 
 use super::tests_scram::{TapEhlo, b64, b64_bytes, reply_code};
 use super::*;
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 
 /// Build a directory that has SCRAM credentials for `alice` AND has a
 /// ban store attached. Used by the ban-interaction tests below to

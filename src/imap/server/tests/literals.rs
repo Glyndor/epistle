@@ -1,7 +1,7 @@
 //! IMAP server tests for literal-bearing command framing.
 
 use super::*;
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 use std::collections::HashMap;
 use std::time::Duration;
 

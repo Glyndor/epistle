@@ -3,7 +3,7 @@
 use super::tests_scram::{TapEhlo, b64, b64_bytes, finish_scram, reply_code};
 use super::tests_scram_bans::*;
 use super::*;
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 
 /// Attempts during an active ban do not extend the ban and do not add
 /// a strike. The test arms a ban, drives a SCRAM client-first with the

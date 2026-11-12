@@ -98,7 +98,8 @@ fn a_clean_spool_with_encryption_on_reports_sealed_yes() {
 #[test]
 fn a_loose_file_in_the_spool_warns() {
 	let dir = tempfile::tempdir().expect("tempdir");
-	let crypto = crate::storage::MessageCrypto::for_test(&crate::test_fixtures::bytes::<32>());
+	let crypto =
+		crate::storage::MessageCrypto::for_test(&crate::test_support::fixtures::bytes::<32>());
 	let spool = FsSpool::open_with_crypto(dir.path(), crypto).expect("open");
 	let id = spool
 		.store(
@@ -155,7 +156,8 @@ fn a_loose_file_in_the_spool_warns() {
 #[test]
 fn a_sealed_envelope_after_migration_is_still_sealed_yes() {
 	let dir = tempfile::tempdir().expect("tempdir");
-	let crypto = crate::storage::MessageCrypto::for_test(&crate::test_fixtures::bytes::<32>());
+	let crypto =
+		crate::storage::MessageCrypto::for_test(&crate::test_support::fixtures::bytes::<32>());
 	let spool = FsSpool::open_with_crypto(dir.path(), crypto).expect("open");
 	let _id = spool
 		.store(

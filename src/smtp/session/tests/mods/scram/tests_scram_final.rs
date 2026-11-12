@@ -13,7 +13,7 @@
 use super::tests_scram::{b64, b64_bytes, reply_code, scram_session};
 use super::tests_scram_bans::{decode_server_first, scram_challenge_text};
 use super::*;
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 
 /// What the client sends in the last round, and what it expects back.
 pub(in crate::smtp::session::tests::mods) struct Client {

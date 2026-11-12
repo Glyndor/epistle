@@ -47,7 +47,7 @@ async fn authorize(app: &axum::Router, peer: &str) -> (StatusCode, serde_json::V
 		.body(Body::from(format!(
 			"client_id=cli&code_challenge={CHALLENGE}&code_challenge_method=S256\
 			 &login=alice@example.org&password={}",
-			crate::test_fixtures::password()
+			crate::test_support::fixtures::password()
 		)))
 		.expect("request");
 	let peer: std::net::IpAddr = peer.parse().expect("peer");

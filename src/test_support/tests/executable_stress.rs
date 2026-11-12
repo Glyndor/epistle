@@ -1,6 +1,6 @@
 //! `write_executable` while other threads fork: the stub must run at once.
 
-use crate::test_executable::write_executable;
+use crate::test_support::executable::write_executable;
 use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};

@@ -12,7 +12,7 @@ use crate::config::Protocol;
 use crate::smtp::directory::Directory;
 use crate::smtp::directory::gate_fixture::*;
 use crate::smtp::directory::tests::bans::decoy_counters::DecoyCounters;
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 
 /// A gate whose only place is taken, and what holds it. Dropping the holder
 /// gives the place back. The holder gives up after a while on its own, so a

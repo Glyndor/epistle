@@ -1,5 +1,5 @@
 use super::*;
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 
 /// Compute the client side of the exchange to drive the server in tests.
 fn client_proof(password: &str, credentials: &ScramCredentials, auth_message: &str) -> Vec<u8> {

@@ -23,7 +23,7 @@ fn account(name: &str, send: Option<bool>) -> crate::config::Account {
 		name: name.to_string(),
 		addresses: vec![format!("{name}@example.org")],
 		password_hash: Some(crate::smtp::auth::tests::base::hash(
-			crate::test_fixtures::password(),
+			crate::test_support::fixtures::password(),
 		)),
 		catch_all: Vec::new(),
 		quota_bytes: None,

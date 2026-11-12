@@ -1,7 +1,7 @@
 //! A quota of 0 means no limit, as on every other delivery path.
 
 use super::*;
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 
 #[test]
 fn a_zero_quota_is_unlimited() {

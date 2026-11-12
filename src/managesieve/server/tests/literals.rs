@@ -1,7 +1,7 @@
 //! ManageSieve server connection-loop tests for literal framing.
 
 use super::*;
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 
 fn directory() -> DirectoryHandle {
 	DirectoryHandle::new(

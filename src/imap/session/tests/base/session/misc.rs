@@ -1,5 +1,5 @@
 use super::*;
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 
 #[test]
 fn plaintext_session_disables_login_until_starttls() {

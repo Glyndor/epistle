@@ -16,7 +16,7 @@ use crate::password::{MAX_LENGTH, MIN_LENGTH, Policy, Rejection};
 /// (`n` followed by the combining tilde U+0303), with one random ASCII tail,
 /// so no password is written into the test.
 fn passwords() -> (String, String) {
-	let tail = crate::test_fixtures::printable_ascii(MIN_LENGTH);
+	let tail = crate::test_support::fixtures::printable_ascii(MIN_LENGTH);
 	(
 		format!("contrase\u{00F1}a{tail}"),
 		format!("contrase\u{006E}\u{0303}a{tail}"),
@@ -65,7 +65,7 @@ fn unicode_policy_normalises_length_to_normalised_form() {
 	let policy = Policy::unicode();
 	// 1 combining-mark + 11 ASCII letters: 12 scalars in NFC, 13 scalars
 	// after NFC (combining mark counts as one scalar), still inside.
-	let ascii_11 = crate::test_fixtures::printable_ascii(11);
+	let ascii_11 = crate::test_support::fixtures::printable_ascii(11);
 	let nfc_form: String = format!("\u{0303}{ascii_11}"); // 12 scalars
 	assert_eq!(nfc_form.chars().count(), 12);
 	assert_eq!(policy.prepare(&nfc_form).unwrap().chars().count(), 12);

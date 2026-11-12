@@ -1,6 +1,6 @@
 use super::super::super::DEFAULT_APPEND_LIMIT;
 use super::*;
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 
 const APPEND_LIMIT: usize = DEFAULT_APPEND_LIMIT;
 

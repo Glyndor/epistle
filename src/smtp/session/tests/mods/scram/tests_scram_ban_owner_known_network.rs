@@ -13,7 +13,7 @@ use super::tests_scram_bans::{
 	decode_server_first, scram_challenge_text, scram_directory_with_ban_store, valid_client_final,
 };
 use super::*;
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 
 /// A banned account from a network the owner has signed in from
 /// before is admitted on a fresh SCRAM exchange. The test arms a

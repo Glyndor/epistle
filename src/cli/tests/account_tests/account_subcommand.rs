@@ -102,7 +102,7 @@ fn password_change_makes_old_password_fail_and_new_one_authenticate() {
 	let mut store = reload_store(&harness);
 
 	// Change the password to a fresh one generated for this run.
-	let new_password = crate::test_fixtures::second_password();
+	let new_password = crate::test_support::fixtures::second_password();
 	assert_eq!(
 		account::password_with_store(
 			&store,
@@ -148,7 +148,7 @@ fn password_change_also_updates_scram_credentials() {
 	// dynamic row. The new password's stored_key under the salt on
 	// disk must match a fresh SCRAM derivation, which is the whole
 	// point of keeping scram in sync with the password hash.
-	let new_password = crate::test_fixtures::wrong_password();
+	let new_password = crate::test_support::fixtures::wrong_password();
 	assert_eq!(
 		account::password_with_store(
 			&store,

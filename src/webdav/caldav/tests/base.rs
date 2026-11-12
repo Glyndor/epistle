@@ -1,5 +1,5 @@
 use super::{ReportKind, is_calendar, report_kind, unfold};
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 use crate::webdav::router;
 use axum::Router;
 use axum::body::Body;

@@ -27,7 +27,7 @@ async fn list_keeps_the_srv_priority_and_matches_what_was_published() {
 	.await;
 	let provider = CloudflareProvider::new(ScopedSecret::new(
 		"example.org",
-		crate::test_fixtures::api_token(),
+		crate::test_support::fixtures::api_token(),
 	))
 	.with_base(base);
 	let records = provider.list("example.org").await.expect("list");

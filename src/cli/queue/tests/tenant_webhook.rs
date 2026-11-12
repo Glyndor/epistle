@@ -7,7 +7,7 @@ use std::process::ExitCode;
 use super::{QueueCli, run, webhook_for};
 use crate::smtp::session::AcceptedMessage;
 use crate::storage::FsSpool;
-use crate::test_fixtures::fresh_secret;
+use crate::test_support::fixtures::fresh_secret;
 use crate::webhook::tests::support::{bodies, quiet, settle, signed_receiver, tenant_config};
 
 fn message(sender: &str, recipient: &str) -> AcceptedMessage {

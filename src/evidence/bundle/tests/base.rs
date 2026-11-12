@@ -287,7 +287,7 @@ pub(super) fn kept_stamped_at(encrypted: bool, gen_time: u64) -> Kept {
 	let tsa = FakeTsa::new(gen_time);
 	let id = Uuid::from_u128(5);
 	let crypto = match encrypted {
-		true => MessageCrypto::for_test(&crate::test_fixtures::bytes::<32>()),
+		true => MessageCrypto::for_test(&crate::test_support::fixtures::bytes::<32>()),
 		false => MessageCrypto::disabled(),
 	};
 	let chain = Chain::open(dir.path()).expect("open");

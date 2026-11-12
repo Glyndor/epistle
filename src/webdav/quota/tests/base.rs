@@ -2,7 +2,7 @@ use axum::Router;
 use axum::http::StatusCode;
 
 use super::{Change, MIN_ENTRY_BYTES, Quota, tree_cost};
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 use crate::webdav::test_support::send_as_alice;
 
 fn app_with_quota(dir: &std::path::Path, quota_bytes: Option<u64>) -> Router {

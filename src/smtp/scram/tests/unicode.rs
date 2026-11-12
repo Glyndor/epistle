@@ -21,13 +21,13 @@
 
 use crate::password::{MIN_LENGTH, Policy};
 use crate::smtp::scram::{SCRAM_ITERATIONS, ScramCredentials};
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 
 /// The same password in NFC form (`ñ` precomposed, U+00F1) and in NFD form
 /// (`n` followed by the combining tilde U+0303), with one random ASCII tail,
 /// so no password is written into the test.
 fn passwords() -> (String, String) {
-	let tail = crate::test_fixtures::printable_ascii(MIN_LENGTH);
+	let tail = crate::test_support::fixtures::printable_ascii(MIN_LENGTH);
 	(
 		format!("contrase\u{00F1}a{tail}"),
 		format!("contrase\u{006E}\u{0303}a{tail}"),
@@ -53,7 +53,7 @@ fn scram_with_fresh_salt_holds_across_nfc_and_nfd_under_unicode_policy() {
 		"shape precondition: NFKC collapses NFD to NFC",
 	);
 
-	let salt = crate::test_fixtures::bytes::<16>();
+	let salt = crate::test_support::fixtures::bytes::<16>();
 	let from_nfc = ScramCredentials::derive(prepared_nfc.as_ref(), &salt, SCRAM_ITERATIONS);
 	let from_nfd = ScramCredentials::derive(prepared_nfd.as_ref(), &salt, SCRAM_ITERATIONS);
 	assert_eq!(

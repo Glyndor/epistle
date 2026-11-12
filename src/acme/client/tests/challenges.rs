@@ -4,7 +4,7 @@
 use super::*;
 use crate::acme::challenge::{Dns01, TxtVisibility};
 use crate::dns::provider::{DnsProvider, DnsRecord, ProviderError};
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;

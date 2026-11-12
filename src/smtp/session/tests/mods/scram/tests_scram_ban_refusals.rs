@@ -3,7 +3,7 @@
 use super::tests_scram::{TapEhlo, b64, b64_bytes, reply_code};
 use super::tests_scram_bans::*;
 use super::*;
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 use base64::Engine;
 
 /// A banned IP is refused on SMTP SCRAM before the SCRAM credential

@@ -7,7 +7,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use tower::ServiceExt;
 
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 
 /// Extended MKCOL body creating a calendar collection.
 pub const MKCOL_CALENDAR: &[u8] = br#"<?xml version="1.0" encoding="utf-8"?>

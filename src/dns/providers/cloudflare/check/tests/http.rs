@@ -83,7 +83,7 @@ async fn inspect(mock: Mock) -> (AccessReport, Vec<String>) {
 		)
 		.into_future(),
 	);
-	let secret = crate::test_fixtures::fresh_secret();
+	let secret = crate::test_support::fixtures::fresh_secret();
 	let provider = CloudflareProvider::new(ScopedSecret::new("example.org", &secret))
 		.with_base(HttpsUrl::loopback_http(&format!("http://{address}")).unwrap());
 	let report = provider
@@ -176,7 +176,7 @@ async fn network_error_has_a_cause_without_a_credential() {
 	let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
 	let address = listener.local_addr().unwrap();
 	drop(listener);
-	let secret = crate::test_fixtures::fresh_secret();
+	let secret = crate::test_support::fixtures::fresh_secret();
 	let provider = CloudflareProvider::new(ScopedSecret::new("example.org", &secret))
 		.with_base(HttpsUrl::loopback_http(&format!("http://{address}")).unwrap());
 	let report = provider.check_access("example.org", &[]).await;

@@ -5,7 +5,7 @@
 use super::base::{TOKEN, request_with_body};
 use super::router;
 use crate::directory_store::{AccountStore, DynamicAccount};
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 use axum::http::StatusCode;
 
 /// API state over a store with SCRAM off, holding `carol` with a verifier

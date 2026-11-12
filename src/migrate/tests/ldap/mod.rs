@@ -20,7 +20,7 @@ account_attribute = "uid"
 mail_attribute = "mail"
 tls = false
 "#,
-		crate::test_fixtures::password()
+		crate::test_support::fixtures::password()
 	))
 	.expect("LDAP config")
 }

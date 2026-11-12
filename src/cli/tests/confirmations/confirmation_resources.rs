@@ -140,7 +140,7 @@ fn add_bob(typed: &str) -> (ExitCode, String, bool, bool) {
 
 #[test]
 fn account_add_on_a_terminal_refuses_a_mismatch_with_the_exact_message() {
-	let strong = crate::test_fixtures::second_password();
+	let strong = crate::test_support::fixtures::second_password();
 	let (code, stderr, created, echo) = add_bob(&format!("{strong}\n{strong}x\n"));
 	assert_eq!(code, ExitCode::from(2));
 	assert_eq!(stderr, format!("{}{}", asked_twice("bob"), error(MISMATCH)));
@@ -165,7 +165,7 @@ fn account_add_on_a_terminal_names_the_policy_rule_that_failed() {
 
 #[test]
 fn account_add_on_a_terminal_creates_the_account_when_both_agree() {
-	let strong = crate::test_fixtures::second_password();
+	let strong = crate::test_support::fixtures::second_password();
 	let (code, stderr, created, echo) = add_bob(&format!("{strong}\n{strong}\n"));
 	assert_eq!(code, ExitCode::SUCCESS, "{stderr}");
 	assert_eq!(stderr, asked_twice("bob"));
@@ -196,7 +196,7 @@ fn account_password_refuses_an_unknown_name_before_reading_anything() {
 fn account_password_asks_twice_for_a_known_name() {
 	let (_dir, cfg) = with_alice();
 	let pty = Pty::open();
-	let strong = crate::test_fixtures::second_password();
+	let strong = crate::test_support::fixtures::second_password();
 	let run = scripted(
 		true,
 		Some(pty.slave),

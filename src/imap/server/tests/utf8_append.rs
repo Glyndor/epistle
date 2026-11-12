@@ -2,7 +2,7 @@
 //! connection so the literal framing and its `)` trailer are exercised.
 
 use super::*;
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 use std::collections::HashMap;
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};

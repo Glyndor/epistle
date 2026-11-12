@@ -96,7 +96,7 @@ fn show_dynamic_two_factor_yes_when_totp_enrolled() {
 			addresses: vec!["alice@example.org".to_string()],
 			password_hash: hash(fixture_password()),
 			scram: None,
-			totp_secret: Some(crate::test_fixtures::fresh_secret()),
+			totp_secret: Some(crate::test_support::fixtures::fresh_secret()),
 			disabled: false,
 			quota_bytes: None,
 			allowed_protocols: None,

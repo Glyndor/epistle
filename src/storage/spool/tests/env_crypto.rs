@@ -18,7 +18,7 @@ use crate::smtp::session::AcceptedMessage;
 use crate::storage::crypto::MessageCrypto;
 
 fn key() -> [u8; 32] {
-	crate::test_fixtures::bytes::<32>()
+	crate::test_support::fixtures::bytes::<32>()
 }
 
 fn sample() -> AcceptedMessage {
@@ -261,7 +261,7 @@ fn editing_a_legacy_plaintext_envelope_under_encryption_completes() {
 		.expect("open pre")
 		.store(&sample(), None, &BTreeMap::new())
 		.expect("store pre");
-	let crypto = MessageCrypto::for_test(&crate::test_fixtures::bytes::<32>());
+	let crypto = MessageCrypto::for_test(&crate::test_support::fixtures::bytes::<32>());
 	let spool = FsSpool::open_with_crypto(dir.path(), crypto).expect("open crypto");
 
 	let (done, finished) = std::sync::mpsc::channel();
@@ -293,7 +293,7 @@ fn editing_a_legacy_plaintext_envelope_under_encryption_completes() {
 #[test]
 fn a_sealed_envelope_without_a_key_reports_the_missing_key() {
 	let dir = tempfile::tempdir().expect("tempdir");
-	let crypto = MessageCrypto::for_test(&crate::test_fixtures::bytes::<32>());
+	let crypto = MessageCrypto::for_test(&crate::test_support::fixtures::bytes::<32>());
 	let id = FsSpool::open_with_crypto(dir.path(), crypto)
 		.expect("open sealed")
 		.store(&sample(), None, &BTreeMap::new())

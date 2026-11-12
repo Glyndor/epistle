@@ -8,7 +8,7 @@
 //! wrong ends the child and fails the parent, not the whole test binary.
 
 use super::*;
-use crate::test_reaped_group::{GroupChild, bounded_loop};
+use crate::test_support::reaped_group::{GroupChild, bounded_loop};
 use std::os::unix::process::ExitStatusExt;
 use std::path::Path;
 use std::time::{Duration, Instant};

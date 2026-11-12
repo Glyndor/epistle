@@ -10,7 +10,7 @@ use super::gate_fixture::*;
 use crate::antispam::bans::BanPolicy;
 use crate::antispam::bans::tests::base::FakeBanStore;
 use crate::config::Protocol;
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 
 const PROTOCOLS: [Protocol; 6] = [
 	Protocol::Submission,

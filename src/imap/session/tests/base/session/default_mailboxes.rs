@@ -1,5 +1,5 @@
 use super::*;
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 
 fn expected_list(rev2: bool, special_use: bool) -> String {
 	let mut response = String::new();

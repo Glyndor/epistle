@@ -9,7 +9,7 @@ use std::time::Duration;
 use axum::http::HeaderMap;
 
 use super::{copy_move, delete};
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 use crate::webdav::quota::Quota;
 
 fn quota_for(dir: &std::path::Path) -> Quota {

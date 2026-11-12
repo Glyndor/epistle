@@ -7,7 +7,7 @@ use super::*;
 use crate::smtp::directory::gate_fixture::*;
 use crate::smtp::directory::hash_gate::HashGate;
 use crate::smtp::directory::hash_gate::tests::base::full_gate;
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 
 fn session(gate: &Arc<HashGate>) -> Session {
 	let directory = Arc::new(gate_directory().with_hash_gate(gate.clone()));

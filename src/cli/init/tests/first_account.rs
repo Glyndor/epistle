@@ -7,7 +7,7 @@ use super::*;
 use crate::cli::prompt::script::scripted;
 
 fn password() -> &'static str {
-	crate::test_fixtures::password()
+	crate::test_support::fixtures::password()
 }
 
 /// An answers file under `dir` with `extra` appended (the

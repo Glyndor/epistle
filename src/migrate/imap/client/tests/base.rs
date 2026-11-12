@@ -276,7 +276,10 @@ async fn authentication_continuations_share_the_original_deadline() {
 	let started = tokio::time::Instant::now();
 	let result = tokio::time::timeout(
 		Duration::from_secs(5),
-		client.authenticate_plain("alice", &crate::test_fixtures::password().repeat(20)),
+		client.authenticate_plain(
+			"alice",
+			&crate::test_support::fixtures::password().repeat(20),
+		),
 	)
 	.await;
 	server.abort();
