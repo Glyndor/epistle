@@ -4,10 +4,16 @@ pub use super::*;
 pub(super) mod tests_scram;
 
 #[cfg(test)]
+pub(super) mod tests_scram_ban_clearing;
+
+#[cfg(test)]
 pub(super) mod tests_scram_ban_lifecycle;
 
 #[cfg(test)]
 pub(super) mod tests_scram_ban_owner_known_network;
+
+#[cfg(test)]
+pub(super) mod tests_scram_ban_refusals;
 
 #[cfg(test)]
 pub(super) mod tests_scram_ban_toctou;

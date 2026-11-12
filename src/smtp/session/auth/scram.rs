@@ -4,15 +4,15 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use std::sync::Arc;
 
-use super::super::directory::bans::BanOutcome;
-use super::super::directory::{Directory, ScramPlan, ScramRefusal};
-use super::super::reply::Reply;
-use super::super::scram::{ChannelBinding, ScramCredentials, ScramServer, username_of};
-use super::{Action, Session};
+use crate::smtp::directory::bans::BanOutcome;
+use crate::smtp::directory::{Directory, ScramPlan, ScramRefusal};
+use crate::smtp::reply::Reply;
+use crate::smtp::scram::{ChannelBinding, ScramCredentials, ScramServer, username_of};
+use crate::smtp::session::{Action, Session};
 
 /// In-flight SCRAM state between AUTH rounds.
 #[derive(Debug)]
-pub(super) enum PendingScram {
+pub(in crate::smtp::session) enum PendingScram {
 	/// Server sent `334 ` (empty); awaiting the client-first message. Carries
 	/// the channel-binding policy chosen for the mechanism the client picked.
 	ClientFirst(ChannelBinding),
@@ -48,7 +48,7 @@ impl Session {
 	/// The channel-binding policy for a SCRAM exchange: `-PLUS` binds to the
 	/// certificate hash; plain SCRAM over a bound link rejects downgrades;
 	/// without a known binding (cleartext) it is unsupported.
-	pub(super) fn scram_binding(&self, plus: bool) -> ChannelBinding {
+	pub(in crate::smtp::session) fn scram_binding(&self, plus: bool) -> ChannelBinding {
 		match (&self.cbind_data, plus) {
 			(Some(hash), true) => ChannelBinding::Required(hash.clone()),
 			(Some(_), false) => ChannelBinding::Supported,
@@ -58,7 +58,11 @@ impl Session {
 
 	/// Begin SCRAM-SHA-256(-PLUS): process the optional initial client-first, or
 	/// prompt for it with an empty challenge.
-	pub(super) fn scram_begin(&mut self, initial: Option<String>, plus: bool) -> Action {
+	pub(in crate::smtp::session) fn scram_begin(
+		&mut self,
+		initial: Option<String>,
+		plus: bool,
+	) -> Action {
 		let binding = self.scram_binding(plus);
 		match initial {
 			Some(client_first) => self.scram_client_first(&client_first, binding),
@@ -71,7 +75,11 @@ impl Session {
 
 	/// Process the base64 client-first message: look up the user's SCRAM
 	/// credentials and answer with the server-first challenge.
-	pub(super) fn scram_client_first(&mut self, encoded: &str, binding: ChannelBinding) -> Action {
+	pub(in crate::smtp::session) fn scram_client_first(
+		&mut self,
+		encoded: &str,
+		binding: ChannelBinding,
+	) -> Action {
 		let Some(client_first) = decode(encoded) else {
 			// A malformed client-first (invalid base64) is a failure, but
 			// the IP ban is consulted first so a banned peer cannot extend
@@ -126,7 +134,7 @@ impl Session {
 
 	/// Count a failure that ends an exchange before the proof, unless a ban
 	/// caused it: a ban refusal never moves the strike count.
-	fn count_scram_failure(&self, username: &str, plan: &ScramPlan) {
+	pub(in crate::smtp::session) fn count_scram_failure(&self, username: &str, plan: &ScramPlan) {
 		match &plan.refusal {
 			Some(ScramRefusal::Banned) => {}
 			Some(ScramRefusal::Denied { account }) => {
@@ -138,7 +146,7 @@ impl Session {
 
 	/// Verify the client proof against the original credentials and return
 	/// the server signature only while those credentials remain current.
-	pub(super) fn scram_client_final(
+	pub(in crate::smtp::session) fn scram_client_final(
 		&mut self,
 		encoded: &str,
 		mut server: ScramServer,
@@ -205,7 +213,7 @@ impl Session {
 	/// protocol error (RFC 4954 §4) and leaves the session
 	/// unauthenticated. Admission and the ban outcome use the current
 	/// directory only after the acknowledgement.
-	pub(super) fn scram_server_final(
+	pub(in crate::smtp::session) fn scram_server_final(
 		&mut self,
 		line: &str,
 		account: String,
@@ -246,7 +254,7 @@ impl Session {
 
 	/// A failed SCRAM step: clear state, count the failure, and reply 535
 	/// (closing after repeated failures), with no user/password oracle.
-	fn scram_failure(&mut self) -> Action {
+	pub(in crate::smtp::session) fn scram_failure(&mut self) -> Action {
 		self.pending_scram = None;
 		self.auth_failures += 1;
 		// The attempt is recorded at the default level. The account is
@@ -276,7 +284,7 @@ impl Session {
 	/// check at the start of the exchange already decided whether to
 	/// refuse the attempt; a ban refusal never reaches this helper, so
 	/// the strike count and ban expiry stay where they were.
-	fn record_scram_outcome(
+	pub(in crate::smtp::session) fn record_scram_outcome(
 		&self,
 		login: &str,
 		account: Option<&str>,
@@ -299,7 +307,7 @@ impl Session {
 	/// banned IP must not be able to extend its own ban by sending
 	/// garbage, so the branches short-circuit here before recording a
 	/// strike.
-	fn is_ip_banned(&self) -> bool {
+	pub(in crate::smtp::session) fn is_ip_banned(&self) -> bool {
 		matches!(
 			self.directory
 				.check_ban("", self.peer_ip, self.auth_protocol),
@@ -309,7 +317,7 @@ impl Session {
 
 	/// The SCRAM server nonce: the injected one in tests, else fresh randomness.
 	/// `None` if the CSPRNG fails (fail closed).
-	fn fresh_nonce(&self) -> Option<String> {
+	pub(in crate::smtp::session) fn fresh_nonce(&self) -> Option<String> {
 		if let Some(nonce) = &self.scram_nonce {
 			return Some(nonce.clone());
 		}

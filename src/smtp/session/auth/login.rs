@@ -3,20 +3,20 @@
 
 use base64::Engine;
 
-use super::super::directory::Proof;
-use super::super::directory::hash_gate::Verdict;
-use super::{Action, Reply, Session};
+use crate::smtp::directory::Proof;
+use crate::smtp::directory::hash_gate::Verdict;
+use crate::smtp::session::{Action, Reply, Session};
 
 impl Session {
 	/// The password checks are queued to the limit: a temporary failure, not
 	/// a wrong credential, and not counted as one.
-	fn auth_busy(&mut self) -> Action {
+	pub(in crate::smtp::session) fn auth_busy(&mut self) -> Action {
 		Action::Continue(Reply::single(454, "4.7.0 Temporary authentication failure"))
 	}
 
 	/// Verify a SASL PLAIN response (`\0authcid\0password`).
-	pub(super) fn verify_plain(&mut self, encoded: &str) -> Action {
-		let Ok(credentials) = super::super::auth::parse_plain(encoded) else {
+	pub(in crate::smtp::session) fn verify_plain(&mut self, encoded: &str) -> Action {
+		let Ok(credentials) = crate::smtp::auth::parse_plain(encoded) else {
 			return self.auth_fail();
 		};
 		// Password + any TOTP second factor, or an app password (CIDR-checked
@@ -37,7 +37,7 @@ impl Session {
 	}
 
 	/// AUTH LOGIN: record the (base64) username and prompt for the password.
-	pub(super) fn login_username(&mut self, encoded: &str) -> Action {
+	pub(in crate::smtp::session) fn login_username(&mut self, encoded: &str) -> Action {
 		let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(encoded.trim()) else {
 			return self.auth_fail();
 		};
@@ -46,7 +46,7 @@ impl Session {
 	}
 
 	/// AUTH LOGIN: verify the (base64) password against the recorded username.
-	pub(super) fn login_password(&mut self, user: &str, encoded: &str) -> Action {
+	pub(in crate::smtp::session) fn login_password(&mut self, user: &str, encoded: &str) -> Action {
 		let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(encoded.trim()) else {
 			return self.auth_fail();
 		};
@@ -65,7 +65,7 @@ impl Session {
 	/// SASL EXTERNAL: authenticate as the identity in the verified client
 	/// certificate. The optional authzid (base64, or `=`/empty) must be empty or
 	/// equal the certificate identity — no acting as another user.
-	pub(super) fn verify_external(&mut self, encoded: &str) -> Action {
+	pub(in crate::smtp::session) fn verify_external(&mut self, encoded: &str) -> Action {
 		let Some(identity) = self.client_identity.clone() else {
 			// EXTERNAL without a verified client certificate: never succeeds.
 			return self.auth_fail_external();
@@ -117,7 +117,7 @@ impl Session {
 	/// A refused SASL EXTERNAL exchange. The attempt is recorded at the
 	/// default level, and the account is not named: the wire answer
 	/// does not say which account the client tried to be either.
-	fn auth_fail_external(&mut self) -> Action {
+	pub(in crate::smtp::session) fn auth_fail_external(&mut self) -> Action {
 		self.auth_failures += 1;
 		crate::smtp::session_log::authentication(
 			crate::smtp::session_log::UNKNOWN,
@@ -129,7 +129,11 @@ impl Session {
 		self.auth_fail_counted()
 	}
 
-	fn auth_success(&mut self, account: String, label: Option<String>) -> Action {
+	pub(in crate::smtp::session) fn auth_success(
+		&mut self,
+		account: String,
+		label: Option<String>,
+	) -> Action {
 		self.authenticated = Some(account);
 		self.auth_app_password_label = label;
 		Action::Continue(Reply::single(235, "2.7.0 authentication successful"))

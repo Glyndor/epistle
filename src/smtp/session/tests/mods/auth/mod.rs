@@ -4,6 +4,15 @@ pub use super::*;
 pub(super) mod tests_auth;
 
 #[cfg(test)]
+pub(super) mod tests_auth_tls;
+
+#[cfg(test)]
+pub(super) mod tests_auth_relay;
+
+#[cfg(test)]
+pub(super) mod tests_auth_starttls;
+
+#[cfg(test)]
 pub(super) mod tests_auth_log;
 
 #[cfg(test)]
