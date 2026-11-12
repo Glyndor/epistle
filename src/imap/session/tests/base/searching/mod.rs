@@ -26,3 +26,9 @@ pub(in crate::imap::session::tests::base) mod sort_dates;
 
 #[cfg(test)]
 pub(in crate::imap::session::tests::base) mod sort_text;
+
+#[cfg(test)]
+mod multisearch;
+
+#[cfg(test)]
+mod search_criteria;

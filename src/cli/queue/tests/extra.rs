@@ -1,6 +1,6 @@
 //! `epistle queue remove` keeps what the sender attached to the message.
 
-use super::base::webhook_receiver;
+use super::removal_records::webhook_receiver;
 use super::*;
 use crate::cli::queue::QueueCli;
 use crate::smtp::session::AcceptedMessage;
