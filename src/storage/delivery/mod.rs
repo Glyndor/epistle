@@ -138,6 +138,13 @@ impl LocalDelivery {
 	) -> Result<Uuid, SinkError> {
 		let lock = self.quota.delivery_lock(account);
 		let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
+		// The recipient was resolved before this lock: the account may have
+		// been removed since, and its mailbox must not be written again.
+		if self.directory.current().addresses_for(account).is_empty() {
+			return Err(SinkError::Unavailable(format!(
+				"account {account} no longer exists"
+			)));
+		}
 		// Each final copy includes its trace and list headers. Published bytes
 		// remain visible to the next admission even when a later step fails.
 		if self

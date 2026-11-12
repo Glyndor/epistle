@@ -16,6 +16,17 @@ new dependency is needed.
   three reach the sink before storage starts; it does not serialise the writes.
 - A login in progress cannot succeed after password replacement or account
   disable returns.
+- Removing an account while deliveries to it are finalising leaves nothing
+  under its mailbox root. One round finalises every delivery after the removal returned;
+  several start the removal and the final dots from one barrier.
+- A DKIM rotation held inside the publication of the new selector, with four
+  tasks signing throughout: no signature uses a selector before its TXT is
+  published, signatures on both sides of the switch verify, and the previous
+  selector stays published.
+- A certificate replaced while a session is encrypted and while two STARTTLS
+  handshakes are pending: the open session still delivers, both pending
+  handshakes and a later connection present the new certificate. The clients
+  keep no session cache, so a resumed session cannot hide the certificate.
 - SIGKILL during outbound spool and mailbox publication, followed by a real
   child restart: every final 250 survives, and every published message is whole.
 

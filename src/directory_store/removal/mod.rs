@@ -212,15 +212,16 @@ fn process_spool_queue(
 ///    retry is straightforward.
 /// 4. Drop the satellites (masked addresses, app passwords, per-account
 ///    suppression entries).
-/// 5. Recursively remove the mailbox directory at
-///    `<data_dir>/accounts/<name>`.
+/// 5. Remove the blobs the account uploaded and clear its bans.
 /// 6. Drop the per-account Bayesian rows so a recreated name does not
 ///    inherit the previous user's training. Tolerates a missing
 ///    database (`None` for `bayes`) by counting zero.
-/// 7. Finally call `store.remove` so the directory row is the last
-///    thing the on-disk state loses. A crash mid-flight therefore
-///    leaves an account that still exists and can be re-removed, never
-///    a ghost with data on disk.
+/// 7. Last, with nothing awaited in between and under the account's
+///    delivery lock, recursively remove the mailbox directory at
+///    `<data_dir>/accounts/<name>` and call `store.remove`, so the
+///    directory row is the last thing the on-disk state loses. A crash
+///    mid-flight therefore leaves an account that still exists and can
+///    be re-removed, never a ghost with data on disk.
 pub async fn remove_account(
 	store: &AccountStore,
 	spool: &FsSpool,
@@ -259,9 +260,6 @@ pub async fn remove_account(
 	let correspondent_addresses = correspondents
 		.remove_all_for(name)
 		.map_err(StoreError::Io)?;
-
-	let mailbox_root = account_root(data_dir, name).map_err(StoreError::Io)?;
-	let mailbox_files = remove_mailbox_dir(&mailbox_root).map_err(StoreError::Io)?;
 
 	// The blobs uploaded into the account's own partition.
 	if let Some(partition) = crate::storage::BlobAccount::new(name) {
@@ -313,7 +311,21 @@ pub async fn remove_account(
 		.and_then(|mut keys| keys.revoke_bound_to(name))
 		.map_err(StoreError::Io)?;
 
-	store.remove(name)?;
+	// The mailbox and the directory row go together, under the account's
+	// admission lock and with nothing awaited between them. A delivery
+	// takes the same lock around its write and re-reads the directory under
+	// it, so one that already passed the recipient check either finishes
+	// before this block (and its mail is removed here) or finds the account
+	// gone and stores nothing. Without the lock it could write after the
+	// walk.
+	let mailbox_files = {
+		let lock = crate::smtp::quota::delivery_lock_for(data_dir, name);
+		let _admission = lock.lock().unwrap_or_else(|e| e.into_inner());
+		let mailbox_root = account_root(data_dir, name).map_err(StoreError::Io)?;
+		let files = remove_mailbox_dir(&mailbox_root).map_err(StoreError::Io)?;
+		store.remove(name)?;
+		files
+	};
 
 	Ok(Removed {
 		mailbox_files,
