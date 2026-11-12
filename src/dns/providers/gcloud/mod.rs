@@ -40,6 +40,7 @@ use crate::dns::provider::{
 	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, ZoneOp, same_txt_purpose,
 };
 use crate::dns::providers::transport;
+use crate::dns::publish::provider::{Change, ReceiptOp, SnapshotOp};
 use crate::dns::txt::{TxtForm, same_txt_value, txt_decode, txt_encode};
 
 mod list;
@@ -280,12 +281,12 @@ impl GcloudProvider {
 			.ok_or_else(|| ProviderError::ZoneNotFound(zone.to_string()))
 	}
 
-	async fn post_change(
+	async fn send_change(
 		&self,
 		managed_zone: &str,
 		additions: &[Rrset],
 		deletions: &[Rrset],
-	) -> Result<(), ProviderError> {
+	) -> Result<reqwest::Response, ProviderError> {
 		let token = self.ensure_token().await?;
 		let url = self.managed_zones_url(&[managed_zone, "changes"])?;
 		let body = serde_json::to_string(&json!({
@@ -302,6 +303,16 @@ impl GcloudProvider {
 			.send()
 			.await
 			.map_err(transport)?;
+		Ok(response)
+	}
+
+	async fn post_change(
+		&self,
+		managed_zone: &str,
+		additions: &[Rrset],
+		deletions: &[Rrset],
+	) -> Result<(), ProviderError> {
+		let response = self.send_change(managed_zone, additions, deletions).await?;
 		Self::classify(&response, false)
 	}
 
@@ -314,30 +325,34 @@ impl GcloudProvider {
 		let rrsets = self.list_rrsets(&managed_zone).await?;
 		let zone_name = self.zone.trim_end_matches('.').to_ascii_lowercase();
 		Ok(rrsets
-			.into_iter()
+			.iter()
 			.filter(|r| {
 				let n = r.name.trim_end_matches('.').to_ascii_lowercase();
 				n == zone_name || n.ends_with(&format!(".{zone_name}"))
 			})
-			.flat_map(|r| {
-				let kind = RecordKind::from_token(&r.kind);
-				let name = r.name.trim_end_matches('.').to_string();
-				r.rrdatas.into_iter().map(move |value| {
-					let kind_for_value = &kind;
-					DnsRecord {
-						name: name.clone(),
-						kind: kind.clone(),
-						value: if kind_for_value == &RecordKind::Txt {
-							txt_decode(&value, TXT_FORM)
-						} else {
-							value
-						},
-						ttl: r.ttl,
-						proxied: None,
-					}
-				})
-			})
+			.flat_map(Self::records_of)
 			.collect())
+	}
+
+	/// The records of one rrset, each as epistle reads it.
+	fn records_of(rrset: &Rrset) -> Vec<DnsRecord> {
+		let kind = RecordKind::from_token(&rrset.kind);
+		let name = rrset.name.trim_end_matches('.').to_string();
+		rrset
+			.rrdatas
+			.iter()
+			.map(|value| DnsRecord {
+				name: name.clone(),
+				kind: kind.clone(),
+				value: if kind == RecordKind::Txt {
+					txt_decode(value, TXT_FORM)
+				} else {
+					value.clone()
+				},
+				ttl: rrset.ttl,
+				proxied: None,
+			})
+			.collect()
 	}
 }
 
@@ -351,10 +366,10 @@ impl DnsProvider for GcloudProvider {
 	/// Strict by value: this provider's delete removes a value-bearing TXT
 	/// only when `same_txt_value` matches.
 	fn delete_exact(&self, zone: &str, record: DnsRecord) -> Op<'_> {
-		if record.kind != RecordKind::Txt || record.value.is_empty() {
-			return Box::pin(async { Err(ProviderError::Unsupported) });
-		}
-		self.delete(zone, record)
+		let zone = zone.to_string();
+		Box::pin(crate::dns::providers::within(async move {
+			self.delete_exact_inner(&zone, record).await
+		}))
 	}
 	fn delete(&self, zone: &str, record: DnsRecord) -> Op<'_> {
 		let zone = zone.to_string();
@@ -378,6 +393,12 @@ impl DnsProvider for GcloudProvider {
 			// that could not answer, and the search stops there.
 			Ok(self.find_managed_zone(&zone).await?.is_some())
 		}))
+	}
+	fn publish_snapshot<'a>(&'a self, zone: &'a str) -> SnapshotOp<'a> {
+		Box::pin(self.snapshot_inner(zone))
+	}
+	fn apply_guarded<'a>(&'a self, zone: &'a str, change: Change) -> ReceiptOp<'a> {
+		Box::pin(self.apply_inner(zone, change))
 	}
 }
 
@@ -452,6 +473,7 @@ fn pem_to_pkcs8(pem: &str) -> Option<Vec<u8>> {
 }
 
 mod auth;
+mod guarded;
 mod write;
 
 #[cfg(test)]

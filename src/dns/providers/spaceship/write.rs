@@ -13,7 +13,16 @@ impl SpaceshipProvider {
 		rel: &str,
 		record: &DnsRecord,
 	) -> Result<(), ProviderError> {
-		let url = self.records_url()?;
+		let item = Self::item_of(kind, rel, record)?;
+		self.put_item(item, true).await
+	}
+
+	/// The item of a save request for `record`.
+	pub(super) fn item_of(
+		kind: &str,
+		rel: &str,
+		record: &DnsRecord,
+	) -> Result<serde_json::Value, ProviderError> {
 		let mut item = serde_json::json!({
 			"type": kind,
 			"name": rel,
@@ -68,8 +77,20 @@ impl SpaceshipProvider {
 				Self::wire_value(record).into(),
 			);
 		}
+		Ok(item)
+	}
+
+	/// Save `item`. `force` turns off Spaceship's conflict resolution, which
+	/// the ordinary upsert wants and the guarded write does not: a conflict
+	/// is refused there, not resolved by dropping somebody's record.
+	pub(super) async fn put_item(
+		&self,
+		item: serde_json::Value,
+		force: bool,
+	) -> Result<(), ProviderError> {
+		let url = self.records_url()?;
 		let body = serde_json::json!({
-			"force": true,
+			"force": force,
 			"items": [item],
 		})
 		.to_string();
