@@ -168,6 +168,13 @@ pub(crate) trait ById {
 
 	/// Delete the record `id`.
 	async fn delete(&self, zone: &str, id: &str) -> Result<(), ProviderError>;
+
+	/// What the provider needs once after the writes of a change for them to
+	/// take effect (a zone that publishes on request). Not called when the
+	/// change wrote nothing.
+	async fn finish(&self, _zone: &str) -> Result<(), ProviderError> {
+		Ok(())
+	}
 }
 
 /// Whether a write went out, to tell a refusal from an unknown outcome.
@@ -218,6 +225,9 @@ async fn run<W: ById>(writer: &W, zone: &str, change: &Change) -> Result<(), Sto
 	}
 	for &index in &steps.deletions {
 		sent.record(writer.delete(zone, &fresh[index].id).await)?;
+	}
+	if sent.0 {
+		sent.record(writer.finish(zone).await)?;
 	}
 	Ok(())
 }

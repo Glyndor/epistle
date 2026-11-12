@@ -31,6 +31,7 @@ use crate::dns::provider::{
 	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, parse_srv, same_txt_purpose,
 };
 use crate::dns::providers::transport;
+use crate::dns::publish::provider::{Change, ReceiptOp, SnapshotOp};
 use crate::dns::txt::{TxtForm, txt_decode, txt_encode};
 
 /// How DNSimple takes a TXT `content` and lists it back; see `upsert_inner`.
@@ -289,40 +290,11 @@ impl DnsimpleProvider {
 	}
 
 	async fn list_inner(&self, zone: &str) -> Result<Vec<DnsRecord>, ProviderError> {
-		let zone_owned = zone.to_string();
-		let records = self.list_page(&zone_owned).await?;
-		let zone_label = self.secret.zone().to_string();
+		let records = self.list_page(zone).await?;
+		let zone_label = self.secret.zone();
 		Ok(records
-			.into_iter()
-			.filter_map(|r| {
-				let name = if r.name.is_empty() {
-					zone_label.clone()
-				} else {
-					format!("{}.{}", r.name, zone_label)
-				};
-				let kind = RecordKind::from_token(&r.kind);
-				let value = if kind == RecordKind::Srv {
-					match (r.priority, r.weight, r.port) {
-						(Some(p), Some(w), Some(port)) => {
-							format!("{p} {w} {port} {}", r.content.trim_end_matches('.'))
-						}
-						_ => return None,
-					}
-				} else if kind == RecordKind::Txt {
-					txt_decode(&r.content, TXT_FORM)
-				} else if kind == RecordKind::Mx && r.priority.is_some() {
-					format!("{} {}", r.priority.unwrap_or(0), r.content)
-				} else {
-					r.content
-				};
-				Some(DnsRecord {
-					name,
-					kind,
-					value,
-					ttl: r.ttl,
-					proxied: None,
-				})
-			})
+			.iter()
+			.filter_map(|r| read::record_of(zone_label, r))
 			.collect())
 	}
 }
@@ -353,6 +325,12 @@ impl DnsProvider for DnsimpleProvider {
 			self.list_inner(&zone).await
 		}))
 	}
+	fn publish_snapshot<'a>(&'a self, zone: &'a str) -> SnapshotOp<'a> {
+		Box::pin(crate::dns::providers::within(self.snapshot_inner(zone)))
+	}
+	fn apply_guarded<'a>(&'a self, zone: &'a str, change: Change) -> ReceiptOp<'a> {
+		Box::pin(crate::dns::providers::guarded::apply(self, zone, change))
+	}
 }
 
 /// Decode a JSON body, mapping a 401/403 to an auth error.
@@ -381,6 +359,8 @@ fn check(response: reqwest::Response) -> Result<(), ProviderError> {
 }
 
 mod delete;
+mod guarded;
+mod read;
 mod upsert;
 
 mod exact;
