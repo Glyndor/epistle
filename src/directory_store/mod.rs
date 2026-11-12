@@ -593,11 +593,10 @@ impl AccountStore {
 	/// Replace a dynamic account in place, preserving its position in the
 	/// on-disk list. Used by SCIM `PUT` (which is "replace the whole user"
 	/// in SCIM terms) without churning the file. `NotFound` if no
-	/// dynamic account carries `name`; `Duplicate` if the replacement's
-	/// addresses collide with another account (including itself if the
-	/// new list is unchanged — `add` short-circuits the collision check
-	/// on self, but a fresh `add` after `remove` doesn't, so we do the
-	/// same dance here).
+	/// dynamic account carries `name`. An address the account does not
+	/// already hold gets the checks `add` runs: `Invalid` outside the
+	/// served domains, `Duplicate` when another account, a static alias or
+	/// a masked address already routes it.
 	pub fn replace_account(
 		&self,
 		name: &str,
@@ -613,23 +612,20 @@ impl AccountStore {
 			fresh.name = name.to_string();
 			normalize::account(&mut fresh);
 			fresh.display_name = display_name::stored(fresh.display_name.as_deref())?;
-			let mut known_addresses: Vec<String> = self
-				.static_accounts
+			// The same checks `add` runs, except for an address the account
+			// already holds: a replacement that keeps it is not claiming it.
+			let held: Vec<String> = state.accounts[slot]
+				.addresses
 				.iter()
-				.flat_map(|existing| existing.addresses.iter())
-				.chain(
-					state
-						.accounts
-						.iter()
-						.enumerate()
-						.filter(|(index, _)| *index != slot)
-						.flat_map(|(_, existing)| existing.addresses.iter()),
-				)
-				.map(|address| crate::util::address::normalize(address))
+				.map(|own| crate::util::address::normalize(own))
 				.collect();
-			known_addresses.sort();
-			for raw in &fresh.addresses {
-				if known_addresses.binary_search(raw).is_ok() {
+			let mut claimed = fresh.clone();
+			claimed.addresses.retain(|raw| !held.contains(raw));
+			if fresh.addresses.is_empty() || !claimed.addresses.is_empty() {
+				self.check_name_and_addresses(&claimed)?;
+			}
+			for raw in &claimed.addresses {
+				if self.address_taken(&state.accounts, Some(name), raw) {
 					return Err(StoreError::Duplicate(raw.to_string()));
 				}
 			}

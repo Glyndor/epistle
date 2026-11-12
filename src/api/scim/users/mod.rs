@@ -434,32 +434,24 @@ pub async fn put_user(
 		.tenant_limits()
 		.check_account_move(state.store(), &existing.addresses, &addresses)
 		.map_err(ScimError::conflict)?;
+	// The replacement starts from the stored account, so what SCIM does not
+	// model (quota, forwards, catch-all, the `Sent` copy, the send and receive
+	// switches) stays as it was. The password is part of the same write, so it
+	// cannot be overwritten by the hash read above.
+	let mut replacement = DynamicAccount {
+		addresses,
+		disabled: !body.active,
+		display_name: body.display_name.clone(),
+		..existing
+	};
 	if let Some(plain) = body.password.as_deref() {
 		check_password(plain)?;
-		let hash = hash_password(plain, state.store())?;
-		let scram = derive_scram(plain, state.store())?;
-		state
-			.store()
-			.set_password_hash(&id, hash, scram)
-			.map_err(store_to_scim)?;
+		replacement.password_hash = hash_password(plain, state.store())?;
+		replacement.scram = derive_scram(plain, state.store())?;
 	}
 	state
 		.store()
-		.replace_account(
-			&id,
-			DynamicAccount {
-				name: id.clone(),
-				addresses,
-				password_hash: existing.password_hash.clone(),
-				scram: existing.scram.clone(),
-				totp_secret: existing.totp_secret.clone(),
-				disabled: !body.active,
-				quota_bytes: None,
-				allowed_protocols: existing.allowed_protocols.clone(),
-				display_name: body.display_name.clone(),
-				..DynamicAccount::default()
-			},
-		)
+		.replace_account(&id, replacement)
 		.map_err(store_to_scim)?;
 	let stored = lookup(&state, &id)?;
 	Ok(scim_resource(StatusCode::OK, render_user(&stored)))

@@ -7,4 +7,5 @@ pub(super) mod cross_handle;
 pub(super) mod lowercase;
 pub(super) mod paused;
 pub(super) mod protocols_and_reload;
+pub(super) mod replace_account;
 pub(super) mod switches;
