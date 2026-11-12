@@ -16,6 +16,8 @@ use serde::{Deserialize, Serialize};
 
 pub use super::first_account::FirstAccount;
 
+pub(super) mod read;
+
 /// Top-level mode the operator chose.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

@@ -213,6 +213,9 @@ pub enum ApplyError {
 	HostBinaryInvalid(String),
 	/// A key under data_dir could not be moved to the directory beside it.
 	KeyMove(String),
+	/// The `--answers` file is a symlink, is not a regular file, or holds a
+	/// credential while group or others can read it.
+	AnswersFile(PathBuf, String),
 }
 
 impl std::fmt::Display for ApplyError {
@@ -239,6 +242,9 @@ impl std::fmt::Display for ApplyError {
 			}
 			ApplyError::ConfigInvalid(message) => {
 				write!(f, "the candidate config is invalid: {message}")
+			}
+			ApplyError::AnswersFile(path, why) => {
+				write!(f, "answers file {} {why}", path.display())
 			}
 			ApplyError::ConfigRead(path, error) => {
 				write!(f, "cannot read existing config {}: {error}", path.display())
