@@ -5,7 +5,7 @@
 //! max_age runs out.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
 
 use super::*;
 
@@ -229,4 +229,70 @@ async fn a_poisoned_cache_mutex_does_not_stop_the_next_lookup() {
 		.await
 		.expect("a lookup of any domain still works");
 	assert_eq!(policy.map(|p| p.mode), Some(Mode::Enforce));
+}
+
+/// A fetcher that counts its calls and fails while `down` is set.
+struct CountingFetcher(Arc<AtomicBool>, Arc<AtomicU32>);
+
+impl PolicyFetcher for CountingFetcher {
+	fn fetch(&self, _domain: &str) -> FetchFuture<'_> {
+		self.1.fetch_add(1, Ordering::Relaxed);
+		let result = match self.0.load(Ordering::Relaxed) {
+			true => Err(PolicyError::Temporary("connection refused".into())),
+			false => Ok(ENFORCE.to_string()),
+		};
+		Box::pin(async move { result })
+	}
+}
+
+/// A policy host that is down must not be downloaded from again on every
+/// delivery: after a failed refresh the cached policy keeps applying and the
+/// next download waits, even when the published id changed in the meantime.
+#[tokio::test]
+async fn a_failed_refresh_is_not_retried_on_every_lookup() {
+	let state = Arc::new(AtomicU8::new(OK));
+	let calls = Arc::new(AtomicU32::new(0));
+	let dns = World(Arc::clone(&state));
+	let down = Arc::new(AtomicBool::new(false));
+	let store = PolicyStore::new(Box::new(CountingFetcher(
+		Arc::clone(&down),
+		Arc::clone(&calls),
+	)));
+	store.policy(&dns, "example.org").await.expect("first");
+	assert_eq!(calls.load(Ordering::Relaxed), 1);
+
+	store.due_for_refresh("example.org");
+	down.store(true, Ordering::Relaxed);
+	for _ in 0..3 {
+		let policy = store.policy(&dns, "example.org").await;
+		assert_eq!(policy.map(|p| p.map(|p| p.mode)), Ok(Some(Mode::Enforce)));
+	}
+	assert_eq!(
+		calls.load(Ordering::Relaxed),
+		2,
+		"one failed download, then the wait"
+	);
+
+	// A new id is still held back by the wait while the host is down.
+	state.store(TXT_ID_B, Ordering::Relaxed);
+	let _ = store.policy(&dns, "example.org").await;
+	assert_eq!(calls.load(Ordering::Relaxed), 2);
+
+	// Once the wait is over the download is tried again.
+	store.due_for_refresh("example.org");
+	let _ = store.policy(&dns, "example.org").await;
+	assert_eq!(calls.load(Ordering::Relaxed), 3);
+}
+
+/// Every recipient domain leaves an entry, "no policy" included, and the
+/// destinations choose them: the cache holds a bounded number.
+#[tokio::test]
+async fn the_cache_does_not_grow_with_every_domain_contacted() {
+	let state = Arc::new(AtomicU8::new(TXT_GONE));
+	let store = PolicyStore::new(Box::new(Fetcher(Arc::clone(&state))));
+	let dns = World(state);
+	for n in 0..MAX_ENTRIES + 50 {
+		let _ = store.policy(&dns, &format!("d{n}.example")).await;
+	}
+	assert_eq!(store.cached_domains(), MAX_ENTRIES);
 }

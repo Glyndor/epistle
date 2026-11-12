@@ -267,3 +267,20 @@ fn a_reply_is_read_by_its_code_and_enhanced_status() {
 		);
 	}
 }
+
+/// A reply of tens of kilobytes is kept as a bounded reason, and the cut
+/// changes neither the code nor whether the reply is retried.
+#[test]
+fn a_long_reply_is_kept_as_a_bounded_reason() {
+	let raw = format!("550 5.1.1 {}\r\n", "x".repeat(60_000));
+	let DeliveryError::Permanent(reason) = DeliveryError::from_reply(550, &raw) else {
+		panic!("a 550 5.1.1 stays permanent");
+	};
+	assert_eq!(reason.chars().count(), 512);
+	assert!(reason.starts_with("550 5.1.1 xxx"), "{reason}");
+	let raw = format!("452 4.2.2 {}\r\n", "y".repeat(60_000));
+	let DeliveryError::Transient(reason) = DeliveryError::from_reply(452, &raw) else {
+		panic!("a 452 stays transient");
+	};
+	assert_eq!(reason.chars().count(), 512);
+}

@@ -205,6 +205,16 @@ pub(crate) const MAX_AGE_SECS: u64 = 31_557_600;
 /// How long "no policy" is remembered before discovery runs again.
 const NO_POLICY_CACHE: Duration = Duration::from_secs(600);
 
+/// The most domains the cache holds at once. Every recipient domain leaves an
+/// entry, and the domains are chosen by whoever is written to, so the map
+/// needs a bound of its own.
+const MAX_ENTRIES: usize = 20_000;
+
+/// How long a cached policy goes without another download after one failed,
+/// so a policy host that is down or slow is not tried again on every
+/// delivery to its domain.
+const FETCH_RETRY: Duration = Duration::from_secs(300);
+
 /// One cached discovery result.
 #[derive(Clone)]
 struct Cached {
@@ -221,6 +231,8 @@ struct Cached {
 	/// Until then a policy still applies when a refresh fails (RFC 8461
 	/// section 3.3 and 5.1).
 	expires: Instant,
+	/// Until then no download is tried: the last one failed.
+	retry_after: Option<Instant>,
 }
 
 /// Discovery + cache: TXT presence check, HTTPS fetch, expiry by max_age.
@@ -286,6 +298,14 @@ impl PolicyStore {
 				};
 			}
 		};
+		// A download failed a moment ago and the policy it was for still
+		// applies: use it without trying again, a changed id included.
+		if let (Some(policy), Some(retry)) =
+			(&fallback, cached.as_ref().and_then(|c| c.retry_after))
+			&& now < retry
+		{
+			return Ok(Some(policy.clone()));
+		}
 		let id_changed = cached.as_ref().and_then(|c| c.txt_id.as_ref()) != observed.as_ref();
 		if !id_changed && cached.as_ref().is_some_and(|c| now < c.refresh) {
 			return Ok(cached.and_then(|c| c.policy));
@@ -308,13 +328,17 @@ impl PolicyStore {
 						Ok(Some(policy))
 					}
 					Err(error) => match fallback {
-						Some(policy) => Ok(Some(policy)),
+						Some(policy) => {
+							self.defer_refresh(&domain);
+							Ok(Some(policy))
+						}
 						None => Err(error),
 					},
 				},
 				Err(error) => match fallback {
 					Some(policy) => {
 						tracing::warn!(%domain, ?error, "MTA-STS refresh failed; keeping the cached policy");
+						self.defer_refresh(&domain);
 						Ok(Some(policy))
 					}
 					None => Err(error),
@@ -377,18 +401,53 @@ impl PolicyStore {
 		let year = Duration::from_secs(MAX_AGE_SECS);
 		let refresh = now.checked_add(refresh).unwrap_or(now + year);
 		let expires = now.checked_add(expires).unwrap_or(now + year);
-		self.cache
+		let mut cache = self
+			.cache
+			.lock()
+			.unwrap_or_else(|poisoned| poisoned.into_inner());
+		if cache.len() >= MAX_ENTRIES && !cache.contains_key(domain) {
+			// Entries past their `max_age` no longer apply to anything; when
+			// that frees nothing, the one closest to expiring goes.
+			cache.retain(|_, entry| now < entry.expires);
+			if cache.len() >= MAX_ENTRIES
+				&& let Some(oldest) = cache
+					.iter()
+					.min_by_key(|(_, entry)| entry.expires)
+					.map(|(name, _)| name.clone())
+			{
+				cache.remove(&oldest);
+			}
+		}
+		cache.insert(
+			domain.to_string(),
+			Cached {
+				policy,
+				txt_id,
+				refresh,
+				expires,
+				retry_after: None,
+			},
+		);
+	}
+
+	/// A download for `domain` failed while its cached policy still applies:
+	/// keep the policy and its expiry, and try again only after
+	/// [`FETCH_RETRY`].
+	fn defer_refresh(&self, domain: &str) {
+		let now = Instant::now();
+		if let Some(entry) = self
+			.cache
 			.lock()
 			.unwrap_or_else(|poisoned| poisoned.into_inner())
-			.insert(
-				domain.to_string(),
-				Cached {
-					policy,
-					txt_id,
-					refresh,
-					expires,
-				},
-			);
+			.get_mut(domain)
+		{
+			entry.retry_after = now.checked_add(FETCH_RETRY);
+		}
+	}
+
+	#[cfg(test)]
+	pub(crate) fn cached_domains(&self) -> usize {
+		self.cache.lock().expect("mta-sts cache mutex").len()
 	}
 
 	/// Make the cached entry for `domain` due for refresh now, as if its
@@ -402,6 +461,7 @@ impl PolicyStore {
 			.get_mut(domain)
 		{
 			entry.refresh = Instant::now();
+			entry.retry_after = None;
 		}
 	}
 }
