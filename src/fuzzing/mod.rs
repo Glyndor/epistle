@@ -7,6 +7,7 @@
 
 mod backup;
 mod common;
+mod config;
 mod dns;
 mod mailbox;
 mod message;
@@ -16,6 +17,7 @@ mod scram_client;
 mod smtp;
 mod web;
 pub use backup::backup_tar;
+pub use config::config_parse;
 pub use dns::{dns_security_records, report_payload, sender_auth_records};
 pub use mailbox::imap_command_line;
 pub use message::{
