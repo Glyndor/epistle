@@ -18,6 +18,7 @@ use crate::dns::provider::{
 	unwrap_quotes,
 };
 use crate::dns::providers::transport;
+use crate::dns::publish::provider::{Change, ReceiptOp, SnapshotOp};
 use crate::dns::txt::{TxtForm, txt_decode, txt_encode};
 
 /// How OVH takes a TXT `target` (logical) and lists it back (quoted and
@@ -205,6 +206,12 @@ impl DnsProvider for OvhProvider {
 			self.list_inner(&zone).await
 		}))
 	}
+	fn publish_snapshot<'a>(&'a self, zone: &'a str) -> SnapshotOp<'a> {
+		Box::pin(crate::dns::providers::within(self.snapshot_inner(zone)))
+	}
+	fn apply_guarded<'a>(&'a self, zone: &'a str, change: Change) -> ReceiptOp<'a> {
+		Box::pin(crate::dns::providers::guarded::apply(self, zone, change))
+	}
 }
 
 /// Convert an OVH record to a [`DnsRecord`], reconstructing the FQDN and
@@ -327,6 +334,7 @@ fn hex_lower(bytes: &[u8]) -> String {
 	out
 }
 
+mod guarded;
 mod transport;
 mod write;
 

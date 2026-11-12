@@ -453,19 +453,18 @@ values the certificate refresh published count as epistle's own too. So:
 - That promise holds against the listing the plan was made from. No provider
   API takes a condition on a write, so a record another account adds or
   changes between that listing and the write is not always seen. Cloudflare,
-  DigitalOcean, Bunny and Porkbun read the name and type again right before
-  they write, stop with `the zone changed since it was read` when the set is
-  not the one that was planned, and address records by id, so they only
-  update or delete records the plan listed; a change made in the moment
-  between that read and the write is still not detected. OVH and DNSimple
-  write by id too, but they update the first record they find at the name and
-  type without comparing the set, so a record another account added there in
-  that moment can be the one that is overwritten. Spaceship removes by name,
-  type and value and, for every type but TXT, removes the whole set at the
-  name before it adds the new one. None of the three reads the set again
-  under a condition. deSEC, GoDaddy, Route 53 and Namecheap write a whole set
-  back from what they read, so a record added to that set in that moment is
-  lost with it. Nothing here has been run against a real provider account.
+  DigitalOcean, Bunny, Porkbun, DNSimple and OVH read the name and type again
+  right before they write, stop with `the zone changed since it was read` when
+  the set is not the one that was planned, and address records by id, so they
+  only update or delete records the plan listed; a change made in the moment
+  between that read and the write is still not detected. (OVH publishes the
+  zone once after the writes, as it only does so on request.) Spaceship
+  removes by name, type and value and, for every type but TXT, removes the
+  whole set at the name before it adds the new one, without reading the set
+  again under a condition. deSEC, GoDaddy, Route 53 and Namecheap write a
+  whole set back from what they read, so a record added to that set in that
+  moment is lost with it. Nothing here has been run against a real provider
+  account.
 - A DMARC record is never replaced by a weaker one: `p=`, `sp=`, `np=` and
   the `adkim=s` / `aspf=s` alignment are compared tag by tag.
 - A record that differs only in TTL or description is not rewritten.
