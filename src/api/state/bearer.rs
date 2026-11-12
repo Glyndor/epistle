@@ -99,6 +99,20 @@ pub async fn require_bearer_token(
 	// API keys first: a SHA-256 lookup, so a key never pays for the configured
 	// token's (possibly argon2) hash.
 	let key_ok = token_ref.is_some_and(|t| state.key_authorizes(t, client_ip, &acceptable_scopes));
+	// A key that is valid but does not cover this route is not a failed
+	// credential: answer 403 and give back the failure this request
+	// reserved. Nothing else is checked, so it costs no argon2.
+	if !key_ok && token_ref.is_some_and(|t| state.key_lacks_scope(t, client_ip, &acceptable_scopes))
+	{
+		state
+			.inner
+			.auth_limiter
+			.lock()
+			.unwrap_or_else(|p| p.into_inner())
+			.refund(client_ip);
+		return ApiError::forbidden("This API key does not have the scope this route needs.")
+			.into_response();
+	}
 	let configured = match token_ref {
 		Some(t) if !key_ok => match state.bearer_is_configured_async(t, client_ip).await {
 			Ok(answer) => answer,

@@ -44,6 +44,20 @@ impl ApiState {
 		matched.is_some()
 	}
 
+	/// Whether `token` is a key that is valid from `client_ip` (right secret,
+	/// not expired, inside its network) but covers none of `acceptable_scopes`.
+	/// The credential is good; the route is not one it may use.
+	pub(super) fn key_lacks_scope(
+		&self,
+		token: &str,
+		client_ip: Option<std::net::IpAddr>,
+		acceptable_scopes: &[Scope],
+	) -> bool {
+		self.inner.api_keys.snapshot().iter().any(|key| {
+			key.admits_credential(token, client_ip, now()) && !key.covers_any(acceptable_scopes)
+		})
+	}
+
 	/// Emit the one-time-per-key warning for legacy (un-scoped) keys. The
 	/// state is shared across requests (it lives behind an `Arc`), so the
 	/// `Mutex<HashSet>` deduplicates: an operator who restarts will see one

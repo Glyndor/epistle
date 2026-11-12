@@ -152,7 +152,7 @@ async fn read_scope_is_rejected_on_masked_mutators() {
 		Some(serde_json::json!({ "label": "x" })),
 	)
 	.await;
-	assert_eq!(status, StatusCode::UNAUTHORIZED);
+	assert_eq!(status, StatusCode::FORBIDDEN);
 
 	// PATCH is rejected: read scope cannot toggle masks.
 	let (status, _) = request_with_body(
@@ -163,7 +163,7 @@ async fn read_scope_is_rejected_on_masked_mutators() {
 		Some(serde_json::json!({ "enabled": false })),
 	)
 	.await;
-	assert_eq!(status, StatusCode::UNAUTHORIZED);
+	assert_eq!(status, StatusCode::FORBIDDEN);
 
 	// DELETE is rejected: read scope cannot revoke masks.
 	let (status, _) = request(
@@ -173,5 +173,5 @@ async fn read_scope_is_rejected_on_masked_mutators() {
 		Some("reader-secret"),
 	)
 	.await;
-	assert_eq!(status, StatusCode::UNAUTHORIZED);
+	assert_eq!(status, StatusCode::FORBIDDEN);
 }

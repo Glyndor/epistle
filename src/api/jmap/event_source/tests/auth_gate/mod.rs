@@ -43,10 +43,10 @@ async fn a_stream_with_too_little_scope_is_refused() {
 	let client = client();
 	// A key that may write but not read cannot open a stream.
 	let response = open(&client, &peer.base, Some(WRITE_KEY.as_str()), LIVE).await;
-	assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+	assert_eq!(response.status(), StatusCode::FORBIDDEN);
 	let (status, body) = read(response).await;
-	assert_eq!(status, StatusCode::UNAUTHORIZED);
-	assert_eq!(body["error"]["code"], "unauthenticated", "{body}");
+	assert_eq!(status, StatusCode::FORBIDDEN);
+	assert_eq!(body["error"]["code"], "forbidden", "{body}");
 	// The refused request took no slot either.
 	let mut held = Vec::new();
 	for _ in 0..MAX {
