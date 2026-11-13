@@ -264,6 +264,7 @@ pub(in crate::cli) const CASES: &[(&[&str], bool)] = &[
 		true,
 	),
 	(&["rotate", "--all", "--dry-run"], false),
+	(&["panel", "admin-id"], true),
 	(&["srs", "show"], true),
 	(&["srs", "split"], true),
 	(&["srs", "rotate", "example.org"], true),

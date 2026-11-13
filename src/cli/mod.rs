@@ -126,6 +126,7 @@ mod storage;
 
 mod tls;
 
+mod panel;
 mod srs;
 mod webhook;
 

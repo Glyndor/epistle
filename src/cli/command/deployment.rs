@@ -27,6 +27,18 @@ macro_rules! deployment_commands {
 				#[command(subcommand)]
 				action: stack::StackCli,
 			},
+			/// Show what the operator needs to know about the web panel.
+			Panel {
+				/// Configuration file; accepted before or after the panel action.
+				#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
+				config: PathBuf,
+				/// Print the result as one JSON object on stdout.
+				#[arg(long, global = true)]
+				json: bool,
+				/// Panel action.
+				#[command(subcommand)]
+				action: crate::cli::panel::PanelCli,
+			},
 			/// Database maintenance for the stack's PostgreSQL.
 			Db {
 				/// Configuration file; accepted before or after the action.

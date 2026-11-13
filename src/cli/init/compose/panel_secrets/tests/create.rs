@@ -1,4 +1,4 @@
-//! The first run lays both secrets down with the right reach, mode and owner.
+//! The first run lays the secrets and the admin id down with the right reach, mode and owner.
 
 use super::*;
 use crate::api::api_keys::sha256_hash;
@@ -13,7 +13,11 @@ fn the_first_run_creates_the_key_row_and_both_files() {
 	);
 	assert_eq!(
 		kinds(&report),
-		[("wrote", token.clone()), ("wrote", session.clone())]
+		[
+			("wrote", token.clone()),
+			("wrote", session.clone()),
+			("wrote", admin_id_path(&layout.data))
+		]
 	);
 	let key = row(&layout);
 	assert_eq!(
