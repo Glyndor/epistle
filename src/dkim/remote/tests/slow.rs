@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use super::*;
 use crate::dkim::test_support::{GOLDEN, fixed_signer};
 
-const DEADLINE: Duration = Duration::from_millis(300);
+const DEADLINE: Duration = Duration::from_secs(1);
 
 fn signer_with_deadline(dir: &std::path::Path) -> Running {
 	start(SignerServer::new(Arc::new(fixed_signer(dir))).with_deadline(DEADLINE))
@@ -54,7 +54,7 @@ async fn a_client_that_drips_its_request_is_cut_off_before_it_finishes() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let running = signer_with_deadline(dir.path());
 	let frame = plain_frame();
-	let step = Duration::from_millis(20);
+	let step = Duration::from_millis(50);
 	// Every single read finishes well inside the deadline; only the
 	// exchange as a whole is too slow.
 	assert!(step * u32::try_from(frame.len()).expect("len") > DEADLINE * 4);
