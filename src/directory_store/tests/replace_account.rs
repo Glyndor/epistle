@@ -45,7 +45,7 @@ fn replace_refuses_an_alias_address() {
 	let result = store.replace_account("bob", account("bob", "Team@example.org"));
 	assert!(
 		matches!(result, Err(StoreError::Duplicate(_))),
-		"{result:?}"
+		"the address must be refused"
 	);
 	assert_eq!(
 		store.dynamic_account("bob").unwrap().addresses,
@@ -67,7 +67,7 @@ fn replace_refuses_a_masked_address() {
 	let result = store.replace_account("bob", account("bob", &masked));
 	assert!(
 		matches!(result, Err(StoreError::Duplicate(_))),
-		"{result:?}"
+		"the address must be refused"
 	);
 }
 
@@ -76,7 +76,10 @@ fn replace_refuses_a_domain_the_server_does_not_serve() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let store = with_bob(dir.path());
 	let result = store.replace_account("bob", account("bob", "bob@elsewhere.example"));
-	assert!(matches!(result, Err(StoreError::Invalid(_))), "{result:?}");
+	assert!(
+		matches!(result, Err(StoreError::Invalid(_))),
+		"the address must be refused"
+	);
 }
 
 #[test]

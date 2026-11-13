@@ -81,7 +81,7 @@ async fn a_value_left_in_the_zone_by_refreshes_that_failed_is_withdrawn_later() 
 	let dir = tempfile::tempdir().expect("dir");
 	let (first_pem, first) = certificate();
 	let (second_pem, second) = certificate();
-	let (third_pem, third) = certificate();
+	let (third_pem, _) = certificate();
 	let (fourth_pem, fourth) = certificate();
 	let provider = Refusing {
 		zone: FakeGuardedProvider::holding(vec![DnsRecord::new(
@@ -131,6 +131,6 @@ async fn a_value_left_in_the_zone_by_refreshes_that_failed_is_withdrawn_later() 
 	assert_eq!(
 		zone_values(&provider),
 		expected,
-		"the new value and the one before it; the first is withdrawn, not left for good ({third} was never written)"
+		"the new value and the one before it; the first is withdrawn, not left for good"
 	);
 }

@@ -54,17 +54,14 @@ fn round() -> (usize, u64) {
 		"alice",
 		&crate::storage::MessageCrypto::disabled(),
 	);
-	assert!(
-		usage <= limit,
-		"{usage} bytes stored under a quota of {limit}"
-	);
+	assert!(usage <= limit, "the bytes stored must stay under the quota");
 	(stored, usage)
 }
 
 #[test]
 fn appends_at_the_same_moment_stop_at_the_quota() {
 	for _ in 0..ROUNDS {
-		let (stored, usage) = round();
-		assert_eq!(stored, FITS, "{usage} bytes stored");
+		let (stored, _) = round();
+		assert_eq!(stored, FITS, "every round must store as many as fit");
 	}
 }

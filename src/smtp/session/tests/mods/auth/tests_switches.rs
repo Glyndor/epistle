@@ -55,7 +55,7 @@ fn the_null_sender_does_not_get_around_it() {
 	let reply = reply_text(&session.command_line("MAIL FROM:<>"));
 	assert!(
 		reply.starts_with("550 5.7.1 sending is turned off"),
-		"{reply}"
+		"unexpected reply to the command"
 	);
 }
 
@@ -65,7 +65,7 @@ fn sending_as_a_list_it_belongs_to_is_refused_too() {
 	let reply = reply_text(&session.command_line("MAIL FROM:<team@example.org>"));
 	assert!(
 		reply.starts_with("550 5.7.1 sending is turned off"),
-		"{reply}"
+		"unexpected reply to the command"
 	);
 }
 
@@ -73,14 +73,14 @@ fn sending_as_a_list_it_belongs_to_is_refused_too() {
 fn another_account_still_sends_while_one_is_off() {
 	let mut session = authenticated(directory_with(&["alice"], &[]), "bob");
 	let reply = reply_text(&session.command_line("MAIL FROM:<bob@example.org>"));
-	assert!(reply.starts_with("250"), "{reply}");
+	assert!(reply.starts_with("250"), "unexpected reply to the command");
 }
 
 #[test]
 fn an_account_that_receives_nothing_still_sends() {
 	let mut session = authenticated(directory_with(&[], &["alice"]), "alice");
 	let reply = reply_text(&session.command_line("MAIL FROM:<alice@example.org>"));
-	assert!(reply.starts_with("250"), "{reply}");
+	assert!(reply.starts_with("250"), "unexpected reply to the command");
 }
 
 fn inbound(directory: Arc<Directory>) -> Session {
@@ -111,14 +111,14 @@ fn a_sub_address_of_it_is_refused_and_does_not_reach_the_catch_all() {
 fn an_account_that_sends_nothing_still_receives() {
 	let mut session = inbound(directory_with(&["alice"], &[]));
 	let reply = reply_text(&session.command_line("RCPT TO:<alice@example.org>"));
-	assert!(reply.starts_with("250"), "{reply}");
+	assert!(reply.starts_with("250"), "unexpected reply to the command");
 }
 
 #[test]
 fn a_list_still_takes_mail_while_a_member_receives() {
 	let mut session = inbound(directory_with(&[], &["alice"]));
 	let reply = reply_text(&session.command_line("RCPT TO:<team@example.org>"));
-	assert!(reply.starts_with("250"), "{reply}");
+	assert!(reply.starts_with("250"), "unexpected reply to the command");
 }
 
 #[test]
