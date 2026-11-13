@@ -28,9 +28,7 @@ use super::survey::{ZoneRun, within};
 use super::{Action, Entry, store};
 use crate::dns::names::canonical_name;
 use crate::dns::provider::{DnsProvider, DnsRecord, RecordKind};
-use crate::dns::publish::provider::{
-	Change, Guard, ObservedRecord, OperationOutcome, Precondition, Receipt,
-};
+use crate::dns::publish::provider::{Guard, ObservedRecord};
 use crate::dns::rrset::same_record;
 
 /// What applying did.
@@ -189,12 +187,7 @@ async fn written(writer: &Writer<'_>, record: &DnsRecord) -> bool {
 impl Writer<'_> {
 	/// The set the zone holds at the name and type of `record`.
 	fn set_of(&self, record: &DnsRecord) -> Vec<ObservedRecord> {
-		let name = canonical_name(&record.name);
-		self.observed
-			.iter()
-			.filter(|o| o.record.kind == record.kind && canonical_name(&o.record.name) == name)
-			.cloned()
-			.collect()
+		crate::dns::publish::write::set_at(&self.observed, &record.name, &record.kind)
 	}
 
 	/// Write `record` in its slot. Returns the identity the provider gave it.
@@ -250,43 +243,23 @@ impl Writer<'_> {
 		before: Vec<ObservedRecord>,
 		after: Vec<DnsRecord>,
 	) -> Result<Option<String>, String> {
-		let operation_id = format!("epistle-publish-{}", uuid::Uuid::now_v7());
-		let change = Change {
+		let set = crate::dns::publish::write::SetChange {
 			name: record.name.clone(),
 			kind: record.kind.clone(),
 			before,
 			after: after.clone(),
-			precondition: match &self.revision {
-				Some(revision) => Precondition::Revision(revision.clone()),
-				None => Precondition::Identity,
-			},
-			operation_id: operation_id.clone(),
 		};
-		let provider = self.target.provider;
-		let (identity, revision) = match provider.apply_guarded(&self.zone, change).await {
-			Receipt::Applied { identity, revision } => (identity, revision),
-			Receipt::Unknown => match provider.lookup_operation(&operation_id).await {
-				Ok(OperationOutcome::Applied) => (None, None),
-				_ => {
-					return Err(
-						"the provider did not confirm the change; nothing else is written until it is resolved"
-							.into(),
-					);
-				}
-			},
-			Receipt::PreconditionFailed => {
-				return Err("the zone changed since it was read; nothing was written".into());
-			}
-			Receipt::Unsupported => {
-				return Err("the provider applies no guarded change; nothing was written".into());
-			}
-			Receipt::Rejected(reason) => {
-				return Err(format!(
-					"the provider refused the change: {}",
-					crate::cli::term::sanitize(&reason)
-				));
-			}
-		};
+		let operation = format!("epistle-publish-{}", uuid::Uuid::now_v7());
+		let applied = crate::dns::publish::write::apply(
+			self.target.provider,
+			&self.zone,
+			set,
+			self.revision.clone(),
+			operation,
+		)
+		.await
+		.map_err(|e| e.to_string())?;
+		let (identity, revision) = (applied.identity, applied.revision);
 		// What this run knows of the zone now: the set it wrote.
 		let name = canonical_name(&record.name);
 		self.observed

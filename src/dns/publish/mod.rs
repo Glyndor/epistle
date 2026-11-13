@@ -12,6 +12,7 @@
 //! the default answers `Unsupported` and never falls back to `upsert`.
 
 pub mod provider;
+pub mod write;
 
 pub use provider::{
 	Change, FakeGuardedProvider, Guard, ObservedRecord, OperationOp, OperationOutcome,
