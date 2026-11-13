@@ -2,13 +2,20 @@
 //!
 //! The PostgreSQL images from 18 on keep each major's cluster in its own
 //! directory of the volume (`PGDATA=/var/lib/postgresql/18/docker` was
-//! measured on `postgres:18`), so the new major initialises next to the old
-//! cluster instead of over it. The old one stays on disk, untouched, until
-//! the operator removes it.
+//! measured on `postgres:18`). Their entrypoint also refuses to initialise a
+//! new major at its default `PGDATA` while another major's cluster sits at
+//! `/var/lib/postgresql/*/docker`: `postgres:19rc2` did so beside an 18
+//! cluster on 2026-11-13, so with the stock images the move stops at the
+//! `db` health check and the old major comes back. The old cluster, the dump
+//! and the old image stay while the move can still fail, and go once `mail`
+//! is healthy and the `config`, `ports` and `db` checks pass on the new major.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::cli::init::images::major;
+use crate::cli::stack::images::{Change, Outcome};
+
+mod leftovers;
 
 /// What the upgrade needs from the stack. The real implementation drives
 /// podup; the tests record the calls.
@@ -29,6 +36,18 @@ pub(crate) trait Stack {
 	fn keep_dump(&mut self, name: &str, sql: &[u8]) -> Result<PathBuf, String>;
 	/// Load a dump into the running database, in one transaction.
 	fn load(&mut self, sql: &[u8]) -> Result<(), String>;
+	/// Where the running server keeps its cluster (`SHOW data_directory`).
+	fn data_directory(&mut self) -> Result<String, String>;
+	/// The `config`, `ports` and `db` status areas that now fail, with
+	/// their detail.
+	fn failing_checks(&mut self) -> Vec<(String, String)>;
+	/// Remove `path` inside the `db` container: with its tree when `tree`,
+	/// otherwise only when it is an empty directory.
+	fn remove_in_db(&mut self, path: &str, tree: bool) -> Result<(), String>;
+	/// Delete the dump [`Stack::keep_dump`] wrote at `path`.
+	fn remove_dump(&mut self, path: &Path) -> Result<(), String>;
+	/// Remove the images `change` retired that nothing uses.
+	fn discard_images(&mut self, change: &Change) -> Result<Outcome, String>;
 	/// Report a step to the operator.
 	fn log(&mut self, line: &str);
 }
@@ -61,6 +80,10 @@ pub(crate) fn upgrade(stack: &mut impl Stack, target: &str) -> Result<(), String
 		));
 	}
 	let before = stack.counts()?;
+	// Asked of the old server while it runs: the directory a verified move
+	// removes is the one it reported, never one derived from its major.
+	let old_dir = stack.data_directory()?;
+	let upgraded = compose.replace(&format!("\"{running}\""), &format!("\"{target}\""));
 	stack.log(&format!(
 		"moving the database from PostgreSQL {from} to {to}; mail is stopped meanwhile"
 	));
@@ -72,8 +95,7 @@ pub(crate) fn upgrade(stack: &mut impl Stack, target: &str) -> Result<(), String
 		stack.log(&format!("dump kept at {}", saved.display()));
 		stack.podup(&["stop", "db"])?;
 		swapped = true;
-		stack
-			.write_compose(&compose.replace(&format!("\"{running}\""), &format!("\"{target}\"")))?;
+		stack.write_compose(&upgraded)?;
 		stack.podup(&["up", "-d", "db"])?;
 		stack.wait_healthy("db")?;
 		stack.load(&sql)?;
@@ -88,12 +110,23 @@ pub(crate) fn upgrade(stack: &mut impl Stack, target: &str) -> Result<(), String
 	match result {
 		Ok(saved) => {
 			stack.podup(&["up", "-d"])?;
+			if let Err(why) = verify(stack) {
+				return Err(format!(
+					"the database runs on PostgreSQL {to} with every table's row count unchanged, \
+					 but {why}. Nothing of PostgreSQL {from} was removed: its cluster stays at \
+					 {old_dir} in the epistle-pgdata volume, its image in the storage and the dump \
+					 at {}",
+					saved.display()
+				));
+			}
 			stack.log(&format!(
-				"the database runs on PostgreSQL {to} with every table's row count unchanged. The \
-				 PostgreSQL {from} cluster is still in the epistle-pgdata volume at \
-				 /var/lib/postgresql/{from}, and the dump at {}; remove them once mail is verified",
-				saved.display()
+				"the database runs on PostgreSQL {to} with every table's row count unchanged, mail \
+				 is healthy and config, ports, db pass"
 			));
+			let change = serde_json::from_str(&upgraded)
+				.map(|new| crate::cli::stack::images::change(&document, &new))
+				.unwrap_or_default();
+			leftovers::discard(stack, from, &old_dir, &saved, &change);
 			Ok(())
 		}
 		Err(error) => {
@@ -116,6 +149,24 @@ pub(crate) fn upgrade(stack: &mut impl Stack, target: &str) -> Result<(), String
 			}
 		}
 	}
+}
+
+/// Whether the stack came back healthy on the new major: `mail` reports
+/// healthy and the `config`, `ports` and `db` checks pass, the same bar a
+/// `stack update` has to clear. `Err` names what failed.
+fn verify(stack: &mut impl Stack) -> Result<(), String> {
+	stack
+		.wait_healthy("mail")
+		.map_err(|error| format!("mail did not come back healthy ({error})"))?;
+	let failing = stack.failing_checks();
+	if failing.is_empty() {
+		return Ok(());
+	}
+	let named: Vec<String> = failing
+		.iter()
+		.map(|(area, detail)| format!("{area}: {detail}"))
+		.collect();
+	Err(format!("status fails ({})", named.join("; ")))
 }
 
 #[cfg(test)]

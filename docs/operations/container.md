@@ -94,7 +94,11 @@ upgrade, the saved binaries and the dumps `stack update` took are removed, so
 rollback exists only while an upgrade can still fail; see
 [Rolling back an upgrade](../cli.md#rolling-back-an-upgrade). The same step
 removes the container images the previous compose file ran and the new one does
-not, when no container uses them. Purge removes the host binary store.
+not, when no container uses them. `db upgrade` does the same for a PostgreSQL
+major move: once the stack is healthy on the new major it removes the old
+cluster, its dump and the old image; see
+[Moving PostgreSQL to a new major](../cli.md#moving-postgresql-to-a-new-major).
+Purge removes the host binary store.
 
 The minimum a Podman or Docker compose unit needs is:
 

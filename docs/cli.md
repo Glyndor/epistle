@@ -1357,12 +1357,28 @@ It counts the rows of every table, stops `mail`, dumps the database into
 `<data_dir>/backups/pre-db-upgrade-<old>-to-<new>-<timestamp>.sql.gz`, stops
 `db`, switches its image, starts it, loads the dump in one transaction and
 counts again. The images from PostgreSQL 18 on keep each major's cluster in
-its own directory of the `epistle-pgdata` volume, so the new major starts
-empty beside the old cluster rather than over it. When the counts match, the
+its own directory of the `epistle-pgdata` volume. When the counts match, the
 whole stack starts on the new major; on any failure the old image and its
-untouched cluster come back and `mail` starts again. The old cluster stays
-in the volume at `/var/lib/postgresql/<old>` until it is removed by hand
-after mail is verified.
+untouched cluster come back and `mail` starts again.
+
+The stock images refuse to initialise a new major while the old major's
+cluster is in the volume: `postgres:19rc2` stopped with `Error: in 18+, these
+Docker images are configured to store database data in a format which is
+compatible with "pg_ctlcluster"` beside an 18 cluster. With them the move
+fails at the `db` health check and PostgreSQL 18 comes back on its own data,
+leaving the dump, the pulled image and an empty `/var/lib/postgresql/19/docker`.
+
+Then it waits up to five minutes for `mail` to report healthy and runs the
+`config`, `ports` and `db` checks of `epistle status`, as `stack update` does.
+When they pass, it removes what only the way back needed: the old cluster (the
+data directory the old server reported before the move, with its emptied major
+directory, such as `/var/lib/postgresql/18/docker` and
+`/var/lib/postgresql/18`), the dump it took, and the old PostgreSQL image when
+no container uses it. A directory outside the volume, or one the new cluster
+overlaps, is kept and the command says so; so is anything a removal fails on,
+without failing the upgrade. When `mail` or a check fails, the command exits
+non-zero with the database already on the new major, and keeps the old
+cluster, the dump and the image, naming where they are.
 
 ### Looking at the database
 

@@ -23,7 +23,9 @@ pub enum DbCli {
 	///
 	/// Dumps the database, starts the new major beside the old cluster,
 	/// restores into it and compares the row count of every table. Any
-	/// failure puts the old major back. The old cluster stays in the volume.
+	/// failure puts the old major back. Once mail is healthy and the config,
+	/// ports and db checks pass on the new major, the old cluster, the dump
+	/// and the old image are removed.
 	Upgrade,
 	/// Show the version, size and connections of the stack's PostgreSQL.
 	///
@@ -51,7 +53,7 @@ pub(super) fn run(config: &Config, path: &Path, action: DbCli, json: bool) -> Ex
 					return ExitCode::FAILURE;
 				}
 			};
-			let mut stack = match host::Podup::new(config) {
+			let mut stack = match host::Podup::new(config, path) {
 				Ok(stack) => stack,
 				Err(error) => {
 					super::style::error(format_args!("cannot upgrade the database: {error}"));

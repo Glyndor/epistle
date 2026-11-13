@@ -158,6 +158,7 @@ fn a_fifo_at_the_generated_compose_path_is_refused_instead_of_waited_on() {
 			data_dir: dir.path().to_path_buf(),
 			database: toml::from_str(r#"url = "postgres://epistle@localhost/epistle""#)
 				.expect("database"),
+			config_path: dir.path().join("mail.toml"),
 		};
 		let reading = std::thread::spawn(move || sender.send(stack.compose()).ok());
 		let value = receiver.recv_timeout(Duration::from_secs(5));

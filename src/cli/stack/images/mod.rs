@@ -19,28 +19,28 @@ use std::collections::BTreeSet;
 use serde_json::Value;
 
 mod podman;
-pub(super) use podman::Podman;
+pub(in crate::cli) use podman::Podman;
 
 /// Which references an update stopped naming.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub(in crate::cli::stack) struct Change {
+pub(in crate::cli) struct Change {
 	/// Named by the compose file before the update and not after it.
-	pub(in crate::cli::stack) retired: Vec<String>,
+	pub(in crate::cli) retired: Vec<String>,
 	/// Named by the compose file after the update.
-	pub(in crate::cli::stack) current: Vec<String>,
+	pub(in crate::cli) current: Vec<String>,
 }
 
 /// What discarding the retired images did, one line per image.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub(in crate::cli::stack) struct Outcome {
+pub(in crate::cli) struct Outcome {
 	/// The references whose image was removed.
-	pub(in crate::cli::stack) removed: Vec<String>,
+	pub(in crate::cli) removed: Vec<String>,
 	/// The references whose image stayed, with the reason.
-	pub(in crate::cli::stack) kept: Vec<String>,
+	pub(in crate::cli) kept: Vec<String>,
 }
 
 /// What the container engine of the service account answers.
-pub(in crate::cli::stack) trait Engine {
+pub(in crate::cli) trait Engine {
 	/// The full id of the image `reference` names, `None` when the storage
 	/// has no such image.
 	fn image_id(&mut self, reference: &str) -> Result<Option<String>, String>;
@@ -53,7 +53,7 @@ pub(in crate::cli::stack) trait Engine {
 }
 
 /// The image of every service in a compose document.
-pub(in crate::cli::stack) fn references(compose: &Value) -> BTreeSet<String> {
+pub(in crate::cli) fn references(compose: &Value) -> BTreeSet<String> {
 	compose["services"]
 		.as_object()
 		.into_iter()
@@ -75,7 +75,7 @@ fn usable(reference: &str) -> bool {
 }
 
 /// The references `old` named and `new` does not.
-pub(in crate::cli::stack) fn change(old: &Value, new: &Value) -> Change {
+pub(in crate::cli) fn change(old: &Value, new: &Value) -> Change {
 	let current = references(new);
 	Change {
 		retired: references(old).difference(&current).cloned().collect(),
@@ -86,7 +86,7 @@ pub(in crate::cli::stack) fn change(old: &Value, new: &Value) -> Change {
 /// Remove the retired images nothing uses. `Err` when the engine cannot say
 /// what is in use or what the new compose file runs: nothing is removed
 /// then, since an image cannot be proved unused.
-pub(in crate::cli::stack) fn discard(
+pub(in crate::cli) fn discard(
 	engine: &mut impl Engine,
 	change: &Change,
 ) -> Result<Outcome, String> {
