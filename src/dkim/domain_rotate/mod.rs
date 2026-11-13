@@ -38,6 +38,7 @@ mod request;
 mod state;
 
 pub use publisher::{HandoffPublisher, KeyPublisher, ProviderPublisher, PublishOp};
+pub(crate) use publisher::{publish_key, withdraw_key};
 pub use request::{last_error, pending_request, request_rotation};
 pub use state::{
 	DomainActive, ERROR_FILE, REQUEST_FILE, STATE_BACKUP_FILE, STATE_FILE, active_keys,

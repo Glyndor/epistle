@@ -28,6 +28,8 @@ pub(super) struct Zone {
 	pub log: Mutex<Vec<String>>,
 	/// A publication to a name containing this is refused.
 	pub refuse_publish: Mutex<Option<String>>,
+	/// How many cycles asked the publisher to build its provider again.
+	pub refreshes: std::sync::atomic::AtomicUsize,
 }
 
 impl Zone {
@@ -52,6 +54,11 @@ impl Zone {
 }
 
 impl KeyPublisher for Zone {
+	fn refresh(&self) {
+		self.refreshes
+			.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+	}
+
 	fn publish<'a>(&'a self, name: &'a str, value: &'a str) -> PublishOp<'a> {
 		Box::pin(async move {
 			if let Some(refused) = self.refuse_publish.lock().unwrap().as_deref()

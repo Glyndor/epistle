@@ -95,6 +95,9 @@ impl DomainRotator {
 	/// One pass of the server's background work for this domain: the
 	/// operator's request first, then the scheduled tick when `auto_due`.
 	pub async fn cycle(&self, now: u64, auto_due: bool) -> Result<(), RotateError> {
+		// The provider is built once per cycle, so a credential that changed
+		// is picked up without a restart.
+		self.publisher.refresh();
 		let performed = match self.serve_request(now).await {
 			Ok(performed) => performed,
 			Err(error) => {

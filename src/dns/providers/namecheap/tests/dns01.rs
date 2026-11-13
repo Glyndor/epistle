@@ -44,8 +44,9 @@ async fn publishes(domain: &str, label: &str) {
 		.await
 		.expect("published at the requested DNS owner");
 	let s = state.lock().expect("state");
-	// One lookup of the registered zone, then the read before setHosts.
-	assert_eq!(s.get_hosts_calls.len(), 2);
+	// One lookup of the registered zone, the snapshot that finds no
+	// precondition to take, then the read before setHosts.
+	assert_eq!(s.get_hosts_calls.len(), 3);
 	for call in &s.get_hosts_calls {
 		assert_eq!(call["SLD"], "example");
 		assert_eq!(call["TLD"], "org");

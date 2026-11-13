@@ -175,7 +175,7 @@ impl TxtVisibility for Visibility {
 }
 
 fn dns01(answer: bool) -> (Arc<Journal>, Arc<Visibility>, Dns01) {
-	dns01_with(answer, &[])
+	dns01_with(answer, &["mail.example.org"])
 }
 
 /// The responder over a credential that covers `zones`.
@@ -353,7 +353,7 @@ async fn calls_after(provider: &Journal, count: usize) -> Vec<String> {
 #[tokio::test]
 async fn dns01_record_is_removed_when_the_order_is_dropped_waiting_for_propagation() {
 	let client = client_for("dns-01", "valid").await;
-	let provider = Arc::new(Journal::with_zones(&[]));
+	let provider = Arc::new(Journal::with_zones(&["mail.example.org"]));
 	let responder = Dns01::new(provider.clone(), Arc::new(Stalled))
 		.with_bounds(Duration::from_secs(300), Duration::from_secs(5));
 	abandon(&client, Arc::new(responder), Duration::from_millis(100)).await;

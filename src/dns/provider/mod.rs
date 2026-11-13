@@ -665,5 +665,7 @@ fn ensure_private(_path: &Path) -> std::io::Result<()> {
 	Ok(())
 }
 
+pub mod live;
+
 #[cfg(test)]
 mod tests;

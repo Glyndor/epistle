@@ -496,6 +496,14 @@ values the certificate refresh published count as epistle's own too. So:
   RDATA), as Route 53 does (one batch that deletes the record set as read and
   creates it again without the value). Nothing here has been run against a
   real provider account.
+- The other writers use the same guarded write, one record set at a time:
+  the TLSA refresh after a certificate changed, the `dns-01` challenge of an
+  ACME order (added next to the TXT records at `_acme-challenge.<name>`, and
+  withdrawn by its value) and the per-domain DKIM rotation, whether this
+  process writes or the certificates container writes for it (the DKIM record
+  at the selector name is replaced or taken away, and a TXT of another purpose
+  there stays). With a provider that takes no precondition they fall back to
+  the ordinary write they used before.
 - A DMARC record is never replaced by a weaker one: `p=`, `sp=`, `np=` and
   the `adkim=s` / `aspf=s` alignment are compared tag by tag.
 - A record that differs only in TTL or description is not rewritten.
@@ -777,13 +785,16 @@ instead. A different existing destination is refused.
 
 ### Rotating the credential
 
-The reconcile loop and the DKIM rotation build the provider again on every run,
-so a token I replace in the `token_file` is the one the next run writes with,
-with no restart. A `token_env` is a variable of the server process: replacing
-it in the environment, or in the compose file, changes nothing until the server
-restarts. The same holds for the TLSA publication and the `dns-01` challenge,
-which build their provider once at start. A `token_file` is the way to rotate a
-credential without a restart.
+The reconcile loop, the DKIM rotations (the `[dkim]` key and every
+`[[dkim.domain]]` key), the ACME renewal with its `dns-01` challenge and the
+TLSA record, and the TLSA refresh of a `[tls]` pair build the provider again on
+every pass, so a token I replace in the `token_file` is the one the next pass
+writes with, with no restart. When that build fails (a token file the process
+can no longer read, say), the provider built before keeps writing and the log
+says why once; the `[dkim]` rotation instead waits until the build works. A
+`token_env` is a variable of the server process: replacing it in the
+environment, or in the compose file, changes nothing until the server restarts.
+A `token_file` is the way to rotate a credential without a restart.
 
 For a generated stack, the command removes the old token environment entry and
 the read-only mount of a token file the configuration no longer names, adds the
