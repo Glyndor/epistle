@@ -51,11 +51,13 @@ fn scram_admits_an_open_account() {
 }
 
 #[test]
-fn scram_refuses_a_disabled_account_that_proves_the_password() {
-	let mut session = session(gate_directory_arc());
-	let code = scram(&mut session, DISABLED, fixtures::password());
-	assert_eq!(code, 535, "a disabled account must not finish SCRAM");
-	assert_eq!(session.authenticated(), None);
+fn scram_refuses_a_disabled_or_reset_account_that_proves_the_password() {
+	for user in [DISABLED, RESET] {
+		let mut session = session(gate_directory_arc());
+		let code = scram(&mut session, user, fixtures::password());
+		assert_eq!(code, 535, "{user} must not finish SCRAM");
+		assert_eq!(session.authenticated(), None);
+	}
 }
 
 #[test]
@@ -87,7 +89,7 @@ fn the_account_name_still_signs_in_when_its_domain_is_switched_off() {
 fn password_mechanisms_refuse_the_same_accounts() {
 	let password = fixtures::password();
 	let off_address = format!("{OFF_DOMAIN_ACCOUNT}@{OFF_DOMAIN}");
-	for user in [DISABLED, TWO_FACTOR, off_address.as_str()] {
+	for user in [DISABLED, TWO_FACTOR, RESET, off_address.as_str()] {
 		let mut by_plain = session(gate_directory_arc());
 		assert_eq!(plain(&mut by_plain, user, password), 535, "PLAIN {user}");
 		assert_eq!(by_plain.authenticated(), None);
@@ -182,8 +184,8 @@ fn a_token_of_the_built_in_server_opens_a_second_factor_account() {
 }
 
 #[test]
-fn a_token_of_the_built_in_server_for_a_disabled_or_unknown_account_opens_nothing() {
-	for account in [DISABLED, "nobody"] {
+fn a_token_of_the_built_in_server_for_a_disabled_reset_or_unknown_account_opens_nothing() {
+	for account in [DISABLED, RESET, "nobody"] {
 		let (verifier, pair, rng) = own_verifier_and_key();
 		let response = own_bearer_response(&pair, &rng, account);
 		let session = session(gate_directory_arc()).with_oauth(verifier);
@@ -208,12 +210,14 @@ fn a_verified_email_that_only_a_catch_all_or_a_sub_address_matches_opens_nothing
 }
 
 #[test]
-fn a_client_certificate_for_a_disabled_account_is_refused() {
-	let mut session = session(gate_directory_arc());
-	session.set_client_identity(Some("bob@example.org".to_string()));
-	let code = reply_code(&session.command_line("AUTH EXTERNAL ="));
-	assert_eq!(code, 535, "EXTERNAL must not open a disabled account");
-	assert_eq!(session.authenticated(), None);
+fn a_client_certificate_for_a_disabled_or_reset_account_is_refused() {
+	for identity in ["bob@example.org", "dave@example.org"] {
+		let mut session = session(gate_directory_arc());
+		session.set_client_identity(Some(identity.to_string()));
+		let code = reply_code(&session.command_line("AUTH EXTERNAL ="));
+		assert_eq!(code, 535, "EXTERNAL must not open {identity}");
+		assert_eq!(session.authenticated(), None);
+	}
 }
 
 #[test]

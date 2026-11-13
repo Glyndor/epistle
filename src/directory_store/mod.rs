@@ -70,6 +70,8 @@ pub use reload_status::{
 };
 
 mod collisions;
+pub mod credential_reset;
+pub use credential_reset::{CredentialReset, NewPassword, ResetTarget};
 pub mod display_name;
 mod mutate_store;
 mod normalize;
@@ -248,11 +250,15 @@ impl AccountStore {
 	/// dynamic account carries `name`. An address the account does not
 	/// already hold gets the checks `add` runs: `Invalid` outside the
 	/// served domains, `Duplicate` when another account, a static alias or
-	/// a masked address already routes it.
+	/// a masked address already routes it. The password, the SCRAM verifier,
+	/// the TOTP secret and a pending reset are the stored ones, whatever
+	/// `replacement` holds; `new_password` replaces the password in the same
+	/// write.
 	pub fn replace_account(
 		&self,
 		name: &str,
 		replacement: DynamicAccount,
+		new_password: Option<NewPassword>,
 	) -> Result<(), StoreError> {
 		self.mutate_store(|state| {
 			let slot = state
@@ -262,6 +268,7 @@ impl AccountStore {
 				.ok_or_else(|| StoreError::NotFound(name.to_string()))?;
 			let mut fresh = replacement;
 			fresh.name = name.to_string();
+			credential_reset::carry(&state.accounts[slot], &mut fresh, new_password);
 			normalize::account(&mut fresh);
 			fresh.display_name = display_name::stored(fresh.display_name.as_deref())?;
 			// The same checks `add` runs, except for an address the account
@@ -356,6 +363,7 @@ impl AccountStore {
 			.with_scram(scram)
 			.with_totp(totp)
 			.with_disabled(disabled)
+			.with_credential_reset(credential_reset::names(&dynamic))
 			.with_switches(send_off, receive_off)
 			.with_account_quotas(account_quotas)
 			.with_domain_quotas(self.domain_quotas.clone())

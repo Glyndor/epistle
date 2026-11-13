@@ -45,7 +45,7 @@ pub(in crate::cli) fn run_with(
 			Ok(Some(lock)) => Some(lock),
 			Ok(None) => {
 				crate::cli::style::error(
-					"an `epistle rotate --all` is running on this server; back up once it has finished",
+					"an `epistle rotate` is running on this server; back up once it has finished",
 				);
 				return ExitCode::FAILURE;
 			}

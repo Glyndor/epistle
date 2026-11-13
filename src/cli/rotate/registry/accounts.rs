@@ -1,6 +1,6 @@
 //! Credentials of the people and programs that sign in.
 
-use super::{Entry, Handling, TRACKING_ISSUE};
+use super::{Entry, Handling};
 
 pub(super) const ENTRIES: &[Entry] = &[
 	Entry {
@@ -30,14 +30,12 @@ pub(super) const ENTRIES: &[Entry] = &[
 		name: "Account passwords",
 		stored_in: "`accounts.toml` (argon2id and SCRAM verifier) and `[[accounts]] password_hash`",
 		config_fields: &["Account.password_hash"],
-		rotate: Handling::Unsupported {
-			issue: TRACKING_ISSUE,
-			meanwhile: "`epistle account password N` for one account at a time; a static `[[accounts]] password_hash` is replaced in the file",
-		},
-		revoke: Handling::Unsupported {
-			issue: TRACKING_ISSUE,
-			meanwhile: "`epistle account disable N` blocks one account at a time",
-		},
+		rotate: Handling::Epistle(
+			"`epistle rotate --all` (or `epistle rotate --accounts-only`) resets the password of every account in `accounts.toml`, and it signs in nowhere until an administrator sets a new one with `epistle account password N`; a static `[[accounts]] password_hash` is replaced in the file",
+		),
+		revoke: Handling::Epistle(
+			"`epistle rotate --accounts-only` refuses every sign-in of every account in `accounts.toml` at once, `epistle account disable N` one account",
+		),
 		operator_after: &["tell every user to choose a new password"],
 	},
 	Entry {
@@ -45,14 +43,12 @@ pub(super) const ENTRIES: &[Entry] = &[
 		name: "Second-factor (TOTP) secrets of the accounts",
 		stored_in: "`accounts.toml`, sealed with the storage key when storage encryption is on",
 		config_fields: &[],
-		rotate: Handling::Unsupported {
-			issue: TRACKING_ISSUE,
-			meanwhile: "delete the secret of one account (`epistle account 2fa disable N`) and have its user enrol again",
-		},
-		revoke: Handling::Unsupported {
-			issue: TRACKING_ISSUE,
-			meanwhile: "`epistle account 2fa disable N` for one account at a time",
-		},
+		rotate: Handling::Epistle(
+			"`epistle rotate --all` (or `epistle rotate --accounts-only`) deletes every secret, and an account that had one signs in again only once a new one is enrolled, or the second factor is removed on purpose with `epistle account 2fa disable N`",
+		),
+		revoke: Handling::Epistle(
+			"`epistle rotate --accounts-only` for every account, `epistle account 2fa disable N` for one",
+		),
 		operator_after: &["tell every user to enrol their authenticator again"],
 	},
 	Entry {
@@ -60,14 +56,12 @@ pub(super) const ENTRIES: &[Entry] = &[
 		name: "TOTP seeds stored in the clear while storage encryption is off",
 		stored_in: "`accounts.toml`, `totp_secret` as plain base32 when `[storage]` has no key",
 		config_fields: &[],
-		rotate: Handling::Unsupported {
-			issue: TRACKING_ISSUE,
-			meanwhile: "turn on `[storage]` encryption so seeds are sealed, and keep copies of `accounts.toml` off the host; anyone holding a copy can forge codes",
-		},
-		revoke: Handling::Unsupported {
-			issue: TRACKING_ISSUE,
-			meanwhile: "a seed in a stolen copy stays valid until its account enrols again",
-		},
+		rotate: Handling::Epistle(
+			"`epistle rotate --all` deletes every seed with the reset of the accounts; turn on `[storage]` encryption so the new ones are sealed",
+		),
+		revoke: Handling::Epistle(
+			"`epistle rotate --accounts-only`: a seed in a stolen copy stops working once its account is reset",
+		),
 		operator_after: &[
 			"treat every copy of `accounts.toml` taken while encryption was off as holding the seeds",
 		],

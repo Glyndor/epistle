@@ -16,6 +16,7 @@ fn seed_dynamic_account(dir: &std::path::Path) {
 	)
 	.expect("open store");
 	let alice = DynamicAccount {
+		reset: None,
 		send: None,
 		receive: None,
 		name: "alice".to_string(),

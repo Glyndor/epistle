@@ -30,6 +30,7 @@ fn a_run_rotates_every_secret_once_and_hands_the_new_ones_over() {
 			"app-password",
 			"webhook-secret",
 			"srs-secret",
+			"account-reset",
 			"restart"
 		]
 	);

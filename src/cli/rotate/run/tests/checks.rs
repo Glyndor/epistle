@@ -7,7 +7,7 @@ use crate::api::ApiKeyStore;
 use crate::config::Config;
 use crate::directory_store::app_passwords::AppPasswordStore;
 
-use super::fixture::{APP, KEYS, Server, rotate_dir};
+use super::fixture::{ACCOUNT, APP, KEYS, Server, accounts, rotate_dir};
 
 /// The secret the run handed over for `kind` and `item`.
 fn handed<'a>(result: &'a Value, kind: &str, item: &str) -> &'a str {
@@ -63,6 +63,8 @@ pub(super) fn rotated_once(server: &Server, out: &str) -> Value {
 		"the SRS secret the domain had is not its previous_secret: it was rotated twice, or not \
 		 kept"
 	);
+	account_reset(server);
+	assert_eq!(result["accounts_reset"], serde_json::json!([ACCOUNT]));
 	let dir = rotate_dir(server);
 	assert!(
 		!dir.join("journal.json").exists(),
@@ -77,4 +79,27 @@ pub(super) fn rotated_once(server: &Server, out: &str) -> Value {
 		"no record of the finished run"
 	);
 	result
+}
+
+/// Check that [`ACCOUNT`] lost its password and second factor and waits for
+/// both.
+pub(super) fn account_reset(server: &Server) {
+	let account = accounts(&server.data_dir)
+		.dynamic_account(ACCOUNT)
+		.expect("the account is still there");
+	assert_ne!(
+		account.password_hash, server.account_hash,
+		"the account kept its password"
+	);
+	assert!(
+		account.totp_secret.is_none(),
+		"the account kept its TOTP secret"
+	);
+	assert_eq!(
+		account.reset,
+		Some(crate::directory_store::CredentialReset {
+			password: true,
+			second_factor: true
+		})
+	);
 }

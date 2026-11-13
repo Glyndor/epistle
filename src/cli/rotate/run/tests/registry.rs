@@ -27,6 +27,7 @@ fn every_kind_of_step_but_the_restart_maps_to_a_registry_row() {
 		Kind::SrsSecret,
 		Kind::DkimKey,
 		Kind::DkimDomainKey,
+		Kind::AccountReset,
 	] {
 		assert!(
 			HANDLED.iter().any(|(handled, _)| *handled == kind),

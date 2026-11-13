@@ -106,6 +106,10 @@ pub struct Directory {
 	/// Account names administratively disabled (kept on disk, cannot
 	/// authenticate). SCIM `active: false` lands here.
 	disabled: HashSet<String>,
+	/// Account names whose credentials were reset after a compromise
+	/// (`epistle rotate`): they sign in nowhere until an administrator gives
+	/// them a new password and, where they had one, a new second factor.
+	credential_reset: HashSet<String>,
 	/// Storage quota (bytes) per account name; absent falls back to the domain
 	/// quota, then the server default.
 	account_quotas: HashMap<String, u64>,
@@ -220,6 +224,7 @@ impl Directory {
 			scram: HashMap::new(),
 			totp: HashMap::new(),
 			disabled: HashSet::new(),
+			credential_reset: HashSet::new(),
 			account_quotas: HashMap::new(),
 			domain_quotas: HashMap::new(),
 			domain_submission_limits: HashMap::new(),

@@ -254,10 +254,11 @@ impl Cli {
 			Command::Rotate {
 				config,
 				all,
+				accounts_only,
 				dry_run,
 				yes,
 				json,
-			} => crate::cli::rotate::run(&config, all, (dry_run, yes), json),
+			} => crate::cli::rotate::run(&config, (all, accounts_only), (dry_run, yes), json),
 			Command::Webhook {
 				config,
 				action,

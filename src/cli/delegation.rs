@@ -22,9 +22,14 @@ impl Command {
 				..
 			} => false,
 			// The rotation writes the stores and the configuration; the
-			// listing (`--dry-run`) reads nothing.
+			// listing (`--dry-run`) writes nothing.
 			Command::Rotate {
 				all: true,
+				dry_run: false,
+				..
+			}
+			| Command::Rotate {
+				accounts_only: true,
 				dry_run: false,
 				..
 			} => true,

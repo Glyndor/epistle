@@ -37,6 +37,9 @@ pub(in crate::cli::rotate) enum Kind {
 	DkimKey,
 	/// One domain's own `[[dkim.domain]]` key, rotated by the server.
 	DkimDomainKey,
+	/// The passwords and second factors of every dynamic account, reset in
+	/// one write.
+	AccountReset,
 	/// The restart that makes the server read the new configuration.
 	Restart,
 }
@@ -66,8 +69,35 @@ pub(in crate::cli::rotate) enum Intent {
 	/// A rotation the server performs: queued while `active` was the
 	/// selector in service.
 	Queued { active: String },
+	/// The accounts a reset was decided for, each with the digest of the
+	/// password hash it held then: one that no longer holds it was reset, or
+	/// was given a new password since, and is not touched again.
+	Reset {
+		targets: Vec<crate::directory_store::ResetTarget>,
+	},
 	/// Nothing to compare: the step can run again without harm.
 	Again,
+}
+
+/// What a run goes through.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(in crate::cli::rotate) enum Scope {
+	/// Every secret this server can rotate: `rotate --all`.
+	#[default]
+	All,
+	/// Only the reset of the accounts: `rotate --accounts-only`.
+	Accounts,
+}
+
+impl Scope {
+	/// The command that runs this scope, for the messages.
+	pub(in crate::cli::rotate) fn command(self) -> &'static str {
+		match self {
+			Scope::All => "epistle rotate --all",
+			Scope::Accounts => "epistle rotate --accounts-only",
+		}
+	}
 }
 
 /// One step of the run.
@@ -113,6 +143,10 @@ impl Step {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(in crate::cli::rotate) struct Journal {
 	pub version: u32,
+	/// What the run goes through. A journal written before the scope
+	/// existed is a `--all` run.
+	#[serde(default)]
+	pub scope: Scope,
 	/// When the run that wrote it began, epoch seconds.
 	pub started_at: u64,
 	/// Every step, in the order they run.
@@ -129,12 +163,14 @@ pub(in crate::cli::rotate) struct Journal {
 impl Journal {
 	/// A new journal for `steps`, every one pending.
 	pub(in crate::cli::rotate) fn new(
+		scope: Scope,
 		started_at: u64,
 		steps: Vec<Step>,
 		notes: Vec<String>,
 	) -> Self {
 		Journal {
 			version: VERSION,
+			scope,
 			started_at,
 			steps,
 			notes,

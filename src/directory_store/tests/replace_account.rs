@@ -42,7 +42,7 @@ fn with_bob(dir: &std::path::Path) -> AccountStore {
 fn replace_refuses_an_alias_address() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let store = with_bob(dir.path());
-	let result = store.replace_account("bob", account("bob", "Team@example.org"));
+	let result = store.replace_account("bob", account("bob", "Team@example.org"), None);
 	assert!(
 		matches!(result, Err(StoreError::Duplicate(_))),
 		"the address must be refused"
@@ -64,7 +64,7 @@ fn replace_refuses_a_masked_address() {
 		.add_masked("carol", "shop", "example.org", 1)
 		.expect("masked")
 		.address;
-	let result = store.replace_account("bob", account("bob", &masked));
+	let result = store.replace_account("bob", account("bob", &masked), None);
 	assert!(
 		matches!(result, Err(StoreError::Duplicate(_))),
 		"the address must be refused"
@@ -75,7 +75,7 @@ fn replace_refuses_a_masked_address() {
 fn replace_refuses_a_domain_the_server_does_not_serve() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let store = with_bob(dir.path());
-	let result = store.replace_account("bob", account("bob", "bob@elsewhere.example"));
+	let result = store.replace_account("bob", account("bob", "bob@elsewhere.example"), None);
 	assert!(
 		matches!(result, Err(StoreError::Invalid(_))),
 		"the address must be refused"
@@ -88,7 +88,9 @@ fn replace_still_takes_a_free_address_and_keeps_its_own() {
 	let store = with_bob(dir.path());
 	let mut next = account("bob", "bob@example.org");
 	next.addresses.push("robert@example.org".to_string());
-	store.replace_account("bob", next).expect("free address");
+	store
+		.replace_account("bob", next, None)
+		.expect("free address");
 	assert_eq!(
 		store.dynamic_account("bob").unwrap().addresses,
 		["bob@example.org", "robert@example.org"]

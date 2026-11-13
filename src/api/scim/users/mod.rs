@@ -436,22 +436,28 @@ pub async fn put_user(
 		.map_err(ScimError::conflict)?;
 	// The replacement starts from the stored account, so what SCIM does not
 	// model (quota, forwards, catch-all, the `Sent` copy, the send and receive
-	// switches) stays as it was. The password is part of the same write, so it
-	// cannot be overwritten by the hash read above.
-	let mut replacement = DynamicAccount {
+	// switches) stays as it was. The stored credentials are kept under the
+	// store's lock, so a password set since `existing` was read is not undone;
+	// a new password goes in the same write.
+	let replacement = DynamicAccount {
 		addresses,
 		disabled: !body.active,
 		display_name: body.display_name.clone(),
 		..existing
 	};
-	if let Some(plain) = body.password.as_deref() {
-		check_password(plain)?;
-		replacement.password_hash = hash_password(plain, state.store())?;
-		replacement.scram = derive_scram(plain, state.store())?;
-	}
+	let new_password = match body.password.as_deref() {
+		Some(plain) => {
+			check_password(plain)?;
+			Some(crate::directory_store::NewPassword {
+				hash: hash_password(plain, state.store())?,
+				scram: derive_scram(plain, state.store())?,
+			})
+		}
+		None => None,
+	};
 	state
 		.store()
-		.replace_account(&id, replacement)
+		.replace_account(&id, replacement, new_password)
 		.map_err(store_to_scim)?;
 	let stored = lookup(&state, &id)?;
 	Ok(scim_resource(StatusCode::OK, render_user(&stored)))

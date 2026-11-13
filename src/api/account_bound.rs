@@ -34,13 +34,14 @@ pub(crate) fn path_is_account_scoped(path: &str) -> bool {
 }
 
 /// Whether the account `principal` is bound to can still be acted on: it
-/// exists and is not disabled. A principal not bound to one account is not
-/// affected. A disabled account keeps its mail, so without this its keys would
-/// go on reading and sending as if nothing happened.
+/// exists, is not disabled and does not wait for a credential reset to be
+/// completed. A principal not bound to one account is not affected. Such an
+/// account keeps its mail, so without this its keys would go on reading and
+/// sending as if nothing happened.
 pub(crate) fn bound_account_is_live(state: &ApiState, principal: &Principal) -> bool {
 	match principal.bound_account() {
 		Some(name) => {
-			!state.store().is_disabled(name)
+			!state.store().is_locked(name)
 				&& state.accounts().iter().any(|account| account.name == name)
 		}
 		None => true,

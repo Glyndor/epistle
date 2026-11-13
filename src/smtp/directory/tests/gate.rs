@@ -8,37 +8,6 @@ use crate::config::Protocol;
 use crate::smtp::scram::SCRAM_ITERATIONS;
 use crate::test_support::fixtures;
 
-/// Every protocol that authenticates. The match makes a new variant a compile
-/// error here, so the parity checks below cannot skip it.
-fn every_protocol() -> [Protocol; 9] {
-	fn complete(protocol: Protocol) {
-		match protocol {
-			Protocol::Smtp
-			| Protocol::Submission
-			| Protocol::Submissions
-			| Protocol::Api
-			| Protocol::Imaps
-			| Protocol::Imap
-			| Protocol::Pop3s
-			| Protocol::ManageSieve
-			| Protocol::WebDav => {}
-		}
-	}
-	let all = [
-		Protocol::Smtp,
-		Protocol::Submission,
-		Protocol::Submissions,
-		Protocol::Api,
-		Protocol::Imaps,
-		Protocol::Imap,
-		Protocol::Pop3s,
-		Protocol::ManageSieve,
-		Protocol::WebDav,
-	];
-	all.into_iter().for_each(complete);
-	all
-}
-
 #[test]
 fn an_open_account_is_admitted_by_every_proof() {
 	let directory = gate_directory();
@@ -95,7 +64,7 @@ fn the_password_path_refuses_the_same_accounts_on_every_protocol() {
 	let directory = gate_directory();
 	let off_address = format!("{OFF_DOMAIN_ACCOUNT}@{OFF_DOMAIN}");
 	for protocol in every_protocol() {
-		for login in [DISABLED, TWO_FACTOR, off_address.as_str()] {
+		for login in [DISABLED, TWO_FACTOR, RESET, off_address.as_str()] {
 			assert_eq!(
 				directory.authenticate(login, fixtures::password(), protocol),
 				None,
@@ -151,7 +120,7 @@ fn an_open_account_plans_a_real_exchange() {
 #[test]
 fn a_refused_account_plans_a_decoy_counted_against_it() {
 	let directory = gate_directory();
-	for name in [DISABLED, TWO_FACTOR] {
+	for name in [DISABLED, TWO_FACTOR, RESET] {
 		let plan = directory.plan_scram(name, None, Protocol::Imaps);
 		assert_eq!(
 			plan.refusal,

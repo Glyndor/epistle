@@ -11,6 +11,7 @@ pub(super) mod list;
 pub(super) mod masked;
 pub(super) mod protocol;
 pub(super) mod protocol_refusal;
+pub(super) mod reset;
 pub(super) mod switches;
 pub(super) mod timing;
 

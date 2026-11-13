@@ -20,6 +20,20 @@ impl Directory {
 		self.disabled.contains(&account.to_ascii_lowercase())
 	}
 
+	/// Mark the accounts whose credentials were reset and are not yet
+	/// replaced. Like a disabled account, such an account keeps its mail and
+	/// signs in nowhere; names are lowercased for the same reason.
+	pub fn with_credential_reset(mut self, names: impl IntoIterator<Item = String>) -> Self {
+		self.credential_reset = names.into_iter().map(|n| n.to_ascii_lowercase()).collect();
+		self
+	}
+
+	/// Whether `account` waits for the credentials a reset asked for.
+	pub fn awaits_credential_reset(&self, account: &str) -> bool {
+		self.credential_reset
+			.contains(&account.to_ascii_lowercase())
+	}
+
 	/// Attach the per-account protocol allowlist (account name → set of
 	/// protocols the account may authenticate through). Account names are
 	/// lowercased to match `credentials()`. An absent entry is
