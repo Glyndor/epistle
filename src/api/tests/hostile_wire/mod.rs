@@ -1,33 +1,43 @@
-//! Real HTTP peers with an out-of-process wall-clock and Linux RSS watchdog.
+//! Real HTTP peers with an out-of-process wall-clock and Linux memory watchdog.
 
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+#[cfg(all(test, target_os = "linux"))]
+mod watchdog;
+
 const CHILD: &str = "EPISTLE_HOSTILE_HTTP_CHILD";
 const DEADLINE: Duration = Duration::from_secs(30);
-/// The ceiling is for a worker that buffers without bound, not for the size
-/// of a healthy one. The isolated worker peaks near 80 MiB on a laptop and
-/// crossed 128 MiB once in CI, where a many-core runner gives the allocator
-/// more arenas, so the line sits at twice that.
-const MAX_RSS_KIB: u64 = 256 * 1024;
+/// The ceiling is for a worker that buffers without bound, so it watches the
+/// anonymous memory (`RssAnon`: heap, stacks, mmap) and not the whole RSS.
+/// `VmHWM` also counts the file pages of the test binary that the kernel has
+/// mapped, and that binary is ~1 GB with debug info: on a laptop the isolated
+/// worker showed `VmHWM` of 66 to 90 MiB, of which 53 to 69 MiB were
+/// `RssFile` and only 7 to 27 MiB `RssAnon` (14 workers, 10 ms polling,
+/// `MALLOC_ARENA_MAX` made no difference). How many file pages are resident
+/// depends on read-ahead and fault-around of the host, not on the code, which
+/// is why a CI runner crossed the old 256 MiB `VmHWM` line in an unrelated
+/// test. The anonymous peak is 27 MiB at most, so 128 MiB leaves a factor of
+/// four and still stops a worker that keeps growing (see `watchdog`).
+const MAX_ANON_KIB: u64 = 128 * 1024;
 
 /// A build instrumented for coverage keeps counters for every line and its
 /// worker peaks several times higher than a plain one while the code is
 /// the same, so the ceiling is four times higher there. `cargo llvm-cov`
 /// sets both variables for the test processes it starts.
-fn max_rss_kib() -> u64 {
+fn max_anon_kib() -> u64 {
 	let instrumented = std::env::var_os("LLVM_PROFILE_FILE").is_some()
 		|| std::env::var_os("CARGO_LLVM_COV").is_some();
 	if instrumented {
-		MAX_RSS_KIB * 4
+		MAX_ANON_KIB * 4
 	} else {
-		MAX_RSS_KIB
+		MAX_ANON_KIB
 	}
 }
 
 /// Return true in the supervisor, false in the isolated test worker.
 /// A process deadline also catches synchronous handlers that never yield.
-/// The RSS ceiling includes runtime, fixtures and request/response buffers.
+/// The memory ceiling includes runtime, fixtures and request/response buffers.
 pub(in crate::api) fn supervised(module: &str, test: &str) -> bool {
 	let name = format!("{}::{test}", module.split_once("::").unwrap().1);
 	if std::env::var(CHILD).as_deref() == Ok(name.as_str()) {
@@ -51,15 +61,15 @@ pub(in crate::api) fn supervised(module: &str, test: &str) -> bool {
 		}
 		#[cfg(target_os = "linux")]
 		if let Ok(status) = std::fs::read_to_string(format!("/proc/{}/status", child.id())) {
-			let peak = status.lines().find_map(|line| {
-				line.strip_prefix("VmHWM:")?
+			let anon = status.lines().find_map(|line| {
+				line.strip_prefix("RssAnon:")?
 					.split_whitespace()
 					.next()?
 					.parse::<u64>()
 					.ok()
 			});
-			if peak.is_some_and(|kib| kib > max_rss_kib()) {
-				violation = Some("HTTP worker exceeded its peak RSS ceiling");
+			if anon.is_some_and(|kib| kib > max_anon_kib()) {
+				violation = Some("HTTP worker exceeded its anonymous memory ceiling");
 			}
 		}
 		if violation.is_some() {
