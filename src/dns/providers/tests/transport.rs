@@ -117,7 +117,8 @@ fn record() -> DnsRecord {
 	)
 }
 
-/// The three operations, each with its error. Route 53 does not list.
+/// The three operations, each with its error. A provider that does not list
+/// answers `Unsupported` to the listing.
 async fn outcomes(client: &dyn DnsProvider) -> [(&'static str, Option<ProviderError>); 3] {
 	[
 		("list", client.list("example.org").await.err()),
@@ -237,12 +238,7 @@ async fn a_body_without_an_end_is_refused_at_the_cap() {
 	.await;
 	for (name, client) in providers(&base) {
 		let before = sent.load(Ordering::SeqCst);
-		// Route 53 reads a body on the way to a write, not on a list.
-		let error = if name == "route53" {
-			client.upsert("example.org", record()).await.err()
-		} else {
-			client.list("example.org").await.err()
-		};
+		let error = client.list("example.org").await.err();
 		let Some(ProviderError::Remote(message)) = error else {
 			panic!("{name}: an endless body was not refused: {error:?}");
 		};
@@ -320,11 +316,7 @@ async fn a_body_that_drips_cannot_hold_a_call() {
 	TEST_REQUEST_TIMEOUT.with(|t| t.set(None));
 	for (name, client) in named {
 		let started = std::time::Instant::now();
-		let error = if name == "route53" {
-			client.upsert("example.org", record()).await.err()
-		} else {
-			client.list("example.org").await.err()
-		};
+		let error = client.list("example.org").await.err();
 		assert!(
 			matches!(error, Some(ProviderError::Remote(_))),
 			"{name}: {error:?}"
