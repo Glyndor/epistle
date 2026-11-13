@@ -176,10 +176,17 @@ async fn report(
 				return ExitCode::FAILURE;
 			}
 		};
-		let checks = dns::check_domain(domain, hostname, &selectors, dns).await;
+		let checks = dns::check_domain_for_role(
+			domain,
+			hostname,
+			&selectors,
+			config.domain_role(domain),
+			dns,
+		)
+		.await;
 		// A record of a group the configuration skips is not published on
 		// purpose: it is not missing, and it is not drift.
-		let checks = crate::dns::skip::split_checks(checks, &config.dns_publish.skip_set());
+		let checks = crate::dns::skip::split_checks(checks, &config.skip_set());
 		steps.clear();
 		print_group(out, domain, &checks, " \u{2014}", decor);
 		for _ in &checks {

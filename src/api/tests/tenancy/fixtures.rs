@@ -11,7 +11,7 @@ use crate::imap::mailbox::{self, Flag, Snapshot};
 use crate::queue::SuppressionList;
 use crate::smtp::session::AcceptedMessage;
 use crate::storage::{FsSpool, MessageCrypto};
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 
 pub(super) fn tenant_key() -> &'static str {
 	fixtures::api_key()

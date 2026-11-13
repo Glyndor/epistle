@@ -16,6 +16,8 @@ use crate::smtp::directory::Resolution;
 
 fn static_account() -> Account {
 	Account {
+		send: None,
+		receive: None,
 		display_name: None,
 		name: "alice".to_string(),
 		addresses: vec!["alice@example.org".to_string()],

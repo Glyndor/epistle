@@ -157,6 +157,8 @@ async fn a_list_sender_carries_the_list_fields_on_all_three_paths() {
 fn list_state(dir: &std::path::Path) -> crate::api::ApiState {
 	let domains = vec!["example.org".to_string()];
 	let accounts = vec![crate::config::Account {
+		send: None,
+		receive: None,
 		display_name: None,
 		name: "alice".to_string(),
 		addresses: vec![

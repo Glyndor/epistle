@@ -33,21 +33,22 @@
 //! A UTF-8 text file, one record per line, fields separated by a single space:
 //!
 //! ```text
-//! EPISTLE-MAILBOX-INDEX 2
-//! gen <highest_modseq> <message_count>
+//! EPISTLE-MAILBOX-INDEX 3
+//! gen <highest_modseq> <message_count> <names_digest_hex>
 //! <uuid> <uid> <plaintext_size> <internaldate_secs>.<nanos> <modseq> <flag,flag,...>
 //! ...
 //! ```
 //!
 //! Line 1 is the magic + format version; an unknown version is ignored. Line 2
-//! is the generation stamp: the mailbox's highest mod-sequence and the `.eml`
-//! file count at build time. The remaining lines are the message records in the
-//! same sequence order `Snapshot::open` produces (UUID-sorted). Flags are
+//! is the generation stamp: the mailbox's highest mod-sequence, the `.eml`
+//! file count and a digest of the `.eml` names at build time. The remaining lines are the message records in the
+//! same sequence order `Snapshot::open` produces (UID-sorted). Flags are
 //! comma-joined: system flag tokens carry their lowercase wire form without the
 //! leading backslash (e.g. `seen`), user keywords carry a `k:` prefix and the
 //! raw atom (e.g. `k:Junk`); an empty flag set is a trailing empty field.
 //!
-//! Version 2 added user-defined keywords (RFC 9051 §2.3.2). A version-1 index
+//! Version 3 added the digest of the names to the stamp, so a mailbox that lost
+//! a message and gained another reads as changed. Version 2 added user-defined keywords (RFC 9051 §2.3.2). A version-1 index
 //! (no keywords in the file) is still parseable: every token is treated as a
 //! system flag, and any future migration is the file-write that bumps the
 //! header.
@@ -64,40 +65,57 @@ use super::mailbox::{Flag, MessageRef};
 const MAGIC: &str = "EPISTLE-MAILBOX-INDEX";
 
 /// Current on-disk format version. A file with any other version is ignored.
-const VERSION: u32 = 2;
+const VERSION: u32 = 3;
 
 /// The path of a mailbox's index file.
 fn index_path(account_dir: &Path) -> std::io::Result<PathBuf> {
 	state_file(account_dir, StateFile::Index)
 }
 
-/// The current mailbox generation: its highest mod-sequence and `.eml` count.
+/// The current mailbox generation: its highest mod-sequence, its `.eml` count
+/// and a digest of the `.eml` names.
 ///
-/// Both are cheap: the mod-sequence is the persisted `.modseqctr` counter (one
-/// small read) and the count is a single `read_dir` pass with no per-file work.
-/// A mismatch on either field versus the stored stamp means the index is stale.
-pub(super) fn current_generation(account_dir: &Path) -> (u64, usize) {
+/// All three are cheap: the mod-sequence is the persisted `.modseqctr` counter
+/// (one small read) and the other two come from a single `read_dir` pass with
+/// no per-file work. A mismatch on any field versus the stored stamp means the
+/// index is stale. The digest is what tells a mailbox that lost one message and
+/// gained another apart from the one that was indexed: delivery and POP3 change
+/// the files without moving the mod-sequence, and the count alone is the same
+/// after a delete and a delivery.
+pub(super) fn current_generation(account_dir: &Path) -> (u64, usize, u64) {
 	let modseq = super::modseq::read_counter(account_dir).max(1);
-	let count = match crate::util::fs_walk::read_dir(account_dir) {
+	let (count, names) = match crate::util::fs_walk::read_dir(account_dir) {
 		Ok(entries) => entries
 			.flatten()
 			.filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
-			.filter(|entry| {
+			.filter_map(|entry| {
 				entry
 					.file_name()
 					.to_str()
-					.is_some_and(|name| name.ends_with(".eml"))
+					.filter(|name| name.ends_with(".eml"))
+					.map(name_hash)
 			})
-			.count(),
-		Err(_) => 0,
+			.fold((0usize, 0u64), |(count, sum), hash| {
+				(count + 1, sum.wrapping_add(hash))
+			}),
+		Err(_) => (0, 0),
 	};
-	(modseq, count)
+	(modseq, count, names)
+}
+
+/// A stable 64-bit hash (FNV-1a) of a file name. The names are added up, so the
+/// digest does not depend on the order `read_dir` lists them in, and it is the
+/// same across runs and builds, which a standard hasher does not promise.
+fn name_hash(name: &str) -> u64 {
+	name.bytes().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+		(hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
+	})
 }
 
 /// Load the index if it exists, parses cleanly, has the current version, and its
 /// stamp matches `generation`. Any deviation returns `None` so the caller falls
 /// back to the authoritative filesystem scan (fail closed).
-pub(super) fn load(account_dir: &Path, generation: (u64, usize)) -> Option<Vec<MessageRef>> {
+pub(super) fn load(account_dir: &Path, generation: (u64, usize, u64)) -> Option<Vec<MessageRef>> {
 	let text = index_path(account_dir)
 		.and_then(crate::util::fs_walk::read_to_string)
 		.ok()?;
@@ -118,7 +136,8 @@ pub(super) fn load(account_dir: &Path, generation: (u64, usize)) -> Option<Vec<M
 	}
 	let stamp_modseq: u64 = stamp_fields.next()?.parse().ok()?;
 	let stamp_count: usize = stamp_fields.next()?.parse().ok()?;
-	if (stamp_modseq, stamp_count) != generation {
+	let stamp_names = u64::from_str_radix(stamp_fields.next()?, 16).ok()?;
+	if (stamp_modseq, stamp_count, stamp_names) != generation {
 		return None;
 	}
 
@@ -208,7 +227,7 @@ fn parse_flags(field: &str) -> Option<Vec<Flag>> {
 /// fail the open — the snapshot already succeeded from the scan.
 pub(super) fn write(
 	account_dir: &Path,
-	generation: (u64, usize),
+	generation: (u64, usize, u64),
 	messages: &[MessageRef],
 ) -> std::io::Result<()> {
 	let mut out = String::with_capacity(64 + messages.len() * 64);
@@ -220,6 +239,8 @@ pub(super) fn write(
 	out.push_str(&generation.0.to_string());
 	out.push(' ');
 	out.push_str(&generation.1.to_string());
+	out.push(' ');
+	out.push_str(&format!("{:016x}", generation.2));
 	out.push('\n');
 	for message in messages {
 		write_record(&mut out, message);

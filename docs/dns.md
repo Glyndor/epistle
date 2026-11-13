@@ -34,6 +34,65 @@ published record always reaches a port the server answers on. The
 published only when a listener serves the client setup documents, and the
 JMAP locator only when the configuration carries the API that serves it.
 
+## Domain roles
+
+A hosted domain has a role: `full` (the default), `send-only`, `receive-only`
+or `disabled`. The role says what the domain does with mail, and the DNS
+follows it:
+
+| Role | Where it comes from | MX | SPF | DKIM | DMARC | MTA-STS, TLS-RPT, SRV, autoconfig |
+|---|---|---|---|---|---|---|
+| `full` | the default | the mail host | `v=spf1 mx -all` | published | `quarantine`, `rua=` | published |
+| `send-only` | `send_only_domains` | the mail host | `v=spf1 mx -all` | published | `quarantine`, no `rua=` | left out |
+| `receive-only` | `receive_only_domains` | the mail host | `v=spf1 -all` | left out | `reject`, `rua=` | published |
+| `disabled` | `disabled_domains` | `0 .` (null MX) | `v=spf1 -all` | left out | `reject`, no `rua=` | left out |
+
+`disabled` is the domain that neither sends nor receives, and it wins over the
+other two lists. A domain cannot be in both `send_only_domains` and
+`receive_only_domains`. A receive-only domain keeps the client locators and
+`autoconfig`: they are one group, the mailboxes of the domain are read through
+them, and a submission locator there points at a server that refuses to send as
+the domain. A message that claims a domain that sends nothing has no
+legitimate sender, so its DMARC policy is `reject` from the start; `dns
+lockdown` still ramps a record that is at a weaker policy, and never weakens a
+stricter one. Receive-only and disabled domains also refuse to send: nobody
+owns an address in them, whichever way the mail is submitted.
+
+Disabling a domain therefore changes its DNS. In automatic mode the publisher
+retires, through its ledger, the DKIM, MTA-STS and other records it had
+written, and replaces the MX and SPF it owns; `domain enable` puts them back,
+except the DMARC record: the publisher never replaces a DMARC record with a
+weaker one, so it stays at `p=reject` without `rua=` until you edit it by hand.
+A message already in flight that was signed with the key loses it from DNS
+before it is verified, so disable a domain once its outbound queue is empty.
+`verify-dns` and `status` expect the same records: the null SPF and null MX are
+the ones that pass, and the DKIM key of a domain that sends nothing is
+`skipped`, not missing.
+
+## Send-only domains
+
+A send-only domain is one that only sends mail through this server, with no mailboxes of
+its own to receive in or set up clients for. It needs SPF, DKIM, DMARC and MX,
+and none of the MTA-STS, TLS-RPT, SRV, `autoconfig` and `autodiscover`
+records. Its DMARC record carries no `rua=`: `domain add` does not create a
+`postmaster@` address on a hosted domain, so a report address there would only
+bounce.
+
+```sh
+epistle domain add notifications.example.org --send-only
+epistle domain set example.net --send-only
+epistle domain set example.net --full
+epistle domain set example.net --receive-only
+```
+
+The role is one of the inputs of the record set, so every command reads the
+same answer: `dns-records`, `domain add`, `srv-records`, `verify-dns`,
+`status` and the publisher. `verify-dns` reports the omitted records as
+`skipped`, not as missing. Changing the role changes what is expected; in
+automatic mode the publisher then retires, through its ledger, the records it
+had written for the groups the new role leaves out, and never a record it did
+not write. `epistle domain list` and `domain show` name the role.
+
 ## The essential four
 
 These decide whether your mail is delivered at all.
@@ -162,7 +221,7 @@ line, the alert engine can watch `dmarc_report_rows_failing`, and
 
 ### Locking the zone against spoofing
 
-`epistle dns lockdown [<domain>] [--yes] [--json] [--undo] [--dmarc reject]`
+`epistle dns lockdown [<domain>] [--yes] [--json] [--undo] [--dmarc reject] [--strict-alignment]`
 (and the `dns` flag `--dry-run`) makes sure nobody can send mail as the
 domain or a name under it from somewhere else. It reads the zone through
 the `[dns]` provider, prints the plan (`--json` prints the same plan as
@@ -173,16 +232,27 @@ JSON), asks, and publishes:
   already there stays), `np=reject`
   (DMARCbis, names that do not exist) is set at once, `pct` is dropped,
   and every other tag (`rua`, `ruf`, `adkim`, `aspf`, `fo`, `ri`) stays as
-  written. `--dmarc reject` goes straight to `reject`. A DMARC record
+  written (`adkim=r` and `aspf=r` stay relaxed, and an absent tag stays
+  absent). `--strict-alignment` also sets `adkim=s` and `aspf=s`, so a
+  message from a subdomain no longer aligns with the organizational domain;
+  a record that already has both is `unchanged`. `--dmarc reject` goes
+  straight to `reject`. A DMARC record
   that cannot be read, a second one, or a CNAME at `_dmarc` is left alone
   and reported.
 - `v=spf1 -all` (sends no mail) and `MX 0 .` (RFC 7505, accepts no mail)
-  at every name with an A, AAAA or CNAME, except: names epistle serves
-  (each hosted domain, the mail hostname, `autoconfig`, `autodiscover`,
-  `mta-sts`), service names (`_dmarc`, `_domainkey` and DKIM selectors,
-  `_mta-sts`, `_smtp._tls`), MX targets, CNAMEs (no record may sit next
-  to a CNAME, RFC 1034 section 3.6.2), and names with an SPF or MX of
-  their own. Each is listed as left as is, with the reason.
+  at every name under the domain that is not declared as sending, at any
+  depth. A name counts when it owns any record (an A, a TXT, an SRV, not
+  only an address), when it is the parent of a name that does (an empty
+  non-terminal: the wildcard never answers for it, because it exists), and
+  for the apex of the domain even when the zone has no address record
+  there. The exceptions: names epistle serves (each hosted domain, the mail
+  hostname, `autoconfig`, `autodiscover`, `mta-sts`), the names `[dns_publish]
+  senders` lists (see [`configuration.md`](configuration.md#dns_publish);
+  only the exact name, not the names under it), service names (`_dmarc`,
+  `_domainkey` and DKIM selectors, `_mta-sts`, `_smtp._tls`), MX targets,
+  CNAMEs (no record may sit next to a CNAME, RFC 1034 section 3.6.2), and
+  names with an SPF or MX of their own. Each is listed as left as is, with
+  the reason.
 - `*.<domain>` `v=spf1 -all`, only when the zone has no wildcard. It
   covers names that do not exist; a wildcard never applies to a name
   with records of its own.
@@ -201,6 +271,15 @@ JSON), asks, and publishes:
   not a delegation. The lockdown reads the whole zone first: a provider
   that cannot list it (`route53`, `rfc2136`) makes the command stop
   before it writes anything.
+
+With `[dns_publish] null_records = true`, automatic mode keeps the null SPF,
+the null MX and the wildcard true with the same decision, as records of the
+ledger: a name added to the zone is covered on the next run, and a name that
+becomes a sender (`senders`), gets an SPF or MX of its own or is delegated
+loses the records epistle published, and only those. A domain inside a
+delegation gets none. `epistle status` lists, under `Null records <domain>`,
+the names a hosted domain has that are not covered yet, whether the option
+is on or not. The DMARC policy still moves only when you run the command.
 
 Before a step up, the plan lists the senders that failed DMARC in the
 aggregate reports epistle received for the domain in the last 30 days
@@ -265,7 +344,10 @@ change (ACME renewal or a replaced `[tls]` pair):
   and leaves the previous value next to the new one until the next rotation. A
   provider that can only replace the whole set does not write while foreign
   records are there: the refresh stays pending and `status` names them.
-  Replacing everything needs you to remove them or publish by hand.
+  Replacing everything needs you to remove them or publish by hand. A value
+  stays known as this instance's until a write that went through leaves it
+  out, so refreshes the provider refused in between do not turn an old value
+  into one that is kept for good.
 - **Zone.** The zone the credential sees is not assumed to serve the name. If
   the zone lists an NS delegation at or above `_25._tcp.<hostname>` the write
   is refused. Providers that cannot list their zone (`route53`, `rfc2136`)
@@ -368,6 +450,43 @@ values the certificate refresh published count as epistle's own too. So:
   replaces the whole set of an MX, SRV, CAA, TLSA, A, AAAA or CNAME on a write,
   so a set that holds a foreign value is a conflict, and so is a second SPF or
   DMARC record at a name.
+- That promise holds against the listing the plan was made from. No provider
+  API takes a condition on a write, so a record another account adds or
+  changes between that listing and the write is not always seen. Cloudflare,
+  DigitalOcean, Bunny, Porkbun, DNSimple and OVH read the name and type again
+  right before they write, stop with `the zone changed since it was read` when
+  the set is not the one that was planned, and address records by id, so they
+  only update or delete records the plan listed; a change made in the moment
+  between that read and the write is still not detected. (OVH publishes the
+  zone once after the writes, as it only does so on request.) Spaceship has no
+  ids, but it removes a record by its type, name and value, so it gets the same
+  check: it reads the name and type again, stops when the set is not the one
+  that was planned, and only ever names records the plan listed (a replaced
+  record is added first and removed after, and a save is never forced, so a
+  conflict Spaceship finds is refused instead of resolved by dropping a
+  record). Google Cloud DNS reads the set again too, but does not rely on that
+  read: it applies a change atomically and its documentation says the
+  deletions of a change must match the live record set exactly, so a change
+  whose deletions no longer match is refused and nothing is written. epistle
+  deletes the set as it read it and adds the new one in one change, so a
+  change by another account in the moment between the read and the write is
+  detected too (the status code of that refusal is not documented, so epistle
+  treats 412 and 409 as a failed precondition and any other refusal as a
+  refusal of the change). deSEC, GoDaddy and Namecheap take no precondition at
+  all: their APIs document no ETag, revision or conditional request, and none
+  removes one value by itself (deSEC and GoDaddy replace the whole record set
+  with the list they are sent, Namecheap rewrites the whole host list of the
+  zone). A record added to that set between the read and the write is lost
+  with it, and nothing epistle can send closes that window. For those
+  providers `epistle dns publish` says so under the zone (`note: this
+  provider takes no precondition on a write...`, and the zone in `unguarded`
+  with `--json`), and after a real `--undo` it says how many records went that way (`N of
+  them went without a precondition`; `without_precondition` marks each one in
+  the `--json` report). RFC 2136 and Route 53 cannot list a zone (Route 53's API can, but the
+  provider does not parse its XML yet), so the command does not run against
+  them at all; both remove one value exactly (an UPDATE that names the RDATA,
+  and one batch that deletes the record set as read and creates it again
+  without the value). Nothing here has been run against a real provider account.
 - A DMARC record is never replaced by a weaker one: `p=`, `sp=`, `np=` and
   the `adkim=s` / `aspf=s` alignment are compared tag by tag.
 - A record that differs only in TTL or description is not rewritten.
@@ -391,8 +510,10 @@ keys are left too, since they may still sign mail; `epistle dkim cleanup`
 retires keys. The removal takes the record epistle published and nothing
 else: the provider is asked for the exact removal, so a record another account
 wrote between the listing and the removal is still there. A provider that
-cannot remove one value (its API rewrites the whole set of the name) removes
-the record the ordinary way. If the ledger cannot be saved after a removal,
+cannot remove one value without a precondition (deSEC, GoDaddy and Namecheap
+replace the whole set of the name, or the whole zone, with what they read, so
+a record added between the read and the write would be lost) removes the
+record the ordinary way, and that window stays open for it. If the ledger cannot be saved after a removal,
 the report of what was removed is printed and the command fails: the record is
 out of the zone and the ledger still lists it, so the next run withdraws it
 again.
@@ -644,6 +765,16 @@ underscores), and replaces `dns.token` and `dns.token_env` with
 `dns.token_file`. With
 `--token-env NAME` or `--token-file /absolute/path`, it imports that source
 instead. A different existing destination is refused.
+
+### Rotating the credential
+
+The reconcile loop and the DKIM rotation build the provider again on every run,
+so a token I replace in the `token_file` is the one the next run writes with,
+with no restart. A `token_env` is a variable of the server process: replacing
+it in the environment, or in the compose file, changes nothing until the server
+restarts. The same holds for the TLSA publication and the `dns-01` challenge,
+which build their provider once at start. A `token_file` is the way to rotate a
+credential without a restart.
 
 For a generated stack, the command removes the old token environment entry and
 the read-only mount of a token file the configuration no longer names, adds the

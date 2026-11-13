@@ -31,6 +31,7 @@ use std::path::Path;
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 
+use super::caldav_filter::{MAX_QUERY_WORK, MAX_REQUEST_WORK};
 use super::caldav_hrefs::hrefs;
 #[cfg(test)]
 use super::caldav_hrefs::{SCAN_STEPS, find_open};
@@ -536,6 +537,9 @@ async fn collect_events_filtered(
 	let Ok(mut dir) = tokio::fs::read_dir(collection).await else {
 		return;
 	};
+	// One budget for the whole request: every object draws from it, so the
+	// per-object bound cannot be multiplied by the size of the collection.
+	let mut request_left = MAX_REQUEST_WORK;
 	while let Ok(Some(child)) = dir.next_entry().await {
 		let Ok(kind) = child.file_type().await else {
 			continue;
@@ -575,9 +579,22 @@ async fn collect_events_filtered(
 		// Apply the filter. An empty filter (no `comp-filter`
 		// children) is a no-op, so the call is cheap.
 		let text = String::from_utf8_lossy(&bytes);
-		match super::caldav_filter::matches(filter, &text) {
+		// An object gets the smaller of its own bound and what the request
+		// has left, and pays for what it spends.
+		let mut left = request_left.min(MAX_QUERY_WORK);
+		let granted = left;
+		let verdict = super::caldav_filter::matches_within(filter, &text, &mut left);
+		request_left -= granted - left;
+		match verdict {
 			Ok(true) => {}
 			Ok(false) => continue,
+			Err(_) if granted < MAX_QUERY_WORK => {
+				// The request ran out of work, not the object: nothing
+				// after this point can be searched, so say the answer is
+				// cut short instead of leaving the rest out.
+				reply.truncated(request);
+				return;
+			}
 			Err(_) => {
 				// The object could not be searched within the work bound:
 				// a series it holds may still fall inside the window, so

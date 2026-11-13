@@ -129,8 +129,15 @@ pub fn command(u: &mut Unstructured, accounts: &[Account]) -> Step {
 		.to_string(),
 		21 => {
 			let user = name(u, accounts);
+			// An empty user name travels as `=` (RFC 4954): the base64 of
+			// nothing leaves a bare `AUTH LOGIN`, where the server asks for
+			// the name and the model would already hold it.
+			let initial = match user.is_empty() {
+				true => "=".to_string(),
+				false => base64(user.as_bytes()),
+			};
 			return Step {
-				line: format!("AUTH LOGIN {}", base64(user.as_bytes())),
+				line: format!("AUTH LOGIN {initial}"),
 				login: None,
 				user: Some(user),
 			};

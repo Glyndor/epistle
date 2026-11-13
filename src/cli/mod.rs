@@ -43,6 +43,7 @@ mod relay;
 mod reports;
 mod resource;
 mod role_addresses;
+mod rotate;
 mod serve;
 mod service;
 mod srv;
@@ -86,6 +87,12 @@ pub struct Cli {
 	/// match arm there can read it without rebuilding the parser.
 	#[command(subcommand)]
 	pub(super) command: Command,
+	/// Do not restart mail after a change.
+	///
+	/// The change is written and takes effect at the next restart; `epistle stack apply`
+	/// restarts once for every change made this way.
+	#[arg(long, global = true)]
+	pub(super) no_restart: bool,
 }
 
 pub use command::Command;

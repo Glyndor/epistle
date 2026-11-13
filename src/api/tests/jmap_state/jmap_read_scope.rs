@@ -145,7 +145,7 @@ async fn send_only_and_write_only_keys_cannot_read() {
 			let (status, _) = request(&app, "GET", path, Some(key)).await;
 			assert_eq!(
 				status,
-				StatusCode::UNAUTHORIZED,
+				StatusCode::FORBIDDEN,
 				"a {label}-only key must not list accounts at {path}"
 			);
 		}
@@ -177,7 +177,7 @@ async fn a_write_only_key_still_writes_and_cannot_download() {
 	let (status, _) = request(&app, "GET", &download, Some(WRITER)).await;
 	assert_eq!(
 		status,
-		StatusCode::UNAUTHORIZED,
+		StatusCode::FORBIDDEN,
 		"a write-only key must not download"
 	);
 	let (status, _) = request(&app, "GET", &download, Some(READER)).await;

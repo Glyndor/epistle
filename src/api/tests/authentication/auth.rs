@@ -5,7 +5,7 @@ use std::sync::Arc;
 use crate::directory_store::{AccountStore, SqlAccount};
 use crate::smtp::auth::tests::base::hash as hash_password;
 use crate::storage::FsSpool;
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 use axum::http::StatusCode;
 use serde_json::json;
 
@@ -368,6 +368,8 @@ async fn confined_verify_checks_the_effective_owner_after_authentication() {
 	]
 	.into_iter()
 	.map(|(name, addresses)| crate::config::Account {
+		send: None,
+		receive: None,
 		name: name.into(),
 		addresses: addresses.into_iter().map(String::from).collect(),
 		password_hash: Some(hash_password(test_password())),

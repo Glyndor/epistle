@@ -96,7 +96,7 @@ pub(in super::super) fn source(server: &FakeServer, security: Security) -> Sourc
 	Source {
 		endpoint: server.endpoint(security),
 		user: USER.to_string(),
-		password: Zeroizing::new(crate::test_fixtures::password().to_string()),
+		password: Zeroizing::new(crate::test_support::fixtures::password().to_string()),
 	}
 }
 

@@ -40,6 +40,8 @@ fn write_config(toml: &str) -> tempfile::NamedTempFile {
 pub(in crate::cli) fn build() -> Harness {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let static_account = Account {
+		send: None,
+		receive: None,
 		display_name: None,
 		name: STATIC_NAME.to_string(),
 		addresses: vec![format!("{STATIC_NAME}@{DOMAIN}")],
@@ -100,7 +102,7 @@ fn password_change_makes_old_password_fail_and_new_one_authenticate() {
 	let mut store = reload_store(&harness);
 
 	// Change the password to a fresh one generated for this run.
-	let new_password = crate::test_fixtures::second_password();
+	let new_password = crate::test_support::fixtures::second_password();
 	assert_eq!(
 		account::password_with_store(
 			&store,
@@ -146,7 +148,7 @@ fn password_change_also_updates_scram_credentials() {
 	// dynamic row. The new password's stored_key under the salt on
 	// disk must match a fresh SCRAM derivation, which is the whole
 	// point of keeping scram in sync with the password hash.
-	let new_password = crate::test_fixtures::wrong_password();
+	let new_password = crate::test_support::fixtures::wrong_password();
 	assert_eq!(
 		account::password_with_store(
 			&store,

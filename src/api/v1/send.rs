@@ -97,6 +97,11 @@ pub async fn send(
 	let principal = Principal::for_token(&state, &auth);
 	let account =
 		acting_account(&state, &principal, &request.from).ok_or_else(ApiError::forbidden_from)?;
+	// An account whose sending is switched off sends nothing, from any of
+	// its addresses or with the null sender.
+	if !state.can_send(&account) {
+		return Err(ApiError::sending_off());
+	}
 	crate::api::mail_from::check_mail_from(&state, &account, &request.from)
 		.map_err(|_| ApiError::forbidden_from())?;
 	// `Sender` names who actually sent the message: the same rule as From.

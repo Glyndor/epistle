@@ -282,9 +282,8 @@ fn warn_unsynced_clock(state: &crate::clock::sync::HostClock, out: &mut dyn Writ
 }
 
 /// The answers file, and the address families it sets to `"none"`.
-fn read_answers(path: &PathBuf) -> Result<(Answers, Declined), ApplyError> {
-	let raw = std::fs::read_to_string(path)
-		.map_err(|error| ApplyError::ConfigRead(path.clone(), error))?;
+fn read_answers(path: &std::path::Path) -> Result<(Answers, Declined), ApplyError> {
+	let raw = answers::read::read_file(path)?;
 	let answers = toml::from_str(&raw).map_err(|error| {
 		// Parser messages and source excerpts can both include credential values.
 		let mut diagnostic = "invalid answers TOML".to_string();

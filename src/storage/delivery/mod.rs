@@ -138,6 +138,13 @@ impl LocalDelivery {
 	) -> Result<Uuid, SinkError> {
 		let lock = self.quota.delivery_lock(account);
 		let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
+		// The recipient was resolved before this lock: the account may have
+		// been removed since, and its mailbox must not be written again.
+		if self.directory.current().addresses_for(account).is_empty() {
+			return Err(SinkError::Unavailable(format!(
+				"account {account} no longer exists"
+			)));
+		}
 		// Each final copy includes its trace and list headers. Published bytes
 		// remain visible to the next admission even when a later step fails.
 		if self
@@ -297,9 +304,20 @@ impl LocalDelivery {
 			store(Some(mailbox), &[])?;
 			return Ok(Delivered::default());
 		}
+		// An account whose sending is off sends nothing on its own either: no
+		// forward, no Sieve redirect or reject, no vacation reply. What would
+		// have gone out is dropped and the message is kept in the mailbox.
+		// So does the mail that reached an address of a domain that only
+		// receives: nothing leaves as that domain.
+		let directory = self.directory.current();
+		let may_send = directory.can_send(account) && directory.address_may_send(delivered_to);
 		// Admin-configured external forwarding, independent of the user filter.
-		let (forwards, keep_local) = self.account_forwards(account, message);
-		let Some(outcome) = self.sieve_outcome(account, message) else {
+		let (forwards, keep_local) = if may_send {
+			self.account_forwards(account, message)
+		} else {
+			(Vec::new(), true)
+		};
+		let Some(mut outcome) = self.sieve_outcome(account, message) else {
 			if let Some(looped) = trace::forwarding_loop(message, delivered_to, &forwards) {
 				return Ok(looped);
 			}
@@ -310,13 +328,23 @@ impl LocalDelivery {
 			}
 			return Ok(Delivered {
 				redirects: trace::redirects(forwards, delivered_to),
-				replies: self
-					.vacation_autoreply(account, delivered_to, message, None)
+				replies: may_send
+					.then(|| self.vacation_autoreply(account, delivered_to, message, None))
+					.flatten()
 					.into_iter()
 					.collect(),
 				..Delivered::default()
 			});
 		};
+		if !may_send {
+			if !outcome.redirects.is_empty() || outcome.reject.is_some() {
+				// The filter meant the message to go elsewhere or be refused;
+				// neither can happen, so it is kept rather than lost.
+				outcome.keep = true;
+			}
+			outcome.redirects.clear();
+			outcome.reject = None;
+		}
 		// reject/ereject: refuse without delivering; the caller bounces the
 		// reason to a non-null sender.
 		if let Some(reason) = outcome.reject {
@@ -394,8 +422,11 @@ impl LocalDelivery {
 		}
 		// vacation (RFC 5230, RFC 8621 section 8): an autoresponse alongside
 		// normal delivery, from the JMAP setting or the Sieve action.
-		let replies = self
-			.vacation_autoreply(account, delivered_to, message, outcome.vacation.as_ref())
+		let replies = may_send
+			.then(|| {
+				self.vacation_autoreply(account, delivered_to, message, outcome.vacation.as_ref())
+			})
+			.flatten()
 			.into_iter()
 			.collect();
 		Ok(Delivered {

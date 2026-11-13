@@ -214,6 +214,7 @@ pub mod digitalocean;
 pub mod dnsimple;
 pub mod gcloud;
 pub mod godaddy;
+pub(crate) mod guarded;
 pub mod namecheap;
 pub mod ovh;
 pub mod porkbun;

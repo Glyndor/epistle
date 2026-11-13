@@ -20,7 +20,8 @@ pub(crate) mod test_support;
 
 pub use per_domain::{DomainSigner, PerDomainSigner};
 pub use rotate::{
-	ROTATE_INTERVAL_DAYS, ROTATE_OVERLAP_DAYS, ReloadableSigner, Rotator, publication_waits,
+	ProviderSource, ROTATE_INTERVAL_DAYS, ROTATE_OVERLAP_DAYS, ReloadableSigner, Rotator,
+	publication_waits,
 };
 pub use rsa_keygen::{KeygenError, generate_rsa_key};
 pub use sign::{Signer, SignerError, generate_key};

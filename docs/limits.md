@@ -126,7 +126,9 @@ the log.
 | `imap-keyword-length` | 64 | octets | own | no standard mandate |
 | `imap-mailbox-depth` | 16 | count | own | no standard mandate |
 | `imap-mailbox-name-length` | 255 | octets | own | no standard mandate (NAME_MAX of the common filesystems) |
+| `imap-fetch-response-octets` | 33554432 | octets | own | no standard mandate (FETCH data a session builds before it answers NO [LIMIT]; the first message of an answer is sent whole, so a larger message can still be fetched alone) |
 | `imap-search-depth` | 64 | count | own | no standard mandate |
+| `imap-vanished-log-octets` | 4194304 | octets | own | no standard mandate (the expunge log of one mailbox, which answers VANISHED (EARLIER); past it the oldest entries are dropped, so a client whose last known mod-sequence is older than the oldest entry kept is told the expunges from that entry on) |
 | `managesieve-script-size` | 1048576 | octets | own | no standard mandate |
 | `managesieve-scripts-per-account` | 50 | count | own | RFC 9661 (maxNumberScripts capability) |
 | `managesieve-script-name-length` | 128 | characters | must | RFC 5804 §1.6 (names of up to 128 characters) |
@@ -142,6 +144,7 @@ the log.
 | `sieve-variables-total-bytes` | 65536 | octets | own | no standard mandate |
 | `sieve-variables` | 128 | count | own | no standard mandate |
 | `caldav-query-work` | 100000 | count | own | no standard mandate |
+| `caldav-query-request-work` | 2000000 | count | own | no standard mandate |
 | `caldav-freebusy-window` | 34560000 | seconds | own | no standard mandate |
 | `caldav-freebusy-items` | 50000 | count | own | no standard mandate |
 | `caldav-freebusy-file-size` | 8388608 | octets | own | no standard mandate |
@@ -169,6 +172,8 @@ the log.
 | `jmap-event-source-min-ping` | 1 | seconds | own | RFC 8620 §7.3 (ping interval) |
 | `jmap-event-source-max-ping` | 300 | seconds | own | RFC 8620 §7.3 (ping interval) |
 | `jmap-event-streams-per-caller` | 4 | count | own | no standard mandate |
+| `jmap-websockets-per-caller` | 4 | count | own | no standard mandate |
+| `jmap-websocket-idle-timeout` | 300 | seconds | own | no standard mandate |
 | `jmap-push-subscriptions-per-caller` | 16 | count | own | no standard mandate |
 | `spf-max-dns-lookups` | 10 | count | must | RFC 7208 §4.6.4 (max 10 DNS-querying terms) |
 | `spf-max-void-lookups` | 2 | count | should | RFC 7208 §4.6.4 (void lookups limited to 2) |
@@ -183,13 +188,21 @@ more than a fixed amount of work or memory:
 
 - A request body for `PROPFIND`, `REPORT`, `MKCOL` or the scheduling outbox
   is read up to 1 MiB; more is `413`. A file `PUT` is read up to 50 MiB,
-  except a `.ics` or `.vcf`, which is held to 4 MiB (`413`).
+  except a `.ics` or `.vcf`, which is held to 4 MiB (`413`). A `GET` serves
+  a file of at most 50 MiB; a longer one is `413`.
+- A `PROPFIND` with `Depth: 1` answers within the same reply budget as a report
+  (below); a listing that does not fit is `507` with
+  `DAV:number-of-matches-within-limits`, and the client asks for a smaller
+  collection or for the resources it needs by name.
 - A `calendar-multiget` or `addressbook-multiget` may name 1000 distinct
   resources. Two spellings of one resource count once. More is `413`.
 - A `calendar-query` object may cost 100000 component visits and recurrence
   steps, which every component of the object shares; an object that exhausts
   that budget is answered with its own `507` inside the `207` reply, and the
-  request goes on with the other objects.
+  request goes on with the other objects. The objects of one request share a
+  further budget of 2000000, so a large collection cannot multiply the bound;
+  a request that exhausts it ends with a `507` on the collection carrying
+  `DAV:number-of-matches-within-limits` and keeps the results found so far.
 - A `calendar-query`, `addressbook-query` or `free-busy-query` body is read up
   to 64 KiB; more is `413`.
 - The body of a report reply is at most 24 MiB and 64 KiB, counted after escaping.

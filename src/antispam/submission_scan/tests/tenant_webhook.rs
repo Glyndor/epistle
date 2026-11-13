@@ -4,7 +4,7 @@
 use super::*;
 use crate::antispam::clamd::tests::fake::{FakeClamd, eicar};
 use crate::smtp::sink::MemorySink;
-use crate::test_fixtures::fresh_secret;
+use crate::test_support::fixtures::fresh_secret;
 use crate::webhook::tests::support::{bodies, quiet, settle, signed_receiver, tenant_config};
 
 fn from(sender: &str) -> AcceptedMessage {

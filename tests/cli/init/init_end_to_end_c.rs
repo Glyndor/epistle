@@ -14,6 +14,10 @@ fn binary() -> &'static Path {
 fn write_answers(dir: &Path, name: &str, body: &str) -> PathBuf {
 	let path = dir.join(name);
 	std::fs::write(&path, body).expect("write answers");
+	// An answers file that carries a token is refused when others can read it.
+	#[cfg(unix)]
+	std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o600))
+		.expect("restrict answers");
 	path
 }
 

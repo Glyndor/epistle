@@ -174,9 +174,10 @@ impl Rotator {
 	}
 
 	async fn orphans(&self) -> Result<Orphans, RotateError> {
+		let provider = self.provider.get();
 		find_orphans(
 			&self.data_dir,
-			Some(self.provider.as_ref()),
+			Some(provider.as_ref()),
 			&self.zones(),
 			&self.signing_domains,
 			&self.keep,
@@ -235,7 +236,7 @@ impl Rotator {
 			// The lock of the zone: the reconcile loop publishes in the
 			// same zone, and the two must not write it at the same time.
 			let _lock = crate::dns::zone_lock::lock(zone).await;
-			if let Err(error) = self.provider.delete(zone, txt_record(name, "")).await {
+			if let Err(error) = self.provider.get().delete(zone, txt_record(name, "")).await {
 				failed.push(format!("delete {name}: {error}"));
 			}
 		}

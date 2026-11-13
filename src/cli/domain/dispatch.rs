@@ -14,7 +14,8 @@ use super::{
 	DomainAliasSubcommand, DomainCli, add_alias_map, add_domain, list, open, remove_alias_map,
 	remove_domain, show,
 };
-use super::{own_key, set, state};
+use super::{own_key, role, set, state};
+use crate::dns::skip::DomainRole;
 
 /// Seconds since the epoch, the clock the new key's selector is named after.
 fn now_epoch() -> u64 {
@@ -173,12 +174,24 @@ pub(super) fn execute(path: &Path, action: DomainCli, dry_run: bool, json: bool)
 		DomainCli::Add {
 			domain,
 			shared_dkim_key,
+			send_only,
+			receive_only,
 		} => {
 			let mut document = match open(path) {
 				Ok(document) => document,
 				Err(error) => return Outcome::Error(error),
 			};
 			if let Err(error) = add_domain(&config, &mut document, &domain) {
+				return Outcome::Error(error);
+			}
+			let role = match (send_only, receive_only) {
+				(true, _) => Some(DomainRole::SendOnly),
+				(false, true) => Some(DomainRole::ReceiveOnly),
+				(false, false) => None,
+			};
+			if let Some(role) = role
+				&& let Err(error) = role::apply(&mut document, &domain, role)
+			{
 				return Outcome::Error(error);
 			}
 			// The domain's own key is made after the edit is known to be valid
@@ -240,6 +253,9 @@ pub(super) fn execute(path: &Path, action: DomainCli, dry_run: bool, json: bool)
 			no_quota,
 			submission_rate,
 			no_submission_rate,
+			send_only,
+			receive_only,
+			full,
 		} => {
 			if !known_domain(&config, &domain) {
 				return refused(format!("domain {domain} is not configured"));
@@ -251,6 +267,13 @@ pub(super) fn execute(path: &Path, action: DomainCli, dry_run: bool, json: bool)
 				Ok(change) => change,
 				Err(error) => return refused(error),
 			};
+			let role = match (send_only, receive_only, full) {
+				(true, _, _) => Some(DomainRole::SendOnly),
+				(false, true, _) => Some(DomainRole::ReceiveOnly),
+				(false, false, true) => Some(DomainRole::Full),
+				(false, false, false) => None,
+			};
+			let change = change.with_role(role);
 			let domain = domain.trim().to_ascii_lowercase();
 			let mut document = match open(path) {
 				Ok(document) => document,

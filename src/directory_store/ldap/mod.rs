@@ -33,7 +33,10 @@
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread::JoinHandle;
 
-use ldap3::{Ldap as LdapConnAsyncHandle, LdapConnAsync, LdapConnSettings, Scope, SearchEntry};
+use ldap3::{Ldap as LdapConnAsyncHandle, LdapConnAsync, LdapConnSettings, SearchEntry};
+use limits::{Limits, capped_search, within};
+
+pub(crate) mod limits;
 
 use crate::config::Ldap;
 use crate::smtp::address::Address;
@@ -70,10 +73,15 @@ impl LdapAuthenticator {
 	/// Spawn the worker thread for the given configuration. The configuration is
 	/// validated by the caller ([`Ldap::validate`]); this only starts the thread.
 	pub fn new(config: Ldap) -> Self {
+		Self::with_limits(config, Limits::AUTH)
+	}
+
+	/// [`LdapAuthenticator::new`] with an explicit per-login budget.
+	pub(crate) fn with_limits(config: Ldap, limits: Limits) -> Self {
 		let (tx, rx) = channel::<AuthRequest>();
 		let worker = std::thread::Builder::new()
 			.name("ldap-auth".to_string())
-			.spawn(move || worker_loop(config, rx))
+			.spawn(move || worker_loop(config, limits, rx))
 			.expect("spawn ldap worker thread");
 		LdapAuthenticator {
 			requests: Some(tx),
@@ -118,7 +126,7 @@ impl Drop for LdapAuthenticator {
 /// services authentication requests until the request channel closes. Each
 /// request is resolved with `block_on`, which drives the connection future
 /// spawned by [`ldap3::drive!`] on that same runtime.
-fn worker_loop(config: Ldap, requests: Receiver<AuthRequest>) {
+fn worker_loop(config: Ldap, limits: Limits, requests: Receiver<AuthRequest>) {
 	let runtime = match tokio::runtime::Builder::new_current_thread()
 		.enable_all()
 		.build()
@@ -133,11 +141,17 @@ fn worker_loop(config: Ldap, requests: Receiver<AuthRequest>) {
 		}
 	};
 	for request in requests {
-		let outcome = runtime.block_on(authenticate_once(
-			&config,
-			&request.login,
-			&request.password,
-		));
+		// The whole login is bounded: a server that never answers must not
+		// hold this serialized worker, and with it every later login.
+		let outcome = runtime
+			.block_on(async {
+				tokio::time::timeout(
+					limits.timeout,
+					authenticate_once(&config, limits, &request.login, &request.password),
+				)
+				.await
+			})
+			.unwrap_or(None);
 		// A receiver that has gone away just means the caller timed out; ignore.
 		let _ = request.reply.send(outcome);
 	}
@@ -152,7 +166,12 @@ fn worker_loop(config: Ldap, requests: Receiver<AuthRequest>) {
 /// (no caching) sidesteps connection-lifetime issues across `block_on` calls;
 /// auth is infrequent, so the extra connect is acceptable. Any failure returns
 /// `None` (fail closed).
-async fn authenticate_once(config: &Ldap, login: &str, password: &str) -> Option<String> {
+async fn authenticate_once(
+	config: &Ldap,
+	limits: Limits,
+	login: &str,
+	password: &str,
+) -> Option<String> {
 	// An empty password would, on many servers, be an unauthenticated bind that
 	// "succeeds" — reject it outright so it never reaches the user bind.
 	if password.is_empty() {
@@ -161,7 +180,7 @@ async fn authenticate_once(config: &Ldap, login: &str, password: &str) -> Option
 	let filter = build_filter(&config.user_filter, login);
 
 	// (1)+(2): service-bind, then search for the login's entry.
-	let entry = search_entry(config, &filter).await?;
+	let entry = search_entry(config, limits, &filter).await?;
 
 	// (3): map the entry to an account name and recover its DN for the bind.
 	let account = account_name(config, &entry)?;
@@ -185,7 +204,7 @@ async fn authenticate_once(config: &Ldap, login: &str, password: &str) -> Option
 /// Open a fresh connection, service-bind, and search for the single entry
 /// matching `filter` under the base DN. Returns the first matching entry, or
 /// `None` on any error or no match.
-async fn search_entry(config: &Ldap, filter: &str) -> Option<SearchEntry> {
+async fn search_entry(config: &Ldap, limits: Limits, filter: &str) -> Option<SearchEntry> {
 	let mut conn = connect(config).await.ok()?;
 	conn.simple_bind(&config.bind_dn, &config.bind_password)
 		.await
@@ -196,14 +215,10 @@ async fn search_entry(config: &Ldap, filter: &str) -> Option<SearchEntry> {
 		config.account_attribute.as_str(),
 		config.mail_attribute.as_str(),
 	];
-	let result = conn
-		.search(&config.base_dn, Scope::Subtree, filter, attrs)
+	let entry = capped_search(&mut conn, &config.base_dn, filter, attrs, limits.entries)
 		.await
-		.ok();
-	let entry = result
-		.and_then(|result| result.success().ok())
-		.and_then(|(entries, _)| entries.into_iter().next())
-		.map(SearchEntry::construct);
+		.ok()
+		.and_then(|entries| entries.into_iter().next());
 	let _ = conn.unbind().await;
 	entry
 }
@@ -325,18 +340,32 @@ pub struct LdapAccount {
 /// inside an async context. Fails closed: any LDAP error is returned as an error
 /// rather than a partial set.
 pub fn load_ldap_accounts(config: &Ldap) -> ldap3::result::Result<Vec<LdapAccount>> {
+	load_with_limits(config, Limits::LOAD)
+}
+
+/// [`load_ldap_accounts`] with an explicit budget.
+pub(crate) fn load_with_limits(
+	config: &Ldap,
+	limits: Limits,
+) -> ldap3::result::Result<Vec<LdapAccount>> {
 	let runtime = tokio::runtime::Builder::new_current_thread()
 		.enable_all()
 		.build()
 		.map_err(|error| ldap3::LdapError::Io { source: error })?;
-	runtime.block_on(load_ldap_accounts_async(config))
+	runtime.block_on(within(
+		limits.timeout,
+		load_ldap_accounts_async(config, limits.entries),
+	))
 }
 
 /// The async core of [`load_ldap_accounts`]: service-bind, search every user
 /// (`%s` → `*`), and map each entry to an [`LdapAccount`]. The mail attribute
 /// values that are not valid mailboxes are skipped, and the ones that are
 /// reach the account in their stored form (lowercased).
-async fn load_ldap_accounts_async(config: &Ldap) -> ldap3::result::Result<Vec<LdapAccount>> {
+async fn load_ldap_accounts_async(
+	config: &Ldap,
+	cap: usize,
+) -> ldap3::result::Result<Vec<LdapAccount>> {
 	let mut conn = connect(config).await?;
 	conn.simple_bind(&config.bind_dn, &config.bind_password)
 		.await?
@@ -348,15 +377,11 @@ async fn load_ldap_accounts_async(config: &Ldap) -> ldap3::result::Result<Vec<Ld
 		config.account_attribute.as_str(),
 		config.mail_attribute.as_str(),
 	];
-	let (entries, _) = conn
-		.search(&config.base_dn, Scope::Subtree, &filter, attrs)
-		.await?
-		.success()?;
+	let entries = capped_search(&mut conn, &config.base_dn, &filter, attrs, cap).await?;
 	let _ = conn.unbind().await;
 
 	let mut accounts: Vec<LdapAccount> = entries
 		.into_iter()
-		.map(SearchEntry::construct)
 		.filter_map(|entry| {
 			let name = account_name(config, &entry)?;
 			let addresses = validated_addresses(&entry, &config.mail_attribute);

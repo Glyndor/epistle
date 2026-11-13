@@ -70,3 +70,32 @@ fn a_cap_of_zero_keeps_the_default() {
 	assert_eq!(session.max_recipients(), DEFAULT_MAX_RECIPIENTS);
 	assert_eq!(DEFAULT_MAX_RECIPIENTS, 100);
 }
+
+#[test]
+fn a_recipient_named_twice_is_kept_once_and_does_not_use_the_cap() {
+	let mut session = session_with_cap(2, 3);
+	for line in [
+		"RCPT TO:<r0@example.org>",
+		"RCPT TO:<R0@Example.org>",
+		"RCPT TO:<r1@example.org>",
+	] {
+		assert_eq!(reply_code(&session.command_line(line)), 250, "{line}");
+	}
+	assert_eq!(
+		reply_code(&session.command_line("RCPT TO:<r2@example.org>")),
+		452,
+		"the repeat took no place under the cap"
+	);
+	session.command_line("DATA");
+	session.data_line(b"Subject: x");
+	session.data_line(b"");
+	session.data_line(b"body");
+	let Some(Action::Deliver(_, message)) = session.data_line(b".") else {
+		panic!("the message is delivered");
+	};
+	assert_eq!(
+		message.recipients,
+		vec!["r0@example.org".to_string(), "r1@example.org".to_string()],
+		"each recipient once"
+	);
+}

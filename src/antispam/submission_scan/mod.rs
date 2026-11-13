@@ -236,7 +236,10 @@ impl ScanningSink {
 		let Some(scanner) = &self.scanner else {
 			return Ok(Inspection::Clean);
 		};
-		let (inspection, _worker) = scanner.scan(raw).ok_or(SinkError::ScanUnavailable)?;
+		// The caller waits for clamd for up to its timeout; on a runtime
+		// worker that wait must not hold the worker.
+		let (inspection, _worker) =
+			off_the_runtime(|| scanner.scan(raw)).ok_or(SinkError::ScanUnavailable)?;
 		#[cfg(test)]
 		if let (Some(worker), Ok(mut workers)) = (_worker, self.workers.lock()) {
 			workers.insert(worker);

@@ -38,11 +38,25 @@ impl CloudflareProvider {
 			let mut found = found.into_iter();
 			(found.next(), found.collect::<Vec<_>>())
 		};
-		let operator_tags: Vec<String> = existing
-			.as_ref()
-			.map(|r| r.tags.clone())
-			.unwrap_or_default();
-		let url = self.records_url(&zone_id, existing.as_ref().map(|r| r.id.as_str()))?;
+		self.write_record(&zone_id, existing.as_ref(), &body)
+			.await?;
+		for stale in extra {
+			self.delete_id(&zone_id, &stale.id).await?;
+		}
+		Ok(())
+	}
+
+	/// Create the record `body` describes, or update `existing` in place
+	/// by its id. The tags of the record are kept but for epistle's own,
+	/// and a refusal over tags is retried once without them.
+	pub(super) async fn write_record(
+		&self,
+		zone_id: &str,
+		existing: Option<&RecordRef>,
+		body: &serde_json::Value,
+	) -> Result<(), ProviderError> {
+		let operator_tags: Vec<String> = existing.map(|r| r.tags.clone()).unwrap_or_default();
+		let url = self.records_url(zone_id, existing.map(|r| r.id.as_str()))?;
 		let own = self
 			.host_tag
 			.as_deref()
@@ -51,7 +65,7 @@ impl CloudflareProvider {
 			.write(
 				&url,
 				existing.is_some(),
-				&body,
+				body,
 				&cloudflare_tags::merge(&operator_tags, own),
 			)
 			.await?;
@@ -60,7 +74,7 @@ impl CloudflareProvider {
 				.write(
 					&url,
 					existing.is_some(),
-					&body,
+					body,
 					&cloudflare_tags::merge(&operator_tags, None),
 				)
 				.await?;
@@ -70,14 +84,10 @@ impl CloudflareProvider {
 					"Cloudflare refused DNS record tags (they need a paid plan); records are written without them from now on"
 				);
 			}
-			decode_ok(retry).await?;
+			decode_ok(retry).await
 		} else {
-			decode_ok(response).await?;
+			decode_ok(response).await
 		}
-		for stale in extra {
-			self.delete_id(&zone_id, &stale.id).await?;
-		}
-		Ok(())
 	}
 
 	/// Delete the record with `id`.

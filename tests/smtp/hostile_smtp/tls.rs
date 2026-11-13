@@ -8,6 +8,7 @@ use epistle::smtp::server::{Server, TlsMode};
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 use tokio_rustls::TlsConnector;
+use tokio_rustls::rustls::client::{ClientSessionStore, Resumption};
 use tokio_rustls::rustls::pki_types::ServerName;
 use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 
@@ -17,6 +18,9 @@ use crate::common::TLS_PROBE_IO_TIMEOUT;
 pub(super) struct Tls {
 	acceptor: epistle::tls::ReloadableAcceptor,
 	connector: TlsConnector,
+	config: Arc<ClientConfig>,
+	cert_pem: String,
+	key_pem: String,
 }
 
 impl Tls {
@@ -24,11 +28,9 @@ impl Tls {
 		epistle::tls::ensure_crypto_provider();
 		let cert = rcgen::generate_simple_self_signed(vec!["mx.epistle.test".into()])
 			.expect("self-signed certificate");
-		let acceptor = epistle::tls::acceptor_from_pem(
-			cert.cert.pem().as_bytes(),
-			cert.signing_key.serialize_pem().as_bytes(),
-		)
-		.expect("TLS acceptor");
+		let (cert_pem, key_pem) = (cert.cert.pem(), cert.signing_key.serialize_pem());
+		let acceptor = epistle::tls::acceptor_from_pem(cert_pem.as_bytes(), key_pem.as_bytes())
+			.expect("TLS acceptor");
 		let mut roots = RootCertStore::empty();
 		roots
 			.add(cert.cert.der().clone())
@@ -36,14 +38,36 @@ impl Tls {
 		let config = ClientConfig::builder()
 			.with_root_certificates(roots)
 			.with_no_client_auth();
+		let config = Arc::new(config);
 		Self {
 			acceptor: epistle::tls::ReloadableAcceptor::new(acceptor),
-			connector: TlsConnector::from(Arc::new(config)),
+			connector: TlsConnector::from(config.clone()),
+			config,
+			cert_pem,
+			key_pem,
 		}
 	}
 
 	pub(super) fn server(&self, server: Server) -> Server {
 		server.with_tls(self.acceptor.clone(), TlsMode::Opportunistic)
+	}
+
+	/// Swap in a fresh acceptor built from the same files, as the reload
+	/// watcher does when they change.
+	pub(super) fn reload(&self) {
+		let fresh =
+			epistle::tls::acceptor_from_pem(self.cert_pem.as_bytes(), self.key_pem.as_bytes())
+				.expect("TLS acceptor");
+		self.acceptor.reload(fresh);
+	}
+
+	/// A client that keeps its tickets in `store` and offers 0-RTT data
+	/// whenever a ticket allows it.
+	pub(super) fn resuming(&self, store: Arc<dyn ClientSessionStore>) -> TlsConnector {
+		let mut config = (*self.config).clone();
+		config.resumption = Resumption::store(store);
+		config.enable_early_data = true;
+		TlsConnector::from(Arc::new(config))
 	}
 
 	async fn upgrade(&self, tcp: TcpStream) -> tokio_rustls::client::TlsStream<TcpStream> {

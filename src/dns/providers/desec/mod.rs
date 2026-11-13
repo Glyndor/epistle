@@ -207,6 +207,7 @@ impl DesecProvider {
 impl DnsProvider for DesecProvider {
 	fn upsert(&self, _zone: &str, record: DnsRecord) -> Op<'_> {
 		Box::pin(crate::dns::providers::within(async move {
+			let _turn = lock::hold(self.secret.token(), self.secret.zone()).await;
 			let mut content = Self::record_content(&record.kind, &record.value);
 			// The bulk PUT replaces the whole rrset. The upsert contract
 			// in `src/dns/provider/mod.rs` replaces only the TXT of the same
@@ -228,6 +229,7 @@ impl DnsProvider for DesecProvider {
 	fn delete(&self, _zone: &str, record: DnsRecord) -> Op<'_> {
 		let record_value = record.value.clone();
 		Box::pin(crate::dns::providers::within(async move {
+			let _turn = lock::hold(self.secret.token(), self.secret.zone()).await;
 			self.authorize(&record)?;
 			let kind = Self::rrset_kind(&record.kind)?;
 			// The TXT matching rule from `src/dns/provider/mod.rs` is
@@ -395,6 +397,8 @@ fn check(response: reqwest::Response) -> Result<(), ProviderError> {
 		Err(ProviderError::Remote(format!("HTTP {status}")))
 	}
 }
+
+mod lock;
 
 #[cfg(test)]
 mod tests;

@@ -36,8 +36,10 @@ pub struct Entry {
 	pub sync_token: String,
 }
 
-/// Build the full `<multistatus>` document for the given entries.
-pub fn multistatus(entries: &[Entry]) -> String {
+/// Build the full `<multistatus>` document for the given entries, or `None`
+/// when it would be longer than `max_bytes`; the document is never built past
+/// that length.
+pub fn multistatus(entries: &[Entry], max_bytes: u64) -> Option<String> {
 	let mut body = String::from(
 		"<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
 		<D:multistatus xmlns:D=\"DAV:\" xmlns:C=\"urn:ietf:params:xml:ns:carddav\" \
@@ -45,9 +47,12 @@ pub fn multistatus(entries: &[Entry]) -> String {
 	);
 	for entry in entries {
 		body.push_str(&response(entry));
+		if body.len() as u64 > max_bytes {
+			return None;
+		}
 	}
 	body.push_str("</D:multistatus>\n");
-	body
+	Some(body)
 }
 
 /// Build a single `<response>` element for one resource.

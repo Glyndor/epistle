@@ -123,11 +123,11 @@ pub(crate) fn block<T>(future: impl Future<Output = T>) -> T {
 		.block_on(future)
 }
 
-fn spf() -> DnsRecord {
+pub(super) fn spf() -> DnsRecord {
 	txt("example.org", "v=spf1 mx -all")
 }
 
-fn mx() -> DnsRecord {
+pub(super) fn mx() -> DnsRecord {
 	rec("example.org", RecordKind::Mx, "10 mail.example.org")
 }
 

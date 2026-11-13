@@ -2,7 +2,7 @@
 //! `ApiState` a test drives and the request helpers.
 
 use super::*;
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use std::collections::BTreeMap;
@@ -50,6 +50,8 @@ pub(in super::super) fn test_state(dir: &std::path::Path, queued: usize) -> ApiS
 			.expect("store");
 	}
 	let accounts = vec![crate::config::Account {
+		send: None,
+		receive: None,
 		display_name: None,
 		name: "alice".to_string(),
 		addresses: vec!["alice@example.org".to_string()],

@@ -168,7 +168,7 @@ fn existing_accounts_and_domains_are_refused_unless_merged() {
 	let existing = DynamicAccount::with_password(
 		"alice".into(),
 		vec!["alice@example.com".into()],
-		crate::test_fixtures::password(),
+		crate::test_support::fixtures::password(),
 		&crate::password::Policy::from_config(&config.auth),
 		false,
 	)

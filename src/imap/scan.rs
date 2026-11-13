@@ -1,7 +1,7 @@
 //! Mailbox scan: the authoritative slow path for [`super::mailbox::Snapshot::open_at`].
 //!
 //! Reads every `.eml` file in the mailbox directory, the matching `.flags`
-//! and `.modseq` sidecars, and assigns UIDs in UUID-sorted order. The
+//! and `.modseq` sidecars, assigns UIDs in UUID-sorted order and returns the messages sorted by UID. The
 //! assignment is serialised with the mailbox's UID lock, so two scans of one
 //! mailbox never hand the same UID to two messages; a scan that finds every
 //! UID already assigned takes no lock at all.
@@ -14,7 +14,8 @@ use crate::imap::mailbox::MessageRef;
 use crate::storage::MessageCrypto;
 use crate::util::path_component::{MessageExt, message_file};
 
-/// Scan `account_dir` and build a `Vec<MessageRef>` in UUID-sorted order.
+/// Scan `account_dir` and build a `Vec<MessageRef>` sorted by UID (UUID order until a message with a lower
+/// UUID than the others arrives).
 ///
 /// Pulled out of [`super::mailbox`] so the open path can stay compact. The
 /// open path still owns the surrounding `Snapshot` plumbing (uid_validity,
@@ -49,8 +50,15 @@ pub(super) fn scan_mailbox(
 	// The UIDs of every message, the missing ones assigned under the
 	// mailbox's UID lock.
 	let uids = super::uid::resolve_uids(account_dir, &ids);
+	// A sequence number must grow with the UID (RFC 9051 §2.3.1.1), and the
+	// client numbers a message that arrived while it was away after the ones
+	// it knew. A message whose UUID sorts before the others (the clock went
+	// back, or an old file was copied in) takes the highest UID, so the
+	// mailbox is ordered by UID, not by file name.
+	let mut order: Vec<(u32, Uuid)> = uids.into_iter().zip(ids.iter().copied()).collect();
+	order.sort();
 	let mut messages = Vec::with_capacity(ids.len());
-	for (id, uid) in ids.iter().copied().zip(uids) {
+	for (uid, id) in order {
 		let path = message_file(account_dir, id, MessageExt::Eml)?;
 		let meta = std::fs::metadata(&path);
 		// RFC822.SIZE must be the plaintext size a client sees, not the

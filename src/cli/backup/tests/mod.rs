@@ -11,6 +11,8 @@ pub(super) mod paths;
 pub(super) mod pg;
 pub(super) mod restore;
 pub(super) mod restore_guards;
+pub(super) mod restore_preflight;
 pub(super) mod restore_run;
 
 pub(super) mod source;
+pub(super) mod stack_database;

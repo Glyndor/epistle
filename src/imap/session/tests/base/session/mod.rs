@@ -10,6 +10,12 @@ mod capabilities;
 mod commands;
 
 #[cfg(test)]
+mod commands_idle_notify;
+
+#[cfg(test)]
+mod commands_mailbox;
+
+#[cfg(test)]
 mod cross_session;
 
 #[cfg(test)]
@@ -53,3 +59,6 @@ mod quota;
 
 #[cfg(test)]
 mod unicode;
+
+#[cfg(test)]
+mod misc_mailbox_status;

@@ -37,7 +37,7 @@ fn split_config(dir: &Path, port: u16) -> Config {
 #[tokio::test]
 async fn the_whole_server_refuses_to_start_without_the_dns_credential() {
 	let dir = tempfile::tempdir().expect("tempdir");
-	let port = crate::test_fixtures::free_port();
+	let port = crate::test_support::fixtures::free_port();
 	let error = super::super::serve(split_config(dir.path(), port), ServeRole::All)
 		.await
 		.expect_err("no credential to answer dns-01 with");
@@ -47,7 +47,7 @@ async fn the_whole_server_refuses_to_start_without_the_dns_credential() {
 #[tokio::test]
 async fn the_mail_role_serves_without_the_dns_credential() {
 	let dir = tempfile::tempdir().expect("tempdir");
-	let port = crate::test_fixtures::free_port();
+	let port = crate::test_support::fixtures::free_port();
 	let server = tokio::spawn(super::super::serve(
 		split_config(dir.path(), port),
 		ServeRole::Mail,
@@ -74,7 +74,7 @@ async fn the_mail_role_serves_without_the_dns_credential() {
 #[tokio::test]
 async fn the_certificates_role_refuses_to_start_without_the_dns_credential() {
 	let dir = tempfile::tempdir().expect("tempdir");
-	let config = split_config(dir.path(), crate::test_fixtures::free_port());
+	let config = split_config(dir.path(), crate::test_support::fixtures::free_port());
 	let error = super::super::certs::serve(config)
 		.await
 		.expect_err("no credential to answer dns-01 with");
@@ -115,7 +115,8 @@ fn the_certificates_role_loads_without_the_database_password_file() {
 fn the_certificates_role_loads_without_the_tables_only_mail_reads() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let path = dir.path().join("mail.toml");
-	let hash = crate::smtp::auth::hash_password(crate::test_fixtures::password()).expect("hash");
+	let hash =
+		crate::smtp::auth::hash_password(crate::test_support::fixtures::password()).expect("hash");
 	let token = "0".repeat(64);
 	let data_dir = dir.path().join("data").display().to_string();
 	let storage_key = dir.path().join("storage.key").display().to_string();
@@ -156,7 +157,7 @@ fn the_certificates_role_loads_without_the_tables_only_mail_reads() {
 #[tokio::test]
 async fn the_certificates_role_refuses_to_start_without_acme() {
 	let dir = tempfile::tempdir().expect("tempdir");
-	let mut config = split_config(dir.path(), crate::test_fixtures::free_port());
+	let mut config = split_config(dir.path(), crate::test_support::fixtures::free_port());
 	config.acme = None;
 	let error = super::super::certs::serve(config)
 		.await

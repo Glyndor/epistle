@@ -75,6 +75,7 @@ impl Command {
 			| Command::StorageKeygen { .. }
 			| Command::OauthKeygen { .. }
 			| Command::TokenHash { .. }
+			| Command::Rotate { .. }
 			| Command::Local { .. }
 			| Command::Probe { .. }
 			| Command::Completions { .. }

@@ -3,7 +3,7 @@ use super::{render, stack_answers};
 #[cfg(unix)]
 #[test]
 fn db_healthcheck_rejects_temporary_server_and_requires_query() {
-	use crate::test_executable::write_executable;
+	use crate::test_support::executable::write_executable;
 	use std::fs;
 	use std::process::Command;
 

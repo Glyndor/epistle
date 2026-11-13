@@ -1,6 +1,6 @@
 //! Linear-scan regression tests for the REPORT body scan in CardDAV and CalDAV.
 
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 use std::sync::atomic::Ordering;
 
 use super::*;
@@ -40,6 +40,8 @@ fn base64_encode(input: &[u8]) -> String {
 /// Build a router backed by a temp data dir with `alice`.
 fn test_app(dir: &std::path::Path) -> Router {
 	let account = |name: &str, pw: &str| crate::config::Account {
+		send: None,
+		receive: None,
 		display_name: None,
 		name: name.to_string(),
 		addresses: vec![format!("{name}@example.org")],
@@ -153,7 +155,7 @@ fn hrefs_still_extracts_values_after_linear_refactor() {
 		<D:href>/a.vcf</D:href>\
 		<D:href> /b.vcf </D:href>\
 		</C:addressbook-multiget>";
-	assert_eq!(hrefs(body), vec!["/a.vcf", "/b.vcf"]);
+	assert_eq!(hrefs(body).collect::<Vec<_>>(), vec!["/a.vcf", "/b.vcf"]);
 }
 
 /// Functional regression: a real REPORT on a real addressbook returns the
@@ -190,4 +192,23 @@ async fn multiget_still_returns_requested_cards() {
 	let text = String::from_utf8(out).unwrap();
 	assert_eq!(text.matches("<D:response>").count(), 2);
 	assert!(text.contains("Ada Lovelace"));
+}
+
+/// A multiget body reads its hrefs one at a time: asking for the first two of
+/// a very long list does not walk the rest of the body.
+#[test]
+fn carddav_hrefs_are_read_lazily() {
+	let list: String = (0..50_000)
+		.map(|n| format!("<D:href>/e{n}.x</D:href>"))
+		.collect();
+	let body = format!("<C:multiget xmlns:D=\"DAV:\">{list}</C:multiget>");
+	SCAN_STEPS.store(0, Ordering::Relaxed);
+	let first: Vec<String> = hrefs(&body).take(2).collect();
+	let steps = SCAN_STEPS.load(Ordering::Relaxed);
+	assert_eq!(first, vec!["/e0.x", "/e1.x"]);
+	assert!(
+		steps < body.len() as u64 / 2,
+		"reading two hrefs touched {steps} of {} bytes",
+		body.len()
+	);
 }

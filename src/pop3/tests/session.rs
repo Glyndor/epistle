@@ -3,7 +3,7 @@
 use super::super::session::{Backend, Response, Session};
 use super::command::Command;
 use crate::smtp::auth::tests::base::fixture_password;
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 use std::cell::RefCell;
 
 /// In-memory backend: one fixed credential, a fixed inbox, and a record of

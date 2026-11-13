@@ -59,7 +59,7 @@ pub(in super::super) async fn download(
 /// `ann` and `bob` on separate domains, and a key bound to `ann` alone with
 /// the given scopes.
 pub(in super::super) fn ann_only(dir: &std::path::Path, scopes: &[&str]) -> (Router, String) {
-	let secret = crate::test_fixtures::api_key().to_string();
+	let secret = crate::test_support::fixtures::api_key().to_string();
 	let mut keys = crate::api::ApiKeyStore::open(dir).expect("open key store");
 	keys.add(crate::api::api_keys::ApiKey {
 		label: "ann-only".to_string(),
@@ -73,11 +73,13 @@ pub(in super::super) fn ann_only(dir: &std::path::Path, scopes: &[&str]) -> (Rou
 	.expect("add key");
 	drop(keys);
 	let account = |name: &str, address: &str| crate::config::Account {
+		send: None,
+		receive: None,
 		display_name: None,
 		name: name.to_string(),
 		addresses: vec![address.to_string()],
 		password_hash: Some(crate::smtp::auth::tests::base::hash(
-			crate::test_fixtures::password(),
+			crate::test_support::fixtures::password(),
 		)),
 		catch_all: Vec::new(),
 		quota_bytes: None,

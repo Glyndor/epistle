@@ -14,6 +14,10 @@ use std::collections::BTreeMap;
 
 /// The largest file read.
 pub(crate) const MAX_BYTES: usize = 16 * 1024 * 1024;
+/// The most entries (values and empty blocks) accepted. The byte limit alone
+/// does not bound memory: a lone `-` is two bytes and becomes an entry that
+/// costs about a hundred, so 16 MiB of them would take about a gigabyte.
+pub(crate) const MAX_ENTRIES: usize = 500_000;
 /// The deepest nesting accepted; Mox's own files go eight levels deep.
 pub(crate) const MAX_DEPTH: usize = 32;
 
@@ -42,6 +46,9 @@ pub(crate) enum SconfError {
 	/// A line indented with spaces, or deeper than its parent allows.
 	#[error("line {0}: bad indentation (sconf indents with one tab per level)")]
 	Indentation(usize),
+	/// Over [`MAX_ENTRIES`].
+	#[error("line {0}: more than {MAX_ENTRIES} entries")]
+	TooManyEntries(usize),
 	/// Over [`MAX_DEPTH`].
 	#[error("line {0}: nested too deeply")]
 	TooDeep(usize),
@@ -113,6 +120,9 @@ impl Doc {
 				});
 			}
 			doc.values.insert(path, value);
+			if doc.values.len() > MAX_ENTRIES {
+				return Err(SconfError::TooManyEntries(number));
+			}
 		}
 		Ok(doc)
 	}

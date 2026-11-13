@@ -1,4 +1,4 @@
-//! Per-caller counts of JMAP work in flight: open event-source streams, API
+//! Per-caller counts of JMAP work in flight: open event-source streams, WebSockets, API
 //! requests and uploads. A slot is taken before the work starts and given
 //! back when it is dropped, however the work ends (answered, failed, or the
 //! client hung up), so a count never leaks.
@@ -20,6 +20,8 @@ use crate::api::state::ApiState;
 pub(crate) enum Work {
 	/// An open `/jmap/eventsource` stream.
 	EventSource,
+	/// An open `/jmap/ws` WebSocket, for its whole life.
+	WebSocket,
 	/// A `POST /jmap/api` request or a WebSocket `Request` frame
 	/// (`maxConcurrentRequests`).
 	Request,
@@ -31,6 +33,7 @@ impl Work {
 	fn tag(self) -> &'static str {
 		match self {
 			Work::EventSource => "eventsource",
+			Work::WebSocket => "websocket",
 			Work::Request => "request",
 			Work::Upload => "upload",
 		}

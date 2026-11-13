@@ -47,6 +47,14 @@ impl Desired {
 /// would publish the default key for a domain that does not sign with it.
 /// Every error found is returned, not only the first.
 pub fn from_config(config: &Config) -> Result<Desired, Vec<String>> {
+	for_domains(config, &config.domains)
+}
+
+/// Compute the records `config` needs for `domains`, a subset of its hosted
+/// domains (`epistle domain add` prints the one it added). It is the same
+/// computation as [`from_config`], with the same role and `skip` filter, so
+/// the records of one domain are the ones the full set holds for it.
+pub fn for_domains(config: &Config, domains: &[String]) -> Result<Desired, Vec<String>> {
 	let mut warnings = Vec::new();
 	let mut errors = Vec::new();
 	let mut dkim_default = Vec::new();
@@ -56,7 +64,7 @@ pub fn from_config(config: &Config) -> Result<Desired, Vec<String>> {
 			Ok(pairs) => dkim_default = pairs,
 			Err(error) => errors.push(error),
 		}
-		match per_domain_dkim_pairs(dkim) {
+		match per_domain_dkim_pairs(dkim, domains) {
 			Ok(map) => dkim_per_domain = map,
 			Err(error) => errors.push(error),
 		}
@@ -85,26 +93,29 @@ pub fn from_config(config: &Config) -> Result<Desired, Vec<String>> {
 			}
 		}
 	});
-	let records = records::build_records(
-		&config.domains,
+	let records = records::build_records_for_roles(
+		domains,
 		&config.hostname,
-		&dkim_default,
-		&dkim_per_domain,
-		tlsa.as_deref(),
-		&records::mta_sts_id(config),
-		// The SRV locators follow the configuration: a service the
-		// operator turned off gets no locator, so a client that follows
-		// one of the published records reaches a listener.
-		ServiceRecords::from_config(config),
-		config.acme.as_ref().map(|a| a.directory_url.as_str()),
-		config.public_ipv4,
-		config.public_ipv6,
+		(&dkim_default, &dkim_per_domain),
+		(
+			tlsa.as_deref(),
+			&records::mta_sts_id(config),
+			// The SRV locators follow the configuration: a service the
+			// operator turned off gets no locator, so a client that follows
+			// one of the published records reaches a listener.
+			ServiceRecords::from_config(config),
+		),
+		(
+			config.acme.as_ref().map(|a| a.directory_url.as_str()),
+			config.public_ipv4,
+			config.public_ipv6,
+		),
+		&config.roles(),
 	);
 	// The filter lives here, once: the reconcile loop and `epistle dns
 	// publish` read this set, so a record the configuration skips is out
 	// of both.
-	let (records, skipped) =
-		crate::dns::skip::split_records(records, &config.dns_publish.skip_set());
+	let (records, skipped) = crate::dns::skip::split_records(records, &config.skip_set());
 	Ok(Desired {
 		records,
 		warnings,
@@ -145,10 +156,16 @@ fn default_dkim_pairs(
 
 /// The per-domain DKIM overrides as a domain to `(selector, value)` map.
 /// Each override is loaded from the file the configuration names; the
-/// optional RSA selector adds a second pair.
-fn per_domain_dkim_pairs(dkim: &Dkim) -> Result<DomainDkim, String> {
+/// optional RSA selector adds a second pair. Only the overrides of `domains`
+/// are loaded: the key of a domain that is not being computed is not an
+/// input of the result.
+fn per_domain_dkim_pairs(dkim: &Dkim, domains: &[String]) -> Result<DomainDkim, String> {
 	let mut map = DomainDkim::new();
-	for entry in &dkim.domain {
+	for entry in dkim
+		.domain
+		.iter()
+		.filter(|entry| domains.iter().any(|d| d.eq_ignore_ascii_case(&entry.name)))
+	{
 		let mut pairs = Vec::new();
 		let signer = crate::dkim::Signer::load(&entry.selector, &entry.key_file)
 			.map_err(|error| error.to_string())?;

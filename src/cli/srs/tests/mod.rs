@@ -5,7 +5,7 @@ use clap::Parser;
 use super::{StackAction, execute_with};
 use crate::cli::resource::Run;
 use crate::config::Config;
-use crate::test_fixtures::fresh_secret;
+use crate::test_support::fixtures::fresh_secret;
 
 mod edit;
 mod reference;

@@ -98,8 +98,8 @@ jobs:
           # reference MTA (Postfix) and writes no SBOM of its own, but
           # `stable` here would still let protocol interop drift away from
           # what the gate tests on a 1.99 compiler.
-          rustup toolchain install 1.99 --profile minimal
-          rustup default 1.99
+          rustup toolchain install 1.99.1 --profile minimal
+          rustup default 1.99.1
 
       - name: Run protocol interop tests
         run: cargo test --locked --test interop

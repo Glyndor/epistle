@@ -16,6 +16,12 @@ mod auth_ban_toctou;
 mod auth_bans;
 
 #[cfg(test)]
+mod auth_bans_account;
+
+#[cfg(test)]
+mod auth_bans_strikes;
+
+#[cfg(test)]
 mod login_gate;
 
 #[cfg(test)]

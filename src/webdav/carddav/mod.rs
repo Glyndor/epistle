@@ -254,27 +254,24 @@ async fn collect_cards_filtered(
 
 /// Extract every `<...:href>VALUE</...:href>` value from a REPORT body. The
 /// namespace prefix is irrelevant, so we match on the local name `href`. Values
-/// are returned in document order, untrimmed of surrounding whitespace beyond a
-/// trim of the captured text.
-pub(super) fn hrefs(body: &str) -> Vec<String> {
-	let mut out = Vec::new();
+/// come in document order, one at a time, so a reader that stops at a limit
+/// never holds the rest of the list.
+pub(super) fn hrefs(body: &str) -> impl Iterator<Item = String> + '_ {
 	let mut rest = body;
-	while let Some(start) = find_open(rest, "href") {
-		let after = &rest[start..];
-		let Some(close) = after.find('>') else {
-			break;
-		};
-		let value_start = close + 1;
-		let Some(end) = after[value_start..].find('<') else {
-			break;
-		};
-		let value = after[value_start..value_start + end].trim();
-		if !value.is_empty() {
-			out.push(value.to_string());
+	std::iter::from_fn(move || {
+		while let Some(start) = find_open(rest, "href") {
+			let after = &rest[start..];
+			let close = after.find('>')?;
+			let value_start = close + 1;
+			let end = after[value_start..].find('<')?;
+			let value = after[value_start..value_start + end].trim();
+			rest = &after[value_start + end..];
+			if !value.is_empty() {
+				return Some(value.to_string());
+			}
 		}
-		rest = &after[value_start + end..];
-	}
-	out
+		None
+	})
 }
 
 /// Find the byte index of an opening tag whose local name is `local`, allowing

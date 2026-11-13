@@ -38,6 +38,7 @@ use crate::dns::skip::SkipSet;
 pub mod apply;
 mod dmarc;
 mod ledger;
+mod null_records;
 pub mod once;
 mod remove;
 mod slot;
@@ -147,6 +148,10 @@ pub struct ZoneInput<'a> {
 	/// is retired like a record the configuration no longer needs, and the
 	/// reason names the group.
 	pub skip: &'a SkipSet,
+	/// Whether the provider flattens a CNAME at the apex of the zone (see
+	/// [`crate::dns::provider::DnsProvider::flattens_apex_cname`]). Only
+	/// then does an apex CNAME not block the other record types.
+	pub flattens_apex_cname: bool,
 }
 
 /// Plan `input`. Pure: nothing is read or written outside `input`.
@@ -253,10 +258,16 @@ fn plan_slot(
 		));
 		return;
 	}
-	if let Some(reason) = cname_clash(first, &name, existing) {
+	let apex_flattening = input.flattens_apex_cname && name == canonical_name(input.zone);
+	if let Some(reason) = cname_clash(first, &name, existing, apex_flattening) {
 		entries.extend(all(Action::Conflict, reason, vec![]));
 		return;
 	}
+	let flat = apex_flattening
+		&& first.kind != RecordKind::Cname
+		&& existing
+			.iter()
+			.any(|r| r.kind == RecordKind::Cname && canonical_name(&r.name) == name);
 	let slot = slot_of(first, existing);
 	let current = values(&slot);
 	let tagged = first.kind == RecordKind::Txt && txt_purpose(&first.value).is_some();
@@ -319,7 +330,10 @@ fn plan_slot(
 		entries.push(entry(
 			Action::Create,
 			first,
-			format!("{name} has no {what} record"),
+			format!(
+				"{name} has no {what} record{}",
+				FLAT_NOTE.filter(|_| flat).unwrap_or_default()
+			),
 			vec![],
 		));
 		return;
@@ -333,7 +347,10 @@ fn plan_slot(
 		entries.push(entry(
 			Action::Update,
 			first,
-			format!("{name} {kind} was published by epistle with another value"),
+			format!(
+				"{name} {kind} was published by epistle with another value{}",
+				FLAT_NOTE.filter(|_| flat).unwrap_or_default()
+			),
 			current,
 		));
 	} else {
@@ -353,10 +370,24 @@ fn plan_slot(
 	}
 }
 
+/// Said on the entries planned next to an apex CNAME the provider flattens.
+const FLAT_NOTE: Option<&str> = Some(
+	" (the apex CNAME is flattened by the provider, so it does not block this record; the CNAME is left as is)",
+);
+
 /// A CNAME may not share its name with any other record (RFC 1034 section
 /// 3.6.2), so a needed CNAME at a name with other records, or a needed record
 /// at a name that is a CNAME, is a conflict.
-fn cname_clash(needed: &DnsRecord, name: &str, existing: &[DnsRecord]) -> Option<String> {
+///
+/// At the apex of a zone whose provider flattens a CNAME there
+/// (`apex_flattening`), a CNAME in place does not block the other types:
+/// they are planned next to it. epistle never writes or removes that CNAME.
+fn cname_clash(
+	needed: &DnsRecord,
+	name: &str,
+	existing: &[DnsRecord],
+	apex_flattening: bool,
+) -> Option<String> {
 	let at_name: Vec<&DnsRecord> = existing
 		.iter()
 		.filter(|r| canonical_name(&r.name) == name)
@@ -373,6 +404,9 @@ fn cname_clash(needed: &DnsRecord, name: &str, existing: &[DnsRecord]) -> Option
 				others.into_iter().collect::<Vec<_>>().join(", ")
 			)
 		});
+	}
+	if apex_flattening {
+		return None;
 	}
 	at_name
 		.iter()
@@ -449,7 +483,7 @@ fn retire(record: &DnsRecord, existing: &[DnsRecord], cuts: &Cuts, skip: &SkipSe
 			vec![],
 		);
 	}
-	if is_dkim(record) {
+	if is_dkim(record) && !skip.sends_nothing(&name) {
 		return entry(
 			Action::Skipped,
 			record,

@@ -98,7 +98,10 @@ impl SpaceshipProvider {
 		}
 	}
 
-	async fn remove_exact_item(&self, item: serde_json::Value) -> Result<(), ProviderError> {
+	pub(super) async fn remove_exact_item(
+		&self,
+		item: serde_json::Value,
+	) -> Result<(), ProviderError> {
 		let response = self
 			.request(reqwest::Method::DELETE, self.records_url()?)
 			.body(serde_json::json!([item]).to_string())

@@ -1,7 +1,7 @@
 //! `[tenant.webhook]`: what the loader accepts and refuses.
 
 use crate::config::{Config, ConfigError};
-use crate::test_fixtures::fresh_secret;
+use crate::test_support::fixtures::fresh_secret;
 
 const HEAD: &str = "hostname = \"mail.example.org\"\ndata_dir = \"/var/lib/mail\"\n\
 	domains = [\"a.example\", \"b.example\"]\n";

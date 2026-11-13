@@ -5,7 +5,7 @@ use crate::dns::rrset::canonical_value;
 
 pub(super) fn matches(stored: &DnsRecordRef, record: &DnsRecord, relative: &str) -> bool {
 	if record.value.is_empty()
-		|| parse_kind(stored.rtype) != record.kind
+		|| read::parse_kind(stored.rtype) != record.kind
 		|| !stored
 			.name
 			.as_deref()
@@ -18,7 +18,7 @@ pub(super) fn matches(stored: &DnsRecordRef, record: &DnsRecord, relative: &str)
 	};
 	let value = match record.kind {
 		RecordKind::Srv => format!("0 {raw}"),
-		RecordKind::Mx if !starts_with_preference(raw) => {
+		RecordKind::Mx if !read::starts_with_preference(raw) => {
 			let Some(priority) = stored.priority else {
 				return false;
 			};

@@ -31,6 +31,8 @@ pub(super) const LIVE: &str = "types=*&closeafter=no&ping=1";
 /// The server under test: two accounts and three credentials.
 pub(super) fn state(dir: &Path) -> ApiState {
 	let accounts = ["alice", "carol"].map(|name| crate::config::Account {
+		send: None,
+		receive: None,
 		display_name: None,
 		name: name.to_string(),
 		addresses: vec![format!("{name}@example.org")],

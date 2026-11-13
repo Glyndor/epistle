@@ -120,6 +120,47 @@ fn stack_update_moves_the_keys_creates_missing_ones_and_repoints_the_config() {
 	);
 }
 
+/// `mail.toml` is routinely a link into another directory of the
+/// installation: the update has to edit the file behind the link and leave
+/// the link where it is.
+#[cfg(unix)]
+#[test]
+fn stack_update_keeps_a_linked_configuration_a_link() {
+	use std::os::unix::fs::PermissionsExt;
+	let root = tempfile::tempdir().unwrap();
+	let data_dir = root.path().join("data");
+	let keys = data_dir.join("keys");
+	std::fs::create_dir_all(&keys).unwrap();
+	std::fs::write(keys.join("storage.key"), b"old-storage").unwrap();
+	let real_dir = root.path().join("real");
+	std::fs::create_dir_all(&real_dir).unwrap();
+	let real = real_dir.join("mail.toml");
+	std::fs::write(
+		&real,
+		format!(
+			"[storage]\nencrypt_at_rest = true\nencryption_key_file = \"{}\"\n",
+			keys.join("storage.key").display()
+		),
+	)
+	.unwrap();
+	std::fs::set_permissions(&real, std::fs::Permissions::from_mode(0o600)).unwrap();
+	let link = root.path().join("mail.toml");
+	std::os::unix::fs::symlink(&real, &link).unwrap();
+	super::prepare_keys_for_update(&data_dir, &link, false, false).unwrap();
+	assert!(
+		std::fs::symlink_metadata(&link)
+			.unwrap()
+			.file_type()
+			.is_symlink(),
+		"the link was replaced by a regular file"
+	);
+	let after = std::fs::read_to_string(&real).unwrap();
+	assert!(
+		after.contains(root.path().join("secrets/storage.key").to_str().unwrap()),
+		"the file behind the link was not updated: {after}"
+	);
+}
+
 /// `stack update` of a split stack keeps the account key only where `certs`
 /// reads it; without the split it never copies a key back under data_dir,
 /// which only an explicit `stack certs disable` does.

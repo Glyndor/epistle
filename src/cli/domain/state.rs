@@ -2,7 +2,9 @@
 //! removing it. The switch is the `disabled_domains` array of the
 //! configuration file; the server rejects mail for a listed domain like
 //! mail for an unknown user and lets nobody send as an address in it.
-//! Accounts, mailboxes, aliases, DNS records and DKIM keys are kept.
+//! Accounts, mailboxes, aliases and DKIM keys are kept. Its DNS says the same:
+//! the null SPF and null MX, a `reject` DMARC policy, and no DKIM or
+//! receiving records (see [`crate::dns::skip::DomainRole::Disabled`]).
 
 use super::writers::Commit;
 use crate::cli::config_edit::ConfigDocument;

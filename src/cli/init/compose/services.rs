@@ -5,79 +5,6 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 use std::path::Path;
 
-/// The `stop_grace_period` of the `mail` service, in seconds: how long podup
-/// waits after SIGTERM before SIGKILL. `serve` drains for 5 s less.
-pub(crate) const MAIL_STOP_GRACE_SECS: u64 = 30;
-
-/// The open-file limit of the `mail` service. Podman starts a rootless
-/// container with the invoking user's soft limit, often 1024, and every
-/// connection is a descriptor: around a thousand idle connections the
-/// listeners stopped greeting. Every listener cap together (SMTP 1000, IMAP
-/// and POP3 500, ManageSieve 100, HTTP 1024) plus the spool, the database
-/// socket and the logs stay well under this.
-pub(crate) const MAIL_NOFILE: u64 = 65_536;
-
-/// The open-file limit to ask for given the hard limit of the process that
-/// writes the compose file (`None` when it is unlimited or unknown). Podman
-/// refuses to start a container whose limit is above the hard limit of the
-/// user that runs it (`setrlimit RLIMIT_NOFILE: Operation not permitted`), so
-/// a lower hard limit lowers the request, and one that leaves nothing above
-/// the usual soft limit of 1024 asks for nothing.
-pub(crate) fn mail_nofile(host_hard_limit: Option<u64>) -> Option<u64> {
-	match host_hard_limit {
-		None => Some(MAIL_NOFILE),
-		Some(hard) if hard > 1024 => Some(hard.min(MAIL_NOFILE)),
-		Some(_) => None,
-	}
-}
-
-/// Explain why a generated request leaves too little room for the listeners.
-///
-/// Two cases warrant a warning, both about the host's `RLIMIT_NOFILE`
-/// hard limit landing below 8192:
-///
-/// 1. The host hard limit is known and the ask `mail_nofile(hard)` made
-///    is still below 8192 (`hard` is between 1025 and 8191 inclusive).
-///    The warning names the value the container ends up with.
-/// 2. The host hard limit is so low that `mail_nofile` declines to ask
-///    for anything (`hard <= 1024`, including the boundary at 1024). The
-///    container then inherits the kernel soft limit, so the warning
-///    names the host hard limit and the reason no larger value was
-///    requested.
-///
-/// Both cases describe a host whose limit is the real ceiling; the
-/// earlier shape missed case 2 at the 1024 boundary.
-pub(crate) fn warn_low_nofile(hard: Option<u64>, out: &mut dyn std::io::Write) {
-	const WARN_BELOW: u64 = 8192;
-	match (mail_nofile(hard), hard) {
-		(Some(requested), _) if requested < WARN_BELOW => {
-			let _ = writeln!(
-				out,
-				"warning: the mail container nofile limit is {requested}, below {WARN_BELOW}, because the host RLIMIT_NOFILE hard limit is {requested}; raise the hard open-file limit for the account running init and the stack (for example with LimitNOFILE in its systemd unit or limits.conf), then run epistle init again"
-			);
-		}
-		(None, Some(host_hard)) if host_hard < WARN_BELOW => {
-			let _ = writeln!(
-				out,
-				"warning: the host RLIMIT_NOFILE hard limit is {host_hard}, below {WARN_BELOW}, so the mail container inherits the kernel soft limit and the nofile request is omitted (the container cannot be raised above the host hard limit); raise the hard open-file limit for the account running init and the stack (for example with LimitNOFILE in its systemd unit or limits.conf), then run epistle init again"
-			);
-		}
-		_ => {}
-	}
-}
-
-/// The hard open-file limit of this process, or `None` when it is unlimited
-/// or cannot be read.
-pub(crate) fn host_hard_nofile() -> Option<u64> {
-	let mut limit = libc::rlimit {
-		rlim_cur: 0,
-		rlim_max: 0,
-	};
-	// SAFETY: `limit` is a valid, writable `rlimit` for the whole call.
-	let read = unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) };
-	(read == 0 && limit.rlim_max != libc::RLIM_INFINITY).then_some(limit.rlim_max)
-}
-
 // ---- internal JSON shape -----------------------------------------------
 
 #[derive(Debug, Serialize)]
@@ -456,7 +383,10 @@ fn add_dns_credentials(
 }
 
 mod certs;
+mod clamav;
+mod nofile;
 pub(super) use certs::ACME_ACCOUNT_SECRET;
+pub(crate) use nofile::{MAIL_STOP_GRACE_SECS, host_hard_nofile, mail_nofile, warn_low_nofile};
 
 /// Every capability: each service starts from none and `cap_add` names
 /// what it was measured to need.
@@ -503,104 +433,6 @@ struct Healthcheck {
 	interval: String,
 	timeout: String,
 	retries: u32,
-}
-
-impl ComposeService {
-	pub(super) fn new_clamav(answers: &Answers, freshclam: bool) -> Self {
-		let mut service = Self {
-			image: super::super::images::clamav().to_string(),
-			entrypoint: None,
-			command: None,
-			network_mode: Some(if freshclam { "pasta" } else { "none" }.to_string()),
-			user: None,
-			userns_mode: None,
-			volumes: vec![VolumeMount::Named("clamav-db:/var/lib/clamav".to_string())],
-			ports: None,
-			environment: BTreeMap::new(),
-			restart: "unless-stopped".to_string(),
-			stop_grace_period: None,
-			security_opt: vec!["no-new-privileges".to_string()],
-			cap_drop: drop_all(),
-			cap_add: None,
-			read_only: Some(true),
-			tmpfs: None,
-			mem_limit: None,
-			pids_limit: None,
-			ulimits: None,
-			sysctls: None,
-			secrets: None,
-			configs: None,
-			depends_on: None,
-			healthcheck: None,
-		};
-		if freshclam {
-			// The image's /init chowns the database volume and creates
-			// /run/clamav as root before it starts freshclam with
-			// `--user=clamav`. Running the daemon as clamav (uid 100, gid
-			// 101 in the image) from the start needs no capability: the
-			// database volume is clamav's, from the image or from earlier
-			// starts. tini stays PID 1, as under /init, so SIGTERM reaches
-			// freshclam and its children are reaped.
-			service.user = Some("100:101".to_string());
-			// UpdateLogFile in the image's freshclam.conf. The tmpfs root is
-			// root's unless its mode opens it, and freshclam runs as clamav.
-			// The log stops growing at LogFileMaxSize (1 MiB by default).
-			service.tmpfs = Some(vec!["/var/log/clamav:size=16m,mode=1777".to_string()]);
-			service.entrypoint = Some(
-				[
-					"/sbin/tini",
-					"--",
-					"freshclam",
-					"--daemon",
-					"--foreground",
-					"--stdout",
-					"--checks=1",
-				]
-				.map(str::to_string)
-				.to_vec(),
-			);
-		} else {
-			service
-				.environment
-				.insert("CLAMAV_NO_FRESHCLAMD".to_string(), "true".to_string());
-			// Measured under `cap_drop: [ALL]`, one failure per line: chown
-			// of /run/clamav (CHOWN), chmod of the now clamav-owned
-			// directory (FOWNER), and clamd's own step down to `User
-			// clamav`, which failed in initgroups() (SETGID, SETUID).
-			// clamd's TemporaryDirectory: every INSTREAM body and every
-			// archive member it extracts lands here while it is scanned.
-			service.tmpfs = Some(vec!["/tmp:size=512m,mode=1777".to_string()]);
-			service.cap_add = Some(
-				["CHOWN", "FOWNER", "SETGID", "SETUID"]
-					.map(str::to_string)
-					.to_vec(),
-			);
-			service
-				.volumes
-				.push(VolumeMount::Named("clamd-socket:/run/clamav".to_string()));
-			service.volumes.push(VolumeMount::bind(
-				&answers.data_dir.join("compose/clamd.conf"),
-				Path::new("/etc/clamav/epistle-clamd.conf"),
-				true,
-			));
-			// Bypass the image's config rewriting and enforce a traversable socket directory.
-			service.entrypoint = Some(vec!["/bin/sh".to_string(), "-c".to_string(), "chown clamav:clamav /run/clamav && chmod 755 /run/clamav && exec clamd --config-file=/etc/clamav/epistle-clamd.conf".to_string()]);
-			service.healthcheck = Some(Healthcheck {
-				test: vec![
-					"CMD".to_string(),
-					"clamdscan".to_string(),
-					"--config-file=/etc/clamav/epistle-clamd.conf".to_string(),
-					"--ping=1".to_string(),
-				],
-				interval: "10s".to_string(),
-				timeout: "5s".to_string(),
-				retries: 30,
-				// The initial freshclam download is about 300 MB; clamd waits for signatures.
-				start_period: Some("10m".to_string()),
-			});
-		}
-		service
-	}
 }
 
 #[derive(Debug, Serialize)]

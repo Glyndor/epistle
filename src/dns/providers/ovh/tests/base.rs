@@ -52,6 +52,10 @@ pub(in super::super) struct MockState {
 	pub(in super::super) addr: String,
 	/// How many `GET /record/{id}` the mock answered.
 	pub(in super::super) reads: usize,
+	/// Every write in order: `create`, `update <id>` or `delete <id>`.
+	pub(in super::super) writes: Vec<String>,
+	/// The `target` each create and update carried, in order.
+	pub(in super::super) targets: Vec<String>,
 }
 
 pub(in super::super) type Shared = Arc<Mutex<MockState>>;
@@ -98,6 +102,9 @@ async fn create_record(
 	s.write_body = body.clone();
 	s.write_method = "POST".into();
 	let parsed: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
+	s.writes.push("create".into());
+	s.targets
+		.push(parsed["target"].as_str().unwrap_or("").to_string());
 	s.next_id += 1;
 	let id = s.next_id;
 	let rec = StoredRecord {
@@ -142,6 +149,9 @@ async fn update_record(
 	s.write_body = body.clone();
 	s.write_method = "PUT".into();
 	let parsed: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
+	s.writes.push(format!("update {id}"));
+	s.targets
+		.push(parsed["target"].as_str().unwrap_or("").to_string());
 	if let Some(r) = s.records.iter_mut().find(|r| r.id == id) {
 		r.field_type = parsed["fieldType"].as_str().unwrap_or("").to_string();
 		r.sub_domain = parsed["subDomain"].as_str().unwrap_or("").to_string();
@@ -162,6 +172,7 @@ async fn delete_record(
 	s.write_path = format!("/domain/zone/{}/record/{}", zone, id);
 	s.write_method = "DELETE".into();
 	s.write_body = String::new();
+	s.writes.push(format!("delete {id}"));
 	s.records.retain(|r| r.id != id);
 	axum::http::StatusCode::NO_CONTENT
 }
@@ -237,3 +248,4 @@ mod signing;
 mod upsert;
 
 mod exact;
+mod guarded;

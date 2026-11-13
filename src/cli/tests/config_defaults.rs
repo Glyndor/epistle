@@ -51,6 +51,7 @@ fn config_path(command: &Command) -> Option<&Path> {
 		| Command::Dns { config, .. }
 		| Command::Storage { config, .. }
 		| Command::Srs { config, .. }
+		| Command::Rotate { config, .. }
 		| Command::Webhook { config, .. }
 		| Command::Alert { config, .. }
 		| Command::Antispam { config, .. }

@@ -6,7 +6,7 @@ use super::check;
 use crate::cli::status::Ctx;
 use crate::cli::status::report::Level;
 use crate::config::Config;
-use crate::test_fixtures::fresh_secret;
+use crate::test_support::fixtures::fresh_secret;
 
 /// A configuration that hosts two domains, plus `extra`.
 fn ctx_for(dir: &std::path::Path, extra: &str) -> Ctx {

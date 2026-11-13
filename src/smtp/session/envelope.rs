@@ -75,6 +75,14 @@ impl Session {
 					));
 				}
 				match (&self.authenticated, Address::parse(&reverse_path)) {
+					// An account whose sending is switched off may sign in
+					// and read, but not submit.
+					(Some(account), _) if !self.directory.can_send(account) => {
+						return Action::Continue(Reply::single(
+							550,
+							"5.7.1 sending is turned off for this account",
+						));
+					}
 					// Authenticated senders must use one of their own
 					// addresses — no spoofing, no null path.
 					(Some(account), Ok(address))
@@ -234,6 +242,23 @@ impl Session {
 				chunking,
 				..
 			} if body.is_empty() && !*chunking => {
+				// The same address named again is accepted and kept once: two
+				// entries would be delivered, reported and recorded twice,
+				// and a report would carry two blocks for one recipient.
+				if recipients
+					.iter()
+					.any(|known| known.eq_ignore_ascii_case(&forward_path))
+				{
+					// A stricter notice request is not lost on the way.
+					if suppresses_dsn
+						&& !no_dsn
+							.iter()
+							.any(|known| known.eq_ignore_ascii_case(&forward_path))
+					{
+						no_dsn.push(forward_path);
+					}
+					return Action::Continue(Reply::ok());
+				}
 				if recipients.len() >= self.max_recipients {
 					return Action::Continue(Reply::single(452, "4.5.3 too many recipients"));
 				}

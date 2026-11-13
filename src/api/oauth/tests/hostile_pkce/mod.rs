@@ -23,7 +23,7 @@ async fn megabyte_pkce_verifier_is_rejected_on_wire() {
 			"/oauth/authorize",
 			json!({
 				"client_id": "cli", "login": "alice@example.org",
-				"password": crate::test_fixtures::password(),
+				"password": crate::test_support::fixtures::password(),
 				"code_challenge_method": "S256", "code_challenge": challenge
 			}),
 		)

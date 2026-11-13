@@ -39,6 +39,8 @@ pub(in super::super) fn push_state(dir: &std::path::Path) -> Router {
 	}
 	drop(key_store);
 	let account = |name: &str, address: &str| crate::config::Account {
+		send: None,
+		receive: None,
 		display_name: None,
 		name: name.to_string(),
 		addresses: vec![address.to_string()],

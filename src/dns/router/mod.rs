@@ -127,6 +127,9 @@ impl DnsProvider for ZoneRouter {
 	fn publish_snapshot<'a>(&'a self, zone: &'a str) -> SnapshotOp<'a> {
 		self.route(zone).publish_snapshot(zone)
 	}
+	fn flattens_apex_cname(&self, zone: &str) -> bool {
+		self.route(zone).flattens_apex_cname(zone)
+	}
 	fn apply_guarded<'a>(&'a self, zone: &'a str, change: Change) -> ReceiptOp<'a> {
 		if !self.agrees(zone, &change.name) {
 			return Box::pin(async { Receipt::Unsupported });

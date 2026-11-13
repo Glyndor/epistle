@@ -37,6 +37,11 @@ pub(crate) fn render(account: &DynamicAccount, out: &mut impl std::io::Write) {
 		"disabled: {}",
 		if account.disabled { "yes" } else { "no" }
 	);
+	render_switches(
+		account.send.unwrap_or(true),
+		account.receive.unwrap_or(true),
+		out,
+	);
 	let quota = match account.quota_bytes {
 		Some(bytes) => bytes.to_string(),
 		None => "server default".to_string(),
@@ -58,6 +63,12 @@ pub(crate) fn render(account: &DynamicAccount, out: &mut impl std::io::Write) {
 			"no"
 		}
 	);
+}
+
+/// The `send:` and `receive:` lines of `account show`, `on` or `off`.
+fn render_switches(send: bool, receive: bool, out: &mut impl std::io::Write) {
+	let _ = writeln!(out, "send: {}", super::switches::word(send));
+	let _ = writeln!(out, "receive: {}", super::switches::word(receive));
 }
 
 /// Render a one-per-line list with `(none)` for the empty case. The
@@ -416,6 +427,11 @@ fn render_static(account: &crate::config::Account, out: &mut impl std::io::Write
 	);
 	let _ = writeln!(out, "addresses: {}", account.addresses.join(","));
 	let _ = writeln!(out, "disabled: no");
+	render_switches(
+		account.send.unwrap_or(true),
+		account.receive.unwrap_or(true),
+		out,
+	);
 	let quota = match account.quota_bytes {
 		Some(bytes) => bytes.to_string(),
 		None => "server default".to_string(),

@@ -328,6 +328,17 @@ fn undo(
 			match &report.failure {
 				None => {
 					let _ = writeln!(err, "{removed} records removed");
+					let loose = report
+						.entries
+						.iter()
+						.filter(|e| e.without_precondition)
+						.count();
+					if loose > 0 {
+						let _ = writeln!(
+							err,
+							"{loose} of them went without a precondition: this provider cannot remove one value, so a record another account added to the same name at that moment would have gone with it"
+						);
+					}
 					ExitCode::SUCCESS
 				}
 				Some(failure) => {

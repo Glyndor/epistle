@@ -91,7 +91,7 @@ const SKIPPED: &[(&str, &str)] = &[
 	),
 	(
 		"evidence key rotate",
-		"refused in the first half hour of a UTC day, so the result depends on the hour; src/cli/evidence/tests/key.rs",
+		"refused in the first half hour of a UTC day, so the result depends on the hour; src/cli/evidence/tests/key_rotation.rs",
 	),
 	("dns provider test", "calls the DNS provider"),
 	("webhook test", "posts to the endpoint"),
@@ -114,6 +114,7 @@ const SKIPPED: &[(&str, &str)] = &[
 		"needs the stack; tests/cli/json/cli_json/operator/stack.rs",
 	),
 	("stack up", "tests/cli/json/cli_json/operator/stack.rs"),
+	("stack apply", "tests/cli/json/cli_json/operator/stack.rs"),
 	("stack down", "tests/cli/json/cli_json/operator/stack.rs"),
 	(
 		"stack ps",
@@ -158,6 +159,7 @@ const CASES: &[(&str, &[&str], Expect)] = &[
 	("verify", &[], Done),
 	("srv-records", &[], Done),
 	("token-hash", &[], Done),
+	("rotate", &["--all", "--dry-run"], Done),
 	("reports", &[], Done),
 	("suppression list", &[], Done),
 	("suppression add", &["gone@example.net"], Done),

@@ -16,10 +16,19 @@ impl Route53Provider {
 		&self,
 		name: &str,
 	) -> Result<Option<TxtRrset>, ProviderError> {
+		self.fetch_rrset(name, "TXT").await
+	}
+
+	/// [`Self::fetch_txt_rrset`] for the record set of `kind` at `name`.
+	pub(super) async fn fetch_rrset(
+		&self,
+		name: &str,
+		kind: &str,
+	) -> Result<Option<TxtRrset>, ProviderError> {
 		let mut start: Option<(String, String)> = None;
 		loop {
 			let text = self.list_page(start.as_ref()).await?;
-			if let Some(rrset) = parse_txt_rrset(&text, name) {
+			if let Some(rrset) = parse_rrset(&text, name, kind) {
 				return Ok(Some(rrset));
 			}
 			match next_page(&text) {

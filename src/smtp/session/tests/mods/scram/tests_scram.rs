@@ -1,5 +1,5 @@
 use super::*;
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 
 pub(in crate::smtp::session::tests::mods) fn reply_code(action: &Action) -> u16 {
 	match action {

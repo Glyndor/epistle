@@ -72,6 +72,8 @@ pub(in super::super) fn world(dir: &std::path::Path) -> ApiState {
 		.expect("add key");
 	drop(keys);
 	let account = |name: &str, address: &str| crate::config::Account {
+		send: None,
+		receive: None,
 		display_name: None,
 		name: name.to_string(),
 		addresses: vec![address.to_string()],

@@ -3,14 +3,14 @@
 use super::*;
 use std::fs;
 
-fn directory() -> DirectoryHandle {
+pub(super) fn directory() -> DirectoryHandle {
 	DirectoryHandle::new(crate::smtp::directory::Directory::new(
 		["example.org".to_string()],
 		[("alice@example.org".to_string(), "alice".to_string())],
 	))
 }
 
-fn message(recipients: &[&str]) -> AcceptedMessage {
+pub(super) fn message(recipients: &[&str]) -> AcceptedMessage {
 	AcceptedMessage {
 		reverse_path: "alice@example.org".into(),
 		recipients: recipients.iter().map(|r| r.to_string()).collect(),
@@ -23,13 +23,13 @@ fn message(recipients: &[&str]) -> AcceptedMessage {
 	}
 }
 
-fn inbox_count(root: &std::path::Path, account: &str) -> usize {
+pub(super) fn inbox_count(root: &std::path::Path, account: &str) -> usize {
 	fs::read_dir(root.join("accounts").join(account).join("new"))
 		.map(|entries| entries.count())
 		.unwrap_or(0)
 }
 
-fn spool_count(root: &std::path::Path) -> usize {
+pub(super) fn spool_count(root: &std::path::Path) -> usize {
 	FsSpool::open(root)
 		.expect("open spool")
 		.list()
@@ -37,7 +37,7 @@ fn spool_count(root: &std::path::Path) -> usize {
 		.len()
 }
 
-fn folder_count(root: &std::path::Path, account: &str, mailbox: &str) -> usize {
+pub(super) fn folder_count(root: &std::path::Path, account: &str, mailbox: &str) -> usize {
 	fs::read_dir(
 		root.join("accounts")
 			.join(account)
@@ -83,173 +83,6 @@ fn explicit_mailbox_hint_quarantines_to_that_folder() {
 	sink.deliver(msg).expect("deliver");
 	assert_eq!(folder_count(dir.path(), "alice", "Rejects"), 1);
 	assert_eq!(inbox_count(dir.path(), "alice"), 0);
-}
-
-#[test]
-fn sieve_reject_bounces_and_skips_delivery() {
-	let dir = tempfile::tempdir().expect("tempdir");
-	let account_dir = dir.path().join("accounts").join("alice");
-	fs::create_dir_all(&account_dir).expect("mkdir");
-	fs::write(account_dir.join("filter.sieve"), "reject \"no thanks\";").expect("filter");
-	let sink = SplitDelivery::new(dir.path(), directory()).expect("sink");
-	sink.deliver(message(&["alice@example.org"]))
-		.expect("deliver");
-	// Rejected: nothing delivered, one DSN bounce queued to the sender.
-	assert_eq!(inbox_count(dir.path(), "alice"), 0);
-	let spool = FsSpool::open(dir.path()).expect("spool");
-	let ids = spool.list().expect("list");
-	assert_eq!(ids.len(), 1);
-	let entry = spool.load(ids[0]).expect("load");
-	// A DSN uses the null reverse-path and goes to the original sender.
-	assert!(
-		entry.envelope.reverse_path.is_empty(),
-		"{:?}",
-		entry.envelope
-	);
-	assert_eq!(
-		entry.envelope.recipients,
-		vec!["alice@example.org".to_string()]
-	);
-}
-
-#[test]
-fn sieve_reject_with_notify_never_sends_no_bounce() {
-	let dir = tempfile::tempdir().expect("tempdir");
-	let account_dir = dir.path().join("accounts").join("alice");
-	fs::create_dir_all(&account_dir).expect("mkdir");
-	fs::write(account_dir.join("filter.sieve"), "reject \"no thanks\";").expect("filter");
-	let sink = SplitDelivery::new(dir.path(), directory()).expect("sink");
-	let mut msg = message(&["alice@example.org"]);
-	msg.no_dsn = vec!["alice@example.org".to_string()];
-	sink.deliver(msg).expect("deliver");
-	// Rejected, but the sender opted out of failure DSNs: nothing is queued.
-	assert_eq!(inbox_count(dir.path(), "alice"), 0);
-	assert_eq!(spool_count(dir.path()), 0);
-}
-
-#[test]
-fn sieve_vacation_replies_once_and_keeps() {
-	let dir = tempfile::tempdir().expect("tempdir");
-	let account_dir = dir.path().join("accounts").join("alice");
-	fs::create_dir_all(&account_dir).expect("mkdir");
-	fs::write(account_dir.join("filter.sieve"), "vacation \"I am away\";").expect("filter");
-	let sink = SplitDelivery::new(dir.path(), directory()).expect("sink");
-
-	let mut msg = message(&["alice@example.org"]);
-	msg.reverse_path = "bob@example.net".into();
-	msg.data = b"To: alice@example.org\r\nSubject: hi\r\n\r\nbody\r\n".to_vec();
-	msg.sender_verified = true;
-	let again = msg.clone();
-	sink.deliver(msg).expect("deliver");
-	// Kept in INBOX, one null-sender autoresponse queued to the sender.
-	assert_eq!(inbox_count(dir.path(), "alice"), 1);
-	let spool = FsSpool::open(dir.path()).expect("spool");
-	let ids = spool.list().expect("list");
-	assert_eq!(ids.len(), 1);
-	let reply = spool.load(ids[0]).expect("load");
-	assert!(reply.envelope.reverse_path.is_empty(), "null sender");
-	assert_eq!(
-		reply.envelope.recipients,
-		vec!["bob@example.net".to_string()]
-	);
-
-	// A second message from the same sender is deduped: no new reply.
-	sink.deliver(again).expect("deliver");
-	assert_eq!(spool.list().expect("list").len(), 1);
-}
-
-#[test]
-fn sieve_redirect_queues_to_the_spool() {
-	let dir = tempfile::tempdir().expect("tempdir");
-	let account_dir = dir.path().join("accounts").join("alice");
-	fs::create_dir_all(&account_dir).expect("mkdir");
-	fs::write(
-		account_dir.join("filter.sieve"),
-		"redirect \"forward@example.com\";",
-	)
-	.expect("filter");
-	let sink = SplitDelivery::new(dir.path(), directory()).expect("sink");
-	sink.deliver(message(&["alice@example.org"]))
-		.expect("deliver");
-	// Redirect cancels the implicit keep: nothing in INBOX, one in the spool.
-	assert_eq!(inbox_count(dir.path(), "alice"), 0);
-	let spool = FsSpool::open(dir.path()).expect("spool");
-	let ids = spool.list().expect("list");
-	assert_eq!(ids.len(), 1);
-	let entry = spool.load(ids[0]).expect("load");
-	assert_eq!(
-		entry.envelope.recipients,
-		vec!["forward@example.com".to_string()]
-	);
-}
-
-#[test]
-fn srs_rewrites_the_forwarded_sender() {
-	let dir = tempfile::tempdir().expect("tempdir");
-	let account_dir = dir.path().join("accounts").join("alice");
-	fs::create_dir_all(&account_dir).expect("mkdir");
-	fs::write(
-		account_dir.join("filter.sieve"),
-		"redirect \"forward@example.com\";",
-	)
-	.expect("filter");
-	let srs = crate::queue::srs::Srs::new(b"test secret");
-	let sink = SplitDelivery::new(dir.path(), directory())
-		.expect("sink")
-		.with_srs(srs, "relay.example");
-	sink.deliver(message(&["alice@example.org"]))
-		.expect("deliver");
-	let spool = FsSpool::open(dir.path()).expect("spool");
-	let ids = spool.list().expect("list");
-	let entry = spool.load(ids[0]).expect("load");
-	// The forwarded sender is rewritten to an SRS address at our domain.
-	assert!(
-		entry.envelope.reverse_path.starts_with("SRS0="),
-		"{}",
-		entry.envelope.reverse_path
-	);
-	assert!(entry.envelope.reverse_path.ends_with("@relay.example"));
-}
-
-#[test]
-fn srs_return_address_forwards_to_original_sender() {
-	let dir = tempfile::tempdir().expect("tempdir");
-	let srs = crate::queue::srs::Srs::new(b"test secret");
-	// Encode an SRS-return address for the original sender at our domain.
-	let now_days = std::time::SystemTime::now()
-		.duration_since(std::time::UNIX_EPOCH)
-		.map(|d| d.as_secs() / 86_400)
-		.unwrap_or(0);
-	let srs_local = srs
-		.forward("origsender", "origin.example", "relay.example", now_days)
-		.split_once('@')
-		.unwrap()
-		.0
-		.to_string();
-	let sink = SplitDelivery::new(dir.path(), directory())
-		.expect("sink")
-		.with_srs(crate::queue::srs::Srs::new(b"test secret"), "relay.example");
-
-	let bounce = AcceptedMessage {
-		reverse_path: String::new(),
-		recipients: vec![format!("{srs_local}@relay.example")],
-		data: b"Subject: bounce\r\n\r\nfailed\r\n".to_vec(),
-		require_tls: false,
-		mailbox: None,
-		tlsrpt_verified: false,
-		sender_verified: false,
-		no_dsn: Vec::new(),
-	};
-	sink.deliver(bounce).expect("deliver");
-	// The bounce is re-queued to the original sender it encoded.
-	let spool = FsSpool::open(dir.path()).expect("spool");
-	let ids = spool.list().expect("list");
-	assert_eq!(ids.len(), 1);
-	let entry = spool.load(ids[0]).expect("load");
-	assert_eq!(
-		entry.envelope.recipients,
-		vec!["origsender@origin.example".to_string()]
-	);
 }
 
 #[test]
@@ -330,108 +163,6 @@ fn relayed_mail_is_dkim_signed() {
 	// The relayed copy carries a DKIM-Signature for the sender domain.
 	assert!(data.starts_with("DKIM-Signature:"), "{data}");
 	assert!(data.contains("d=example.org"), "{data}");
-}
-
-/// A throwaway ARC sealer signing under `domain`.
-fn arc_sealer(domain: &str) -> std::sync::Arc<crate::arc::sealer::ArcSealer> {
-	use ring::signature::Ed25519KeyPair;
-	let rng = ring::rand::SystemRandom::new();
-	let pkcs8 = Ed25519KeyPair::generate_pkcs8(&rng).expect("generate");
-	let key = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).expect("parse");
-	std::sync::Arc::new(crate::arc::sealer::ArcSealer::new(key, domain, "sel"))
-}
-
-/// Configure a Sieve redirect for alice and return the (account-rooted) sink.
-fn redirect_sink(dir: &std::path::Path) -> SplitDelivery {
-	let account_dir = dir.join("accounts").join("alice");
-	fs::create_dir_all(&account_dir).expect("mkdir");
-	fs::write(
-		account_dir.join("filter.sieve"),
-		"redirect \"forward@example.com\";",
-	)
-	.expect("filter");
-	SplitDelivery::new(dir, directory()).expect("sink")
-}
-
-/// AMS refuses to sign without a From header, so forwarded test mail carries one.
-const FORWARD_BODY: &[u8] = b"From: bob@example.net\r\nSubject: hi\r\n\r\nbody\r\n";
-
-#[test]
-fn forwarded_mail_gains_an_arc_seal() {
-	let dir = tempfile::tempdir().expect("tempdir");
-	let sink = redirect_sink(dir.path()).with_arc_sealer(arc_sealer("relay.example"));
-	let mut msg = message(&["alice@example.org"]);
-	msg.data = FORWARD_BODY.to_vec();
-	sink.deliver(msg).expect("deliver");
-
-	let spool = FsSpool::open(dir.path()).expect("spool");
-	let ids = spool.list().expect("list");
-	let entry = spool.load(ids[0]).expect("load");
-	let data = String::from_utf8_lossy(&entry.data);
-	// A fresh chain: a complete first instance under our domain.
-	assert!(data.contains("ARC-Seal:"), "{data}");
-	assert!(data.contains("ARC-Message-Signature:"), "{data}");
-	assert!(data.contains("ARC-Authentication-Results:"), "{data}");
-	assert!(data.contains("d=relay.example"), "{data}");
-	assert!(data.contains("cv=none"), "{data}");
-}
-
-#[test]
-fn no_sealer_leaves_the_forwarded_copy_unchanged() {
-	let dir = tempfile::tempdir().expect("tempdir");
-	let sink = redirect_sink(dir.path());
-	let mut msg = message(&["alice@example.org"]);
-	msg.data = FORWARD_BODY.to_vec();
-	sink.deliver(msg).expect("deliver");
-
-	let spool = FsSpool::open(dir.path()).expect("spool");
-	let ids = spool.list().expect("list");
-	let entry = spool.load(ids[0]).expect("load");
-	// Without a sealer the copy is forwarded byte-for-byte, under the
-	// Delivered-To of the address that forwarded it.
-	assert_eq!(
-		entry.data,
-		[
-			b"Delivered-To: alice@example.org\r\n".as_slice(),
-			FORWARD_BODY
-		]
-		.concat()
-	);
-}
-
-#[test]
-fn a_chain_we_already_sealed_is_not_resealed() {
-	let dir = tempfile::tempdir().expect("tempdir");
-	let sealer = arc_sealer("relay.example");
-	// Pre-seal the message as if we sealed it at inbound accept (i=1, our domain).
-	let prepend = sealer
-		.seal(
-			FORWARD_BODY,
-			"none",
-			&[],
-			crate::arc::chain::ChainValidation::None,
-		)
-		.expect("seal");
-	let mut sealed = prepend.into_bytes();
-	sealed.extend_from_slice(FORWARD_BODY);
-
-	let sink = redirect_sink(dir.path()).with_arc_sealer(std::sync::Arc::clone(&sealer));
-	let mut msg = message(&["alice@example.org"]);
-	msg.data = sealed.clone();
-	sink.deliver(msg).expect("deliver");
-
-	let spool = FsSpool::open(dir.path()).expect("spool");
-	let ids = spool.list().expect("list");
-	let entry = spool.load(ids[0]).expect("load");
-	// No second set: the forwarded copy is the already-sealed input under
-	// its Delivered-To.
-	let expected = [b"Delivered-To: alice@example.org\r\n".as_slice(), &sealed].concat();
-	assert_eq!(entry.data, expected, "our domain must not double-seal");
-	// Exactly one instance is present (i=1, no i=2).
-	let chain = crate::arc::chain::extract(&entry.data)
-		.expect("extract")
-		.expect("chain");
-	assert_eq!(chain.len(), 1, "expected a single ARC instance");
 }
 
 #[test]

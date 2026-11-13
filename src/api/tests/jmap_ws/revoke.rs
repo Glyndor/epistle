@@ -12,12 +12,12 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
-const ANN: &str = "ann-ws-secret";
-const CAROL: &str = "carol-ws-secret";
+pub(super) const ANN: &str = "ann-ws-secret";
+pub(super) const CAROL: &str = "carol-ws-secret";
 
 /// `ann` (static) and `carol` (dynamic, so she can be disabled or removed),
 /// each with a read/write key bound to the account.
-fn ws_state(
+pub(super) fn ws_state(
 	dir: &std::path::Path,
 ) -> (
 	ApiState,
@@ -45,6 +45,8 @@ fn ws_state(
 			domains.clone(),
 			std::collections::HashMap::new(),
 			vec![crate::config::Account {
+				send: None,
+				receive: None,
 				display_name: None,
 				name: "ann".to_string(),
 				addresses: vec!["ann@example.org".to_string()],
@@ -60,6 +62,8 @@ fn ws_state(
 	);
 	store
 		.add(crate::directory_store::DynamicAccount {
+			send: None,
+			receive: None,
 			display_name: None,
 			name: "carol".to_string(),
 			addresses: vec!["carol@example.org".to_string()],
@@ -85,6 +89,18 @@ fn ws_state(
 	(state, store)
 }
 
+/// Serve the API of `state` on a loopback port and return its address.
+pub(in super::super) async fn serve(state: ApiState) -> std::net::SocketAddr {
+	let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+		.await
+		.expect("bind loopback");
+	let addr = listener.local_addr().expect("local addr");
+	tokio::spawn(async move {
+		axum::serve(listener, router(state)).await.ok();
+	});
+	addr
+}
+
 /// A minimal RFC 6455 client: enough to send masked text frames and read the
 /// server's unmasked frames, so the test needs no WebSocket dependency.
 pub(in super::super) struct Client {
@@ -93,13 +109,18 @@ pub(in super::super) struct Client {
 
 impl Client {
 	pub(in super::super) async fn open(state: ApiState, token: &str) -> Client {
-		let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-			.await
-			.expect("bind loopback");
-		let addr = listener.local_addr().expect("local addr");
-		tokio::spawn(async move {
-			axum::serve(listener, router(state)).await.ok();
-		});
+		let addr = serve(state).await;
+		match Client::connect(addr, token).await {
+			Ok(client) => client,
+			Err(head) => panic!("upgrade refused: {head}"),
+		}
+	}
+
+	/// Upgrade to a socket on `addr` as `token`, or the refusal's head.
+	pub(in super::super) async fn connect(
+		addr: std::net::SocketAddr,
+		token: &str,
+	) -> Result<Client, String> {
 		let mut stream = TcpStream::connect(addr).await.expect("connect");
 		let handshake = format!(
 			"GET /jmap/ws HTTP/1.1\r\nHost: {addr}\r\nUpgrade: websocket\r\n\
@@ -115,15 +136,22 @@ impl Client {
 		while !head.ends_with(b"\r\n\r\n") {
 			head.push(stream.read_u8().await.expect("handshake reply"));
 		}
-		let head = String::from_utf8_lossy(&head);
-		assert!(head.starts_with("HTTP/1.1 101"), "upgrade refused: {head}");
-		Client { stream }
+		let head = String::from_utf8_lossy(&head).into_owned();
+		if !head.starts_with("HTTP/1.1 101") {
+			return Err(head);
+		}
+		Ok(Client { stream })
 	}
 
 	pub(in super::super) async fn send(&mut self, frame: &Value) {
-		let payload = frame.to_string().into_bytes();
+		self.send_frame(0x1, frame.to_string().as_bytes()).await;
+	}
+
+	/// One masked frame with `opcode` (1 text, 2 binary) and `payload`, which
+	/// must fit a 16-bit length.
+	pub(in super::super) async fn send_frame(&mut self, opcode: u8, payload: &[u8]) {
 		let mask = [0x11u8, 0x22, 0x33, 0x44];
-		let mut out = vec![0x81u8];
+		let mut out = vec![0x80 | opcode];
 		match payload.len() {
 			len @ 0..=125 => out.push(0x80 | len as u8),
 			len => {
@@ -160,7 +188,13 @@ impl Client {
 	/// The next frame's opcode and payload; opcode 0 (a continuation, which
 	/// this server never sends) when the connection ended without one.
 	pub(in super::super) async fn next(&mut self) -> (u8, Vec<u8>) {
-		tokio::time::timeout(Duration::from_secs(5), async {
+		self.next_within(Duration::from_secs(5)).await
+	}
+
+	/// [`Self::next`] with `wait` as the limit, for a test that runs on the
+	/// paused runtime clock and waits out a long server timer.
+	pub(in super::super) async fn next_within(&mut self, wait: Duration) -> (u8, Vec<u8>) {
+		tokio::time::timeout(wait, async {
 			let Ok(first) = self.stream.read_u8().await else {
 				return (0, Vec::new());
 			};
@@ -177,7 +211,7 @@ impl Client {
 			(first & 0x0f, payload)
 		})
 		.await
-		.expect("no frame within 5s")
+		.expect("no frame within the wait")
 	}
 
 	pub(in super::super) async fn next_json(&mut self) -> Value {

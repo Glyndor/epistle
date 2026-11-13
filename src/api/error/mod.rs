@@ -87,6 +87,17 @@ impl ApiError {
 		}
 	}
 
+	/// `403` for a submission by an account whose sending is switched off.
+	/// Unlike `forbidden_from` it names the cause, which is the account's
+	/// own state and tells nothing about other addresses.
+	pub fn sending_off() -> Self {
+		ApiError {
+			status: StatusCode::FORBIDDEN,
+			code: "sending_off",
+			message: "Sending is turned off for this account.".to_string(),
+		}
+	}
+
 	/// `403` for an account-bound API key on a route outside JMAP and
 	/// `/api/v1/send`.
 	pub fn account_bound_route() -> Self {

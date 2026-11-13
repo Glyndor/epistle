@@ -43,6 +43,8 @@ fn es_state(dir: &std::path::Path) -> crate::api::ApiState {
 	state
 		.store()
 		.add(crate::directory_store::DynamicAccount {
+			send: None,
+			receive: None,
 			display_name: None,
 			name: "carol".to_string(),
 			addresses: vec!["carol@example.org".to_string()],
@@ -232,7 +234,7 @@ async fn the_event_source_needs_read_and_valid_arguments() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = router(es_state(dir.path()));
 	let (status, _) = open(&app, SENDER, "types=*&closeafter=no&ping=0").await;
-	assert_eq!(status, StatusCode::UNAUTHORIZED, "a send-only key");
+	assert_eq!(status, StatusCode::FORBIDDEN, "a send-only key");
 	for query in [
 		"types=*&closeafter=maybe&ping=0",
 		"types=*&closeafter=no&ping=soon",

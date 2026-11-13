@@ -553,6 +553,26 @@ pub enum Command {
 		#[command(subcommand)]
 		action: crate::cli::srs::SrsCli,
 	},
+	/// Every secret and credential, and how each one is rotated.
+	///
+	/// Walks the registry of secrets and credentials and prints, for each
+	/// one, what epistle does and what stays with the operator outside the
+	/// server. `--dry-run` changes nothing and is the only mode so far.
+	Rotate {
+		/// Configuration file; accepted before or after the action. The
+		/// listing does not read it.
+		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
+		config: PathBuf,
+		/// Go through every secret and credential.
+		#[arg(long)]
+		all: bool,
+		/// Print the plan without changing anything.
+		#[arg(long)]
+		dry_run: bool,
+		/// Print the plan as one JSON object on stdout.
+		#[arg(long)]
+		json: bool,
+	},
 	/// Manage the outbound event webhook.
 	Webhook {
 		/// Configuration file; accepted before or after the webhook action.

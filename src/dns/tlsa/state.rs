@@ -48,9 +48,12 @@ pub struct State {
 	pub managed: Vec<String>,
 }
 
-/// How many values the state keeps: the current one, the one it overlaps
-/// and one more for a publication that failed halfway.
-const MANAGED_KEPT: usize = 3;
+/// The most values the state keeps. A value stays in it from the moment it
+/// is meant to be published until a write that went through says what the
+/// zone holds of ours (see [`State::settle`]), so a value that a refused
+/// refresh left in the zone is still known as ours at the next one. The
+/// limit only keeps the file from growing while the provider stays down.
+const MANAGED_KEPT: usize = 8;
 
 /// Where the state of a deployment lives.
 pub fn path(data_dir: &Path) -> PathBuf {
@@ -130,6 +133,16 @@ impl State {
 		}
 		managed.truncate(MANAGED_KEPT);
 		self.managed = managed;
+	}
+
+	/// Keep, of the values this instance published, only the ones the zone
+	/// still holds after a write that went through: `left`, the new value
+	/// and the one it overlaps. The values the refreshes before it left
+	/// behind were withdrawn by that write, so they are not ours to look
+	/// for any more.
+	pub fn settle(&mut self, left: &[String]) {
+		self.managed
+			.retain(|kept| left.iter().any(|value| normal(value) == normal(kept)));
 	}
 
 	/// Note that publishing `value` failed at `now` for `reason`.

@@ -42,6 +42,7 @@ pub(super) fn with_config<F: FnOnce(&Config) -> ExitCode>(path: &Path, f: F) -> 
 impl Cli {
 	/// Execute the parsed command.
 	pub fn run(self) -> ExitCode {
+		crate::cli::config_edit::defer_restarts(self.no_restart);
 		if self.command.requires_service_user() {
 			match super::rootless::reexecute() {
 				Ok(Some(code)) => return code,
@@ -250,6 +251,9 @@ impl Cli {
 				dry_run,
 				json,
 			} => crate::cli::srs::run(&config, action, dry_run, json),
+			Command::Rotate {
+				all, dry_run, json, ..
+			} => crate::cli::rotate::run(all, dry_run, json),
 			Command::Webhook {
 				config,
 				action,

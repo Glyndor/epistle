@@ -81,7 +81,7 @@ async fn the_total_deadline_stops_the_scan_of_the_local_mailbox() {
 			verify: Verify::Skip,
 		},
 		user: "alice".into(),
-		password: Zeroizing::new(crate::test_fixtures::password().into()),
+		password: Zeroizing::new(crate::test_support::fixtures::password().into()),
 	};
 	let _guard = durability::tests::base::begin(None);
 	let (_, error) = run_with_connection(

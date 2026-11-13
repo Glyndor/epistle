@@ -1,4 +1,7 @@
-//! The closing marker that tells a complete pg_dump from a cut one.
+//! The closing marker that tells a complete pg_dump from a cut one. It detects
+//! truncation only: it is text, so anyone who writes a `database.sql` can end it
+//! with the marker, and it says nothing about what the SQL does or where the
+//! file came from.
 
 /// True when `stdout` ends with the closing marker of a complete pg_dump.
 /// pg_dump closes with `-- PostgreSQL database dump complete`, then a bare

@@ -83,14 +83,21 @@ fn build_request_body(max_body_bytes: usize, raw: &[u8]) -> Vec<u8> {
 
 /// Extract only the headers the operator asked us to send (`From`, `Subject`,
 /// `Reply-To`). Headers are matched case-insensitively, and the first instance
-/// of each is kept. The implementation is line-based — RFC 5322 folded headers
+/// of each is kept, each at most `MAX_HEADER_BYTES` and all together at most
+/// `MAX_HEADERS_BYTES`. The implementation is line-based — RFC 5322 folded headers
 /// are joined onto their predecessor for safety, so a folded `Subject` is not
 /// silently truncated. Line endings are normalized so both LF and CRLF input
 /// parse the same way; the real wire form is CRLF.
 fn extract_safe_headers(raw: &[u8]) -> Vec<String> {
 	let mut kept: Vec<String> = Vec::new();
 	let mut current: Option<String> = None;
+	let mut total = 0usize;
 	for line in raw.split(|b| *b == b'\n') {
+		// The header section has its own ceiling, so a message cannot send a
+		// provider more than the operator sized for it through the headers.
+		if total >= MAX_HEADERS_BYTES {
+			break;
+		}
 		let line = line.strip_suffix(b"\r").unwrap_or(line);
 		// Header continuation: starts with whitespace. RFC 5322 collapses the
 		// leading whitespace to a single space when unfolding, so we trim it
@@ -98,9 +105,10 @@ fn extract_safe_headers(raw: &[u8]) -> Vec<String> {
 		if line.first().is_some_and(|b| b.is_ascii_whitespace()) {
 			if let Some(existing) = current.as_mut() {
 				let trimmed = String::from_utf8_lossy(line).trim().to_string();
-				if !trimmed.is_empty() {
+				if !trimmed.is_empty() && existing.len() < MAX_HEADER_BYTES {
 					existing.push(' ');
 					existing.push_str(&trimmed);
+					cut_at_boundary(existing, MAX_HEADER_BYTES);
 				}
 			}
 			continue;
@@ -113,6 +121,7 @@ fn extract_safe_headers(raw: &[u8]) -> Vec<String> {
 			break;
 		}
 		if let Some(prev) = current.take() {
+			total += prev.len();
 			kept.push(prev);
 		}
 		// Header line `Name: Value`.
@@ -121,13 +130,35 @@ fn extract_safe_headers(raw: &[u8]) -> Vec<String> {
 				|| matches_header_name(&name, "subject")
 				|| matches_header_name(&name, "reply-to"))
 		{
-			current = Some(format!("{name}: {value}"));
+			let mut header = format!("{name}: {value}");
+			cut_at_boundary(&mut header, MAX_HEADER_BYTES);
+			current = Some(header);
 		}
 	}
 	if let Some(prev) = current {
 		kept.push(prev);
 	}
 	kept
+}
+
+/// The most one forwarded header may take, once unfolded.
+const MAX_HEADER_BYTES: usize = 1024;
+
+/// The most all the forwarded headers may take together. The documented limit
+/// is for headers and body, so the body keeps its `max_body_bytes` on top of
+/// this and the whole stays within a small, fixed multiple of what was sized.
+const MAX_HEADERS_BYTES: usize = 4096;
+
+/// Cut `text` to at most `max` bytes, on a character boundary.
+fn cut_at_boundary(text: &mut String, max: usize) {
+	if text.len() <= max {
+		return;
+	}
+	let mut end = max;
+	while !text.is_char_boundary(end) {
+		end -= 1;
+	}
+	text.truncate(end);
 }
 
 fn split_header(line: &[u8]) -> Option<(String, String)> {

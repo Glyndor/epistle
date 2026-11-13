@@ -5,7 +5,10 @@
 //! (`resources/config/config.toml`, `crates/directory/src/backend/memory/
 //! config.rs` and `crates/common/src/config/smtp/auth.rs` at that tag).
 //! From v0.16 the file only names the datastore and every setting lives in
-//! the database; such a file is recognised and refused with directions.
+//! the database; such a file is refused with directions. What is read for
+//! 0.16 and later is a plan file the operator exports with Stalwart's own
+//! `stalwart-cli snapshot` (see [`snapshot`]); epistle never opens the
+//! database or runs Stalwart.
 //!
 //! What a TOML file can hold, and is imported: DKIM signatures
 //! (`[signature.<id>]` with `domain`, `selector`, `algorithm` and
@@ -22,11 +25,13 @@ use toml::{Table, Value};
 use super::import::{self, Account, Alias, Key, Plan, keys};
 use super::mox::read_bounded;
 
+mod snapshot;
+
 #[cfg(test)]
 pub(crate) mod fixture;
 
 /// The largest configuration file read.
-const MAX_BYTES: usize = 4 * 1024 * 1024;
+const MAX_BYTES: usize = 32 * 1024 * 1024;
 
 /// Why the configuration could not be read.
 #[derive(Debug, thiserror::Error)]
@@ -37,11 +42,15 @@ pub(crate) enum ReadError {
 	/// The file is not TOML.
 	#[error("{0} is not a Stalwart TOML configuration: {1}")]
 	Parse(String, String),
+	/// A plan file that cannot be read.
+	#[error("{0} is not a readable Stalwart plan file: {1}")]
+	Plan(String, String),
 	/// A Stalwart 0.16 or later bootstrap file.
 	#[error(
 		"{0} is a Stalwart 0.16+ bootstrap file: every setting lives in Stalwart's database, \
-		 not in a file. Create the domains and accounts here (epistle domain add, epistle \
-		 account add), set up DKIM (epistle dkim), and copy each account's mail with \
+		 not in a file. Export them with `stalwart-cli snapshot Domain Account MailingList \
+		 DkimSignature --include-secrets --output plan.ndjson` and pass that file as --from, or \
+		 create the domains and accounts here by hand and copy each account's mail with \
 		 epistle migrate imap"
 	)]
 	Database(String),
@@ -52,6 +61,9 @@ pub(crate) fn read(file: &Path) -> Result<Plan, ReadError> {
 	let shown = file.display().to_string();
 	let text = read_bounded(file, MAX_BYTES).map_err(|e| ReadError::Io(shown.clone(), e))?;
 	if text.trim_start().starts_with('{') {
+		if snapshot::is_plan(&text) {
+			return snapshot::read(&text, &shown).map_err(|e| ReadError::Plan(shown, e));
+		}
 		return Err(ReadError::Database(shown));
 	}
 	let table: Table = text

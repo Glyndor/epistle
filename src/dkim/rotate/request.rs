@@ -123,6 +123,10 @@ impl Rotator {
 	/// `auto_due`. A rotation just performed for a request makes the
 	/// scheduled tick pointless for this pass.
 	pub async fn cycle(&self, now: u64, auto_due: bool) -> Result<(), RotateError> {
+		if let Err(reason) = self.provider.refresh() {
+			tracing::warn!(%reason, "the DNS provider could not be built: DKIM rotation does nothing until it can");
+			return Ok(());
+		}
 		let performed = match self.serve_request(now).await {
 			Ok(performed) => performed,
 			Err(error) => {

@@ -19,6 +19,7 @@ use crate::dns::provider::{
 	record_description, same_txt_purpose,
 };
 use crate::dns::providers::transport;
+use crate::dns::publish::provider::{Change, ReceiptOp, SnapshotOp};
 use crate::dns::txt::{TxtForm, txt_encode};
 use tags as cloudflare_tags;
 
@@ -221,6 +222,11 @@ impl CloudflareProvider {
 }
 
 impl DnsProvider for CloudflareProvider {
+	/// Cloudflare flattens a CNAME at the apex and accepts other record
+	/// types next to it.
+	fn flattens_apex_cname(&self, _zone: &str) -> bool {
+		true
+	}
 	fn check_access<'a>(
 		&'a self,
 		_: &'a str,
@@ -260,6 +266,12 @@ impl DnsProvider for CloudflareProvider {
 		Box::pin(crate::dns::providers::listing(zone_name, async move {
 			self.list_inner(&zone).await
 		}))
+	}
+	fn publish_snapshot<'a>(&'a self, zone: &'a str) -> SnapshotOp<'a> {
+		Box::pin(crate::dns::providers::within(self.snapshot_inner(zone)))
+	}
+	fn apply_guarded<'a>(&'a self, zone: &'a str, change: Change) -> ReceiptOp<'a> {
+		Box::pin(self.apply_guarded_inner(zone, change))
 	}
 	fn has_zone(&self, zone: &str) -> ZoneOp<'_> {
 		let zone = zone.to_string();
@@ -308,6 +320,7 @@ async fn decode_ok(response: reqwest::Response) -> Result<(), ProviderError> {
 	}
 }
 
+mod guarded;
 mod record;
 mod write;
 

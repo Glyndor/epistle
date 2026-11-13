@@ -52,6 +52,8 @@ fn a_key_in_a_file_is_checked_too() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let path = dir.path().join("oauth_signing.key");
 	std::fs::write(&path, format!("{private}\n")).expect("write");
+	std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o600))
+		.expect("restrict");
 	let section = oauth(
 		&foreign,
 		&format!("signing_key_file = {:?}\n", path.display().to_string()),

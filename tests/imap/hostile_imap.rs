@@ -15,7 +15,13 @@ mod compress_support;
 mod framing;
 #[path = "hostile_imap/harness.rs"]
 mod harness;
+#[path = "hostile_imap/keywords.rs"]
+mod keywords;
 #[path = "hostile_imap/mailboxes.rs"]
 mod mailboxes;
+#[path = "hostile_imap/metadata.rs"]
+mod metadata;
 #[path = "hostile_imap/search.rs"]
 mod search;
+#[path = "hostile_imap/shared_ban.rs"]
+mod shared_ban;

@@ -201,6 +201,7 @@ fn failing_senders_are_carried_into_the_plan() {
 			source_ip: "198.51.100.7".into(),
 			messages: 12,
 		}],
+		..DmarcInputs::default()
 	};
 	let plan = plan_with(&[dmarc("v=DMARC1; p=none")], None, &inputs);
 	assert!(plan.dmarc.has_reports);
@@ -234,5 +235,68 @@ fn a_reject_policy_missing_a_tag_is_completed_in_place() {
 	assert_eq!(
 		entry.reason,
 		"keep _dmarc.example.org at p=reject; set sp=reject and np=reject; the other tags stay as written; pct is dropped (DMARCbis)"
+	);
+}
+
+fn strict() -> DmarcInputs {
+	DmarcInputs {
+		strict_alignment: true,
+		..DmarcInputs::default()
+	}
+}
+
+#[test]
+fn alignment_tags_are_never_set_without_the_option() {
+	let plan = plan(&[dmarc("v=DMARC1; p=none; rua=mailto:d@example.org")]);
+	let value = &dmarc_write(&plan).expect("rewritten").record.value;
+	assert!(
+		!value.contains("adkim") && !value.contains("aspf"),
+		"{value}"
+	);
+}
+
+#[test]
+fn strict_alignment_sets_both_tags_on_a_new_record() {
+	let plan = plan_with(&[], None, &strict());
+	let entry = dmarc_write(&plan).expect("published");
+	assert_eq!(
+		entry.record.value,
+		"v=DMARC1; p=quarantine; sp=quarantine; np=reject; adkim=s; aspf=s"
+	);
+	assert!(
+		entry
+			.reason
+			.ends_with("adkim=s and aspf=s (strict alignment)")
+	);
+}
+
+#[test]
+fn strict_alignment_replaces_relaxed_tags_once_and_keeps_the_rest() {
+	let plan = plan_with(
+		&[dmarc(
+			"v=DMARC1; p=none; adkim=r; rua=mailto:d@example.org; aspf=r",
+		)],
+		None,
+		&strict(),
+	);
+	assert_eq!(
+		dmarc_write(&plan).expect("rewritten").record.value,
+		"v=DMARC1; p=quarantine; sp=quarantine; np=reject; adkim=s; aspf=s; rua=mailto:d@example.org"
+	);
+}
+
+#[test]
+fn a_record_already_strict_is_unchanged_and_a_relaxed_one_is_not() {
+	let done = "v=DMARC1; p=reject; sp=reject; np=reject; adkim=s; aspf=s";
+	let plan = plan_with(&[dmarc(done)], None, &strict());
+	assert_eq!(plan.dmarc.action, DmarcAction::Unchanged);
+	let relaxed = "v=DMARC1; p=reject; sp=reject; np=reject; adkim=s; aspf=r";
+	let plan = plan_with(&[dmarc(relaxed)], None, &strict());
+	assert_eq!(plan.dmarc.action, DmarcAction::Publish);
+	let plan = plan_with(&[dmarc(relaxed)], None, &DmarcInputs::default());
+	assert_eq!(
+		plan.dmarc.action,
+		DmarcAction::Unchanged,
+		"no option, no change"
 	);
 }

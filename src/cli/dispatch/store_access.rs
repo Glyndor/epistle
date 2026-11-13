@@ -75,6 +75,7 @@ pub(super) fn guard(command: &Command) -> Result<Option<FileLock>, String> {
 		| Command::Limits { .. }
 		| Command::Dns { .. }
 		| Command::Srs { .. }
+		| Command::Rotate { .. }
 		| Command::Webhook { .. }
 		| Command::Alert { .. }
 		| Command::Relay { .. }

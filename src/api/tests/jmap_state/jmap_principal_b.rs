@@ -19,6 +19,8 @@ pub(in super::super) fn state_with_key(
 	key_store.add(key).expect("add key");
 	drop(key_store);
 	let account = |name: &str, address: &str| crate::config::Account {
+		send: None,
+		receive: None,
 		display_name: None,
 		name: name.to_string(),
 		addresses: vec![address.to_string()],

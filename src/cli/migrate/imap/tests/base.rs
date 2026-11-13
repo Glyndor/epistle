@@ -1,7 +1,7 @@
 use clap::Parser;
 
 use super::super::super::MigrateCli;
-use super::super::super::report::{bytes, plan};
+use super::super::super::report::{bytes, facts, plan};
 use super::*;
 use crate::cli::{Cli, Command};
 use crate::migrate::imap::{FolderReport, Skipped};
@@ -90,12 +90,12 @@ fn the_password_file_gives_its_first_line() {
 	let file = dir.path().join("pw");
 	std::fs::write(
 		&file,
-		format!("{}\nignored\n", crate::test_fixtures::password()),
+		format!("{}\nignored\n", crate::test_support::fixtures::password()),
 	)
 	.expect("write");
 	assert_eq!(
 		password(Some(&file)).expect("read").as_str(),
-		crate::test_fixtures::password()
+		crate::test_support::fixtures::password()
 	);
 	std::fs::write(&file, "\n").expect("write");
 	assert!(password(Some(&file)).is_err(), "an empty file is refused");
@@ -166,7 +166,7 @@ fn an_unknown_account_is_refused_before_any_connection() {
 	let alice = crate::directory_store::DynamicAccount::with_password(
 		"alice".into(),
 		vec!["alice@example.org".into()],
-		crate::test_fixtures::password(),
+		crate::test_support::fixtures::password(),
 		&crate::password::Policy::from_config(&config.auth),
 		false,
 	)
@@ -199,4 +199,30 @@ fn the_recovery_body_limit_uses_the_configured_message_size() {
 			"use the local configuration for recovery"
 		);
 	}
+}
+
+#[test]
+fn a_folder_line_names_the_messages_left_out_for_size() {
+	let mut report = FolderReport {
+		too_large: 2,
+		too_large_uids: vec![7, 9],
+		..FolderReport::default()
+	};
+	assert!(
+		facts(&report).contains("2 too large (UID 7, 9)"),
+		"{}",
+		facts(&report)
+	);
+	report.too_large = 30;
+	assert!(
+		facts(&report).contains("(UID 7, 9, ...)"),
+		"{}",
+		facts(&report)
+	);
+	report.too_large_uids.clear();
+	assert!(
+		facts(&report).ends_with("30 too large"),
+		"{}",
+		facts(&report)
+	);
 }

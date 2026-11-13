@@ -9,7 +9,7 @@ old server is switched off.
 |---|---|---|
 | Mox | `epistle migrate mox --from DIR` | `epistle migrate imap` per account |
 | Stalwart up to 0.15 | `epistle migrate stalwart --from FILE` | `epistle migrate imap` per account |
-| Stalwart 0.16 and later | by hand (settings live in its database) | `epistle migrate imap` per account |
+| Stalwart 0.16 and later | `epistle migrate stalwart --from PLAN` (a snapshot you export) | `epistle migrate imap` per account |
 | Any other IMAP server | by hand (`epistle domain add`, `epistle account add`) | `epistle migrate imap` per account |
 
 ## The order that keeps mail flowing
@@ -42,7 +42,9 @@ follows the configuration format of Mox v0.0.17. It imports:
 - the DKIM keys of the selectors listed under `Sign`, with the same selectors.
 
 Mox's DMARC and TLS report addresses, MTA-STS policy, routes, rulesets and web
-handlers are not imported; the output lists the ones it found.
+handlers are not imported; the output lists the ones it found. A
+configuration file larger than 16 MiB, or with more than 500000 entries
+(values and empty blocks, list items included), is refused.
 
 ## From Stalwart
 
@@ -59,9 +61,45 @@ become aliases. Accounts in an `internal` (RocksDB), SQL or LDAP directory are
 not read; create them with `epistle account add` and copy their mail with
 `migrate imap`.
 
-From Stalwart 0.16 the configuration file only points at the database, and the
-import refuses it with the same directions. Settings changed in Stalwart's web
-admin live in its database in every version and are not imported.
+### Stalwart 0.16 and later
+
+From 0.16 `config.json` only points at the database and every setting lives
+there as typed objects, so there is no file to read and epistle does not open
+Stalwart's database or run its binary. Export the objects with Stalwart's own
+tool, on the old server, as a plan file (NDJSON):
+
+```sh
+stalwart-cli --url https://mail.example.org --user admin snapshot \
+  Domain Account MailingList DkimSignature --include-secrets --output plan.ndjson
+epistle migrate stalwart --from plan.ndjson --dry-run
+```
+
+`--include-secrets` is what puts the DKIM private keys in the file. The
+management API masks secrets unless the `includeSecrets` setting of
+`SystemSettings` is on, so turn it on, reload, take the snapshot and turn it
+off again. Treat `plan.ndjson` like the keys it holds and delete it after the
+import. Without secrets everything else is still imported and each DKIM key
+is listed as skipped.
+
+What is imported:
+
+- domains (a disabled domain is imported enabled and noted);
+- user accounts with their name, description and enabled aliases;
+- groups, whose members become an alias per group address, and mailing lists,
+  with their recipients, as hidden aliases;
+- a domain's catch-all address, as the catch-all of the account that owns it;
+- the `active` DKIM1 signatures (`ed25519-sha256` and `rsa-sha256`) whose key
+  is in the file, under the same selector.
+
+What is not: passwords (the same rule as below), alias domains, DKIM2 and
+rotating (non-active) keys, keys read from a file or variable, roles beyond a
+note for administrators, tenants and every setting, rule and listener. The
+output names the object types it saw and left out. Include every object type
+you want in the `snapshot` command: an account whose `Domain` is not in the
+file is skipped with that reason.
+
+Settings changed in Stalwart's web admin live in its database in every
+version and are not imported.
 
 ## What both imports do
 

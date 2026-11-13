@@ -46,3 +46,56 @@ fn restart_policy_observes_changes_and_compose_presence() {
 		"restart failures must reach the caller"
 	);
 }
+
+#[test]
+fn deferred_restart_leaves_the_stack_alone_and_says_how_to_apply() {
+	let dir = tempfile::tempdir_in(".").unwrap();
+	let config = Config::parse_text(
+		&format!(
+			"hostname = 'mail.example.org'\ndata_dir = {:?}",
+			dir.path().canonicalize().unwrap()
+		),
+		Path::new("mail.toml"),
+	)
+	.unwrap();
+	let compose = crate::cli::init::compose_file_path(&config.data_dir);
+	std::fs::create_dir_all(compose.parent().unwrap()).unwrap();
+	std::fs::write(compose, "{}").unwrap();
+	let action = || crate::cli::stack::StackAction::Restart {
+		service: Some("mail".into()),
+	};
+	let mut ran = false;
+	let mut output = Vec::new();
+	let (code, reload) = super::super::restart::apply_deferring(
+		true,
+		&config,
+		Outcome::Changed,
+		true,
+		&mut output,
+		|_, _| {
+			ran = true;
+			ExitCode::SUCCESS
+		},
+		action(),
+	)
+	.unwrap();
+	assert!(!ran, "--no-restart must not touch the stack");
+	assert_eq!(code, ExitCode::SUCCESS);
+	assert_eq!(reload, crate::cli::json_out::Reload::Deferred);
+	let text = String::from_utf8(output).unwrap();
+	assert!(
+		text.contains("epistle stack apply"),
+		"the notice names the command: {text}"
+	);
+	let (_, reload) = super::super::restart::apply_deferring(
+		false,
+		&config,
+		Outcome::Changed,
+		true,
+		&mut Vec::new(),
+		|_, _| ExitCode::SUCCESS,
+		action(),
+	)
+	.unwrap();
+	assert_eq!(reload, crate::cli::json_out::Reload::Restarted);
+}

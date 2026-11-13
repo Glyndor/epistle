@@ -422,6 +422,14 @@ pub trait DnsProvider: Send + Sync {
 	}
 	/// List the records epistle manages in `zone`.
 	fn list(&self, zone: &str) -> ListOp<'_>;
+	/// Whether this provider flattens a CNAME at the apex of `zone`, so that
+	/// other record types (MX, TXT, CAA) may sit next to it there. RFC 1034
+	/// section 3.6.2 forbids that anywhere else, and a provider that does not
+	/// flatten refuses it, so the default is `false`. Only the apex is
+	/// affected: a CNAME at any other name still excludes the other types.
+	fn flattens_apex_cname(&self, _zone: &str) -> bool {
+		false
+	}
 	/// Whether `zone` is a zone this provider holds.
 	///
 	/// A record name is not a zone: `mail.example.org` is a name inside the

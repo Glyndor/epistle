@@ -6,6 +6,8 @@ use std::net::IpAddr;
 use std::sync::Arc;
 
 use super::dns_dkim::{SigningKey, compare, signing_keys, state_item};
+mod uncovered;
+
 use super::report::{AreaReport, Item, Level};
 use super::{Ctx, NET_TIMEOUT};
 use crate::config::Config;
@@ -63,16 +65,26 @@ async fn evaluate(config: &Config, dns: &dyn DnsLookup) -> AreaReport {
 		// override replaces the default, otherwise the default applies.
 		let selectors = crate::cli::verify::dns::dkim_selectors_for(config, domain)
 			.unwrap_or_else(|_| default_selectors.clone());
-		records.extend(dns::check_domain(domain, &config.hostname, &selectors, dns).await);
+		records.extend(
+			dns::check_domain_for_role(
+				domain,
+				&config.hostname,
+				&selectors,
+				config.domain_role(domain),
+				dns,
+			)
+			.await,
+		);
 	}
 	// A record of a group the configuration skips is not published on
 	// purpose: it is not missing, and the operator is told so.
-	let records = crate::dns::skip::split_checks(records, &config.dns_publish.skip_set());
+	let records = crate::dns::skip::split_checks(records, &config.skip_set());
 	// Cloudflare's orange cloud breaks delivery to every mail name:
 	// SMTP / IMAP / POP3 / submission all need direct traffic, and the
 	// proxy only forwards HTTP(S). The check lives behind the configured
 	// provider so other providers keep their existing surface.
 	findings.extend(proxied_items(config, proxy_provider(config)).await);
+	findings.extend(uncovered::items(config, uncovered::provider(config)).await);
 	let mut items: Vec<Item> = records.iter().map(record_item).collect();
 	let ok = count(&records, &Status::Ok);
 	let missing = count(&records, &Status::Missing);
@@ -88,6 +100,10 @@ async fn evaluate(config: &Config, dns: &dyn DnsLookup) -> AreaReport {
 			.as_ref()
 			.and_then(|dkim| dkim.override_for(domain))
 			.map(|entry| entry.name.to_ascii_lowercase());
+		// A domain that sends nothing has no key in DNS to compare.
+		if !config.domain_role(domain).sends() {
+			continue;
+		}
 		for key in keys.iter().filter(|key| key.domain == own) {
 			if let Some(item) = key_item(&key.key, domain, dns).await {
 				mismatches += usize::from(item.status == Level::Fail);

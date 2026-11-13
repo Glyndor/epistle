@@ -200,7 +200,7 @@ fn container_commands_ignore_host_password_and_untrusted_connection_values() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let compose = write_minimal_compose(dir.path());
 	let db: Database = toml::from_str(
-		r#"url = "postgres://untrusted:host-secret-sentinel@invalid/untrusted?password=query-secret-sentinel"
+		r#"url = "postgres://epistle:host-secret-sentinel@%2Frun%2Fpostgresql/epistle?password=query-secret-sentinel"
  password_file = "/nonexistent/$(untrusted-secret-file)""#,
 	)
 	.expect("db");

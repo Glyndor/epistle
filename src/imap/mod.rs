@@ -3,6 +3,7 @@
 pub mod acl;
 pub mod archive;
 mod binary_append;
+pub mod bounds;
 pub(crate) mod changelog;
 pub mod command;
 mod compress;
@@ -26,4 +27,4 @@ pub mod special_use;
 mod subscriptions;
 mod uid;
 mod uidvalidity;
-mod vanished;
+pub(crate) mod vanished;

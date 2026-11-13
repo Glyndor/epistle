@@ -199,6 +199,19 @@ pub fn spawn_dkim_rotation(
 				return;
 			};
 			let zone = first.zone.clone();
+			// With a credential in this process, the provider is built again
+			// at the start of every cycle: a token file that changed is read
+			// again. A `token_env` is the variable of this process and only
+			// changes with a restart.
+			let source: Option<crate::dkim::ProviderSource> = match write {
+				DnsWrite::Direct => {
+					let config = config.clone();
+					Some(std::sync::Arc::new(move || {
+						super::dns_reconcile::build_provider(&config)
+					}))
+				}
+				DnsWrite::Handoff(_) => None,
+			};
 			let mut rotator = crate::dkim::Rotator::new(
 				config.data_dir.clone(),
 				signer.clone(),
@@ -209,6 +222,9 @@ pub fn spawn_dkim_rotation(
 				overlap,
 			)
 			.with_zones(config.dns.zones());
+			if let Some(source) = source {
+				rotator = rotator.with_provider_source(source);
+			}
 			// A rotated key signs only once a resolver sees it. Without a
 			// resolver there is no way to confirm that, so rotation does not
 			// run: the configured key keeps signing.

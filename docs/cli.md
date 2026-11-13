@@ -14,8 +14,8 @@ array, a show an object. A change prints one object with `result` (`saved`,
 `done` once a stack command finished, `passed` for a test), `action`, the
 fields naming what changed (an account, an address, a label, a new secret
 shown once) and `reload` when the command waits for the server: `loaded`,
-`no-server`, `timed-out`, `restarted`, `restart-failed`, `restart-needed`
-or `none`. Notes and errors stay on stderr, and so does the output of the
+`no-server`, `timed-out`, `restarted`, `restart-failed`, `restart-needed`,
+`deferred` (`--no-restart` was given) or `none`. Notes and errors stay on stderr, and so does the output of the
 podup run a command starts, so a failure leaves stdout empty. The commands
 whose stdout already is the product take no `--json`: `serve`, `local` and
 `mta-sts-serve` (they run until stopped), `export` and `backup` (the mbox
@@ -31,7 +31,7 @@ forward). Policy refusals exited `2` before they had their own code.
 
 | Resource | Actions | Older flat form (hidden, still works) |
 |---|---|---|
-| `account` | `list`, `show`, `add`, `remove`, `password`, `enable`, `disable`, `address add\|remove`, `quota`, `protocols`, `save-sent`, `find-log-id` | `accounts`, `account-add`, `account-remove` |
+| `account` | `list`, `show`, `add`, `remove`, `password`, `enable`, `disable`, `address add\|remove`, `quota`, `protocols`, `set`, `save-sent`, `find-log-id` | `accounts`, `account-add`, `account-remove` |
 | `account forward` | `list`, `add`, `remove` | |
 | `account catch-all` | `list`, `add`, `remove` | |
 | `account 2fa` | `show`, `disable` | |
@@ -63,6 +63,16 @@ epistle completions fish > ~/.config/fish/completions/epistle.fish
 Every change is validated before it is written, keeps the comments in
 `mail.toml`, accepts `--dry-run`, and restarts `mail` only when it has to.
 
+To run several of them in a row without a restart after each, give every one
+`--no-restart` (it works before or after the subcommand). The change is
+written and the command says it takes effect at the next restart; its `--json`
+result carries `"reload": "deferred"`. Then `sudo epistle stack apply` once:
+it recreates the services whose definition changed (published ports, the DNS
+credential) and restarts `mail`, so the live SMTP and IMAP connections drop
+once instead of once per command. Without a compose stack the option changes
+nothing: the command already only says the server must be restarted. Commands
+that never restart accept the option and ignore it.
+
 | I want to… | Command |
 |---|---|
 | [Is it working?](#health-epistle-status-epistle-check) | `epistle status`, `epistle check <area>` |
@@ -83,6 +93,7 @@ Every change is validated before it is written, keeps the comments in
 | [DNS provider for DKIM and TLSA](#dns-provider-epistle-dns-provider) | `epistle dns provider …` |
 | [Webhook and alerts](#webhook-epistle-webhook) | `epistle webhook …`, `epistle alert …` |
 | [SRS secret of each domain](#srs-epistle-srs) | `epistle srs show\|split\|rotate` |
+| [Every secret and how it is rotated](#secrets-and-credentials-epistle-rotate) | `epistle rotate --all --dry-run` |
 | [Blob storage (filesystem or S3)](#blob-storage-epistle-storage-blobs) | `epistle storage blobs …` |
 | [Keys per tenant and key rotation](#tenant-keys-epistle-storage-tenant-keys) | `epistle storage tenant-keys migrate` |
 | [Rotate DKIM, renew TLS, rotate an API key](#rotations-epistle-dkim-epistle-tls-epistle-api-key) | `epistle dkim rotate`, `epistle dkim cleanup`, `epistle tls renew`, `epistle api-key rotate` |
@@ -662,14 +673,17 @@ spans several lines is hidden whole.
 ## DNS lockdown (`epistle dns lockdown`)
 
 ```sh
-epistle dns lockdown [<domain>] [--dry-run] [--yes] [--json] [--dmarc reject]
+epistle dns lockdown [<domain>] [--dry-run] [--yes] [--json] [--dmarc reject] [--strict-alignment]
 epistle dns lockdown [<domain>] --undo [--dry-run] [--yes]
 ```
 
 Publishes the anti-spoofing records for the domain (the `[dns]` zone by
 default): DMARC one step stricter per run, a null SPF and null MX on
-names that send no mail, and a wildcard null SPF. Subdomains delegated to
-other nameservers (NS records) are left alone. It asks first; `--yes`
+every name that is not declared as sending (any depth, any record type, the
+parents of names, the apex; `[dns_publish] senders` declares the senders),
+and a wildcard null SPF. Subdomains delegated to
+other nameservers (NS records) are left alone. `--strict-alignment` also sets
+`adkim=s` and `aspf=s` in the DMARC record. It asks first; `--yes`
 skips the question. `--undo` removes what earlier runs published. See
 [`docs/dns.md`](dns.md#locking-the-zone-against-spoofing).
 
@@ -837,6 +851,20 @@ Each hosted domain signs the sender of the mail it forwards with a secret of its
 
 `domain add` and a first `init` write the new domain's secret; `domain remove` removes it.
 
+## Secrets and credentials (`epistle rotate`)
+
+```sh
+epistle rotate --all --dry-run [--json]
+```
+
+Lists every kind of secret and credential the server holds, so that nobody has to read ten pages to know which ones exist after a compromise. For each one it says where it is stored, how it is rotated and how it is revoked, and who does it:
+
+- `epistle`: one command of `epistle` does it on this server, and the row names it.
+- `operator`: the operator does it, by hand or at the provider (a DNS token, the database password, the relay password). `epistle` cannot mint or revoke those.
+- `not supported yet`: `epistle` cannot do it yet. The row links the issue and says what to do meanwhile. Today that is the storage key (re-encrypting the existing mail under a new key), the mass reset of account passwords and second factors, and the TOTP seeds, which `accounts.toml` keeps in the clear while `[storage]` encryption is off.
+
+The list is a registry in the code, and a test fails the build when a secret field is added to the configuration without an entry in it, so a new secret cannot be left out of the procedure. `--dry-run` changes nothing and reads no configuration, so it works on a server whose configuration does not load. It is the only mode so far; without it the command refuses and exits 3. `--all` is required. `--json` prints one object with an `entries` array.
+
 ## Domains (`epistle domain`)
 
 ```sh
@@ -846,10 +874,12 @@ epistle domain show example.org
 epistle domain show example.org --json
 epistle domain add new.example.org
 epistle domain add new.example.org --dry-run
+epistle domain add notifications.example.org --send-only
+epistle domain add inbound.example.org --receive-only
 epistle domain remove old.example.org [--yes|-y]
 epistle domain disable example.net [--yes|-y] [--dry-run]
 epistle domain enable example.net [--dry-run]
-epistle domain set example.org [--quota 10G | --no-quota] [--submission-rate 50 | --no-submission-rate] [--dry-run]
+epistle domain set example.org [--quota 10G | --no-quota] [--submission-rate 50 | --no-submission-rate] [--send-only | --receive-only | --full] [--dry-run]
 epistle domain alias add alias.example.org example.org
 epistle domain alias remove alias.example.org [--yes|-y]
 ```
@@ -858,15 +888,19 @@ epistle domain alias remove alias.example.org [--yes|-y]
 (`ALIASES TO`) and the domains it targets (`ALIASES FROM`). `show` writes
 the alias edges plus the accounts and aliases that route mail through
 the domain, so the operator can see what depends on it before removing
-it. JSON records contain `domain`, `enabled`, `aliases_to`, `aliases_from`,
-`accounts` and `aliases`.
+it. Both name the domain's role (`ROLE`; `full`, `send-only`, `receive-only` or `disabled`). JSON records
+contain `domain`, `enabled`, `role`, `aliases_to`, `aliases_from`, `accounts`
+and `aliases`.
 
 `disable` switches a domain off without removing it: the name goes into
 `disabled_domains`, and after the restart mail for it is rejected at RCPT
 exactly like mail for an unknown user (a permanent 550, so senders get a
 bounce, not a retry), and no account may send as an address in it (SMTP
-submission, the API and JMAP all refuse). Accounts, mailboxes, aliases, DNS
-records and DKIM keys stay. A mailbox is still reachable by the account's own
+submission, the API and JMAP all refuse). Accounts, mailboxes, aliases and DKIM
+keys stay. Its DNS changes to say the same: the publisher replaces the MX with
+the null MX and the SPF with `v=spf1 -all`, sets the DMARC policy to `reject`
+and retires the DKIM, MTA-STS, TLS-RPT and client-locator records it wrote
+(see [`dns.md`](dns.md#domain-roles)); `enable` puts them back. A mailbox is still reachable by the account's own
 name over IMAP and POP3, but logging in with an address in the disabled domain
 fails, because that address no longer resolves. Mail already in the outbound
 queue with a sender in the domain is accepted mail and is still delivered; the
@@ -887,11 +921,33 @@ per-domain submission rate in messages per minute
 (`domain_submission_limits`), the same overrides `limits set quota --domain`
 and `limits set submission-rate --domain` write and `limits show` lists. Name
 at least one of `--quota`, `--no-quota`, `--submission-rate`,
-`--no-submission-rate`; a flag left out keeps its value, and `--no-…` removes
-the override. A zero rate is refused (it would lift the limit; use
+`--no-submission-rate`, `--send-only`, `--receive-only` or `--full`; a flag left
+out keeps its value, and `--no-…` removes the override. `--send-only`,
+`--receive-only` and `--full` set the domain's role (see below); they cannot be
+given together. A zero rate is refused (it would lift the limit; use
 `--no-submission-rate`), and so is an unknown domain. The JSON result carries
-`domain` and the overrides it touched (`quota`, `submission_rate`; `null`
-once removed). `show` prints both overrides.
+`domain` and what it touched (`quota`, `submission_rate`; `null` once
+removed; `role`). `show` prints both overrides.
+
+A domain has a role, `full` by default. `add --send-only` and `set
+--send-only` write the name into `send_only_domains`; `set --full` takes it
+out. A send-only domain only sends mail, so its DNS is SPF, DKIM, DMARC
+(without `rua=`) and MX: no MTA-STS, TLS-RPT, SRV, `autoconfig` or
+`autodiscover` record. `dns-records`, `domain add`, `srv-records`,
+`verify-dns`, `status` and the automatic publisher all read the same set, so
+what is printed is what is checked and what is written; `verify-dns` shows the
+omitted records as `skipped`. Changing the role changes what is expected, and
+the publisher retires only the records its ledger says it wrote. `domain
+remove` drops the role with the domain. See [`dns.md`](dns.md#domain-roles).
+
+`add --receive-only` and `set --receive-only` write the name into
+`receive_only_domains` and take it out of `send_only_domains`, and the other
+way round: a domain has one role. A receive-only domain only receives mail, so
+its DNS carries the null SPF (`v=spf1 -all`), a `reject` DMARC policy and no
+DKIM key, and nobody may send as an address in it: SMTP submission, the API and
+JMAP refuse, and a forward, a Sieve redirect or a vacation reply for mail to it
+is dropped. A domain that neither sends nor receives is not a role: use
+`disable`, which wins over both lists and also gives it the null MX.
 
 `add` validates the name (`validate_dns_name`, same rules the loader
 uses), appends it to `[domains]` and prints the DNS records the operator
@@ -1132,8 +1188,9 @@ sequence and its exit code becomes epistle's exit code.
 | `sudo epistle stack ps [--json]` | Lists running services as a table or JSON. |
 | `sudo epistle stack logs [--follow] [SERVICE]` | Streams service logs. |
 | `sudo epistle stack restart [SERVICE]` | Restarts the stack or one service. |
+| `sudo epistle stack apply` | Applies what commands run with `--no-restart` left waiting: `podup up -d` to recreate what changed, then one restart of `mail`. |
 | `sudo epistle stack stop [SERVICE]` / `sudo epistle stack start [SERVICE]` | Stop or start the whole stack, or one service, without removing containers or the autostart unit. `stack stop mail` is how to take the mail server down for `epistle restore` while the database stays up to receive the dump. |
-| `sudo epistle stack update` | Renders `compose.yaml` again with this release's code, shows what changed and replaces it, then runs `podup up -d` so only changed services are recreated. In default mode it also restarts `mail` when its definition did not change, so it runs the host binary the new .deb installed; in custom image mode it runs `podup pull` first. Before any of that it dumps the stack's database to `<data_dir>/backups/pre-<version>-<timestamp>.sql.gz` (mode 0600, the newest three `pre-*` dumps kept while the update runs), because the new server migrates the schema when it starts; a failed dump stops the update before anything changes. Afterwards it waits up to five minutes for `mail` to report healthy and runs the `config`, `ports` and `db` checks of `epistle status`; on a stack that runs the certificates container it also waits for `certs` to settle, judged the way `stack certs` judges it (two `podup ps` looks fifteen seconds apart, with the same start in both), and runs the `tls` check as well, since that is the check that reports the container; a failure names the area and exits non-zero, and the apt upgrade prints it framed with the rollback command. When all of that passes, it deletes the `pre-<version>-*` dumps it took (a dump `db upgrade` took stays) and the images the previous compose file named and the new one does not, such as an older ClamAV digest or the version-tagged epistle image of a stack created by an earlier release. An image is removed only when no container of the service account uses it, so one that is still in use, or that carries another name, stays and the update says so; a failed update keeps the dumps and the images. Data and volumes are kept. Before it writes the new file it moves the storage and OAuth signing keys out of data_dir, and once `db` runs it takes SUPERUSER away from an `epistle` role an older release created (see [the container stack](operations/container.md#the-database-roles)). |
+| `sudo epistle stack update` | Renders `compose.yaml` again with this release's code, shows what changed and replaces it, then runs `podup up -d` so only changed services are recreated. In default mode it also restarts `mail` when its definition did not change, so it runs the host binary the new .deb installed; in custom image mode it runs `podup pull` first. Before any of that it dumps the stack's database to `<data_dir>/backups/pre-<version>-<timestamp>.sql.gz` (mode 0600, the newest three `pre-*` dumps kept while the update runs), because the new server migrates the schema when it starts; a failed dump stops the update before anything changes. Afterwards it waits up to five minutes for `mail` to report healthy and runs the `config`, `ports` and `db` checks of `epistle status`; on a stack that runs the certificates container it also waits for `certs` to settle, judged the way `stack certs` judges it (two `podup ps` looks fifteen seconds apart, with the same start in both), and runs the `tls` check as well, since that is the check that reports the container; a failure names the area and exits non-zero, and the apt upgrade prints it framed with the rollback command. When all of that passes, it deletes the `pre-<version>-*` dumps it took (a dump `db upgrade` took stays) and the images the previous compose file named and the new one does not, such as an older ClamAV digest or the version-tagged epistle image of a stack created by an earlier release. An image is removed only when no container of the service account uses it, so one that is still in use, or that carries another name, stays and the update says so; a failed update keeps the dumps and the images. Data and volumes are kept. Before it writes the new file it moves the storage and OAuth signing keys out of data_dir (when the configuration is a symlink, the file it points to is the one that is updated and the link stays), and once `db` runs it takes SUPERUSER away from an `epistle` role an older release created (see [the container stack](operations/container.md#the-database-roles)). |
 | `sudo epistle stack resources [--json]` | Lists each service's `mem_limit` and `pids_limit` from `compose.yaml`, and their sum. Does not run `podup`. |
 | `sudo epistle stack resources set SERVICE [--memory SIZE] [--pids N] [--json]` | Changes the limit of `mail`, `db`, `clamav` or `freshclam` (`SIZE` is a whole number with `k`, `m` or `g`) in `compose.yaml`; `mail` is refused less than five messages of `max_message_size` and 256 MiB (381 MiB at the default 25 MiB), so the budget derived from its limit holds one message, where `init` records answered limits, so `stack update` keeps it. The running container keeps its old limit until `sudo epistle stack update` recreates it. `set` and `stack update` take the same lock on `compose.yaml` (`.compose.yaml.lock` beside it), so one waits for the other and neither loses the other's change. |
 | `sudo epistle stack certs enable\|disable [--yes]` | Asks before it changes anything (`--yes` skips the question). `enable` moves the ACME renewal, the TLSA refresh and the DNS credential into a `certs` container and recreates `mail` without the credential or the ACME account key; it refuses a configuration without `[acme] challenge = "dns-01"` and a `[dns]` provider, and it refuses a DNS credential it cannot read and an install with no ACME account key anywhere, before it touches the stack. The account key is copied to `secrets/acme_account.key` beside data_dir and the copy under `<data_dir>/acme` is removed only once `mail` and `certs` are up; a failure puts the previous `compose.yaml` back. No command creates an account key: a key that is nowhere is refused, because a new key is a new account with the authority. The compose file is rewritten under the lock beside it (`.compose.yaml.lock`), the same one `stack update`, `stack resources set` and `dns provider set` take, so one waits for the other and none loses the other's change. `disable` copies the key back and returns to one `mail` that renews. See [the split plan](operations/container-split.md). |
@@ -1379,9 +1436,20 @@ works on the host and inside the container deployment:
   when the replay worked, a warning) says which path in the container is left
   and how to remove it.
 
+With a compose file present, both commands act on the stack's own database
+(role and database `epistle` over the socket of `db`) and nothing else. If
+`[database] url` names any other database, `backup` and `restore` refuse with
+an error before they touch anything, instead of dumping or overwriting the
+stack's database in its place. To back up an external database, move the
+compose directory away, or point `url` at the stack's database.
+
 The archive's `database.sql` has to end with the closing marker `pg_dump`
 writes, as the backup requires; a restore refuses one that does not before it
-touches anything. The database is loaded before the files are laid down, and
+touches anything. The marker only catches a truncated dump: it is plain text,
+so whoever writes an archive can write it too. The SQL is replayed as it is,
+by `psql`, with the rights of the `epistle` database role (and `psql` runs its
+own backslash commands from the file), so restore only archives you made or
+that come from a source you trust. The database is loaded before the files are laid down, and
 the archive is checked against `data_dir` first. A dump that `psql` rejects
 therefore leaves both the database and the files as they were. When the load
 ends without a `psql` exit (the exec was cut), the message says it is not
@@ -1523,7 +1591,7 @@ The command shapes are:
 | Command | What it does |
 |---|---|
 | `epistle init` | Interactive: walk through every question. |
-| `epistle init --answers FILE` | Non-interactive: read the answers from a TOML file. |
+| `epistle init --answers FILE` | Non-interactive: read the answers from a TOML file. It must be a regular file, not a symlink, and a file with an inline `dns.token` must not be readable by group or others (mode `0600`); prefer `dns.token_file`. |
 | `epistle init --answers FILE --dry-run` | Print the plan, write nothing. |
 | `epistle init --print-answers` | Print the answers template on stdout. |
 
@@ -1713,7 +1781,7 @@ The API keys made with `epistle api-key` open the HTTP API, described in the [HT
 |---|---|
 | `epistle dkim show [--json]` | The DKIM key in service (selector, key file, rotation time, next scheduled rotation, previous selector and when it retires, the RSA selector in service, from `state` or `config`, with the RSA selector a rotation retires or moves to) and whether the published TXT of each signing domain matches it. A domain with a `[[dkim.domain]]` key is listed under `overrides` and checked against the key it signs with: the one its own rotation put in service, or the entry's before its first rotation. `stale_records` lists the records of the shared key still published at a domain that has a key of its own (an unfinished `dkim split`; the text form says `split incomplete`). `keys` (one `key <domain>: ...` line per hosted domain in the text form) names the selector each domain signs with and, for a domain on the `[dkim]` default, the other domains that sign with the same key (`shared_with`), so a shared key is visible. Reads the same rotation state as `serve`, `dns-records` and `verify-dns`; an unreadable state file is an error, never a silent fallback to the configured key. A rotation the server began and has not finished is listed with its selector (`in_progress` in JSON), or with the reason it is being withdrawn. Every time it prints (when the key rotated, when the next rotation is due, when the previous selector retires, when the rotation began, when it was requested) is an RFC 3339 UTC instant such as `2026-12-31T23:59:59Z`; `--json` keeps the epoch seconds. |
 | `epistle dkim rotate [--dry-run]` | Rotate the Ed25519 key now, and with dual signing the RSA key in the same step (new selector `rsa<day>`). Refuses what the server refuses: no `[dkim]` or `[dns]`, a signing domain outside every `[dns]` zone, a provider that cannot be built, a second rotation on the same UTC day. With the certificates container on, the DNS credential is in that container and this host never reads it, so the command does not refuse for a credential it cannot build: the request it queues is served by the server, which publishes the records through the hand-off the two containers share. Domains with a `[[dkim.domain]]` key are not signing domains of the default key. `--dry-run` prints the selectors and the TXT names and changes nothing. `--domain D` rotates `D`'s own `[[dkim.domain]]` key instead, to `own<day>` (and `ownrsa<day>` when the entry dual-signs; `x2`, `x3` after the name when it is taken), and only that domain's records are written. It refuses what the server's rotation of `D` refuses: no `[[dns]]` entry that can publish at `D`, an unreadable rotation state of `D`, and a rotation while the selector the last one replaced is still in its overlap window (the refusal gives the date it retires; after it the rotation retires it first). A domain that signs with the `[dkim]` key is refused and pointed at `dkim rotate` without `--domain`. The request goes to `<data_dir>/keys/dkim/<D>/rotate.request`. |
-| `epistle dkim split [--dry-run] [--wait SECONDS] [--restarted] [--finish [--skip-overlap-check]]` | Give every domain that signs with the `[dkim]` key a key of its own, for installs made before each domain had one. One domain keeps `[dkim]` (the first in `domains` that signs with it); each other gets an Ed25519 key (and an RSA one when `[dkim]` signs with both) under `<data_dir>/keys/dkim/<domain>/`, with the selectors `own<day>` and `ownrsa<day>` (`...x2`, `x3` when the shared key is published under that very name: a new record never replaces one a key that is still signing is published under). The records are published through `[dns]` for the domains inside its zone and printed for the rest (`publish by hand: ...`); the command then asks a resolver (about every 5 seconds, `--wait` seconds in all, default 120, `0` asks once) until every record shows the right key. When the wait ends with records still missing, the command asks the zone's own nameservers what they serve and names the cause under each `not visible yet` line: `the zone's authoritative servers publish it; the host's resolver holds a cached negative answer (good for up to N s)`, `the zone's authoritative servers publish it; the host's resolver does not show it`, `the zone's authoritative servers do not agree: some publish it and the rest do not answer with it`, `no authoritative server of the zone publishes it: the record has not reached the zone` or `the zone's authoritative servers could not be asked, so the reason is unknown`. The cause is reported, not acted on: the signature still switches only when the host's resolver shows the record. Only then does it write the `[[dkim.domain]]` entries (after recording the move, and the shared key's selectors, in `<data_dir>/dkim-split.json`) and restart the server, so no message is ever signed with a key receivers cannot look up, a published record counts only if a verifier could use it (the same key and type, no `h=`/`s=` that excludes it, no repeated tag), one run at a time per data directory (a lock file beside the state, taken in the `data_dir` the run acts on, even if the configuration changes while it waits; a second one is refused), and a run that stops before that changes nothing about signing: running it again reuses the keys. `--dry-run` prints the plan and makes no key, publishes nothing and writes nothing (not even the lock file: it waits for a run in progress and creates no file). Refused while a rotation is in progress. The shared key is still published at the domains that left it, so whoever holds it can still sign as them: the report lists those records with their full names (`stale after the switch: s1._domainkey.b.example.org ...`, and `stale_records` in `--json`; it covers the configured pair, the selector in service and the one a rotation is retiring), and `dkim show`, `status` and `check` warn `split incomplete` while any is published, and say so when they could not check (`stale_unchecked` in `dkim show --json`). `--finish` is the follow-up, and it removes nothing it has not shown to be the shared key's. A record counts as the shared key's only when its `p=` is the public key of a key this host knows is the shared one (the configured pair, the selector in service, the one a rotation retires); any other record at the name is printed as `not ours, left alone` and kept, and a record is deleted with the exact value that was read. A lookup that fails, or a record with no `p=` to compare, makes the command fail (exit 1) before it removes anything: "could not read" is never taken for "gone". The domain's own record must resolve with its own key first. The server must be confirmed to run the new key: `split` records that only when the restart it makes succeeds. Without a stack, or if the restart failed, it says `NOT confirmed` and exits 4, running `epistle dkim split` again repeats the restart, and `epistle dkim split --restarted` records one you made by hand; until then `--finish` retires nothing, and `--skip-overlap-check` does not lift that. A domain that is split again starts over (the earlier restart does not count for the new key), and a record of a move with no `[[dkim.domain]]` entry in the file is never confirmed. With several `[[dns]]` zones each record goes through the entry that serves its name, and the other names are printed. The 14-day overlap runs from that confirmed restart (`dkim-split.json`); a domain with no recorded move, or one whose overlap has not passed, is refused with an error that names the record (and the date), unless `--skip-overlap-check` is given, which retires them anyway and warns. `--finish` also retires the shared key's selectors that the split recorded and a later rotation has since dropped from the rotation state. Every value of the shared key at a name is removed, one by one and by exact value (`delete_exact`), and then the resolver is asked again (every 5 seconds for `--wait` seconds): the command fails (exit 1) if the shared `p=` is still visible, or if a record that is not ours at that name is gone. Only Google Cloud DNS (a change whose deletions must match exactly) and RFC 2136 (an UPDATE that names the RDATA) remove a TXT by its value without being able to take another record with it. deSEC and Route 53 rewrite the record set from what they read, DigitalOcean and Porkbun delete by id, and Namecheap rewrites the zone, so a record added or changed between their read and their write would be lost; Bunny, Cloudflare and OVH match by purpose; DNSimple, GoDaddy and Spaceship have not been shown to match by value. For all of those, and for a domain outside every `[[dns]]` zone, the records are printed as `remove by hand: NAME VALUE` and nothing is deleted. A record whose shared key's file is missing from this host cannot be told from somebody else's, so it makes the command fail rather than count as "not ours". It only ever looks at domains that have a `[[dkim.domain]]` entry, so the domain that kept the `[dkim]` key never loses its record; `--dry-run` lists what it would remove and what is held. `--json` gives `keeps`, `moves` and `stale_records` with `result` `split`, `waiting` (with `missing` and, per missing record, its `causes` entry: the `name`, the `cause` (`cached-negative`, `not-shown`, `partly-served`, `not-served` or `unknown`) and the `negative_ttl` the resolver gave) or `dry-run`, and for `--finish` `retired` and `manual` with `result` `retired`. |
+| `epistle dkim split [--dry-run] [--wait SECONDS] [--restarted] [--finish [--skip-overlap-check]]` | Give every domain that signs with the `[dkim]` key a key of its own, for installs made before each domain had one. One domain keeps `[dkim]` (the first in `domains` that signs with it); each other gets an Ed25519 key (and an RSA one when `[dkim]` signs with both) under `<data_dir>/keys/dkim/<domain>/`, with the selectors `own<day>` and `ownrsa<day>` (`...x2`, `x3` when the shared key is published under that very name: a new record never replaces one a key that is still signing is published under). The records are published through `[dns]` for the domains inside its zone and printed for the rest (`publish by hand: ...`); the command then asks a resolver (about every 5 seconds, `--wait` seconds in all, default 120, `0` asks once) until every record shows the right key. When the wait ends with records still missing, the command asks the zone's own nameservers what they serve and names the cause under each `not visible yet` line: `the zone's authoritative servers publish it; the host's resolver holds a cached negative answer (good for up to N s)`, `the zone's authoritative servers publish it; the host's resolver does not show it`, `the zone's authoritative servers do not agree: some publish it and the rest do not answer with it`, `no authoritative server of the zone publishes it: the record has not reached the zone` or `the zone's authoritative servers could not be asked, so the reason is unknown`. The cause is reported, not acted on: the signature still switches only when the host's resolver shows the record. Only then does it write the `[[dkim.domain]]` entries (after recording the move, and the shared key's selectors, in `<data_dir>/dkim-split.json`) and restart the server, so no message is ever signed with a key receivers cannot look up, a published record counts only if a verifier could use it (the same key and type, no `h=`/`s=` that excludes it, no repeated tag), one run at a time per data directory (a lock file beside the state, taken in the `data_dir` the run acts on, even if the configuration changes while it waits; a second one is refused), and a run that stops before that changes nothing about signing: running it again reuses the keys. `--dry-run` prints the plan and makes no key, publishes nothing and writes nothing (not even the lock file: it waits for a run in progress and creates no file). Refused while a rotation is in progress. The shared key is still published at the domains that left it, so whoever holds it can still sign as them: the report lists those records with their full names (`stale after the switch: s1._domainkey.b.example.org ...`, and `stale_records` in `--json`; it covers the configured pair, the selector in service and the one a rotation is retiring), and `dkim show`, `status` and `check` warn `split incomplete` while any is published, and say so when they could not check (`stale_unchecked` in `dkim show --json`). `--finish` is the follow-up, and it removes nothing it has not shown to be the shared key's. A record counts as the shared key's only when its `p=` is the public key of a key this host knows is the shared one (the configured pair, the selector in service, the one a rotation retires); any other record at the name is printed as `not ours, left alone` and kept, and a record is deleted with the exact value that was read. A lookup that fails, or a record with no `p=` to compare, makes the command fail (exit 1) before it removes anything: "could not read" is never taken for "gone". The domain's own record must resolve with its own key first. The server must be confirmed to run the new key: `split` records that only when the restart it makes succeeds. Without a stack, or if the restart failed, it says `NOT confirmed` and exits 4, running `epistle dkim split` again repeats the restart, and `epistle dkim split --restarted` records one you made by hand; until then `--finish` retires nothing, and `--skip-overlap-check` does not lift that. A domain that is split again starts over (the earlier restart does not count for the new key), and a record of a move with no `[[dkim.domain]]` entry in the file is never confirmed. With several `[[dns]]` zones each record goes through the entry that serves its name, and the other names are printed. The 14-day overlap runs from that confirmed restart (`dkim-split.json`); a domain with no recorded move, or one whose overlap has not passed, is refused with an error that names the record (and the date), unless `--skip-overlap-check` is given, which retires them anyway and warns. `--finish` also retires the shared key's selectors that the split recorded and a later rotation has since dropped from the rotation state. Every value of the shared key at a name is removed, one by one and by exact value (`delete_exact`), and then the resolver is asked again (every 5 seconds for `--wait` seconds): the command fails (exit 1) if the shared `p=` is still visible, or if a record that is not ours at that name is gone. Google Cloud DNS (a change whose deletions must match exactly), Route 53 (one batch that deletes the record set as read and creates it again without the value, refused by Route 53 if the set changed in between) and RFC 2136 (an UPDATE that names the RDATA) remove a value without being able to take another record with it, and Bunny, Cloudflare, DigitalOcean, DNSimple, OVH, Porkbun and Spaceship match the value in their own listing and delete that one record by id. deSEC and GoDaddy replace the whole record set with what they read and Namecheap rewrites the zone, none with a precondition, so a record added or changed between their read and their write would be lost. For all of those, and for a domain outside every `[[dns]]` zone, the records are printed as `remove by hand: NAME VALUE` and nothing is deleted. A record whose shared key's file is missing from this host cannot be told from somebody else's, so it makes the command fail rather than count as "not ours". It only ever looks at domains that have a `[[dkim.domain]]` entry, so the domain that kept the `[dkim]` key never loses its record; `--dry-run` lists what it would remove and what is held. `--json` gives `keeps`, `moves` and `stale_records` with `result` `split`, `waiting` (with `missing` and, per missing record, its `causes` entry: the `name`, the `cause` (`cached-negative`, `not-shown`, `partly-served`, `not-served` or `unknown`) and the `negative_ttl` the resolver gave) or `dry-run`, and for `--finish` `retired` and `manual` with `result` `retired`. |
 | `epistle dkim cleanup [--dry-run] [--yes]` | List the `dkim-ed<day>.key` and `dkim-rsa<day>.key` files and `ed<day>._domainkey` and `rsa<day>._domainkey` TXT records of the signing domains that neither the active, the previous, a pending nor a configured selector (`[dkim]` or `[[dkim.domain]]`) uses (left by crashes in older releases), ask for confirmation and queue their removal. `--dry-run` only lists; `--yes` skips the question. Refused when the rotation state cannot be read, and nothing is queued when the server does not rotate keys for this configuration. The TXT records are only removed by the server that serves the request, and only if it can read the zone: with the certificates container on it holds no DNS credential, so the records are not checked, the command says so (`TXT records not checked`, `records_unchecked` in `--json`), leaves them published and exits with a failure; the leftover key files are removed all the same, because they are found from the rotation state alone. |
 | `epistle tls show [--json]` | The certificate the server presents (the ACME pair when `[acme]` is set and `<data_dir>/acme/{cert,key}.pem` is usable, otherwise the pair the `[tls]` section names, otherwise the bootstrap pair `init` wrote in `<data_dir>/keys/`): subject, names, issuer, expiry as an RFC 3339 UTC date (for example `2026-12-31T23:59:59Z`), days left, and `acme` or `static` as the source. JSON adds `not_after_utc` and keeps the epoch-second `not_after` field. The time a renewal was requested for is an RFC 3339 UTC instant as well. `serve`, `probe` and this command resolve it the same way. |
 | `epistle tls renew [--force]` | Ask the server to renew the ACME certificate. Without `--force` nothing is queued while the ACME pair is usable, its certificate is issued by an authority, and it is outside its `renew_before_days` window. An unusable pair or a self-issued certificate is due regardless of that window. |
@@ -1771,8 +1839,9 @@ Only `epistle init` turns one into the other: it derives the name from the addre
 | `epistle account quota N SIZE\|none` | Storage quota (`500M`, `10G`, `1T`); `none` falls back to the domain, then the server default. |
 | `epistle account protocols N LIST\|all` | Restrict sign-in to some protocols (`imap,smtp,api,webdav`); `all` clears it. |
 | `epistle account set N --default-class CLASS` | The [mail class](evidence.md) granted to the account's mail when neither the request nor the credential names one: `transactional`, `marketing`, `personal`, or `none` to clear it. |
+| `epistle account set N [--send on\|off] [--receive on\|off]` | Turn sending and receiving on or off for the account, independent of `disable` (sign-in) and of `protocols`. Both are on by default, and a switch left out keeps its state. `--default-class` does not combine with them. Dynamic accounts only; a static one carries `send` and `receive` keys in the configuration. `show` and `list --json` report both. |
 | `epistle account save-sent N on\|off` | Save a copy of every message the account sends into its `Sent` folder. Default on; `off` is the per-account opt-out. The app-password override (`app-password create --save-sent`) wins when set. |
-| `epistle account show N [--json]` | Public view: log id, addresses, disabled, quota, protocols, and the at-rest key that protects its new mail (owner and key id, with the reason when a tenant account stays on the server key). Works for static accounts. Never a secret. |
+| `epistle account show N [--json]` | Public view: log id, addresses, disabled, send, receive, quota, protocols, and the at-rest key that protects its new mail (owner and key id, with the reason when a tenant account stays on the server key). Works for static accounts. Never a secret. |
 | `epistle account find-log-id acct-…` | Map a log pseudonym back to its account. |
 | `epistle account forward list\|add\|remove N [ADDR]` | Also send the account's mail to `ADDR`. Refuses the account's own addresses, an invalid address, and any forward while neither `srs_secret` nor an `[[srs_domain]]` is set (without SRS the copy fails SPF at the next hop). |
 | `epistle account catch-all list\|add\|remove N [DOMAIN]` | Deliver mail for unknown users of `DOMAIN` to the account. `DOMAIN` must be a configured domain (not an alias) that no other account catches. |
@@ -1807,7 +1876,7 @@ without the flag the output, text or JSON, is exactly what it was.
 | `epistle export --account N [--maildir DIR]` | Export an account's mailboxes as an mbox stream on stdout, or as a Maildir tree where `Work/Project` is the Maildir++ folder `.Work.Project`. |
 | `epistle import --account N [--maildir DIR]` | Import an mbox stream from stdin, or a Maildir tree. Maildir++ folders become nested folders: `.Work.Project` is `Work/Project`. An entry over the message size limit (`max_message_size`, the same limit the server applies to what it receives) is refused, named and counted, the import carries on with the rest, and the command exits 1. |
 | `epistle migrate imap --account N --host H --user U` | Copy a remote IMAP account, resumably. See [migration](operations/migration.md). |
-| `epistle migrate mox --from DIR` / `migrate stalwart --from FILE` | Import domains, accounts, aliases and DKIM keys. Needs `--passwords-out FILE` (a new file, mode 0600, one `account<TAB>password` line per new account) or `--password-reset`, except with `--dry-run`. `--merge` keeps what already exists and adds the rest; `--json` prints the plan and the changes. |
+| `epistle migrate mox --from DIR` / `migrate stalwart --from FILE` (a v0.15 `config.toml`, or the plan file `stalwart-cli snapshot` exports from v0.16 and later) | Import domains, accounts, aliases and DKIM keys. Needs `--passwords-out FILE` (a new file, mode 0600, one `account<TAB>password` line per new account) or `--password-reset`, except with `--dry-run`. `--merge` keeps what already exists and adds the rest; `--json` prints the plan and the changes. |
 | `epistle queue` | List the outbound delivery queue (same as `queue list`). See [Outbound queue](#outbound-queue). |
 | `epistle delivery list [--recipient ADDR] [--account NAME] [--since WHEN] [--until WHEN] [--status S] [--limit N] [--json]` | Read the per-recipient delivery log: one record per delivered, failed, suppressed or canceled recipient, and one per deferred recipient for each distinct reply, at most eight per recipient (a retry deferred for the same reason adds none), newest day first, at most `N` records (default 100, at most 100000; a larger value is a usage error). The log is read a line at a time, so memory does not grow with the size of a day's file, and days outside `--since`/`--until` are not opened. `--since` and `--until` take an RFC 3339 time or a duration such as `24h` or `7d` counted back from now; `--since` after `--until` is refused, and so is a filter given empty (`--account ""`): it is a usage error (exit 2), never "no filter". `--status` (also `--outcome`) is `delivered`, `deferred`, `failed`, `suppressed` or `canceled`. Metadata only, never a subject or body. The time of each record is an RFC 3339 UTC instant; `--json` keeps the epoch second. `epistle delivery` alone is `delivery list`. Needs `[storage] delivery_log_days` above 0. |
 | `epistle delivery show ID [--json]` | Every record of one message, oldest first. `ID` is the spool id of the `SPOOL` column of `delivery list`. The time of each record is an RFC 3339 UTC instant; `--json` keeps the epoch second. The remote host and its reply are escaped for the terminal. Exits 2 for an id that is not a UUID or that has no record. |

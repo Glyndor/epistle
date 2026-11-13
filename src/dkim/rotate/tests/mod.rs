@@ -8,6 +8,7 @@ pub(super) mod empty_state;
 pub(super) mod multidomain;
 pub(super) mod multizone;
 pub(super) mod orphans;
+pub(super) mod provider_source;
 pub(super) mod publication;
 pub(super) mod request;
 pub(super) mod resume;

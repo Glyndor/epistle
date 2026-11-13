@@ -133,3 +133,32 @@ fn find_body_start_returns_none_when_missing() {
 	let raw = b"From: x Subject: y\r\nNOTBLANK";
 	assert_eq!(find_body_start(raw), None);
 }
+
+/// A header of any size reaches the provider cut to a fixed number of bytes,
+/// and all of them together stay under a ceiling, whatever the message holds.
+#[test]
+fn the_forwarded_headers_are_bounded_one_by_one_and_together() {
+	let mut raw = format!("Subject: {}\r\n", "x".repeat(200_000)).into_bytes();
+	for _ in 0..50 {
+		raw.extend_from_slice(format!("From: {}\r\n", "y".repeat(5_000)).as_bytes());
+	}
+	raw.extend_from_slice(b"\r\nbody\r\n");
+	let kept = extract_safe_headers(&raw);
+	assert!(kept.iter().all(|h| h.len() <= 1024), "one header too long");
+	let total: usize = kept.iter().map(String::len).sum();
+	assert!(total <= 4096 + 1024, "the headers took {total} bytes");
+	assert!(kept.iter().any(|h| h.starts_with("Subject: xxx")));
+}
+
+/// A folded header is cut inside a character without panicking.
+#[test]
+fn a_folded_header_is_cut_on_a_character_boundary() {
+	let mut raw = b"Subject: start".to_vec();
+	for _ in 0..600 {
+		raw.extend_from_slice("\r\n \u{e9}\u{e9}".as_bytes());
+	}
+	raw.extend_from_slice(b"\r\n\r\nbody");
+	let kept = extract_safe_headers(&raw);
+	assert_eq!(kept.len(), 1);
+	assert!(kept[0].len() <= 1024 && kept[0].is_char_boundary(kept[0].len()));
+}

@@ -25,8 +25,8 @@ fn a_member_name_with_a_line_break_stays_one_path() {
 	let data_dir = dir.path().join("data");
 	std::fs::create_dir_all(&data_dir).expect("data dir");
 	let archive = backup::tar_gz(&[
-		("first".into(), 0o600, b"first".to_vec()),
-		(HOSTILE.into(), 0o600, b"second".to_vec()),
+		("data/first".into(), 0o600, b"first".to_vec()),
+		(format!("data/{HOSTILE}"), 0o600, b"second".to_vec()),
 	])
 	.expect("archive");
 	let mut printed = Vec::new();
@@ -48,7 +48,7 @@ fn a_member_name_with_a_line_break_stays_one_path() {
 		result,
 		json!({
 			"result": "dry-run", "action": "restore", "entries": 2,
-			"paths": ["data/first", format!("data/{HOSTILE}")],
+			"paths": ["data/data/first", format!("data/data/{HOSTILE}")],
 		})
 	);
 	// The text form shows the name with its line break escaped, so it

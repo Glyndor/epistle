@@ -23,7 +23,7 @@ pub fn show(config: &Config, out: &mut impl Write) -> std::io::Result<()> {
 	for entry in catalog::ADJUSTABLE {
 		write_adjustable_row(entry, config, out)?;
 	}
-	for fixed in catalog::FIXED {
+	for fixed in catalog::fixed() {
 		write_fixed_row(fixed, out)?;
 	}
 	Ok(())
@@ -44,7 +44,7 @@ pub fn show_json(config: &Config) -> serde_json::Value {
 	for entry in catalog::ADJUSTABLE {
 		write_adjustable_json(entry, config, &mut limits);
 	}
-	for fixed in catalog::FIXED {
+	for fixed in catalog::fixed() {
 		write_fixed_json(fixed, &mut limits);
 	}
 	let domain_overrides = collect_domain_overrides(config);

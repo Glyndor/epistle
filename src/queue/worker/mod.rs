@@ -11,6 +11,7 @@ use super::resolver::Connector;
 use conversation::Conversation;
 
 mod attempt;
+mod blocking;
 mod claims;
 mod conversation;
 mod evidence;
@@ -325,7 +326,7 @@ impl Worker {
 			match done {
 				Some(done) => worker.complete(&mut schedule, done),
 				None => {
-					if let Err(error) = worker.scan(&mut schedule) {
+					if let Err(error) = blocking::off_the_runtime(|| worker.scan(&mut schedule)) {
 						tracing::warn!(%error, "queue scan failed");
 					}
 				}

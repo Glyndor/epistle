@@ -17,7 +17,7 @@ use crate::antispam::bans::tests::base::FakeBanStore;
 use crate::antispam::bans::{self, BanInfo, BanPolicy, BanStore};
 use crate::config::Protocol;
 use crate::smtp::directory::hash_gate::{HashGate, Verdict};
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 
 /// A gate wide enough to let the whole burst hash at the same moment, with no
 /// limit on the line: the width of the gate must not be what bounds the guesses.

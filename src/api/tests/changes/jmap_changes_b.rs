@@ -167,6 +167,8 @@ async fn jmap_email_changes_for_a_foreign_account_is_account_not_found() {
 	drop(keys);
 
 	let account = |name: &str| crate::config::Account {
+		send: None,
+		receive: None,
 		display_name: None,
 		name: name.to_string(),
 		addresses: vec![format!("{name}@example.org")],

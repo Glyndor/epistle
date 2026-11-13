@@ -85,3 +85,43 @@ fn append_introducing_keyword_advertises_it_on_next_select() {
 		"a fresh SELECT must advertise $greet as in use, saw: {reselect}"
 	);
 }
+
+fn put(dir: &std::path::Path, id: &str, body: &[u8]) {
+	let new_dir = dir.join("accounts").join("alice").join("new");
+	std::fs::create_dir_all(&new_dir).expect("create dirs");
+	std::fs::write(new_dir.join(format!("{id}.eml")), body).expect("write");
+}
+
+const A: &str = "00000000-0000-7000-8000-000000000002";
+const B: &str = "00000000-0000-7000-8000-000000000003";
+/// Sorts before both: a message that enters the mailbox after them although
+/// its file name is the lowest.
+const LATE: &str = "00000000-0000-7000-8000-000000000001";
+
+#[test]
+fn a_message_with_a_low_file_name_arriving_late_is_numbered_last() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	put(dir.path(), A, b"Subject: a\r\n\r\na\r\n");
+	put(dir.path(), B, b"Subject: b\r\n\r\nb\r\n");
+	let mut session = logged_in(dir.path());
+	let select = text(&session.command_line("a1 SELECT INBOX"));
+	assert!(select.contains("a1 OK"), "{select}");
+	// Another session sets \Seen on B, and a message arrives whose file name
+	// sorts before A and B.
+	let new_dir = dir.path().join("accounts/alice/new");
+	std::fs::write(new_dir.join(format!("{B}.flags")), b"[\"seen\"]").expect("flags");
+	put(dir.path(), LATE, b"Subject: late\r\n\r\nlate\r\n");
+
+	let noop = text(&session.command_line("a2 NOOP"));
+	assert!(noop.contains("* 2 FETCH (FLAGS (\\Seen))\r\n"), "{noop}");
+	assert!(noop.contains("* 3 EXISTS\r\n"), "{noop}");
+	// What the client was told must be what the server numbers: the late
+	// message is number 3 and B is still number 2.
+	let fetch = text(&session.command_line("a3 FETCH 1:* (UID)"));
+	assert!(
+		fetch.contains("* 1 FETCH (UID 1)\r\n")
+			&& fetch.contains("* 2 FETCH (UID 2)\r\n")
+			&& fetch.contains("* 3 FETCH (UID 3)\r\n"),
+		"the sequence numbers must follow the UIDs: {fetch}"
+	);
+}

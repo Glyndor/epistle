@@ -9,7 +9,7 @@ use super::*;
 use crate::evidence::tsa::fake::FakeTsa;
 
 fn secret() -> String {
-	crate::test_fixtures::fresh_secret()
+	crate::test_support::fixtures::fresh_secret()
 }
 
 #[test]

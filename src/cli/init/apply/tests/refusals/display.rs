@@ -43,6 +43,10 @@ fn apply_error_display_messages_for_every_variant() {
 			"mkdir",
 		),
 		(ApplyError::ConfigSymlink(path.clone()), "symlink"),
+		(
+			ApplyError::AnswersFile(path.clone(), "must be a regular file".into()),
+			"answers file",
+		),
 	];
 	for (error, expected_fragment) in cases {
 		let rendered = format!("{error}");

@@ -7,7 +7,7 @@ use super::tests_scram_bans::{decode_server_first, scram_challenge_text};
 use super::*;
 use crate::smtp::directory::gate_fixture::*;
 use crate::smtp::scram::SCRAM_ITERATIONS;
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 
 fn session() -> Session {
 	let mut session = Session::new("mail.example.org")

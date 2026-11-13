@@ -72,6 +72,10 @@ pub(super) struct MockState {
 	/// The `dnsName` the managed-zone listing denies with a 403, as a
 	/// provider that refuses to answer about that zone does.
 	pub(super) zone_denied: Option<String>,
+	/// What another account leaves in the zone in the moment between the
+	/// provider's last read and its change: swapped in when the next change
+	/// arrives, before it is checked.
+	pub(super) race: Option<Vec<Rrset>>,
 }
 
 pub(super) type Shared = Arc<Mutex<MockState>>;
@@ -271,7 +275,35 @@ pub(super) async fn post_change(
 	s.bearers.push(auth.to_string());
 	let parsed: Value =
 		serde_json::from_str(&body).map_err(|_| axum::http::StatusCode::BAD_REQUEST)?;
-	// Apply deletions first, then additions.
+	if let Some(raced) = s.race.take() {
+		s.live_rrsets = raced;
+	}
+	// Cloud DNS applies a change atomically: each deletion must match a
+	// live record set exactly (412 otherwise), and an addition must not
+	// collide with a record set that stays (409). Nothing is applied when
+	// either fails.
+	let deletions: Vec<Rrset> =
+		serde_json::from_value(parsed["deletions"].clone()).unwrap_or_default();
+	let additions: Vec<Rrset> =
+		serde_json::from_value(parsed["additions"].clone()).unwrap_or_default();
+	let exact = |live: &Rrset, d: &Rrset| {
+		live.name == d.name && live.kind == d.kind && live.ttl == d.ttl && live.rrdatas == d.rrdatas
+	};
+	if deletions
+		.iter()
+		.any(|d| !s.live_rrsets.iter().any(|live| exact(live, d)))
+	{
+		return Err(axum::http::StatusCode::PRECONDITION_FAILED);
+	}
+	let mut staying = s.live_rrsets.clone();
+	staying.retain(|live| !deletions.iter().any(|d| exact(live, d)));
+	if additions.iter().any(|a| {
+		staying
+			.iter()
+			.any(|live| live.name == a.name && live.kind == a.kind)
+	}) {
+		return Err(axum::http::StatusCode::CONFLICT);
+	}
 	if let Some(dels) = parsed.get("deletions").and_then(Value::as_array) {
 		for d in dels {
 			let name = d["name"].as_str().unwrap_or("").to_string();

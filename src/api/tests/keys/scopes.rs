@@ -2,7 +2,7 @@
 
 use super::base::{TOKEN, request, request_with_body, test_state};
 use super::*;
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 use axum::http::StatusCode;
 
 // --- Scope enforcement on the bearer middleware ---------------------------------
@@ -65,8 +65,8 @@ async fn read_scoped_key_is_rejected_on_send() {
 		})),
 	)
 	.await;
-	assert_eq!(status, StatusCode::UNAUTHORIZED, "read scope must not send");
-	assert_eq!(body["error"]["code"], "unauthenticated");
+	assert_eq!(status, StatusCode::FORBIDDEN, "read scope must not send");
+	assert_eq!(body["error"]["code"], "forbidden");
 }
 
 #[tokio::test]
@@ -101,8 +101,8 @@ async fn queue_removal_requires_the_write_scope() {
 		Some("reader-secret"),
 	)
 	.await;
-	assert_eq!(status, StatusCode::UNAUTHORIZED);
-	assert_eq!(body["error"]["code"], "unauthenticated");
+	assert_eq!(status, StatusCode::FORBIDDEN);
+	assert_eq!(body["error"]["code"], "forbidden");
 }
 
 /// A send-only API key cannot write to `/api/v1/accounts` — scopes are
@@ -138,10 +138,10 @@ async fn send_scoped_key_is_rejected_on_write() {
 	.await;
 	assert_eq!(
 		status,
-		StatusCode::UNAUTHORIZED,
+		StatusCode::FORBIDDEN,
 		"send scope must not mutate accounts"
 	);
-	assert_eq!(body["error"]["code"], "unauthenticated");
+	assert_eq!(body["error"]["code"], "forbidden");
 }
 
 /// A send-only API key passes the middleware on `POST /api/v1/send`: the
@@ -177,4 +177,43 @@ async fn send_scoped_key_is_admitted_on_send() {
 	)
 	.await;
 	assert_eq!(status, StatusCode::OK, "send scope admits a /send POST");
+}
+
+/// A valid key used on a route its scopes do not cover is refused with 403
+/// and spends none of the client's authentication-failure budget, so it
+/// cannot lock the client out. Wrong secrets still do.
+#[tokio::test]
+async fn a_key_without_the_scope_does_not_spend_the_failure_budget() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut key_store = crate::api::ApiKeyStore::open(dir.path()).expect("open key store");
+	key_store
+		.add(crate::api::api_keys::ApiKey {
+			label: "reader".to_string(),
+			hash: crate::api::api_keys::sha256_hash("reader-secret"),
+			expires_at: None,
+			ip_cidr: None,
+			scopes: vec!["read".to_string()],
+			domains: Vec::new(),
+			account: None,
+		})
+		.expect("add key");
+	drop(key_store);
+	let app = router(test_state(dir.path(), 0));
+	for _ in 0..60 {
+		let (status, _) = request(&app, "DELETE", "/api/v1/queue/x", Some("reader-secret")).await;
+		assert_eq!(status, StatusCode::FORBIDDEN);
+	}
+	let (status, _) = request(&app, "GET", "/api/v1/status", Some("reader-secret")).await;
+	assert_eq!(
+		status,
+		StatusCode::OK,
+		"the budget was spent by valid calls"
+	);
+	// Control: wrong secrets are still counted and end in 429.
+	let mut limited = false;
+	for _ in 0..60 {
+		let (status, _) = request(&app, "GET", "/api/v1/status", Some("not-a-secret")).await;
+		limited |= status == StatusCode::TOO_MANY_REQUESTS;
+	}
+	assert!(limited, "invalid credentials must still be rate limited");
 }

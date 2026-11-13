@@ -7,7 +7,7 @@
 
 use crate::api::{ApiState, router};
 use crate::oauth::OauthVerifier;
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use base64::Engine;
@@ -48,6 +48,8 @@ pub(in super::super) fn keys() -> Keys {
 pub(in super::super) fn state_with_authz(dir: &std::path::Path, keys: &Keys) -> ApiState {
 	let spool = crate::storage::FsSpool::open(dir).expect("spool");
 	let accounts = vec![crate::config::Account {
+		send: None,
+		receive: None,
 		display_name: None,
 		name: "alice".to_string(),
 		addresses: vec![LOGIN.to_string()],

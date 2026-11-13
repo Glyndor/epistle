@@ -2,7 +2,7 @@
 //! webhook and to no other.
 
 use super::*;
-use crate::test_fixtures::fresh_secret;
+use crate::test_support::fixtures::fresh_secret;
 use crate::webhook::tests::support::{bodies, quiet, settle, signed_receiver, tenant_config};
 
 fn two_domains() -> DirectoryHandle {

@@ -43,6 +43,8 @@ fn show_dynamic_reports_forwards_catch_all_and_two_factor() {
 	let store = store(dir.path(), &config);
 	store
 		.add(DynamicAccount {
+			send: None,
+			receive: None,
 			name: "alice".to_string(),
 			addresses: vec!["alice@example.org".to_string()],
 			password_hash: hash(fixture_password()),
@@ -88,11 +90,13 @@ fn show_dynamic_two_factor_yes_when_totp_enrolled() {
 	let store = store(dir.path(), &config);
 	store
 		.add(DynamicAccount {
+			send: None,
+			receive: None,
 			name: "alice".to_string(),
 			addresses: vec!["alice@example.org".to_string()],
 			password_hash: hash(fixture_password()),
 			scram: None,
-			totp_secret: Some(crate::test_fixtures::fresh_secret()),
+			totp_secret: Some(crate::test_support::fixtures::fresh_secret()),
 			disabled: false,
 			quota_bytes: None,
 			allowed_protocols: None,

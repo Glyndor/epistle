@@ -13,6 +13,9 @@ mod fetch_edges;
 mod fetch_envelope;
 
 #[cfg(test)]
+mod fetch_limit;
+
+#[cfg(test)]
 mod fetch_sections;
 
 #[cfg(test)]

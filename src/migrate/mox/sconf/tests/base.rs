@@ -64,3 +64,16 @@ fn the_fixture_parses() {
 		["2024a", "2024b"]
 	);
 }
+
+#[test]
+fn a_file_of_bare_list_items_stops_at_the_entry_cap() {
+	// Two bytes a line: far under the byte limit, far over the entry cap.
+	let items = "-\n".repeat(MAX_ENTRIES + 1);
+	assert!(items.len() < MAX_BYTES);
+	assert_eq!(
+		Doc::parse(&items).err(),
+		Some(SconfError::TooManyEntries(MAX_ENTRIES + 1))
+	);
+	let at_the_cap = "-\n".repeat(MAX_ENTRIES);
+	assert!(Doc::parse(&at_the_cap).is_ok());
+}

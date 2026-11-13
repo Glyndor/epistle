@@ -3,7 +3,7 @@
 
 use super::support::{Received, bodies, quiet, settle, signed_receiver, tenant_config};
 use super::*;
-use crate::test_fixtures::fresh_secret;
+use crate::test_support::fixtures::fresh_secret;
 
 fn received_for(account: &str) -> WebhookEvent {
 	WebhookEvent::MessageReceived {
@@ -338,6 +338,17 @@ fn a_private_tenant_url_alone_makes_no_poster_until_the_operator_allows_it() {
 	let url = "http://169.254.169.254/latest/meta-data";
 	assert!(from_config(&alpha_to(url, false, None)).is_none());
 	assert!(from_config(&alpha_to(url, true, None)).is_some());
+}
+
+#[tokio::test]
+async fn the_test_event_without_a_server_wide_webhook_is_an_error_not_a_panic() {
+	let url = "http://169.254.169.254/latest/meta-data";
+	let webhook = from_config(&alpha_to(url, true, None)).expect("a tenant poster");
+	let error = webhook
+		.send_test()
+		.await
+		.expect_err("no endpoint to post to");
+	assert!(matches!(error, WebhookError::NoEndpoint), "{error:?}");
 }
 
 #[tokio::test]

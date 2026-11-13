@@ -37,3 +37,15 @@ fn no_domains_is_an_error() {
 	assert_eq!(run(&config, false, &mut out), ExitCode::FAILURE);
 	assert!(out.is_empty());
 }
+
+#[test]
+fn a_send_only_domain_gets_no_locator() {
+	let mut config = config(&["example.org", "example.net"]);
+	config.send_only_domains = vec!["example.net".to_string()];
+	let mut out = Vec::new();
+	assert_eq!(run(&config, false, &mut out), ExitCode::SUCCESS);
+	let text = String::from_utf8(out).expect("utf8");
+	assert!(text.contains("_imaps._tcp.example.org."), "{text}");
+	assert!(!text.contains("example.net"), "{text}");
+	assert_eq!(text.lines().count(), 6);
+}

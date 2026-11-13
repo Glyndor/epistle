@@ -1,0 +1,333 @@
+//! SCRAM-SHA-256 authentication exchange over SMTP AUTH (RFC 4954 + 5802).
+
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64;
+use std::sync::Arc;
+
+use crate::smtp::directory::bans::BanOutcome;
+use crate::smtp::directory::{Directory, ScramPlan, ScramRefusal};
+use crate::smtp::reply::Reply;
+use crate::smtp::scram::{ChannelBinding, ScramCredentials, ScramServer, username_of};
+use crate::smtp::session::{Action, Session};
+
+/// In-flight SCRAM state between AUTH rounds.
+#[derive(Debug)]
+pub(in crate::smtp::session) enum PendingScram {
+	/// Server sent `334 ` (empty); awaiting the client-first message. Carries
+	/// the channel-binding policy chosen for the mechanism the client picked.
+	ClientFirst(ChannelBinding),
+	/// Server sent the server-first challenge; awaiting the client-final.
+	ClientFinal {
+		server: Box<ScramServer>,
+		credentials: Box<ScramCredentials>,
+		account: String,
+		directory: Arc<Directory>,
+		/// `Some` when the server-first was built on decoy credentials: the
+		/// exchange cannot succeed, and the refusal says whether it still
+		/// counts as a failed attempt (see [`ScramRefusal`]). A banned
+		/// subject who completes the exchange must not clear the ban with a
+		/// valid proof nor extend it with a bad one.
+		refusal: Option<ScramRefusal>,
+	},
+	/// The proof was verified and the server-final went out as a `334`
+	/// challenge; awaiting the client's acknowledgement (the empty line)
+	/// before the session is authenticated.
+	ServerFinal {
+		account: String,
+		directory: Arc<Directory>,
+	},
+}
+
+impl Session {
+	/// Inject a fixed SCRAM server nonce, so tests are deterministic.
+	pub fn with_scram_nonce(mut self, nonce: &str) -> Self {
+		self.scram_nonce = Some(nonce.to_string());
+		self
+	}
+
+	/// The channel-binding policy for a SCRAM exchange: `-PLUS` binds to the
+	/// certificate hash; plain SCRAM over a bound link rejects downgrades;
+	/// without a known binding (cleartext) it is unsupported.
+	pub(in crate::smtp::session) fn scram_binding(&self, plus: bool) -> ChannelBinding {
+		match (&self.cbind_data, plus) {
+			(Some(hash), true) => ChannelBinding::Required(hash.clone()),
+			(Some(_), false) => ChannelBinding::Supported,
+			(None, _) => ChannelBinding::Unsupported,
+		}
+	}
+
+	/// Begin SCRAM-SHA-256(-PLUS): process the optional initial client-first, or
+	/// prompt for it with an empty challenge.
+	pub(in crate::smtp::session) fn scram_begin(
+		&mut self,
+		initial: Option<String>,
+		plus: bool,
+	) -> Action {
+		let binding = self.scram_binding(plus);
+		match initial {
+			Some(client_first) => self.scram_client_first(&client_first, binding),
+			None => {
+				self.pending_scram = Some(PendingScram::ClientFirst(binding));
+				Action::CollectAuthResponse(Reply::single(334, ""))
+			}
+		}
+	}
+
+	/// Process the base64 client-first message: look up the user's SCRAM
+	/// credentials and answer with the server-first challenge.
+	pub(in crate::smtp::session) fn scram_client_first(
+		&mut self,
+		encoded: &str,
+		binding: ChannelBinding,
+	) -> Action {
+		let Some(client_first) = decode(encoded) else {
+			// A malformed client-first (invalid base64) is a failure, but
+			// the IP ban is consulted first so a banned peer cannot extend
+			// its own ban by sending garbage: refused attempts never record
+			// a strike. With no username there is no account row to check,
+			// so the ban is the IP ban only.
+			if self.is_ip_banned() {
+				return self.scram_failure();
+			}
+			self.record_scram_outcome("", None, false, false);
+			return self.scram_failure();
+		};
+		let Some(username) = username_of(&client_first) else {
+			// A well-formed base64 client-first without a username tag is
+			// still a malformed client-first. The same IP-ban-first rule
+			// applies: a banned peer must not be able to extend its own
+			// ban by sending repeated tag-less garbage.
+			if self.is_ip_banned() {
+				return self.scram_failure();
+			}
+			self.record_scram_outcome("", None, false, false);
+			return self.scram_failure();
+		};
+		// The directory plans the whole exchange: the ban check comes before
+		// any credential lookup, and an account that may not sign in with
+		// SCRAM (disabled, second factor, protocol not allowed) or a login
+		// under a ban gets decoy credentials. Either way the wire shows the
+		// same `334` and then a `535` at client-final, exactly as a wrong
+		// proof would, so nothing tells a refusal from a bad password.
+		let plan = self
+			.directory
+			.plan_scram(&username, self.peer_ip, self.auth_protocol);
+		let Some(nonce) = self.fresh_nonce() else {
+			// CSPRNG failure: fail closed rather than use a predictable nonce.
+			self.count_scram_failure(&username, &plan);
+			return self.scram_failure();
+		};
+		let mut server = ScramServer::new(nonce).with_channel_binding(binding);
+		let Ok((_user, server_first)) = server.first(&client_first, &plan.credentials) else {
+			self.count_scram_failure(&username, &plan);
+			return self.scram_failure();
+		};
+		self.pending_scram = Some(PendingScram::ClientFinal {
+			server: Box::new(server),
+			credentials: Box::new(plan.credentials),
+			account: plan.account,
+			directory: self.directory.clone(),
+			refusal: plan.refusal,
+		});
+		Action::CollectAuthResponse(Reply::single(334, &BASE64.encode(server_first)))
+	}
+
+	/// Count a failure that ends an exchange before the proof, unless a ban
+	/// caused it: a ban refusal never moves the strike count.
+	pub(in crate::smtp::session) fn count_scram_failure(&self, username: &str, plan: &ScramPlan) {
+		match &plan.refusal {
+			Some(ScramRefusal::Banned) => {}
+			Some(ScramRefusal::Denied { account }) => {
+				self.record_scram_outcome(username, account.as_deref(), false, false);
+			}
+			None => self.record_scram_outcome(username, Some(&plan.account), false, false),
+		}
+	}
+
+	/// Verify the client proof against the original credentials and return
+	/// the server signature only while those credentials remain current.
+	pub(in crate::smtp::session) fn scram_client_final(
+		&mut self,
+		encoded: &str,
+		mut server: ScramServer,
+		credentials: ScramCredentials,
+		account: &str,
+		refusal: Option<ScramRefusal>,
+		directory: Arc<Directory>,
+	) -> Action {
+		// A refused exchange stays refused at client-final. A ban that was in
+		// force at client-first holds even if it has since expired: a banned
+		// subject must not clear the row with a valid proof (the credentials
+		// here are decoys) nor extend it with a bad one (no strike is
+		// recorded). An account the rules refuse ends as one failed attempt.
+		// The recheck below catches a ban that fires after the client-first.
+		match refusal {
+			Some(ScramRefusal::Banned) => return self.scram_failure(),
+			Some(ScramRefusal::Denied { account: counted }) => {
+				self.record_scram_outcome(account, counted.as_deref(), false, false);
+				return self.scram_failure();
+			}
+			None => {}
+		}
+		// Each final round checks the current ban. Only the last round
+		// records success, using its own known-network bypass decision.
+		match self
+			.directory
+			.check_ban(account, self.peer_ip, self.auth_protocol)
+		{
+			BanOutcome::Banned => return self.scram_failure(),
+			BanOutcome::BannedButKnown { .. } | BanOutcome::Clear { .. } => {}
+		}
+		let Some(client_final) = decode(encoded) else {
+			self.record_scram_outcome(account, Some(account), false, false);
+			return self.scram_failure();
+		};
+		let proof = server.finish(&client_final, &credentials);
+		let current =
+			self.directory
+				.scram_credentials_current(account, &directory, self.auth_protocol);
+		match proof {
+			Ok(server_final) if current => {
+				// The server-final travels as a challenge. SMTP has no room
+				// for the SASL "additional data with a successful outcome"
+				// (RFC 4954 §4), so the `235` cannot carry it; the client
+				// gets it in a `334`, verifies its own signature against it
+				// and acknowledges with the empty line. The session is
+				// authenticated only then, so a client that proves itself
+				// and walks away does not get in.
+				self.pending_scram = Some(PendingScram::ServerFinal {
+					account: account.to_string(),
+					directory,
+				});
+				Action::CollectAuthResponse(Reply::single(334, &BASE64.encode(server_final)))
+			}
+			_ => {
+				self.record_scram_outcome(account, Some(account), false, false);
+				self.scram_failure()
+			}
+		}
+	}
+
+	/// The last round: the client acknowledges the server-final with the
+	/// empty line and the session is authenticated. Any other line is a
+	/// protocol error (RFC 4954 §4) and leaves the session
+	/// unauthenticated. Admission and the ban outcome use the current
+	/// directory only after the acknowledgement.
+	pub(in crate::smtp::session) fn scram_server_final(
+		&mut self,
+		line: &str,
+		account: String,
+		directory: Arc<Directory>,
+	) -> Action {
+		if !line.is_empty() {
+			return Action::Continue(Reply::single(501, "5.5.2 invalid authentication response"));
+		}
+		let bypassed = match self
+			.directory
+			.check_ban(&account, self.peer_ip, self.auth_protocol)
+		{
+			BanOutcome::Banned => return self.scram_failure(),
+			BanOutcome::BannedButKnown { .. } => true,
+			BanOutcome::Clear { .. } => false,
+		};
+		if !self
+			.directory
+			.scram_credentials_current(&account, &directory, self.auth_protocol)
+		{
+			self.record_scram_outcome(&account, Some(&account), false, false);
+			return self.scram_failure();
+		}
+		self.record_scram_outcome(&account, Some(&account), true, bypassed);
+		// The exchange succeeded. The line that says so at the default
+		// level: the password path writes the audit channel instead, and
+		// this mechanism never reached it.
+		crate::smtp::session_log::authentication(
+			&crate::log_id::account(&account),
+			self.auth_protocol.as_str(),
+			"SCRAM",
+			crate::smtp::session_log::SUCCEEDED,
+			self.auth_failures,
+		);
+		self.authenticated = Some(account);
+		Action::Continue(Reply::single(235, "2.7.0 authentication successful"))
+	}
+
+	/// A failed SCRAM step: clear state, count the failure, and reply 535
+	/// (closing after repeated failures), with no user/password oracle.
+	pub(in crate::smtp::session) fn scram_failure(&mut self) -> Action {
+		self.pending_scram = None;
+		self.auth_failures += 1;
+		// The attempt is recorded at the default level. The account is
+		// not named: a refused attempt never says which account it
+		// tried to be, the same way the wire answer does not.
+		crate::smtp::session_log::authentication(
+			crate::smtp::session_log::UNKNOWN,
+			self.auth_protocol.as_str(),
+			"SCRAM",
+			crate::smtp::session_log::FAILED,
+			self.auth_failures,
+		);
+		let reply = Reply::single(535, "5.7.8 authentication credentials invalid");
+		if self.auth_failures >= 3 {
+			Action::Close(reply)
+		} else {
+			Action::Continue(reply)
+		}
+	}
+
+	/// Write the outcome of a SCRAM authentication attempt back to the
+	/// shared ban store, keyed exactly as the PLAIN path keys it
+	/// (`ip:<peer>` and the account the credential check resolved). A
+	/// success clears both subjects unless the proof was a bypass lift
+	/// (`bypassed = true`), in which case only the bypass list is
+	/// refreshed; a failure records a strike against both. The ban
+	/// check at the start of the exchange already decided whether to
+	/// refuse the attempt; a ban refusal never reaches this helper, so
+	/// the strike count and ban expiry stay where they were.
+	pub(in crate::smtp::session) fn record_scram_outcome(
+		&self,
+		login: &str,
+		account: Option<&str>,
+		success: bool,
+		bypassed: bool,
+	) {
+		self.directory.record_ban_outcome(
+			login,
+			account,
+			success,
+			bypassed,
+			self.peer_ip,
+			self.auth_protocol,
+		);
+	}
+
+	/// Whether the peer IP is currently banned. Used by the malformed
+	/// client-first branches, which never see a username and so cannot
+	/// consult the account ban: only the IP ban can refuse them. A
+	/// banned IP must not be able to extend its own ban by sending
+	/// garbage, so the branches short-circuit here before recording a
+	/// strike.
+	pub(in crate::smtp::session) fn is_ip_banned(&self) -> bool {
+		matches!(
+			self.directory
+				.check_ban("", self.peer_ip, self.auth_protocol),
+			BanOutcome::Banned
+		)
+	}
+
+	/// The SCRAM server nonce: the injected one in tests, else fresh randomness.
+	/// `None` if the CSPRNG fails (fail closed).
+	pub(in crate::smtp::session) fn fresh_nonce(&self) -> Option<String> {
+		if let Some(nonce) = &self.scram_nonce {
+			return Some(nonce.clone());
+		}
+		use ring::rand::SecureRandom;
+		let mut bytes = [0u8; 18];
+		ring::rand::SystemRandom::new().fill(&mut bytes).ok()?;
+		Some(BASE64.encode(bytes))
+	}
+}
+
+fn decode(encoded: &str) -> Option<String> {
+	String::from_utf8(BASE64.decode(encoded).ok()?).ok()
+}

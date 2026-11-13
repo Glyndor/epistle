@@ -6,7 +6,7 @@ use super::gate_fixture::*;
 use super::{Directory, Proof, ScramRefusal};
 use crate::config::Protocol;
 use crate::smtp::scram::SCRAM_ITERATIONS;
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 
 /// Every protocol that authenticates. The match makes a new variant a compile
 /// error here, so the parity checks below cannot skip it.

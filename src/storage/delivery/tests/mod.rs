@@ -7,6 +7,7 @@ pub(super) mod forward;
 pub(super) mod list_copy;
 pub(super) mod lists;
 pub(super) mod redirects;
+pub(super) mod send_off;
 pub(super) mod sieve_limits;
 pub(super) mod sieve_names;
 pub(super) mod sieve_warnings;

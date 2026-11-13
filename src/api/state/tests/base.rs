@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::api::api_keys::{ApiKey, ApiKeyStore, Scope};
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 
 fn ip(text: &str) -> std::net::IpAddr {
 	text.parse().expect("ip")
@@ -123,6 +123,8 @@ fn owns_address_is_fail_closed_without_directory() {
 fn owns_address_consults_attached_directory() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let accounts = crate::config::Account {
+		send: None,
+		receive: None,
 		display_name: None,
 		name: "alice".to_string(),
 		addresses: vec!["alice@example.org".to_string()],

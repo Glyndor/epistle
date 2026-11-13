@@ -5,6 +5,9 @@
 //! the code `epistle dns publish` runs. Without one (manual mode) none of
 //! this runs and the section is only read by the command.
 //!
+//! The `senders` list names what may send mail besides the hosted domains;
+//! `epistle dns lockdown` leaves those names alone and protects the rest.
+//!
 //! The `skip` list names the groups of records automatic mode must not
 //! publish: the records of a group are never written, and a record epistle
 //! published earlier is retired through the ledger like a record the
@@ -37,6 +40,18 @@ pub struct DnsPublish {
 	/// every record the configuration needs is published.
 	#[serde(default)]
 	pub skip: Vec<SkipGroup>,
+	/// The names under a hosted domain that send mail. Hosted domains
+	/// themselves count and need no entry; every other name under them is
+	/// not a sender, and `epistle dns lockdown` gives it a null SPF and a
+	/// null MX unless it has records of its own. Empty by default.
+	#[serde(default)]
+	pub senders: Vec<String>,
+	/// Keep the null SPF and null MX `dns lockdown` publishes true in
+	/// automatic mode: a name added to the zone later is covered on the
+	/// next run, and one that becomes a sender or gets records of its own
+	/// loses them. Off by default.
+	#[serde(default)]
+	pub null_records: bool,
 }
 
 impl Default for DnsPublish {
@@ -44,6 +59,8 @@ impl Default for DnsPublish {
 		DnsPublish {
 			interval_secs: DEFAULT_INTERVAL_SECS,
 			skip: Vec::new(),
+			senders: Vec::new(),
+			null_records: false,
 		}
 	}
 }

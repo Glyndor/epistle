@@ -51,13 +51,15 @@ pub enum MigrateCli {
 	},
 	/// Import domains, DKIM keys, accounts and aliases from Stalwart.
 	///
-	/// Reads a Stalwart config.toml (the format up to v0.15). DKIM signatures
+	/// Reads a Stalwart config.toml (the format up to v0.15): DKIM signatures
 	/// come with their selectors; accounts and aliases come when the
-	/// directory is the in-file `memory` type, and the output says how to
-	/// move the rest. From v0.16 Stalwart keeps every setting in its
-	/// database, and that bootstrap file is refused with directions.
+	/// directory is the in-file `memory` type. For v0.16 and later, which
+	/// keep every setting in their database, read the plan file that
+	/// `stalwart-cli snapshot Domain Account MailingList DkimSignature
+	/// --include-secrets` exports. A 0.16 config.json is refused with
+	/// directions.
 	Stalwart {
-		/// Stalwart's config.toml.
+		/// Stalwart's config.toml, or a `stalwart-cli snapshot` plan file.
 		#[arg(long, value_name = "FILE")]
 		from: PathBuf,
 		/// What to do with passwords, and how to run.

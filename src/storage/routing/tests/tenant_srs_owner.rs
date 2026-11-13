@@ -4,7 +4,7 @@
 use super::*;
 use crate::queue::srs::{Srs, SrsKeys};
 use crate::smtp::sink::MessageSink;
-use crate::test_fixtures::fresh_secret;
+use crate::test_support::fixtures::fresh_secret;
 
 fn directory() -> DirectoryHandle {
 	DirectoryHandle::new(crate::smtp::directory::Directory::new(

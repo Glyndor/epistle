@@ -9,7 +9,7 @@ use std::time::Duration;
 use axum::http::HeaderMap;
 
 use super::{copy_move, delete};
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 use crate::webdav::quota::Quota;
 
 fn quota_for(dir: &std::path::Path) -> Quota {
@@ -18,6 +18,8 @@ fn quota_for(dir: &std::path::Path) -> Quota {
 
 fn quota_with(dir: &std::path::Path, quota_bytes: Option<u64>) -> Quota {
 	let account = crate::config::Account {
+		send: None,
+		receive: None,
 		display_name: None,
 		name: "alice".to_string(),
 		addresses: vec!["alice@example.org".to_string()],

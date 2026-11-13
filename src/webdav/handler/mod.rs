@@ -22,7 +22,7 @@ use super::carddav;
 use super::path;
 use super::propfind;
 use super::quota::{Change, LOG_RESERVE, MIN_ENTRY_BYTES, Quota};
-use super::report_bounds::MAX_RESOURCE_BYTES;
+use super::report_bounds::{self, MAX_RESOURCE_BYTES};
 
 mod propfind_handler;
 use propfind_handler::propfind;
@@ -308,9 +308,14 @@ async fn get(target: &Path, with_body: bool) -> Response {
 	if !with_body {
 		return builder.body(Body::empty()).expect("head response");
 	}
-	match tokio::fs::read(target).await {
-		Ok(bytes) => builder.body(Body::from(bytes)).expect("get response"),
-		Err(_) => StatusCode::NOT_FOUND.into_response(),
+	// The same cap a `PUT` is held to, so a reply never holds more than the
+	// server accepts to store.
+	if length > PUT_BODY_LIMIT as u64 {
+		return StatusCode::PAYLOAD_TOO_LARGE.into_response();
+	}
+	match report_bounds::read_capped(target, PUT_BODY_LIMIT as u64).await {
+		Some(bytes) => builder.body(Body::from(bytes)).expect("get response"),
+		None => StatusCode::NOT_FOUND.into_response(),
 	}
 }
 

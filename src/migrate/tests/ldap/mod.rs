@@ -1,13 +1,15 @@
 //! A self-referring directory must fail closed, without chasing its URL.
+mod limits;
 mod peer;
+mod raw;
 
 use super::DEADLINE;
 use crate::directory_store::load_ldap_accounts;
 use ldap3::LdapError;
 use std::sync::atomic::Ordering;
 
-fn load(url: &str) -> Result<Vec<crate::directory_store::LdapAccount>, LdapError> {
-	let config = toml::from_str(&format!(
+fn config(url: &str) -> crate::config::Ldap {
+	toml::from_str(&format!(
 		r#"
 url = "{url}"
 bind_dn = "cn=svc"
@@ -18,10 +20,13 @@ account_attribute = "uid"
 mail_attribute = "mail"
 tls = false
 "#,
-		crate::test_fixtures::password()
+		crate::test_support::fixtures::password()
 	))
-	.expect("LDAP config");
-	load_ldap_accounts(&config)
+	.expect("LDAP config")
+}
+
+fn load(url: &str) -> Result<Vec<crate::directory_store::LdapAccount>, LdapError> {
+	load_ldap_accounts(&config(url))
 }
 
 #[tokio::test]

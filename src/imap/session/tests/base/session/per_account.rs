@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use crate::imap::session::Session;
 use crate::net::per_account_conn::PerAccountCounter;
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 
 use super::{directory, text as rendered};
 

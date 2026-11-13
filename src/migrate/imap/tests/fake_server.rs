@@ -115,7 +115,7 @@ impl FakeServer {
 		let shared = Arc::new(Mutex::new(Shared {
 			folders,
 			delimiter,
-			password: crate::test_fixtures::password().to_string(),
+			password: crate::test_support::fixtures::password().to_string(),
 			fault: Fault::None,
 			body_fetches: 0,
 			logins: 0,

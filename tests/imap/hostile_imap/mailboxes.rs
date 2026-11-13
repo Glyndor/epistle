@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use super::harness::*;
 
 /// Include directory names and file contents, so an empty escaped folder counts.
-fn tree(root: &Path) -> Vec<(PathBuf, Option<Vec<u8>>)> {
+pub fn tree(root: &Path) -> Vec<(PathBuf, Option<Vec<u8>>)> {
 	fn visit(root: &Path, dir: &Path, found: &mut Vec<(PathBuf, Option<Vec<u8>>)>) {
 		for entry in std::fs::read_dir(dir).expect("read tree") {
 			let entry = entry.expect("tree entry");

@@ -16,7 +16,8 @@ pub(super) fn expand_env(raw: &str) -> Result<String, ConfigError> {
 			.find('}')
 			.ok_or_else(|| ConfigError::Invalid("unterminated ${...} in config".to_string()))?;
 		let var = &after[..end];
-		let value = std::env::var(var).map_err(|_| ConfigError::MissingEnv(var.to_string()))?;
+		let value =
+			std::env::var(var).map_err(|_| ConfigError::MissingEnv(super::clip::name(var, 128)))?;
 		out.push_str(&value);
 		rest = &after[end + 1..];
 	}

@@ -151,9 +151,12 @@ fn jmap_state_with_tenant_limits(
 	dir: &std::path::Path,
 	tenant_limits: Arc<TenantLimits>,
 ) -> crate::api::ApiState {
-	let token_hash = crate::smtp::auth::tests::base::hash(crate::test_fixtures::api_token());
+	let token_hash =
+		crate::smtp::auth::tests::base::hash(crate::test_support::fixtures::api_token());
 	let spool = crate::storage::FsSpool::open(dir).expect("open spool");
 	let accounts = vec![crate::config::Account {
+		send: None,
+		receive: None,
 		display_name: None,
 		name: "alice".to_string(),
 		addresses: vec!["alice@example.org".to_string()],
@@ -226,7 +229,7 @@ async fn jmap_request(
 		.uri("/jmap/api")
 		.header(
 			axum::http::header::AUTHORIZATION,
-			format!("Bearer {}", crate::test_fixtures::api_token()),
+			format!("Bearer {}", crate::test_support::fixtures::api_token()),
 		)
 		.header(axum::http::header::CONTENT_TYPE, "application/json")
 		.body(axum::body::Body::from(body.to_string()))

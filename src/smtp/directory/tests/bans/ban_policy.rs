@@ -9,7 +9,7 @@ use super::gate_fixture::*;
 use crate::antispam::bans::BanPolicy;
 use crate::antispam::bans::tests::base::FakeBanStore;
 use crate::config::Protocol;
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 
 fn directory() -> Directory {
 	gate_directory().with_ban_store(std::sync::Arc::new(FakeBanStore::new(BanPolicy::default())))

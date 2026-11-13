@@ -4,7 +4,7 @@
 use super::*;
 use crate::smtp::directory::gate_fixture::*;
 use crate::smtp::scram::SCRAM_ITERATIONS;
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
 

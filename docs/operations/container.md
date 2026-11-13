@@ -106,7 +106,7 @@ podman run --rm \
   -p 143:143 -p 993:993 -p 995:995 \
   -v /etc/glyndor/epistle:/etc/epistle:ro \
   -v /var/lib/glyndor/epistle/data:/var/lib/glyndor/epistle/data \
-  ghcr.io/glyndor/epistle:0.12.8
+  ghcr.io/glyndor/epistle:0.12.9
 ```
 
 The `/etc/glyndor/epistle` mount carries `mail.toml`; the
@@ -135,7 +135,7 @@ The compose form is the same flag under the `userns_mode:` key:
 ```yaml
 services:
   epistle:
-    image: ghcr.io/glyndor/epistle:0.12.8
+    image: ghcr.io/glyndor/epistle:0.12.9
     userns_mode: "keep-id:uid=65532,gid=65532"
     volumes:
       - /etc/glyndor/epistle:/etc/epistle:ro
@@ -618,15 +618,15 @@ is absent (a bare host deployment without the container stack).
 The release job pushes per-arch images plus a multi-arch manifest list with
 three floating tags:
 
-- `ghcr.io/glyndor/epistle:0.12.8-amd64`, `…:0.12.8-arm64` per-arch, built
+- `ghcr.io/glyndor/epistle:0.12.9-amd64`, `…:0.12.9-arm64` per-arch, built
   natively on the matching runner.
-- `ghcr.io/glyndor/epistle:0.12.8` the full release.
+- `ghcr.io/glyndor/epistle:0.12.9` the full release.
 - `ghcr.io/glyndor/epistle:0.12` the latest patch release in the `0.12` line.
 - `ghcr.io/glyndor/epistle:0` the latest minor release in the `0.x` line.
 
 `podman pull ghcr.io/glyndor/epistle:0.12` keeps getting patches;
 `…:0` keeps getting minors. A consumer that wants to pin a specific build
-uses `gh attestation verify oci://ghcr.io/glyndor/epistle:0.12.8 …` (below);
+uses `gh attestation verify oci://ghcr.io/glyndor/epistle:0.12.9 …` (below);
 that command resolves the tag itself, so a separate digest lookup is
 not needed. `podman pull --quiet` only prints the local image id and is
 not a digest, so it has no place in the verification path.
@@ -638,7 +638,7 @@ Sigstore. The signed envelope is published as a GitHub attestation, so a
 consumer does not need a separate signer key:
 
 ```sh
-gh attestation verify oci://ghcr.io/glyndor/epistle:0.12.8 \
+gh attestation verify oci://ghcr.io/glyndor/epistle:0.12.9 \
   --repo Glyndor/epistle \
   --signer-workflow Glyndor/epistle/.github/workflows/release.yml \
   --deny-self-hosted-runners
@@ -648,7 +648,7 @@ A green `Verification succeeded` line proves four things and only four
 things:
 
 1. An attestation exists in `Glyndor/epistle` for the manifest list
-   that resolves from `oci://ghcr.io/glyndor/epistle:0.12.8`.
+   that resolves from `oci://ghcr.io/glyndor/epistle:0.12.9`.
 2. The signer workflow is `Glyndor/epistle/.github/workflows/release.yml`,
    identified by the `SubjectAlternativeName` of the Sigstore-issued
    certificate. Not just any workflow in this repository -- specifically

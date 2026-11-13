@@ -18,6 +18,7 @@ use crate::dns::provider::{
 	DnsProvider, DnsRecord, ProviderError, RecordKind, ScopedSecret, parse_srv, same_txt_purpose,
 };
 use crate::dns::providers::transport;
+use crate::dns::publish::provider::{Change, ReceiptOp, SnapshotOp};
 use crate::dns::txt::{TxtForm, same_txt_value, txt_decode, txt_encode};
 
 /// How DigitalOcean takes a TXT `data` and lists it back; see `record_body`.
@@ -160,49 +161,51 @@ impl DigitaloceanProvider {
 
 	async fn list_inner(&self, zone: &str) -> Result<Vec<DnsRecord>, ProviderError> {
 		let records = self.list_all(zone).await?;
-		Ok(records
-			.into_iter()
-			.filter_map(|r| {
-				let name = if r.name == "@" {
-					zone.to_string()
-				} else {
-					format!("{}.{}", r.name, zone)
-				};
-				let kind = RecordKind::from_token(&r.kind);
-				let value = if kind == RecordKind::Srv {
-					match (r.priority, r.weight, r.port) {
-						(Some(p), Some(w), Some(port)) => {
-							format!("{p} {w} {port} {}", r.data.trim_end_matches('.'))
-						}
-						_ => return None,
-					}
-				} else if kind == RecordKind::Mx {
-					match r.priority {
-						Some(p) => format!("{p} {}", r.data.trim_end_matches('.')),
-						_ => return None,
-					}
-				} else if kind == RecordKind::Txt {
-					txt_decode(&r.data, TXT_FORM)
-				} else if kind == RecordKind::Caa && r.tag.is_some() {
-					format!(
-						"{} {} \"{}\"",
-						r.flags.unwrap_or(0),
-						r.tag.as_deref().unwrap_or_default(),
-						r.data
-					)
-				} else {
-					r.data
-				};
-				Some(DnsRecord {
-					name,
-					kind,
-					value,
-					ttl: r.ttl,
-					proxied: None,
-				})
-			})
-			.collect())
+		Ok(records.iter().filter_map(|r| record_of(zone, r)).collect())
 	}
+}
+
+/// The record a listed entry stands for, read back into the shape the rest
+/// of epistle uses; `None` for an entry that cannot be read as one (an SRV or
+/// an MX without its priority).
+fn record_of(zone: &str, r: &DomainRecord) -> Option<DnsRecord> {
+	let name = if r.name == "@" {
+		zone.to_string()
+	} else {
+		format!("{}.{}", r.name, zone)
+	};
+	let kind = RecordKind::from_token(&r.kind);
+	let value = if kind == RecordKind::Srv {
+		match (r.priority, r.weight, r.port) {
+			(Some(p), Some(w), Some(port)) => {
+				format!("{p} {w} {port} {}", r.data.trim_end_matches('.'))
+			}
+			_ => return None,
+		}
+	} else if kind == RecordKind::Mx {
+		match r.priority {
+			Some(p) => format!("{p} {}", r.data.trim_end_matches('.')),
+			_ => return None,
+		}
+	} else if kind == RecordKind::Txt {
+		txt_decode(&r.data, TXT_FORM)
+	} else if kind == RecordKind::Caa && r.tag.is_some() {
+		format!(
+			"{} {} \"{}\"",
+			r.flags.unwrap_or(0),
+			r.tag.as_deref().unwrap_or_default(),
+			r.data
+		)
+	} else {
+		r.data.clone()
+	};
+	Some(DnsRecord {
+		name,
+		kind,
+		value,
+		ttl: r.ttl,
+		proxied: None,
+	})
 }
 
 impl DnsProvider for DigitaloceanProvider {
@@ -231,6 +234,12 @@ impl DnsProvider for DigitaloceanProvider {
 			self.list_inner(&zone).await
 		}))
 	}
+	fn publish_snapshot<'a>(&'a self, zone: &'a str) -> SnapshotOp<'a> {
+		Box::pin(crate::dns::providers::within(self.snapshot_inner(zone)))
+	}
+	fn apply_guarded<'a>(&'a self, zone: &'a str, change: Change) -> ReceiptOp<'a> {
+		Box::pin(crate::dns::providers::guarded::apply(self, zone, change))
+	}
 }
 
 /// Decode a JSON body, mapping a 401/403 to an auth error.
@@ -245,6 +254,7 @@ async fn decode<T: serde::de::DeserializeOwned>(
 	serde_json::from_str(&text).map_err(|e| ProviderError::Remote(e.to_string()))
 }
 
+mod guarded;
 mod pages;
 mod requests;
 mod write;

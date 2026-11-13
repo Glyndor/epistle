@@ -9,7 +9,7 @@ use std::sync::{
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-fn tlv(tag: u8, value: &[u8]) -> Vec<u8> {
+pub(super) fn tlv(tag: u8, value: &[u8]) -> Vec<u8> {
 	assert!(value.len() < 256, "small fixture only");
 	let mut out = vec![tag];
 	if value.len() >= 128 {
@@ -21,7 +21,7 @@ fn tlv(tag: u8, value: &[u8]) -> Vec<u8> {
 }
 
 /// Recover the message id and operation from a bounded request frame.
-async fn request(tcp: &mut TcpStream) -> (u8, u8) {
+pub(super) async fn request(tcp: &mut TcpStream) -> (u8, u8) {
 	assert_eq!(tcp.read_u8().await.expect("sequence"), 0x30);
 	let first = tcp.read_u8().await.expect("length");
 	let size = if first < 128 {
@@ -42,7 +42,7 @@ async fn request(tcp: &mut TcpStream) -> (u8, u8) {
 	(body[2], body[3])
 }
 
-async fn done(tcp: &mut TcpStream, id: u8, operation: u8, url: Option<&str>) {
+pub(super) fn reply_bytes(id: u8, operation: u8, url: Option<&str>) -> Vec<u8> {
 	let mut result = vec![
 		0x0a,
 		0x01,
@@ -57,7 +57,11 @@ async fn done(tcp: &mut TcpStream, id: u8, operation: u8, url: Option<&str>) {
 	}
 	let mut message = vec![0x02, 0x01, id];
 	message.extend(tlv(operation, &result));
-	tcp.write_all(&tlv(0x30, &message))
+	tlv(0x30, &message)
+}
+
+pub(super) async fn done(tcp: &mut TcpStream, id: u8, operation: u8, url: Option<&str>) {
+	tcp.write_all(&reply_bytes(id, operation, url))
 		.await
 		.expect("LDAP reply");
 }

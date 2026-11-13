@@ -10,6 +10,7 @@
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use ring::signature::Ed25519KeyPair;
+use std::collections::HashMap;
 
 use crate::dkim::{Algorithm, Canon, DkimOutcome, canon};
 use crate::spf::{DnsFailure, DnsLookup};
@@ -19,6 +20,10 @@ use super::signature::MessageSignature;
 
 /// Headers signed when present, lowest occurrence first (RFC 6376 §5.4).
 const SIGNED_HEADERS: [&str; 6] = ["from", "to", "cc", "subject", "date", "message-id"];
+
+/// The largest header block a message may carry for its AMS to be read. The
+/// same bound DKIM puts on the signatures of a message.
+const MAX_HEADER_BYTES: usize = 2 * 1024 * 1024;
 
 /// Build the `ARC-Message-Signature` header line for `instance`, signing the
 /// message with relaxed/relaxed ed25519. Returns `None` if From is absent.
@@ -87,6 +92,17 @@ pub async fn verify(
 		return DkimOutcome::Fail;
 	}
 
+	// RFC 6376 sections 5.4 and 8.15, as DKIM applies them: `h=` has to
+	// cover every instance of From, not just one.
+	let from_instances = headers
+		.iter()
+		.filter(|(name, _)| name.eq_ignore_ascii_case("from"))
+		.count();
+	let from_signed = ams.signed_headers.iter().filter(|n| *n == "from").count();
+	if from_instances > from_signed {
+		return DkimOutcome::PermError;
+	}
+
 	let hash_input = header_hash_input(ams.header_canon, &headers, &ams.signed_headers, raw_value);
 
 	let key_name = format!("{}._domainkey.{}", ams.selector, ams.domain);
@@ -94,13 +110,9 @@ pub async fn verify(
 		Ok(texts) => texts,
 		Err(DnsFailure::Temporary) => return DkimOutcome::TempError,
 	};
-	let record = match KeyRecord::first(&texts) {
-		Ok(record) => record,
-		Err(_) => return DkimOutcome::PermError,
-	};
 	// The algorithm the header declares decides the primitive and the shape
 	// of the key, and the record has to publish a key of that type.
-	let key = match record.verification_key(ams.algorithm) {
+	let key = match KeyRecord::select(&texts, ams.algorithm) {
 		Ok(key) => key,
 		Err(_) => return DkimOutcome::PermError,
 	};
@@ -123,11 +135,19 @@ fn header_hash_input(
 	signed: &[String],
 	raw_value: &str,
 ) -> String {
-	let mut used = vec![false; headers.len()];
+	// Each name takes the lowest header of that name not yet used. The
+	// positions are listed once, so the cost follows the headers and the
+	// names, not their product.
+	let mut positions: HashMap<String, Vec<usize>> = HashMap::new();
+	for (index, (name, _)) in headers.iter().enumerate() {
+		positions
+			.entry(name.to_ascii_lowercase())
+			.or_default()
+			.push(index);
+	}
 	let mut input = String::new();
 	for name in signed {
-		if let Some(index) = lowest_unused(headers, &used, name) {
-			used[index] = true;
+		if let Some(index) = positions.get_mut(name).and_then(Vec::pop) {
 			input.push_str(&canon::header(
 				canon_mode,
 				&headers[index].0,
@@ -181,6 +201,9 @@ fn split_message(raw: &[u8]) -> Option<SplitMessage> {
 		Some(pos) => (pos + 2, pos + 4),
 		None => (raw.len(), raw.len()),
 	};
+	if header_end > MAX_HEADER_BYTES {
+		return None;
+	}
 	let block = std::str::from_utf8(&raw[..header_end]).ok()?;
 	let body = raw.get(body_start..).unwrap_or(&[]).to_vec();
 

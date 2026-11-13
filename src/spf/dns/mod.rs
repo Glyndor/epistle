@@ -201,7 +201,15 @@ impl SystemDns {
 		record_type: hickory_resolver::proto::rr::RecordType,
 	) -> LookupResult<Vec<hickory_resolver::proto::rr::RData>> {
 		use hickory_resolver::net::{DnsError, NetError};
-		match self.resolver.lookup(format!("{name}."), record_type).await {
+		// A name that cannot be put on the wire never reaches a server, and a
+		// retry cannot change that: it is an absence (RFC 7208 section 4.3
+		// reads a malformed domain as `none`), not a temporary failure. The
+		// conversion is the one the resolver applies to a string, so an
+		// internationalized name is still looked up under its punycode form.
+		let Ok(fqdn) = hickory_resolver::proto::rr::Name::from_utf8(format!("{name}.")) else {
+			return Ok(Vec::new());
+		};
+		match self.resolver.lookup(fqdn, record_type).await {
 			Ok(lookup) => Ok(lookup
 				.answers()
 				.iter()

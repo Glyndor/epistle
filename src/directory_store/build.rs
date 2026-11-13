@@ -132,6 +132,33 @@ pub(super) fn disabled(dynamic: &[DynamicAccount]) -> HashSet<String> {
 		.collect()
 }
 
+/// The accounts whose sending is off and the accounts whose receiving is
+/// off, as `(send_off, receive_off)`, across the static and the dynamic
+/// accounts. An account that never set either is in neither.
+pub(super) fn switches_off(
+	static_accounts: &[Account],
+	dynamic: &[DynamicAccount],
+) -> (Vec<String>, Vec<String>) {
+	let rows = static_accounts
+		.iter()
+		.map(|account| (&account.name, account.send, account.receive))
+		.chain(
+			dynamic
+				.iter()
+				.map(|account| (&account.name, account.send, account.receive)),
+		);
+	let (mut send_off, mut receive_off) = (Vec::new(), Vec::new());
+	for (name, send, receive) in rows {
+		if send == Some(false) {
+			send_off.push(name.clone());
+		}
+		if receive == Some(false) {
+			receive_off.push(name.clone());
+		}
+	}
+	(send_off, receive_off)
+}
+
 /// SCRAM-SHA-256 credentials per dynamic account (only dynamic
 /// accounts carry SCRAM — derived from the plaintext password at
 /// set time).

@@ -46,6 +46,17 @@ pub struct Account {
 	/// written, any case and script; trimmed, bounded, no control characters.
 	#[serde(default)]
 	pub display_name: Option<String>,
+	/// Whether the account may send mail: SMTP submission, `/api/v1/send` and
+	/// JMAP `EmailSubmission`. Absent (the default) and `true` both mean it
+	/// may; `false` turns sending off while sign-in, receiving and reading
+	/// stay as they are.
+	#[serde(default)]
+	pub send: Option<bool>,
+	/// Whether mail addressed to the account is accepted. Absent (the
+	/// default) and `true` both mean it is; `false` makes the server refuse
+	/// it as it would for an address that does not exist.
+	#[serde(default)]
+	pub receive: Option<bool>,
 }
 
 /// Serde default for boolean fields that default to true.

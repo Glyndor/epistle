@@ -349,7 +349,7 @@ pub struct Rotator {
 	state_path: PathBuf,
 	data_dir: PathBuf,
 	signer: ReloadableSigner,
-	provider: Arc<dyn DnsProvider>,
+	provider: provider::LiveProvider,
 	zone: String,
 	/// The other zones the provider holds, when the configuration has one
 	/// entry per zone. A domain is published in the longest zone that
@@ -402,7 +402,7 @@ impl Rotator {
 			state_path,
 			data_dir,
 			signer,
-			provider,
+			provider: provider::LiveProvider::fixed(provider),
 			zone,
 			more_zones: Vec::new(),
 			signing_domains,
@@ -416,6 +416,14 @@ impl Rotator {
 			#[cfg(test)]
 			crash_at: None,
 		}
+	}
+
+	/// Build the provider again from `source` at the start of every cycle, so
+	/// a credential that changed in the configuration is picked up without a
+	/// restart. A cycle whose build fails writes nothing.
+	pub fn with_provider_source(mut self, source: ProviderSource) -> Self {
+		self.provider.with_source(source);
+		self
 	}
 
 	/// Publish in several zones: a domain goes to the longest zone, among
@@ -609,6 +617,9 @@ pub(crate) use steps::{Step, pending_key, remove_key_file, write_key};
 
 mod orphans;
 pub use orphans::{CLEANUP_FILE, Orphans, find_orphans, request_cleanup};
+
+mod provider;
+pub use provider::ProviderSource;
 
 mod publication;
 pub(crate) use publication::key_of;

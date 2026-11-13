@@ -46,7 +46,7 @@ pub enum BuildError {
 
 impl OauthVerifier {
 	/// Build from configuration: the algorithm name (`ES256`/`RS256`) and the
-	/// base64-encoded public key (SPKI DER for RSA, raw point for EC).
+	/// base64-encoded public key (PKCS#1 `RSAPublicKey` DER for RSA, raw point for EC).
 	pub fn new(
 		issuer: impl Into<String>,
 		audience: impl Into<String>,

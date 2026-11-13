@@ -8,7 +8,7 @@ use super::command::Command;
 use crate::directory_store::DirectoryHandle;
 use crate::smtp::directory::gate_fixture::*;
 use crate::smtp::directory::hash_gate::tests::base::full_gate;
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 use base64::Engine;
 
 const TEMP: &str = "[SYS/TEMP] try again later";

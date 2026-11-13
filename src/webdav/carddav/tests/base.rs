@@ -1,5 +1,5 @@
 use super::{ReportKind, etag, hrefs, is_addressbook, report_kind};
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 use crate::webdav::router;
 use axum::Router;
 use axum::body::Body;
@@ -37,6 +37,8 @@ fn base64_encode(input: &[u8]) -> String {
 /// Build a router backed by a temp data dir with `alice` and `bob`.
 fn test_app(dir: &std::path::Path) -> Router {
 	let account = |name: &str, pw: &str| crate::config::Account {
+		send: None,
+		receive: None,
 		display_name: None,
 		name: name.to_string(),
 		addresses: vec![format!("{name}@example.org")],
@@ -125,7 +127,10 @@ async fn hrefs_extracts_values_in_order() {
 		<D:href>/alice/book/a.vcf</D:href>\
 		<D:href> /alice/book/b.vcf </D:href>\
 		</C:addressbook-multiget>";
-	assert_eq!(hrefs(body), vec!["/alice/book/a.vcf", "/alice/book/b.vcf"]);
+	assert_eq!(
+		hrefs(body).collect::<Vec<_>>(),
+		vec!["/alice/book/a.vcf", "/alice/book/b.vcf"]
+	);
 }
 
 #[tokio::test]

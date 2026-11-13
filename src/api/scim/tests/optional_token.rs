@@ -7,7 +7,7 @@ use tower::ServiceExt;
 #[tokio::test]
 async fn scim_routes_accept_a_labelled_key_without_a_static_token() {
 	let dir = tempfile::tempdir().unwrap();
-	let secret = crate::test_fixtures::api_key();
+	let secret = crate::test_support::fixtures::api_key();
 	let mut keys = crate::api::ApiKeyStore::open(dir.path()).unwrap();
 	keys.add(crate::api::ApiKey {
 		label: "provisioner".into(),

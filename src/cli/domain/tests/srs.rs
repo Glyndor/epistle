@@ -6,7 +6,7 @@ use super::writers::{commit_add, commit_remove};
 use super::*;
 use crate::cli::config_edit::ConfigDocument;
 use crate::config::Config;
-use crate::test_fixtures::fresh_secret;
+use crate::test_support::fixtures::fresh_secret;
 
 fn fixture(extra: &str) -> (tempfile::TempDir, tempfile::NamedTempFile) {
 	let dir = tempfile::tempdir().unwrap();

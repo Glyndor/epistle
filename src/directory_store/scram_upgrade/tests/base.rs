@@ -12,7 +12,7 @@ use crate::config::Protocol;
 use crate::directory_store::{AccountStore, DynamicAccount};
 use crate::smtp::auth::tests::base::hash;
 use crate::smtp::scram::{SCRAM_ITERATIONS, ScramCredentials, ScramServer, ScramStored};
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 
 const LEGACY_ITERATIONS: u32 = 4096;
 

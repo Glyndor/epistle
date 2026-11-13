@@ -3,7 +3,7 @@
 
 use super::base::{TOKEN, request, request_with_body, test_state};
 use super::*;
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 use axum::http::StatusCode;
 
 // --- Account management: the write surface (requires the `write` scope) -------

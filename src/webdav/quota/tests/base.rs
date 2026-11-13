@@ -2,11 +2,13 @@ use axum::Router;
 use axum::http::StatusCode;
 
 use super::{Change, MIN_ENTRY_BYTES, Quota, tree_cost};
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 use crate::webdav::test_support::send_as_alice;
 
 fn app_with_quota(dir: &std::path::Path, quota_bytes: Option<u64>) -> Router {
 	let account = crate::config::Account {
+		send: None,
+		receive: None,
 		display_name: None,
 		name: "alice".to_string(),
 		addresses: vec!["alice@example.org".to_string()],
@@ -39,6 +41,8 @@ fn dav_file(dir: &std::path::Path, relative: &str) -> std::path::PathBuf {
 
 fn state_for(dir: &std::path::Path, quota_bytes: Option<u64>) -> crate::webdav::WebDavState {
 	let account = crate::config::Account {
+		send: None,
+		receive: None,
 		display_name: None,
 		name: "alice".to_string(),
 		addresses: vec!["alice@example.org".to_string()],

@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::password::Policy;
-use crate::test_fixtures as fixtures;
+use crate::test_support::fixtures;
 
 /// Every fixture-level call goes through the ASCII-only policy: app
 /// passwords are random base64 secrets, the prepare is a no-op here even

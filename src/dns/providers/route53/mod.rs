@@ -129,10 +129,11 @@ impl Route53Provider {
 	}
 }
 
-/// A TXT rrset as the API returns it. `name` is the FQDN with the
-/// trailing dot AWS always uses; `values` is each rdata as Route 53
-/// returns it, XML entities resolved but still quoted and escaped the
-/// way `upsert_rrset` writes it back.
+/// A record set as the API returns it (a TXT one for the TXT paths, any
+/// kind for `delete_exact`). `name` is the FQDN with the trailing dot AWS
+/// always uses; `values` is each rdata as Route 53 returns it, XML entities
+/// resolved but still quoted and escaped the way `upsert_rrset` writes it
+/// back.
 #[derive(Debug)]
 struct TxtRrset {
 	name: String,
@@ -142,12 +143,12 @@ struct TxtRrset {
 }
 
 /// Walk `LISTResourceRecordSetsResult` for the first `<ResourceRecordSet>`
-/// whose `<Name>` matches `target` and whose `<Type>` is `TXT`. The
+/// whose `<Name>` matches `target` and whose `<Type>` is `wanted`. The
 /// reader uses a lowercased view to find tag boundaries (the wire
 /// form is case-insensitive) and slices the original `xml` to keep
 /// the byte case of the values. The response is well-formed by API
 /// contract.
-fn parse_txt_rrset(xml: &str, target: &str) -> Option<TxtRrset> {
+fn parse_rrset(xml: &str, target: &str, wanted: &str) -> Option<TxtRrset> {
 	let lower = xml.to_ascii_lowercase();
 	let mut cursor = 0;
 	loop {
@@ -172,7 +173,7 @@ fn parse_txt_rrset(xml: &str, target: &str) -> Option<TxtRrset> {
 			values.push(xml_unescape(&xml[abs_start..abs_end]));
 			value_cursor = vend;
 		}
-		if kind.eq_ignore_ascii_case("TXT")
+		if kind.eq_ignore_ascii_case(wanted)
 			&& name
 				.trim_end_matches('.')
 				.eq_ignore_ascii_case(target.trim_end_matches('.'))
@@ -182,7 +183,7 @@ fn parse_txt_rrset(xml: &str, target: &str) -> Option<TxtRrset> {
 				.unwrap_or(300);
 			return Some(TxtRrset {
 				name,
-				kind: "TXT".to_string(),
+				kind: wanted.to_ascii_uppercase(),
 				ttl,
 				values,
 			});
@@ -307,6 +308,11 @@ impl DnsProvider for Route53Provider {
 			}
 		}))
 	}
+	fn delete_exact(&self, _zone: &str, record: DnsRecord) -> Op<'_> {
+		Box::pin(crate::dns::providers::within(async move {
+			self.delete_exact_inner(record).await
+		}))
+	}
 	fn list(&self, _zone: &str) -> ListOp<'_> {
 		// Route 53 lists records as XML, which this provider does not parse.
 		Box::pin(async move { Err(ProviderError::Unsupported) })
@@ -332,7 +338,7 @@ fn record_type(kind: &RecordKind) -> Result<&'static str, ProviderError> {
 	}
 }
 
-/// The logical value of one rdata as `parse_txt_rrset` returns it: Route
+/// The logical value of one rdata as `parse_rrset` returns it: Route
 /// 53 returns TXT rdata quoted, with octal escapes, the same form it takes.
 fn txt_read(value: &str) -> String {
 	txt_decode(value, TXT_FORM)
@@ -417,6 +423,7 @@ fn xml_unescape(value: &str) -> String {
 		.replace("&amp;", "&")
 }
 
+mod exact;
 mod rrset;
 mod sign;
 

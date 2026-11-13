@@ -95,7 +95,10 @@ impl Session {
 				tag,
 				synchronizing,
 				wire_size,
-				"BAD too many keywords (max {})\r\n",
+				&format!(
+					"BAD too many keywords (max {})\r\n",
+					crate::imap::keyword::MAX_KEYWORDS_PER_MESSAGE
+				),
 			);
 		}
 		self.pending_append = Some(PendingLiteral {
@@ -209,7 +212,10 @@ impl Session {
 				tag,
 				synchronizing,
 				size,
-				"BAD too many keywords (max {})\r\n",
+				&format!(
+					"BAD too many keywords (max {})\r\n",
+					crate::imap::keyword::MAX_KEYWORDS_PER_MESSAGE
+				),
 			);
 		}
 		self.pending_append = Some(PendingLiteral {

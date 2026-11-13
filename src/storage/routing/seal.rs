@@ -7,43 +7,30 @@ const SRS_MAX_AGE_DAYS: u64 = 14;
 
 impl SplitDelivery {
 	/// ARC headers to prepend to a forwarded copy of `data`, or `None` when no
-	/// sealer is configured, when our domain already sealed the latest instance
-	/// (skip the duplicate set), or when the message cannot be sealed.
+	/// sealer is configured or the message cannot be sealed.
 	///
-	/// Forward sealing stays synchronous: the chain-validation status comes from
-	/// the pure [`crate::arc::chain::chain_status`] (the prior chain's recorded
-	/// `cv`), never the async, DNS-backed `arc::validate::validate`. A message
-	/// with no prior chain — the common case — yields `cv=none` with no lookup;
-	/// a present chain reuses its own recorded status structurally rather than
-	/// re-running cryptographic verification in this sync delivery path.
+	/// Forward sealing stays synchronous and never looks DNS up, so it cannot
+	/// tell whether a chain it did not make still validates. It seals only a
+	/// message with no ARC headers (`cv=none`, the first instance). A message
+	/// that already carries a chain, ours from the accept hop included, or
+	/// headers that do not form one, is forwarded as it is: a later instance
+	/// has to carry `cv=pass` (RFC 8617 section 5.2) and that claim needs a
+	/// validation.
 	pub(super) fn arc_seal(&self, data: &[u8]) -> Option<String> {
-		let (sealer, our_domain) = self.arc.as_ref()?;
-		let prior = crate::arc::chain::extract(data)
-			.ok()
-			.flatten()
-			.unwrap_or_default();
-		// No double seal: if our domain already authored the latest instance
-		// (e.g. inbound mail we sealed at accept), do not add a second set.
-		if let Some(top) = prior.last()
-			&& crate::arc::chain::tag(&top.seal, "d")
-				.is_some_and(|d| d.eq_ignore_ascii_case(our_domain))
-		{
+		let (sealer, _) = self.arc.as_ref()?;
+		if !matches!(crate::arc::chain::extract(data), Ok(None)) {
 			return None;
 		}
-		// cv reflects the prior chain: none when fresh, else its recorded status
-		// (a structurally broken chain extracts to empty, so seals as a fresh
-		// chain — never an invalid set). This keeps sealing sync (no DNS).
-		let cv = if prior.is_empty() {
-			crate::arc::chain::ChainValidation::None
-		} else {
-			crate::arc::chain::chain_status(&prior)
-				.unwrap_or(crate::arc::chain::ChainValidation::Fail)
-		};
 		// Reuse this message's Authentication-Results as our hop's summary, or a
 		// minimal "none" when the message carries none.
 		let auth_results =
 			header_of(data, "authentication-results").unwrap_or_else(|| "none".to_string());
-		sealer.seal(data, &auth_results, &prior, cv)
+		sealer.seal(
+			data,
+			&auth_results,
+			&[],
+			crate::arc::chain::ChainValidation::None,
+		)
 	}
 
 	/// The envelope sender to use for mail that an account of

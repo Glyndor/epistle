@@ -348,5 +348,5 @@ async fn tls_client_connect(
 
 // Each integration crate uses the shared fixture source.
 #[allow(dead_code)]
-#[path = "../../src/test_fixtures.rs"]
+#[path = "../../src/test_support/fixtures.rs"]
 mod fixtures;

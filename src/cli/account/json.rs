@@ -45,11 +45,14 @@ pub(crate) fn list(config: &Config, aliases: bool, out: &mut impl std::io::Write
 		.map(|(name, addresses, dynamic)| {
 			let source = if dynamic { "dynamic" } else { "static" };
 			let display_name = store.display_name(&name);
+			let (send, receive) = store.switches(&name);
 			let mut row = json!({
 				"name": name,
 				"source": source,
 				"display_name": display_name,
 				"addresses": addresses,
+				"send": send,
+				"receive": receive,
 			});
 			if let Some(attached) = &attached {
 				row["aliases"] = attached
@@ -75,6 +78,8 @@ pub(crate) fn show(store: &AccountStore, name: &str, out: &mut impl std::io::Wri
 			"display_name": account.display_name,
 			"addresses": account.addresses,
 			"disabled": account.disabled,
+			"send": account.send.unwrap_or(true),
+			"receive": account.receive.unwrap_or(true),
 			"quota_bytes": account.quota_bytes,
 			"protocols": protocols(account.allowed_protocols.as_ref()),
 			"two_factor": account.totp_secret.is_some(),
@@ -89,6 +94,8 @@ pub(crate) fn show(store: &AccountStore, name: &str, out: &mut impl std::io::Wri
 			"display_name": account.display_name,
 			"addresses": account.addresses,
 			"disabled": false,
+			"send": account.send.unwrap_or(true),
+			"receive": account.receive.unwrap_or(true),
 			"quota_bytes": account.quota_bytes,
 			"protocols": protocols(account.allowed_protocols.as_ref()),
 			"two_factor": false,

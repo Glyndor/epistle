@@ -145,6 +145,12 @@ fn restore_summarising(
 	}
 	summary.entries = entries.len();
 	if dry_run {
+		// The preview answers for the same checks the restore makes before it
+		// writes, so an archive it would refuse does not read as a green run.
+		if let Err(error) = check_files(&entries, &config.data_dir) {
+			crate::cli::style::error(format_args!("laying down files: {error}"));
+			return ExitCode::FAILURE;
+		}
 		let _ = writeln!(out, "would restore {} entries:", entries.len());
 		for (name, _mode, content) in &entries {
 			if name == DATABASE_SQL_NAME {
@@ -174,8 +180,10 @@ fn restore_summarising(
 		crate::cli::style::error(format_args!("laying down files: {error}"));
 		return ExitCode::FAILURE;
 	}
-	// A dump cut short never reaches the database: the marker `pg_dump` writes
-	// last has to be there, as it has to be when the backup is made.
+	// A truncated dump is refused: the marker `pg_dump` writes last has to be
+	// there, as it has to be when the backup is made. This catches a cut, not a
+	// forgery: whoever writes the archive can write the marker too, and the SQL
+	// then runs as it is, so an archive is only as trustworthy as where it came from.
 	if config.database.is_some()
 		&& let Some((_, _, sql)) = entries
 			.iter()

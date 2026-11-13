@@ -10,14 +10,10 @@
 //! still uses the domain; the error lists the offenders so the operator
 //! knows what to clean up first.
 
-use std::io::Write;
-
-use super::term::table::Table;
 use std::path::Path;
 use std::process::ExitCode;
 
 use clap::{Args, Subcommand};
-use serde::Serialize;
 
 use crate::config::Config;
 
@@ -25,8 +21,12 @@ use super::config_edit::ConfigDocument;
 use super::style;
 
 pub(in crate::cli) mod own_key;
+mod role;
 mod set;
 mod state;
+mod view;
+pub(in crate::cli) use view::list;
+use view::show;
 
 mod dispatch;
 use dispatch::{Outcome, execute};
@@ -66,6 +66,14 @@ pub enum DomainCli {
 		/// own. The key then signs as every domain that shares it.
 		#[arg(long)]
 		shared_dkim_key: bool,
+		/// The domain only sends mail: its DNS carries SPF, DKIM, DMARC and
+		/// MX, and no MTA-STS, TLS-RPT, SRV, autoconfig or autodiscover record.
+		#[arg(long, conflicts_with = "receive_only")]
+		send_only: bool,
+		/// The domain only receives mail: nothing is sent as it, so its DNS
+		/// carries the null SPF, a `reject` DMARC policy and no DKIM key.
+		#[arg(long)]
+		receive_only: bool,
 	},
 	/// Remove a domain from `domains`.
 	///
@@ -83,13 +91,15 @@ pub enum DomainCli {
 	},
 	/// Edit the `domain_aliases` map.
 	Alias(DomainAliasArgs),
-	/// Set the storage quota or submission rate of one domain.
+	/// Set the role, storage quota or submission rate of one domain.
 	///
-	/// The same per-domain overrides `limits set --domain` writes. A flag
-	/// that is left out keeps its value; `--no-quota` and
-	/// `--no-submission-rate` remove the override.
+	/// The quota and rate are the per-domain overrides `limits set --domain`
+	/// writes. A flag that is left out keeps its value; `--no-quota` and
+	/// `--no-submission-rate` remove the override. `--send-only`,
+	/// `--receive-only` and `--full` change the role: which DNS records the
+	/// domain needs and who may send as it.
 	#[command(group(clap::ArgGroup::new("change").required(true).multiple(true)
-		.args(["quota", "no_quota", "submission_rate", "no_submission_rate"])))]
+		.args(["quota", "no_quota", "submission_rate", "no_submission_rate", "send_only", "receive_only", "full"])))]
 	Set {
 		/// Domain to change.
 		#[arg(value_name = "DOMAIN")]
@@ -111,6 +121,18 @@ pub enum DomainCli {
 		/// Remove the domain's submission rate override.
 		#[arg(long)]
 		no_submission_rate: bool,
+		/// The domain only sends mail: SPF, DKIM, DMARC and MX, nothing
+		/// else in DNS.
+		#[arg(long, conflicts_with_all = ["full", "receive_only"])]
+		send_only: bool,
+		/// The domain only receives mail: the null SPF, a `reject` DMARC
+		/// policy, no DKIM key, and nobody may send as it.
+		#[arg(long, conflicts_with = "full")]
+		receive_only: bool,
+		/// The domain receives mail and sets clients up: every record
+		/// (the default role).
+		#[arg(long)]
+		full: bool,
 	},
 	/// Switch a domain off without removing it.
 	///
@@ -184,215 +206,6 @@ pub(super) fn run(path: &Path, action: DomainCli, dry_run: bool, json: bool) -> 
 
 fn open(path: &Path) -> Result<ConfigDocument, String> {
 	ConfigDocument::open(path)
-}
-
-#[derive(Serialize)]
-struct DomainRow {
-	domain: String,
-	enabled: bool,
-	aliases_to: Vec<String>,
-	aliases_from: Vec<String>,
-}
-
-/// List every configured domain plus its alias map. JSON-friendly.
-pub(super) fn list(config: &Config, json: bool, out: &mut impl Write) -> std::io::Result<()> {
-	let mut rows = Vec::new();
-	for domain in &config.domains {
-		let aliases_to: Vec<String> = config
-			.domain_aliases
-			.iter()
-			.filter(|(_, target)| target.eq_ignore_ascii_case(domain))
-			.map(|(alias, _)| alias.clone())
-			.collect();
-		let aliases_from: Vec<String> = config
-			.domain_aliases
-			.iter()
-			.filter(|(alias, _)| alias.eq_ignore_ascii_case(domain))
-			.map(|(_, target)| target.clone())
-			.collect();
-		rows.push(DomainRow {
-			domain: domain.clone(),
-			enabled: state::is_enabled(config, domain),
-			aliases_to,
-			aliases_from,
-		});
-	}
-	if json {
-		serde_json::to_writer(&mut *out, &rows).map_err(std::io::Error::other)?;
-		writeln!(out)?;
-		return Ok(());
-	}
-	// A switched-off domain is named as such in the text forms.
-	let shown = |row: &DomainRow| {
-		if row.enabled {
-			row.domain.clone()
-		} else {
-			format!("{} (disabled)", row.domain)
-		}
-	};
-	if let Some(decor) = super::term::stdout(json) {
-		let mut table = Table::new(&["DOMAIN", "ALIASES TO", "ALIASES FROM"]);
-		for row in &rows {
-			let joined = |list: &[String]| {
-				if list.is_empty() {
-					"-".into()
-				} else {
-					list.join(",")
-				}
-			};
-			table.push(vec![
-				shown(row),
-				joined(&row.aliases_to),
-				joined(&row.aliases_from),
-			]);
-		}
-		return table.write(decor, out);
-	}
-	writeln!(out, "{:<30} ALIASES TO   ALIASES FROM", "DOMAIN")?;
-	for row in &rows {
-		writeln!(
-			out,
-			"{:<30} {:<12} {}",
-			shown(row),
-			if row.aliases_to.is_empty() {
-				"-".into()
-			} else {
-				row.aliases_to.join(",")
-			},
-			if row.aliases_from.is_empty() {
-				"-".into()
-			} else {
-				row.aliases_from.join(",")
-			},
-		)?;
-	}
-	Ok(())
-}
-
-#[derive(Serialize)]
-struct DomainView {
-	domain: String,
-	enabled: bool,
-	quota: Option<u64>,
-	submission_rate: Option<u32>,
-	aliases_to: Vec<String>,
-	aliases_from: Vec<String>,
-	accounts: Vec<String>,
-	aliases: Vec<String>,
-}
-
-/// Show one domain: alias edges plus the local accounts and aliases that
-/// rely on it.
-fn show(config: &Config, domain: &str, json: bool, out: &mut impl Write) -> std::io::Result<()> {
-	if !config
-		.domains
-		.iter()
-		.any(|existing| existing.eq_ignore_ascii_case(domain))
-	{
-		return Err(std::io::Error::other(format!(
-			"domain {domain} is not configured"
-		)));
-	}
-	let aliases_to: Vec<String> = config
-		.domain_aliases
-		.iter()
-		.filter(|(_, target)| target.eq_ignore_ascii_case(domain))
-		.map(|(alias, _)| alias.clone())
-		.collect();
-	let aliases_from: Vec<String> = config
-		.domain_aliases
-		.iter()
-		.filter(|(alias, _)| alias.eq_ignore_ascii_case(domain))
-		.map(|(_, target)| target.clone())
-		.collect();
-	let accounts: Vec<String> = config
-		.accounts
-		.iter()
-		.flat_map(|account| account.addresses.iter())
-		.filter(|address| {
-			crate::smtp::address::Address::parse(address)
-				.map(|parsed| parsed.domain().eq_ignore_ascii_case(domain))
-				.unwrap_or(false)
-		})
-		.cloned()
-		.collect();
-	let aliases: Vec<String> = config
-		.alias
-		.iter()
-		.filter(|alias| {
-			crate::smtp::address::Address::parse(&alias.address)
-				.map(|parsed| parsed.domain().eq_ignore_ascii_case(domain))
-				.unwrap_or(false)
-		})
-		.map(|alias| alias.address.clone())
-		.collect();
-	let view = DomainView {
-		domain: domain.to_string(),
-		enabled: state::is_enabled(config, domain),
-		quota: config
-			.domain_quotas
-			.get(&domain.to_ascii_lowercase())
-			.copied(),
-		submission_rate: config
-			.domain_submission_limits
-			.get(&domain.to_ascii_lowercase())
-			.copied(),
-		aliases_to,
-		aliases_from,
-		accounts,
-		aliases,
-	};
-	if json {
-		serde_json::to_writer(&mut *out, &view).map_err(std::io::Error::other)?;
-		writeln!(out)?;
-		return Ok(());
-	}
-	writeln!(out, "domain\t{}", view.domain)?;
-	writeln!(out, "enabled\t{}", if view.enabled { "yes" } else { "no" })?;
-	let number = |value: Option<String>| value.unwrap_or_else(|| "-".into());
-	writeln!(out, "quota\t{}", number(view.quota.map(|v| v.to_string())))?;
-	writeln!(
-		out,
-		"submission_rate\t{}",
-		number(view.submission_rate.map(|v| v.to_string()))
-	)?;
-	writeln!(
-		out,
-		"aliases_to\t{}",
-		if view.aliases_to.is_empty() {
-			"-".into()
-		} else {
-			view.aliases_to.join(",")
-		}
-	)?;
-	writeln!(
-		out,
-		"aliases_from\t{}",
-		if view.aliases_from.is_empty() {
-			"-".into()
-		} else {
-			view.aliases_from.join(",")
-		}
-	)?;
-	writeln!(
-		out,
-		"accounts\t{}",
-		if view.accounts.is_empty() {
-			"-".into()
-		} else {
-			view.accounts.join(",")
-		}
-	)?;
-	writeln!(
-		out,
-		"aliases\t{}",
-		if view.aliases.is_empty() {
-			"-".into()
-		} else {
-			view.aliases.join(",")
-		}
-	)?;
-	Ok(())
 }
 
 /// Validate `domain` as a DNS name and check it is not already configured.
@@ -470,6 +283,7 @@ fn remove_domain(
 	// Whatever was set for the domain goes with it, so nothing in the file
 	// names a domain the server no longer hosts.
 	own_key::drop_entry(document, domain)?;
+	role::forget(document, domain)?;
 	if !state::is_enabled(config, domain) {
 		state::set_enabled(config, document, domain, true)?;
 	}
