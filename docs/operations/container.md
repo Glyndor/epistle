@@ -525,16 +525,18 @@ provider; `sudo epistle stack certs disable` returns to one `mail`.
 | `<data_dir>/acme` (certificate, key, renewal request) | read-write | read-only |
 | `<data_dir>/dns-tlsa` (TLSA retry state) | read-write | read-only |
 | `<data_dir>/compose` | not mounted | read-only |
+| `<data_dir>/dns-handoff` (DKIM record requests) | read-write | read-write |
 | rest of data_dir | not mounted | read-write |
 | ports | none | as before |
 
 `mail` picks a new certificate up from disk within a minute, without a
 restart. If `certs` stops, `mail` keeps serving the certificate it has until it
 expires; `epistle status` reports the container in its `tls` area with the
-days left. DKIM keys do not rotate while the split is on: rotation publishes
-through the credential `mail` no longer holds, and moves to its own service in
-a later step. The design and what is left are in
-[the split plan](container-split.md).
+days left. DKIM keys keep rotating while the split is on: `mail` keeps the
+keys and asks `certs` to publish each record through
+`<data_dir>/dns-handoff`, which both containers mount. The design and what is
+left are in [the split plan](container-split.md) and
+[the serve split](serve-split.md).
 
 ### The database roles
 
