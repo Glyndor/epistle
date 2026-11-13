@@ -1,7 +1,8 @@
 //! Forwarded mail and the ARC chain it already carries: the sealing done
 //! while forwarding has no DNS, so it only starts a chain, never extends one.
 
-use super::base::{FORWARD_BODY, arc_sealer, message, redirect_sink};
+use super::arc_seal::{FORWARD_BODY, arc_sealer, redirect_sink};
+use super::base::message;
 use super::*;
 use crate::arc::chain::{ChainValidation, extract};
 use crate::storage::FsSpool;

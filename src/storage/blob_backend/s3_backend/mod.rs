@@ -15,7 +15,6 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use uuid::Uuid;
 
@@ -25,6 +24,9 @@ use super::{BlobAccount, BlobBackend};
 use limits::{Limits, read_capped};
 
 pub(crate) mod limits;
+mod object;
+mod wire;
+use wire::{current_epoch, parse_list, urlencode};
 
 /// `Send + Sync` future alias specific to this module. Uses `'static` (with
 /// the per-call state cloned into the `async move`) so the four verbs have
@@ -196,85 +198,6 @@ struct SignedObjectHeaders {
 	authorization: String,
 }
 
-impl S3Backend {
-	/// `GetObject` for one key: `None` on 404.
-	fn get_key(inner: Arc<Inner>, key: String) -> BoxFuture<'static, Option<Vec<u8>>> {
-		Box::pin(async move {
-			let url = Self::object_url(&inner, &key);
-			let hdr = Self::signed_object_headers(&inner, "GET", &key, &[]);
-			let response = inner
-				.client
-				.get(&url)
-				.header("x-amz-date", &hdr.amz_date)
-				.header(reqwest::header::AUTHORIZATION, &hdr.authorization)
-				.header("x-amz-content-sha256", &hdr.payload_hash)
-				.header(reqwest::header::HOST, &hdr.host)
-				.send()
-				.await
-				.map_err(|error| BlobError::Remote(error.to_string()))?;
-			let status = response.status();
-			if status == reqwest::StatusCode::NOT_FOUND {
-				return Ok(None);
-			}
-			if status == reqwest::StatusCode::UNAUTHORIZED
-				|| status == reqwest::StatusCode::FORBIDDEN
-			{
-				return Err(BlobError::Auth);
-			}
-			if !status.is_success() {
-				return Err(BlobError::Remote(format!("HTTP {status}")));
-			}
-			Ok(Some(read_capped(response, inner.limits.object).await?))
-		})
-	}
-
-	/// `PutObject` for one key.
-	fn put_key(inner: Arc<Inner>, key: String, payload: Vec<u8>) -> BoxFuture<'static, ()> {
-		Box::pin(async move {
-			let url = Self::object_url(&inner, &key);
-			let hdr = Self::signed_object_headers(&inner, "PUT", &key, &payload);
-			let response = inner
-				.client
-				.put(&url)
-				.header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
-				.header("x-amz-date", &hdr.amz_date)
-				.header(reqwest::header::AUTHORIZATION, &hdr.authorization)
-				.header("x-amz-content-sha256", &hdr.payload_hash)
-				.header(reqwest::header::HOST, &hdr.host)
-				.body(payload)
-				.send()
-				.await
-				.map_err(|error| BlobError::Remote(error.to_string()))?;
-			Self::check(response)
-		})
-	}
-
-	/// `DeleteObject` for one key; a missing key is success.
-	fn delete_key(inner: Arc<Inner>, key: String) -> BoxFuture<'static, ()> {
-		Box::pin(async move {
-			let url = Self::object_url(&inner, &key);
-			let hdr = Self::signed_object_headers(&inner, "DELETE", &key, &[]);
-			let response = inner
-				.client
-				.delete(&url)
-				.header("x-amz-date", &hdr.amz_date)
-				.header(reqwest::header::AUTHORIZATION, &hdr.authorization)
-				.header("x-amz-content-sha256", &hdr.payload_hash)
-				.header(reqwest::header::HOST, &hdr.host)
-				.send()
-				.await
-				.map_err(|error| BlobError::Remote(error.to_string()))?;
-			// 204 (Deleted) and 404 (NoSuchKey) are both success here:
-			// `delete` is idempotent.
-			let status = response.status();
-			if status == reqwest::StatusCode::NOT_FOUND {
-				return Ok(());
-			}
-			Self::check(response)
-		})
-	}
-}
-
 impl BlobBackend for S3Backend {
 	fn get(
 		&self,
@@ -438,69 +361,5 @@ impl BlobBackend for S3Backend {
 		})
 	}
 }
-
-/// The JSON body S3 returns from `ListObjectsV2`. We only need the keys and
-/// whether more pages follow; serde fills the rest with `#[serde(default)]`
-/// so a future S3 release adding fields does not break parsing.
-#[derive(serde::Deserialize)]
-struct ListResponse {
-	#[serde(default, rename = "Contents")]
-	contents: Vec<ListEntry>,
-	#[serde(default, rename = "NextContinuationToken")]
-	next_continuation_token: Option<String>,
-}
-
-/// One entry inside `ListBucketResult.Contents`: the object key, plus
-/// metadata we do not need but must tolerate on the wire.
-#[derive(serde::Deserialize)]
-struct ListEntry {
-	#[serde(rename = "Key")]
-	key: String,
-}
-
-/// The body of a ListObjectsV2 answer. S3 answers with XML
-/// (`ListBucketResult`); a store that answers with the same fields as JSON is
-/// read too, so the first character decides.
-fn parse_list(bytes: &[u8]) -> Result<ListResponse, BlobError> {
-	let text = std::str::from_utf8(bytes)
-		.map_err(|error| BlobError::Remote(format!("the listing is not text: {error}")))?;
-	if text.trim_start().starts_with('<') {
-		quick_xml::de::from_str(text).map_err(|error| BlobError::Remote(error.to_string()))
-	} else {
-		serde_json::from_str(text).map_err(|error| BlobError::Remote(error.to_string()))
-	}
-}
-
-/// Percent-encode without touching unreserved characters S3 already accepts.
-/// S3 is tolerant; this avoids `reqwest::Url` re-ordering or rewriting the
-/// path under us, which would break the canonical request the signature is
-/// computed against.
-fn urlencode(input: &str) -> String {
-	use std::fmt::Write;
-	let mut out = String::with_capacity(input.len());
-	for byte in input.bytes() {
-		match byte {
-			b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-				out.push(byte as char);
-			}
-			other => {
-				let _ = write!(out, "%{other:02X}");
-			}
-		}
-	}
-	out
-}
-
-/// Monotonic-ish second counter used as `x-amz-date`. A wall-clock value is
-/// what SigV4 wants; the `SystemTime → epoch_seconds` fallback handles
-/// clocks set before the Unix epoch (1969) by clamping to zero rather than
-/// panicking, which the upload path would do anyway.
-fn current_epoch() -> u64 {
-	SystemTime::now()
-		.duration_since(UNIX_EPOCH)
-		.unwrap_or_default()
-		.as_secs()
-}
-
 #[cfg(test)]
 mod tests;
