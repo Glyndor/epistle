@@ -91,7 +91,8 @@ pub(super) fn label(step: &Step) -> String {
 fn result(step: &Step, reload: Option<Reload>) -> &'static str {
 	match step.kind {
 		Kind::DkimKey | Kind::DkimDomainKey => "queued",
-		Kind::Restart => reload.map_or("restarted", Reload::name),
+		// A restart made by the run that was cut short is not known here.
+		Kind::Restart => reload.map_or("done", Reload::name),
 		_ => "rotated",
 	}
 }
