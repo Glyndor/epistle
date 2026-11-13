@@ -150,6 +150,14 @@ pub(super) fn collect_files(root: &Path) -> std::io::Result<Vec<(String, u32, Ve
 				if relative == Path::new(".store.lock") {
 					continue;
 				}
+				// The new secrets of an unfinished `rotate --all` are plaintext and live
+				// only until the run hands them over; an archive would keep them for as
+				// long as the archive lives. The run's lock is no more data than the lease.
+				if relative == Path::new("rotate/secrets.json")
+					|| relative == Path::new("rotate/lock")
+				{
+					continue;
+				}
 				let name = format!("data/{}", relative.to_string_lossy());
 				let metadata = entry.metadata()?;
 				let mode = metadata.permissions().mode();

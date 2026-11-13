@@ -23,7 +23,11 @@ impl Command {
 			} => false,
 			// The rotation writes the stores and the configuration; the
 			// listing (`--dry-run`) reads nothing.
-			Command::Rotate { dry_run: false, .. } => true,
+			Command::Rotate {
+				all: true,
+				dry_run: false,
+				..
+			} => true,
 			Command::Init { .. }
 			| Command::Stack { .. }
 			| Command::Db { .. }

@@ -31,9 +31,20 @@ pub(super) fn plan(config: &Config, now: u64) -> Result<(Vec<Step>, Vec<String>)
 			..
 		} if signing_domains.is_empty() && out_of_zone.is_empty() => {}
 		DkimRotationPlan::Run { .. } => {
-			crate::cli::dkim::preflight(config, now)
-				.map_err(|reason| format!("dkim-signing-key: the [dkim] key: {reason}"))?;
-			steps.push(Step::pending(Kind::DkimKey, "", None));
+			let today = rotate::rotated_today(&config.data_dir, now)
+				.map_err(|error| format!("dkim-signing-key: the [dkim] key: {error}"))?;
+			if today {
+				notes.push(
+					"dkim-signing-key: the [dkim] key already rotated today and is not rotated \
+					 again; if it was exposed after that rotation, run `epistle dkim rotate` \
+					 tomorrow"
+						.to_string(),
+				);
+			} else {
+				crate::cli::dkim::preflight(config, now)
+					.map_err(|reason| format!("dkim-signing-key: the [dkim] key: {reason}"))?;
+				steps.push(Step::pending(Kind::DkimKey, "", None));
+			}
 		}
 		DkimRotationPlan::Off => notes.push(
 			"dkim-signing-key: the [dkim] key does not rotate on this server, because no [dns] \
@@ -44,6 +55,15 @@ pub(super) fn plan(config: &Config, now: u64) -> Result<(Vec<Step>, Vec<String>)
 	}
 	let domains = decide_domain_rotation(config, &write);
 	for domain in &domains.rotating {
+		if let Some(until) = overlap_until(config, domain, now)? {
+			notes.push(format!(
+				"dkim-signing-key: the key of {domain} rotated recently and the selector it \
+				 replaced stays published until {}, so it is not rotated again before then; run \
+				 `epistle dkim rotate --domain {domain}` after that date if it was exposed",
+				crate::clock::rfc3339_or_epoch(until)
+			));
+			continue;
+		}
 		crate::cli::dkim::rotate_domain::preflight(config, domain, now)
 			.map_err(|reason| format!("dkim-signing-key: {domain}: {reason}"))?;
 		steps.push(Step::pending(Kind::DkimDomainKey, domain, None));
@@ -55,6 +75,20 @@ pub(super) fn plan(config: &Config, now: u64) -> Result<(Vec<Step>, Vec<String>)
 		));
 	}
 	Ok((steps, notes))
+}
+
+/// When the selector `domain`'s last rotation replaced stops being
+/// published, while that is still ahead. The server will not rotate the key
+/// again before then, so the run leaves a note instead of refusing as a
+/// whole. An unreadable state is a refusal.
+fn overlap_until(config: &Config, domain: &str, now: u64) -> Result<Option<u64>, String> {
+	let reason = |error: rotate::RotateError| format!("dkim-signing-key: {domain}: {error}");
+	let dir = domain_rotate::state_dir(&config.data_dir, domain).map_err(reason)?;
+	let state = domain_rotate::read_state(&dir).map_err(reason)?;
+	Ok(state
+		.and_then(|state| state.previous)
+		.map(|previous| previous.retire_at)
+		.filter(|until| now < *until))
 }
 
 /// The selector in service for the step's key.

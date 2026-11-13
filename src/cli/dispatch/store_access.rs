@@ -31,6 +31,7 @@ pub(super) fn guard(command: &Command) -> Result<Option<FileLock>, String> {
 		// The rotation rewrites the API key and app password stores.
 		Command::Rotate {
 			config,
+			all: true,
 			dry_run: false,
 			..
 		} => config,

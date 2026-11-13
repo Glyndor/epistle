@@ -105,3 +105,70 @@ fn a_queued_rotation_counts_as_done_while_it_waits_or_once_the_selector_moved() 
 		);
 	}
 }
+
+/// Write a rotation state at `path` whose key in service is `selector`,
+/// rotated at `rotated_at`, with the replaced selector published until
+/// `retire_at` when given.
+fn state(path: &std::path::Path, selector: &str, rotated_at: u64, retire_at: Option<u64>) {
+	let dir = path.parent().expect("dir");
+	std::fs::create_dir_all(dir).expect("mkdir");
+	let (pem, _) = crate::dkim::generate_key().expect("key");
+	std::fs::write(dir.join(format!("{selector}.pem")), pem).expect("key");
+	let state = crate::dkim::rotate::RotationState {
+		selector: selector.into(),
+		key_file: dir.join(format!("{selector}.pem")),
+		rotated_at,
+		previous: retire_at.map(|retire_at| crate::dkim::rotate::Previous {
+			selector: "replaced".into(),
+			key_file: dir.join("replaced.pem"),
+			retire_at,
+			rsa: None,
+		}),
+		pending: None,
+		rsa: None,
+	};
+	std::fs::write(path, serde_json::to_vec(&state).expect("json")).expect("state");
+}
+
+#[test]
+fn a_key_rotated_today_or_inside_its_overlap_is_a_note_and_not_a_refusal() {
+	let dir = tempfile::tempdir().expect("dir");
+	let config = config(dir.path());
+	let domain_dir =
+		crate::dkim::domain_rotate::state_dir(&config.data_dir, "example.org").expect("dir");
+	state(
+		&domain_dir.join(crate::dkim::domain_rotate::STATE_FILE),
+		"own19995",
+		NOW - 5 * 86_400,
+		Some(NOW + 86_400),
+	);
+	state(
+		&config.data_dir.join(crate::dkim::rotate::STATE_FILE),
+		&crate::dkim::rotate::selector_for(NOW),
+		NOW - 60,
+		None,
+	);
+	let (steps, notes) =
+		plan(&config, NOW).expect("a key that cannot rotate today refuses nothing");
+	assert!(steps.is_empty(), "{steps:?}");
+	assert!(
+		notes
+			.iter()
+			.any(|note| note.contains("[dkim] key already rotated today")),
+		"{notes:?}"
+	);
+	assert!(
+		notes
+			.iter()
+			.any(|note| note.contains("example.org") && note.contains("stays published until")),
+		"{notes:?}"
+	);
+	// Once the overlap is over the domain's key is queued again.
+	let (steps, _) = plan(&config, NOW + 2 * 86_400).expect("plan");
+	assert!(
+		steps
+			.iter()
+			.any(|step| step.kind == Kind::DkimDomainKey && step.item == "example.org"),
+		"{steps:?}"
+	);
+}
