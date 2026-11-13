@@ -16,9 +16,25 @@ on:
       - "src/storage/**"
       - "src/tls/**"
       - "tests/system/interop.rs"
+      # tests/system/interop.rs includes this file with #[path].
+      - "src/test_support/fixtures.rs"
       - ".github/workflows/interop.yml"
       - "Cargo.toml"
       - "Cargo.lock"
+      # Same exclusions as the pull_request filter below, and for the same
+      # reason: these files only exist under #[cfg(test)].
+      - "!src/**/tests/**"
+      - "!src/**/*_tests*.rs"
+      - "!src/**/tests_*.rs"
+      - "!src/**/test_support.rs"
+      - "!src/**/tests.rs"
+      - "!src/**/*_test_support.rs"
+      - "!src/smtp/directory/fixtures/**"
+      - "!src/smtp/session/test_hooks.rs"
+      - "!src/dns/txt_fixtures.rs"
+      - "!src/hostile_public_http/**"
+      - "!src/**/testdata/**"
+      - "!src/dkim/test_*.pem"
   pull_request:
     paths:
       - "src/smtp/**"
@@ -27,18 +43,31 @@ on:
       - "src/storage/**"
       - "src/tls/**"
       - "tests/system/interop.rs"
+      # tests/system/interop.rs includes this file with #[path].
+      - "src/test_support/fixtures.rs"
       - ".github/workflows/interop.yml"
       - "Cargo.toml"
       - "Cargo.lock"
       # Files that only exist under #[cfg(test)] cannot change what this job
       # builds or runs, so a pull request that touches only them does not pay
       # for it. Same exclusions as db.yml. The module that declares them
-      # (`mod tests;` in a mod.rs) is not matched, and the push above still
-      # runs everything.
+      # (`mod tests;` in a mod.rs) is not matched. The push above skips the
+      # same files: they cannot change the binary on develop either.
       - "!src/**/tests/**"
       - "!src/**/*_tests*.rs"
       - "!src/**/tests_*.rs"
       - "!src/**/test_support.rs"
+      # More names that only exist under #[cfg(test)]: the tests.rs leaves, the
+      # helper modules, the hostile HTTP harness and the keys and captures the
+      # tests read with include_bytes!.
+      - "!src/**/tests.rs"
+      - "!src/**/*_test_support.rs"
+      - "!src/smtp/directory/fixtures/**"
+      - "!src/smtp/session/test_hooks.rs"
+      - "!src/dns/txt_fixtures.rs"
+      - "!src/hostile_public_http/**"
+      - "!src/**/testdata/**"
+      - "!src/dkim/test_*.pem"
 
 # A newer push to a pull request supersedes the run in flight. Queue and
 # branch runs are never cancelled: only a pull_request event is.

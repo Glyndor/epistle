@@ -16,6 +16,21 @@ on:
       - "src/**"
       - "Cargo.toml"
       - "Cargo.lock"
+      # These files only exist under #[cfg(test)], so they cannot change what
+      # a benchmark compiles. Same exclusions as e2e.yml.
+      - "!src/**/tests/**"
+      - "!src/**/*_tests*.rs"
+      - "!src/**/tests_*.rs"
+      - "!src/**/test_support.rs"
+      - "!src/**/tests.rs"
+      - "!src/**/*_test_support.rs"
+      - "!src/test_support/**"
+      - "!src/smtp/directory/fixtures/**"
+      - "!src/smtp/session/test_hooks.rs"
+      - "!src/dns/txt_fixtures.rs"
+      - "!src/hostile_public_http/**"
+      - "!src/**/testdata/**"
+      - "!src/dkim/test_*.pem"
   workflow_dispatch:
 
 # A newer push to a pull request supersedes the run in flight. Queue and
