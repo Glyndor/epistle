@@ -229,6 +229,7 @@ impl Writer<'_> {
 			// else, so a record another account wrote in between stays.
 			super::remove::remove(provider, &zone, record, timeout)
 				.await
+				.map(|_| ())
 				.map_err(|e| e.to_string())?;
 			return Ok(());
 		}

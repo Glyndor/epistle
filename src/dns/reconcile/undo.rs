@@ -35,6 +35,11 @@ pub struct UndoEntry {
 	pub outcome: &'static str,
 	/// Why, for the operator.
 	pub reason: String,
+	/// The record was removed without a precondition, because the provider
+	/// cannot remove one value: a record another account added at that
+	/// moment would have gone with it.
+	#[serde(skip_serializing_if = "std::ops::Not::not")]
+	pub without_precondition: bool,
 }
 
 /// What undoing did, or would do with a dry run.
@@ -89,14 +94,18 @@ pub async fn undo(
 				continue;
 			}
 			let (outcome, reason) = decide(&record, &name, &listing, &cuts, &skip);
-			if outcome == "remove"
-				&& !dry_run && let Err(error) = remove(provider, &zone, &record, timeout).await
-			{
-				report.failure = Some(format!(
-					"removing {name} {} failed: {error}",
-					record.kind.as_str()
-				));
-				return Ok(report);
+			let mut without_precondition = false;
+			if outcome == "remove" && !dry_run {
+				match remove(provider, &zone, &record, timeout).await {
+					Ok(exact) => without_precondition = !exact,
+					Err(error) => {
+						report.failure = Some(format!(
+							"removing {name} {} failed: {error}",
+							record.kind.as_str()
+						));
+						return Ok(report);
+					}
+				}
 			}
 			// What happened to the record goes into the report before
 			// the ledger is saved: a ledger that cannot be saved must
@@ -106,6 +115,7 @@ pub async fn undo(
 				record: record.clone(),
 				outcome,
 				reason,
+				without_precondition,
 			});
 			if outcome != "left" && !dry_run {
 				// The record is out of the zone. The ledger that says
