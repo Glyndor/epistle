@@ -1,4 +1,4 @@
-# Two stages: a Rust 1.99 musl build, and a distroless-static runtime
+# Two stages: a Rust 1.100 musl build, and a distroless-static runtime
 # that carries only the resulting binary, a /etc/epistle/ mount point
 # and the `65532:65532` (nonroot) user. The build environment matches
 # what release.yml's `build-deb` job does: the same digest-pinned rust
@@ -13,8 +13,8 @@
 # it. The two values are 1:1; a request for any other arch fails in
 # the case statement.
 
-FROM docker.io/library/rust@sha256:09027f873d45b8ecd1dc86f1fa13b7a62b875c961f017a0e331267b350430137 AS builder
-# 1.99-slim-trixie. Same pin as release.yml.
+FROM docker.io/library/rust@sha256:e9d95b74296f7126a83ae3d041aeaba1ff4c478f13abc5cc034fcf7c131c3d4a AS builder
+# 1.100-slim-trixie. Same pin as release.yml.
 
 ARG TARGETARCH
 
@@ -71,7 +71,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
 #   podman image inspect --format '{{.Digest}}' gcr.io/distroless/static-debian13:nonroot
 # Bump the digest deliberately, the way db.yml documents the postgres
 # digests.
-FROM gcr.io/distroless/static-debian13:nonroot@sha256:25ac8f0c3b2334a9eb05452266bd4697864a8c8ef0ef71e5e6480d7f92868329
+FROM gcr.io/distroless/static-debian13:nonroot@sha256:aafe993665bf6200db38a02c11a9351e782a84b6a45e7f33b6695638c88e3931
 
 # OCI labels. `--label=...` on the `podman build` command line
 # overrides them at build time, so a release job can stamp the
