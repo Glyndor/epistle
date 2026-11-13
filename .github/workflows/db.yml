@@ -154,7 +154,7 @@ jobs:
         # The assertion is per file, not a global percentage. The combined run
         # instruments the whole tree from `--tests` (every lib test plus every
         # integration target), so the global figure lands near 2.5% and says
-        # nothing about anything; the four files below are what this job
+        # nothing about anything; the files below are what this job
         # exists to cover, so they are what it asserts.
         #
         # src/antispam/hook/mod.rs is deliberately NOT in this list even though
@@ -185,6 +185,9 @@ jobs:
           #   src/db/mod.rs                  88.79%
           #   src/directory_store/sql/mod.rs 96.88%
           #   src/antispam/corpus/mod.rs         73.15%
+          # src/antispam/corpus/mod.rs was split by responsibility afterwards;
+          # its files are listed one by one below, and mod.rs, which now only
+          # declares the constants and the submodules, is not.
           #   src/antispam/reputation/mod.rs     79.75%
           # The floor is today's worst file rounded down to the ten, not 90. A
           # threshold above what the tree actually has would make this gate red
@@ -195,7 +198,9 @@ jobs:
           COVERAGE_FILES: |
             src/db/mod.rs
             src/antispam/reputation/mod.rs
-            src/antispam/corpus/mod.rs
+            src/antispam/corpus/store.rs
+            src/antispam/corpus/score.rs
+            src/antispam/corpus/training.rs
             src/directory_store/sql/mod.rs
         run: |
           # `--tests` instruments every test target (lib tests plus every
