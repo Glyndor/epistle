@@ -11,8 +11,15 @@ epistle (0.12.9) unstable; urgency=medium
   * DKIM signs server-written mail for the hosted domain, and every rotation cycle builds the DNS provider again.
   * SMTP keeps a recipient named twice once, treats an SPF name that cannot be encoded as no record, and writes no report for a delivery status report. The queue, MTA-STS policy age and the language model band's forwarded headers are bounded.
   * `migrate` names the messages a folder skips for their declared size and caps the entries of a Mox configuration file.
+  * A hosted domain can also be `receive-only`, with a list of its own, and a domain that is switched off gets the records of a domain that neither sends nor receives. Nobody can send as an address of a `receive-only` domain.
+  * The ARC verifier requires `h=` to cover every `From`, takes the first usable key record and bounds what it reads, and the sealer only starts a chain it can vouch for. The MTA-STS cache has a ceiling and keeps a cached policy for five minutes after a failed fetch, and a recipient's last error is cut at 512 characters.
+  * A SCIM `PUT` keeps the settings it does not name, including the send and receive switches and the password it carries, and a key that lacks the scope of a route gets 403 instead of 401 and no longer counts as a failed credential.
+  * A key file or an answers file that others can read is refused, and `stack update` keeps a linked config a link.
+  * A remote LDAP or S3 server meets deadlines and ceilings, and a mailbox is removed under the delivery lock of its account.
+  * Google Cloud DNS, Spaceship, DNSimple and OVH write under a precondition or read again before writing.
+  * `migrate stalwart` reads the plan that `stalwart-cli snapshot` exports for Stalwart 0.16 and later.
 
- -- Glyndor <packages@glyndor.net>  Wed, 11 Nov 2026 12:00:00 +0000
+ -- Glyndor <packages@glyndor.net>  Thu, 12 Nov 2026 12:00:00 +0000
 
 epistle (0.12.8) unstable; urgency=medium
 
