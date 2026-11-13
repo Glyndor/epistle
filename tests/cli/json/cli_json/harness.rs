@@ -144,7 +144,7 @@ pub fn chatty_podup(env: &Env) -> std::path::PathBuf {
 	let shim = bin.join("podup");
 	executable::write_executable(
 		&shim,
-		"#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'podup version v5.15.4'; exit 0; fi\n\
+		"#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'podup version v5.19.0'; exit 0; fi\n\
 		 echo \"podup says: $*\"\nexit 0\n",
 	);
 	let compose = env.data_dir().join("compose/compose.yaml");
