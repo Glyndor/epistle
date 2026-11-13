@@ -3,8 +3,9 @@
 //! schema, `db upgrade` before the new major takes over. They live under
 //! `data_dir/backups` as `<name>-<UTC timestamp>.sql.gz`, mode 0600 (a dump
 //! holds password hashes and keys), and only the newest few are kept. A
-//! `stack update` that came back healthy removes the dumps it took, since
-//! nothing is left to roll back to.
+//! `stack update` that came back healthy removes the dumps it took, and a
+//! verified `db upgrade` the one it took, since nothing is left to roll back
+//! to.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
