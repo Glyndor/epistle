@@ -62,7 +62,8 @@ fn switching_provider_changes_in_place_and_clears_stale_credentials() {
 			.replace(
 				"token_env = 'CF_TOKEN' # secret source\n",
 				"access_key = \"AKIAEXAMPLE\"\nsecret_key_env = \"AWS_SECRET\"\nhosted_zone_id = \"Z123\"\n"
-			) + "# secret source\n",
+			)
+			+ "# secret source\n",
 		"the previous token source must not survive a provider switch"
 	);
 }

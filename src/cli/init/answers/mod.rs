@@ -354,10 +354,7 @@ pub fn is_public_hostname(hostname: &str) -> bool {
 		_ => return false,
 	};
 	let tld_lc = tld.to_ascii_lowercase();
-	if RESERVED_TLDS.iter().any(|reserved| *reserved == tld_lc) {
-		return false;
-	}
-	true
+	!RESERVED_TLDS.iter().any(|reserved| *reserved == tld_lc)
 }
 
 #[cfg(test)]

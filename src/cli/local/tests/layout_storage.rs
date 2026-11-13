@@ -72,7 +72,8 @@ fn layout_marks_marker_files_and_permissions() {
 					std::fs::metadata(dir.path().join(name))
 						.unwrap()
 						.permissions()
-						.mode() & 0o777,
+						.mode()
+						& 0o777,
 				)
 			})
 			.collect::<Vec<_>>();
@@ -82,12 +83,14 @@ fn layout_marks_marker_files_and_permissions() {
 		let data_mode = std::fs::metadata(dir.path().join("data"))
 			.unwrap()
 			.permissions()
-			.mode() & 0o777;
+			.mode()
+			& 0o777;
 		assert_eq!(data_mode, 0o700, "data/ must be 0700, got {data_mode:o}");
 		let accounts_mode = std::fs::metadata(dir.path().join("data").join("accounts.toml"))
 			.unwrap()
 			.permissions()
-			.mode() & 0o777;
+			.mode()
+			& 0o777;
 		assert_eq!(accounts_mode, 0o600, "accounts.toml must be 0600");
 	}
 

@@ -130,7 +130,12 @@ fn key_show_names_the_fingerprint_and_the_keys_it_took_over_from() {
 			.starts_with("-----BEGIN PUBLIC KEY-----")
 	);
 	let mut out = Vec::new();
-	crate::cli::evidence::key::run(server.root(), KeyCli::Show { json: false }, now(), &mut out);
+	let _ = crate::cli::evidence::key::run(
+		server.root(),
+		KeyCli::Show { json: false },
+		now(),
+		&mut out,
+	);
 	assert!(text(&out).contains(&format!("evidence key: {new}")));
 }
 

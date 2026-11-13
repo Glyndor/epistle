@@ -136,7 +136,8 @@ pub(crate) async fn verify_tlsrpt(dns: &dyn DnsLookup, raw: &[u8]) -> bool {
 			&& signature.signed_headers.iter().any(|name| name == "from")
 			&& verify_one(dns, &message, &header_index, index, header.value)
 				.await
-				.outcome == DkimOutcome::Pass
+				.outcome
+				== DkimOutcome::Pass
 		{
 			return true;
 		}

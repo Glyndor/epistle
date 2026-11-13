@@ -95,7 +95,7 @@ fn the_rotated_rsa_key_is_shown_with_its_previous_and_pending_ones() {
 	);
 
 	let mut out = Vec::new();
-	render(&view, false, &mut out);
+	let _ = render(&view, false, &mut out);
 	let text = String::from_utf8(out).expect("utf-8");
 	for line in [
 		"rsa selector: rsa7 (from state)",
@@ -105,7 +105,7 @@ fn the_rotated_rsa_key_is_shown_with_its_previous_and_pending_ones() {
 		assert!(text.contains(line), "dkim show prints {line:?}");
 	}
 	let mut out = Vec::new();
-	render(&view, true, &mut out);
+	let _ = render(&view, true, &mut out);
 	let json: serde_json::Value = serde_json::from_slice(&out).expect("json");
 	assert_eq!(json["rsa_selector"], "rsa7");
 	assert_eq!(json["previous"]["rsa_selector"], "rsa1");

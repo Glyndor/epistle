@@ -158,7 +158,8 @@ fn a_password_answers_the_same_under_both_policies() {
 		Policy::unicode()
 			.login_form(&decomposed_long)
 			.chars()
-			.count() > 12,
+			.count()
+			> 12,
 		"the decomposed fixture is longer than the cap before normalisation"
 	);
 	assert_eq!(

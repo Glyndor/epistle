@@ -208,7 +208,8 @@ fn dns_forwarding(service: &Value, config_dir: &Path, data_dir: &Path) -> Option
 			let relabelled = volume.get("bind").is_some();
 			let read_only = volume["read_only"].as_bool() == Some(true);
 			(relabelled
-				&& read_only && volume["target"].as_str() == Some(source)
+				&& read_only
+				&& volume["target"].as_str() == Some(source)
 				&& Path::new(source) != config_dir
 				&& !shared.iter().any(|dir| dir == Path::new(source)))
 			.then(|| PathBuf::from(source))

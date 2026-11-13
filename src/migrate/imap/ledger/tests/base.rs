@@ -252,7 +252,8 @@ fn a_changed_uidvalidity_discards_the_ledger_and_an_absent_one_confirms_nothing(
 				.expect("path")
 		)
 		.expect("metadata")
-		.len() <= HEADER
+		.len()
+			<= HEADER
 	);
 
 	// A source without UIDVALIDITY has no ledger at all, and writes nothing.
@@ -437,7 +438,8 @@ fn the_ledger_is_private_and_refuses_links() {
 		std::fs::metadata(&path)
 			.expect("metadata")
 			.permissions()
-			.mode() & 0o777,
+			.mode()
+			& 0o777,
 		0o600
 	);
 	let outside = tempfile::tempdir().expect("outside");

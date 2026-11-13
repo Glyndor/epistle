@@ -26,7 +26,8 @@ fn replacing_local_file_does_not_chmod_a_swapped_symlink() {
 		std::fs::metadata(&victim)
 			.expect("victim metadata")
 			.permissions()
-			.mode() & 0o777,
+			.mode()
+			& 0o777,
 		0o644,
 		"replacing a local file must leave a swapped symlink target mode unchanged"
 	);

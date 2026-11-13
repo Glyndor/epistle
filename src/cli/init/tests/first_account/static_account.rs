@@ -119,7 +119,8 @@ fn a_clash_is_found_when_the_existing_config_does_not_load() {
 		std::fs::metadata(&config)
 			.expect("meta")
 			.permissions()
-			.mode() & 0o777,
+			.mode()
+			& 0o777,
 		0o664
 	);
 }

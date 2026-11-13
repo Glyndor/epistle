@@ -124,7 +124,7 @@ fn add_writes_a_new_alias_with_optional_fields() {
 	};
 	let _ = config;
 	add_alias(&load(file.path()), &mut document, &args).expect("add must succeed");
-	commit_and_restart(
+	let _ = commit_and_restart(
 		document,
 		&args.address,
 		"added",
@@ -158,7 +158,7 @@ fn add_accepts_a_dotted_alias_address() {
 		visible: false,
 	};
 	add_alias(&load(file.path()), &mut document, &args).expect("add must succeed");
-	commit_and_restart(
+	let _ = commit_and_restart(
 		document,
 		&args.address,
 		"added",
@@ -255,7 +255,7 @@ fn remove_drops_an_existing_alias() {
 	let config = load(file.path());
 	let mut document = crate::cli::config_edit::ConfigDocument::open(file.path()).unwrap();
 	remove_alias(&config, &mut document, "team@example.org").expect("remove must succeed");
-	commit_and_restart(
+	let _ = commit_and_restart(
 		document,
 		"team@example.org",
 		"removed",
@@ -291,7 +291,7 @@ fn member_add_appends_to_the_alias_members_list() {
 		},
 	};
 	member_edit(&config, &mut document, args).expect("add member must succeed");
-	commit_and_restart(
+	let _ = commit_and_restart(
 		document,
 		"team@example.org",
 		"member added",
@@ -325,7 +325,7 @@ fn member_remove_drops_the_member_and_keeps_one() {
 		},
 	};
 	member_edit(&config, &mut document, args).expect("remove member must succeed");
-	commit_and_restart(
+	let _ = commit_and_restart(
 		document,
 		"team@example.org",
 		"member removed",
@@ -368,7 +368,7 @@ fn sender_add_and_remove_round_trip() {
 		},
 	};
 	sender_edit(&config, &mut document, args).expect("add sender must succeed");
-	commit_and_restart(
+	let _ = commit_and_restart(
 		document,
 		"team@example.org",
 		"sender added",
@@ -388,7 +388,7 @@ fn sender_add_and_remove_round_trip() {
 		},
 	};
 	sender_edit(&config, &mut document, args).expect("remove sender must succeed");
-	commit_and_restart(
+	let _ = commit_and_restart(
 		document,
 		"team@example.org",
 		"sender removed",

@@ -86,7 +86,8 @@ fn decoded_text(part: &MessagePart<'_>) -> (String, bool) {
 	let utf8 = matches!(
 		charset.to_ascii_lowercase().as_str(),
 		"utf-8"
-			| "utf8" | "unicode11utf8"
+			| "utf8"
+			| "unicode11utf8"
 			| "unicode20utf8"
 			| "x-unicode20utf8"
 			| "unicode-1-1-utf-8"

@@ -96,7 +96,8 @@ fn admit(
 				&& devices
 					.values()
 					.filter(|g| net48_of(g.client) == net)
-					.count() >= MAX_GRANTS_PER_NET)
+					.count()
+					>= MAX_GRANTS_PER_NET)
 	};
 	if devices.len() >= MAX_DEVICE_GRANTS || over_cap(&devices) {
 		// Expired grants nobody polled for would otherwise count forever.
@@ -121,7 +122,8 @@ fn admit(
 			&& devices
 				.values()
 				.filter(|g| net48_of(g.client) == net)
-				.count() >= MAX_GRANTS_PER_NET;
+				.count()
+				>= MAX_GRANTS_PER_NET;
 		return Err(
 			(if client_full { client_wait } else { 0 }).max(if net_full { net_wait } else { 0 }),
 		);

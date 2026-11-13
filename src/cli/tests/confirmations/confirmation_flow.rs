@@ -355,7 +355,8 @@ fn api_key_revoke_asks_with_the_key_scopes() {
 			crate::api::ApiKeyStore::open(dir.path())
 				.expect("open")
 				.keys()
-				.len() == 1
+				.len()
+				== 1
 		},
 	);
 }
@@ -395,7 +396,8 @@ fn app_password_revoke_asks_naming_label_and_account() {
 			AppPasswordStore::open(dir.path())
 				.expect("open")
 				.for_account(NAME)
-				.len() == 1
+				.len()
+				== 1
 		},
 	);
 }

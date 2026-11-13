@@ -59,14 +59,16 @@ fn sieve_plain_continuation_login_and_cancel_wire() {
 				&format!("{{{}+}}", encoded.len()),
 				Some(encoded.as_bytes().to_vec())
 			)
-			.encode() == b"OK \"Authenticated.\"\r\n",
+			.encode()
+			== b"OK \"Authenticated.\"\r\n",
 		"ManageSieve continuation must accept a literal client response"
 	);
 	let mut cleartext = Session::new(Login(dir.path().into()), false);
 	assert!(
 		cleartext
 			.handle_line("AUTHENTICATE \"PLAIN\"", None)
-			.encode() == b"NO (ENCRYPT-NEEDED) \"TLS is required first.\"\r\n",
+			.encode()
+			== b"NO (ENCRYPT-NEEDED) \"TLS is required first.\"\r\n",
 		"ManageSieve must require TLS before sending a SASL challenge"
 	);
 }

@@ -282,7 +282,8 @@ impl Worker {
 			let on_hold = move |host: &str| {
 				self.holds()
 					.held(&Destination::exchanger(host), now)
-					.is_some() || self.host_closed(&route.entry.envelope, host, now).is_some()
+					.is_some()
+					|| self.host_closed(&route.entry.envelope, host, now).is_some()
 			};
 			let connection = match self
 				.connector

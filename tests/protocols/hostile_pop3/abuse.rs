@@ -44,8 +44,10 @@ async fn unread_5000_capa_replies_cannot_hold_the_single_preauth_slot() {
 					matches!(
 						reply.as_str(),
 						"+OK capability list follows\r\n"
-							| "USER\r\n" | "UIDL\r\n"
-							| "TOP\r\n" | "SASL PLAIN\r\n"
+							| "USER\r\n"
+							| "UIDL\r\n"
+							| "TOP\r\n"
+							| "SASL PLAIN\r\n"
 							| ".\r\n"
 					),
 					"{reply:?}"

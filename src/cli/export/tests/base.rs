@@ -134,7 +134,8 @@ fn maildir_export_is_private_to_the_owner() {
 		std::fs::metadata(path)
 			.expect("metadata")
 			.permissions()
-			.mode() & 0o777
+			.mode()
+			& 0o777
 	};
 	assert_eq!(mode(&target.join("cur")), 0o700);
 	let file = std::fs::read_dir(target.join("cur"))
@@ -177,7 +178,8 @@ fn a_repeated_export_tightens_what_was_already_there() {
 		std::fs::metadata(path)
 			.expect("metadata")
 			.permissions()
-			.mode() & 0o777
+			.mode()
+			& 0o777
 	};
 	assert_eq!(mode(&target.join("cur")), 0o700);
 	assert_eq!(mode(&file), 0o600);

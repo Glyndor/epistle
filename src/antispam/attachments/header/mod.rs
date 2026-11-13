@@ -209,7 +209,8 @@ pub fn parse(block: &[u8]) -> PartHeader {
 		&& types
 			.iter()
 			.filter_map(|ct| ct.attribute("boundary"))
-			.count() > 1
+			.count()
+			> 1
 	{
 		ambiguous = true;
 	}
