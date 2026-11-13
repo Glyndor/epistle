@@ -122,6 +122,23 @@ pub(super) fn warn_externally_referenced(
 	}
 }
 
+/// What `rotate --all` keeps under `rotate/` that a restore may bring back:
+/// the journal of a run and the record of the last one. Everything else
+/// there stays out, by name: the new secrets of an unfinished run are
+/// plaintext and live only until the run hands them over, their staging
+/// copies (`.secrets.json.<id>.tmp`) are the same bytes, and the lock is not
+/// data. A file the command adds later is left out until it is named here.
+const ROTATION_ARCHIVED: &[&str] = &["rotate/journal.json", "rotate/last-run.json"];
+
+/// Whether a file under `data_dir` at `relative` belongs in the archive as far
+/// as the rotation directory is concerned.
+fn archived_from_rotation(relative: &Path) -> bool {
+	!relative.starts_with("rotate")
+		|| ROTATION_ARCHIVED
+			.iter()
+			.any(|name| relative == Path::new(name))
+}
+
 /// Every regular file under `root`, as (archive-relative path, source mode, bytes).
 ///
 /// The mode is read from the file's metadata so the archive round-trips the
@@ -148,6 +165,9 @@ pub(super) fn collect_files(root: &Path) -> std::io::Result<Vec<(String, u32, Ve
 				// The lease file a running command holds is not data: the restore would skip
 				// it anyway, and a copy records nothing but who was running.
 				if relative == Path::new(".store.lock") {
+					continue;
+				}
+				if !archived_from_rotation(relative) {
 					continue;
 				}
 				let name = format!("data/{}", relative.to_string_lossy());
