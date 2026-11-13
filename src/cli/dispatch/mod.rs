@@ -251,6 +251,11 @@ impl Cli {
 				dry_run,
 				json,
 			} => crate::cli::srs::run(&config, action, dry_run, json),
+			Command::Panel {
+				config,
+				action,
+				json,
+			} => crate::cli::panel::run(&config, action, json),
 			Command::Rotate {
 				config,
 				all,

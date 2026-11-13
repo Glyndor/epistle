@@ -61,7 +61,8 @@ fn config_path(command: &Command) -> Option<&Path> {
 		| Command::Dkim { config, .. }
 		| Command::Tls { config, .. }
 		| Command::ApiKey { config, .. }
-		| Command::Db { config, .. } => Some(config),
+		| Command::Db { config, .. }
+		| Command::Panel { config, .. } => Some(config),
 		Command::Archive { action, .. } => match action {
 			archive::Subcommand::List { config, .. }
 			| archive::Subcommand::Restore { config, .. }

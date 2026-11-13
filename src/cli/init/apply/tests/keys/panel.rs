@@ -4,7 +4,9 @@
 use std::fmt::Write as _;
 
 use super::*;
-use crate::cli::init::compose::panel_secrets::{api_token_path, session_secret_path};
+use crate::cli::init::compose::panel_secrets::{
+	admin_id_path, api_token_path, session_secret_path,
+};
 
 const IMAGE: &str = "ghcr.io/glyndor/epistle-panel:0.3.1";
 
@@ -42,6 +44,7 @@ fn secrets_of(answers: &Answers) -> Vec<String> {
 	[
 		api_token_path(&answers.data_dir),
 		session_secret_path(&answers.data_dir),
+		admin_id_path(&answers.data_dir),
 	]
 	.iter()
 	.map(|path| std::fs::read_to_string(path).expect("secret"))

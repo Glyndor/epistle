@@ -65,6 +65,8 @@ fn the_plan_step_names_paths_and_verbs_and_never_a_secret() {
 		key: decision.key.to_string(),
 		session_secret: session_secret_path(&layout.data),
 		session: decision.session.to_string(),
+		admin_id: admin_id_path(&layout.data),
+		admin: decision.admin_id.to_string(),
 	};
 	let line = step.to_string();
 	assert!(line.contains("renew the key"), "{line}");

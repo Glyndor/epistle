@@ -243,6 +243,7 @@ const CASES: &[(&str, &[&str], Expect)] = &[
 	),
 	("domain alias remove", &["alias.example.net", "--yes"], Done),
 	("domain remove", &["example.net", "--yes"], Done),
+	("panel admin-id", &[], Refused(2)),
 	("srs show", &[], Done),
 	("srs split", &[], Done),
 	("srs rotate", &["example.org"], Done),

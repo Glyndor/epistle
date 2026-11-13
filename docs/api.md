@@ -207,6 +207,17 @@ secret when the file was lost, and renews the secret and the expiry when fewer
 than 30 days remain. A key labelled `panel` with any other scopes, domains or
 account is refused, not rewritten: revoke it and run the command again.
 
+The panel's admin area is served at `/app/{id}`, where `{id}` is a UUID v4 of
+this installation. `init` and `stack update` generate it once from the system's
+random source and keep it in `secrets/panel_admin_id` beside the data directory
+with mode `0600`; the panel reads it through `EPISTLE_PANEL_ADMIN_ID_FILE`. A
+later run keeps it, narrows a wider mode to `0600`, and refuses a file that
+holds anything but a lower-case UUID v4 (it never overwrites one: a new id
+moves the admin area). It is not a cryptographic secret, since the session and
+the admin role are the barrier, but it is not public: it appears in no plan, no
+report, no `--json` output and no `epistle status`. `epistle panel admin-id`
+prints it.
+
 ### Expiry is opt-in
 
 No key expires unless it is given an expiry. There is no default lifetime: a

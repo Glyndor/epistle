@@ -62,6 +62,9 @@ mod init;
 #[path = "cli_json/operator/sweep.rs"]
 mod sweep;
 
+#[path = "cli_json/operator/panel.rs"]
+mod panel;
+
 #[path = "cli_json/accounts/domain_state.rs"]
 mod domain_state;
 
