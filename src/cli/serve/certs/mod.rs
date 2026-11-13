@@ -70,6 +70,7 @@ pub(super) fn renewal(
 	acme: &Acme,
 	responder: Arc<dyn ChallengeResponder>,
 	tlsa: TlsaPublisher,
+	dns: Arc<crate::dns::provider::live::LiveProvider>,
 ) -> RenewalJob {
 	RenewalJob {
 		directory_url: acme.directory_url.clone(),
@@ -81,6 +82,7 @@ pub(super) fn renewal(
 		reloadable: None,
 		renew_before_days: u64::from(acme.renew_before_days),
 		tlsa: Some(tlsa),
+		dns: Some(dns),
 	}
 }
 
@@ -130,6 +132,10 @@ pub(super) async fn serve(config: Config) -> std::io::Result<()> {
 			 container needs it for the dns-01 challenge and the TLSA record",
 		)
 	})?;
+	// Built again at every pass of the renewal loop; the hand-off server
+	// writes through the same provider.
+	let live = super::tasks::dns_reconcile::live_provider(&config, provider);
+	let provider: Arc<dyn crate::dns::provider::DnsProvider> = live.clone();
 	let visibility = crate::acme::dns01_authoritative::AuthoritativeTxt::from_system()?;
 	// The journal lets the next start withdraw a record this run could not.
 	// It lives under `<data_dir>/acme`, which `mail` mounts read-only, so
@@ -142,6 +148,7 @@ pub(super) async fn serve(config: Config) -> std::io::Result<()> {
 		acme,
 		responder,
 		(Arc::clone(&provider), config.hostname.clone()),
+		live,
 	);
 	// The mail container keeps the DKIM keys and drives the rotation; the
 	// records it publishes are written here, where the credential is.

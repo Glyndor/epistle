@@ -140,6 +140,20 @@ pub(super) fn build_provider(config: &Config) -> Result<Arc<dyn DnsProvider>, St
 	}
 }
 
+/// `provider`, built again from `config` with [`build_provider`] at the start
+/// of every cycle of the task that writes through it, so a credential that
+/// changed is picked up without a restart.
+pub(in crate::cli::serve) fn live_provider(
+	config: &Config,
+	provider: Arc<dyn DnsProvider>,
+) -> Arc<crate::dns::provider::live::LiveProvider> {
+	let config = config.clone();
+	Arc::new(crate::dns::provider::live::LiveProvider::from_source(
+		provider,
+		Arc::new(move || build_provider(&config)),
+	))
+}
+
 /// Why no provider could be built from the configuration: the entries that
 /// cannot publish, and why.
 ///

@@ -118,7 +118,7 @@ impl CertWatcher {
 /// pair is logged once and the certificate in service stays.
 pub async fn run(
 	mut watcher: CertWatcher,
-	provider: Option<std::sync::Arc<dyn crate::dns::provider::DnsProvider>>,
+	provider: Option<std::sync::Arc<crate::dns::provider::live::LiveProvider>>,
 	hostname: String,
 	data_dir: std::path::PathBuf,
 ) {
@@ -129,8 +129,15 @@ pub async fn run(
 	ticker.tick().await;
 	loop {
 		ticker.tick().await;
+		// The provider is built once per tick, so a credential that changed
+		// is picked up without a restart.
+		if let Some(provider) = &provider {
+			provider.refresh_or_keep("TLSA record of the [tls] certificate");
+		}
 		let target = crate::dns::tlsa::Target {
-			provider: provider.as_deref(),
+			provider: provider
+				.as_deref()
+				.map(|provider| provider as &dyn crate::dns::provider::DnsProvider),
 			hostname: &hostname,
 			data_dir: &data_dir,
 		};

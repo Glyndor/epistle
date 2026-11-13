@@ -90,7 +90,11 @@ pub(super) fn build_tls_for(
 			watcher = watcher.with_end_point(end_point.clone());
 		}
 		if publishes_tlsa(role) && !skips_tlsa(config) {
-			let provider = config.dns.build_for_host(&config.hostname);
+			// Built again at every tick of the watcher.
+			let provider = config
+				.dns
+				.build_for_host(&config.hostname)
+				.map(|provider| super::tasks::dns_reconcile::live_provider(config, provider));
 			tokio::spawn(crate::tls::watch::run(
 				watcher,
 				provider,
@@ -133,15 +137,20 @@ pub(super) fn build_tls_for(
 				// When a DNS provider is configured, refresh the TLSA record on
 				// every certificate rotation. The configuration may skip the
 				// record: then the rotation publishes nothing.
-				let tlsa = if skips_tlsa(config) {
-					None
-				} else {
-					config
-						.dns
-						.build_for_host(&config.hostname)
-						.map(|provider| (provider, config.hostname.clone()))
+				// One provider for the challenge and the TLSA record, built
+				// again at every pass of the renewal loop.
+				let dns = config
+					.dns
+					.build_for_host(&config.hostname)
+					.map(|provider| super::tasks::dns_reconcile::live_provider(config, provider));
+				let tlsa = match &dns {
+					Some(dns) if !skips_tlsa(config) => Some((
+						Arc::clone(dns) as Arc<dyn crate::dns::provider::DnsProvider>,
+						config.hostname.clone(),
+					)),
+					_ => None,
 				};
-				let responder = responder(config, challenge_store, alpn_store)?;
+				let responder = responder(config, challenge_store, alpn_store, dns.clone())?;
 				let (acme, data_dir, reloadable) =
 					(acme.clone(), config.data_dir.clone(), reloadable.clone());
 				acme_renewal = Some(crate::acme::renew::Renewal::spawn(|stop| {
@@ -156,6 +165,7 @@ pub(super) fn build_tls_for(
 							reloadable: Some(reloadable),
 							renew_before_days: u64::from(acme.renew_before_days),
 							tlsa,
+							dns,
 						},
 						stop,
 					)
@@ -210,12 +220,13 @@ fn responder(
 	config: &Config,
 	http01: ChallengeStore,
 	alpn: Option<Arc<AlpnChallengeStore>>,
+	dns: Option<Arc<crate::dns::provider::live::LiveProvider>>,
 ) -> std::io::Result<Arc<dyn ChallengeResponder>> {
 	let challenge = config.acme.as_ref().map(|acme| acme.challenge);
 	match (challenge, alpn) {
 		(Some(AcmeChallenge::TlsAlpn01), Some(store)) => Ok(Arc::new(store)),
 		(Some(AcmeChallenge::Dns01), _) => {
-			let provider = config.dns.build_for_host(&config.hostname).ok_or_else(|| {
+			let provider: Arc<dyn crate::dns::provider::DnsProvider> = dns.ok_or_else(|| {
 				std::io::Error::other(
 					"[acme] challenge = \"dns-01\": the [dns] provider could not be built (check its credentials)",
 				)

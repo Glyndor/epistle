@@ -60,10 +60,22 @@ impl DnsProvider for Journal {
 		Box::pin(async { Ok(()) })
 	}
 
+	/// The zone lookup, which `lookup_fails` breaks. Reading a zone that
+	/// was found goes on working: the lookup is what must not be asked
+	/// again.
+	fn has_zone<'a>(&'a self, zone: &'a str) -> crate::dns::provider::ZoneOp<'a> {
+		let fails = self.lookup_fails.load(Ordering::Relaxed);
+		let held = self.zones.iter().any(|held| held == zone);
+		Box::pin(async move {
+			if fails {
+				Err(ProviderError::Remote("the lookup failed".into()))
+			} else {
+				Ok(held)
+			}
+		})
+	}
+
 	fn list(&self, zone: &str) -> ListOp<'_> {
-		if self.lookup_fails.load(Ordering::Relaxed) {
-			return Box::pin(async { Err(ProviderError::Remote("the lookup failed".into())) });
-		}
 		let held = self.zones.iter().any(|held| held == zone);
 		let zone = zone.to_string();
 		Box::pin(async move {
