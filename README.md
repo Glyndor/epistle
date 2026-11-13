@@ -27,7 +27,7 @@ sudo epistle stack up
 ```
 
 The installer adds the signed Glyndor apt repository and runs
-`sudo apt install epistle`, which brings Podman and podup. `init` writes the
+`sudo apt install epistle`, which brings Podman, podup and `wireguard-tools`. The tools are only installed: nothing is configured until you turn on a mesh between nodes. `init` writes the
 configuration, and `stack up` starts the containers and brings them back after
 a reboot. `apt upgrade` keeps the server current.
 
@@ -77,6 +77,7 @@ network at all and are reached only through Unix sockets.
 | [Evidence of sending](docs/evidence.md) | Mail classes, the signed and timestamped evidence log, bundles a third party can check |
 | [Recovery after a compromise](docs/operations/recovery.md) | What rotating keys fixes and does not, the order to work in, what to tell users |
 | [Migration](docs/operations/migration.md) | Moving from Mox, Stalwart or any IMAP server |
+| [Mesh between nodes](docs/operations/mesh.md) | The optional WireGuard network between nodes of one deployment: design and open decisions |
 | [Container stack](docs/operations/container.md) | What `epistle stack` runs and how it is built |
 | [Security](docs/security.md) and [threat model](docs/threat-model.md) | The controls, what they protect and what they assume |
 | [ASVS mapping](docs/asvs.md) | The controls mapped to OWASP ASVS |

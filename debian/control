@@ -23,7 +23,7 @@ Rules-Requires-Root: no
 
 Package: epistle
 Architecture: any
-Depends: ${shlibs:Depends}, ${misc:Depends}, glyndor-archive-keyring, adduser, podup (>= 5.15.4)
+Depends: ${shlibs:Depends}, ${misc:Depends}, glyndor-archive-keyring, adduser, podup (>= 5.15.4), wireguard-tools
 Recommends: openssl, systemd-timesyncd | chrony
 Description: self-hosted mail server with a management API and CLI
  epistle is a headless mail server: SMTP, IMAP4rev2, JMAP and POP3 with the
@@ -37,3 +37,8 @@ Description: self-hosted mail server with a management API and CLI
  also runs standalone for the management commands, for `epistle config-check`,
  and for key generation, import and export, none of which need a container
  runtime.
+ .
+ wireguard-tools is a dependency so that a deployment with more than one node
+ can join them over a private tunnel. Installing the package creates no
+ interface, key or firewall rule; the tunnel exists only after the operator
+ turns it on.

@@ -23,6 +23,11 @@
 //! is not enough; the floor must be expressed, and the comparison must be
 //! numeric per component, not lexicographic, so `5.10.10` rejects `5.9.0`.
 //!
+//! `wireguard-tools` is in `Depends` for the optional mesh between nodes
+//! (`docs/operations/mesh.md`). The package only carries the tools: the
+//! maintainer scripts must never create an interface, a key or a firewall
+//! rule, because a node that did not ask for a tunnel must not have one.
+//!
 //! These tests exist so that removing either dependency, or lowering the
 //! podup floor, turns something red.
 
@@ -144,5 +149,51 @@ fn version_compare_is_numeric_per_component_not_lexicographic() {
 			actual, *expected,
 			"version_cmp({lhs:?}, {rhs:?}) must be {expected:?}"
 		);
+	}
+}
+
+#[test]
+fn the_binary_package_depends_on_wireguard_tools() {
+	let depends = control_field("Depends");
+	assert!(
+		depends.iter().any(|dep| dep == "wireguard-tools"),
+		"Depends must name wireguard-tools, which the optional mesh needs; got: {depends:?}"
+	);
+	let recommends = control_field("Recommends");
+	assert!(
+		!recommends
+			.iter()
+			.any(|dep| dep.starts_with("wireguard-tools")),
+		"wireguard-tools belongs in Depends, not Recommends; got: {recommends:?}"
+	);
+}
+
+#[test]
+fn installing_the_package_configures_no_tunnel() {
+	let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+	// Each needle is a command that would create part of a tunnel. The
+	// scripts may mention the words in prose, so the needles are whole
+	// command shapes.
+	let needles = [
+		"wg genkey",
+		"wg genpsk",
+		"wg set ",
+		"wg setconf",
+		"wg-quick",
+		"type wireguard",
+		"nft add",
+		"nft -f",
+		"iptables ",
+		"ip6tables ",
+	];
+	for script in ["preinst", "postinst", "postrm"] {
+		let path = root.join(format!("debian/epistle.{script}"));
+		let text = fs::read_to_string(&path).expect("read maintainer script");
+		for needle in needles {
+			assert!(
+				!text.contains(needle),
+				"debian/epistle.{script} contains `{needle}`: installing the package must create no interface, key or firewall rule"
+			);
+		}
 	}
 }
