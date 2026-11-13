@@ -190,7 +190,10 @@ already says; publication stays with `certs` through the hand-off.
 1. This document.
 2. Signing in two halves, in one process: the half that reads the message and
    the half that holds the key, behind a named interface, with output that is
-   identical byte for byte. No socket, no role, no Compose change.
+   identical byte for byte. No socket, no role, no Compose change. Built: the
+   reader is `HeaderBlock` (`src/dkim/sign/block.rs`) and the key half is
+   `KeyHolder` (`src/dkim/sign/holder.rs`), which `Signer` and
+   `PerDomainSigner` implement.
 3. The frame codec, the socket server and client for that interface, and a
    fuzz target for the codec, tested over a socket pair. The stack does not
    run it. Needs the uid measurement of decision 3.
