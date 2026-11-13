@@ -13,7 +13,7 @@ use crate::dns::rrset::canonical_value;
 
 /// One `<Change>` for the record set `name`/`kind` with `ttl` and `values`
 /// verbatim as Route 53 listed them.
-fn change_xml(action: &str, rrset: &TxtRrset, values: &[String]) -> String {
+fn change_xml(action: &str, rrset: &Rrset, values: &[String]) -> String {
 	let value_xml: String = values
 		.iter()
 		.map(|v| {
@@ -71,6 +71,24 @@ impl Route53Provider {
 
 	/// Submit `changes` as one change batch.
 	async fn post_batch(&self, changes: &str) -> Result<(), ProviderError> {
+		let response = self.send_batch(changes).await?;
+		let status = response.status();
+		if status == reqwest::StatusCode::FORBIDDEN || status == reqwest::StatusCode::UNAUTHORIZED {
+			return Err(ProviderError::Auth);
+		}
+		if status.is_success() {
+			Ok(())
+		} else {
+			Err(ProviderError::Remote(format!("HTTP {status}")))
+		}
+	}
+
+	/// Send `changes` as one signed change batch and hand back the answer,
+	/// whatever its status.
+	pub(super) async fn send_batch(
+		&self,
+		changes: &str,
+	) -> Result<reqwest::Response, ProviderError> {
 		let body = format!(
 			"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\
 <ChangeResourceRecordSetsRequest xmlns=\"https://route53.amazonaws.com/doc/{API_VERSION}/\">\
@@ -84,8 +102,7 @@ impl Route53Provider {
 			.unwrap_or_default();
 		let (amz_date, date) = timestamps(now.as_secs());
 		let auth = self.authorization(&path, &body, &amz_date, &date);
-		let response = self
-			.client
+		self.client
 			.post(url.into_url())
 			.header("x-amz-date", &amz_date)
 			.header(reqwest::header::HOST, HOST)
@@ -94,15 +111,6 @@ impl Route53Provider {
 			.body(body)
 			.send()
 			.await
-			.map_err(transport)?;
-		let status = response.status();
-		if status == reqwest::StatusCode::FORBIDDEN || status == reqwest::StatusCode::UNAUTHORIZED {
-			return Err(ProviderError::Auth);
-		}
-		if status.is_success() {
-			Ok(())
-		} else {
-			Err(ProviderError::Remote(format!("HTTP {status}")))
-		}
+			.map_err(transport)
 	}
 }

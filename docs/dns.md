@@ -269,8 +269,8 @@ JSON), asks, and publishes:
   delegation) gets no DMARC rewrite, no names and no wildcard. The NS
   records at the zone apex name the servers of the zone itself and are
   not a delegation. The lockdown reads the whole zone first: a provider
-  that cannot list it (`route53`, `rfc2136`) makes the command stop
-  before it writes anything.
+  that cannot list it (`rfc2136`) makes the command stop before it writes
+  anything.
 
 With `[dns_publish] null_records = true`, automatic mode keeps the null SPF,
 the null MX and the wildcard true with the same decision, as records of the
@@ -350,8 +350,8 @@ change (ACME renewal or a replaced `[tls]` pair):
   into one that is kept for good.
 - **Zone.** The zone the credential sees is not assumed to serve the name. If
   the zone lists an NS delegation at or above `_25._tcp.<hostname>` the write
-  is refused. Providers that cannot list their zone (`route53`, `rfc2136`)
-  cannot be checked and keep writing into the zone you configured.
+  is refused. A provider that cannot list its zone (`rfc2136`) cannot be
+  checked and keeps writing into the zone you configured.
 
 ## Client autodiscovery
 
@@ -472,7 +472,16 @@ values the certificate refresh published count as epistle's own too. So:
   change by another account in the moment between the read and the write is
   detected too (the status code of that refusal is not documented, so epistle
   treats 412 and 409 as a failed precondition and any other refusal as a
-  refusal of the change). deSEC, GoDaddy and Namecheap take no precondition at
+  refusal of the change). Route 53 works the same way: a change batch is
+  applied whole or not at all, and a `DELETE` in it must name the record set
+  with its TTL and every value, so epistle sends one batch that deletes the
+  set as it read it and creates the new one (a `CREATE` alone where it saw no
+  set, which Route 53 refuses when one appeared). An `InvalidChangeBatch` that
+  says the set does not match, was not found or already exists is a failed
+  precondition; any other refusal is a refusal of the change, and a server
+  error leaves the outcome unknown. A set that is an alias or has a routing
+  policy is never written. The zone is the hosted zone of `hosted_zone_id`,
+  and its name is the one that holds the SOA record. deSEC, GoDaddy and Namecheap take no precondition at
   all: their APIs document no ETag, revision or conditional request, and none
   removes one value by itself (deSEC and GoDaddy replace the whole record set
   with the list they are sent, Namecheap rewrites the whole host list of the
@@ -482,18 +491,18 @@ values the certificate refresh published count as epistle's own too. So:
   provider takes no precondition on a write...`, and the zone in `unguarded`
   with `--json`), and after a real `--undo` it says how many records went that way (`N of
   them went without a precondition`; `without_precondition` marks each one in
-  the `--json` report). RFC 2136 and Route 53 cannot list a zone (Route 53's API can, but the
-  provider does not parse its XML yet), so the command does not run against
-  them at all; both remove one value exactly (an UPDATE that names the RDATA,
-  and one batch that deletes the record set as read and creates it again
-  without the value). Nothing here has been run against a real provider account.
+  the `--json` report). RFC 2136 cannot list a zone, so the command does not
+  run against it at all; it removes one value exactly (an UPDATE that names the
+  RDATA), as Route 53 does (one batch that deletes the record set as read and
+  creates it again without the value). Nothing here has been run against a
+  real provider account.
 - A DMARC record is never replaced by a weaker one: `p=`, `sp=`, `np=` and
   the `adkim=s` / `aspf=s` alignment are compared tag by tag.
 - A record that differs only in TTL or description is not rewritten.
 - Names below a delegation (NS records under the zone apex) are left alone,
   as `dns lockdown` does.
-- A provider that cannot list a zone (`route53`, `rfc2136`) stops the command
-  before it writes anything. A zone whose `[[dns]]` entry is `manual` is
+- A provider that cannot list a zone (`rfc2136`) stops the command before it
+  writes anything. A zone whose `[[dns]]` entry is `manual` is
   listed under "By hand".
 
 Every record enters the ledger before it is written, so a write whose answer
@@ -559,10 +568,10 @@ can still report activity, expiration, zones and record reading. Do not add
 token-management permissions merely to make every finding verifiable.
 
 For Bunny, deSEC, DigitalOcean, DNSimple, Google Cloud DNS, GoDaddy,
-Namecheap, OVH, Porkbun and Spaceship, the existing zone listing can verify
-record reading in the configured zone. It does not enumerate every zone
-accessible to the credential. Other findings stay unknown. Route 53,
-RFC 2136 and manual mode currently expose no inspection metadata.
+Namecheap, OVH, Porkbun, Route 53 and Spaceship, the existing zone listing can
+verify record reading in the configured zone. It does not enumerate every zone
+accessible to the credential. Other findings stay unknown. RFC 2136 and manual
+mode currently expose no inspection metadata.
 Read-only operations at Porkbun and Namecheap use POST; Google may exchange
 a service-account assertion for an access token. None writes DNS records.
 Tokens, token identifiers and remote error bodies are never printed. Zone names
@@ -594,7 +603,7 @@ controls must be checked in that provider's documentation. A local
 | Namecheap | Enable only the account access needed for `namecheap.domains.dns.getHosts` and `namecheap.domains.dns.setHosts` through form POST `/xml.response`. Supply the permitted egress IPv4 address. Verify key restrictions in the provider documentation; `setHosts` replaces the zone's host list. |
 | OVH | Create application and consumer credentials for GET `/domain/zone/{zone}/record[/{id}]`, POST on `/record` and `/refresh`, and PUT and DELETE on `/record/{id}`. Verify access-rule syntax for those paths. |
 | Porkbun | Use an API key and secret for POST `/api/json/v3/dns/retrieve/{zone}`, `/dns/create/{zone}`, `/dns/edit/{zone}/{id}`, and `/dns/delete/{zone}/{id}` under the same API base. Verify domain API access and key restrictions. |
-| Route 53 | Use credentials for `ListResourceRecordSets` (GET `/2013-04-01/hostedzone/{id}/rrset`) and `ChangeResourceRecordSets` (POST at that path). Restrict to the hosted zone where IAM permits it; verify the IAM action and resource syntax. |
+| Route 53 | Use credentials for `ListResourceRecordSets` (GET `/2013-04-01/hostedzone/{id}/rrset`, which also finds the name of the zone from its SOA record) and `ChangeResourceRecordSets` (POST at that path). Restrict to the hosted zone where IAM permits it; verify the IAM action and resource syntax. |
 | RFC 2136 | Create a TSIG key on the authoritative nameserver with an update policy limited to the zone and record names/types epistle publishes. There is no HTTP endpoint or token inspection. Verify update-policy syntax in the nameserver documentation. |
 | Spaceship | Use an API key and secret for GET, PUT and DELETE `/api/v1/dns/records/{zone}`. Verify DNS-only permissions and domain restrictions in the API manager documentation. |
 | Manual | No token is needed; records are published by hand. |
@@ -640,8 +649,8 @@ another host: a redirect is an error. The error of a failed call carries no
 URL, and what the provider answered is shown with control characters
 escaped.
 
-`route53` and `rfc2136` cannot list a zone at all, so a command that has to
-read it stops with an error before it writes anything.
+`rfc2136` cannot list a zone at all, so a command that has to read it stops
+with an error before it writes anything.
 
 ### Record descriptions
 
