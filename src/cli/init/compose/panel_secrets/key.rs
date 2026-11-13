@@ -105,8 +105,7 @@ pub(super) fn apply(
 	let secret = crate::cli::util::generate_secret()
 		.ok_or_else(|| ApplyError::Rng("panel API key".to_string()))?;
 	let hash = crate::api::api_keys::sha256_hash(&secret);
-	crate::storage::write_secret(path, secret.as_bytes())
-		.map_err(|error| ApplyError::KeyWrite(path.to_path_buf(), error))?;
+	write_token(path, &secret).map_err(|error| ApplyError::KeyWrite(path.to_path_buf(), error))?;
 	let expires_at = clock.now + KEY_LIFETIME_SECS;
 	let store_path: PathBuf = clock.data_dir.join("api_keys.toml");
 	match action {
@@ -129,4 +128,11 @@ pub(super) fn apply(
 		Held::Present(_) => ReportStep::Updated(path.to_path_buf()),
 	});
 	Ok(())
+}
+
+/// Write `secret` to the key file at `path`: owner-only, replaced in one
+/// rename. Every writer of the file goes through here, so the file has one
+/// mode and one shape whoever wrote it last.
+pub(super) fn write_token(path: &Path, secret: &str) -> std::io::Result<()> {
+	crate::storage::write_secret(path, secret.as_bytes())
 }

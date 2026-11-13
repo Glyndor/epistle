@@ -571,8 +571,9 @@ pub enum Command {
 	/// what stays with the operator, and changes nothing. Without it the
 	/// command gives every API key and app password a new secret, replaces
 	/// the webhook secret and each domain's SRS secret, asks the server to
-	/// rotate the DKIM keys, and restarts the mail service. It asks first;
-	/// a run cut short is continued by the next one.
+	/// rotate the DKIM keys, and restarts the mail service. The web panel's
+	/// key goes to the file the panel reads, and its container is made
+	/// again. It asks first; a run cut short is continued by the next one.
 	Rotate {
 		/// Configuration file; accepted before or after the action. The
 		/// listing does not read it.

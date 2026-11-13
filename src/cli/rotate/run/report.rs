@@ -14,12 +14,23 @@ use crate::cli::rotate::registry::entries;
 /// operator and listed at the end.
 pub(in crate::cli::rotate) const HANDLED: &[(Kind, &str)] = &[
 	(Kind::ApiKey, "api-key"),
+	(Kind::PanelApiKey, "panel-api-key"),
 	(Kind::AppPassword, "app-password"),
 	(Kind::WebhookSecret, "webhook-secret"),
 	(Kind::SrsSecret, "srs-secret"),
 	(Kind::DkimKey, "dkim-signing-key"),
 	(Kind::DkimDomainKey, "dkim-signing-key"),
 ];
+
+/// How this run reached the services it had to, when it was this run that
+/// did: a step finished by the run that was cut short says nothing here.
+#[derive(Debug, Clone, Copy, Default)]
+pub(in crate::cli::rotate) struct Reloads {
+	/// The restart of the mail service.
+	pub mail: Option<Reload>,
+	/// The `panel` container made again.
+	pub panel: Option<Reload>,
+}
 
 fn count(journal: &Journal, kind: Kind) -> usize {
 	journal
@@ -46,9 +57,19 @@ pub(in crate::cli::rotate) fn question(journal: &Journal, resumed: bool) -> Stri
 	}
 	let mut parts = vec![format!(
 		"{} API keys and {} app passwords get a new secret, and the old one stops working at once",
-		count(journal, Kind::ApiKey),
+		count(journal, Kind::ApiKey) + count(journal, Kind::PanelApiKey),
 		count(journal, Kind::AppPassword)
 	)];
+	if count(journal, Kind::PanelApiKey) > 0 {
+		parts.push(
+			if count(journal, Kind::PanelRecreate) > 0 {
+				"the web panel's key file is rewritten and its container is made again"
+			} else {
+				"the web panel's key file is rewritten"
+			}
+			.to_string(),
+		);
+	}
 	if count(journal, Kind::WebhookSecret) > 0 {
 		parts.push("the webhook receiver must be given the new secret".to_string());
 	}
@@ -88,17 +109,19 @@ pub(super) fn label(step: &Step) -> String {
 	}
 }
 
-fn result(step: &Step, reload: Option<Reload>) -> &'static str {
+fn result(step: &Step, reloads: Reloads) -> &'static str {
 	match step.kind {
 		Kind::DkimKey | Kind::DkimDomainKey => "queued",
+		Kind::PanelRecreate => reloads.panel.map_or("done", Reload::name),
 		// A restart made by the run that was cut short is not known here.
-		Kind::Restart => reload.map_or("done", Reload::name),
+		Kind::Restart => reloads.mail.map_or("done", Reload::name),
 		_ => "rotated",
 	}
 }
 
 /// Whether the step's new secret is handed to the operator. An SRS secret
-/// never leaves the server.
+/// never leaves the server, and the web panel's key goes to the file the
+/// panel reads, so nobody has to carry it there.
 fn shown(kind: Kind) -> bool {
 	matches!(kind, Kind::ApiKey | Kind::AppPassword | Kind::WebhookSecret)
 }
@@ -138,7 +161,7 @@ pub(in crate::cli::rotate) fn print(
 	out: &mut impl Write,
 	journal: &Journal,
 	secrets: &Secrets,
-	(resumed, reload): (bool, Option<Reload>),
+	(resumed, reloads): (bool, Reloads),
 	json: bool,
 ) -> io::Result<()> {
 	let handed: Vec<(&Step, &str)> = journal
@@ -153,7 +176,7 @@ pub(in crate::cli::rotate) fn print(
 			.steps
 			.iter()
 			.map(|step| {
-				json!({ "kind": step.kind, "item": step.item, "owner": step.owner, "result": result(step, reload) })
+				json!({ "kind": step.kind, "item": step.item, "owner": step.owner, "result": result(step, reloads) })
 			})
 			.collect();
 		let handed: Vec<Value> = handed
@@ -164,7 +187,7 @@ pub(in crate::cli::rotate) fn print(
 			.collect();
 		let shown = json!({
 			"result": "rotated", "resumed": resumed, "started_at": journal.started_at,
-			"steps": steps, "secrets": handed, "reload": reload.map(Reload::name),
+			"steps": steps, "secrets": handed, "reload": reloads.mail.map(Reload::name),
 			"notes": journal.notes, "then": after, "remaining": left,
 		});
 		serde_json::to_writer(&mut *out, &shown)?;
@@ -178,7 +201,7 @@ pub(in crate::cli::rotate) fn print(
 		)?;
 	}
 	for step in &journal.steps {
-		writeln!(out, "{:<40} {}", label(step), result(step, reload))?;
+		writeln!(out, "{:<40} {}", label(step), result(step, reloads))?;
 	}
 	if journal
 		.steps
@@ -189,6 +212,13 @@ pub(in crate::cli::rotate) fn print(
 			out,
 			"The running server rotates the queued DKIM keys within a minute and publishes their \
 			 records; follow them with `epistle dkim show`."
+		)?;
+	}
+	if count(journal, Kind::PanelApiKey) > 0 {
+		writeln!(
+			out,
+			"The web panel's new key is in its key file, `secrets/panel_api_token` beside the \
+			 data directory, and is not printed."
 		)?;
 	}
 	if !handed.is_empty() {

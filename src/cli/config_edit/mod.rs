@@ -18,7 +18,7 @@ pub(crate) use transaction::{Companion, commit_pair};
 
 pub(crate) use restart::{
 	after_change_reporting, after_change_with, after_credential_change_reporting,
-	after_ports_change_reporting, defer_restarts,
+	after_ports_change_reporting, after_secret_change_reporting, defer_restarts,
 };
 pub use rules::FieldChange;
 

@@ -13,6 +13,11 @@ use crate::evidence::bindings;
 use super::super::journal::{Intent, Kind, Step};
 use super::super::secrets::Secrets;
 
+/// Whether the step rotates a row of the API key store.
+fn is_api_key(kind: Kind) -> bool {
+	matches!(kind, Kind::ApiKey | Kind::PanelApiKey)
+}
+
 /// One step per API key and per app password, in label order.
 pub(super) fn plan(config: &Config) -> Result<Vec<Step>, String> {
 	let keys = ApiKeyStore::open(&config.data_dir)
@@ -40,16 +45,17 @@ pub(super) fn prepare(
 ) -> Result<Intent, String> {
 	let secret =
 		crate::cli::generate_secret().ok_or("the system gave no random bytes for a secret")?;
-	let intent = match step.kind {
-		Kind::ApiKey => Intent::Replace {
+	let intent = if is_api_key(step.kind) {
+		Intent::Replace {
 			old: api_key_hash(config, &step.item)?,
 			new: crate::api::api_keys::sha256_hash(&secret),
-		},
-		_ => Intent::Replace {
+		}
+	} else {
+		Intent::Replace {
 			old: None,
 			new: crate::smtp::auth::hash_password(&secret)
 				.map_err(|error| format!("cannot hash the secret: {error}"))?,
-		},
+		}
 	};
 	secrets.put(step.secret_key(), secret)?;
 	Ok(intent)
@@ -57,9 +63,10 @@ pub(super) fn prepare(
 
 /// Whether the store already holds the hash the step decided on.
 pub(super) fn landed(config: &Config, step: &Step, new: &str) -> Result<bool, String> {
-	let stored = match step.kind {
-		Kind::ApiKey => api_key_hash(config, &step.item)?,
-		_ => app_password_hash(config, step)?,
+	let stored = if is_api_key(step.kind) {
+		api_key_hash(config, &step.item)?
+	} else {
+		app_password_hash(config, step)?
 	};
 	Ok(stored.as_deref() == Some(new))
 }
@@ -72,7 +79,7 @@ pub(super) fn apply(config: &Config, step: &Step, intent: &Intent) -> Result<(),
 		return Err(format!("{}: the journal records no hash", step.item));
 	};
 	match step.kind {
-		Kind::ApiKey => {
+		Kind::ApiKey | Kind::PanelApiKey => {
 			if let Some(old) = old {
 				let (from, to) = (bindings::api_key_key(old), bindings::api_key_key(new));
 				bindings::update(&config.data_dir, |bindings| {
@@ -103,17 +110,14 @@ pub(super) fn apply(config: &Config, step: &Step, intent: &Intent) -> Result<(),
 /// What is left once the hash is in place: the old digest's class binding of
 /// an API key. Doing it twice is harmless.
 pub(super) fn settle(config: &Config, step: &Step, intent: &Intent) -> Result<(), String> {
-	let (
-		Kind::ApiKey,
-		Intent::Replace {
-			old: Some(old),
-			new,
-		},
-	) = (step.kind, intent)
+	let Intent::Replace {
+		old: Some(old),
+		new,
+	} = intent
 	else {
 		return Ok(());
 	};
-	if old == new {
+	if !is_api_key(step.kind) || old == new {
 		return Ok(());
 	}
 	let old = bindings::api_key_key(old);
