@@ -6,13 +6,14 @@
 //! `#[path]` attribute.
 
 use std::io::Read;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
+use std::net::{SocketAddr, TcpStream};
 use std::path::Path;
 use std::process::{Child as ChildProc, Command, Stdio};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
+
+mod ports;
 
 /// Path to the binary `cargo test` builds. `CARGO_BIN_EXE_<name>` is
 /// set by Cargo for integration tests against a binary in the same
@@ -150,16 +151,6 @@ pub fn wait_for_bind(
 		}
 		std::thread::sleep(Duration::from_millis(20));
 	}
-}
-
-/// Probe `127.0.0.1:0` once to learn a free port, then drop the
-/// listener. Returns the port the OS picked.
-pub fn free_loopback_port() -> u16 {
-	let listener = std::net::TcpListener::bind((IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
-		.expect("bind 127.0.0.1:0");
-	let port = listener.local_addr().expect("addr").port();
-	drop(listener);
-	port
 }
 
 /// Strip the line that carries the password from a child stderr
@@ -364,26 +355,8 @@ impl Drop for Child {
 	}
 }
 
-/// Sequential counter shared across retries so each test invocation
-/// picks a distinct starting port base.
-pub fn next_port_base() -> u16 {
-	static COUNTER: AtomicUsize = AtomicUsize::new(0);
-	let seed = COUNTER.fetch_add(1, Ordering::Relaxed);
-	15000 + ((seed as u16) * 1000) % 30000
-}
-
-/// Pick a port base: bind `127.0.0.1:0` once to learn a port the OS
-/// marked free, then round down to a base below `port - 8025` so every
-/// computed listener port stays clear of the probe.
-pub fn pick_port_base() -> u16 {
-	let port = free_loopback_port();
-	let aligned_below = port.saturating_sub(8025 + (port % 1000));
-	if aligned_below >= 1024 {
-		aligned_below
-	} else {
-		next_port_base()
-	}
-}
+#[allow(unused_imports)] // only the `local` test targets pick a port base.
+pub use ports::pick_port_base;
 
 /// True when `message` names the Linux `EADDRINUSE` text in the
 /// child's stderr. Any other failure is a real regression and
