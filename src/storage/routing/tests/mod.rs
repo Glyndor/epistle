@@ -1,6 +1,7 @@
 pub use super::*;
 
 pub(super) mod arc_forward;
+pub(super) mod arc_seal;
 pub(super) mod base;
 pub(super) mod dkim_domain;
 pub(super) mod dkim_per_domain;
@@ -8,6 +9,7 @@ pub(super) mod dkim_rotation;
 pub(super) mod dkim_server_mail;
 pub(super) mod forward;
 pub(super) mod report;
+pub(super) mod sieve_actions;
 pub(super) mod sign_reply;
 pub(super) mod srs_domains;
 pub(super) mod tenant_inherit;

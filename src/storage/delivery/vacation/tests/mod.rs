@@ -4,3 +4,4 @@ pub use super::*;
 pub(super) mod base;
 pub(super) mod guard;
 pub(super) mod jmap;
+pub(super) mod verified;
