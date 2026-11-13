@@ -1178,7 +1178,7 @@ than 5% free. An output that is a link, a hard link, or not owned by
 for the server to read, so those files must be readable by the account where
 they are.
 
-Stack requires podup 5.15.4 or newer. A failed podup command stops the
+Stack requires podup 5.19.0 or newer. A failed podup command stops the
 sequence and its exit code becomes epistle's exit code.
 
 | Command | What it does |

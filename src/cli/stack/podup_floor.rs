@@ -6,10 +6,10 @@ use std::process::{Command, ExitCode};
 use super::exit_code_from_status;
 
 /// The `podup` version this build requires at minimum. Mirrors the
-/// `podup (>= 5.15.4)` dependency in `debian/control`; a test reads
+/// `podup (>= 5.19.0)` dependency in `debian/control`; a test reads
 /// the control file and asserts the two are equal so the floor cannot
 /// drift away from the package relationship.
-pub(super) const PODUP_FLOOR: &str = "5.15.4";
+pub(super) const PODUP_FLOOR: &str = "5.19.0";
 
 /// Spawn `podup --version`, parse the `vMAJOR.MINOR.PATCH` it prints,
 /// and refuse to run any subcommand below [`PODUP_FLOOR`]. The error
