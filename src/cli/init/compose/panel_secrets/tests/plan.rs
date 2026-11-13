@@ -11,7 +11,8 @@ fn deciding_writes_nothing_and_says_what_a_first_run_would_do() {
 		decision,
 		Decision {
 			key: KeyAction::Create,
-			session: SessionAction::Generate
+			session: SessionAction::Generate,
+			admin_id: AdminIdAction::Generate,
 		}
 	);
 	assert!(
@@ -29,14 +30,33 @@ fn deciding_writes_nothing_and_says_what_a_first_run_would_do() {
 fn the_decision_matches_what_the_run_then_does() {
 	let layout = layout();
 	let cases = [
-		(NOW, KeyAction::Create, SessionAction::Generate),
-		(NOW + DAY, KeyAction::Reuse, SessionAction::Reuse),
-		(NOW + 340 * DAY, KeyAction::Renew, SessionAction::Reuse),
+		(
+			NOW,
+			KeyAction::Create,
+			SessionAction::Generate,
+			AdminIdAction::Generate,
+		),
+		(
+			NOW + DAY,
+			KeyAction::Reuse,
+			SessionAction::Reuse,
+			AdminIdAction::Reuse,
+		),
+		(
+			NOW + 340 * DAY,
+			KeyAction::Renew,
+			SessionAction::Reuse,
+			AdminIdAction::Reuse,
+		),
 	];
-	for (now, key, session) in cases {
+	for (now, key, session, admin_id) in cases {
 		assert_eq!(
 			decide(&layout.data, now).expect("decide"),
-			Decision { key, session }
+			Decision {
+				key,
+				session,
+				admin_id
+			}
 		);
 		run(&layout, now);
 	}

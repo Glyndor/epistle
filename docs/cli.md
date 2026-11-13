@@ -41,6 +41,7 @@ forward). Policy refusals exited `2` before they had their own code.
 | `warmup` | `status`, `plan`, `start`, `enable`, `disable`, `pause`, `resume`, `set`, `reset` | |
 | `domain` | `list`, `show`, `add`, `remove`, `set`, `disable`, `enable`, `alias add\|remove` | |
 | `db` | `upgrade`, `status` | |
+| `panel` | `admin-id` | |
 | `evidence` | `verify`, `export`, `check`, `key show\|rotate`, `policy show\|set`, `timestamp show\|enable\|disable`, `clock accept`, `acknowledge`, `abandon` | |
 | `learning` | `status`, `enable`, `disable`, `reset` | |
 | `masked`, `ban`, `queue`, `alias`, `limits`, `relay`, `service`, `dkim`, `tls` | see each section below | |
@@ -878,6 +879,30 @@ Without `--dry-run` the command rotates what this server can rotate by itself, i
 Before it changes anything it checks what each step will check, so a refusal (a DKIM rotation state that cannot be read, a store that cannot be read) stops the command with nothing changed. A DKIM key the server would not rotate yet is not a refusal: the `[dkim]` key when it already rotated today, and a domain's key while the selector its last rotation replaced is still published. The command leaves that key alone and says so in the notes, with the date after which `dkim rotate --domain` works again, and rotates everything else. Then it asks once, naming what stops working: every client of an old API key or app password, and the webhook receiver until it has the new secret. Without a terminal it is refused with exit code 2 unless `--yes` is given. At the end it prints the new API key, app password and webhook secrets once (the SRS secrets never leave the server), what was queued, and what is left to the operator: the notes about what this server could not rotate (a `[dkim]` key no `[dns]` entry publishes, a webhook secret read from the environment, a tenant's `[tenant.webhook] secret`, domains on the shared `srs_secret`, the static `[api] token_hash`), and every registry row the command does not carry out, with how to do it. `--json` prints one object: `steps` (each `kind`, `item`, `owner` and `result`: `rotated`, `queued` or the restart's `reload`), `secrets`, `reload`, `notes`, `then` and `remaining`.
 
 **A run cut short is continued, not repeated.** Each step first writes to a journal, `<data_dir>/rotate/journal.json`, the value it will leave (the hash of the new secret, or the DKIM selector in service), then makes the change, then marks itself done. A new secret is written to `<data_dir>/rotate/secrets.json` before the store or the file that will hold its hash changes. Both files are owner-only, and until the run finishes the new secrets stay in `secrets.json`, so finish an interrupted run soon. Of `<data_dir>/rotate/` a backup archives only `journal.json` and `last-run.json`, never the secrets or their staging copies, and while a rotation runs a backup is refused (and, on a server that has run a rotation before, a rotation is refused while a backup reads the data directory). If the command is killed, or a step fails, the next `epistle rotate --all` asks to continue the same run: a step whose value is already on disk is marked done without being applied again, so no secret is rotated twice and none is left with a hash whose secret nobody was given. The run stops at the first failure and names the step. When every step is done and the secrets are printed, the journal is kept as `last-run.json` and the secrets file is deleted, so the next `rotate --all` is a new rotation. A journal this version cannot read stops the command; it is not replaced. Two runs at once are refused.
+
+## Web panel (`epistle panel`)
+
+```sh
+epistle panel admin-id [--json]
+```
+
+Shows the admin id of the web panel: the `{id}` of its admin area, served at
+`/app/{id}`. `init` and `stack update` generate it once, when the stack runs the
+panel, and keep it from then on (see "The panel's key" in `docs/api.md`). The id
+is alone on stdout; the path `/app/<id>`, to append to the address the panel is
+served at, and a reminder go to stderr. With `--json` stdout is one object with
+`admin_id` and `path`, and stderr stays empty.
+
+The id is not a cryptographic secret, since the session and the admin role are
+the barrier, but it is not public either: this is the one command that prints
+it. It is absent from every plan, report and `--json` output of the other
+commands, from `epistle status` and from the logs. Do not post it, link it from
+a public page or paste it into a ticket.
+
+With no id yet (the panel is not installed or the stack was not updated since),
+the command exits 2 and says how to get one. A file at the id's place that holds
+anything but a lower-case UUID v4 is an error that names the file and not its
+content.
 
 ## Domains (`epistle domain`)
 

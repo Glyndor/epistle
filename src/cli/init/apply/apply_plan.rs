@@ -186,6 +186,8 @@ pub fn plan(answers: &Answers) -> Result<Plan, ApplyError> {
 				&answers.data_dir,
 			),
 			session: decision.session.to_string(),
+			admin_id: crate::cli::init::compose::panel_secrets::admin_id_path(&answers.data_dir),
+			admin: decision.admin_id.to_string(),
 		});
 	}
 	steps.push(PlanStep::Config {

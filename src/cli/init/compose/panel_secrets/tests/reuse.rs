@@ -14,7 +14,11 @@ fn a_second_run_reuses_both_files_and_leaves_them_byte_for_byte() {
 	let report = run(&layout, NOW + DAY);
 	assert_eq!(
 		kinds(&report),
-		[("reused", token.clone()), ("reused", session.clone())]
+		[
+			("reused", token.clone()),
+			("reused", session.clone()),
+			("reused", admin_id_path(&layout.data))
+		]
 	);
 	assert_eq!((text(&token), text(&session)), (before.0, before.1));
 	let after = row(&layout);

@@ -39,6 +39,9 @@ impl Command {
 			| Command::Dns { .. }
 			| Command::Storage { .. }
 			| Command::Srs { .. }
+			// Reads the panel's files in the secrets directory, which only the
+			// service account can open.
+			| Command::Panel { .. }
 			| Command::Webhook { .. }
 			| Command::Alert { .. }
 			| Command::Antispam { .. }

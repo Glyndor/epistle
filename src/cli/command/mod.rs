@@ -553,6 +553,18 @@ pub enum Command {
 		#[command(subcommand)]
 		action: crate::cli::srs::SrsCli,
 	},
+	/// Show what the operator needs to know about the web panel.
+	Panel {
+		/// Configuration file; accepted before or after the panel action.
+		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
+		config: PathBuf,
+		/// Print the result as one JSON object on stdout.
+		#[arg(long, global = true)]
+		json: bool,
+		/// Panel action.
+		#[command(subcommand)]
+		action: crate::cli::panel::PanelCli,
+	},
 	/// Rotate every secret this server can rotate, after a compromise.
 	///
 	/// `--dry-run` lists every secret and credential, what epistle does and
