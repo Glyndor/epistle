@@ -4,7 +4,7 @@ use std::io::{self, Write};
 
 use serde_json::{Value, json};
 
-use super::journal::{Journal, Kind, State, Step};
+use super::journal::{Intent, Journal, Kind, Scope, State, Step};
 use super::secrets::Secrets;
 use crate::cli::json_out::Reload;
 use crate::cli::rotate::plan::{describe, handling_json};
@@ -19,7 +19,30 @@ pub(in crate::cli::rotate) const HANDLED: &[(Kind, &str)] = &[
 	(Kind::SrsSecret, "srs-secret"),
 	(Kind::DkimKey, "dkim-signing-key"),
 	(Kind::DkimDomainKey, "dkim-signing-key"),
+	(Kind::AccountReset, "account-password"),
+	(Kind::AccountReset, "account-totp-secret"),
+	(Kind::AccountReset, "totp-seed-in-clear"),
 ];
+
+/// What a reset account needs before it signs in again.
+const UNLOCK: &str = "give each reset account a new password (`epistle account password NAME`); \
+	 one that had a second factor also needs a new one, enrolled from the panel or the API \
+	 (`POST /api/v1/accounts/NAME/totp`), or removed on purpose (`epistle account 2fa disable \
+	 NAME`). Until then it signs in nowhere";
+
+/// The accounts the run decided to reset.
+fn reset_accounts(journal: &Journal) -> Vec<&str> {
+	journal
+		.steps
+		.iter()
+		.filter_map(|step| match &step.intent {
+			Some(Intent::Reset { targets }) => Some(targets),
+			_ => None,
+		})
+		.flatten()
+		.map(|target| target.name.as_str())
+		.collect()
+}
 
 fn count(journal: &Journal, kind: Kind) -> usize {
 	journal
@@ -44,11 +67,22 @@ pub(in crate::cli::rotate) fn question(journal: &Journal, resumed: bool) -> Stri
 			journal.steps.len()
 		);
 	}
+	let reset = "the password and second factor of every account are reset, and no account \
+	             signs in until an administrator gives it a new password";
+	if journal.scope == Scope::Accounts {
+		return format!(
+			"Reset the credentials of every account on this server? {reset}; the mail service is \
+			 restarted. [y/N] "
+		);
+	}
 	let mut parts = vec![format!(
 		"{} API keys and {} app passwords get a new secret, and the old one stops working at once",
 		count(journal, Kind::ApiKey),
 		count(journal, Kind::AppPassword)
 	)];
+	if count(journal, Kind::AccountReset) > 0 {
+		parts.push(reset.to_string());
+	}
 	if count(journal, Kind::WebhookSecret) > 0 {
 		parts.push("the webhook receiver must be given the new secret".to_string());
 	}
@@ -91,6 +125,7 @@ pub(super) fn label(step: &Step) -> String {
 fn result(step: &Step, reload: Option<Reload>) -> &'static str {
 	match step.kind {
 		Kind::DkimKey | Kind::DkimDomainKey => "queued",
+		Kind::AccountReset => "reset",
 		// A restart made by the run that was cut short is not known here.
 		Kind::Restart => reload.map_or("done", Reload::name),
 		_ => "rotated",
@@ -113,7 +148,7 @@ fn remaining(journal: &Journal) -> (Vec<Value>, Vec<String>) {
 			.any(|(kind, row)| *row == id && journal.steps.iter().any(|step| step.kind == *kind))
 	};
 	let left = entries()
-		.filter(|entry| !handled(entry.id))
+		.filter(|entry| journal.scope == Scope::All && !handled(entry.id))
 		.map(|entry| {
 			json!({
 				"id": entry.id, "name": entry.name,
@@ -147,7 +182,11 @@ pub(in crate::cli::rotate) fn print(
 		.filter(|step| shown(step.kind))
 		.filter_map(|step| secrets.get(&step.secret_key()).map(|secret| (step, secret)))
 		.collect();
-	let (left, after) = remaining(journal);
+	let (left, mut after) = remaining(journal);
+	let accounts = reset_accounts(journal);
+	if !accounts.is_empty() {
+		after.push(UNLOCK.to_string());
+	}
 	if json {
 		let steps: Vec<Value> = journal
 			.steps
@@ -165,6 +204,7 @@ pub(in crate::cli::rotate) fn print(
 		let shown = json!({
 			"result": "rotated", "resumed": resumed, "started_at": journal.started_at,
 			"steps": steps, "secrets": handed, "reload": reload.map(Reload::name),
+			"accounts_reset": accounts,
 			"notes": journal.notes, "then": after, "remaining": left,
 		});
 		serde_json::to_writer(&mut *out, &shown)?;
@@ -190,6 +230,9 @@ pub(in crate::cli::rotate) fn print(
 			"The running server rotates the queued DKIM keys within a minute and publishes their \
 			 records; follow them with `epistle dkim show`."
 		)?;
+	}
+	if !accounts.is_empty() {
+		writeln!(out, "\nAccounts reset: {}", accounts.join(", "))?;
 	}
 	if !handed.is_empty() {
 		writeln!(out, "\nNew secrets, shown once:")?;

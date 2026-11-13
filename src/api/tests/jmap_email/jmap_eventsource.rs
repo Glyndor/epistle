@@ -43,6 +43,7 @@ fn es_state(dir: &std::path::Path) -> crate::api::ApiState {
 	state
 		.store()
 		.add(crate::directory_store::DynamicAccount {
+			reset: None,
 			send: None,
 			receive: None,
 			display_name: None,

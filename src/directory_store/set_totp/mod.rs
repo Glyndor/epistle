@@ -92,6 +92,7 @@ impl super::AccountStore {
 				.find(|account| account.name == name)
 				.ok_or_else(|| super::StoreError::NotFound(name.to_string()))?;
 			target.totp_secret = stored;
+			super::credential_reset::second_factor_replaced(target);
 			Ok(())
 		})?;
 		Ok(())

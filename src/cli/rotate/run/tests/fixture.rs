@@ -1,6 +1,7 @@
 //! A server with something of every kind the run rotates without a DKIM
-//! setup: two API keys, an app password, a webhook secret and a domain's SRS
-//! secret. Every secret is minted, so none is a literal in the source.
+//! setup: two API keys, an app password, a webhook secret, a domain's SRS
+//! secret and an account with a password and a second factor. Every secret
+//! is minted, so none is a literal in the source.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -10,13 +11,16 @@ use crate::cli::stack::StackAction;
 use crate::config::Config;
 use crate::directory_store::app_passwords::{AppPassword, AppPasswordStore};
 
-use super::super::{Options, execute};
+use super::super::{Options, Scope, execute};
 
 /// The API key labels the fixture creates.
 pub(super) const KEYS: [&str; 2] = ["ci", "panel"];
 
 /// The account and label of its app password.
 pub(super) const APP: (&str, &str) = ("alice@example.org", "phone");
+
+/// The dynamic account the run resets.
+pub(super) const ACCOUNT: &str = "bob";
 
 /// A server on disk and the secrets it started with.
 pub(super) struct Server {
@@ -32,6 +36,8 @@ pub(super) struct Server {
 	/// The webhook secret and the SRS secret the file started with.
 	pub webhook: String,
 	pub srs: String,
+	/// The password hash of [`ACCOUNT`] before the run.
+	pub account_hash: String,
 }
 
 fn minted() -> String {
@@ -77,7 +83,9 @@ pub(super) fn server() -> Server {
 			},
 		)
 		.unwrap();
+	let account_hash = add_account(&data_dir, ACCOUNT);
 	Server {
+		account_hash,
 		config: file.path().to_path_buf(),
 		_dir: dir,
 		_file: file,
@@ -87,6 +95,33 @@ pub(super) fn server() -> Server {
 		webhook,
 		srs,
 	}
+}
+
+/// The account store of the server, as a fresh process opens it.
+pub(super) fn accounts(data_dir: &Path) -> crate::directory_store::AccountStore {
+	crate::directory_store::AccountStore::open(
+		data_dir,
+		vec!["example.org".to_string()],
+		std::collections::HashMap::new(),
+		Vec::new(),
+	)
+	.unwrap()
+}
+
+/// Add a dynamic account with a minted password and a second factor, and
+/// return its password hash.
+pub(super) fn add_account(data_dir: &Path, name: &str) -> String {
+	let hash = crate::smtp::auth::hash_password(&minted()).unwrap();
+	accounts(data_dir)
+		.add(crate::directory_store::DynamicAccount {
+			name: name.to_string(),
+			addresses: vec![format!("{name}@example.org")],
+			password_hash: hash.clone(),
+			totp_secret: Some(crate::totp::encode_base32(&[3u8; 20])),
+			..crate::directory_store::DynamicAccount::default()
+		})
+		.unwrap();
+	hash
 }
 
 /// What one run printed and how it ended.
@@ -100,12 +135,18 @@ pub(super) struct Ran {
 
 /// Run the rotation of `config` as the operator would with `--yes --json`.
 pub(super) fn run(config: &Path, now: u64) -> Ran {
+	run_scoped(config, now, Scope::All)
+}
+
+/// [`run`] for one scope.
+pub(super) fn run_scoped(config: &Path, now: u64, scope: Scope) -> Ran {
 	let (mut out, mut status) = (Vec::new(), Vec::new());
 	let mut restarts = 0;
 	let options = Options {
 		yes: true,
 		json: true,
 		now,
+		scope,
 	};
 	let code = execute(
 		config,

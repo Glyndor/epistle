@@ -1,7 +1,8 @@
 //! A key bound to one account stops reaching anything over HTTP once that
 //! account is disabled or removed: every JMAP endpoint and `/api/v1/send`
 //! answer it with the same 403 `forbidden` the WebSocket gives a frame sent
-//! after the account went away. Re-enabling the account restores it.
+//! after the account went away. Re-enabling the account restores it. A reset
+//! of its credentials refuses the key the same way until it has a new password.
 
 use super::base::{request, request_with_body, test_state};
 use super::*;
@@ -44,6 +45,7 @@ fn state_with_carol(dir: &std::path::Path) -> ApiState {
 			forward: Vec::new(),
 			catch_all: Vec::new(),
 			save_sent: None,
+			reset: None,
 		})
 		.expect("add carol");
 	state
@@ -148,4 +150,31 @@ async fn removing_the_account_refuses_its_key_on_every_http_route() {
 
 	state.store().remove("carol").expect("remove carol");
 	assert_all_refused(&reach(&app, &blob).await, "removed");
+}
+
+#[tokio::test]
+async fn resetting_the_account_refuses_its_key_until_it_has_a_new_password() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let state = state_with_carol(dir.path());
+	let app = router(state.clone());
+	let blob = upload_blob(&app).await;
+	assert_all_served(&reach(&app, &blob).await, "before the reset");
+
+	let store = state.store();
+	let digest = crate::directory_store::credential_reset::hash_digest(
+		&store.dynamic_account("carol").unwrap().password_hash,
+	);
+	let targets = [crate::directory_store::ResetTarget {
+		name: "carol".to_string(),
+		digest,
+	}];
+	store
+		.reset_credentials(&targets, "$argon2id$placeholder")
+		.expect("reset carol");
+	assert_all_refused(&reach(&app, &blob).await, "reset");
+
+	store
+		.set_password_hash("carol", "$argon2id$new".to_string(), None)
+		.expect("new password");
+	assert_all_served(&reach(&app, &blob).await, "given a new password");
 }

@@ -3,7 +3,7 @@
 //!
 //! A new run plans its steps and checks what each one will check, so a
 //! refusal comes before anything changes; then it asks once. Each step
-//! records the value it will leave in the [journal](journal), writes it,
+//! records the value it will leave in the [journal], writes it,
 //! and marks itself done. The next run after a cut continues from the
 //! journal and applies a step only when its value is not on disk yet, so no
 //! secret is rotated twice and none is left with a hash nobody holds the
@@ -13,7 +13,7 @@
 pub(super) mod journal;
 mod report;
 pub(super) mod secrets;
-mod steps;
+pub(super) mod steps;
 
 #[cfg(test)]
 mod tests;
@@ -28,6 +28,7 @@ use crate::cli::stack::StackAction;
 use crate::config::Config;
 use crate::storage::lock::FileLock;
 
+pub(super) use journal::Scope;
 use journal::{Intent, Journal, Kind, State};
 use secrets::Secrets;
 use steps::Context;
@@ -40,6 +41,8 @@ pub(super) struct Options {
 	pub json: bool,
 	/// The time of the run, epoch seconds.
 	pub now: u64,
+	/// What the run goes through.
+	pub scope: Scope,
 }
 
 /// Run or continue the rotation of the configuration at `path`.
@@ -85,24 +88,34 @@ fn drive(
 		Config::load(path).map_err(|error| format!("cannot load {}: {error}", path.display()))?;
 	let dir = journal::dir(&config.data_dir);
 	let _lock = lock(&config.data_dir)?.ok_or(
-		"another `epistle rotate --all` or an `epistle backup` is running on this server"
-			.to_string(),
+		"another `epistle rotate` or an `epistle backup` is running on this server".to_string(),
 	)?;
 	let context = Context {
 		path,
 		config: &config,
 		now: options.now,
+		scope: options.scope,
 	};
+	let command = options.scope.command();
 	let (mut journal, resumed) = match Journal::load(&dir)? {
+		Some(journal) if journal.scope != options.scope => {
+			return Err(Stop::Refused(format!(
+				"a `{}` run was cut short on this server; finish it with that command first",
+				journal.scope.command()
+			)));
+		}
 		Some(journal) => (journal, true),
 		None => {
 			let (steps, notes) = steps::plan(&context)
-				.map_err(|reason| format!("rotate --all refused, nothing was changed: {reason}"))?;
-			(Journal::new(options.now, steps, notes), false)
+				.map_err(|reason| format!("`{command}` refused, nothing was changed: {reason}"))?;
+			(
+				Journal::new(options.scope, options.now, steps, notes),
+				false,
+			)
 		}
 	};
 	crate::cli::prompt::confirm_destructive(
-		"rotate --all",
+		command.trim_start_matches("epistle "),
 		&report::question(&journal, resumed),
 		options.yes,
 	)
@@ -122,8 +135,8 @@ fn drive(
 		};
 		if let Err(error) = run.advance(&mut journal, index) {
 			return Err(Stop::Refused(format!(
-				"rotate --all stopped at {}: {error}. The steps before it are done and stay done; \
-				 run `epistle rotate --all` again to continue from this one",
+				"`{command}` stopped at {}: {error}. The steps before it are done and stay done; \
+				 run `{command}` again to continue from this one",
 				report::label(&journal.steps[index])
 			)));
 		}

@@ -75,6 +75,6 @@ fn a_run_killed_at_any_checkpoint_is_finished_by_the_next_without_rotating_twice
 		let result = rotated_once(&server, &ran.out);
 		assert_eq!(result["resumed"], true, "checkpoint {at}");
 	}
-	// Six steps, three checkpoints each.
-	assert_eq!(killed, 18, "the run did not stop where it should have");
+	// Seven steps, three checkpoints each.
+	assert_eq!(killed, 21, "the run did not stop where it should have");
 }

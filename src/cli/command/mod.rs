@@ -558,17 +558,22 @@ pub enum Command {
 	/// `--dry-run` lists every secret and credential, what epistle does and
 	/// what stays with the operator, and changes nothing. Without it the
 	/// command gives every API key and app password a new secret, replaces
-	/// the webhook secret and each domain's SRS secret, asks the server to
-	/// rotate the DKIM keys, and restarts the mail service. It asks first;
-	/// a run cut short is continued by the next one.
+	/// the webhook secret and each domain's SRS secret, resets the password
+	/// and second factor of every account, asks the server to rotate the
+	/// DKIM keys, and restarts the mail service. It asks first; a run cut
+	/// short is continued by the next one.
 	Rotate {
 		/// Configuration file; accepted before or after the action. The
 		/// listing does not read it.
 		#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
 		config: PathBuf,
 		/// Go through every secret and credential.
-		#[arg(long)]
+		#[arg(long, conflicts_with = "accounts_only")]
 		all: bool,
+		/// Only reset the password and second factor of every account; with
+		/// `--dry-run`, list the accounts it would reset.
+		#[arg(long)]
+		accounts_only: bool,
 		/// Print the plan without changing anything.
 		#[arg(long)]
 		dry_run: bool,
