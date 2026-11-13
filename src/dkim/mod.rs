@@ -24,7 +24,7 @@ pub use rotate::{
 	publication_waits,
 };
 pub use rsa_keygen::{KeygenError, generate_rsa_key};
-pub use sign::{Signer, SignerError, generate_key};
+pub use sign::{HeaderBlock, KeyHolder, Malformed, Refusal, Signer, SignerError, generate_key};
 pub(crate) use sign::{load_ed25519_key, rsa_record_value};
 pub use verify::{DkimOutcome, DkimResult, verify_message};
 

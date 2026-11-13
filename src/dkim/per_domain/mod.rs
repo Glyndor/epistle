@@ -7,6 +7,7 @@
 //! replaces that domain's override.
 
 use super::rotate::ReloadableSigner;
+use super::sign::{HeaderBlock, KeyHolder, Refusal};
 
 /// One per-domain override as the signer keeps it: the lowercase domain
 /// name and the signer of that domain, which its rotation replaces.
@@ -41,16 +42,23 @@ impl PerDomainSigner {
 	/// Sign `raw` for `domain`, picking the override when the operator
 	/// configured one and falling back to the default signer otherwise.
 	/// `domain` is matched case-insensitively, the same way the
-	/// validator and the routing layer compare it.
+	/// validator and the routing layer compare it. The message is read
+	/// here and only its header block reaches the key ([`KeyHolder`]).
 	pub fn sign(&self, domain: &str, raw: &[u8]) -> Option<String> {
+		super::sign::holder::sign_message(self, domain, raw)
+	}
+}
+
+impl KeyHolder for PerDomainSigner {
+	fn sign_block(&self, domain: &str, block: &HeaderBlock) -> Result<String, Refusal> {
 		if let Some(override_signer) = self
 			.overrides
 			.iter()
 			.find(|d| d.domain.eq_ignore_ascii_case(domain))
 		{
-			return override_signer.signer.current().sign(domain, raw);
+			return override_signer.signer.current().sign_block(domain, block);
 		}
-		self.default_signer.current().sign(domain, raw)
+		self.default_signer.current().sign_block(domain, block)
 	}
 }
 
