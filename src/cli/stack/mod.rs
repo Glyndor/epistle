@@ -28,7 +28,7 @@ pub use action::StackCli;
 pub(super) mod certs;
 pub(super) mod dumps;
 pub(super) mod health;
-mod images;
+pub(super) mod images;
 pub(super) mod port_warnings;
 pub(super) mod resources;
 mod retry;
