@@ -60,6 +60,19 @@ fn a_run_rotates_every_secret_once_and_hands_the_new_ones_over() {
 		assert!(left.contains(&id), "{id} is not listed as left to do");
 	}
 	assert!(!left.contains(&"api-key"));
+	// What follows a row it carried out, and nothing for a key it had none of.
+	let then: Vec<&str> = result["then"]
+		.as_array()
+		.unwrap()
+		.iter()
+		.map(|line| line.as_str().unwrap())
+		.collect();
+	assert!(then.iter().any(|line| line.starts_with("api-key: ")));
+	assert!(
+		!then
+			.iter()
+			.any(|line| line.starts_with("dkim-signing-key: "))
+	);
 }
 
 #[test]

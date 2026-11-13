@@ -103,10 +103,15 @@ fn shown(kind: Kind) -> bool {
 	matches!(kind, Kind::ApiKey | Kind::AppPassword | Kind::WebhookSecret)
 }
 
-/// The registry rows this run did not carry out, and what the operator
-/// still does after the rows it did.
-fn remaining() -> (Vec<Value>, Vec<String>) {
+/// The registry rows this run does not carry out, and what the operator
+/// still does after the rows it did carry out on this server.
+fn remaining(journal: &Journal) -> (Vec<Value>, Vec<String>) {
 	let handled = |id: &str| HANDLED.iter().any(|(_, row)| *row == id);
+	let ran = |id: &str| {
+		HANDLED
+			.iter()
+			.any(|(kind, row)| *row == id && journal.steps.iter().any(|step| step.kind == *kind))
+	};
 	let left = entries()
 		.filter(|entry| !handled(entry.id))
 		.map(|entry| {
@@ -117,7 +122,7 @@ fn remaining() -> (Vec<Value>, Vec<String>) {
 		})
 		.collect();
 	let after = entries()
-		.filter(|entry| handled(entry.id))
+		.filter(|entry| ran(entry.id))
 		.flat_map(|entry| {
 			entry
 				.operator_after
@@ -142,7 +147,7 @@ pub(in crate::cli::rotate) fn print(
 		.filter(|step| shown(step.kind))
 		.filter_map(|step| secrets.get(&step.secret_key()).map(|secret| (step, secret)))
 		.collect();
-	let (left, after) = remaining();
+	let (left, after) = remaining(journal);
 	if json {
 		let steps: Vec<Value> = journal
 			.steps
