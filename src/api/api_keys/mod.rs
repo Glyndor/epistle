@@ -395,7 +395,14 @@ impl ApiKeyStore {
 	/// so there is no moment with both or neither accepted. `NotFound` if the
 	/// label is absent.
 	pub fn rotate(&mut self, label: &str, hash: String) -> std::io::Result<()> {
-		self.rotate_inner(label, hash)
+		self.rotate_inner(label, hash, None)
+	}
+
+	/// [`Self::rotate`] that also sets the expiry to `expires_at`, in the same
+	/// atomic rewrite, so a renewed key never has a moment with the new secret
+	/// and the old deadline. Scopes, domains and CIDR stay as they are.
+	pub fn renew(&mut self, label: &str, hash: String, expires_at: u64) -> std::io::Result<()> {
+		self.rotate_inner(label, hash, Some(expires_at))
 	}
 
 	/// The stored digest of the key labelled `label`, which names it for the
@@ -407,7 +414,12 @@ impl ApiKeyStore {
 			.map(|key| key.hash.clone())
 	}
 
-	fn rotate_inner(&mut self, label: &str, hash: String) -> std::io::Result<()> {
+	fn rotate_inner(
+		&mut self,
+		label: &str,
+		hash: String,
+		expires_at: Option<u64>,
+	) -> std::io::Result<()> {
 		let label_owned = label.to_string();
 		let new_state = crate::storage::locked::edit(
 			&self.path,
@@ -432,6 +444,9 @@ impl ApiKeyStore {
 						)
 					})?;
 				key.hash = hash.clone();
+				if let Some(expires_at) = expires_at {
+					key.expires_at = Some(expires_at);
+				}
 				Ok(())
 			},
 		)?;

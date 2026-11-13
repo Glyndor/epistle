@@ -174,6 +174,20 @@ pub fn plan(answers: &Answers) -> Result<Plan, ApplyError> {
 			.is_ok_and(|metadata| metadata.file_type().is_file() && metadata.len() > 0);
 		steps.push(PlanStep::DbAdminPassword { path, reused });
 	}
+	if answers.services.panel_image.is_some() {
+		let decision = crate::cli::init::compose::panel_secrets::decide(
+			&answers.data_dir,
+			crate::cli::init::compose::panel_secrets::now(),
+		)?;
+		steps.push(PlanStep::PanelSecrets {
+			api_token: crate::cli::init::compose::panel_secrets::api_token_path(&answers.data_dir),
+			key: decision.key.to_string(),
+			session_secret: crate::cli::init::compose::panel_secrets::session_secret_path(
+				&answers.data_dir,
+			),
+			session: decision.session.to_string(),
+		});
+	}
 	steps.push(PlanStep::Config {
 		path: answers.config_path.clone(),
 		identical,

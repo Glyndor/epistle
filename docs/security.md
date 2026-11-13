@@ -774,6 +774,8 @@ clients when replacing a credential, and retain decryption keys for old backups.
 | Secret and location | Stored form | Replacement |
 | --- | --- | --- |
 | API keys: `api_keys.toml` | `sha256:<hex>` digest; plaintext shown once | `epistle api-key rotate LABEL`; distribute the new key |
+| Panel API key: the `panel` row of `api_keys.toml`, and its secret in `secrets/panel_api_token` beside data_dir (`0600`) | The row holds the digest; the file holds the plaintext the panel container reads | `epistle stack update` replaces it when fewer than 30 days remain, or when the file is lost; the panel reads the file when it starts |
+| Panel session secret: `secrets/panel_session_secret` beside data_dir (`0600`) | 48 random bytes as hex, plaintext | Delete the file and run `epistle stack update`; every panel user is signed out |
 | Static API token: `[api] token_hash` in `mail.toml` | `sha256:<hex>`; legacy argon2id PHC also accepted | Generate a new token, run `epistle token-hash`, replace the hash and restart; update clients |
 | Dynamic account password: `accounts.toml` | Salted argon2id PHC with parameters | `epistle account password N` |
 | Static account password: `[[accounts]] password_hash` in `mail.toml`; SQL directory `password_hash` | Argon2id PHC | Replace the configured argon2id PHC hash and restart; update SQL at its source (the account CLI manages dynamic accounts only) |

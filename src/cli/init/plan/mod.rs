@@ -156,6 +156,20 @@ pub enum PlanStep {
 		/// `true` when a non-empty file is already there.
 		reused: bool,
 	},
+	/// The panel's API key and session secret. Listed only when the stack
+	/// runs the panel. Names the files and what will happen to them, never a
+	/// value.
+	PanelSecrets {
+		/// Where the API key's secret is kept.
+		api_token: PathBuf,
+		/// What happens to the key: `create`, `reuse`, `renew` or
+		/// `replace the lost secret of`.
+		key: String,
+		/// Where the session secret is kept.
+		session_secret: PathBuf,
+		/// What happens to the session secret: `generate` or `reuse`.
+		session: String,
+	},
 	/// The compose file `podup` brings up. Always listed; the
 	/// compose file is written whether or not the database
 	/// service is on, because the `mail` service is the same in
@@ -332,6 +346,23 @@ impl fmt::Display for PlanStep {
 			PlanStep::DbAdminPassword { path, reused } => {
 				let verb = if *reused { "reuse" } else { "generate" };
 				write!(f, "database admin password: {verb} {}", path.display())
+			}
+			PlanStep::PanelSecrets {
+				api_token,
+				key,
+				session_secret,
+				session,
+			} => {
+				writeln!(
+					f,
+					"panel API key (read and write, 365 days): {key} the key, secret in {}",
+					api_token.display()
+				)?;
+				write!(
+					f,
+					"       panel session secret: {session} {}",
+					session_secret.display()
+				)
 			}
 			PlanStep::ComposeFile {
 				path,

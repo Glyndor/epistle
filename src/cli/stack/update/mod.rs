@@ -41,6 +41,11 @@ pub(super) struct UpdatePlan {
 	pub(super) steps: Vec<Step>,
 	/// The config path the `mail` service serves, which `status` reads.
 	pub(super) config_path: std::path::PathBuf,
+	/// Whether the new stack runs the panel, which needs its secrets in place
+	/// before the compose file is written. Read from the plan and not from the
+	/// compose file on disk, which has no panel on the first update after the
+	/// package is installed.
+	pub(super) panel: bool,
 	/// The images the new compose file stops naming, to remove once the
 	/// update is verified.
 	pub(super) images: super::images::Change,
@@ -63,8 +68,24 @@ pub(super) fn plan_update(
 	data_dir: &Path,
 	listeners: &[Listener],
 ) -> Result<UpdatePlan, String> {
+	plan_update_in(
+		compose,
+		data_dir,
+		listeners,
+		Path::new(crate::cli::init::PANEL_MANIFEST),
+	)
+}
+
+/// [`plan_update`], reading the panel package's pin file at `manifest`.
+pub(super) fn plan_update_in(
+	compose: &Path,
+	data_dir: &Path,
+	listeners: &[Listener],
+	manifest: &Path,
+) -> Result<UpdatePlan, String> {
 	let existing = compose_text(compose)?;
-	let regenerated = crate::cli::init::regenerate(data_dir, listeners, &existing)?;
+	let regenerated =
+		crate::cli::init::regenerate_in(data_dir, listeners, &existing, None, manifest)?;
 	let old: Value = serde_json::from_str(&existing).map_err(|error| error.to_string())?;
 	let new: Value = serde_json::from_str(&regenerated.text).map_err(|error| error.to_string())?;
 	let managed = new
@@ -89,6 +110,7 @@ pub(super) fn plan_update(
 		notes: regenerated.notes,
 		steps,
 		config_path: regenerated.config_path,
+		panel: regenerated.panel,
 		images: super::images::change(&old, &new),
 	})
 }
@@ -284,12 +306,13 @@ impl execute::UpdateHost for Live<'_> {
 		crate::cli::db::harden::run(self.compose)
 	}
 
-	fn prepare_keys(&mut self) -> Result<Vec<String>, String> {
+	fn prepare_keys(&mut self, panel: bool) -> Result<Vec<String>, String> {
 		crate::cli::init::prepare_keys_for_update(
 			&self.config.data_dir,
 			self.config_path,
 			self.has_database(),
 			super::certs::runs_certs(self.compose)?,
+			panel,
 		)
 	}
 
