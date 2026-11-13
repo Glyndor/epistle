@@ -2,6 +2,7 @@
 //! the published DKIM TXT records match it.
 
 use std::path::PathBuf;
+#[cfg(test)]
 use std::process::ExitCode;
 
 use serde::Serialize;
@@ -11,7 +12,13 @@ use crate::dkim::Signer;
 use crate::dkim::rotate::{self, ROTATE_INTERVAL_DAYS};
 use crate::spf::DnsLookup;
 
+mod keys;
+mod render;
 mod rotation_error;
+
+pub(in crate::cli::dkim) use keys::signing_domains;
+use keys::{compare, key_views, own_keys};
+pub(in crate::cli::dkim) use render::render;
 
 /// The previous selector still published during its overlap window.
 #[derive(Debug, Serialize)]
@@ -111,89 +118,6 @@ pub(super) struct DkimView {
 	/// finished: a failure is never read as "gone".
 	stale_unchecked: Vec<String>,
 	records: Vec<RecordView>,
-}
-
-/// The key each signing domain uses and the domains it shares it with.
-fn key_views(
-	config: &Config,
-	dkim: &crate::config::Dkim,
-	default: (&str, Option<&str>),
-	own: &OwnKeys,
-) -> Vec<KeyView> {
-	let on_default = dkim.domains_on_default(&config.domains, &config.domain_aliases);
-	signing_domains(config)
-		.into_iter()
-		.map(|domain| match own.get(&domain) {
-			Some(active) => KeyView {
-				source: "dkim.domain",
-				selector: active.ed.selector.clone(),
-				rsa_selector: active.rsa.as_ref().map(|rsa| rsa.selector.clone()),
-				shared_with: Vec::new(),
-				domain,
-			},
-			None => KeyView {
-				source: "dkim",
-				selector: default.0.to_string(),
-				rsa_selector: default.1.map(str::to_string),
-				shared_with: on_default
-					.iter()
-					.filter(|d| **d != domain)
-					.cloned()
-					.collect(),
-				domain,
-			},
-		})
-		.collect()
-}
-
-/// The keys in service of every domain with a `[[dkim.domain]]` entry, by
-/// lowercase domain: the ones its rotation put in service, or the entry's.
-type OwnKeys = std::collections::HashMap<String, crate::dkim::domain_rotate::DomainActive>;
-
-fn own_keys(config: &Config, dkim: &crate::config::Dkim) -> Result<OwnKeys, String> {
-	dkim.domain
-		.iter()
-		.map(|entry| {
-			let active = crate::dkim::domain_rotate::active_keys(entry, &config.data_dir)
-				.map_err(|error| format!("{}: {error}", entry.name))?;
-			Ok((entry.name.to_ascii_lowercase(), active))
-		})
-		.collect()
-}
-
-/// Every domain the relay signs for, lowercase and sorted.
-pub(super) fn signing_domains(config: &Config) -> Vec<String> {
-	let mut all = std::collections::BTreeSet::new();
-	all.extend(config.domains.iter().map(|d| d.to_ascii_lowercase()));
-	all.extend(config.domain_aliases.keys().map(|d| d.to_ascii_lowercase()));
-	all.into_iter().collect()
-}
-
-/// The `p=` tag of a DKIM record with whitespace removed.
-fn public_key(record: &str) -> Option<String> {
-	record
-		.split(';')
-		.find_map(|tag| tag.trim().strip_prefix("p="))
-		.map(|value| value.split_whitespace().collect())
-}
-
-/// Compare the TXT records at `name` with `expected` (a full record value;
-/// `None` means only presence of a DKIM record is checked).
-async fn compare(dns: &dyn DnsLookup, name: &str, expected: Option<&str>) -> &'static str {
-	let Ok(records) = dns.txt(name).await else {
-		return "lookup-error";
-	};
-	let dkim: Vec<&String> = records
-		.iter()
-		.filter(|r| r.trim_start().to_ascii_lowercase().starts_with("v=dkim1"))
-		.collect();
-	if dkim.is_empty() {
-		return "missing";
-	}
-	match expected.and_then(public_key) {
-		Some(want) if !dkim.iter().any(|r| public_key(r).as_deref() == Some(&want)) => "differs",
-		_ => "ok",
-	}
 }
 
 /// Build the view. `dns` is `None` when the caller does not want lookups.
@@ -359,141 +283,6 @@ pub(super) async fn build(
 		stale_unchecked,
 		records,
 	})
-}
-
-/// Print the view as text or JSON.
-pub(super) fn render(view: &DkimView, json: bool, out: &mut impl std::io::Write) -> ExitCode {
-	let result = if json {
-		serde_json::to_writer_pretty(&mut *out, view)
-			.map_err(std::io::Error::other)
-			.and_then(|()| writeln!(out))
-	} else {
-		render_text(view, out)
-	};
-	if result.is_ok() {
-		ExitCode::SUCCESS
-	} else {
-		ExitCode::FAILURE
-	}
-}
-
-/// `ed` alone, or `ed and rsa` when an RSA selector goes with it.
-fn pair(ed: &str, rsa: Option<&str>) -> String {
-	match rsa {
-		Some(rsa) => format!("{ed} and {rsa}"),
-		None => ed.to_string(),
-	}
-}
-
-/// An instant as RFC 3339 UTC, or `-` when there is none.
-fn when(epoch: Option<u64>) -> String {
-	epoch.map_or_else(|| "-".to_string(), crate::clock::rfc3339_or_epoch)
-}
-
-fn render_text(view: &DkimView, out: &mut impl std::io::Write) -> std::io::Result<()> {
-	writeln!(out, "selector: {} ({})", view.selector, view.algorithm)?;
-	writeln!(
-		out,
-		"key file: {} (from {})",
-		view.key_file.display(),
-		view.source
-	)?;
-	writeln!(out, "rotated at: {}", when(view.rotated_at))?;
-	if !view.automatic_rotation {
-		writeln!(out, "next rotation: never ([dns] is not configured)")?;
-	} else if view.next_rotation_due.is_none() {
-		writeln!(out, "next rotation: at the server's next hourly tick")?;
-	} else {
-		writeln!(out, "next rotation: {}", when(view.next_rotation_due))?;
-	}
-	if let Some(rsa) = &view.rsa_selector {
-		writeln!(
-			out,
-			"rsa selector: {rsa} (from {})",
-			view.rsa_source.unwrap_or("config")
-		)?;
-	}
-	if let Some(previous) = &view.previous {
-		writeln!(
-			out,
-			"previous: {} (retires at {})",
-			pair(&previous.selector, previous.rsa_selector.as_deref()),
-			crate::clock::rfc3339_or_epoch(previous.retire_at)
-		)?;
-	}
-	if let Some(next) = &view.in_progress {
-		let to = pair(&next.selector, next.rsa_selector.as_deref());
-		let since = crate::clock::rfc3339_or_epoch(next.started_at);
-		match &next.withdrawing {
-			Some(reason) => writeln!(out, "rotation to {to} is being withdrawn: {reason}")?,
-			None if next.rsa_selector.is_some() => writeln!(
-				out,
-				"rotation to {to} in progress since {since}; {} sign until DNS shows the new keys",
-				pair(&view.selector, view.rsa_selector.as_deref())
-			)?,
-			None => writeln!(
-				out,
-				"rotation to {to} in progress since {since}; {} signs until DNS shows the new key",
-				view.selector
-			)?,
-		}
-	}
-	if let Some(at) = view.rotation_requested_at {
-		writeln!(
-			out,
-			"rotation requested at {}, waiting for the server",
-			crate::clock::rfc3339_or_epoch(at)
-		)?;
-	}
-	if let Some(error) = &view.last_request_error {
-		writeln!(out, "last rotation error: {error}")?;
-	}
-	for entry in &view.overrides {
-		let rsa = entry
-			.rsa_selector
-			.as_deref()
-			.map(|rsa| format!(" and rsa {rsa}"))
-			.unwrap_or_default();
-		writeln!(
-			out,
-			"override {}: {}{} ({})",
-			entry.domain,
-			entry.selector,
-			rsa,
-			entry.key_file.display()
-		)?;
-	}
-	for key in &view.keys {
-		let who = if key.shared_with.is_empty() {
-			"its own key".to_string()
-		} else {
-			format!("shared with {}", key.shared_with.join(", "))
-		};
-		writeln!(
-			out,
-			"key {}: {} ({who})",
-			key.domain,
-			pair(&key.selector, key.rsa_selector.as_deref())
-		)?;
-	}
-	if !view.stale_records.is_empty() {
-		writeln!(
-			out,
-			"split incomplete: the shared key is still published at {}; `epistle dkim split --finish` retires it",
-			view.stale_records.join(", ")
-		)?;
-	}
-	if !view.stale_unchecked.is_empty() {
-		writeln!(
-			out,
-			"split: could not check whether the shared key is still published ({})",
-			view.stale_unchecked.join("; ")
-		)?;
-	}
-	for record in &view.records {
-		writeln!(out, "{} {}", record.status, record.name)?;
-	}
-	Ok(())
 }
 
 #[cfg(test)]
