@@ -90,6 +90,8 @@ fn apply_does_not_regenerate_the_self_signed_cert_pair() {
 	answers.domains = vec!["example.org".to_string(), "example.com".to_string()];
 	answers.services = Services {
 		antivirus: None,
+		panel: None,
+		panel_image: None,
 		imap: false,
 		submission: true,
 		pop3: false,

@@ -20,6 +20,7 @@ fn dry_run_prints_the_block_and_still_exits_0_with_a_missing_ptr() {
 		detector: &Scripted::found(None, None),
 		resolver: &fake,
 		meminfo: std::path::Path::new(""),
+		panel_manifest: std::path::Path::new("/nonexistent/epistle-panel/image"),
 		clock: &|| crate::clock::sync::HostClock::Synced,
 	};
 	let mut out = Vec::new();
@@ -49,6 +50,7 @@ fn a_detected_address_gets_its_ptr_checked_too() {
 		detector: &Scripted::found(Some(v4()), None),
 		resolver: &fake,
 		meminfo: std::path::Path::new(""),
+		panel_manifest: std::path::Path::new("/nonexistent/epistle-panel/image"),
 		clock: &|| crate::clock::sync::HostClock::Synced,
 	};
 	let mut out = Vec::new();
@@ -73,6 +75,7 @@ fn no_address_prints_no_block_and_builds_no_resolver() {
 		detector: &Scripted::found(None, None),
 		resolver: &resolver,
 		meminfo: std::path::Path::new(""),
+		panel_manifest: std::path::Path::new("/nonexistent/epistle-panel/image"),
 		clock: &|| crate::clock::sync::HostClock::Synced,
 	};
 	let mut out = Vec::new();

@@ -71,6 +71,8 @@ fn apply_does_not_rewrite_keys_when_every_answer_changes() {
 	// every answer change, not to test service-specific config branches.
 	answers.services = Services {
 		antivirus: None,
+		panel: None,
+		panel_image: None,
 		imap: false,
 		submission: true,
 		pop3: false,

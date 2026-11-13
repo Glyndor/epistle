@@ -36,6 +36,7 @@ use crate::config::AcmeChallenge;
 pub(super) mod challenge;
 mod dns_credentials;
 mod host_binary;
+pub(super) mod panel_package;
 
 #[cfg(not(test))]
 pub(super) use host_binary::validate_host_binary_for;
@@ -363,6 +364,8 @@ pub(super) fn minimal_answers() -> crate::cli::init::Answers {
 		dns: None,
 		services: crate::cli::init::answers::Services {
 			antivirus: None,
+			panel: None,
+			panel_image: None,
 			imap: true,
 			submission: true,
 			pop3: false,

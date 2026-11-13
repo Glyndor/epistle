@@ -1229,6 +1229,19 @@ custom mail image instead (the host binary is then not mounted). The
 generated base records which mode the file is in via `x-epistle-managed-image`:
 true for the default host-binary shape, false for a custom image.
 
+The optional web panel comes from the `epistle-panel` package, which installs
+one file, `/usr/share/glyndor/epistle-panel/image`, holding the image
+reference `ghcr.io/glyndor/epistle-panel:<version>` (a tag, no digest). `init`
+and `stack update` read that file: it must hold exactly that repository and a
+plain tag on one line, and anything else stops the run with an error naming the
+file. `services.panel` in the answers file overrides the package: `false` keeps
+the panel out of a stack that has the package, `true` makes `init` fail when the
+package is missing, and a missing key leaves the package to decide. The choice
+is kept in `x-epistle-panel` in `compose.yaml`, so `stack update` keeps it.
+The panel needs the management API: with the package installed and
+`services.api` off, `init` and `stack update` say so and add no panel. This
+release reads the file and records the choice; it does not add the service yet.
+
 Apt upgrades refresh the stack only when `podup-epistle.service` exists
 and is enabled for `glyndor-epistle`. Failures print a warning and leave
 the package installed; retry with `sudo epistle stack update`. Stacks

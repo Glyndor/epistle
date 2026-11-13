@@ -10,6 +10,7 @@ fn no_lookups(detector: &dyn super::super::detect::Detector) -> Probes<'_> {
 		detector,
 		resolver: &|| None,
 		meminfo: std::path::Path::new("/nonexistent/meminfo"),
+		panel_manifest: std::path::Path::new("/nonexistent/epistle-panel/image"),
 		clock: &|| crate::clock::sync::HostClock::Synced,
 	}
 }

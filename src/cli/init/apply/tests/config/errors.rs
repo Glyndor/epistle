@@ -229,6 +229,8 @@ fn answers_with_dns_and_extra_services() -> Answers {
 		}),
 		services: Services {
 			antivirus: None,
+			panel: None,
+			panel_image: None,
 			imap: false,
 			submission: false,
 			pop3: true,

@@ -44,6 +44,8 @@ fn answers_with_services(services: Services) -> Answers {
 fn plan_listeners_render_one_per_line_with_padded_kind() {
 	let answers = answers_with_services(Services {
 		antivirus: None,
+		panel: None,
+		panel_image: None,
 		imap: true,
 		submission: true,
 		pop3: false,
@@ -172,6 +174,8 @@ fn plan_listeners_step_has_its_own_header_line() {
 fn plan_listeners_step_has_one_line_per_listener() {
 	let answers = answers_with_services(Services {
 		antivirus: None,
+		panel: None,
+		panel_image: None,
 		imap: true,
 		submission: true,
 		pop3: true,
@@ -254,6 +258,8 @@ fn listener_entries_match_schema_default_ports() {
 	use crate::cli::init::plan::ListenerEntry;
 	let plan = plan(&answers_with_services(Services {
 		antivirus: None,
+		panel: None,
+		panel_image: None,
 		imap: true,
 		submission: true,
 		pop3: true,

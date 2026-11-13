@@ -305,6 +305,8 @@ pub fn run<R: BufRead>(
 	};
 	let services = Services {
 		antivirus: None,
+		panel: None,
+		panel_image: None,
 		imap: ask_bool(reader, "enable IMAP", true, out)?,
 		submission: ask_bool(reader, "enable submission", true, out)?,
 		pop3: ask_bool(reader, "enable POP3", false, out)?,
