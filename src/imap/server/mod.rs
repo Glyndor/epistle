@@ -300,6 +300,9 @@ impl Server {
 				return Ok(());
 			}
 
+			if self.end_if_withdrawn(&mut *stream, &clock, &session).await {
+				return Ok(());
+			}
 			let mut output = session.command_line(&line);
 			// Abuse guard: drop a client that only produces BAD responses.
 			if is_bad_response(&output.bytes) {
@@ -495,3 +498,5 @@ mod read;
 use read::read_auth_line;
 
 mod session_factory;
+
+mod withdrawn;

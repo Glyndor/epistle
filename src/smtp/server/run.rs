@@ -10,6 +10,7 @@ use crate::smtp::session::{Action, Session};
 use crate::smtp::trace::line_error_reply;
 
 use super::data_rate::{Cut, RateWindow, send_within};
+use super::run_withdrawn::end_withdrawn;
 use super::session_time::{SessionClock, end_session};
 use super::{
 	COMMAND_TIMEOUT, Connection, Mode, READ_BUFFER, Server, discard_chunk, end_cut, read_chunk,
@@ -124,6 +125,9 @@ impl Server {
 				};
 				// Each command and AUTH round uses the latest published account rules.
 				session = session.with_directory(self.directory.current());
+				if self.account_withdrawn(&session) {
+					return end_withdrawn(&mut stream, session).await;
+				}
 				match mode {
 					Mode::Commands => Some(session.command_line(&line_str)),
 					// Argon2 is CPU-bound; per-connection rate limiting keeps attempts scarce.
@@ -204,6 +208,10 @@ impl Server {
 				Action::CollectAuthResponse(reply) => {
 					mode = Mode::Auth;
 					send(&mut stream, &reply).await?;
+				}
+				// The body arrived without a command boundary to check at.
+				Action::Deliver(..) if self.account_withdrawn(&session) => {
+					return end_withdrawn(&mut stream, session).await;
 				}
 				Action::Deliver(reply, message) => {
 					self.deliver(&mut stream, &mut session, peer, reply, message)

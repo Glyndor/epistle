@@ -26,6 +26,13 @@ pub trait Backend {
 	) -> Option<String>;
 	/// The script store for an authenticated account.
 	fn store(&self, account: &str) -> ScriptStore;
+	/// Whether the signed-in `account` may still act: not disabled and not
+	/// waiting for a credential reset since it signed in. Asked before every
+	/// command once signed in. A backend with no directory to ask keeps the
+	/// default.
+	fn account_is_live(&self, _account: &str) -> bool {
+		true
+	}
 }
 
 /// What the session wants written back; [`Response::encode`] renders the bytes.
@@ -165,7 +172,14 @@ impl<B: Backend> Session<B> {
 	}
 
 	/// Consume a client line and its optional literal.
+	/// A signed-in account that was disabled or reset since it signed in gets
+	/// `BYE` instead, and the connection ends.
 	pub fn handle_line(&mut self, line: &str, literal: Option<Vec<u8>>) -> Response {
+		if let Some(account) = &self.account
+			&& !self.backend.account_is_live(account)
+		{
+			return Response::Bye("account no longer available".to_string());
+		}
 		if std::mem::take(&mut self.pending_plain) {
 			let response = literal
 				.and_then(|bytes| String::from_utf8(bytes).ok())

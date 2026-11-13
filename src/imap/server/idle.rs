@@ -2,9 +2,10 @@
 //!
 //! While the client idles the server polls the SELECTed mailbox at
 //! `IDLE_POLL` intervals and pushes the changes it finds. The wait ends
-//! when the client sends DONE, when the connection ends, or when the
-//! read timeout of the listener passes, whichever comes first: the poll
-//! interval never outlasts the configured timeout.
+//! when the client sends DONE, when the connection ends, when a poll finds
+//! the account disabled or reset, or when the read timeout of the listener
+//! passes, whichever comes first: the poll interval never outlasts the
+//! configured timeout.
 
 use super::*;
 
@@ -65,7 +66,11 @@ impl Server {
 						Ok(Ok(count)) => count,
 						Ok(Err(error)) => return Err(error),
 						Err(_) => {
-							// Poll interval expired; check for new messages.
+							// Poll interval expired: end the session if its
+							// account was withdrawn, else check for new messages.
+							if self.end_if_withdrawn(stream, clock, session).await {
+								return Ok(Outcome::Closed);
+							}
 							if let Some(notification) = session.check_idle()
 								&& response_writer::write_response(
 									stream,

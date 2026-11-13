@@ -92,7 +92,7 @@ impl Directory {
 		proof: Proof,
 	) -> bool {
 		let account = account.to_ascii_lowercase();
-		if self.disabled.contains(&account) || self.credential_reset.contains(&account) {
+		if !self.account_is_live(&account) {
 			return false;
 		}
 		if !self.is_protocol_allowed(&account, protocol) {

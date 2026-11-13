@@ -118,6 +118,11 @@ impl Session {
 		self.account().is_some()
 	}
 
+	/// The account the client signed in as, `None` before sign-in.
+	pub(crate) fn signed_in_account(&self) -> Option<&str> {
+		self.account()
+	}
+
 	fn account(&self) -> Option<&str> {
 		match &self.state {
 			State::NotAuthenticated { .. } => None,
