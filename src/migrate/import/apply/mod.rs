@@ -95,11 +95,14 @@ pub(crate) fn prepare(
 	let mut conflicts = Vec::new();
 
 	let mut domains = config.domains.clone();
+	// Each plan entry is looked up in a set, not scanned for in the list:
+	// the plan comes from a file somebody else wrote and may be long.
+	let mut known: std::collections::HashSet<String> = domains
+		.iter()
+		.map(|domain| domain.to_ascii_lowercase())
+		.collect();
 	for domain in &plan.domains {
-		if domains
-			.iter()
-			.any(|known| known.eq_ignore_ascii_case(domain))
-		{
+		if !known.insert(domain.to_ascii_lowercase()) {
 			conflicts.push(format!("domain {domain} is already configured"));
 			outcome.domains_kept.push(domain.clone());
 		} else {
@@ -107,10 +110,11 @@ pub(crate) fn prepare(
 			outcome.domains_added.push(domain.clone());
 		}
 	}
-	let existing: Vec<String> = store.account_views().into_iter().map(|v| v.0).collect();
+	let existing: std::collections::HashSet<String> =
+		store.account_views().into_iter().map(|v| v.0).collect();
 	let mut new_accounts = Vec::new();
 	for account in &plan.accounts {
-		if existing.iter().any(|name| name == &account.name) {
+		if existing.contains(&account.name) {
 			conflicts.push(format!("account {} already exists", account.name));
 			outcome.accounts_kept.push(account.name.clone());
 		} else {
