@@ -13,6 +13,15 @@ pub fn dkim_signature(value: &str) {
 	));
 }
 
+/// The DKIM signer's socket frame: a request as the signer reads it,
+/// through every check it runs before the key holder sees the block, and
+/// an answer as the client reads it. Both sides read bytes from a process
+/// that may be compromised.
+pub fn signer_frame(data: &[u8]) {
+	let _ = crate::dkim::remote::admit(data);
+	let _ = crate::dkim::remote::frame::SignResponse::decode(data);
+}
+
 /// A whole message through every MIME consumer: IMAP BODYSTRUCTURE and
 /// ENVELOPE, JMAP body properties, the DMARC and TLS-RPT report walkers,
 /// the From field DMARC and submission read, and DKIM body hashing.
