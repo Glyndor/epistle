@@ -190,7 +190,8 @@ fn links_in_the_store_and_its_parents_are_rejected_without_writes() {
 			std::fs::metadata(root.join("outside"))
 				.unwrap()
 				.permissions()
-				.mode() & 0o777,
+				.mode()
+				& 0o777,
 			0o755
 		);
 	}

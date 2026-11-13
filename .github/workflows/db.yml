@@ -95,7 +95,7 @@ jobs:
       matrix:
         include:
           - postgres: 18
-            image: postgres:18@sha256:74935e72241653ca55e0414067e6d8763aceb8a810eb51b452253ec3dcfc4336
+            image: postgres:18@sha256:b9f6b8ff03b62f3cfd9d9ba3fe56226a9991c79d3fb46fd46536263bf02be553
     services:
       postgres:
         # Digest-pinned: a major tag is a moving target, so a retag would
@@ -132,8 +132,8 @@ jobs:
           # macros against a live Postgres, and `stable` here would mean the
           # queries compiled for the SBOM are not the ones the database
           # tests ran against the same schema.
-          rustup toolchain install 1.99.1 --profile minimal
-          rustup default 1.99.1
+          rustup toolchain install 1.100.0 --profile minimal
+          rustup default 1.100.0
 
       - name: Install cargo-llvm-cov
         env:
@@ -141,7 +141,7 @@ jobs:
           # reusable-rust-ci.yml. Two coverage jobs on two different
           # instrumentation versions produce two numbers that are not
           # comparable, so bump both together or neither.
-          LLVM_COV_VERSION: "0.8.7"
+          LLVM_COV_VERSION: "0.9.1"
         run: command -v cargo-llvm-cov >/dev/null || cargo install cargo-llvm-cov --locked --version "$LLVM_COV_VERSION"
 
       - name: Coverage gate

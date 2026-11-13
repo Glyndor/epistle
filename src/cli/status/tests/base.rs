@@ -58,7 +58,7 @@ fn json_has_an_entry_per_area_with_status_detail_and_items() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let path = valid(dir.path());
 	let mut out = Vec::new();
-	execute(&path, &[CheckArea::Config], true, false, &mut out);
+	let _ = execute(&path, &[CheckArea::Config], true, false, &mut out);
 	let value: serde_json::Value = serde_json::from_slice(&out).expect("valid JSON");
 	let config = &value["config"];
 	assert_eq!(config["status"], "ok", "{value}");

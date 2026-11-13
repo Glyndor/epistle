@@ -56,7 +56,7 @@ fn account_list_shows_each_account_enabled_with_its_source() {
 	assert!(lines[1].contains("\x1b[32m✔ enabled"), "{lines:#?}");
 	assert_eq!(lines.last().map(String::as_str), Some("1 accounts"));
 	let narrow = on_terminal(40, |out| {
-		crate::cli::accounts::list(&config, out);
+		let _ = crate::cli::accounts::list(&config, out);
 	});
 	assert_fits(&narrow, 40);
 }

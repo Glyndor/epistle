@@ -29,11 +29,11 @@ on:
       toolchain:
         description: Rust toolchain to pin the audit and deny jobs to
         type: string
-        default: "1.99.1"
+        default: "1.100.0"
       cargo-audit-version:
         description: Exact version of cargo-audit to install; bumped via .github releases
         type: string
-        default: "0.22.2"
+        default: "0.23.0"
       extra-lockfiles:
         description: >
           Newline-separated lockfiles to audit in addition to the one in

@@ -145,7 +145,7 @@ fn without_dns_section_there_is_no_scheduled_rotation() {
 	assert!(!view.automatic_rotation);
 	assert_eq!(view.next_rotation_due, None);
 	let mut out = Vec::new();
-	render(&view, false, &mut out);
+	let _ = render(&view, false, &mut out);
 	let text = String::from_utf8(out).expect("utf8");
 	assert!(
 		text.contains("next rotation: never ([dns] is not configured)"),
@@ -210,7 +210,7 @@ fn the_text_shows_every_time_as_an_rfc3339_instant() {
 
 	let view = view_with(&f, &[]);
 	let mut out = Vec::new();
-	render(&view, false, &mut out);
+	let _ = render(&view, false, &mut out);
 	let text = String::from_utf8(out).expect("utf-8");
 	// Every instant the operator reads is a date, not a number: the epoch
 	// made them do the arithmetic to know when the next rotation was due.
@@ -275,7 +275,7 @@ fn a_rotation_in_progress_is_shown_beside_the_key_that_signs() {
 	std::fs::write(&path, serde_json::to_vec(&state).expect("json")).expect("state");
 	let text = |view: &DkimView| {
 		let mut out = Vec::new();
-		render(view, false, &mut out);
+		let _ = render(view, false, &mut out);
 		String::from_utf8(out).expect("utf-8")
 	};
 	let view = view_with(&f, &[]);

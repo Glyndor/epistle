@@ -401,11 +401,12 @@ impl Directory {
 				let bypassed = bypassable
 					&& kind == "account"
 					&& account.is_some()
-					&& ip.is_some() && block_on_async(store.is_known_network(
-					subject_account,
-					ip.expect("ip present"),
-					now_secs,
-				));
+					&& ip.is_some()
+					&& block_on_async(store.is_known_network(
+						subject_account,
+						ip.expect("ip present"),
+						now_secs,
+					));
 				if bypassed {
 					// The ban row is still in force for any other
 					// client; what we record is that this single

@@ -30,7 +30,7 @@ fn config_check_accepts_a_site_local_public_ipv6_and_names_it() {
 	assert!(err.contains("ignored"), "{err}");
 	let json = {
 		let mut out = Vec::new();
-		crate::cli::config::check::tests::run(file.path(), true, &mut out, &mut Vec::new());
+		let _ = crate::cli::config::check::tests::run(file.path(), true, &mut out, &mut Vec::new());
 		String::from_utf8_lossy(&out).into_owned()
 	};
 	assert!(

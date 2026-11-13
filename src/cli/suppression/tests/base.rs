@@ -259,7 +259,7 @@ async fn delivery_skips_an_address_added_from_the_cli() {
 async fn delivery_skips_per_account_only_for_that_account() {
 	let mine = tempfile::tempdir().expect("tempdir");
 	let config_mine = config(mine.path());
-	add(
+	let _ = add(
 		&config_mine,
 		"bob@example.net",
 		Some("alice@example.org"),
@@ -271,7 +271,7 @@ async fn delivery_skips_per_account_only_for_that_account() {
 
 	let other = tempfile::tempdir().expect("tempdir");
 	let config_other = config(other.path());
-	add(
+	let _ = add(
 		&config_other,
 		"bob@example.net",
 		Some("someone@example.org"),

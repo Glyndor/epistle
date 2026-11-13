@@ -238,7 +238,7 @@ fn remove_leaves_a_non_relay_rule_with_the_same_selector_alone() {
 		"\n[[transport]]\ndomain = 'example.net'\nkind = 'fail'\n\n[[transport]]\ndomain = 'example.net'\nkind = 'relay'\nhost = 'smtp.example.net'\nport = 25\n",
 	);
 	let before = std::fs::read_to_string(file.path()).unwrap();
-	execute_with(
+	let _ = execute_with(
 		file.path(),
 		parse(&["remove", "--domain", "example.net"]),
 		false,

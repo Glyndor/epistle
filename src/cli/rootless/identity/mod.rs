@@ -239,7 +239,8 @@ fn seal_by_listing() -> io::Result<()> {
 				break;
 			}
 			if let Some(fd) = fd_number(&buffer[at + 19..at + length])
-				&& fd >= 3 && fd != dir
+				&& fd >= 3
+				&& fd != dir
 			{
 				entries = entries.and(mark(fd));
 			}

@@ -114,7 +114,7 @@ fn the_container_bind_keeps_the_family_the_operator_asked_for() {
 fn a_published_ipv6_address_keeps_a_dual_stack_container_bind() {
 	for (addr, mapping) in [("::", "[::1]:993:993"), ("0.0.0.0", "[::1]:993:993")] {
 		let (dir, path) = stack(&[("imaps", addr, 993)], &["993:993"]);
-		set_to(
+		let _ = set_to(
 			&path,
 			ServiceName::Imaps,
 			Some("::1"),
@@ -137,7 +137,7 @@ fn a_published_ipv6_address_keeps_a_dual_stack_container_bind() {
 fn a_wildcard_publishes_every_address_and_says_so() {
 	let (dir, path) = stack(&[("imaps", "::", 993)], &["993:993"]);
 	let (mut out, mut status) = (Vec::new(), Vec::new());
-	set_to(
+	let _ = set_to(
 		&path,
 		ServiceName::Imaps,
 		Some("0.0.0.0"),
@@ -159,7 +159,7 @@ fn a_wildcard_publishes_every_address_and_says_so() {
 fn a_listener_the_container_holds_on_loopback_is_reported_as_set_not_published() {
 	let (dir, path) = stack(&[("api", "127.0.0.1", 8025)], &[]);
 	let (mut out, mut status) = (Vec::new(), Vec::new());
-	set_to(
+	let _ = set_to(
 		&path,
 		ServiceName::Api,
 		None,
@@ -260,7 +260,7 @@ fn a_published_listener_with_an_override_says_how_the_two_combine() {
 	.unwrap();
 	let before = std::fs::read_to_string(&override_path).unwrap();
 	let (mut out, mut status) = (Vec::new(), Vec::new());
-	set_to(
+	let _ = set_to(
 		&path,
 		ServiceName::Imaps,
 		Some("127.0.0.1"),
@@ -284,7 +284,7 @@ fn a_published_listener_with_an_override_says_how_the_two_combine() {
 	// Asking for what the map already pins changes nothing, and the override
 	// still answers for the port.
 	let (mut out, mut status) = (Vec::new(), Vec::new());
-	set_to(
+	let _ = set_to(
 		&path,
 		ServiceName::Imaps,
 		Some("127.0.0.1"),
@@ -364,7 +364,7 @@ fn an_override_that_names_another_port_keeps_todays_success() {
 	)
 	.unwrap();
 	let (mut out, mut status) = (Vec::new(), Vec::new());
-	set_to(
+	let _ = set_to(
 		&path,
 		ServiceName::Imaps,
 		Some("127.0.0.1"),
@@ -389,7 +389,7 @@ fn an_override_without_ports_keeps_todays_success() {
 	let override_path = dir.path().join("compose/compose.override.yaml");
 	std::fs::write(&override_path, "services:\n  mail:\n    mem_limit: 512m\n").unwrap();
 	let (mut out, mut status) = (Vec::new(), Vec::new());
-	set_to(
+	let _ = set_to(
 		&path,
 		ServiceName::Imaps,
 		Some("127.0.0.1"),
@@ -420,7 +420,7 @@ fn a_listener_without_tls_keeps_its_mapping_on_loopback_when_the_file_forgets_it
 	let mut text = std::fs::read_to_string(&path).unwrap();
 	text = text.replace("port = 8025", "port = 9999");
 	crate::storage::write_secret(&path, text.as_bytes()).unwrap();
-	set_to(
+	let _ = set_to(
 		&path,
 		ServiceName::Imaps,
 		None,

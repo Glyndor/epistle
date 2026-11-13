@@ -326,7 +326,7 @@ fn the_table_on_a_terminal_shows_the_time_as_an_rfc3339_instant() {
 		let Command::Delivery(args) = cli.command else {
 			panic!("not a delivery command");
 		};
-		run(
+		let _ = run(
 			dir.path(),
 			DEFAULT_DELIVERY_LOG_DAYS,
 			args.action,

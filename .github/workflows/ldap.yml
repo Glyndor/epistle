@@ -138,10 +138,10 @@ jobs:
       - name: Install toolchain
         run: |
           # Pinned to match ci.yml. Same compiler that the gate tests
-          # run on, so a clippy lint widening on 1.99 does not break
+          # run on, so a clippy lint widening on 1.100 does not break
           # LDAP auth coverage here while the gate stays green.
-          rustup toolchain install 1.99.1 --profile minimal
-          rustup default 1.99.1
+          rustup toolchain install 1.100.0 --profile minimal
+          rustup default 1.100.0
 
       - name: Run LDAP integration tests
         # If this command prints "skipping", the env block above is

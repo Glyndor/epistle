@@ -34,7 +34,7 @@ jobs:
           # Pinned like every other tool this repository installs in CI. A
           # floating version turns an unrelated upstream release into a red
           # build on a pull request that changed nothing.
-          ECLINT_VERSION: "3.4.0"
+          ECLINT_VERSION: "3.11.3"
         # editorconfig-checker reads .editorconfig itself rather than carrying
         # its own copy of the rules. That is the point: a second list of rules
         # in this file would drift from the real one silently, which is the

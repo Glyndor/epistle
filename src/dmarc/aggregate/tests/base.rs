@@ -16,7 +16,8 @@ impl crate::spf::DnsLookup for FakeDns {
 	fn txt(
 		&self,
 		name: &str,
-	) -> Pin<Box<dyn Future<Output = Result<Vec<String>, crate::spf::DnsFailure>> + Send + '_>> {
+	) -> Pin<Box<dyn Future<Output = Result<Vec<String>, crate::spf::DnsFailure>> + Send + '_>>
+	{
 		let result = if self.fail || self.fail_names.iter().any(|failing| failing == name) {
 			Err(crate::spf::DnsFailure::Temporary)
 		} else {
@@ -28,14 +29,16 @@ impl crate::spf::DnsLookup for FakeDns {
 	fn addresses(
 		&self,
 		_name: &str,
-	) -> Pin<Box<dyn Future<Output = Result<Vec<IpAddr>, crate::spf::DnsFailure>> + Send + '_>> {
+	) -> Pin<Box<dyn Future<Output = Result<Vec<IpAddr>, crate::spf::DnsFailure>> + Send + '_>>
+	{
 		Box::pin(async move { Ok(Vec::new()) })
 	}
 
 	fn mx(
 		&self,
 		_name: &str,
-	) -> Pin<Box<dyn Future<Output = Result<Vec<String>, crate::spf::DnsFailure>> + Send + '_>> {
+	) -> Pin<Box<dyn Future<Output = Result<Vec<String>, crate::spf::DnsFailure>> + Send + '_>>
+	{
 		Box::pin(async move { Ok(Vec::new()) })
 	}
 }

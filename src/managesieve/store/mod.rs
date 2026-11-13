@@ -56,7 +56,8 @@ pub fn is_valid_name(name: &str) -> bool {
 			c.is_control()
 				|| matches!(c, '/' | '\\' | '\u{2028}' | '\u{2029}')
 				|| crate::util::validation::is_bidi_or_invisible(c)
-		}) && (name.is_ascii() || name.nfc().eq(name.chars()))
+		})
+		&& (name.is_ascii() || name.nfc().eq(name.chars()))
 }
 
 /// A ManageSieve operation that failed in a way the protocol must report.

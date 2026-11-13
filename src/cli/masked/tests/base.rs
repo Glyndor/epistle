@@ -192,7 +192,7 @@ fn list_prints_text_and_json() {
 		account: "alice".to_string(),
 		address: address.clone(),
 	};
-	exec(&config, disable);
+	let _ = exec(&config, disable);
 
 	let (code, text, _) = exec(
 		&config,

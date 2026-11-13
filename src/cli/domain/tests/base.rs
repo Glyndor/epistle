@@ -147,7 +147,7 @@ fn add_writes_the_new_domain_and_records_dns() {
 	add_domain(&config, &mut document, "new.example.org").expect("add must succeed");
 	let mut out: Vec<u8> = Vec::new();
 	let mut status: Vec<u8> = Vec::new();
-	commit_add(
+	let _ = commit_add(
 		&config,
 		document,
 		"new.example.org",
@@ -214,7 +214,7 @@ fn remove_succeeds_when_only_other_domains_point_at_the_target() {
 	remove_domain(&config, &mut document, "other.example.org").expect("remove must succeed");
 	let mut out: Vec<u8> = Vec::new();
 	let mut status: Vec<u8> = Vec::new();
-	commit_remove(document, "other.example.org", false, &mut out, &mut status)
+	let _ = commit_remove(document, "other.example.org", false, &mut out, &mut status)
 		.expect("commit must succeed");
 	let after = std::fs::read_to_string(file.path()).unwrap();
 	assert!(

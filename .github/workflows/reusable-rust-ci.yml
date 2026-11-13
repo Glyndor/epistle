@@ -17,7 +17,7 @@ on:
       toolchain:
         description: Rust toolchain to pin the build, lint and test jobs to
         type: string
-        default: "1.99.1"
+        default: "1.100.0"
       coverage-threshold:
         description: Minimum line coverage percentage (0 disables the gate)
         type: number
@@ -29,7 +29,7 @@ on:
       llvm-cov-version:
         description: Exact version of the tool; bumped via .github releases
         type: string
-        default: "0.8.7"
+        default: "0.9.1"
       extra-test-os:
         description: JSON array of extra runner images to also run tests on (e.g. '["macos-latest"]')
         type: string
@@ -57,7 +57,7 @@ on:
       semver-checks-version:
         description: Exact version of the tool; bumped via .github releases
         type: string
-        default: "0.50.0"
+        default: "0.51.0"
       doc-warnings:
         description: Build the docs with -D warnings so broken doc links fail the build
         type: boolean

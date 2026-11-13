@@ -65,7 +65,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
-      IMAPTEST_IMAGE: docker.io/dovecot/imaptest@sha256:8e10d66bf5008a0f5d22425357fb653502f39dc83bc08367fb249edc69da546c
+      IMAPTEST_IMAGE: docker.io/dovecot/imaptest@sha256:db2b7de2f7bdd5d331fbdc12463828e3e35f1571c40999df47a0ff2359d399d7
       CONTAINER: docker
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -83,8 +83,8 @@ jobs:
 
       - name: Install toolchain
         run: |
-          rustup toolchain install 1.99.1 --profile minimal
-          rustup default 1.99.1
+          rustup toolchain install 1.100.0 --profile minimal
+          rustup default 1.100.0
 
       - name: Build
         run: cargo build --locked

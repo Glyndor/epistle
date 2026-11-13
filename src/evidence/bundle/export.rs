@@ -248,10 +248,11 @@ fn scan_day(
 			}
 			(Entry::Accepted(accepted), Selector::Recipient { address, from, to }) => {
 				day >= *from
-					&& day <= *to && accepted
-					.recipients
-					.iter()
-					.any(|r| r.eq_ignore_ascii_case(address))
+					&& day <= *to
+					&& accepted
+						.recipients
+						.iter()
+						.any(|r| r.eq_ignore_ascii_case(address))
 			}
 			(Entry::Outcome(outcome), Selector::Recipient { address, .. }) => {
 				spool_ids.contains(&outcome.spool_id)

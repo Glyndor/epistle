@@ -25,7 +25,7 @@ fn add(path: &std::path::Path, domain: &str) -> Config {
 	let config = Config::load(path).unwrap();
 	let mut document = ConfigDocument::open(path).unwrap();
 	add_domain(&config, &mut document, domain).expect("add must succeed");
-	commit_add(
+	let _ = commit_add(
 		&config,
 		document,
 		domain,
@@ -81,7 +81,7 @@ fn removing_a_domain_removes_its_secret() {
 	assert!(config.srs_domain("other.example.org").is_some());
 	let mut document = ConfigDocument::open(file.path()).unwrap();
 	remove_domain(&config, &mut document, "other.example.org").expect("remove");
-	commit_remove(
+	let _ = commit_remove(
 		document,
 		"other.example.org",
 		false,

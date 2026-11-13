@@ -129,7 +129,7 @@ fn commit_add_full(
 ) -> Result<ExitCode, super::super::super::resource::ResourceError> {
 	// Non-dry-run path: route through the production `commit_add` with
 	// a stub `restart` callback. A panic here fails the test loudly.
-	writers::commit_add(config, document, domain, false, out, status)?;
+	let _ = writers::commit_add(config, document, domain, false, out, status)?;
 	// The actual restart is `crate::cli::stack::run`, which a test
 	// host does not have a compose file for. A panic here would come
 	// from there, not from us.
@@ -154,7 +154,7 @@ fn commit_remove_full(
 	out: &mut impl Write,
 	status: &mut impl Write,
 ) -> Result<ExitCode, super::super::super::resource::ResourceError> {
-	writers::commit_remove(document, domain, false, out, status)?;
+	let _ = writers::commit_remove(document, domain, false, out, status)?;
 	Ok(ExitCode::SUCCESS)
 }
 
@@ -177,7 +177,7 @@ fn commit_alias_full(
 	out: &mut impl Write,
 	status: &mut impl Write,
 ) -> Result<ExitCode, super::super::super::resource::ResourceError> {
-	writers::commit_alias(document, alias, verb, false, out, status)?;
+	let _ = writers::commit_alias(document, alias, verb, false, out, status)?;
 	Ok(ExitCode::SUCCESS)
 }
 
@@ -208,7 +208,7 @@ fn domain_add_dry_run_leaves_file_unchanged() {
 		"new.example.org",
 		"--dry-run",
 	]);
-	run_action(&path, action, dry_run);
+	let _ = run_action(&path, action, dry_run);
 	let after = std::fs::read_to_string(&path).unwrap();
 	assert_eq!(before, after, "dry-run must not write mail.toml");
 	assert!(!after.contains("new.example.org"));
@@ -228,7 +228,7 @@ fn domain_remove_dry_run_leaves_file_unchanged() {
 		"removable.example.org",
 		"--dry-run",
 	]);
-	run_action(&path, action, dry_run);
+	let _ = run_action(&path, action, dry_run);
 	let after = std::fs::read_to_string(&path).unwrap();
 	assert_eq!(before, after, "dry-run must not write mail.toml");
 	assert!(after.contains("removable.example.org"));
@@ -262,7 +262,7 @@ fn domain_alias_add_dry_run_leaves_file_unchanged() {
 		"example.org",
 		"--dry-run",
 	]);
-	run_action(&path, action, dry_run);
+	let _ = run_action(&path, action, dry_run);
 	let after = std::fs::read_to_string(&path).unwrap();
 	assert_eq!(before, after, "dry-run must not write mail.toml");
 	assert!(!after.contains("alias.example.org"));
@@ -280,7 +280,7 @@ fn domain_alias_remove_dry_run_leaves_file_unchanged() {
 		"alias.example.org",
 		"--dry-run",
 	]);
-	run_action(&path, action, dry_run);
+	let _ = run_action(&path, action, dry_run);
 	let after = std::fs::read_to_string(&path).unwrap();
 	assert_eq!(before, after, "dry-run must not write mail.toml");
 	assert!(after.contains("alias.example.org"));
