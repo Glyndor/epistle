@@ -4,7 +4,9 @@ This is the plan for the work tracked in #1399 and #1400, and the decisions that
 have to hold across its phases. Phase 1 runs today, off by default; the section
 "What runs today" under it says what was built and where it departs from the
 plan. The later phases are intended, not built: `docs/operations/container.md`
-describes the stack as it is.
+describes the stack as it is. Which process holds which secret and parser
+after the split, and how the processes talk, is in
+[the serve split](serve-split.md).
 
 ## Where it starts
 
@@ -260,14 +262,12 @@ runs it renders and runs exactly as before.
 
 What changed from the plan above, and why:
 
-- **The table's `dkim/` volume does not exist yet.** DKIM rotation and key
-  generation stay in `mail` for now, and with the split on they wait, since
-  rotation publishes through the credential `mail` no longer holds; the key
-  in use keeps signing and `status` says so. The hook is in place: the role
-  check in `serve` that keeps rotation off in `--role mail`, and the `certs`
-  service that already holds the credential. Moving rotation is the next step:
-  each domain now has a key of its own (#1545), and the rotation of each
-  domain's key on its own state (#1579) is what moves into `certs`, once.
+- **The table's `dkim/` volume does not exist.** DKIM rotation and key
+  generation stay in `mail`, which keeps the keys, and with the split on the
+  rotation keeps running: since #1631 `mail` asks `certs` for each record
+  through the hand-off directory, as "The hand-off" above describes. Where
+  the keys go next is the signing service of phase 2, designed in
+  [the serve split](serve-split.md).
 - **The `acme-challenge/` volume does not exist.** See the first answer below.
 - **`stack rollback`** turns the container off with the current binary before
   it puts an older binary back, because that binary may not know `--role`.

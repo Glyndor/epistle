@@ -79,6 +79,7 @@ network at all and are reached only through Unix sockets.
 | [Migration](docs/operations/migration.md) | Moving from Mox, Stalwart or any IMAP server |
 | [Mesh between nodes](docs/operations/mesh.md) | The optional WireGuard network between nodes of one deployment: design and open decisions |
 | [Container stack](docs/operations/container.md) | What `epistle stack` runs and how it is built |
+| [Serve split](docs/operations/serve-split.md) | Which process holds which secret and parser once `serve` is split, and how they talk |
 | [Security](docs/security.md) and [threat model](docs/threat-model.md) | The controls, what they protect and what they assume |
 | [ASVS mapping](docs/asvs.md) | The controls mapped to OWASP ASVS |
 | [Performance](docs/operations/performance.md) | The measured hot paths and how to reproduce them |
