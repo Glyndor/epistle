@@ -63,6 +63,18 @@ on:
       - "!src/**/*_tests*.rs"
       - "!src/**/tests_*.rs"
       - "!src/**/test_support.rs"
+      # More names that only exist under #[cfg(test)]: the tests.rs leaves, the
+      # helper modules, the hostile HTTP harness and the keys and captures the
+      # tests read with include_bytes!.
+      - "!src/**/tests.rs"
+      - "!src/**/*_test_support.rs"
+      - "!src/test_support/**"
+      - "!src/smtp/directory/fixtures/**"
+      - "!src/smtp/session/test_hooks.rs"
+      - "!src/dns/txt_fixtures.rs"
+      - "!src/hostile_public_http/**"
+      - "!src/**/testdata/**"
+      - "!src/dkim/test_*.pem"
 
 # A newer push to a pull request supersedes the run in flight. Queue and
 # branch runs are never cancelled: only a pull_request event is.

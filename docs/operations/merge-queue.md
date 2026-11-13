@@ -24,6 +24,10 @@ required check carries `merge_group` at the top level:
 Workflows with path filters that are not required (`container`, `db`, `e2e`,
 `imaptest`, `interop`, `ldap`, `fuzz`, `upgrade`) do not run in the queue, and
 neither does `dependabot-freshness` in `ci.yml`. They run on the pull request.
+They skip a change that only touches `#[cfg(test)]` files under `src/`
+(`src/**/tests/**` and the other names in their filters), on the pull request
+and on the push alike; `db` skips only the test folders that never open a
+database.
 
 `dco` reads its commit range from the event: on `merge_group` it is the
 squash commit GitHub built, so the trailer is checked on the commit that
