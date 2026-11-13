@@ -10,13 +10,21 @@ epistle rotate --all --dry-run
 
 The command changes nothing. For each kind of secret it says where it is stored, how it is rotated and revoked, and what stays with the operator outside the server. Rows marked `not supported yet` link the work that is still missing.
 
+Then, on the rebuilt server (see below), rotate what it can rotate by itself:
+
+```sh
+epistle rotate --all
+```
+
+It gives every API key and app password a new secret, replaces the webhook secret and the SRS secret of every domain that has its own, asks the server to rotate and publish every DKIM key a `[dns]` entry publishes at, and restarts the mail service. It asks once before it starts, prints the new API key, app password and webhook secrets once at the end, and lists what is left to you. If it is interrupted, run it again: it continues the same run from its journal and rotates nothing twice. [The command reference](../cli.md#secrets-and-credentials-epistle-rotate) has the details.
+
 ## Rebuild first, then generate the keys
 
 Rotating the keys on a host that is still compromised achieves nothing: whoever is inside reads the new keys as they are written. So the order is:
 
 1. Stop the service and take a copy of the data directory for investigation. Do not repair the host.
 2. Build a new server from a clean image, and install `epistle` from the package archive again.
-3. Generate every new key on a clean machine, or on the rebuilt server before it is reachable from outside. That covers the DKIM, ARC, OAuth and evidence keys, the SRS and webhook secrets, and the storage key if you replace it.
+3. Generate every new key on a clean machine, or on the rebuilt server before it is reachable from outside. That covers the DKIM, ARC, OAuth and evidence keys, the SRS and webhook secrets, and the storage key if you replace it. `epistle rotate --all` does the API keys, app passwords, webhook and SRS secrets and DKIM keys in one go; the ARC, OAuth and evidence keys are still one command or one edit each, as the dry run says.
 4. Restore the mail from a backup made before the compromise, or from the copy you trust.
 5. Change what lives at other parties: the DNS provider token, the database password, the relay password, the S3 access key, the LDAP bind password. Create the new credential at the provider, then revoke the old one there. `epistle` holds nothing that can revoke them.
 6. Publish the new DNS records (DKIM and ARC selectors) and remove the records of the keys that were exposed. `epistle verify-dns` checks what is published.
@@ -25,7 +33,7 @@ Rotating the keys on a host that is still compromised achieves nothing: whoever 
 ## What rotation fixes
 
 - **Signing as your domains.** A new DKIM or ARC key signs from then on, and mail signed with the old key stops verifying once its DNS record is removed. Until the record is removed a stolen key still signs mail that verifies, so remove it when the overlap window of the rotation ends. A new SRS secret keeps the old one as `previous_secret` for 14 days so return addresses already out still verify; remove it when you want the old secret dead.
-- **Sessions and tokens.** A new OAuth signing key makes every token the old one signed stop verifying. New API keys and app passwords replace the old secrets in the same write.
+- **Sessions and tokens.** A new OAuth signing key makes every token the old one signed stop verifying. New API keys and app passwords replace the old secrets in the same write, so every client using an old one stops working until it is given the new one.
 - **Webhook receivers.** A new webhook secret stops the receiver accepting events signed with the old one.
 
 ## What rotation does not fix

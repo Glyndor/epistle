@@ -93,7 +93,7 @@ that never restart accept the option and ignore it.
 | [DNS provider for DKIM and TLSA](#dns-provider-epistle-dns-provider) | `epistle dns provider …` |
 | [Webhook and alerts](#webhook-epistle-webhook) | `epistle webhook …`, `epistle alert …` |
 | [SRS secret of each domain](#srs-epistle-srs) | `epistle srs show\|split\|rotate` |
-| [Every secret and how it is rotated](#secrets-and-credentials-epistle-rotate) | `epistle rotate --all --dry-run` |
+| [Every secret and how it is rotated, and rotating them](#secrets-and-credentials-epistle-rotate) | `epistle rotate --all --dry-run`, `epistle rotate --all` |
 | [Blob storage (filesystem or S3)](#blob-storage-epistle-storage-blobs) | `epistle storage blobs …` |
 | [Keys per tenant and key rotation](#tenant-keys-epistle-storage-tenant-keys) | `epistle storage tenant-keys migrate` |
 | [Rotate DKIM, renew TLS, rotate an API key](#rotations-epistle-dkim-epistle-tls-epistle-api-key) | `epistle dkim rotate`, `epistle dkim cleanup`, `epistle tls renew`, `epistle api-key rotate` |
@@ -158,7 +158,7 @@ a terminal. Echo comes back when the read ends, Ctrl-C included.
 `alias remove`, `masked remove`, `queue remove`, `dns publish`, `dns publish --undo`,
 `dns lockdown`, `dns lockdown --undo`, `dkim cleanup`, `learning reset`,
 `warmup start`, `webhook disable`, `stack rollback`, `evidence acknowledge`,
-`evidence abandon`, `evidence key rotate`, `evidence timestamp disable`,
+`evidence abandon`, `evidence key rotate`, `evidence timestamp disable`, `rotate --all`,
 `evidence clock accept` and `restore` ask before they
 change anything, and the question names what goes: the account with its masked
 addresses and app passwords, the API key's scopes, the queued message's sender
@@ -855,15 +855,29 @@ Each hosted domain signs the sender of the mail it forwards with a secret of its
 
 ```sh
 epistle rotate --all --dry-run [--json]
+epistle rotate --all [--yes|-y] [--json]
 ```
 
-Lists every kind of secret and credential the server holds, so that nobody has to read ten pages to know which ones exist after a compromise. For each one it says where it is stored, how it is rotated and how it is revoked, and who does it:
+`--dry-run` lists every kind of secret and credential the server holds, so that nobody has to read ten pages to know which ones exist after a compromise. For each one it says where it is stored, how it is rotated and how it is revoked, and who does it:
 
 - `epistle`: one command of `epistle` does it on this server, and the row names it.
 - `operator`: the operator does it, by hand or at the provider (a DNS token, the database password, the relay password). `epistle` cannot mint or revoke those.
 - `not supported yet`: `epistle` cannot do it yet. The row links the issue and says what to do meanwhile. Today that is the storage key (re-encrypting the existing mail under a new key), the mass reset of account passwords and second factors, and the TOTP seeds, which `accounts.toml` keeps in the clear while `[storage]` encryption is off.
 
-The list is a registry in the code, and a test fails the build when a secret field is added to the configuration without an entry in it, so a new secret cannot be left out of the procedure. `--dry-run` changes nothing and reads no configuration, so it works on a server whose configuration does not load. It is the only mode so far; without it the command refuses and exits 3. `--all` is required. `--json` prints one object with an `entries` array.
+The list is a registry in the code, and a test fails the build when a secret field is added to the configuration without an entry in it, so a new secret cannot be left out of the procedure. `--dry-run` changes nothing and reads no configuration, so it works on a server whose configuration does not load. `--all` is required. `--json` prints one object with an `entries` array.
+
+Without `--dry-run` the command rotates what this server can rotate by itself, in this order:
+
+1. every API key in `api_keys.toml` gets a new secret (scopes, domains, expiry and range stay; an evidence class follows the key to its new secret);
+2. every app password gets a new secret;
+3. the secret of the server's `[webhook]` is replaced;
+4. every `[[srs_domain]]` gets a new secret, the old one kept as `previous_secret` so the return addresses already out keep verifying for 14 days;
+5. the server is asked to rotate the `[dkim]` key and every `[[dkim.domain]]` key a `[dns]` entry publishes at, as `dkim rotate` and `dkim rotate --domain` do; it makes the keys and publishes their records within a minute;
+6. the mail service is restarted when the configuration changed (`The server must be restarted.` without a stack, and `--no-restart` leaves it for `epistle stack apply`).
+
+Before it changes anything it checks what each step will check, so a refusal (a DKIM key the server would not rotate today, a store that cannot be read) stops the command with nothing changed. Then it asks once, naming what stops working: every client of an old API key or app password, and the webhook receiver until it has the new secret. Without a terminal it is refused with exit code 2 unless `--yes` is given. At the end it prints the new API key, app password and webhook secrets once (the SRS secrets never leave the server), what was queued, and what is left to the operator: the notes about what this server could not rotate (a `[dkim]` key no `[dns]` entry publishes, a webhook secret read from the environment, a tenant's `[tenant.webhook] secret`, domains on the shared `srs_secret`, the static `[api] token_hash`), and every registry row the command does not carry out, with how to do it. `--json` prints one object: `steps` (each `kind`, `item`, `owner` and `result`: `rotated`, `queued` or the restart's `reload`), `secrets`, `reload`, `notes`, `then` and `remaining`.
+
+**A run cut short is continued, not repeated.** Each step first writes to a journal, `<data_dir>/rotate/journal.json`, the value it will leave (the hash of the new secret, or the DKIM selector in service), then makes the change, then marks itself done. A new secret is written to `<data_dir>/rotate/secrets.json` before the store or the file that will hold its hash changes. Both files are owner-only. If the command is killed, or a step fails, the next `epistle rotate --all` asks to continue the same run: a step whose value is already on disk is marked done without being applied again, so no secret is rotated twice and none is left with a hash whose secret nobody was given. The run stops at the first failure and names the step. When every step is done and the secrets are printed, the journal is kept as `last-run.json` and the secrets file is deleted, so the next `rotate --all` is a new rotation. A journal this version cannot read stops the command; it is not replaced. Two runs at once are refused.
 
 ## Domains (`epistle domain`)
 
