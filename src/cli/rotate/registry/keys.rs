@@ -14,7 +14,7 @@ pub(super) const ENTRIES: &[Entry] = &[
 			"DkimDomain.rsa_key_file",
 		],
 		rotate: Handling::Epistle(
-			"`epistle dkim rotate`, and `epistle dkim rotate --domain DOMAIN` for a domain's own key",
+			"`epistle rotate --all` asks the server to rotate every key it publishes; `epistle dkim rotate`, and `epistle dkim rotate --domain DOMAIN` for a domain's own key, do one",
 		),
 		revoke: Handling::Operator(
 			"delete the old selector's TXT record at the DNS provider once its overlap window ends; `epistle dkim cleanup` lists what is left",
@@ -63,8 +63,8 @@ pub(super) const ENTRIES: &[Entry] = &[
 		name: "Webhook signing secrets, the server's and each tenant's",
 		stored_in: "`[webhook] secret` and `[tenant.webhook] secret`",
 		config_fields: &["Webhook.secret"],
-		rotate: Handling::Operator(
-			"`epistle webhook set --secret-stdin` with a new secret, and the same secret at the receiver; a tenant's `[tenant.webhook] secret` is edited in the file",
+		rotate: Handling::Epistle(
+			"`epistle rotate --all` replaces the server's secret and prints it once (`epistle webhook set --secret-stdin` sets one by hand); a tenant's `[tenant.webhook] secret` is edited in the file",
 		),
 		revoke: Handling::Epistle(
 			"`epistle webhook disable` stops the server's webhook; a tenant's is removed from the file",
@@ -81,7 +81,7 @@ pub(super) const ENTRIES: &[Entry] = &[
 			"Config.srs_secret",
 		],
 		rotate: Handling::Epistle(
-			"`epistle srs rotate DOMAIN`, after `epistle srs split` for a domain that uses the shared secret",
+			"`epistle rotate --all` replaces the secret of every domain that has its own, and `epistle srs rotate DOMAIN` one; a domain on the shared secret needs `epistle srs split` first",
 		),
 		revoke: Handling::Operator(
 			"remove `previous_secret` from `[[srs_domain]]` after 14 days; removing it sooner stops the return addresses already out from verifying",

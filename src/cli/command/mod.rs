@@ -553,11 +553,14 @@ pub enum Command {
 		#[command(subcommand)]
 		action: crate::cli::srs::SrsCli,
 	},
-	/// Every secret and credential, and how each one is rotated.
+	/// Rotate every secret this server can rotate, after a compromise.
 	///
-	/// Walks the registry of secrets and credentials and prints, for each
-	/// one, what epistle does and what stays with the operator outside the
-	/// server. `--dry-run` changes nothing and is the only mode so far.
+	/// `--dry-run` lists every secret and credential, what epistle does and
+	/// what stays with the operator, and changes nothing. Without it the
+	/// command gives every API key and app password a new secret, replaces
+	/// the webhook secret and each domain's SRS secret, asks the server to
+	/// rotate the DKIM keys, and restarts the mail service. It asks first;
+	/// a run cut short is continued by the next one.
 	Rotate {
 		/// Configuration file; accepted before or after the action. The
 		/// listing does not read it.
@@ -569,7 +572,11 @@ pub enum Command {
 		/// Print the plan without changing anything.
 		#[arg(long)]
 		dry_run: bool,
-		/// Print the plan as one JSON object on stdout.
+		/// Skip the confirmation. Without a terminal the run is refused
+		/// with exit code 2 unless this is given.
+		#[arg(long, short = 'y')]
+		yes: bool,
+		/// Print the result as one JSON object on stdout.
 		#[arg(long)]
 		json: bool,
 	},

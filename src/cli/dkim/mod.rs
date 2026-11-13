@@ -379,7 +379,7 @@ pub(super) fn run_split(
 }
 
 mod cleanup;
-mod rotate_domain;
+pub(in crate::cli) mod rotate_domain;
 mod show;
 mod split;
 

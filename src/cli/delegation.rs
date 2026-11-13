@@ -21,6 +21,9 @@ impl Command {
 				action: super::evidence::EvidenceCli::Check { .. },
 				..
 			} => false,
+			// The rotation writes the stores and the configuration; the
+			// listing (`--dry-run`) reads nothing.
+			Command::Rotate { dry_run: false, .. } => true,
 			Command::Init { .. }
 			| Command::Stack { .. }
 			| Command::Db { .. }

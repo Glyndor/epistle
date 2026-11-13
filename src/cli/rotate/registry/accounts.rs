@@ -9,7 +9,7 @@ pub(super) const ENTRIES: &[Entry] = &[
 		stored_in: "`api_keys.toml` (sha256 digests) and `[api] token_hash`",
 		config_fields: &["Api.token_hash"],
 		rotate: Handling::Epistle(
-			"`epistle api-key rotate LABEL`, one key at a time; the static token is replaced by hand (`epistle token-hash`)",
+			"`epistle rotate --all` gives every key a new secret and prints it once, `epistle api-key rotate LABEL` one key; the static token is replaced by hand (`epistle token-hash`)",
 		),
 		revoke: Handling::Epistle("`epistle api-key revoke LABEL`, one key at a time"),
 		operator_after: &["hand each client its new key; it is shown once"],
@@ -19,7 +19,9 @@ pub(super) const ENTRIES: &[Entry] = &[
 		name: "App passwords",
 		stored_in: "`app_passwords.toml` (argon2id)",
 		config_fields: &[],
-		rotate: Handling::Epistle("`epistle app-password rotate N LABEL`, one at a time"),
+		rotate: Handling::Epistle(
+			"`epistle rotate --all` gives every app password a new secret and prints it once, `epistle app-password rotate N LABEL` one",
+		),
 		revoke: Handling::Epistle("`epistle app-password revoke N LABEL`, one at a time"),
 		operator_after: &["update every client that used the old secret"],
 	},

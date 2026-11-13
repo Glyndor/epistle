@@ -28,6 +28,12 @@ pub(super) fn guard(command: &Command) -> Result<Option<FileLock>, String> {
 			action: crate::cli::storage::blobs::StorageCli::Blobs { .. },
 			..
 		} => config,
+		// The rotation rewrites the API key and app password stores.
+		Command::Rotate {
+			config,
+			dry_run: false,
+			..
+		} => config,
 		Command::Migrate(args) => &args.config,
 		Command::Archive { action, .. } => match action {
 			archive::Subcommand::List { config, .. }
