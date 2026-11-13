@@ -542,6 +542,23 @@ keys and asks `certs` to publish each record through
 left are in [the split plan](container-split.md) and
 [the serve split](serve-split.md).
 
+### The DKIM signer socket
+
+Not in the stack yet: the code that serves DKIM signing on a Unix socket
+exists (`src/dkim/remote/`), and no service runs it. When the `signer` service
+is added, one volume holds the socket's directory and only the signer and its
+clients mount it.
+
+- The directory is `0700` and owned by the uid the signer runs as. The signer
+  refuses to bind in a directory open to group or others, or reached through a
+  symlink, and the socket is `0600`.
+- Every service runs as `uid 65532` under `keep-id` today, so a client in
+  another container reaches the socket as that same uid. A uid of its own for
+  the signer needs a group shared with its clients and a `0750` directory,
+  which waits for decision 3 of [the serve split](serve-split.md).
+- The signer does not read the caller's uid (`SO_PEERCRED`) yet: whoever
+  mounts the volume can ask for a signature.
+
 ### The database roles
 
 PostgreSQL's bootstrap superuser is `epistle_admin`, whose password is in

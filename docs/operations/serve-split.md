@@ -196,7 +196,12 @@ already says; publication stays with `certs` through the hand-off.
    `PerDomainSigner` implement.
 3. The frame codec, the socket server and client for that interface, and a
    fuzz target for the codec, tested over a socket pair. The stack does not
-   run it. Needs the uid measurement of decision 3.
+   run it. Needs the uid measurement of decision 3. Built without it: the
+   codec, `SignerServer` and `RemoteSigner` are in `src/dkim/remote/`, the
+   fuzz target is `signer_frame`, and the socket's directory is the only
+   identity (`0700`, the signer's uid, no `SO_PEERCRED`). A client that gets
+   no answer it can trust returns `Unavailable`, which no caller takes yet:
+   what `SplitDelivery` does with it is decision 1.
 4. `epistle serve --role signer`, the `signer` service off by default,
    `epistle stack signer enable|disable`, an area in `epistle status` and the
    rollback, the way phase 1 did it. Needs decisions 1 to 4, 6 and 7.
