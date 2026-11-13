@@ -84,10 +84,10 @@ fn drive(
 	let config =
 		Config::load(path).map_err(|error| format!("cannot load {}: {error}", path.display()))?;
 	let dir = journal::dir(&config.data_dir);
-	private_dir(&dir)?;
-	let _lock = FileLock::try_acquire(&dir.join("lock"))
-		.map_err(|error| format!("cannot lock {}: {error}", dir.display()))?
-		.ok_or("another `epistle rotate --all` is running on this server".to_string())?;
+	let _lock = lock(&config.data_dir)?.ok_or(
+		"another `epistle rotate --all` or an `epistle backup` is running on this server"
+			.to_string(),
+	)?;
 	let context = Context {
 		path,
 		config: &config,
@@ -201,6 +201,17 @@ impl<W: Write, R: FnOnce(&Config, StackAction) -> ExitCode> Run<'_, W, R> {
 		}
 		Ok(())
 	}
+}
+
+/// Take the rotation lock of `data_dir`, or `None` while someone holds it.
+/// A run holds it from start to end, and a backup while it reads the data
+/// directory, so the two never overlap: an archive cannot catch a run half
+/// way, and a run cannot change the stores under a backup.
+pub(in crate::cli) fn lock(data_dir: &Path) -> Result<Option<FileLock>, String> {
+	let dir = journal::dir(data_dir);
+	private_dir(&dir)?;
+	FileLock::try_acquire(&dir.join("lock"))
+		.map_err(|error| format!("cannot lock {}: {error}", dir.display()))
 }
 
 /// Create the run's directory readable by its owner alone.

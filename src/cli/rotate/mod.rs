@@ -9,6 +9,8 @@ mod plan;
 pub(super) mod registry;
 mod run;
 
+pub(super) use run::lock;
+
 use std::io::Write;
 use std::path::Path;
 use std::process::ExitCode;

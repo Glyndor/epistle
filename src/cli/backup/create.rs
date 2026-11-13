@@ -34,6 +34,29 @@ pub(in crate::cli) fn run_with(
 	warnings: &mut impl Write,
 	resolver: &dyn Fn(&str) -> Option<PathBuf>,
 ) -> ExitCode {
+	// A rotation in progress changes the stores and keeps its new secrets on
+	// disk; the backup waits for it rather than catching it half way. The
+	// lock lives in the rotation's directory, which only a rotation creates:
+	// a backup writes nothing into the data directory. A rotation that starts
+	// for the first time during a backup is not waited for, and its secrets
+	// stay out of the archive all the same (`collect::archived_from_rotation`).
+	let _rotation = if config.data_dir.join("rotate").is_dir() {
+		match crate::cli::rotate::lock(&config.data_dir) {
+			Ok(Some(lock)) => Some(lock),
+			Ok(None) => {
+				crate::cli::style::error(
+					"an `epistle rotate --all` is running on this server; back up once it has finished",
+				);
+				return ExitCode::FAILURE;
+			}
+			Err(error) => {
+				crate::cli::style::error(error);
+				return ExitCode::FAILURE;
+			}
+		}
+	} else {
+		None
+	};
 	let mut steps = Steps::start(&["files", "database", "archive"], false);
 	steps.begin("files");
 	let mut entries = match collect_files(&config.data_dir) {
