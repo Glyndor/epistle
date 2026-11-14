@@ -22,6 +22,7 @@ fn every_row_the_run_carries_out_names_it_in_the_registry() {
 fn every_kind_of_step_but_the_restart_maps_to_a_registry_row() {
 	for kind in [
 		Kind::ApiKey,
+		Kind::PanelApiKey,
 		Kind::AppPassword,
 		Kind::WebhookSecret,
 		Kind::SrsSecret,
@@ -33,7 +34,12 @@ fn every_kind_of_step_but_the_restart_maps_to_a_registry_row() {
 			"{kind:?} has no registry row"
 		);
 	}
-	assert!(!HANDLED.iter().any(|(kind, _)| *kind == Kind::Restart));
+	// The two steps that only act on a container rotate nothing themselves.
+	assert!(
+		!HANDLED
+			.iter()
+			.any(|(kind, _)| matches!(kind, Kind::Restart | Kind::PanelRecreate))
+	);
 }
 
 #[test]

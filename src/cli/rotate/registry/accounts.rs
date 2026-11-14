@@ -15,6 +15,19 @@ pub(super) const ENTRIES: &[Entry] = &[
 		operator_after: &["hand each client its new key; it is shown once"],
 	},
 	Entry {
+		id: "panel-api-key",
+		name: "The web panel's API key",
+		stored_in: "`api_keys.toml` (the `panel` label) and `secrets/panel_api_token` beside the data directory, which the panel container reads",
+		config_fields: &[],
+		rotate: Handling::Epistle(
+			"`epistle rotate --all` gives the key a new secret, writes it to the file and makes the `panel` container again; `epistle stack update` renews the key when fewer than 30 days are left",
+		),
+		revoke: Handling::Epistle(
+			"`epistle api-key revoke panel`; the next `epistle stack update` creates a new key and its file",
+		),
+		operator_after: &[],
+	},
+	Entry {
 		id: "app-password",
 		name: "App passwords",
 		stored_in: "`app_passwords.toml` (argon2id)",

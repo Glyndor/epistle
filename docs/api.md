@@ -207,6 +207,12 @@ secret when the file was lost, and renews the secret and the expiry when fewer
 than 30 days remain. A key labelled `panel` with any other scopes, domains or
 account is refused, not rewritten: revoke it and run the command again.
 
+`epistle rotate --all` rotates this key with every other one and writes the new
+secret to the same file, then makes the `panel` container again so that it
+reads it; the secret is not printed. `epistle api-key rotate panel` does
+neither: it prints the new secret and leaves the file with the old one, which
+the API refuses until the next `epistle stack update` replaces the file.
+
 The panel's admin area is served at `/app/{id}`, where `{id}` is a UUID v4 of
 this installation. `init` and `stack update` generate it once from the system's
 random source and keep it in `secrets/panel_admin_id` beside the data directory

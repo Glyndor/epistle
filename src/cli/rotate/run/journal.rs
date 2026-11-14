@@ -27,6 +27,9 @@ const FINISHED: &str = "last-run.json";
 pub(in crate::cli::rotate) enum Kind {
 	/// One management API key, by label.
 	ApiKey,
+	/// The web panel's API key, whose secret is also in the file the panel
+	/// container reads.
+	PanelApiKey,
 	/// One app password, by account and label.
 	AppPassword,
 	/// The secret of the server's `[webhook]`.
@@ -37,6 +40,8 @@ pub(in crate::cli::rotate) enum Kind {
 	DkimKey,
 	/// One domain's own `[[dkim.domain]]` key, rotated by the server.
 	DkimDomainKey,
+	/// The `panel` container made again, which is when it reads its key.
+	PanelRecreate,
 	/// The restart that makes the server read the new configuration.
 	Restart,
 }

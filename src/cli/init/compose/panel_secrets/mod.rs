@@ -20,6 +20,7 @@
 mod admin_id;
 mod held;
 mod key;
+mod rotation;
 mod session;
 
 use std::path::{Path, PathBuf};
@@ -29,6 +30,9 @@ use crate::api::ApiKeyStore;
 
 pub(crate) use admin_id::{AdminIdAction, read as read_admin_id};
 pub(crate) use key::KeyAction;
+pub(crate) use rotation::{held_api_token, replace_api_token};
+#[cfg(test)]
+pub(crate) use rotation::{install_for_tests, key_is_kept_for_tests};
 pub(crate) use session::SessionAction;
 
 /// The label of the panel's API key.

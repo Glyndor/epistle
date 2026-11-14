@@ -22,8 +22,7 @@ use std::io::Write;
 use std::path::Path;
 use std::process::ExitCode;
 
-use crate::cli::config_edit::{Outcome, after_change_reporting};
-use crate::cli::json_out::Reload;
+use crate::cli::config_edit::{Outcome, after_change_reporting, after_secret_change_reporting};
 use crate::cli::stack::StackAction;
 use crate::config::Config;
 use crate::storage::lock::FileLock;
@@ -48,9 +47,9 @@ pub(super) fn execute(
 	options: Options,
 	out: &mut impl Write,
 	status: &mut impl Write,
-	restart: impl FnOnce(&Config, StackAction) -> ExitCode,
+	stack: impl FnMut(&Config, StackAction) -> ExitCode,
 ) -> ExitCode {
-	match drive(path, &options, out, status, restart) {
+	match drive(path, &options, out, status, stack) {
 		Ok(code) => code,
 		Err(Stop::Refused(message)) => {
 			crate::cli::style::error(message);
@@ -79,7 +78,7 @@ fn drive(
 	options: &Options,
 	out: &mut impl Write,
 	status: &mut impl Write,
-	restart: impl FnOnce(&Config, StackAction) -> ExitCode,
+	mut stack: impl FnMut(&Config, StackAction) -> ExitCode,
 ) -> Result<ExitCode, Stop> {
 	let config =
 		Config::load(path).map_err(|error| format!("cannot load {}: {error}", path.display()))?;
@@ -109,16 +108,15 @@ fn drive(
 	.map_err(Stop::Cancelled)?;
 	journal.save(&dir)?;
 	let mut secrets = Secrets::open(&dir)?;
-	let mut restart = Some(restart);
-	let mut reload = None;
+	let mut reloads = report::Reloads::default();
 	for index in 0..journal.steps.len() {
 		let mut run = Run {
 			context: &context,
 			dir: &dir,
 			secrets: &mut secrets,
 			status,
-			restart: &mut restart,
-			reload: &mut reload,
+			stack: &mut stack,
+			reloads: &mut reloads,
 		};
 		if let Err(error) = run.advance(&mut journal, index) {
 			return Err(Stop::Refused(format!(
@@ -128,7 +126,7 @@ fn drive(
 			)));
 		}
 	}
-	report::print(out, &journal, &secrets, (resumed, reload), options.json)
+	report::print(out, &journal, &secrets, (resumed, reloads), options.json)
 		.map_err(|error| format!("cannot write the result: {error}"))?;
 	secrets.remove()?;
 	journal.archive(&dir, options.now)?;
@@ -141,11 +139,12 @@ struct Run<'a, W, R> {
 	dir: &'a Path,
 	secrets: &'a mut Secrets,
 	status: &'a mut W,
-	restart: &'a mut Option<R>,
-	reload: &'a mut Option<Reload>,
+	/// Runs one stack action: the restart of mail and the panel container.
+	stack: &'a mut R,
+	reloads: &'a mut report::Reloads,
 }
 
-impl<W: Write, R: FnOnce(&Config, StackAction) -> ExitCode> Run<'_, W, R> {
+impl<W: Write, R: FnMut(&Config, StackAction) -> ExitCode> Run<'_, W, R> {
 	/// Take the step at `index` one state further until it is done.
 	fn advance(&mut self, journal: &mut Journal, index: usize) -> Result<(), String> {
 		let step = journal.steps[index].clone();
@@ -178,24 +177,47 @@ impl<W: Write, R: FnOnce(&Config, StackAction) -> ExitCode> Run<'_, W, R> {
 		Ok(())
 	}
 
-	/// Put the decided value in place: a store or file write, or the restart.
+	/// Put the decided value in place: a store or file write, the panel
+	/// container, or the restart.
 	fn put(&mut self, step: &journal::Step, intent: &Intent) -> Result<(), String> {
-		if step.kind != Kind::Restart {
-			return steps::apply(self.context, step, intent, self.secrets);
+		match step.kind {
+			Kind::Restart => self.restart_mail(),
+			Kind::PanelRecreate => self.recreate_panel(),
+			_ => steps::apply(self.context, step, intent, self.secrets),
 		}
-		let restart = self
-			.restart
-			.take()
-			.ok_or("the restart was asked for twice in one run")?;
+	}
+
+	/// Make the `panel` container again from the compose file, so it is
+	/// handed the key file the run just wrote. A step cut short runs again:
+	/// making the container twice only costs the panel a second start.
+	fn recreate_panel(&mut self) -> Result<(), String> {
+		let (code, reload) = after_secret_change_reporting(
+			self.context.config,
+			steps::panel::SERVICE,
+			self.status,
+			&mut *self.stack,
+		)
+		.map_err(|error| error.to_string())?;
+		self.reloads.panel = Some(reload);
+		if code != ExitCode::SUCCESS {
+			return Err(
+				"the panel container could not be made again, so it still holds its old key"
+					.to_string(),
+			);
+		}
+		Ok(())
+	}
+
+	fn restart_mail(&mut self) -> Result<(), String> {
 		let (code, reload) = after_change_reporting(
 			self.context.config,
 			Outcome::Changed,
 			true,
 			self.status,
-			restart,
+			&mut *self.stack,
 		)
 		.map_err(|error| error.to_string())?;
-		*self.reload = Some(reload);
+		self.reloads.mail = Some(reload);
 		if code != ExitCode::SUCCESS {
 			return Err("the restart of the mail service failed".to_string());
 		}

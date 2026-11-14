@@ -16,7 +16,7 @@ Then, on the rebuilt server (see below), rotate what it can rotate by itself:
 epistle rotate --all
 ```
 
-It gives every API key and app password a new secret, replaces the webhook secret and the SRS secret of every domain that has its own, asks the server to rotate and publish every DKIM key a `[dns]` entry publishes at, and restarts the mail service. It asks once before it starts, prints the new API key, app password and webhook secrets once at the end, and lists what is left to you. If it is interrupted, run it again: it continues the same run from its journal and rotates nothing twice. [The command reference](../cli.md#secrets-and-credentials-epistle-rotate) has the details.
+It gives every API key and app password a new secret, replaces the webhook secret and the SRS secret of every domain that has its own, asks the server to rotate and publish every DKIM key a `[dns]` entry publishes at, and restarts the mail service. When the server runs the web panel, the panel's new key is written to the file it reads and its container is made again. It asks once before it starts, prints the new API key, app password and webhook secrets once at the end, and lists what is left to you. If it is interrupted, run it again: it continues the same run from its journal and rotates nothing twice. [The command reference](../cli.md#secrets-and-credentials-epistle-rotate) has the details.
 
 ## Rebuild first, then generate the keys
 

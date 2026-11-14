@@ -58,6 +58,22 @@ pub(crate) fn after_ports_change_reporting(
 	apply(config, outcome, true, status, run, action)
 }
 
+/// Like [`after_ports_change_reporting`] for a change to a file `service`
+/// reads as a secret: podup hands a container its secrets when it makes it,
+/// so a restart keeps the old content and the service is made again.
+/// `--no-restart` leaves it for `epistle stack apply`.
+pub(crate) fn after_secret_change_reporting(
+	config: &Config,
+	service: &str,
+	status: &mut impl Write,
+	run: impl FnOnce(&Config, stack::StackAction) -> ExitCode,
+) -> Result<(ExitCode, Reload), ResourceError> {
+	let action = stack::StackAction::Recreate {
+		service: service.into(),
+	};
+	apply(config, Outcome::Changed, true, status, run, action)
+}
+
 /// Like [`after_ports_change_reporting`] for a change to the DNS credential:
 /// the container that mounts it is recreated, `certs` when the stack runs
 /// the certificates container and `mail` otherwise.

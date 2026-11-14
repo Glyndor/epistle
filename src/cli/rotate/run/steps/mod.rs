@@ -4,6 +4,7 @@
 mod config;
 mod credentials;
 mod dkim;
+pub(in crate::cli::rotate) mod panel;
 
 use std::path::Path;
 
@@ -24,10 +25,12 @@ pub(in crate::cli::rotate) struct Context<'a> {
 
 /// Every step of a new run in order, and the notes for what this server
 /// cannot rotate. Checks what the steps will check, so a refusal comes
-/// before anything is changed. A restart closes the run when a step edits
-/// the configuration.
+/// before anything is changed. A restart follows the last secret when a step
+/// edits the configuration, and the panel's container is made again after
+/// everything else when its key file was one of them.
 pub(in crate::cli::rotate) fn plan(context: &Context) -> Result<(Vec<Step>, Vec<String>), String> {
 	let mut steps = credentials::plan(context.config)?;
+	let recreates_panel = panel::plan(context.config, &mut steps)?;
 	let (in_file, mut notes) = config::plan(context.path, context.config)?;
 	let edits_file = !in_file.is_empty();
 	steps.extend(in_file);
@@ -36,6 +39,9 @@ pub(in crate::cli::rotate) fn plan(context: &Context) -> Result<(Vec<Step>, Vec<
 	notes.extend(key_notes);
 	if edits_file {
 		steps.push(Step::pending(Kind::Restart, "", None));
+	}
+	if recreates_panel {
+		steps.push(Step::pending(Kind::PanelRecreate, "", None));
 	}
 	Ok((steps, notes))
 }
@@ -47,10 +53,12 @@ pub(in crate::cli::rotate) fn prepare(
 	secrets: &mut Secrets,
 ) -> Result<Intent, String> {
 	match step.kind {
-		Kind::ApiKey | Kind::AppPassword => credentials::prepare(context.config, step, secrets),
+		Kind::ApiKey | Kind::PanelApiKey | Kind::AppPassword => {
+			credentials::prepare(context.config, step, secrets)
+		}
 		Kind::WebhookSecret | Kind::SrsSecret => config::prepare(context.path, step, secrets),
 		Kind::DkimKey | Kind::DkimDomainKey => dkim::prepare(context.config, step),
-		Kind::Restart => Ok(Intent::Again),
+		Kind::PanelRecreate | Kind::Restart => Ok(Intent::Again),
 	}
 }
 
@@ -61,7 +69,7 @@ pub(in crate::cli::rotate) fn landed(
 	intent: &Intent,
 ) -> Result<bool, String> {
 	match (step.kind, intent) {
-		(Kind::ApiKey | Kind::AppPassword, Intent::Replace { new, .. }) => {
+		(Kind::ApiKey | Kind::PanelApiKey | Kind::AppPassword, Intent::Replace { new, .. }) => {
 			credentials::landed(context.config, step, new)
 		}
 		(Kind::WebhookSecret | Kind::SrsSecret, Intent::Replace { new, .. }) => {
@@ -78,7 +86,8 @@ pub(in crate::cli::rotate) fn landed(
 	}
 }
 
-/// Put the decided value in place. The restart is the caller's.
+/// Put the decided value in place. The restart and the panel container are
+/// the caller's.
 pub(in crate::cli::rotate) fn apply(
 	context: &Context,
 	step: &Step,
@@ -87,9 +96,15 @@ pub(in crate::cli::rotate) fn apply(
 ) -> Result<(), String> {
 	match step.kind {
 		Kind::ApiKey | Kind::AppPassword => credentials::apply(context.config, step, intent),
+		Kind::PanelApiKey => {
+			panel::write(context.config, step, secrets)?;
+			credentials::apply(context.config, step, intent)
+		}
 		Kind::WebhookSecret | Kind::SrsSecret => config::apply(context.path, step, secrets),
 		Kind::DkimKey | Kind::DkimDomainKey => dkim::apply(context.config, step, context.now),
-		Kind::Restart => Err("the restart is not a store step".to_string()),
+		Kind::PanelRecreate | Kind::Restart => {
+			Err(format!("a {:?} step is not a store step", step.kind))
+		}
 	}
 }
 

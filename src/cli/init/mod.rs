@@ -36,6 +36,14 @@ pub(crate) use compose::MAIL_STOP_GRACE_SECS;
 pub use compose::compose_file_path;
 pub(crate) use compose::panel_package::MANIFEST as PANEL_MANIFEST;
 pub(crate) use compose::panel_secrets::read_admin_id as panel_admin_id;
+pub(crate) use compose::panel_secrets::{
+	LABEL as PANEL_KEY_LABEL, held_api_token as panel_key_file,
+	replace_api_token as replace_panel_key,
+};
+#[cfg(test)]
+pub(crate) use compose::panel_secrets::{
+	install_for_tests as install_panel_for_tests, key_is_kept_for_tests as panel_key_is_kept,
+};
 pub(crate) use compose::{DATABASE_NAME, DATABASE_PASSWORD_FILE, DATABASE_USER, HOST_EPISTLE_PATH};
 pub(crate) use compose_publish::{
 	CONTAINER_BIND, CONTAINER_BIND_DUAL, Narrowed, OverrideEntry, OverridePorts,
