@@ -21,7 +21,8 @@ pub use config::config_parse;
 pub use dns::{dns_security_records, report_payload, sender_auth_records};
 pub use mailbox::imap_command_line;
 pub use message::{
-	arc_headers, arf_report, attachment_inspect, attachment_walk, dkim_signature, mime, rules_match,
+	arc_headers, arf_report, attachment_inspect, attachment_walk, dkim_signature, mime,
+	rules_match, signer_frame,
 };
 pub use migrate::migrate_imap_response;
 pub use queue::srs_reverse;

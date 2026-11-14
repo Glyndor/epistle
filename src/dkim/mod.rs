@@ -5,6 +5,7 @@ pub mod domain_keys;
 pub mod domain_rotate;
 pub(crate) mod key_record;
 mod per_domain;
+pub mod remote;
 pub mod rotate;
 mod rsa_keygen;
 pub mod sharing;
