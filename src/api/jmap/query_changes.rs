@@ -19,39 +19,6 @@ use super::fold::{Folded, Outcome, fold};
 use super::state::{Kind, State, admitted_account, entries_since, max_changes};
 use crate::imap::changelog::Object;
 
-/// The mailbox an Email query lists, or `None` when the journal cannot
-/// replay the query's results.
-pub(super) fn replayable_email_query(args: &Value) -> Option<String> {
-	let mailbox = match args.get("filter") {
-		None | Some(Value::Null) => "INBOX".to_string(),
-		Some(Value::Object(filter)) if filter.is_empty() => "INBOX".to_string(),
-		Some(Value::Object(filter)) if filter.len() == 1 => {
-			filter.get("inMailbox")?.as_str()?.to_string()
-		}
-		Some(_) => return None,
-	};
-	let newest_first = |comparator: &Value| {
-		comparator.get("property").and_then(Value::as_str) == Some("receivedAt")
-			&& comparator.get("isAscending").and_then(Value::as_bool) == Some(false)
-	};
-	match args.get("sort") {
-		None | Some(Value::Null) => Some(mailbox),
-		Some(Value::Array(sort)) if sort.is_empty() => Some(mailbox),
-		Some(Value::Array(sort)) if sort.len() == 1 && newest_first(&sort[0]) => Some(mailbox),
-		Some(_) => None,
-	}
-}
-
-/// The ids `Email/query` returns for `mailbox`: newest first.
-pub(super) fn email_query_ids(state: &ApiState, account: &str, mailbox: &str) -> Vec<String> {
-	let mut ids: Vec<String> =
-		crate::imap::mailbox::Snapshot::open(state.data_dir(), account, mailbox, state.crypto())
-			.map(|snapshot| snapshot.messages().map(|m| m.id().to_string()).collect())
-			.unwrap_or_default();
-	ids.reverse();
-	ids
-}
-
 pub(super) fn email(state: &ApiState, principal: &Principal, args: &Value, call_id: &str) -> Value {
 	reply(state, principal, args, call_id, Kind::Email)
 }
@@ -91,9 +58,10 @@ fn query_changes(
 		.and_then(Value::as_str)
 		.unwrap_or("");
 	let (method, object, current) = if kind == Kind::Email {
-		let mailbox = replayable_email_query(args)
+		let mailboxes = super::email_query::replayable_mailboxes(state, &account, args)
 			.ok_or_else(|| json!(["error", { "type": "cannotCalculateChanges" }, call_id]))?;
-		let ids = email_query_ids(state, &account, &mailbox);
+		let ids = super::email_query::replayable_ids(state, &account, &mailboxes)
+			.ok_or_else(|| json!(["error", { "type": "cannotCalculateChanges" }, call_id]))?;
 		("Email/queryChanges", Object::Email, ids)
 	} else {
 		let ids = crate::imap::mailbox::list(state.data_dir(), &account);
