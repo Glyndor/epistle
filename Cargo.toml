@@ -146,6 +146,10 @@ name = "utc_purity"
 path = "tests/repository/utc_purity.rs"
 
 [[test]]
+name = "advisory_ignores_agree"
+path = "tests/repository/advisory_ignores_agree.rs"
+
+[[test]]
 name = "rust_audit_workflow"
 path = "tests/workflows/audit/rust_audit_workflow.rs"
 
