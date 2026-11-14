@@ -34,6 +34,16 @@ impl Directory {
 			.contains(&account.to_ascii_lowercase())
 	}
 
+	/// Whether `account` may act at all: it is not administratively disabled
+	/// and does not wait for a credential reset. Sign-in refuses an account
+	/// for which this is `false` ([`Directory::admit_login`]), and a session
+	/// that signed in before the change asks again before each command, so
+	/// disabling or resetting an account also ends the sessions it has open.
+	pub fn account_is_live(&self, account: &str) -> bool {
+		let account = account.to_ascii_lowercase();
+		!self.disabled.contains(&account) && !self.credential_reset.contains(&account)
+	}
+
 	/// Attach the per-account protocol allowlist (account name → set of
 	/// protocols the account may authenticate through). Account names are
 	/// lowercased to match `credentials()`. An absent entry is

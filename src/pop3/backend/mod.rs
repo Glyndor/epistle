@@ -177,6 +177,10 @@ impl Backend for MailboxBackend {
 		)
 	}
 
+	fn account_is_live(&self, account: &str) -> bool {
+		self.directory.account_is_live(account)
+	}
+
 	fn list(&self, account: &str) -> Vec<(String, usize)> {
 		crate::util::blocking::may_block(|| self.list_newest(account, self.listed_limit))
 	}

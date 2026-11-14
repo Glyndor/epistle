@@ -63,7 +63,7 @@ impl Iterator for Wire<'_> {
 				self.done = true;
 				return Some(format!("+OK {text}\r\n").into_bytes());
 			}
-			Response::Err(text) => {
+			Response::Err(text) | Response::Closing(text) => {
 				self.done = true;
 				return Some(format!("-ERR {text}\r\n").into_bytes());
 			}

@@ -11,8 +11,9 @@ impl Server {
 	/// With NOTIFY active (RFC 5465), poll the selected mailbox at
 	/// `IDLE_POLL` intervals while waiting and push unsolicited
 	/// EXISTS/EXPUNGE. Returns the number of bytes read, or `None` when the
-	/// connection must end: the server is draining, the deadline passed, or a
-	/// notification could not be written.
+	/// connection must end: the server is draining, the deadline passed, a
+	/// poll found the account disabled or reset, or a notification could not
+	/// be written.
 	pub(super) async fn read_more<S>(
 		&self,
 		stream: &mut S,
@@ -57,6 +58,9 @@ impl Server {
 							session.is_authenticated(),
 						)
 						.await;
+						return Ok(None);
+					}
+					if self.end_if_withdrawn(stream, clock, session).await {
 						return Ok(None);
 					}
 					if let Some(notification) = session.check_notify()

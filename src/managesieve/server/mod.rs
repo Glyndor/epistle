@@ -71,6 +71,9 @@ impl Backend for DirectoryBackend {
 	fn store(&self, account: &str) -> ScriptStore {
 		ScriptStore::new(&self.accounts_root, account)
 	}
+	fn account_is_live(&self, account: &str) -> bool {
+		self.directory.account_is_live(account)
+	}
 }
 
 /// A ManageSieve server bound to one listener.

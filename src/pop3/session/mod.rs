@@ -43,6 +43,13 @@ pub trait Backend {
 	fn fetch(&self, account: &str, uid: &str) -> Option<Vec<u8>>;
 	/// Permanently remove the given unique-ids (committed at QUIT).
 	fn remove(&self, account: &str, uids: &[String]);
+	/// Whether the signed-in `account` may still act: not disabled and not
+	/// waiting for a credential reset since it signed in. Asked before every
+	/// command of the TRANSACTION state. A backend with no directory to ask
+	/// keeps the default.
+	fn account_is_live(&self, _account: &str) -> bool {
+		true
+	}
 }
 
 /// What the session wants written back. Encoding (dot-stuffing, CRLF, the
@@ -65,6 +72,8 @@ pub enum Response {
 	},
 	/// `+OK <text>` then close the connection.
 	Bye(String),
+	/// `-ERR <text>` then close the connection, committing nothing.
+	Closing(String),
 }
 
 impl Response {
@@ -82,7 +91,7 @@ impl Response {
 
 	/// Whether the connection should close after sending this response.
 	pub fn is_final(&self) -> bool {
-		matches!(self, Response::Bye(_))
+		matches!(self, Response::Bye(_) | Response::Closing(_))
 	}
 
 	/// Whether this is the reply for a message that cannot be read.
@@ -200,7 +209,14 @@ impl<B: Backend> Session<B> {
 	pub fn handle(&mut self, command: Command) -> Response {
 		match self.state {
 			State::Authorization => self.authorization(command),
-			State::Transaction => self.transaction(command),
+			// An account disabled or reset since sign-in ends the session
+			// here, QUIT included: the deletions it marked are not committed.
+			State::Transaction => match &self.account {
+				Some(account) if !self.backend.account_is_live(account) => {
+					Response::Closing("account no longer available".to_string())
+				}
+				_ => self.transaction(command),
+			},
 		}
 	}
 
