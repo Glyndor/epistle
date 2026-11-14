@@ -12,6 +12,11 @@
 //! confusable check on the U-label form, runs UTS 46 strict to produce the
 //! A-label, and re-validates the wire shape on the result. Any caller that
 //! stores a domain stores the returned string verbatim.
+//!
+//! [`catalog`] holds what each hosted domain is, read once for the command
+//! and the API routes that show it.
+
+pub mod catalog;
 
 use crate::util::validation::{MAX_DOMAIN, MAX_LABEL};
 use unicode_security::confusable_detection::skeleton;

@@ -1,6 +1,7 @@
 pub use super::*;
 
 pub(super) mod aliases;
+pub(super) mod api_parity;
 pub(super) mod base;
 pub(super) mod dry_run;
 pub(super) mod removal;

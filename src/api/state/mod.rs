@@ -132,6 +132,8 @@ struct Inner {
 	webhook: Option<Arc<crate::webhook::Webhook>>,
 	/// Hosted domains switched off (`disabled_domains`).
 	disabled_domains: Vec<String>,
+	/// What each hosted domain is, as `epistle domain show` reads it.
+	domain_catalog: crate::domain::catalog::Catalog,
 	/// Per-instance message-size cap, applied consistently to SMTP
 	/// (`SIZE` extension, per-line running check, end-of-DATA check,
 	/// per-chunk BDAT cap), the JMAP `Email/set` build, the JMAP

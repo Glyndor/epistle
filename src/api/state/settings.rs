@@ -37,9 +37,27 @@ impl ApiState {
 	/// state is shared.
 	pub fn with_disabled_domains(mut self, domains: Vec<String>) -> Self {
 		if let Some(inner) = Arc::get_mut(&mut self.inner) {
+			inner.domain_catalog =
+				crate::domain::catalog::Catalog::hosting(&inner.domains, &domains);
 			inner.disabled_domains = domains;
 		}
 		self
+	}
+
+	/// Describe the hosted domains from the configuration file the server
+	/// started with, so the domain routes answer what `epistle domain show`
+	/// prints. Without it they know only the domains and which are switched
+	/// off. Must be set before the state is shared.
+	pub fn with_domain_catalog(mut self, catalog: crate::domain::catalog::Catalog) -> Self {
+		if let Some(inner) = Arc::get_mut(&mut self.inner) {
+			inner.domain_catalog = catalog;
+		}
+		self
+	}
+
+	/// What each hosted domain is.
+	pub fn domain_catalog(&self) -> &crate::domain::catalog::Catalog {
+		&self.inner.domain_catalog
 	}
 
 	/// The hosted domains that are switched off: they stay in

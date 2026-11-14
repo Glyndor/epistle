@@ -1,4 +1,7 @@
-//! `GET /api/v1/domains`.
+//! `GET /api/v1/domains` and `GET /api/v1/domains/{domain}`: the hosted
+//! domains as `epistle domain list --json` and `epistle domain show --json`
+//! print them, both read from [`crate::domain::catalog`]. A key confined to
+//! some domains sees only those.
 
 use axum::extract::State;
 use axum::{Extension, Json};
@@ -6,6 +9,9 @@ use serde::Serialize;
 
 use crate::api::Principal;
 use crate::api::state::{ApiState, MatchedAuth};
+use crate::domain::catalog::DomainRow;
+
+pub(super) mod domain;
 
 #[derive(Serialize)]
 pub struct Domains {
@@ -13,6 +19,9 @@ pub struct Domains {
 	domains: Vec<String>,
 	/// Those of them that are switched off: mail for them is rejected.
 	disabled: Vec<String>,
+	/// The same domains with their role and alias edges, each the row
+	/// `epistle domain list --json` prints for it.
+	details: Vec<DomainRow>,
 }
 
 pub async fn list(
@@ -36,8 +45,18 @@ pub async fn list(
 		})
 		.cloned()
 		.collect();
+	let details = state
+		.domain_catalog()
+		.rows()
+		.into_iter()
+		.filter(|row| principal.admits_domain(&row.domain))
+		.collect();
 	Json(Domains {
 		domains: visible,
 		disabled,
+		details,
 	})
 }
+
+#[cfg(test)]
+mod tests;

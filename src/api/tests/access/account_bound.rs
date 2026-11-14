@@ -33,6 +33,7 @@ async fn account_bound_key_is_refused_on_administrative_routes() {
 		("GET", "/api/v1/status"),
 		("GET", "/api/v1/accounts"),
 		("GET", "/api/v1/domains"),
+		("GET", "/api/v1/domains/example.org"),
 		("GET", "/api/v1/queue"),
 		("GET", "/scim/v2/Users"),
 	] {

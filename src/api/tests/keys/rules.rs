@@ -19,6 +19,9 @@ pub(super) enum Domain {
 	/// The `{name}` account of the path must be covered, or the answer is the
 	/// same `404` as for an account that does not exist.
 	AccountParam,
+	/// The `{domain}` of the path must be one of the key's domains, or the
+	/// answer is the same `404` as for a domain the server does not host.
+	HostedParam,
 	/// Data shared by every tenant: refused to a confined key.
 	Unconfined,
 	/// The caller proves an account with its own credentials; no key is used.
@@ -126,6 +129,12 @@ pub(super) const RULES: &[Rule] = &[
 		"read",
 		Domain::Filtered,
 		"a_scoped_key_lists_only_its_own_domains",
+	),
+	rule(
+		"/api/v1/domains/{domain}",
+		"read",
+		Domain::HostedParam,
+		"a_confined_key_gets_the_same_404_for_a_foreign_and_an_unknown_domain",
 	),
 	rule(
 		"/api/v1/accounts",
