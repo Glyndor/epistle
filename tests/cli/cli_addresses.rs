@@ -318,15 +318,11 @@ fn domain_and_domain_alias_edits_write_lowercase() {
 		b"",
 	);
 	assert!(removed.status.success(), "{}", stderr(&removed));
-	let file = std::fs::read_to_string(&config).expect("config");
-	assert!(
-		file.contains("domains = [\"example.org\", \"example.net\"]"),
-		"{file}"
-	);
-	assert!(
-		file.contains("\"alias.example\" = \"example.net\""),
-		"{file}"
-	);
-	assert!(!file.contains("Old.Example"), "{file}");
-	assert!(!file.contains("NET") && !file.contains("Alias."), "{file}");
+	// The edits land in the state file under the data directory, not in the
+	// configuration file, which stays as the operator wrote it.
+	let file = std::fs::read_to_string(dir.path().join("data/domains.toml")).expect("state file");
+	assert!(file.contains("name = \"example.net\""), "{file}");
+	assert!(file.contains("alias.example"), "{file}");
+	assert!(!file.contains("old.example"), "{file}");
+	assert!(!file.contains("NET") && !file.contains("Alias.") && !file.contains("Old."), "{file}");
 }
