@@ -4,17 +4,29 @@ use std::sync::Arc;
 
 use crate::config::Config;
 
+/// Where the SMTP server writes the DMARC journal the hourly flush reads:
+/// `data_dir`, or nowhere with `[queue] dmarc_reports = false`, since
+/// records nobody flushes would pile up under `data_dir/dmarc-reports/`.
+pub(in crate::cli::serve) fn dmarc_journal_dir(config: &Config) -> Option<std::path::PathBuf> {
+	config.queue.dmarc_reports.then(|| config.data_dir.clone())
+}
+
 /// Spawn the hourly DMARC aggregate-report flush: for each completed day with
 /// accumulated delivery records, build the reports and queue them through
-/// `sink` (so the outbound mail is DKIM-signed like any other).
+/// `sink` (so the outbound mail is DKIM-signed like any other). The reports
+/// come from `postmaster@<hostname>` unless `[queue] dmarc_report_from` says
+/// otherwise. Not spawned with `[queue] dmarc_reports = false`.
 pub(in crate::cli::serve) fn spawn_dmarc_flush(
 	config: &Config,
 	spf_dns: Arc<dyn crate::spf::DnsLookup>,
 	sink: Arc<dyn crate::smtp::sink::MessageSink>,
 ) -> std::io::Result<()> {
+	if !config.queue.dmarc_reports {
+		return Ok(());
+	}
 	let data_dir = config.data_dir.clone();
 	let hostname = config.hostname.clone();
-	let org_email = format!("postmaster@{hostname}");
+	let org_email = config.dmarc_report_from();
 	let auto_submitted = config.system_auto_submitted;
 	tokio::spawn(async move {
 		let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));

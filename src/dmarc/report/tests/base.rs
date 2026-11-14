@@ -14,6 +14,7 @@ fn sample_records() -> Vec<DeliveryRecord> {
 			disposition: "none".to_string(),
 			policy_domain: "example.org".to_string(),
 			published_policy: "reject".to_string(),
+			published_subdomain_policy: "reject".to_string(),
 			pct: 100,
 		},
 		DeliveryRecord {
@@ -28,6 +29,7 @@ fn sample_records() -> Vec<DeliveryRecord> {
 			disposition: "reject".to_string(),
 			policy_domain: "example.org".to_string(),
 			published_policy: "reject".to_string(),
+			published_subdomain_policy: "reject".to_string(),
 			pct: 100,
 		},
 	]
@@ -95,6 +97,7 @@ fn build_email_has_correct_structure() {
 	);
 	let now = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
 	let email = build_email(
+		"postmaster@example.org",
 		"sender.example",
 		"reports@example.org",
 		"r1",

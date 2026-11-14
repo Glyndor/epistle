@@ -44,6 +44,7 @@ impl Config {
 		self.validate_webhook()?;
 		self.validate_tenant_webhooks()?;
 		self.validate_retry_schedule()?;
+		self.validate_dmarc_report_from()?;
 		self.validate_privileges()?;
 		self.validate_transport()?;
 		self.validate_oauth()?;

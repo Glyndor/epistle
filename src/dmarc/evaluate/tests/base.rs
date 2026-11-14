@@ -2,9 +2,9 @@ use super::*;
 use std::collections::HashMap;
 use std::pin::Pin;
 
-struct TxtDns {
-	records: HashMap<String, Vec<String>>,
-	fail: bool,
+pub(super) struct TxtDns {
+	pub(super) records: HashMap<String, Vec<String>>,
+	pub(super) fail: bool,
 }
 
 impl DnsLookup for TxtDns {
@@ -35,7 +35,7 @@ impl DnsLookup for TxtDns {
 	}
 }
 
-fn dns(records: &[(&str, &str)]) -> TxtDns {
+pub(super) fn dns(records: &[(&str, &str)]) -> TxtDns {
 	let mut map: HashMap<String, Vec<String>> = HashMap::new();
 	for (name, value) in records {
 		map.entry(name.to_string())

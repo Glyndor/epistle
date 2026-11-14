@@ -8,6 +8,19 @@ pub enum Policy {
 	Reject,
 }
 
+impl Policy {
+	/// The value the record publishes this policy as: `none`, `quarantine`
+	/// or `reject`. The same words the `p=` and `sp=` tags carry, so a
+	/// report can quote the policy the way the domain published it.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Policy::None => "none",
+			Policy::Quarantine => "quarantine",
+			Policy::Reject => "reject",
+		}
+	}
+}
+
 /// Alignment mode for SPF/DKIM identifiers (RFC 7489 section 3.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Alignment {

@@ -55,7 +55,8 @@ pub(super) use directory::{build_ldap_authenticator, spawn_ldap_directory, spawn
 pub(super) use oauth::build_authz_server;
 pub(in crate::cli) use oauth::build_oauth_verifier;
 pub(super) use sweeps::{
-	retention_days, spawn_dmarc_flush, spawn_storage_maintenance, spawn_tlsrpt_reports,
+	dmarc_journal_dir, retention_days, spawn_dmarc_flush, spawn_storage_maintenance,
+	spawn_tlsrpt_reports,
 };
 
 mod bayes;

@@ -6,8 +6,8 @@ use std::pin::Pin;
 use crate::smtp::sink::MemorySink;
 
 #[derive(Default)]
-struct FakeDns {
-	txt: HashMap<String, Vec<String>>,
+pub(super) struct FakeDns {
+	pub(super) txt: HashMap<String, Vec<String>>,
 	fail: bool,
 	fail_names: Vec<String>,
 }
@@ -43,7 +43,7 @@ impl crate::spf::DnsLookup for FakeDns {
 	}
 }
 
-fn dns_with_dmarc(domain: &str, policy: &str) -> FakeDns {
+pub(super) fn dns_with_dmarc(domain: &str, policy: &str) -> FakeDns {
 	let mut dns = FakeDns::default();
 	dns.txt
 		.entry(format!("_dmarc.{domain}"))
@@ -52,7 +52,7 @@ fn dns_with_dmarc(domain: &str, policy: &str) -> FakeDns {
 	dns
 }
 
-fn sample_record(domain: &str) -> DeliveryRecord {
+pub(super) fn sample_record(domain: &str) -> DeliveryRecord {
 	DeliveryRecord {
 		timestamp: 1_700_000_000,
 		source_ip: "1.2.3.4".to_string(),
@@ -65,6 +65,7 @@ fn sample_record(domain: &str) -> DeliveryRecord {
 		disposition: "none".to_string(),
 		policy_domain: domain.to_string(),
 		published_policy: "reject".to_string(),
+		published_subdomain_policy: "reject".to_string(),
 		pct: 100,
 	}
 }
@@ -73,7 +74,7 @@ fn fixed_now() -> std::time::SystemTime {
 	std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000)
 }
 
-fn build_sender<'a>(
+pub(super) fn build_sender<'a>(
 	data_dir: &'a std::path::Path,
 	dns: &'a dyn crate::spf::DnsLookup,
 	sink: &'a dyn MessageSink,
@@ -137,6 +138,7 @@ fn record_and_read_roundtrip() {
 		disposition: "none".to_string(),
 		policy_domain: "example.org".to_string(),
 		published_policy: "reject".to_string(),
+		published_subdomain_policy: "reject".to_string(),
 		pct: 100,
 	};
 	record_delivery(dir.path(), "20240101", &record);

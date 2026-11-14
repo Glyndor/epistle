@@ -155,6 +155,7 @@ fn an_abuse_report_has_the_documented_headers() {
 #[test]
 fn a_dmarc_report_has_the_documented_headers() {
 	let email = epistle::dmarc::report::build_email(
+		"postmaster@example.org",
 		"example.net",
 		"rua@example.net",
 		"report-1",
