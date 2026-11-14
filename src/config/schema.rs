@@ -1,0 +1,451 @@
+//! The configuration schema: every field the configuration file may set.
+
+use std::net::{Ipv4Addr, Ipv6Addr};
+use std::path::PathBuf;
+
+use serde::Deserialize;
+
+use super::defaults::{default_bulk_recipients, default_masked_addresses_max, default_yes};
+use super::{
+	Account, Acme, Alert, Alias, Antispam, Api, Arc, Attachments, Auth, Database, Dkim,
+	DnsProviders, DnsPublish, Ldap, Listener, Llm, LogFormat, MtaSts, Oauth, Otel, Privileges,
+	Queue, SrsDomain, Storage, SubjectPass, Tenant, Tls, Transport, Webhook,
+};
+
+/// Top-level server configuration.
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Config {
+	/// Fully qualified hostname the server identifies as (EHLO, TLS).
+	pub hostname: String,
+	/// The public IPv4 address the hostname resolves to. Optional: when set,
+	/// `dns-records` emits the A record and `verify-dns` checks the PTR of
+	/// this address; when absent, `verify-dns` resolves the hostname instead.
+	#[serde(default)]
+	pub public_ipv4: Option<Ipv4Addr>,
+	/// Same for IPv6 (an AAAA record). Publishing SPF for a host that also
+	/// has AAAA without listing the IPv6 makes mail sent over IPv6 fail SPF.
+	#[serde(default)]
+	pub public_ipv6: Option<Ipv6Addr>,
+	/// Directory where all server state lives.
+	pub data_dir: PathBuf,
+	/// Domains this server accepts mail for. Required when any listener
+	/// is configured: without it every recipient would be rejected.
+	#[serde(default)]
+	pub domains: Vec<String>,
+	/// Domain aliases (alias domain → target domain): mail to `user@alias`
+	/// is delivered as `user@target`.
+	#[serde(default)]
+	pub domain_aliases: std::collections::HashMap<String, String>,
+	/// Entries of `domains` that are switched off: the domain stays
+	/// configured (accounts, mailboxes and DKIM keys are kept), but mail for
+	/// it is rejected like mail for an unknown user and no account may send
+	/// as an address in it. Its DNS says the same: null SPF, null MX, a
+	/// `reject` DMARC policy and no DKIM, MTA-STS, TLS-RPT or client
+	/// locator. Each entry must also be in `domains`.
+	#[serde(default)]
+	pub disabled_domains: Vec<String>,
+	/// Entries of `domains` that only send mail (the `send-only` role): the
+	/// DNS they need is SPF, DKIM, DMARC and MX, with no MTA-STS, TLS-RPT,
+	/// SRV, `autoconfig` or `autodiscover` records. Every other domain is
+	/// `full`. Each entry must also be in `domains`.
+	#[serde(default)]
+	pub send_only_domains: Vec<String>,
+	/// Entries of `domains` that only receive mail (the `receive-only`
+	/// role): nothing is sent as the domain, so its DNS carries the null SPF
+	/// and a `reject` DMARC policy and no DKIM key, and no account may send
+	/// as an address in it. Each entry must also be in `domains` and not in
+	/// `send_only_domains`.
+	#[serde(default)]
+	pub receive_only_domains: Vec<String>,
+	/// DNS blocklist zones (RFC 5782) screened against unauthenticated
+	/// clients. Empty disables DNSBL screening (the default).
+	#[serde(default)]
+	pub dnsbl_zones: Vec<String>,
+	/// Right-hand-side blocklist zones queried with the envelope sender's
+	/// domain (RFC 5782 §2.3). Absent disables the sender-domain screen.
+	#[serde(default)]
+	pub dnsbl_domain_zones: Vec<String>,
+	/// URI blocklist zones queried with the host of every URL found in the
+	/// body (RFC 5782 §2.3). Absent disables the URL-host screen.
+	#[serde(default)]
+	pub dnsbl_url_zones: Vec<String>,
+	/// Seconds to delay a first-time (no-reputation) unauthenticated sender
+	/// before accepting. 0 disables the slowdown (the default). Requires a
+	/// configured database.
+	#[serde(default)]
+	pub first_time_sender_delay_secs: u64,
+	/// Seconds an unseen (client, sender, recipient) triplet is greylisted
+	/// (deferred with a 451) before a retry is accepted. 0 disables greylisting
+	/// (the default).
+	#[serde(default)]
+	pub greylist_delay_secs: u64,
+	/// Secret for Sender Rewriting Scheme (SRS) on forwarded mail. When set,
+	/// redirected/forwarded mail's envelope sender is rewritten so it passes
+	/// SPF at the next hop. Absent disables SRS (the default).
+	pub srs_secret: Option<String>,
+	/// A secret of its own for a hosted domain's forwarded mail, one
+	/// `[[srs_domain]]` per domain. A domain with no entry keeps using
+	/// `srs_secret`; two domains may not share a secret.
+	#[serde(default)]
+	pub srs_domain: Vec<SrsDomain>,
+	/// Per-account IMAP storage quota in bytes (RFC 9208). Absent uses the
+	/// built-in default (5 GiB).
+	pub quota_bytes: Option<u64>,
+	/// Outbound give-up window in seconds: undelivered mail older than this is
+	/// bounced to the sender. Absent uses the built-in default (5 days).
+	pub queue_give_up_secs: Option<u64>,
+	/// Outbound wait after a recipient's first failed attempt, in seconds;
+	/// each later wait doubles. Absent uses 60 (one minute).
+	pub queue_retry_base_secs: Option<u64>,
+	/// Longest outbound wait between attempts, in seconds. Absent uses 3600.
+	pub queue_retry_cap_secs: Option<u64>,
+	/// Message age, in seconds, at which the one "delivery delayed" warning
+	/// is sent. Absent uses 14400 (four hours).
+	pub queue_delay_warning_secs: Option<u64>,
+	/// Delivery rules: route or flag locally delivered mail by sender/header.
+	#[serde(default)]
+	pub rules: Vec<crate::rules::Rule>,
+	/// URL of an external scanner hook (ClamAV/Rspamd behind HTTP) consulted
+	/// for unauthenticated inbound mail. Leave unset to disable HTTP scanning.
+	pub scanner_hook_url: Option<String>,
+	/// Unix socket scanner configuration. Absent disables clamd.
+	#[serde(default)]
+	pub antispam: Antispam,
+	/// What to do with attachments that are not what they claim. Absent
+	/// flags them.
+	#[serde(default)]
+	pub attachments: Attachments,
+	/// LLM-assisted screening for unauthenticated mail whose Bayesian score
+	/// lands in an uncertain band. Absent disables the hook.
+	pub antispam_llm: Option<Llm>,
+	/// SubjectPass opt-in: signed retry token for the uncertain band.
+	/// Disabled by default; enabling requires a `[database]` section so the
+	/// band has a Bayesian score to fall back on.
+	#[serde(default)]
+	pub subjectpass: SubjectPass,
+	/// Network listeners. Empty means the server starts nothing.
+	#[serde(default)]
+	pub listeners: Vec<Listener>,
+	/// Mail accounts. Mail for a local domain address not listed here is
+	/// rejected during RCPT.
+	#[serde(default)]
+	pub accounts: Vec<Account>,
+	/// TLS material. Required by `submissions` listeners; enables STARTTLS
+	/// on `smtp` and `submission` listeners.
+	pub tls: Option<Tls>,
+	/// Public MTA-STS policy settings.
+	#[serde(default)]
+	pub mta_sts: MtaSts,
+	/// DKIM signing for outbound mail.
+	pub dkim: Option<Dkim>,
+	/// Management API. Required by `api` listeners.
+	pub api: Option<Api>,
+	/// PostgreSQL backing for the antispam engine. Optional until antispam
+	/// persistence is enabled.
+	pub database: Option<Database>,
+	/// Log output format (text or json).
+	#[serde(default)]
+	pub log_format: LogFormat,
+	/// Automatic TLS (ACME). Present enables certificate issuance/renewal.
+	pub acme: Option<Acme>,
+	/// DNS providers for record automation (e.g. TLSA refresh on cert
+	/// rotation): one `[dns]` table, or one `[[dns]]` table per zone, each
+	/// with its own credential.
+	#[serde(default)]
+	pub dns: DnsProviders,
+	/// How automatic mode keeps the DNS records true: the interval of the
+	/// server's reconcile loop. See [`DnsPublish`].
+	#[serde(default)]
+	pub dns_publish: DnsPublish,
+	/// Default storage quota (bytes) per domain, applied to accounts in that
+	/// domain that have no quota of their own.
+	#[serde(default)]
+	pub domain_quotas: std::collections::HashMap<String, u64>,
+	/// Write a `Feedback-ID` of the sending domain and the class on a
+	/// submission that has none. `false` leaves the field to the client.
+	#[serde(default = "default_yes")]
+	pub default_feedback_id: bool,
+	/// Give a bulk `transactional` submission a `mailto` `List-Unsubscribe`
+	/// pointing at the sender. `false` leaves every submission without one.
+	/// Nothing on the server answers the address it points at: it is the
+	/// sender's own mailbox, and the sender's own tooling has to act on it.
+	#[serde(default = "default_yes")]
+	pub default_list_unsubscribe: bool,
+	/// Recipients above which a `transactional` submission counts as bulk
+	/// for `default_list_unsubscribe`. `20`, the default, means twenty-one or
+	/// more: a notice to a handful of people is correspondence, not bulk
+	/// mail. Personal mail never counts and marketing mail already has to
+	/// carry a one-click unsubscribe.
+	#[serde(default = "default_bulk_recipients")]
+	pub bulk_recipients: usize,
+	/// Write the `List-Id` of the list a sender speaks for when the envelope
+	/// sender is a configured `[[alias]]` with a `list_id`. `false` leaves
+	/// the field to the client.
+	#[serde(default = "default_yes")]
+	pub default_list_id: bool,
+	/// Write `Auto-Submitted: auto-generated` on the mail the server builds
+	/// itself (bounces, alerts, DMARC and TLS-RPT reports). `false` leaves
+	/// the field out of that mail.
+	#[serde(default = "default_yes")]
+	pub system_auto_submitted: bool,
+	/// Write `X-Epistle: 1` on every submission. On by default: it names the
+	/// software the message left, with no version, and a receiver ignores it.
+	/// The value is fixed and a client cannot write or change it. `false`
+	/// leaves the field out.
+	#[serde(default = "default_yes")]
+	pub x_epistle_header: bool,
+	/// Write `Organization` on a submission whose domain has an entry in
+	/// `domain_organization`. `false` leaves the field out.
+	#[serde(default = "default_yes")]
+	pub organization_header: bool,
+	/// The `Organization` value of each domain, lowercase keys.
+	#[serde(default)]
+	pub domain_organization: std::collections::HashMap<String, String>,
+	/// Max messages an authenticated account may submit per minute. Absent
+	/// disables per-account submission rate limiting.
+	#[serde(default)]
+	pub submission_rate_limit_per_min: Option<u32>,
+	/// Cap on the number of recipients an authenticated account may write
+	/// to for the first time in a rolling 24h window. Every submission path
+	/// (SMTP authenticated end-of-DATA, `POST /api/v1/send`, JMAP
+	/// `EmailSubmission/set`) computes the count of recipients the account
+	/// has not previously contacted, sums it with the number of markers
+	/// already inside the window, and refuses the message when the sum
+	/// would exceed this limit. Absent disables the cap (the default).
+	/// The intent is to stop the slow-exfiltration pattern a per-minute
+	/// rate limit cannot see: a compromised account can stay under
+	/// `submission_rate_limit_per_min` for hours while sending to fresh
+	/// addresses, and a daily ceiling on the *new* recipients makes that
+	/// visible.
+	#[serde(default)]
+	pub new_recipients_per_day: Option<u32>,
+	/// Per-domain submission rate limit (messages/min) for authenticated
+	/// senders in that domain. Resolved by walking the account's own
+	/// addresses — the same lookup [`crate::smtp::directory::Directory::quota_for`]
+	/// performs — so the limit is the one for the domain the account is
+	/// actually in, not the first domain configured. An account without a
+	/// matching entry falls back to `submission_rate_limit_per_min` (and
+	/// then to no limit, if that is also unset). Absent entries in
+	/// `domain_quotas` and the existing `with_domain_quotas` builder mirror
+	/// the same shape and lifecycle.
+	#[serde(default)]
+	pub domain_submission_limits: std::collections::HashMap<String, u32>,
+	/// Messages an unauthenticated client IP may start per minute. Absent
+	/// disables the per-IP inbound limit. Enforced on
+	/// `MAIL FROM` for sessions that never authenticated; a send over the
+	/// cap is deferred with `450 4.7.1 too many messages from this client;
+	/// retry later` so a legitimate burst (a mailing list, a resend after
+	/// an outage) retries rather than bounces.
+	#[serde(default)]
+	pub inbound_rate_limit_per_ip_per_min: Option<u32>,
+	/// Messages a single envelope sender may start per minute across all
+	/// clients. Absent disables the per-sender inbound limit. Enforced on
+	/// `MAIL FROM` for sessions that never authenticated, lowercased
+	/// reverse path; the null sender (`<>`) used by bounces is skipped so
+	/// a verification failure does not exhaust the budget of a real
+	/// client. Over the cap is deferred with
+	/// `450 4.7.1 too many messages from this sender; retry later`.
+	#[serde(default)]
+	pub inbound_rate_limit_per_sender_per_min: Option<u32>,
+	/// Max concurrent connections per listener (back-pressure cap). Absent
+	/// uses each protocol's built-in default. Excess connections are dropped.
+	#[serde(default)]
+	pub max_connections_per_listener: Option<usize>,
+	/// Max concurrent connections per client IP per SMTP listener. A peer
+	/// over the cap is answered `421 4.7.0 too many connections from your
+	/// address` and closed. Absent (or `0`) uses the built-in default of
+	/// 20. An IPv6 client is counted by its /64; no peer is exempt.
+	#[serde(default)]
+	pub max_connections_per_ip: Option<usize>,
+	/// Shared byte budget every SMTP `DATA` / `BDAT` reservation draws
+	/// from. When a reservation would push the in-flight total past the
+	/// cap the message is refused with `452 4.3.1 insufficient system
+	/// resources; try again later`, so a busy server cannot grow without
+	/// bound. `0` disables the cap (every reservation succeeds, the
+	/// historical behaviour). Absent derives it from the memory the `mail`
+	/// container may use (see [`crate::smtp::memory_fit`]): a fifth of
+	/// the limit, at least `max_message_size`, at most 1 GiB.
+	#[serde(default)]
+	pub message_memory_budget: Option<u64>,
+	/// Minimum average transfer rate of one message transaction, in
+	/// bytes per second, once `data_rate_grace` is over. A client below it
+	/// is answered `421 4.4.2 transfer too slow, closing connection` and
+	/// closed. Absent uses 10240; `0` turns the check off.
+	#[serde(default)]
+	pub min_data_rate: Option<u64>,
+	/// Seconds from the start of a message transaction (the 354 of DATA,
+	/// or the first BDAT chunk) before `min_data_rate` applies. Absent
+	/// uses 120; from 1 to 3600.
+	#[serde(default)]
+	pub data_rate_grace: Option<u64>,
+	/// Commands that bring an SMTP session no closer to a delivered
+	/// message (NOOP, RSET, VRFY, AUTH response lines, refused commands)
+	/// one session may send before it is answered `421 4.7.0` and closed.
+	/// Absent uses 100; `0` turns the limit off, else from 10 to 10000.
+	#[serde(default)]
+	pub junk_command_limit: Option<u64>,
+	/// Seconds an SMTP session may last before it is answered `421 4.4.2`
+	/// and closed at the next command boundary (never while a message body
+	/// is being received). Absent uses 1800; `0` turns the limit off, else
+	/// from 60 to 86400.
+	#[serde(default)]
+	pub max_session_time: Option<u64>,
+	/// Seconds an IMAP, POP3 or ManageSieve client gets, from the start of
+	/// the connection, to sign in. One deadline covers the TLS handshake,
+	/// every command and every literal before authentication, and nothing
+	/// the client sends moves it; a signed-in session is not held to it.
+	/// Absent uses 60; from 5 to 3600.
+	#[serde(default)]
+	pub preauth_timeout: Option<u64>,
+	/// Max concurrent connections one client may hold on each IMAP, POP3 and
+	/// ManageSieve listener; a client over the cap gets the protocol's
+	/// `BYE` or `-ERR` and is closed. Absent (or `0`) uses 200. An IPv6
+	/// client is counted by its /64; no peer is exempt.
+	#[serde(default)]
+	pub max_mailbox_connections_per_ip: Option<usize>,
+	/// Max concurrent authenticated connections one account may hold on
+	/// each IMAP, POP3 and JMAP listener combined. Two caps apply
+	/// together: at most `max_connections_per_account_per_ip` per
+	/// (account, client IP) and at most `max_connections_per_account_total`
+	/// per account. Absent (or `0`) uses the built-in defaults of 10 per
+	/// (account, IP) and 50 per account, matching Dovecot's
+	/// `mail_max_userip_connections`. Applied after authentication: a
+	/// connection over the cap is answered with the protocol's
+	/// "user is busy" reply (`NO [LIMIT]` on IMAP, `-ERR [IN-USE]` on
+	/// POP3, HTTP 429 on JMAP) and closed.
+	#[serde(default)]
+	pub max_connections_per_account: Option<u32>,
+	/// Max concurrent authenticated connections one account may hold on
+	/// each IMAP, POP3 and JMAP listener combined per (account, client IP).
+	/// See [`Config::max_connections_per_account`]. Absent (or `0`) uses 10.
+	#[serde(default)]
+	pub max_connections_per_account_per_ip: Option<u32>,
+	/// Max concurrent authenticated connections one account may hold on
+	/// each IMAP, POP3 and JMAP listener combined across every client IP.
+	/// See [`Config::max_connections_per_account`]. Absent (or `0`) uses 50.
+	#[serde(default)]
+	pub max_connections_per_account_total: Option<u32>,
+	/// Max concurrent connections each plain-HTTP listener (API and JMAP,
+	/// WebDAV, autoconfig without TLS, ACME, metrics) serves; a connection
+	/// over the cap gets `503` and is closed. Absent (or `0`) uses 1024.
+	#[serde(default)]
+	pub max_http_connections: Option<usize>,
+	/// Max concurrent connections one client may hold on each plain-HTTP
+	/// listener, over the same `503`. Absent (or `0`) uses 256. An IPv6
+	/// client is counted by its /64; no peer is exempt.
+	#[serde(default)]
+	pub max_http_connections_per_ip: Option<usize>,
+	/// Outbound transport rules (smarthost relay / SOCKS / direct / fail) with
+	/// account/domain/global routing. Empty means direct MX delivery for all.
+	#[serde(default)]
+	pub transport: Vec<Transport>,
+	/// OpenTelemetry OTLP trace export. Present enables span export.
+	#[serde(default)]
+	pub otel: Option<Otel>,
+	/// Multi-target aliases: an address that delivers to several accounts.
+	#[serde(default)]
+	pub alias: Vec<Alias>,
+	/// ARC sealing for inbound mail (RFC 8617). Present enables sealing.
+	pub arc: Option<Arc>,
+	/// OAuth2/OIDC token verification (OAUTHBEARER/XOAUTH2). Present enables it.
+	pub oauth: Option<Oauth>,
+	/// LDAP / Active Directory directory backend. Present enables authenticating
+	/// non-local logins against the LDAP server and loading its users for
+	/// recipient resolution.
+	pub ldap: Option<Ldap>,
+	/// Maximum masked email addresses one account may own. 0 disables
+	/// masked addresses entirely; the default of 100 is generous for the
+	/// usual disposable-alias use cases (a signup per service) and stops a
+	/// runaway loop from minting the whole address space. `429 Too Many
+	/// Requests` answers requests above the limit.
+	#[serde(default = "default_masked_addresses_max")]
+	pub masked_addresses_max: usize,
+	/// Outbound event webhooks. Present enables notifications, unless it
+	/// says `enabled = false`; read it through [`Config::active_webhook`].
+	pub webhook: Option<Webhook>,
+	/// Per-instance message-size cap in bytes. `None` keeps the
+	/// historical default of 25 MiB (the same value the SMTP
+	/// `SIZE` extension, the JMAP `maxSizeRequest` / upload cap and
+	/// the REST `POST /api/v1/send` builder enforce). Applied
+	/// consistently: the SMTP `MAIL FROM` SIZE check, the per-line
+	/// running size, the end-of-DATA check, the per-chunk BDAT cap,
+	/// the JMAP `Email/set` / `EmailSubmission/set` builder, the JMAP
+	/// `upload` body limit, and the REST `send` body limit all use
+	/// the same value.
+	#[serde(default)]
+	pub max_message_size: Option<u64>,
+	/// Recipients one message may name, on SMTP (`RCPT TO`, advertised as
+	/// `LIMITS RCPTMAX`), `POST /api/v1/send` and JMAP `EmailSubmission/set`.
+	/// Absent keeps 100. RFC 5321 §4.5.3.1.8 says a server MUST accept at
+	/// least 100, so a lower value is refused; at most 10000.
+	#[serde(default)]
+	pub max_recipients: Option<usize>,
+	/// Tenant definitions: named groups of domains with optional aggregate
+	/// caps on accounts, domains, storage and submission rate. Absent or
+	/// empty means no tenancy is in effect and the server behaves exactly as
+	/// it did before this field existed.
+	#[serde(default, rename = "tenant")]
+	pub tenants: Vec<Tenant>,
+	/// Unprivileged user/group to drop to after privileged ports are bound.
+	/// Absent leaves the process running as whoever started it.
+	pub privileges: Option<Privileges>,
+	/// At-rest message encryption. Absent leaves stored mail unencrypted at the
+	/// application layer (relying on full-disk encryption); present can enable
+	/// transparent ChaCha20-Poly1305 encryption of stored message files.
+	#[serde(default)]
+	pub storage: Option<Storage>,
+	/// Outbound queue settings (currently the STARTTLS authentication mode).
+	/// Absent uses the secure defaults (strict outbound TLS).
+	#[serde(default)]
+	pub queue: Queue,
+	/// Authentication toggles. Absent keeps the historical default of
+	/// `scram = true`. Present with `scram = false` hides the mechanism on
+	/// the wire, refuses an explicit `AUTHENTICATE`/`AUTH` against it,
+	/// and prevents account-create and password-change paths from deriving
+	/// or storing a verifier.
+	#[serde(default)]
+	pub auth: Auth,
+	/// Alert rules: periodic metric comparisons that fire webhooks or email
+	/// when the configured condition holds. Absent or empty disables the
+	/// alert engine entirely (the default).
+	#[serde(default)]
+	pub alerts: Vec<Alert>,
+	/// Seconds a successful authentication keeps an (account, network)
+	/// pair on the bypass list that lets a banned account sign in from
+	/// a network the owner has used before. Absent uses the 30-day
+	/// default. The row ages out of the list after this many seconds
+	/// during the daily sweep, and a network the owner has not used
+	/// within the window falls back to the no-bypass refusal.
+	#[serde(default)]
+	pub known_network_window_secs: Option<u64>,
+	/// When `true`, the outbound queue worker is not started: mail submitted
+	/// for a recipient outside a configured domain stays in the spool, and
+	/// no outbound SMTP connection is ever opened. Only `epistle local`
+	/// sets this; the field is `#[serde(skip)]` so `Config::load` cannot
+	/// produce `true` from a TOML file (the loader would reject such a
+	/// file as an unknown field, by design).
+	#[serde(skip, default)]
+	pub hold_outbound: bool,
+	/// Mail addresses and domains the file spells with capitals, each as a
+	/// line naming the entry and the lowercase form epistle uses for it.
+	/// Filled when the file is loaded, never read from it.
+	#[serde(skip)]
+	pub mixed_case: Vec<String>,
+	/// Values the file sets that load changed to keep the server within a
+	/// MUST of an RFC, each as a line naming the value in the file and the
+	/// one in use. Filled when the file is loaded, never read from it.
+	#[serde(skip)]
+	pub adjusted: Vec<String>,
+	/// Why validation refused the file, when `epistle status` loaded it with
+	/// `Config::load_lenient`. Always `None` after [`Config::load`], which
+	/// fails instead. Filled when the file is loaded, never read from it.
+	#[serde(skip)]
+	pub validation_error: Option<String>,
+	/// External-clock probe: three independent NTP/NTS sources and the
+	/// offsets `epistle status` and `epistle check clock` report. Absent
+	/// uses the design defaults (Cloudflare NTS, Netnod NTS, Google NTP,
+	/// warn 1 s, fail 5 s).
+	#[serde(default)]
+	pub clock_external: Option<crate::clock::external::ClockExternal>,
+}

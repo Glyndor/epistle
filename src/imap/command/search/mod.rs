@@ -1,6 +1,75 @@
+//! The SEARCH family: the criteria, the scopes, the sort keys and the
+//! ESEARCH return options they carry, and their parsers.
+
 use super::parse::parse_astring;
 use super::search_key::parse_search_key;
-use super::{Command, ParseError, ReturnOpt, SearchScope, SortKey, ThreadAlgorithm};
+use super::{Command, ParseError};
+
+/// The threading algorithm a `THREAD` command asked for. The parser
+/// accepts only the algorithms we advertise in CAPABILITY, so the
+/// caller can rely on the discriminant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThreadAlgorithm {
+	/// `THREAD=ORDEREDSUBJECT` (RFC 5256 §3).
+	OrderedSubject,
+	/// `THREAD=REFERENCES` (RFC 5256 §3).
+	References,
+}
+
+/// An ESEARCH `RETURN` option (RFC 4731).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReturnOpt {
+	/// Return the lowest matching sequence number / UID.
+	Min,
+	/// Return the highest matching sequence number / UID.
+	Max,
+	/// Return the count of matches.
+	Count,
+	/// Return every matching sequence number / UID.
+	All,
+	/// SEARCHRES (RFC 5182): save the result set so the client can reference
+	/// it via `$` in a subsequent command.
+	Save,
+}
+
+/// A MULTISEARCH source scope (RFC 7377 §2.2 `scope-option`). Selects which
+/// mailboxes an `ESEARCH` command searches.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SearchScope {
+	/// The currently selected mailbox (the default when no `IN` is given).
+	Selected,
+	/// Mailboxes that receive new messages — here, just INBOX.
+	Inboxes,
+	/// Every mailbox in the user's personal namespace.
+	Personal,
+	/// Every subscribed mailbox.
+	Subscribed,
+	/// The named mailboxes and all their descendants.
+	Subtree(Vec<String>),
+	/// The named mailboxes and their immediate children only.
+	SubtreeOne(Vec<String>),
+	/// Exactly the named mailboxes.
+	Mailboxes(Vec<String>),
+}
+
+/// A SORT key (RFC 5256), optionally preceded by REVERSE in the command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SortKey {
+	/// Internal date (delivery time).
+	Arrival,
+	/// Cc header.
+	Cc,
+	/// Date header.
+	Date,
+	/// From header.
+	From,
+	/// RFC 5322 size in octets.
+	Size,
+	/// Subject header.
+	Subject,
+	/// To header.
+	To,
+}
 
 /// Parse `SORT (<keys>) <charset> <search-criteria>` (RFC 5256).
 pub(super) fn parse_sort(tag: &str, args: &str, uid: bool) -> Result<Command, ParseError> {

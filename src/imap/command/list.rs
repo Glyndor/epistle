@@ -1,8 +1,20 @@
 //! LIST and its LIST-EXTENDED selection options, patterns and return options
 //! (RFC 9051 §6.3.9, RFC 5258).
 
-use super::parse::{parse_astring, parse_status_items};
-use super::{Command, ListAttribute, ParseError, StatusItem};
+use super::parse::parse_astring;
+use super::status::parse_status_items;
+use super::{Command, ParseError, StatusItem};
+
+/// An optional mailbox attribute requested through LIST-EXTENDED.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ListAttribute {
+	/// Subscription state (RFC 5258).
+	Subscribed,
+	/// Child state (RFC 3348).
+	Children,
+	/// Special-use role (RFC 6154).
+	SpecialUse,
+}
 
 /// A parsed `LIST`, plain or extended.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

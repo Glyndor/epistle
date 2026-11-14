@@ -4,8 +4,22 @@
 
 use super::date_time::split_date_time;
 use super::parse::parse_astring;
-use super::{Command, LiteralAnnouncement, ParseError};
+use super::{Command, ParseError};
 use crate::imap::internal_date::InternalDate;
+
+/// The `{n}` / `{n+}` literal count at the end of an APPEND or REPLACE
+/// command line. The synchronizing flag distinguishes the classic
+/// `{n}` form (client waits for `+` before sending bytes) from the
+/// non-synchronizing `{n+}` form (RFC 7888), where the client already
+/// sends the payload and the server must consume or discard it on
+/// rejection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiteralAnnouncement {
+	/// Literal size in octets.
+	pub size: usize,
+	/// `true` for `{n}` (synchronizing), `false` for `{n+}`.
+	pub synchronizing: bool,
+}
 
 /// Parse `APPEND <mailbox> [(flags)] [date] {literal}`. The optional date
 /// becomes the message's INTERNALDATE. `append_limit` is the per-listener
