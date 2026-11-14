@@ -146,7 +146,7 @@ function name is the stable reference.
 | 8.1.1 Sensitive data protected at rest | Met | Message bodies are canonical `.eml` on the filesystem, `0600`, on a LUKS-encrypted volume by default; bodies never enter the DB (a DB compromise exposes no mail content). |
 | 8.2.1 Minimal data retention | Met | Retention is opt-in per account, default off (never silently deletes); GDPR erasure hard-purges `.eml` (shredded) + every DB row (see `docs/configuration.md`). |
 | 8.3.1 Sensitive data not in logs/URLs | Met | See V7; no PII/secret in logs or URLs. |
-| 8.3.4 Secrets sourced from env/secret store | Met | `${VAR}` expansion aborts startup on an unset var (`src/config/mod.rs`); no secret literal in config or code. |
+| 8.3.4 Secrets sourced from env/secret store | Met | `${VAR}` expansion aborts startup on an unset var (`src/config/env.rs`); no secret literal in config or code. |
 
 ---
 
