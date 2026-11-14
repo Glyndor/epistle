@@ -1,5 +1,6 @@
 //! An API key bound to one account (`account = "<name>"` in `api_keys.toml`)
-//! reaches only the account-scoped surface: JMAP and `/api/v1/send`, where the
+//! reaches only the account-scoped surface: JMAP, `/api/v1/send`,
+//! `/api/v1/deliveries` and that account's suppression list, where the
 //! handlers derive the acting account from the key. Every other route is
 //! administrative (accounts, domains, queue, SCIM, ...) and has no notion of
 //! "the key's own account", so such a key is refused there with a 403 before
@@ -29,6 +30,8 @@ use super::state::MatchedAuth;
 pub(crate) fn path_is_account_scoped(path: &str) -> bool {
 	path == "/api/v1/send"
 		|| path == "/api/v1/deliveries"
+		|| path == "/api/v1/suppression"
+		|| path.strip_prefix("/api/v1/suppression/").is_some()
 		|| path == "/.well-known/jmap"
 		|| path.starts_with("/jmap/")
 }

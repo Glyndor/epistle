@@ -186,7 +186,7 @@ without a restart.
 | `--expires-in DURATION` | A number and a unit from now: `s`, `m`, `h`, `d` or `w`, for example `90d`. `m` is minutes, not months: count months in days. Not combined with `--expires-at` |
 | `--ip-cidr CIDR` | One network the client must come from. A request from elsewhere is `401` |
 | `--domain NAME` | Confine the key to a domain (repeat for more). Without it the key reaches every domain |
-| `--account NAME` | Bind the key to one account. It then reaches only JMAP, `POST /api/v1/send` and `GET /api/v1/deliveries`, acting as that account, and cannot hold `scim` or `--domain` |
+| `--account NAME` | Bind the key to one account. It then reaches only JMAP, `POST /api/v1/send`, `GET /api/v1/deliveries` and that account's suppression list, acting as that account, and cannot hold `scim` or `--domain` |
 | `--class CLASS` | The mail class `POST /api/v1/send` gives mail sent with the key when the request names none (see [Class and evidence](#class-and-evidence)) |
 
 `epistle api-key rotate LABEL` replaces the secret and keeps everything else,
@@ -269,7 +269,7 @@ curl -s -H "Authorization: Bearer $KEY" "$API/api/v1/status"
 |---|---|
 | `401` `unauthenticated` | No header, an unknown or expired key, or a key pinned to another network. The three look the same |
 | `403` `forbidden` | A valid key whose scopes do not cover the route. It does not count towards the authentication failure limit |
-| `403` `forbidden` | The key is bound to one account and the route is administrative, or the bound account is disabled or gone |
+| `403` `forbidden` | The key is bound to one account and the route is administrative outside its suppression list, or the bound account is disabled or gone |
 | `403` `forbidden_from` | `POST /api/v1/send` from an address the credential may not act for |
 | `403` `sending_off` | `POST /api/v1/send` for an account whose sending is switched off (`epistle account set NAME --send off`) |
 | `429` `rate_limited` | The client address made 20 requests with credentials that did not hold in the last 60 seconds. Every request from it is refused, valid or not, until the window passes. The `Retry-After` header gives the remaining window in seconds, rounded up |
@@ -505,9 +505,18 @@ from `next_cursor`), `DELETE /api/v1/queue/{id}` removes an entry and records
 each pending recipient as `canceled` in the delivery log, then posts a
 `canceled` webhook event when the delivery log is enabled and a webhook is
 configured.
-`GET /api/v1/suppression` and `DELETE /api/v1/suppression/{address}`
-list and clear suppressed recipients, globally or for one sending account with
-`?account=`. Pages end when `next_cursor` is absent.
+`GET /api/v1/suppression` lists suppressed recipients,
+`POST /api/v1/suppression` adds one and `DELETE /api/v1/suppression/{address}`
+clears one. The POST body is `{"address": "recipient@example.net"}` with an
+optional `reason` (at most 512 characters, no control or invisible formatting
+characters). The reason is stored with the entry; the suppression listing
+returns addresses only. The address is validated by the server, and adding an
+address already on the list succeeds without replacing its first reason or
+timestamp.
+`?account=` selects one account name or sending address's list instead of the
+global one. A key confined to an account or domain may use only the list of an
+account it can act for; the global list needs an unconfined key.
+Pages end when `next_cursor` is absent.
 
 ## Accounts and the rest of the management API
 

@@ -278,8 +278,9 @@ pub enum ApiKeyCli {
 		/// Confine this key to a domain (repeat for more).
 		#[arg(long = "domain", value_name = "DOMAIN")]
 		domains: Vec<String>,
-		/// Bind the key to one account (then it reaches only JMAP and
-		/// `/api/v1/send`). An account-bound key has no domain-wide reach,
+		/// Bind the key to one account (then it reaches only JMAP,
+		/// `/api/v1/send`, `/api/v1/deliveries` and that account's
+		/// suppression list). An account-bound key has no domain-wide reach,
 		/// so `--domain` cannot be combined with it.
 		#[arg(long, value_name = "ACCOUNT", conflicts_with = "domains", value_parser = crate::cli::account::name::parse)]
 		account: Option<String>,

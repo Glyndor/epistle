@@ -200,14 +200,6 @@ pub(super) fn add(
 	json: bool,
 	out: &mut impl std::io::Write,
 ) -> ExitCode {
-	// Anything that is not a deliverable address would sit in the list
-	// forever and match nothing, so refuse it up front.
-	if let Err(why) = crate::util::address_reason::parse(address) {
-		return super::exit::refused(format_args!("cannot suppress: {why}"));
-	}
-	if let Some(problem) = reason.and_then(exchange::reason_problem) {
-		return super::exit::refused(problem);
-	}
 	let list = match SuppressionList::open(&config.data_dir) {
 		Ok(list) => list,
 		Err(error) => {
@@ -215,31 +207,44 @@ pub(super) fn add(
 			return ExitCode::FAILURE;
 		}
 	};
-	let address = crate::util::address::normalize(address);
-	let now = std::time::SystemTime::now()
-		.duration_since(std::time::UNIX_EPOCH)
-		.map(|elapsed| elapsed.as_secs())
-		.unwrap_or(0);
-	let reason = reason.unwrap_or("added by hand (epistle suppression add)");
-	let (written, line) = match account {
-		Some(account) => (
-			list.try_suppress_for_because(account, &address, reason, now),
-			format!("suppressed {address} for {account}"),
-		),
-		None => (
-			list.try_suppress_because(&address, reason, now),
-			format!("suppressed {address}"),
-		),
+	let normalized = crate::util::address::normalize(address);
+	let account_keys = account.into_iter().map(str::to_string).collect::<Vec<_>>();
+	let added = match crate::suppression::add(
+		&list,
+		address,
+		&account_keys,
+		reason,
+		crate::suppression::CLI_DEFAULT_REASON,
+	) {
+		Ok(added) => added,
+		Err(crate::suppression::AddError::InvalidAddress(why)) => {
+			return super::exit::refused(format_args!("cannot suppress: {why}"));
+		}
+		Err(crate::suppression::AddError::InvalidReason(problem)) => {
+			return super::exit::refused(problem);
+		}
+		Err(crate::suppression::AddError::Storage(error)) => {
+			super::style::error(format_args!("cannot suppress {normalized}: {error}"));
+			return ExitCode::FAILURE;
+		}
 	};
-	// A marker that was not written is not a suppression: say so.
-	if let Err(error) = written {
-		super::style::error(format_args!("cannot suppress {address}: {error}"));
-		return ExitCode::FAILURE;
-	}
 	let mut report = super::json_out::Report::new(out, json);
+	let verb = if added.changed {
+		"suppressed"
+	} else {
+		"already suppressed"
+	};
+	let line = match account {
+		Some(account) => format!("{verb} {} for {account}", added.address),
+		None => format!("{verb} {}", added.address),
+	};
 	report.line(line);
-	let fields = serde_json::json!({ "address": address, "account": account, "reason": reason });
-	report.change("add", true, fields, None)
+	let fields = serde_json::json!({
+		"address": added.address,
+		"account": account,
+		"reason": added.reason,
+	});
+	report.change("add", added.changed, fields, None)
 }
 
 /// Remove one address from the suppression list (the per-account

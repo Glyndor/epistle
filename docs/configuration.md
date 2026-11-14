@@ -473,7 +473,7 @@ data, not only on the accounts routes:
 |---|---|
 | `GET /api/v1/status` | `domains` and `accounts` count only what the key covers; `queue_size` is left out because the queue is shared |
 | `GET /api/v1/queue`, `DELETE /api/v1/queue/{id}` | only entries whose sender is in the key's domains; an entry with an empty sender (a bounce) is for unconfined keys; any other entry answers `404` |
-| `GET /api/v1/suppression`, `DELETE /api/v1/suppression/{address}` | the shared list answers `403`; `?account=` works for an account the key covers and answers `404` for any other |
+| `GET`, `POST /api/v1/suppression`, `DELETE /api/v1/suppression/{address}` | the shared list answers `403`; `?account=` works for an account the key covers and answers `404` for any other |
 | `/api/v1/accounts/{name}/masked`, `.../archive` | `404` unless the account is covered, unknown accounts included |
 | `POST /api/v1/auth/verify` | checks only the passwords of covered accounts; any other login answers `valid: false` without the password being tried |
 | `POST /api/v1/accounts`, `POST /scim/v2/Users` | a name that is malformed or held outside the key's domains gives the same `400`, so the answer does not reveal other tenants' names |
