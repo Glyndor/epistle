@@ -38,9 +38,9 @@ name: Dependabot freshness (reusable)
 # syntax, and a future Windows caller would otherwise silently mis-parse the
 # date and fail the arithmetic on an empty string.
 #
-# `concurrency:` cancels an in-flight run when a newer one starts. The group
-# key uses `github.workflow` so an unrelated caller triggering the same
-# reusable does not collide, and `github.ref` to distinguish per-ref runs.
+# `concurrency:` cancels superseded PR runs only. The group key uses
+# `github.workflow` so an unrelated caller triggering the same reusable does
+# not collide, and `github.ref` to distinguish per-ref runs.
 
 on:
   workflow_call:
@@ -59,7 +59,7 @@ defaults:
 
 concurrency:
   group: dependabot-freshness-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions: {}
 

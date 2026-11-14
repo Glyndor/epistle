@@ -11,9 +11,8 @@ name: Debian package
 # is built by the compiler that vouched for the code. Neither build subsumes the
 # other.
 #
-# No path filter. One would fire on nearly every pull request anyway, since this
-# repository keeps its code in src/, and a filter that silently stops matching is
-# how a gate stops being a gate.
+# Required checks keep reporting: the plan gates the reusable's build job,
+# never the workflow trigger. Coverage owns the PR/queue workspace suite.
 
 # Push is scoped to main only. A pull request into develop runs this on the
 # pull_request event and again in the merge queue (merge_group) on the commit
@@ -36,10 +35,17 @@ permissions:
   contents: read
 
 jobs:
+  plan:
+    uses: ./.github/workflows/reusable-ci-plan.yml
+
   debian:
+    needs: plan
+    if: ${{ !cancelled() }}
     uses: ./.github/workflows/reusable-rust-debian.yml
     with:
       package-name: epistle
+      run-build: ${{ needs.plan.outputs.debian != 'false' }}
+      run-tests: ${{ github.event_name != 'pull_request' && github.event_name != 'merge_group' }}
       # Not the reusable's trixie default: trixie ships rustc 1.85 and the
       # dependency floor is 1.94 (set by sqlx 0.9's `rust-version`), which
       # edition 2024 alone does not reveal. sid carries 1.95. Digest-pinned so

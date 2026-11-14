@@ -1,8 +1,8 @@
 name: Folder limit
 
-# Counting the tree takes under a second, so the job runs on every pull request
-# without a decide step. The gate is loaded from the base commit so a pull
-# request cannot rewrite its own checker.
+# File edits cannot change direct file counts; the plan selects additions,
+# deletions and changes to the gate itself. Load the gate from the base
+# commit so a pull request cannot rewrite its own checker.
 on:
   pull_request:
     branches: [main, develop]
@@ -12,10 +12,15 @@ permissions:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  plan:
+    uses: ./.github/workflows/reusable-ci-plan.yml
+
   folder-limit:
+    needs: plan
+    if: ${{ !cancelled() && needs.plan.outputs.folder != 'false' }}
     name: folder limit
     runs-on: ubuntu-latest
     timeout-minutes: 3

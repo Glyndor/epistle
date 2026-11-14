@@ -10,7 +10,7 @@ permissions: {}
 
 concurrency:
   group: main-guard-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   develop-only:

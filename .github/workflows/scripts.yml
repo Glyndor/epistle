@@ -18,31 +18,27 @@ on:
   push:
     branches: [develop, main]
     paths:
-      - ".github/workflows/scripts.yml"
+      - ".github/workflows/**"
       - ".github/scripts/**"
       - "debian/rules"
-      - ".github/workflows/release.yml"
-      - ".github/workflows/reusable-version-bump.yml"
+      - "debian/control"
   pull_request:
     paths:
-      - ".github/workflows/scripts.yml"
+      # Planner tests exercise the workflow steps and their wiring. Keep them
+      # running when a caller or reusable changes, as well as the scripts.
+      - ".github/workflows/**"
       - ".github/scripts/**"
-      # test_release_targets.py asserts these two agree, so a pull request
-      # that changes either has to run it. Without them the check would only
-      # fire on the push after the merge, which is after the damage.
+      # test_release_targets.py compares the packaging and release targets.
       - "debian/rules"
-      - ".github/workflows/release.yml"
-      # version_bump/test_is_version_bump.py runs the judge step of this
-      # reusable as written. The workflows that call it filter on their own
-      # paths and would not run for an edit to it alone.
-      - ".github/workflows/reusable-version-bump.yml"
+      # Planner tests require compat 13+ for nocheck to skip the override.
+      - "debian/control"
 
 permissions:
   contents: read
 
 concurrency:
   group: scripts-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   python-scripts:
@@ -62,7 +58,7 @@ jobs:
           python3 -m pip install --require-hashes -r .github/scripts/sign-requirements.txt
 
       - name: Run script unit tests
-        # Discovers every test_sign.py under .github/scripts. New
+        # Discovers every test_*.py under .github/scripts. New
         # helpers in that directory only need to ship a test_*.py
         # next to them; this job picks it up automatically.
         run: |

@@ -1,8 +1,19 @@
 name: Rust CI (reusable)
-
 on:
   workflow_call:
     inputs:
+      run-lint:
+        description: Run formatting and lint checks selected by the caller's plan
+        type: boolean
+        default: true
+      run-tests:
+        description: Run workspace tests and coverage selected by the caller's plan
+        type: boolean
+        default: true
+      run-msrv:
+        description: Check MSRV when selected by the caller's plan
+        type: boolean
+        default: true
       working-directory:
         description: Directory containing the Cargo workspace
         type: string
@@ -65,14 +76,13 @@ on:
 
 permissions:
   contents: read
-
 concurrency:
   group: rust-ci-${{ github.workflow }}-${{ github.ref }}-${{ inputs.working-directory }}
-  cancel-in-progress: true
-
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   lint:
     name: Format & lint
+    if: inputs.run-lint
     runs-on: ubuntu-latest
     # Measured 2026-10-30: the slowest of four green runs took 3 min.
     timeout-minutes: 15
@@ -118,6 +128,25 @@ jobs:
 
   test:
     name: Test
+    needs: [test-suite, coverage]
+    # A skipped dependency must not hide a failed/cancelled suite. Coverage
+    # already runs every workspace test; reflect it under the required name.
+    if: ${{ always() && inputs.run-tests }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Reflect the workspace suite result
+        env:
+          RESULT: ${{ inputs.coverage-threshold > 0 && needs.coverage.result || needs.test-suite.result }}
+        run: |
+          case "$RESULT" in
+            success) echo "Workspace tests passed" ;;
+            *) echo "::error::workspace tests did not pass (result: $RESULT)"; exit 1 ;;
+          esac
+
+  test-suite:
+    name: Workspace tests
+    if: inputs.run-tests && inputs.coverage-threshold == 0
     runs-on: ubuntu-latest
     # Measured 2026-10-30: the slowest of four green runs took 34 min.
     timeout-minutes: 70
@@ -174,7 +203,7 @@ jobs:
 
   test-extra:
     name: Test (${{ matrix.os }})
-    if: inputs.extra-test-os != '[]'
+    if: inputs.run-tests && inputs.extra-test-os != '[]'
     runs-on: ${{ matrix.os }}
     # Measured 2026-10-30: the slowest of four green runs took 34 min.
     timeout-minutes: 70
@@ -228,7 +257,7 @@ jobs:
     # required check does not block a merge - which is the exact failure this job
     # exists to prevent. `if: always()` plus an explicit result check is what makes
     # it a gate rather than a decoration.
-    if: always()
+    if: ${{ always() && inputs.run-tests }}
     runs-on: ubuntu-latest
     # Measured 2026-10-30: the slowest of four green runs took 1 min.
     timeout-minutes: 5
@@ -247,7 +276,7 @@ jobs:
 
   coverage:
     name: Coverage
-    if: inputs.coverage-threshold > 0
+    if: inputs.run-tests && inputs.coverage-threshold > 0
     runs-on: ubuntu-latest
     # Measured 2026-10-30: the slowest of four green runs took 36 min.
     timeout-minutes: 75
@@ -335,7 +364,7 @@ jobs:
 
   msrv:
     name: MSRV (${{ inputs.msrv }})
-    if: inputs.msrv != ''
+    if: inputs.run-msrv && inputs.msrv != ''
     runs-on: ubuntu-latest
     # Measured 2026-10-30: the slowest of four green runs took 3 min.
     timeout-minutes: 15
@@ -374,7 +403,7 @@ jobs:
     # not a matrix - a single job interpolating an input into its own name. The
     # number stays visible in the job log and in the `MSRV (x.y)` job itself.
     needs: msrv
-    if: always()
+    if: ${{ always() && inputs.run-msrv }}
     runs-on: ubuntu-latest
     # Measured 2026-10-30: the slowest of four green runs took 1 min.
     timeout-minutes: 5

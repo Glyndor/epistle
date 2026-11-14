@@ -7,6 +7,14 @@ name: Rust Debian package (reusable)
 on:
   workflow_call:
     inputs:
+      run-build:
+        description: Build the package selected by the caller's plan
+        type: boolean
+        default: true
+      run-tests:
+        description: Run dh_auto_test (false uses Debian's nocheck build option)
+        type: boolean
+        default: true
       package-name:
         description: Debian package name (the .deb is <package-name>_*.deb)
         type: string
@@ -77,11 +85,12 @@ concurrency:
   # package-name distinguishes two packages built from the same repo/ref, which
   # would otherwise cancel each other's in-flight run.
   group: rust-debian-${{ github.workflow }}-${{ github.ref }}-${{ inputs.arch }}-${{ inputs.package-name }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
     name: dpkg-buildpackage
+    if: inputs.run-build
     runs-on: ${{ inputs.runner }}
     # Measured 2026-10-30: the slowest of four green runs took 40 min.
     timeout-minutes: 80
@@ -147,6 +156,10 @@ jobs:
         run: dpkg-checkbuilddeps
 
       - name: Build the package
+        env:
+          # dh omits dh_auto_test, including its override, for nocheck builds.
+          # Ordinary package builds keep their tests unless the caller opts out.
+          DEB_BUILD_OPTIONS: ${{ !inputs.run-tests && 'nocheck' || '' }}
         run: dpkg-buildpackage -us -uc -b
 
       - name: Confirm the .deb was produced
@@ -216,7 +229,7 @@ jobs:
 
   vendored:
     name: build (vendored / offline)
-    if: ${{ inputs.check-vendored }}
+    if: ${{ inputs.run-build && inputs.check-vendored }}
     runs-on: ${{ inputs.runner }}
     # Measured 2026-10-30: the slowest of four green runs took 40 min.
     timeout-minutes: 80

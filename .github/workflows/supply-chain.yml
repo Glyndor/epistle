@@ -20,5 +20,12 @@ permissions:
   contents: read
 
 jobs:
+  plan:
+    uses: ./.github/workflows/reusable-ci-plan.yml
+
   sbom-and-licenses:
+    needs: plan
+    if: ${{ !cancelled() }}
     uses: ./.github/workflows/reusable-rust-supply-chain.yml
+    with:
+      run-sbom: ${{ needs.plan.outputs.supply != 'false' }}

@@ -243,7 +243,7 @@ fn the_ci_workflow_installs_fakeroot_for_the_packaging_tests() {
 		"reusable-rust-ci.yml must declare an apt-packages input for the jobs that \
 		 run the suite"
 	);
-	for name in ["test", "coverage"] {
+	for name in ["test-suite", "coverage"] {
 		let body = job(&reusable, name);
 		assert!(
 			body.contains("APT_PACKAGES: ${{ inputs.apt-packages }}"),

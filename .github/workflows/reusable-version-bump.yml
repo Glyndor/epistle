@@ -30,6 +30,12 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  # Several callers use this reusable on the same ref; github.workflow keeps
+  # their judges independent. Branch/queue runs must never cancel each other.
+  group: version-bump-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   judge:
     name: version bump
