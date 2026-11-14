@@ -19,6 +19,15 @@ fn limit(response: &Value, name: &str) {
 #[tokio::test]
 async fn q45_message_budget_is_a_method_error_and_q53_replay_is_bounded() {
 	let dir = tempfile::tempdir().expect("tempdir");
+	// An account gets a change journal with its first message, and only then
+	// does its query state become a cursor queryChanges can replay.
+	append(
+		dir.path(),
+		"INBOX",
+		EPOCH,
+		&[],
+		b"Subject: first\r\n\r\nbody\r\n",
+	);
 	let app = router(test_state(dir.path(), 0));
 	let since = query(&app, json!({})).await["queryState"].clone();
 	let unchanged = call(
@@ -32,7 +41,7 @@ async fn q45_message_budget_is_a_method_error_and_q53_replay_is_bounded() {
 		"cursor must be replayable: {unchanged}"
 	);
 	assert_eq!(unchanged[1]["added"], json!([]));
-	counted_messages(dir.path(), 100_000);
+	counted_messages(dir.path(), 99_999);
 	// Exactly 100,000 passes the general count guard and reaches the smaller text budget.
 	let response = call(&app, "Email/query", json!({"filter": {"text": "needle"}})).await;
 	limit(&response, "maxEmailQuerySearchMessages");

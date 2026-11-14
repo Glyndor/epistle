@@ -85,7 +85,7 @@ impl Fixture {
 		// Deliberately append out of date order; UUID/arrival order cannot stand in for receivedAt.
 		let middle = append(dir.path(), "INBOX", EPOCH + 10, &[],
 			b"From: middle@example.org\r\nTo: middle@example.net\r\nSubject: Noise\r\nContent-Type: text/plain\r\n\r\nSenderNeedle ToNeedle SubjectNeedle\r\n");
-		let old = append(dir.path(), "INBOX", EPOCH, &[Flag::Seen, Flag::Keyword("project".into())],
+		let old = append(dir.path(), "INBOX", EPOCH, &[Flag::Seen, Flag::Keyword(crate::imap::keyword::Keyword::new("project").expect("keyword"))],
 			b"From: SenderNeedle <first@example.org>\r\nTo: ToNeedle <first@example.net>\r\nCc: CopyNeedle <cc@example.net>\r\nBcc: BlindNeedle <bcc@example.net>\r\nSubject: SubjectNeedle alpha omega O'Reilly\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nBodyNeedle\r\n");
 		let new = append(dir.path(), "Archive", EPOCH + 20, &[Flag::Flagged],
 			b"From: newest@example.org\r\nTo: newest@example.net\r\nSubject: Other\r\n\r\nunrelated\r\n");
