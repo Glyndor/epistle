@@ -24,18 +24,22 @@ fn podup_stub(dir: &std::path::Path, first: &str, second: &str) -> String {
 	let counter = dir.join("podup.calls").display().to_string();
 	let log = dir.join("podup.argv").display().to_string();
 	let podup = dir.join("podup");
-	std::fs::write(
-		&podup,
-		format!(
+	let temporary = dir.join("podup.tmp");
+	{
+		use std::io::Write;
+		let mut file = std::fs::File::create(&temporary).expect("podup temporary file");
+		let contents = format!(
 			"#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"{log}\"\nfor a in \"$@\"; do\n\
 			 \tif [ \"$a\" = \"ps\" ]; then\n\
 			 \t\tn=0\n\t\tif [ -f \"{counter}\" ]; then n=$(cat \"{counter}\"); fi\n\
 			 \t\tn=$((n + 1))\n\t\tprintf '%s' \"$n\" > \"{counter}\"\n\
 			 \t\tif [ \"$n\" -eq 1 ]; then printf '%s' '{first}'; else printf '%s' '{second}'; fi\n\
 			 \t\tbreak\n\tfi\ndone\nexit 0\n"
-		),
-	)
-	.expect("podup");
+		);
+		file.write_all(contents.as_bytes()).expect("podup contents");
+		file.flush().expect("flush podup");
+	}
+	std::fs::rename(&temporary, &podup).expect("install podup");
 	use std::os::unix::fs::PermissionsExt;
 	std::fs::set_permissions(&podup, std::fs::Permissions::from_mode(0o755)).expect("mode");
 	podup.display().to_string()
