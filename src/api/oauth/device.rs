@@ -96,8 +96,7 @@ fn admit(
 				&& devices
 					.values()
 					.filter(|g| net48_of(g.client) == net)
-					.count()
-					>= MAX_GRANTS_PER_NET)
+					.count() >= MAX_GRANTS_PER_NET)
 	};
 	if devices.len() >= MAX_DEVICE_GRANTS || over_cap(&devices) {
 		// Expired grants nobody polled for would otherwise count forever.
@@ -122,8 +121,7 @@ fn admit(
 			&& devices
 				.values()
 				.filter(|g| net48_of(g.client) == net)
-				.count()
-				>= MAX_GRANTS_PER_NET;
+				.count() >= MAX_GRANTS_PER_NET;
 		return Err(
 			(if client_full { client_wait } else { 0 }).max(if net_full { net_wait } else { 0 }),
 		);
@@ -279,7 +277,9 @@ pub async fn device_approve(
 			// beyond the default `read` is granted only when the approval
 			// names exactly those scopes, so a device cannot get `send` or
 			// `write` out of an approval that never showed them.
-			let confirmed = fields.get("scope").and_then(|value| super::scopes::Scopes::parse(value));
+			let confirmed = fields
+				.get("scope")
+				.and_then(|value| super::scopes::Scopes::parse(value));
 			if !grant.scopes.is_default()
 				&& !confirmed.is_some_and(|confirmed| confirmed.same_set(&grant.scopes))
 			{

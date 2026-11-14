@@ -175,7 +175,11 @@ async fn a_device_gets_beyond_read_only_what_the_approval_names() {
 		let app = app.clone();
 		let code = grant["user_code"].as_str().unwrap().to_owned();
 		async move {
-			let tail = if scope.is_empty() { String::new() } else { format!("&scope={scope}") };
+			let tail = if scope.is_empty() {
+				String::new()
+			} else {
+				format!("&scope={scope}")
+			};
 			form(
 				&app,
 				"/oauth/device/approve",
@@ -193,7 +197,11 @@ async fn a_device_gets_beyond_read_only_what_the_approval_names() {
 		assert_eq!(body["error"], "invalid_grant");
 	}
 	let (status, _) = approve("send+read").await;
-	assert_eq!(status, StatusCode::OK, "the same set in any order is the approval");
+	assert_eq!(
+		status,
+		StatusCode::OK,
+		"the same set in any order is the approval"
+	);
 }
 
 #[tokio::test]
