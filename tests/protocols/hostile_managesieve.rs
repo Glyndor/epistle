@@ -8,6 +8,8 @@ mod auth_tls;
 mod framing;
 #[path = "hostile_managesieve/harness.rs"]
 mod harness;
+#[path = "hostile_managesieve/jmap_overlap.rs"]
+mod jmap_overlap;
 #[path = "hostile_managesieve/names.rs"]
 mod names;
 #[path = "hostile_managesieve/scripts.rs"]
