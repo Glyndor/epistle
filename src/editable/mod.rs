@@ -12,7 +12,7 @@
 //!   copies them in ([`StateFile::seed`]);
 //! - loading the configuration lays every state file over it
 //!   ([`StateFile::apply`]), so every reader sees one configuration;
-//! - [`commit`] is the one write path: the cross-process lock of the file, a
+//! - [`commit()`] is the one write path: the cross-process lock of the file, a
 //!   fresh read under it, the change, a check that the server would load the
 //!   result, and an atomic owner-only rename, or nothing when nothing changed;
 //! - [`LiveConfig`] is the configuration a running server applies, replaced

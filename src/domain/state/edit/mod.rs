@@ -2,7 +2,7 @@
 //! `/api/v1/domains` routes both describe what they want as a [`Change`] and
 //! hand it to [`commit`].
 //!
-//! [`commit`] goes through [`crate::editable::commit`]: the cross-process
+//! [`commit`] goes through [`crate::editable::commit()`]: the cross-process
 //! lock of the state file, a fresh read (or, when the file does not exist
 //! yet, what the configuration file declares), the change with the rules in
 //! [`rules`], a check that the configuration the server would load with the

@@ -324,5 +324,8 @@ fn domain_and_domain_alias_edits_write_lowercase() {
 	assert!(file.contains("name = \"example.net\""), "{file}");
 	assert!(file.contains("alias.example"), "{file}");
 	assert!(!file.contains("old.example"), "{file}");
-	assert!(!file.contains("NET") && !file.contains("Alias.") && !file.contains("Old."), "{file}");
+	assert!(
+		!file.contains("NET") && !file.contains("Alias.") && !file.contains("Old."),
+		"{file}"
+	);
 }

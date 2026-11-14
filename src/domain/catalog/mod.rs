@@ -9,7 +9,7 @@
 //! the filter to the domains a key is confined to.
 //!
 //! The server builds its catalog again whenever it reloads the hosted-domain
-//! state ([`crate::domain::state::live`]), so a change shows in the routes the
+//! state (`crate::domain::state`, through its live configuration), so a change shows in the routes the
 //! moment the server starts acting on it.
 
 use serde::Serialize;
