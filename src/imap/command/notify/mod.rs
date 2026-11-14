@@ -1,7 +1,65 @@
-//! Parsing for the RFC 5465 NOTIFY command.
+//! The RFC 5465 NOTIFY command: the request it carries and its parser.
 
 use super::parse::parse_astring;
-use super::{Command, NotifyEvent, NotifyGroup, NotifyMailboxes, NotifyRequest, ParseError};
+use super::{Command, ParseError};
+
+/// A parsed `NOTIFY` request (RFC 5465 §6).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NotifyRequest {
+	/// `NOTIFY NONE`: disable all unsolicited event notifications.
+	None,
+	/// `NOTIFY SET [STATUS] (...)`: enable notifications. `status` records the
+	/// `STATUS` return modifier. `selected` holds the events requested for the
+	/// `selected` mailbox specifier, the only one whose events are pushed;
+	/// `others` keeps the remaining groups for the initial STATUS replies.
+	Set {
+		/// Whether the request carried the `STATUS` return modifier: when
+		/// set, a STATUS reply goes out for every mailbox in `others`.
+		status: bool,
+		/// Events requested for the `selected` mailbox specifier.
+		selected: Vec<NotifyEvent>,
+		/// The event groups naming other mailboxes, in request order.
+		others: Vec<NotifyGroup>,
+	},
+}
+
+/// A NOTIFY event group for mailboxes other than the selected one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NotifyGroup {
+	/// Which mailboxes the group covers.
+	pub mailboxes: NotifyMailboxes,
+	/// The events requested for them (empty for `NONE`).
+	pub events: Vec<NotifyEvent>,
+}
+
+/// A `filter-mailboxes-other` mailbox specifier (RFC 5465 §8).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NotifyMailboxes {
+	/// `inboxes`: the mailboxes that receive mail, here INBOX.
+	Inboxes,
+	/// `personal`: every mailbox of the user.
+	Personal,
+	/// `subscribed`: every subscribed mailbox.
+	Subscribed,
+	/// `subtree <mailboxes>`: the named mailboxes and all their children.
+	Subtree(Vec<String>),
+	/// `mailboxes <mailboxes>`: exactly the named mailboxes.
+	Mailboxes(Vec<String>),
+}
+
+/// A NOTIFY message event (RFC 5465 §6). Only the events the server can deliver
+/// for the selected mailbox are modelled; unknown events are rejected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotifyEvent {
+	/// `MessageNew`: a message was added to the mailbox.
+	MessageNew,
+	/// `MessageExpunge`: a message was removed from the mailbox.
+	MessageExpunge,
+	/// `FlagChange`: a message's flags changed.
+	FlagChange,
+	/// `AnnotationChange`: a message annotation changed.
+	AnnotationChange,
+}
 
 /// Parse `NOTIFY NONE` or `NOTIFY SET [STATUS] (<event-group> ...)`.
 ///
