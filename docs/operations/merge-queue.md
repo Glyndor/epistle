@@ -54,7 +54,8 @@ Do not add `merge_group` to any other workflow, `release.yml` in particular.
 ## Keeping it working
 
 `.github/scripts/check_merge_group_triggers.py` (run by
-`merge-group-triggers.yml`, tested by `test_check_merge_group_triggers.py`)
+`merge-group-triggers.yml`, tested by
+`.github/scripts/test_check_merge_group_triggers.py`)
 fails when a required check has no caller with `merge_group`, when a job that
 emits one is renamed, or when another workflow carries the trigger. Its list
 of required checks must change together with the ruleset.
