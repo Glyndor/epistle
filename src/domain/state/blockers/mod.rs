@@ -1,7 +1,9 @@
-//! `epistle domain`: refuse removal while any account (static or
-//! dynamic), alias, masked address or `domain_aliases` entry still uses
-//! the domain. Lists every offender so the operator knows what to drop
-//! first.
+//! Refuse to remove a hosted domain while any account (static or
+//! dynamic), alias, masked address or domain alias still uses it, or the
+//! configuration file names it where only the operator can change it
+//! (`[acme] domains`, a `[[tenant]]`). Lists every offender so the operator
+//! knows what to drop first. `epistle domain remove` and
+//! `DELETE /api/v1/domains/{domain}` refuse with the same list.
 
 use crate::config::Config;
 use crate::smtp::address::Address;
@@ -44,6 +46,25 @@ pub fn removal_blockers(config: &Config, domain: &str) -> Result<(), String> {
 		}
 		if target.eq_ignore_ascii_case(domain) {
 			offenders.push(format!("domain_aliases maps {alias} to {domain}"));
+		}
+	}
+	// What only an edit of the configuration file can change.
+	if let Some(acme) = &config.acme
+		&& acme
+			.domains
+			.iter()
+			.any(|name| name.eq_ignore_ascii_case(domain))
+	{
+		offenders.push("the configuration file lists it in [acme] domains".to_string());
+	}
+	for tenant in &config.tenants {
+		if tenant
+			.domains
+			.iter()
+			.any(|name| name.eq_ignore_ascii_case(domain))
+		{
+			let name = tenant.name.as_deref().unwrap_or("without a name");
+			offenders.push(format!("the configuration file's tenant {name} lists it"));
 		}
 	}
 	// Masked addresses (a JSON-backed store on disk).
@@ -90,6 +111,7 @@ pub fn removal_blockers(config: &Config, domain: &str) -> Result<(), String> {
 	}
 }
 
+/// Whether `address` parses and is in `domain`, without regard to ASCII case.
 pub fn address_domain_matches(address: &str, domain: &str) -> bool {
 	Address::parse(address)
 		.map(|parsed| parsed.domain().eq_ignore_ascii_case(domain))

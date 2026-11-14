@@ -22,6 +22,8 @@ pub(super) struct Inputs<'a> {
 		crate::antispam::corpus::BayesStore,
 		crate::antispam::training_queue::TrainingQueue,
 	)>,
+	/// The hosted-domain state the routes answer with and write through.
+	pub live: &'a Arc<crate::editable::LiveConfig>,
 }
 
 pub(super) fn build(config: &Config, inputs: Inputs<'_>) -> std::io::Result<crate::api::ApiState> {
@@ -40,6 +42,7 @@ pub(super) fn build(config: &Config, inputs: Inputs<'_>) -> std::io::Result<crat
 		send_limiter,
 		tenant_limits,
 		bayes,
+		live,
 	} = inputs;
 	// Validation guarantees [api] exists for api listeners.
 	let api = config
@@ -66,6 +69,7 @@ pub(super) fn build(config: &Config, inputs: Inputs<'_>) -> std::io::Result<crat
 	.with_webhook(webhook.clone())
 	.with_disabled_domains(config.disabled_domains.clone())
 	.with_domain_catalog(crate::domain::catalog::Catalog::from_config(config))
+	.with_live_domains(Arc::clone(live))
 	.with_max_message_size(max_message_size)
 	.with_max_recipients(max_recipients)
 	.with_quota(

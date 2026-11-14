@@ -40,7 +40,7 @@ pub use delivery_log::{DEFAULT_DELIVERY_LOG_DAYS, DeliveryLog, DeliveryOutcome, 
 
 #[cfg(test)]
 mod tests;
-pub use routing::SplitDelivery;
+pub use routing::{SplitDelivery, SrsSlot};
 pub use save_sent::{
 	Guard as SentGuard, SaveError as SentSaveError, SaveOutcome, SkipReason, first_message_id,
 	store_copy as save_sent_copy,

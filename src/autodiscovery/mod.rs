@@ -141,7 +141,27 @@ fn domain_of(email: &str) -> Option<String> {
 #[derive(Clone)]
 struct Discovery {
 	hostname: String,
-	domains: Arc<[String]>,
+	/// The lowercase domains a client is given settings for, replaced when
+	/// the hosted domains change while the server runs.
+	domains: Arc<std::sync::RwLock<Arc<[String]>>>,
+}
+
+impl Discovery {
+	/// Whether a client is given settings for the lowercase `domain`.
+	fn hosts(&self, domain: &String) -> bool {
+		self.domains
+			.read()
+			.expect("autodiscovery domains lock")
+			.contains(domain)
+	}
+}
+
+fn lowercase(domains: &[String]) -> Arc<[String]> {
+	domains
+		.iter()
+		.map(|d| d.to_ascii_lowercase())
+		.collect::<Vec<_>>()
+		.into()
 }
 
 /// [`router`] for the domains of `config` that are switched on: a disabled
@@ -150,17 +170,32 @@ pub fn router_for(config: &crate::config::Config) -> Router {
 	router(config.hostname.clone(), config.enabled_domains())
 }
 
+/// [`router_for`] the hosted domains of a running server: the set follows
+/// every reload of the domain state.
+pub fn router_live(live: &crate::editable::LiveConfig) -> Router {
+	let config = live.current();
+	let (router, domains) = build(config.hostname.clone(), config.enabled_domains());
+	live.on_change(move |config| {
+		*domains.write().expect("autodiscovery domains lock") =
+			lowercase(&config.enabled_domains());
+	});
+	router
+}
+
 /// Router serving the autoconfig/autodiscover documents.
 pub fn router(hostname: String, domains: Vec<String>) -> Router {
+	build(hostname, domains).0
+}
+
+type DomainSet = Arc<std::sync::RwLock<Arc<[String]>>>;
+
+fn build(hostname: String, domains: Vec<String>) -> (Router, DomainSet) {
+	let domains: DomainSet = Arc::new(std::sync::RwLock::new(lowercase(&domains)));
 	let state = Discovery {
 		hostname,
-		domains: domains
-			.iter()
-			.map(|d| d.to_ascii_lowercase())
-			.collect::<Vec<_>>()
-			.into(),
+		domains: Arc::clone(&domains),
 	};
-	Router::new()
+	let router = Router::new()
 		.route("/mail/config-v1.1.xml", get(autoconfig_handler))
 		.route(
 			"/.well-known/autoconfig/mail/config-v1.1.xml",
@@ -175,7 +210,8 @@ pub fn router(hostname: String, domains: Vec<String>) -> Router {
 			get(autodiscover_v2_handler),
 		)
 		.route("/mobileconfig", get(mobileconfig_handler))
-		.with_state(state)
+		.with_state(state);
+	(router, domains)
 }
 
 fn xml(body: String) -> Response {
@@ -202,7 +238,7 @@ async fn autoconfig_handler(
 	let Some(domain) = params.get("emailaddress").and_then(|e| domain_of(e)) else {
 		return StatusCode::BAD_REQUEST.into_response();
 	};
-	if !state.domains.contains(&domain) {
+	if !state.hosts(&domain) {
 		return StatusCode::NOT_FOUND.into_response();
 	}
 	xml(autoconfig(&domain, &state.hostname))
@@ -232,7 +268,7 @@ async fn mobileconfig_handler(
 	let Some((email, domain)) = params.get("email").and_then(|e| plausible_address(e)) else {
 		return StatusCode::BAD_REQUEST.into_response();
 	};
-	if !state.domains.contains(&domain) {
+	if !state.hosts(&domain) {
 		return StatusCode::NOT_FOUND.into_response();
 	}
 	(
@@ -264,7 +300,7 @@ async fn autodiscover_v2_handler(
 		return StatusCode::BAD_REQUEST.into_response();
 	};
 	if let Some(domain) = param_ci(&params, "Email").and_then(|e| domain_of(e))
-		&& !state.domains.contains(&domain)
+		&& !state.hosts(&domain)
 	{
 		return StatusCode::NOT_FOUND.into_response();
 	}

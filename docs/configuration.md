@@ -42,11 +42,11 @@ a connection URL.
 | `public_ipv4` | IPv4 | unset | Public IPv4 the hostname resolves to. Required by `verify-dns` to check the PTR and confirm the address matches the published A record; absent leaves `verify-dns` to look it up on the fly. Loopback, link-local, RFC 1918, carrier-grade NAT (`100.64.0.0/10`, RFC 6598), multicast, broadcast and the documentation ranges are refused by `epistle init` and by validation: only a global unicast address is accepted. A value already in the file that fails the rule (an older release accepted more, for example a site-local `fec0::` address) does not stop the server from starting: it is ignored, as if unset, with a warning that names the value and says what to do, in the log, in `epistle config-check` and in `epistle status`. |
 | `public_ipv6` | IPv6 | unset | Same for IPv6, including the way a value in the file that fails the rule is ignored with a warning. Publishing SPF for a host that also has AAAA without listing the v6 makes mail sent over IPv6 fail SPF. |
 | `data_dir` | path | — (required) | Absolute path where all server state lives (mail, spool, suppression, …). |
-| `domains` | list | `[]` | Domains this server accepts mail for. Required once any listener is configured. A domain needs at least one dot: `localhost` and `intranet` are refused, because RFC 5321 §2.3.5 keeps unqualified names out of an SMTP transaction and mail for them cannot be delivered on the public internet. |
-| `domain_aliases` | table | `{}` | `alias → target`: mail to `user@alias` is delivered as `user@target`. |
-| `disabled_domains` | array | `[]` | Entries of `domains` that are switched off: mail for them is rejected like mail for an unknown user and nobody may send as an address in them. Accounts, mailboxes and DKIM keys are kept; its DNS says the same (null SPF, null MX, a `reject` DMARC policy, no DKIM, MTA-STS, TLS-RPT or client locator, see [`dns.md`](dns.md#domain-roles)). Every entry must be in `domains`, once; with listeners configured at least one domain must stay enabled. `epistle domain disable\|enable` edits it. |
-| `send_only_domains` | array | `[]` | Entries of `domains` that only send mail (the `send-only` role): the DNS they need is SPF, DKIM, DMARC without `rua=`, and MX, with no MTA-STS, TLS-RPT, SRV, `autoconfig` or `autodiscover` record. Every other domain is `full`. Every entry must be in `domains`, once. `epistle domain add --send-only` and `domain set --send-only\|--receive-only\|--full` edit it. |
-| `receive_only_domains` | array | `[]` | Entries of `domains` that only receive mail (the `receive-only` role): nothing is sent as them, so no account may send as an address in them (SMTP submission, the API and JMAP refuse, and a forward, a Sieve redirect or a vacation reply for mail to them is dropped), and their DNS carries the null SPF, a `reject` DMARC policy and no DKIM key. Every entry must be in `domains`, once, and not in `send_only_domains`. A domain that neither sends nor receives goes in `disabled_domains`, which wins over both lists. `epistle domain add --receive-only` and `domain set --receive-only\|--send-only\|--full` edit it. |
+| `domains` | list | `[]` | Domains this server accepts mail for. Required once any listener is configured. A domain needs at least one dot: `localhost` and `intranet` are refused, because RFC 5321 §2.3.5 keeps unqualified names out of an SMTP transaction and mail for them cannot be delivered on the public internet. Seeds the [domain state file](#the-domain-state-file), which wins once it exists. |
+| `domain_aliases` | table | `{}` | `alias → target`: mail to `user@alias` is delivered as `user@target`. Seeds the [domain state file](#the-domain-state-file). |
+| `disabled_domains` | array | `[]` | Entries of `domains` that are switched off: mail for them is rejected like mail for an unknown user and nobody may send as an address in them. Accounts, mailboxes and DKIM keys are kept; its DNS says the same (null SPF, null MX, a `reject` DMARC policy, no DKIM, MTA-STS, TLS-RPT or client locator, see [`dns.md`](dns.md#domain-roles)). Every entry must be in `domains`, once; with listeners configured at least one domain must stay enabled. Seeds the [domain state file](#the-domain-state-file); `epistle domain disable\|enable` edits that file. |
+| `send_only_domains` | array | `[]` | Entries of `domains` that only send mail (the `send-only` role): the DNS they need is SPF, DKIM, DMARC without `rua=`, and MX, with no MTA-STS, TLS-RPT, SRV, `autoconfig` or `autodiscover` record. Every other domain is `full`. Every entry must be in `domains`, once. Seeds the [domain state file](#the-domain-state-file); `epistle domain add --send-only` and `domain set --send-only\|--receive-only\|--full` edit that file. |
+| `receive_only_domains` | array | `[]` | Entries of `domains` that only receive mail (the `receive-only` role): nothing is sent as them, so no account may send as an address in them (SMTP submission, the API and JMAP refuse, and a forward, a Sieve redirect or a vacation reply for mail to them is dropped), and their DNS carries the null SPF, a `reject` DMARC policy and no DKIM key. Every entry must be in `domains`, once, and not in `send_only_domains`. A domain that neither sends nor receives goes in `disabled_domains`, which wins over both lists. Seeds the [domain state file](#the-domain-state-file); `epistle domain add --receive-only` and `domain set --receive-only\|--send-only\|--full` edit that file. |
 | `dnsbl_zones` | list | `[]` | DNS blocklist zones (RFC 5782) screened against unauthenticated clients. Empty disables the IP screen. |
 | `dnsbl_domain_zones` | list | `[]` | Right-hand-side blocklist zones queried with the envelope sender's domain (RFC 5782 §2.3). Empty disables the sender-domain screen. |
 | `dnsbl_url_zones` | list | `[]` | URI blocklist zones queried with the host of every URL found in the body (RFC 5782 §2.3). Empty disables the URL-host screen. |
@@ -98,6 +98,54 @@ a connection URL.
 | `rules` | array | `[]` | Delivery rules that route or flag locally delivered mail by sender/header. |
 | `alerts` | array | `[]` | Metric alerts: rules that fire a webhook or email when a counter crosses its configured threshold over a sample window. |
 | `tenant` | array | `[]` | Tenant definitions: named groups of domains with optional aggregate caps on accounts, domains, storage and submission rate. Empty means no tenancy is in effect. See [`[[tenant]]`](#tenant). |
+
+## The domain state file
+
+The hosted domains, the role of each, whether it is switched on and the
+domain aliases are kept in `<data_dir>/domains.toml`, so they can change while
+`/etc/epistle` stays read-only for the server. `epistle domain` and the
+`/api/v1/domains` routes write it, under the same lock as `accounts.toml`, and
+the running server reloads it within a few seconds, as it reloads
+`accounts.toml` and `api_keys.toml`. Nothing restarts `mail`.
+
+```toml
+[[domain]]
+name = "example.org"
+role = "full"          # full, send-only or receive-only
+enabled = true
+
+[aliases]
+"example.net" = "example.org"
+```
+
+- **The configuration file is the seed.** While the file does not exist,
+  `domains`, `domain_aliases`, `disabled_domains`, `send_only_domains` and
+  `receive_only_domains` are read from the configuration file as before. The
+  first start of `serve`, or the first `epistle domain` change, writes the file
+  from them. From then on the file wins and those keys are not read.
+- **Editing those keys afterwards does nothing.** The file records a digest of
+  what it was made from; when the configuration file's lists no longer match
+  it, `serve`, `config-check` and `status` say that the change is ignored.
+  `epistle domain import` copies the lists in again (it asks first, and
+  refuses to drop a domain that is still in use).
+- **What stays in the configuration file.** `[[dkim.domain]]`,
+  `[[srs_domain]]`, `domain_quotas`, `domain_submission_limits`,
+  `[acme] domains` and `[[tenant]]` keep applying to the domains the file
+  hosts; an entry for a domain it no longer hosts is ignored. A domain added
+  with `epistle domain add` carries the DKIM key and the SRS secret made for it
+  (`dkim` and `srs_secret`); an entry of the configuration file for the same
+  domain wins.
+- **Reloads are checked.** A file that does not parse, or that gives a
+  configuration the server would refuse at start, is not loaded: the running
+  domains stay and the log says why. At start, such a file stops the server
+  with the file named; fix it, or run `epistle domain import`.
+- **Live and at the next start.** A reload reaches mail acceptance, who may
+  send as a domain, logins, DKIM signing with the domain's own key, SRS,
+  autoconfig and autodiscover, the management API and the DNS reconcile loop.
+  The rotation schedule of a new domain's own key, and what the certificates
+  container accepts to publish for it, follow at the next start of `serve`.
+- The file holds secrets and is written `0600`. Back it up with the data
+  directory; `epistle backup` includes it.
 
 ## `[antispam]` clamd scanner and Bayesian thresholds
 
@@ -355,7 +403,7 @@ With `rsa_selector` and `rsa_key_file` set (dual signing), each rotation also re
 | `rotate_overlap_days` | **Deprecated.** Ignored. Same backward-compatibility note as `rotate_days`. |
 
 #### `[[dkim.domain]]`
-Per-domain keys. A domain listed here signs with its own key instead of the `[dkim]` default, so one domain's key can be replaced, or kept from another server, without touching the others; every other domain keeps the default. `epistle init` (for every domain after the first) and `epistle domain add` write these entries themselves, with the key files under `<data_dir>/keys/dkim/<domain>/`, so a new install has one key per domain; an install made before that has the entries it had, and none are added to it. The signer picks the key of the signature's `d=` domain and never another domain's. `epistle dns-records`, `verify-dns`, `status` and `dkim show` show each domain's own selector and record.
+Per-domain keys. A domain listed here signs with its own key instead of the `[dkim]` default, so one domain's key can be replaced, or kept from another server, without touching the others; every other domain keeps the default. `epistle init` (for every domain after the first) writes these entries itself, and `epistle domain add` names the key it makes in the [domain state file](#the-domain-state-file), with the key files under `<data_dir>/keys/dkim/<domain>/`, so a new install has one key per domain; an entry here wins over the state file's for the same domain; an install made before that has the entries it had, and none are added to it. The signer picks the key of the signature's `d=` domain and never another domain's. `epistle dns-records`, `verify-dns`, `status` and `dkim show` show each domain's own selector and record.
 
 ```toml
 [dkim]
@@ -2127,7 +2175,7 @@ Rules:
 - Two domains that share a secret fail to load, and so does a domain whose secret is `srs_secret` or another domain's `previous_secret`. The message names both.
 - While two or more hosted domains still sign with `srs_secret`, `epistle status` and `epistle config-check` warn about it.
 - An account that forwards needs `srs_secret` or an entry for each of its domains; without either the file fails to load.
-- `epistle domain add` writes the new domain's entry, `epistle domain remove` removes it, and a new `epistle init` writes one per domain. An existing installation moves with `epistle srs split` (every hosted domain without an entry) and `epistle srs rotate DOMAIN`.
+- `epistle domain add` keeps the new domain's secret in the [domain state file](#the-domain-state-file) (an entry here wins over it), an entry for a domain that is no longer hosted is ignored, and a new `epistle init` writes one per domain. An existing installation moves with `epistle srs split` (every hosted domain without an entry) and `epistle srs rotate DOMAIN`.
 - Naming the hosted domain makes the return address longer. RFC 5321 limits a local part to 64 octets, and a receiver that enforces it refuses a longer sender, as it would refuse a long SRS address without the name.
 
 ### `[[transport]]`

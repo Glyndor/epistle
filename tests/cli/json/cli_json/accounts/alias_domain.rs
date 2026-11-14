@@ -15,6 +15,12 @@ fn restart_needed(action: &str, key: &str, value: &str) -> Value {
 	json!({ "result": "saved", "action": action, key: value, "reload": "restart-needed" })
 }
 
+/// A domain change goes to the domain state file, which a running server
+/// reloads; with none running there is nothing to wait for.
+fn no_server(action: &str, key: &str, value: &str) -> Value {
+	json!({ "result": "saved", "action": action, key: value, "reload": "no-server" })
+}
+
 #[test]
 fn alias_lifecycle() {
 	let env = env("");
@@ -74,7 +80,7 @@ fn domain_add_lists_the_records_to_publish() {
 		value,
 		json!({
 			"result": "saved", "action": "add", "domain": "example.net",
-			"records": null, "reload": "restart-needed",
+			"records": null, "reload": "no-server",
 		})
 	);
 	let records: Vec<&str> = records
@@ -104,7 +110,7 @@ fn domain_alias_and_remove() {
 			"domain",
 			&["alias", "add", "example.com", "example.org"]
 		),
-		(0, restart_needed("alias add", "alias", "example.com"))
+		(0, no_server("alias add", "alias", "example.com"))
 	);
 	assert_eq!(
 		run(
@@ -112,11 +118,11 @@ fn domain_alias_and_remove() {
 			"domain",
 			&["alias", "remove", "example.com", "--yes"]
 		),
-		(0, restart_needed("alias remove", "alias", "example.com"))
+		(0, no_server("alias remove", "alias", "example.com"))
 	);
 	assert_eq!(run(&env.config, "domain", &["add", "example.net"]).0, 0);
 	assert_eq!(
 		run(&env.config, "domain", &["remove", "example.net", "--yes"]),
-		(0, restart_needed("remove", "domain", "example.net"))
+		(0, no_server("remove", "domain", "example.net"))
 	);
 }

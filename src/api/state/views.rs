@@ -81,10 +81,10 @@ impl ApiState {
 			.load(std::sync::atomic::Ordering::Relaxed)
 	}
 
-	/// The mail domains this server hosts, as configured at startup. Used by
-	/// the API to accept or reject account and domain operations.
-	pub fn domains(&self) -> &[String] {
-		&self.inner.domains
+	/// The mail domains this server hosts now. Used by the API to accept or
+	/// reject account and domain operations.
+	pub fn domains(&self) -> Vec<String> {
+		self.hosted().domains.clone()
 	}
 
 	/// A snapshot of every account in the directory, with its delivery

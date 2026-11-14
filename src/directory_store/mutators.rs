@@ -142,11 +142,7 @@ impl AccountStore {
 		let raw = normalize(raw);
 		let raw = raw.as_str();
 		let address = address_reason::parse(raw).map_err(StoreError::Invalid)?;
-		if !self
-			.domains
-			.iter()
-			.any(|domain| domain.eq_ignore_ascii_case(address.domain()))
-		{
+		if !self.hosts(address.domain()) {
 			return Err(StoreError::Invalid(address_reason::not_handled(
 				address.domain(),
 			)));

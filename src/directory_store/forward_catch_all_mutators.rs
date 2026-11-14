@@ -98,12 +98,13 @@ impl AccountStore {
 	/// The domain is stored lowercase, as the directory compares it.
 	pub fn add_catch_all(&self, name: &str, domain: &str) -> Result<(), StoreError> {
 		let domain_lower = crate::util::address::normalize_domain(domain);
-		if let Some(target) = self.domain_aliases.get(&domain_lower) {
+		let hosted = self.hosted_domains();
+		if let Some(target) = hosted.domain_aliases.get(&domain_lower) {
 			return Err(StoreError::Invalid(format!(
 				"{domain} is an alias of {target}; set the catch-all on {target}"
 			)));
 		}
-		if !self
+		if !hosted
 			.domains
 			.iter()
 			.any(|configured| configured.eq_ignore_ascii_case(&domain_lower))

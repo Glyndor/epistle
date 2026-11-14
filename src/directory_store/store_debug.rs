@@ -9,7 +9,7 @@ impl std::fmt::Debug for AccountStore {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		f.debug_struct("AccountStore")
 			.field("path", &self.path)
-			.field("domains", &self.domains)
+			.field("domains", &self.hosted_domains().domains)
 			.field(
 				"dynamic_count",
 				&self.dynamic.read().map(|g| g.len()).unwrap_or(0),
