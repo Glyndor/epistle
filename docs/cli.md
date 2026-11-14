@@ -39,7 +39,7 @@ forward). Policy refusals exited `2` before they had their own code.
 | `api-key` | `list`, `create`, `revoke`, `rotate` | `api-keys`, `api-key-create`, `api-key-revoke` |
 | `suppression` | `list`, `show`, `add`, `remove`, `export`, `import` | `suppression`, `suppression --remove ADDR` |
 | `warmup` | `status`, `plan`, `start`, `enable`, `disable`, `pause`, `resume`, `set`, `reset` | |
-| `domain` | `list`, `show`, `add`, `remove`, `set`, `disable`, `enable`, `alias add\|remove` | |
+| `domain` | `list`, `show`, `add`, `remove`, `set`, `disable`, `enable`, `alias add\|remove`, `import` | |
 | `db` | `upgrade`, `status` | |
 | `panel` | `admin-id` | |
 | `evidence` | `verify`, `export`, `check`, `key show\|rotate`, `policy show\|set`, `timestamp show\|enable\|disable`, `clock accept`, `acknowledge`, `abandon` | |
@@ -925,7 +925,22 @@ epistle domain enable example.net [--dry-run]
 epistle domain set example.org [--quota 10G | --no-quota] [--submission-rate 50 | --no-submission-rate] [--send-only | --receive-only | --full] [--dry-run]
 epistle domain alias add alias.example.org example.org
 epistle domain alias remove alias.example.org [--yes|-y]
+epistle domain import [--yes|-y] [--dry-run]
 ```
+
+The hosted domains, their roles, their switches and the domain aliases live
+in `<data_dir>/domains.toml` (see
+[configuration](configuration.md#the-domain-state-file)), not in the
+configuration file. Every command below that changes them writes that file
+and nothing else; the running server reloads it within a few seconds, so no
+command restarts `mail`. The command waits for the reload the way `account`
+commands do, and the JSON result's `reload` is `loaded`, `no-server` or
+`timed-out`. The first change, or the first start of `serve`, writes the file
+from `domains`, `domain_aliases` and the role lists of the configuration file;
+after that, edits to those lists in the configuration file are ignored, the
+server says so in its log, and `domain import` copies them in again. Only
+`set --quota` and `set --submission-rate` still edit the configuration file
+and restart `mail`, since the per-domain limits live there.
 
 `list` writes every configured domain with the domains that target it
 (`ALIASES TO`) and the domains it targets (`ALIASES FROM`). `show` writes
@@ -935,8 +950,8 @@ it. Both name the domain's role (`ROLE`; `full`, `send-only`, `receive-only` or 
 contain `domain`, `enabled`, `role`, `aliases_to`, `aliases_from`, `accounts`
 and `aliases`.
 
-`disable` switches a domain off without removing it: the name goes into
-`disabled_domains`, and after the restart mail for it is rejected at RCPT
+`disable` switches a domain off without removing it: the domain's `enabled`
+becomes `false`, and once the server reloads the file mail for it is rejected at RCPT
 exactly like mail for an unknown user (a permanent 550, so senders get a
 bounce, not a retry), and no account may send as an address in it (SMTP
 submission, the API and JMAP all refuse). Accounts, mailboxes, aliases and DKIM
@@ -955,8 +970,8 @@ there with a warning on stderr that it receives and sends nothing until the
 domain is enabled. `disable` asks first (see
 [Prompts and `--yes`](#prompts-and---yes)), refuses an unknown domain with
 exit 2, and refuses to switch off the last enabled domain of a server that
-has listeners (exit 3, a rule of the server). `enable` takes the name out of
-`disabled_domains` again. Both report `result` `unchanged` when the domain is
+has listeners (exit 3, a rule of the server). `enable` switches it back on,
+with the role it had. Both report `result` `unchanged` when the domain is
 already in that state, and the JSON result carries `domain` and `enabled`.
 
 `set` writes the per-domain default storage quota (`domain_quotas`) and the
@@ -973,8 +988,7 @@ given together. A zero rate is refused (it would lift the limit; use
 removed; `role`). `show` prints both overrides.
 
 A domain has a role, `full` by default. `add --send-only` and `set
---send-only` write the name into `send_only_domains`; `set --full` takes it
-out. A send-only domain only sends mail, so its DNS is SPF, DKIM, DMARC
+--send-only` give it the `send-only` role; `set --full` takes it back. A send-only domain only sends mail, so its DNS is SPF, DKIM, DMARC
 (without `rua=`) and MX: no MTA-STS, TLS-RPT, SRV, `autoconfig` or
 `autodiscover` record. `dns-records`, `domain add`, `srv-records`,
 `verify-dns`, `status` and the automatic publisher all read the same set, so
@@ -983,40 +997,45 @@ omitted records as `skipped`. Changing the role changes what is expected, and
 the publisher retires only the records its ledger says it wrote. `domain
 remove` drops the role with the domain. See [`dns.md`](dns.md#domain-roles).
 
-`add --receive-only` and `set --receive-only` write the name into
-`receive_only_domains` and take it out of `send_only_domains`, and the other
-way round: a domain has one role. A receive-only domain only receives mail, so
+`add --receive-only` and `set --receive-only` give the domain the
+`receive-only` role: a domain has one role. A receive-only domain only receives mail, so
 its DNS carries the null SPF (`v=spf1 -all`), a `reject` DMARC policy and no
 DKIM key, and nobody may send as an address in it: SMTP submission, the API and
 JMAP refuse, and a forward, a Sieve redirect or a vacation reply for mail to it
 is dropped. A domain that neither sends nor receives is not a role: use
 `disable`, which wins over both lists and also gives it the null MX.
 
-`add` validates the name (`validate_dns_name`, same rules the loader
-uses), appends it to `[domains]` and prints the DNS records the operator
-must publish for the new domain (filtered to that domain only). It
-refuses when the domain is already configured, when it collides with
-a `domain_aliases` source or target, or when the loader rejects the
-final document.
+`add` validates the name with the loader's rule for a domain name (a name
+with a trailing dot, a space or a look-alike script is refused, and a Unicode
+name is refused with the ASCII form to write instead), stores it lowercase and
+prints the DNS records the operator must publish for the new domain. It
+refuses when the domain is already configured, when it is a domain alias or
+the target of one, or when the server would refuse the result. The new domain
+also gets an SRS secret of its own, kept in the state file.
 
 With `[dkim]` configured, `add` also gives the new domain a DKIM key of its
 own: the Ed25519 key (and the RSA key, when `[dkim]` signs with one) is written
-`0600` under `<data_dir>/keys/dkim/<domain>/`, and a `[[dkim.domain]]` entry
-names it with the selectors `own<day>` and `ownrsa<day>`, which are not the
+`0600` under `<data_dir>/keys/dkim/<domain>/`, and the domain's entry in the
+state file names it with the selectors `own<day>` and `ownrsa<day>`, which are not the
 ones `[dkim]` publishes, so the new record never replaces the one the default
 key is still published under. The records `add` prints are that key's. A key
 of the domain's own means a leaked key signs only as that domain.
 `--shared-dkim-key` keeps the old behaviour (the domain signs with the
-`[dkim]` key, which `config-check` and `status` then report). `--dry-run`
-shows the entry and writes no key. `remove` and `alias remove` take the
-domain's `[[dkim.domain]]` entry out with it and leave the key files, which are
-yours to delete once the record is gone from DNS.
+`[dkim]` key, which `config-check` and `status` then report). A domain the
+configuration file already names in `[[dkim.domain]]` keeps that key.
+`--dry-run` shows the entry and writes no key. The running server loads the
+new key and the new secret when it reloads the file, and signs the domain's
+mail with them from then on. `remove` leaves the key files, which are yours to
+delete once the record is gone from DNS; an entry of the configuration file for
+a domain that is no longer hosted is ignored. The records are published by the
+DNS reconcile loop on its next run, which reads the hosted domains again each
+time; the key's rotation is scheduled at the next start of `serve`.
 
 `remove` walks every account (static `[accounts]` plus `<data_dir>/accounts.toml`),
-every `[alias]` and its members and senders, every `domain_aliases`
-entry and every masked address on disk. If any of those still uses the
-domain, the command fails with a message that lists each offender by
-category (`account alice@example.org`, `alias team@example.org`,
+every `[alias]` and its members and senders, every domain alias, every
+masked address on disk, `[acme] domains` and every `[[tenant]]`. If any of
+those still uses the domain, the command fails with a message that lists each
+offender by category (`account alice@example.org`, `alias team@example.org`,
 `domain_aliases maps alias.example.org to example.org`,
 `masked address ...`). The file is only written after every offender
 has been cleaned up.
@@ -1024,15 +1043,24 @@ has been cleaned up.
 `domain alias remove` drops a single key. Both removals ask first (see
 [Prompts and `--yes`](#prompts-and---yes)).
 
-`domain alias add` writes an entry under `[domain_aliases]`. The target
-must already be a configured domain; the alias name must not collide
-with another `domain_aliases` key or with any configured domain.
+`domain alias add` adds a domain alias. The target must already be a
+configured domain; the alias name must not be another alias or a configured
+domain.
 
-Edits preserve every other TOML value, validate through the normal
-loader before atomic replacement, and follow the same restart policy
-as `service` and `limits` (compose restart or a manual restart message).
-Secrets never appear in `show`/`list` output. `--dry-run` on `add` and
-`remove` prints the validated unified diff without writing.
+`import` replaces the hosted domains, roles, switches and aliases of the state
+file with what the configuration file declares, after asking (see
+[Prompts and `--yes`](#prompts-and---yes)). A domain that stays keeps the key
+and the secret it was given; a domain that would go is refused while something
+still uses it, as `remove` is. A state file that does not parse, which stops
+the server and every command from loading, is moved aside to
+`domains.toml.bad` and replaced.
+
+Every change runs under the same lock as the other data-directory stores,
+checks that the server would load the result, and replaces the file
+atomically, owner-only. A change that changes nothing writes nothing and
+reports `unchanged`. Secrets never appear in `show`/`list` output, and
+`--dry-run` prints the unified diff of the state file, with the SRS secret
+hidden, without writing.
 
 ## Aliases (`epistle alias`)
 

@@ -437,6 +437,12 @@ pub struct Config {
 	/// one in use. Filled when the file is loaded, never read from it.
 	#[serde(skip)]
 	pub adjusted: Vec<String>,
+	/// What the configuration file itself declares about the hosted domains,
+	/// kept when `<data_dir>/domains.toml` replaces the lists (see
+	/// [`crate::domain::state`]). Filled when the file is loaded, never read
+	/// from it.
+	#[serde(skip)]
+	pub domain_seed: crate::domain::state::DomainSeed,
 	/// Why validation refused the file, when `epistle status` loaded it with
 	/// `Config::load_lenient`. Always `None` after [`Config::load`], which
 	/// fails instead. Filled when the file is loaded, never read from it.

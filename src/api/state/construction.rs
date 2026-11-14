@@ -66,8 +66,10 @@ impl ApiState {
 			inner: Arc::new(Inner {
 				token_hash: token_hash.map(str::to_owned),
 				data_dir: data_dir.clone(),
-				domain_catalog: crate::domain::catalog::Catalog::hosting(&domains, &[]),
-				domains,
+				hosted: Arc::new(std::sync::RwLock::new(Arc::new(
+					hosted::HostedView::hosting(domains, Vec::new()),
+				))),
+				live_domains: None,
 				store,
 				spool,
 				auth_limiter: std::sync::Mutex::new(ClientLimiters::new(AUTH_WINDOW)),
@@ -102,7 +104,6 @@ impl ApiState {
 				outbound: None,
 				delivery_log_days: 0,
 				webhook: None,
-				disabled_domains: Vec::new(),
 				max_message_size: crate::smtp::session::MAX_MESSAGE_SIZE,
 				max_recipients: crate::smtp::session::DEFAULT_MAX_RECIPIENTS,
 			}),

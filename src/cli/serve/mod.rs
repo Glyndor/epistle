@@ -7,6 +7,7 @@ mod connection_limits;
 pub(super) mod dkim;
 mod evidence;
 mod listeners;
+mod live_domains;
 mod metrics;
 mod queue;
 mod ratelimit;
@@ -90,16 +91,27 @@ async fn serve(config: Config, role: ServeRole) -> std::io::Result<()> {
 		.with_crypto(crypto.clone())
 		.into_shared();
 	let directory = account_store.handle();
+	let live = live_domains::start(&config);
 	// A write picks its tenant key from the account's addresses.
 	crypto.attach_accounts(Arc::new(directory.clone()));
 	let SplitCompanions {
 		split,
 		dkim_signer,
 		domain_signers,
+		per_domain,
+		srs,
 		webhook,
 		arc_sealer,
 		mut evidence,
 	} = dkim::build_split_with_companions(&config, &metrics, directory.clone(), crypto.clone())?;
+	live_domains::follow(
+		&live,
+		live_domains::Followers {
+			account_store: Arc::clone(&account_store),
+			signer: per_domain,
+			srs,
+		},
+	);
 	let greylist = tasks::build_greylist(&config, reputation_pool.as_ref()).await;
 	let oauth_verifier = crate::cli::oauth::advice::build_and_say(&config).await?;
 	let challenge_store = crate::acme::http01::ChallengeStore::new();
@@ -149,6 +161,9 @@ async fn serve(config: Config, role: ServeRole) -> std::io::Result<()> {
 			as Arc<dyn crate::directory_store::file_watcher::ApiKeyReloader>)
 		.with_warmup(
 			Arc::clone(&warmup) as Arc<dyn crate::directory_store::file_watcher::WarmupReloader>
+		)
+		.with_state(
+			Arc::clone(&live) as Arc<dyn crate::directory_store::file_watcher::StateReloader>
 		)
 		.spawn(crate::directory_store::reload_status::POLL_INTERVAL);
 	evidence::spawn(evidence.tasks.take());
@@ -230,6 +245,7 @@ async fn serve(config: Config, role: ServeRole) -> std::io::Result<()> {
 						send_limiter: &send_limiter,
 						tenant_limits: &tenant_limits,
 						bayes: &bayes,
+						live: &live,
 					},
 				)?;
 				let listener = tasks::bind(listener_config, &ipv4_any_ports).await?;
@@ -313,7 +329,7 @@ async fn serve(config: Config, role: ServeRole) -> std::io::Result<()> {
 					}
 				};
 				let listener = tasks::bind(listener_config, &ipv4_any_ports).await?;
-				let router = crate::autodiscovery::router_for(&config);
+				let router = crate::autodiscovery::router_live(&live);
 				let serve =
 					crate::autodiscovery::serve(listener, router, tls, max_conn, http_limits);
 				tasks.push(Box::pin(serve));

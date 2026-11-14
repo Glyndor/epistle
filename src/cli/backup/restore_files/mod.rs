@@ -304,6 +304,11 @@ pub(super) fn is_private_key_path(relative: &Path) -> bool {
 	if path_str == "accounts.toml" {
 		return true;
 	}
+	// The hosted-domain state holds the SRS secret of every domain added
+	// through it.
+	if path_str == crate::domain::state::FILE_NAME {
+		return true;
+	}
 	// Anything under `secrets/` is a credential by where it is stored: the
 	// database password, the at-rest storage key, per-feature API tokens.
 	if path_str.starts_with("secrets/") {

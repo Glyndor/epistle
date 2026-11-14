@@ -22,7 +22,7 @@ pub struct SplitDelivery {
 	signer: Option<crate::dkim::PerDomainSigner>,
 	rules: Vec<crate::rules::Rule>,
 	/// SRS rewriter and our domain, for forwarded (redirected) mail.
-	srs: Option<(crate::queue::srs::SrsKeys, String)>,
+	srs: SrsSlot,
 	/// ARC sealer for forwarded mail, so the next hop can trust our assessment
 	/// even when forwarding breaks SPF/DKIM (RFC 8617). Optional and our domain,
 	/// used to skip re-sealing a chain we already sealed at inbound accept.
@@ -59,7 +59,7 @@ impl SplitDelivery {
 			directory,
 			signer: None,
 			rules: Vec::new(),
-			srs: None,
+			srs: SrsSlot::default(),
 			arc: None,
 			metrics: None,
 			webhook: None,
@@ -124,12 +124,18 @@ impl SplitDelivery {
 	/// [`with_srs`](Self::with_srs) with a secret per hosted domain next to
 	/// (or instead of) the server-wide one.
 	pub fn with_srs_keys(
-		mut self,
+		self,
 		keys: crate::queue::srs::SrsKeys,
 		our_domain: impl Into<String>,
 	) -> Self {
-		self.srs = Some((keys, our_domain.into()));
+		self.srs.replace(Some((keys, our_domain.into())));
 		self
+	}
+
+	/// The slot the SRS keys are read from, to replace them while the sink
+	/// runs.
+	pub fn srs_slot(&self) -> SrsSlot {
+		self.srs.clone()
 	}
 
 	/// Seal forwarded mail into our ARC chain at `our_domain`, so the next hop
@@ -192,6 +198,8 @@ mod outbound;
 mod route;
 mod seal;
 mod sink;
+mod srs_slot;
+pub use srs_slot::SrsSlot;
 
 #[cfg(test)]
 mod tests;

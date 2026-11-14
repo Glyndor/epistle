@@ -178,8 +178,14 @@ fn removing_a_domain_drops_its_overrides() {
 		(0, Some("saved")),
 		"{value}"
 	);
-	let text = std::fs::read_to_string(&env.config).expect("read");
-	assert!(!text.contains("example.net"), "left behind:\n{text}");
+	// The overrides stay in the configuration file, which a domain change no
+	// longer writes, and no longer apply to a domain the server does not host.
+	let output = epistle(&["limits", "--config", &env.config, "show", "--json"], b"");
+	let (_, value) = json(&output);
+	assert!(
+		value["domain-overrides"]["example.net"].is_null(),
+		"left behind: {value}"
+	);
 }
 
 fn run_domain(env: &Env, args: &[&str]) -> (i32, Value) {

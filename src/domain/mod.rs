@@ -17,6 +17,7 @@
 //! and the API routes that show it.
 
 pub mod catalog;
+pub mod state;
 
 use crate::util::validation::{MAX_DOMAIN, MAX_LABEL};
 use unicode_security::confusable_detection::skeleton;

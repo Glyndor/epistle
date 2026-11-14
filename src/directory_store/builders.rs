@@ -37,10 +37,11 @@ impl AccountStore {
 
 		let store = AccountStore {
 			path,
-			domains,
-			domain_aliases,
-			disabled_domains: Vec::new(),
-			send_off_domains: Vec::new(),
+			hosted: RwLock::new(super::HostedDomains {
+				domains,
+				domain_aliases,
+				..super::HostedDomains::default()
+			}),
 			static_accounts,
 			domain_quotas: std::collections::HashMap::new(),
 			domain_submission_limits: std::collections::HashMap::new(),
@@ -66,7 +67,7 @@ impl AccountStore {
 
 	/// Switch off hosted domains and rebuild the directory.
 	pub fn with_disabled_domains(mut self, domains: Vec<String>) -> Self {
-		self.disabled_domains = domains;
+		self.hosted.get_mut().expect("hosted lock").disabled = domains;
 		self.handle.replace(self.build_directory());
 		self
 	}
@@ -74,7 +75,7 @@ impl AccountStore {
 	/// Set the hosted domains nobody may send as (`receive_only_domains`)
 	/// and rebuild the directory.
 	pub fn with_send_off_domains(mut self, domains: Vec<String>) -> Self {
-		self.send_off_domains = domains;
+		self.hosted.get_mut().expect("hosted lock").send_off = domains;
 		self.handle.replace(self.build_directory());
 		self
 	}

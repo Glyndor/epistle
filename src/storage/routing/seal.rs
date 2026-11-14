@@ -40,9 +40,10 @@ impl SplitDelivery {
 		if original.is_empty() {
 			return String::new();
 		}
-		let Some((srs, our_domain)) = &self.srs else {
+		let Some(current) = self.srs.current() else {
 			return original.to_string();
 		};
+		let (srs, our_domain) = &*current;
 		let Some((local, domain)) = original.rsplit_once('@') else {
 			return original.to_string();
 		};
@@ -59,7 +60,8 @@ impl SplitDelivery {
 	/// secret verified the address (`None` for the older shape); otherwise
 	/// `None`.
 	pub(super) fn srs_return(&self, recipient: &str) -> Option<(String, Option<String>)> {
-		let (srs, our_domain) = self.srs.as_ref()?;
+		let current = self.srs.current()?;
+		let (srs, our_domain) = &*current;
 		let (local, domain) = recipient.rsplit_once('@')?;
 		if !domain.eq_ignore_ascii_case(our_domain) {
 			return None;

@@ -85,11 +85,24 @@ pub trait WarmupReloader: Send + Sync {
 	fn reload_warmup(&self) -> std::io::Result<()>;
 }
 
+/// Hot-reload target for the state files that replace part of the
+/// configuration file (`domains.toml`, see [`crate::editable`]). Held as a
+/// trait object for the same reason as [`ApiKeyReloader`].
+pub trait StateReloader: Send + Sync {
+	/// The names of the state files to watch in the data directory.
+	fn files(&self) -> Vec<&'static str>;
+
+	/// Apply `text`, the contents of the state file `file` (empty when the
+	/// file is gone). A refusal leaves the running configuration untouched.
+	fn reload_state(&self, file: &str, text: &str) -> std::io::Result<()>;
+}
+
 /// The reloaders the watcher feeds besides the account store.
 #[derive(Clone, Copy, Default)]
 struct Targets<'a> {
 	api_keys: Option<&'a dyn ApiKeyReloader>,
 	warmup: Option<&'a dyn WarmupReloader>,
+	state: Option<&'a dyn StateReloader>,
 }
 
 /// The watched path and the reload step it triggers. One entry per
@@ -104,6 +117,8 @@ enum ReloadKind {
 	Aliases,
 	ApiKeys,
 	Warmup,
+	/// A state file of [`crate::editable`], by name.
+	State(&'static str),
 }
 
 impl ReloadKind {
@@ -115,6 +130,7 @@ impl ReloadKind {
 			ReloadKind::Aliases => "aliases.json",
 			ReloadKind::ApiKeys => "api_keys.toml",
 			ReloadKind::Warmup => crate::queue::warmup::settings::SETTINGS_FILE,
+			ReloadKind::State(name) => name,
 		}
 	}
 
@@ -133,6 +149,12 @@ impl ReloadKind {
 			ReloadKind::AppPasswords => store.reload_app_passwords_from(text),
 			ReloadKind::Masked => store.reload_masked_from(text),
 			ReloadKind::Aliases => store.reload_aliases_from(text),
+			ReloadKind::State(name) => match targets.state {
+				Some(reloader) => reloader
+					.reload_state(name, text)
+					.map_err(|error| StoreError::Invalid(error.to_string())),
+				None => Ok(()),
+			},
 			ReloadKind::Warmup => match targets.warmup {
 				Some(reloader) => reloader
 					.reload_warmup()
@@ -204,6 +226,8 @@ pub struct FileWatcher {
 	api_keys: Option<Arc<dyn ApiKeyReloader>>,
 	/// Optional hot-reload target for `warmup.json`.
 	warmup: Option<Arc<dyn WarmupReloader>>,
+	/// Optional hot-reload target for the state files.
+	state: Option<Arc<dyn StateReloader>>,
 	/// The data dir the watcher polls under; cached so the reload
 	/// status file is written back to the same root.
 	data_dir: PathBuf,
@@ -257,6 +281,8 @@ pub enum PollTarget {
 	ApiKeys,
 	/// The `warmup.json` warm-up settings.
 	Warmup,
+	/// A state file of [`crate::editable`], by name (`domains.toml`).
+	State(&'static str),
 }
 
 impl From<ReloadKind> for PollTarget {
@@ -268,6 +294,7 @@ impl From<ReloadKind> for PollTarget {
 			ReloadKind::Aliases => PollTarget::Aliases,
 			ReloadKind::ApiKeys => PollTarget::ApiKeys,
 			ReloadKind::Warmup => PollTarget::Warmup,
+			ReloadKind::State(name) => PollTarget::State(name),
 		}
 	}
 }
@@ -318,6 +345,7 @@ impl FileWatcher {
 			store,
 			api_keys: None,
 			warmup: None,
+			state: None,
 			data_dir,
 		}
 	}
@@ -339,11 +367,29 @@ impl FileWatcher {
 		self
 	}
 
+	/// Attach the reloader of the state files and watch each file it names,
+	/// before [`spawn`](Self::spawn).
+	pub fn with_state(mut self, reloader: Arc<dyn StateReloader>) -> Self {
+		for name in reloader.files() {
+			let watch = Watch {
+				path: self.data_dir.join(name),
+				kind: ReloadKind::State(name),
+			};
+			self.last
+				.insert(watch.path.clone(), fingerprint(&watch.path));
+			self.last_warned.insert(watch.path.clone(), None);
+			self.watches.push(watch);
+		}
+		self.state = Some(reloader);
+		self
+	}
+
 	/// The reloaders to feed.
 	fn targets(&self) -> Targets<'_> {
 		Targets {
 			api_keys: self.api_keys.as_deref(),
 			warmup: self.warmup.as_deref(),
+			state: self.state.as_deref(),
 		}
 	}
 

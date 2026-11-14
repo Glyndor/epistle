@@ -46,6 +46,8 @@ mod error;
 pub use error::StoreError;
 mod handle;
 pub use handle::DirectoryHandle;
+mod hosted;
+pub use hosted::HostedDomains;
 mod store_debug;
 
 mod forward_catch_all_mutators;
@@ -93,12 +95,9 @@ struct DynamicFile {
 /// The mutable account store: static accounts + persisted dynamic ones.
 pub struct AccountStore {
 	path: PathBuf,
-	domains: Vec<String>,
-	domain_aliases: std::collections::HashMap<String, String>,
-	/// Hosted domains switched off (`disabled_domains` in the configuration).
-	disabled_domains: Vec<String>,
-	/// Hosted domains that only receive (`receive_only_domains`).
-	send_off_domains: Vec<String>,
+	/// The hosted domains, their aliases and switches. Replaced when the
+	/// domain state file is reloaded ([`AccountStore::reload_domains`]).
+	hosted: RwLock<hosted::HostedDomains>,
 	static_accounts: Vec<Account>,
 	/// Default storage quota (bytes) per domain.
 	domain_quotas: std::collections::HashMap<String, u64>,
@@ -204,11 +203,7 @@ impl AccountStore {
 		}
 		for raw in &account.addresses {
 			let address = address_reason::parse(raw).map_err(StoreError::Invalid)?;
-			if !self
-				.domains
-				.iter()
-				.any(|domain| domain.eq_ignore_ascii_case(address.domain()))
-			{
+			if !self.hosts(address.domain()) {
 				return Err(StoreError::Invalid(address_reason::not_handled(
 					address.domain(),
 				)));
@@ -354,12 +349,13 @@ impl AccountStore {
 			.expect("masked lock")
 			.entries()
 			.collect::<Vec<_>>();
-		let mut dir = Directory::new(self.domains.iter().cloned(), address_accounts)
+		let hosted = self.hosted.read().expect("hosted lock").clone();
+		let mut dir = Directory::new(hosted.domains, address_accounts)
 			.with_password_hashes(hashes)
 			.with_catch_all(catch_all)
-			.with_domain_aliases(self.domain_aliases.clone())
-			.with_disabled_domains(self.disabled_domains.iter().cloned())
-			.with_send_off_domains(self.send_off_domains.iter().cloned())
+			.with_domain_aliases(hosted.domain_aliases)
+			.with_disabled_domains(hosted.disabled)
+			.with_send_off_domains(hosted.send_off)
 			.with_scram(scram)
 			.with_totp(totp)
 			.with_disabled(disabled)

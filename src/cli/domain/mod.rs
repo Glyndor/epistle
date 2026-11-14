@@ -1,27 +1,28 @@
-//! `epistle domain`: list, show, add and remove configured domains;
-//! add or remove a `domain_aliases` entry under the same parent command.
+//! `epistle domain`: list, show, add and remove the hosted domains; switch
+//! them on and off, give them a role, and add or remove domain aliases.
 //!
-//! `domain add` writes the new domain to `domains` and prints the DNS
-//! records the operator now needs to publish. The DNS output mirrors
-//! `dns-records` but scoped to the new domain only.
+//! Every change is written to `<data_dir>/domains.toml` through
+//! [`crate::domain::state::edit`], the layer the `/api/v1/domains` routes
+//! write through too, and the running server reloads the file within
+//! seconds: nothing restarts `mail`. Only `domain set --quota` and
+//! `--submission-rate` still edit the configuration file, since the
+//! per-domain limits live there.
 //!
-//! `domain remove` refuses while any account (static config, dynamic
-//! accounts, on-disk masked addresses), alias or `domain_aliases` entry
-//! still uses the domain; the error lists the offenders so the operator
-//! knows what to clean up first.
+//! `domain add` prints the DNS records the operator now needs to publish,
+//! the `dns-records` output scoped to the new domain. `domain remove` refuses
+//! while any account, alias, masked address or domain alias still uses the
+//! domain, and lists the offenders so the operator knows what to clean up
+//! first.
 
 use std::path::Path;
 use std::process::ExitCode;
 
 use clap::{Args, Subcommand};
 
-use crate::config::Config;
-
 use super::config_edit::ConfigDocument;
 use super::style;
 
 pub(in crate::cli) mod own_key;
-mod role;
 mod set;
 mod state;
 mod view;
@@ -54,8 +55,8 @@ pub enum DomainCli {
 	},
 	/// Add a domain and print the DNS records to publish.
 	///
-	/// Add a domain to `domains` and print the DNS records the operator now
-	/// needs to publish. With `[dkim]` configured the domain gets a DKIM key
+	/// Add a domain and print the DNS records the operator now needs to
+	/// publish. With `[dkim]` configured the domain gets a DKIM key
 	/// of its own, written under `keys/dkim/<domain>/` and named by a
 	/// `[[dkim.domain]]` entry, so the records include its selector.
 	Add {
@@ -75,7 +76,7 @@ pub enum DomainCli {
 		#[arg(long)]
 		receive_only: bool,
 	},
-	/// Remove a domain from `domains`.
+	/// Stop hosting a domain.
 	///
 	/// Refuses while the domain is still used by an account, alias, masked
 	/// address or `domain_aliases` entry.
@@ -89,8 +90,21 @@ pub enum DomainCli {
 		#[arg(long, short = 'y')]
 		yes: bool,
 	},
-	/// Edit the `domain_aliases` map.
+	/// Add or remove a domain alias.
 	Alias(DomainAliasArgs),
+	/// Copy the domain lists of the configuration file into the state file.
+	///
+	/// Replaces the hosted domains, roles, switches and domain aliases of
+	/// `<data_dir>/domains.toml` with what `domains`, `domain_aliases` and
+	/// the role lists of the configuration file declare. A domain that would
+	/// go is refused while something still uses it.
+	Import {
+		/// Skip the interactive confirmation. A non-interactive run
+		/// without `--yes` is refused with exit code 2; on a terminal
+		/// the operator is asked to type `y`.
+		#[arg(long, short = 'y')]
+		yes: bool,
+	},
 	/// Set the role, storage quota or submission rate of one domain.
 	///
 	/// The quota and rate are the per-domain overrides `limits set --domain`
@@ -208,159 +222,7 @@ fn open(path: &Path) -> Result<ConfigDocument, String> {
 	ConfigDocument::open(path)
 }
 
-/// Validate `domain` as a DNS name and check it is not already configured.
-fn validate_domain_for_add(config: &Config, raw: &str) -> Result<(), String> {
-	crate::config::validate_dns_name("domain", raw).map_err(|e| e.to_string())?;
-	if config
-		.domains
-		.iter()
-		.any(|existing| existing.eq_ignore_ascii_case(raw))
-	{
-		return Err(format!("domain {raw} is already configured"));
-	}
-	// A new domain must not collide with an existing alias source or
-	// target. Allowing it would silently re-route mail that resolves
-	// through domain_aliases.
-	for (alias, target) in &config.domain_aliases {
-		if alias.eq_ignore_ascii_case(raw) {
-			return Err(format!(
-				"domain {raw} is already declared as a domain alias (target {target})"
-			));
-		}
-		if target.eq_ignore_ascii_case(raw) {
-			return Err(format!(
-				"domain {raw} is already targeted by the domain alias {alias}"
-			));
-		}
-	}
-	Ok(())
-}
-
-/// Add `domain` to the `domains` array.
-fn add_domain(config: &Config, document: &mut ConfigDocument, domain: &str) -> Result<(), String> {
-	validate_domain_for_add(config, domain)?;
-	let mut domains = config.domains.clone();
-	domains.push(domain.trim().to_ascii_lowercase());
-	let mut new_array = toml_edit::Array::new();
-	for existing in &domains {
-		new_array.push(toml_edit::Value::from(existing.clone()));
-	}
-	document.replace_top_array("domains", new_array)?;
-	// The domain signs the sender of what it forwards with a secret of its
-	// own from the start, never with one shared with the others.
-	let secret = crate::queue::srs::generate_secret()
-		.ok_or("the system gave no random bytes for the domain's SRS secret")?;
-	crate::cli::srs::set_domain_secret(document, domain, secret, None)?;
-	Ok(())
-}
-
-/// Refuse the removal when `domain` is in use. Returns the user-facing
-/// message listing each offender category and the addresses themselves.
-fn remove_domain(
-	config: &Config,
-	document: &mut ConfigDocument,
-	domain: &str,
-) -> Result<(), String> {
-	if !config
-		.domains
-		.iter()
-		.any(|existing| existing.eq_ignore_ascii_case(domain))
-	{
-		return Err(format!("domain {domain} is not configured"));
-	}
-	removal_blockers(config, domain)?;
-	let remaining: Vec<String> = config
-		.domains
-		.iter()
-		.filter(|existing| !existing.eq_ignore_ascii_case(domain))
-		.cloned()
-		.collect();
-	let mut new_array = toml_edit::Array::new();
-	for existing in &remaining {
-		new_array.push(toml_edit::Value::from(existing.clone()));
-	}
-	document.replace_top_array("domains", new_array)?;
-	// Whatever was set for the domain goes with it, so nothing in the file
-	// names a domain the server no longer hosts.
-	own_key::drop_entry(document, domain)?;
-	role::forget(document, domain)?;
-	if !state::is_enabled(config, domain) {
-		state::set_enabled(config, document, domain, true)?;
-	}
-	for map in ["domain_quotas", "domain_submission_limits"] {
-		if let Some(key) = document.map_key(map, |key| key.eq_ignore_ascii_case(domain.trim())) {
-			document.remove_map_entry(map, &key)?;
-		}
-	}
-	document.remove_elements("srs_domain", "name", &domain.trim().to_ascii_lowercase())?;
-	Ok(())
-}
-
-fn add_alias_map(
-	config: &Config,
-	document: &mut ConfigDocument,
-	alias: &str,
-	target: &str,
-) -> Result<(), String> {
-	crate::config::validate_dns_name("domain alias", alias).map_err(|e| e.to_string())?;
-	crate::config::validate_dns_name("domain alias target", target).map_err(|e| e.to_string())?;
-	if !config
-		.domains
-		.iter()
-		.any(|existing| existing.eq_ignore_ascii_case(target))
-	{
-		return Err(format!(
-			"domain alias target {target} is not a configured domain"
-		));
-	}
-	if config.domain_aliases.iter().any(|(existing, _)| {
-		existing.eq_ignore_ascii_case(alias) || alias.eq_ignore_ascii_case(existing)
-	}) {
-		return Err(format!("domain alias {alias} is already declared"));
-	}
-	if config
-		.domains
-		.iter()
-		.any(|existing| existing.eq_ignore_ascii_case(alias))
-	{
-		return Err(format!(
-			"domain alias {alias} collides with a configured domain"
-		));
-	}
-	let (alias, target) = (
-		alias.trim().to_ascii_lowercase(),
-		target.trim().to_ascii_lowercase(),
-	);
-	document.set_map_entry("domain_aliases", &alias, target)?;
-	Ok(())
-}
-
-fn remove_alias_map(
-	config: &Config,
-	document: &mut ConfigDocument,
-	alias: &str,
-) -> Result<(), String> {
-	if !config
-		.domain_aliases
-		.iter()
-		.any(|(existing, _)| existing.eq_ignore_ascii_case(alias))
-	{
-		return Err(format!("domain alias {alias} is not declared"));
-	}
-	let key = document
-		.map_key("domain_aliases", |key| {
-			key.eq_ignore_ascii_case(alias.trim())
-		})
-		.unwrap_or_else(|| alias.to_string());
-	document.remove_map_entry("domain_aliases", &key)?;
-	own_key::drop_entry(document, alias)?;
-	Ok(())
-}
-
 #[cfg(test)]
 mod tests;
-
-pub mod blockers;
-pub(super) use blockers::removal_blockers;
 
 pub mod writers;

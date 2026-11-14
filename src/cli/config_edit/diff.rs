@@ -39,7 +39,7 @@ const SECRET_KEYS: &[&str] = &[
 /// What replaces the value of a credential.
 const REDACTED: &str = "<redacted>";
 
-pub(super) fn unified(path: &Path, old: &str, new: &str) -> String {
+pub(crate) fn unified(path: &Path, old: &str, new: &str) -> String {
 	if old == new {
 		return String::new();
 	}

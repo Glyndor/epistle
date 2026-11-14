@@ -8,9 +8,9 @@
 //! --json` prints for it. A route only adds what it owes the caller on top,
 //! the filter to the domains a key is confined to.
 //!
-//! The server builds its catalog once, from the configuration it started
-//! with. A change written to the file later shows in the routes after the
-//! restart that applies it, the same moment the server starts acting on it.
+//! The server builds its catalog again whenever it reloads the hosted-domain
+//! state ([`crate::domain::state::live`]), so a change shows in the routes the
+//! moment the server starts acting on it.
 
 use serde::Serialize;
 

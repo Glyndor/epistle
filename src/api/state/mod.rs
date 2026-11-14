@@ -37,7 +37,12 @@ struct Inner {
 	/// Token hash: either `sha256:<lowercase-hex>` or a legacy argon2id PHC string.
 	token_hash: Option<String>,
 	data_dir: PathBuf,
-	domains: Vec<String>,
+	/// The hosted domains, which are switched off and what each is; replaced
+	/// when the domain state is reloaded.
+	hosted: Arc<std::sync::RwLock<Arc<hosted::HostedView>>>,
+	/// The live domain state the writes go through, when the server runs
+	/// with one.
+	live_domains: Option<Arc<crate::editable::LiveConfig>>,
 	store: Arc<AccountStore>,
 	spool: FsSpool,
 	auth_limiter: std::sync::Mutex<ClientLimiters>,
@@ -130,10 +135,6 @@ struct Inner {
 	delivery_log_days: u64,
 	/// Optional advisory webhook used for queue cancellation events.
 	webhook: Option<Arc<crate::webhook::Webhook>>,
-	/// Hosted domains switched off (`disabled_domains`).
-	disabled_domains: Vec<String>,
-	/// What each hosted domain is, as `epistle domain show` reads it.
-	domain_catalog: crate::domain::catalog::Catalog,
 	/// Per-instance message-size cap, applied consistently to SMTP
 	/// (`SIZE` extension, per-line running check, end-of-DATA check,
 	/// per-chunk BDAT cap), the JMAP `Email/set` build, the JMAP
@@ -154,6 +155,7 @@ use limiter::{AUTH_WINDOW, ClientLimiters};
 pub use super::account_view::AccountView;
 
 mod construction;
+mod hosted;
 mod settings;
 #[cfg(test)]
 mod test_support;
