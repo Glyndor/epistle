@@ -4,7 +4,8 @@
 //! authenticated; its default is the most restrictive option (strict PKIX
 //! verification), so an absent `[queue]` section leaves existing deployments
 //! unchanged (fail closed). `tlsrpt_reports` turns the outbound TLS-RPT
-//! reports off.
+//! reports off, `dmarc_reports` the outbound DMARC aggregate reports, and
+//! `dmarc_report_from` says which address they come from.
 
 use serde::Deserialize;
 
@@ -39,6 +40,15 @@ pub struct Queue {
 	/// Defaults to `true`.
 	#[serde(default = "default_tlsrpt_reports")]
 	pub tlsrpt_reports: bool,
+	/// Record the DMARC verdict of every inbound message and send the
+	/// daily DMARC aggregate report (RFC 7489) to every domain that asks
+	/// for one. Defaults to `true`.
+	#[serde(default = "default_dmarc_reports")]
+	pub dmarc_reports: bool,
+	/// Address the DMARC aggregate reports are sent from, and the contact
+	/// the report XML names. Absent uses `postmaster@<hostname>`.
+	#[serde(default)]
+	pub dmarc_report_from: Option<String>,
 	/// Outbound conversations running at once, all destinations together.
 	/// Defaults to [`crate::queue::limits::DEFAULT_CONCURRENCY`].
 	#[serde(default = "default_concurrency")]
@@ -70,11 +80,17 @@ const fn default_tlsrpt_reports() -> bool {
 	true
 }
 
+const fn default_dmarc_reports() -> bool {
+	true
+}
+
 impl Default for Queue {
 	fn default() -> Self {
 		Queue {
 			outbound_tls: OutboundTls::default(),
 			tlsrpt_reports: default_tlsrpt_reports(),
+			dmarc_reports: default_dmarc_reports(),
+			dmarc_report_from: None,
 			concurrency: default_concurrency(),
 			per_domain_concurrency: default_per_domain_concurrency(),
 			backoff_steps: default_backoff_steps(),
@@ -83,6 +99,16 @@ impl Default for Queue {
 }
 
 impl super::Config {
+	/// The address the DMARC aggregate reports come from: the one the
+	/// operator configured, or `postmaster@<hostname>` when the setting is
+	/// absent.
+	pub fn dmarc_report_from(&self) -> String {
+		self.queue
+			.dmarc_report_from
+			.clone()
+			.unwrap_or_else(|| format!("postmaster@{}", self.hostname))
+	}
+
 	/// The conversation caps must allow at least one conversation, stay
 	/// within what one process should open, and not give one domain more
 	/// than the total.
@@ -103,6 +129,25 @@ impl super::Config {
 			));
 		}
 		self.validate_backoff_steps()
+	}
+
+	/// The address the DMARC reports come from must be one plain mailbox
+	/// with a valid domain name: the value goes into the `From:` header of
+	/// a message we sign, so anything that could break out of that header
+	/// is refused rather than escaped. The refused value is quoted escaped,
+	/// so a CR or LF in it cannot forge a log line either.
+	pub(in crate::config) fn validate_dmarc_report_from(&self) -> Result<(), super::ConfigError> {
+		let Some(address) = &self.queue.dmarc_report_from else {
+			return Ok(());
+		};
+		let invalid = |message: String| Err(super::ConfigError::Invalid(message));
+		let Some((_, domain)) = crate::util::address::plain_mailbox(address) else {
+			return invalid(format!(
+				"[queue] dmarc_report_from {address:?} is not a plain mailbox (local@domain)"
+			));
+		};
+		super::validate_dns_name("[queue] dmarc_report_from domain", domain)?;
+		Ok(())
 	}
 
 	/// The backoff needs at least one step and at most

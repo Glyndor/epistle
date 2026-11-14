@@ -65,9 +65,9 @@ impl Server {
 						.rsplit_once('@')
 						.map(|(_, domain)| domain.to_ascii_lowercase());
 					passed = sender_passed(outcome, envelope.as_deref(), &dkim_results);
-					let dmarc = match &author {
+					let (dmarc, published) = match &author {
 						crate::dmarc::author::AuthorDomain::One(from) => {
-							crate::dmarc::evaluate(
+							crate::dmarc::evaluate_with_policy(
 								dns.as_ref(),
 								from,
 								(outcome, domain.as_deref()),
@@ -80,11 +80,11 @@ impl Server {
 						// owner to authenticate; RFC 5322 forbids the
 						// first outright. It fails rather than errs.
 						crate::dmarc::author::AuthorDomain::Multiple => {
-							crate::dmarc::DmarcOutcome::Fail
+							(crate::dmarc::DmarcOutcome::Fail, None)
 						}
 						// No usable From header: nothing to align.
 						crate::dmarc::author::AuthorDomain::Missing => {
-							crate::dmarc::DmarcOutcome::PermError
+							(crate::dmarc::DmarcOutcome::PermError, None)
 						}
 					};
 					// Record DMARC result for aggregate reporting.
@@ -114,8 +114,16 @@ impl Server {
 							dmarc: dmarc.as_str().to_owned(),
 							disposition: disposition.to_owned(),
 							policy_domain: from_domain.clone(),
-							published_policy: String::new(),
-							pct: 100,
+							// What the evaluated record published, for
+							// the report's `<policy_published>`; empty
+							// when no record applied.
+							published_policy: published
+								.map(|policy| policy.policy.to_owned())
+								.unwrap_or_default(),
+							published_subdomain_policy: published
+								.map(|policy| policy.subdomain_policy.to_owned())
+								.unwrap_or_default(),
+							pct: published.map_or(100, |policy| policy.pct),
 						};
 						let today = crate::dmarc::aggregate::unix_to_day(record.timestamp);
 						crate::dmarc::aggregate::record_delivery(report_data_dir, &today, &record);

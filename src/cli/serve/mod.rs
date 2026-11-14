@@ -362,9 +362,11 @@ async fn serve(config: Config, role: ServeRole) -> std::io::Result<()> {
 					.with_identification(crate::smtp::identification::Policy::from_config(&config))
 					.with_data_rate(data_rate)
 					.with_session_limits(session_limits)
-					.with_report_dir(config.data_dir.clone())
 					.with_data_dir(config.data_dir.clone())
 					.with_crypto(Arc::new(crypto.clone()));
+				if let Some(dir) = tasks::dmarc_journal_dir(&config) {
+					server = server.with_report_dir(dir);
+				}
 				if let Some(pool) = &reputation_pool {
 					server = server.with_reputation_pool(pool.clone());
 					if let Some((store, _)) = &bayes {

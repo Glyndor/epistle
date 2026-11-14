@@ -26,6 +26,7 @@ fn sample_records() -> Vec<DeliveryRecord> {
 		disposition: "none".to_string(),
 		policy_domain: "example.org".to_string(),
 		published_policy: "reject".to_string(),
+		published_subdomain_policy: "reject".to_string(),
 		pct: 100,
 	}]
 }
@@ -43,6 +44,7 @@ fn report_message_carries_rfc_5322_headers_and_attachment_filename() {
 		&sample_records(),
 	);
 	let body = build_email(
+		"postmaster@mail.reporter.example",
 		"sender.example",
 		"reports@collector.example",
 		"r1",
@@ -105,6 +107,7 @@ fn attachment_payload_decodes_to_valid_gzip_xml() {
 		&sample_records(),
 	);
 	let body = build_email(
+		"postmaster@reporter.example",
 		"example.org",
 		"reports@example.org",
 		"r1",

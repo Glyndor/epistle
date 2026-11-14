@@ -47,6 +47,9 @@ mod tests_starttls;
 mod tests_author;
 
 #[cfg(test)]
+mod tests_dmarc_journal;
+
+#[cfg(test)]
 mod tests_sender_verified;
 
 #[cfg(test)]
