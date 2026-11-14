@@ -197,7 +197,7 @@ async fn device(app: &axum::Router, scope: &str) -> String {
 		app,
 		"/oauth/device/approve",
 		&format!(
-			"user_code={}&login=alice@example.org&password={}&scope=read+write+send",
+			"user_code={}&login=alice@example.org&password={}&scope={scope}",
 			grant["user_code"].as_str().unwrap(),
 			crate::test_support::fixtures::password()
 		),

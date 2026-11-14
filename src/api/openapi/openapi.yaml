@@ -3077,10 +3077,19 @@ components:
         interval:
           type: integer
           description: "5."
+        scope:
+          type: string
+          description: The scopes the device asked for, space-separated. The approval has to name them.
     DeviceApproveRequest:
       type: object
       required: [user_code]
       properties:
+        scope:
+          type: string
+          description: |
+            The scopes being approved. Required when the device asked for anything
+            beyond `read`, and it has to name exactly the scopes the device asked
+            for (any order); otherwise the answer is `400 invalid_grant`.
         user_code:
           type: string
         login:

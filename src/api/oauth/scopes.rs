@@ -38,6 +38,16 @@ impl Scopes {
 			.join(" ")
 	}
 
+	/// Whether `self` and `other` name the same scopes, in any order.
+	pub(super) fn same_set(&self, other: &Self) -> bool {
+		self.0.len() == other.0.len() && self.0.iter().all(|scope| other.0.contains(scope))
+	}
+
+	/// Whether the only scope is `read`, the default of an omitted scope.
+	pub(super) fn is_default(&self) -> bool {
+		self.0 == [Scope::Read]
+	}
+
 	pub(super) fn into_vec(self) -> Vec<Scope> {
 		self.0
 	}

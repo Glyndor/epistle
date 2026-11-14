@@ -206,6 +206,7 @@ pub async fn device_authorization(
 			&headers,
 		)
 		.map(client_bucket);
+	let scope_text = scopes.as_string();
 	let grant = DeviceGrant {
 		scopes,
 		user_code: user_code.clone(),
@@ -227,6 +228,7 @@ pub async fn device_authorization(
 		"verification_uri_complete": format!("{verification_uri}?user_code={user_code}"),
 		"expires_in": CODE_TTL_SECS,
 		"interval": POLL_INTERVAL_SECS,
+		"scope": scope_text,
 	}))
 	.into_response()
 }
@@ -273,6 +275,16 @@ pub async fn device_approve(
 	});
 	match (grant, account) {
 		(Some(grant), Some(account)) => {
+			// The device chose the scopes, the user approves them: anything
+			// beyond the default `read` is granted only when the approval
+			// names exactly those scopes, so a device cannot get `send` or
+			// `write` out of an approval that never showed them.
+			let confirmed = fields.get("scope").and_then(|value| super::scopes::Scopes::parse(value));
+			if !grant.scopes.is_default()
+				&& !confirmed.is_some_and(|confirmed| confirmed.same_set(&grant.scopes))
+			{
+				return oauth_error("invalid_grant");
+			}
 			grant.approved_account = Some(account);
 			Json(serde_json::json!({ "status": "approved" })).into_response()
 		}

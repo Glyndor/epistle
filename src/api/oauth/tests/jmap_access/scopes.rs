@@ -158,3 +158,59 @@ async fn non_string_json_scopes_do_not_fall_back_to_read() {
 		}
 	}
 }
+
+#[tokio::test]
+async fn a_device_gets_beyond_read_only_what_the_approval_names() {
+	let dir = tempfile::tempdir().unwrap();
+	let app = router(world(dir.path()));
+	let (status, grant) = form(
+		&app,
+		"/oauth/device_authorization",
+		"client_id=panel&scope=read+send",
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(grant["scope"], "read send", "the response names the scopes");
+	let approve = |scope: &'static str| {
+		let app = app.clone();
+		let code = grant["user_code"].as_str().unwrap().to_owned();
+		async move {
+			let tail = if scope.is_empty() { String::new() } else { format!("&scope={scope}") };
+			form(
+				&app,
+				"/oauth/device/approve",
+				&format!(
+					"user_code={code}&login=alice@example.org&password={}{tail}",
+					crate::test_support::fixtures::password()
+				),
+			)
+			.await
+		}
+	};
+	for wrong in ["", "read", "read+write+send", "send"] {
+		let (status, body) = approve(wrong).await;
+		assert_eq!(status, StatusCode::BAD_REQUEST, "scope {wrong:?}: {body}");
+		assert_eq!(body["error"], "invalid_grant");
+	}
+	let (status, _) = approve("send+read").await;
+	assert_eq!(status, StatusCode::OK, "the same set in any order is the approval");
+}
+
+#[tokio::test]
+async fn a_read_only_device_needs_no_scope_in_the_approval() {
+	let dir = tempfile::tempdir().unwrap();
+	let app = router(world(dir.path()));
+	let (_, grant) = form(&app, "/oauth/device_authorization", "client_id=panel").await;
+	assert_eq!(grant["scope"], "read");
+	let (status, _) = form(
+		&app,
+		"/oauth/device/approve",
+		&format!(
+			"user_code={}&login=alice@example.org&password={}",
+			grant["user_code"].as_str().unwrap(),
+			crate::test_support::fixtures::password()
+		),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+}
