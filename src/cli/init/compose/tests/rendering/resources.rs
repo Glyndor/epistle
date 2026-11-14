@@ -129,3 +129,61 @@ fn low_nofile_warns_with_the_host_limit_and_how_to_raise_it() {
 		assert!(out.is_empty(), "{hard:?}");
 	}
 }
+
+#[test]
+fn the_panel_is_a_service_of_the_stack_and_the_web_is_not() {
+	use crate::cli::init::resources::{limits, problems};
+	let mut overrides = std::collections::BTreeMap::new();
+	overrides.insert(
+		"panel".to_string(),
+		ServiceResources {
+			memory: Some("768m".to_string()),
+			pids: None,
+		},
+	);
+	assert!(
+		problems(&overrides).is_empty(),
+		"{:?}",
+		problems(&overrides)
+	);
+	overrides.insert("web".to_string(), ServiceResources::default());
+	let found = problems(&overrides);
+	assert_eq!(found.len(), 1, "{found:?}");
+	assert_eq!(found[0].0, "resources.web");
+	assert!(
+		found[0].1.contains("panel"),
+		"the reason lists the services"
+	);
+	let mut bad = std::collections::BTreeMap::new();
+	bad.insert(
+		"panel".to_string(),
+		ServiceResources {
+			memory: Some("0m".to_string()),
+			pids: Some(0),
+		},
+	);
+	assert_eq!(problems(&bad).len(), 2, "the panel's values are validated");
+	// An answered override replaces one default and keeps the other.
+	assert_eq!(limits(&overrides, "panel"), Some(("768m".to_string(), 128)));
+	assert_eq!(
+		limits(&Default::default(), "panel"),
+		Some(("512m".to_string(), 128))
+	);
+}
+
+#[test]
+fn an_answered_override_reaches_the_rendered_panel() {
+	let mut answers = stack_answers();
+	answers.services.api = true;
+	answers.services.panel_image = Some("ghcr.io/glyndor/epistle-panel:0.3.1".to_string());
+	answers.resources.insert(
+		"panel".to_string(),
+		ServiceResources {
+			memory: Some("768m".to_string()),
+			pids: Some(64),
+		},
+	);
+	let value = render(&answers, true);
+	assert_eq!(limits(&value, "panel"), (json!("768m"), json!(64)));
+	assert_eq!(limits(&value, "mail"), (json!("1g"), json!(1024)));
+}

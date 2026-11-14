@@ -218,3 +218,104 @@ fn the_plain_entry_point_keeps_the_recorded_choice() {
 	let result = regenerate(&answers.data_dir, &listeners, &written).expect("regenerate");
 	assert_eq!(key(&result.text), Some(serde_json::json!(false)));
 }
+
+const SECRETS: [&str; 3] = ["panel_api_token", "panel_session_secret", "panel_admin_id"];
+
+/// Whether the rendered file carries the panel in any of its three forms: the
+/// service, its secrets and the publication.
+fn carries_panel(text: &str) -> (bool, bool, bool) {
+	let value: serde_json::Value = serde_json::from_str(text).expect("json");
+	let ports = value["services"]["mail"]["ports"].to_string();
+	(
+		value["services"].get("panel").is_some(),
+		SECRETS
+			.iter()
+			.any(|name| value["secrets"].get(*name).is_some()),
+		ports.contains(":7587"),
+	)
+}
+
+#[test]
+fn an_update_adds_the_service_the_secrets_and_the_port_and_is_then_stable() {
+	let answers = answers(None, true);
+	let written = render_for(&answers, true).expect("render");
+	assert_eq!(carries_panel(&written), (false, false, false));
+	let case = manifest(Some(GOOD));
+	let updated = again(&answers, &written, &case).expect("regenerate").text;
+	assert_eq!(carries_panel(&updated), (true, true, true));
+	let value: serde_json::Value = serde_json::from_str(&updated).expect("json");
+	assert_eq!(value["services"]["panel"]["image"], GOOD.trim());
+	for name in SECRETS {
+		assert!(value["secrets"][name]["file"].is_string(), "{name}");
+	}
+	assert_eq!(
+		again(&answers, &updated, &case).expect("regenerate").text,
+		updated,
+		"a second update changes nothing"
+	);
+}
+
+#[test]
+fn a_purged_package_takes_the_service_the_secrets_and_the_port_away() {
+	let answers = answers(None, true);
+	let written = render_for(&answers, true).expect("render");
+	let with = again(&answers, &written, &manifest(Some(GOOD)))
+		.expect("regenerate")
+		.text;
+	assert_eq!(carries_panel(&with), (true, true, true));
+	let purged = again(&answers, &with, &manifest(None)).expect("regenerate");
+	assert_eq!(carries_panel(&purged.text), (false, false, false));
+	assert!(!purged.panel);
+}
+
+#[test]
+fn a_declined_panel_stays_out_of_a_stack_that_has_the_package() {
+	let answers = answers(Some(false), true);
+	let written = render_for(&answers, true).expect("render");
+	let result = again(&answers, &written, &manifest(Some(GOOD))).expect("regenerate");
+	assert_eq!(carries_panel(&result.text), (false, false, false));
+	assert_eq!(key(&result.text), Some(serde_json::json!(false)));
+}
+
+#[test]
+fn the_panel_is_not_rendered_when_the_api_is_off_and_the_note_says_so() {
+	let answers = answers(None, false);
+	let written = render_for(&answers, true).expect("render");
+	let result = again(&answers, &written, &manifest(Some(GOOD))).expect("regenerate");
+	assert_eq!(carries_panel(&result.text), (false, false, false));
+	assert!(!result.panel);
+	assert!(
+		result
+			.notes
+			.iter()
+			.any(|note| note.contains("management API is off")),
+		"{:?}",
+		result.notes
+	);
+	// The resolver alone: the image stays unset and the note is the same.
+	let mut resolved = answers.clone();
+	let case = manifest(Some(GOOD));
+	let notes = crate::cli::init::compose::panel_package::resolve(
+		&mut resolved,
+		&case.manifest,
+		false,
+		true,
+	)
+	.expect("a missing API is a note, not an error");
+	assert_eq!(resolved.services.panel_image, None);
+	assert!(notes[0].contains("management API is off"), "{notes:?}");
+}
+
+#[test]
+fn the_address_an_operator_gave_the_panel_port_survives_an_update() {
+	let answers = answers(None, true);
+	let written = render_for(&answers, true).expect("render");
+	let case = manifest(Some(GOOD));
+	let updated = again(&answers, &written, &case).expect("regenerate").text;
+	let edited = updated.replace("127.0.0.1:7587:7587", "10.0.0.5:7587:7587");
+	assert_ne!(edited, updated);
+	assert_eq!(
+		again(&answers, &edited, &case).expect("regenerate").text,
+		edited
+	);
+}
