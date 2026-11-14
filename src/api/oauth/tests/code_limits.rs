@@ -25,6 +25,7 @@ fn now() -> u64 {
 /// without issuing thousands of them over the wire.
 fn code(account: &str, client: Option<(bool, u64)>, expires_at: u64) -> super::AuthCode {
 	super::AuthCode {
+		scopes: crate::api::oauth::scopes::Scopes::requested(None).unwrap(),
 		account: account.to_string(),
 		code_challenge: CHALLENGE.to_string(),
 		expires_at,

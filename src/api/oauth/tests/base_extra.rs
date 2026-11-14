@@ -42,6 +42,7 @@ fn expired_device_grant_redeems_as_expired_token() {
 	authz.devices.lock().unwrap().insert(
 		device_code.clone(),
 		crate::api::oauth::DeviceGrant {
+			scopes: crate::api::oauth::scopes::Scopes::requested(None).unwrap(),
 			user_code: "AAAA-AAAA".to_string(),
 			approved_account: Some("alice".to_string()),
 			expires_at: 1, // long past
@@ -66,6 +67,7 @@ fn polling_too_fast_yields_slow_down() {
 	authz.devices.lock().unwrap().insert(
 		"dc".to_string(),
 		crate::api::oauth::DeviceGrant {
+			scopes: crate::api::oauth::scopes::Scopes::requested(None).unwrap(),
 			user_code: "AAAA-AAAA".to_string(),
 			approved_account: None,
 			expires_at: now + 600,

@@ -17,7 +17,7 @@ guide is the prose around it. How the headers of the mail come out is in
 | Prefix | What it is | Needs |
 |---|---|---|
 | `/api/v1` | Management, mail submission, delivery log | A bearer key with `read`, `write` or `send` |
-| `/jmap` and `/.well-known/jmap` | JMAP mail (RFC 8620, 8621, 8887) | A bearer key with `read`, `write` or `send` |
+| `/jmap` and `/.well-known/jmap` | JMAP mail (RFC 8620, 8621, 8887) | A bearer key or local OAuth access token with `read`, `write` or `send` |
 | `/scim/v2` | SCIM 2.0 account provisioning | A bearer key with `scim` |
 | `/oauth` | Device and PKCE grants for mail clients | The account's own credentials |
 | `/healthz` | Liveness | Nothing |
@@ -45,8 +45,9 @@ port = 8025
 # token_hash = "sha256:<64 hex digits>"
 ```
 
-Without `token_hash`, only labelled keys in `api_keys.toml` authenticate on
-bearer-protected routes. Create one with `epistle api-key create app --account
+Without `token_hash`, labelled keys in `api_keys.toml` authenticate on
+bearer-protected routes; local OAuth access tokens also authenticate JMAP.
+Create a key with `epistle api-key create app --account
 ACCOUNT --scope send --expires-in 365d`. `epistle init` with `services.api = true`
 and `epistle service enable api` create the section without a static token;
 `epistle status` reports "no static token configured" as a good state.
@@ -54,7 +55,8 @@ and `epistle service enable api` create the section without a static token;
 No routes become unreachable in this release: every bearer-protected route has
 a per-key scope, including SCIM discovery, Users and Groups (`scim`). OAuth's
 `POST /oauth/device_authorization`, `/oauth/device/approve`, `/oauth/authorize`
-and `/oauth/token` use grant codes or account credentials, independently of the
+and `/oauth/token` use grant codes or account credentials; `/oauth/revoke` uses
+possession of the token to revoke. These work independently of the
 static token (and still require an OAuth signing key). A key with every scope
 remains a labelled key; it never becomes the configured static identity.
 A route reserved to the static token with no per-key scope must refuse keys
@@ -600,7 +602,7 @@ posts a `test` event and reports the status the endpoint answered.
 
 ## JMAP
 
-JMAP uses the same keys. `GET /jmap/session` (or `/.well-known/jmap`) returns
+JMAP accepts the same keys and local OAuth access tokens (see [OAuth](#oauth)). `GET /jmap/session` (or `/.well-known/jmap`) returns
 the Session resource: the accounts the key reaches (the JMAP account id is the
 account name), the capabilities and the limits; its URLs are relative.
 `POST /jmap/api` runs method calls. The scope is checked per call: a call the
@@ -664,8 +666,9 @@ Present only when `[oauth] signing_key` is set; otherwise every `/oauth/*`
 path answers `401` to a request with no bearer (which counts as a failed
 authentication for the 20 per minute limit) and `404` to one with a valid
 bearer. It issues ES256 access tokens, valid for one hour, for
-OAUTHBEARER on IMAP and SMTP submission. The REST API does not accept them as
-a bearer. `POST /oauth/device_authorization` starts a device flow,
+OAUTHBEARER on IMAP and SMTP submission, and bearer authentication on JMAP.
+On JMAP the signed `sub` confines the token to its own live account. The token
+never authenticates `/api/v1` or SCIM. `POST /oauth/device_authorization` starts a device flow,
 `POST /oauth/device/approve` approves it with the account's `login` and
 `password` (or HTTP Basic), and `POST /oauth/token` polls (no faster than every
 5 seconds) or redeems a PKCE code from `POST /oauth/authorize` (`S256` only; a `code_verifier` is
@@ -677,6 +680,24 @@ request is the digest of the verifier, so it is exactly 43 characters of
 `400 invalid_request`. At most 100 codes may be alive for one account, 50 for
 one client address and 10,000 in all; past them the answer is
 `429 temporarily_unavailable` with `Retry-After`, and nothing is stored.
+Both grant requests accept a space-separated `scope` drawn from `read write send`.
+Omitting it grants `read`; an explicit empty or unknown scope is `400 invalid_scope`.
+The grant stores the scopes, and the signed access token and token response carry
+them. Approval and redemption cannot widen them. `write` and `send` do not imply
+`read`. `EmailSubmission/set` requires `send` even on an otherwise writable account.
+Tokens without explicit scopes must be reissued. Token responses disable caching.
+
+`POST /oauth/revoke` takes `token` as form or JSON. Possession permits revoking
+that token's signed identifier for JMAP. Invalid, expired and already revoked
+tokens get the same empty `200`. Revocations persist in `oauth_revocations.json`
+under the data directory, containing identifier hashes and expiries, and survive
+restart. Expired entries are pruned on revocation. A write failure gives `503`;
+unreadable or corrupt revocations fail closed during OAuth authentication.
+Every JMAP request checks signature against the local signing key, issuer,
+audience, expiry, revocation and account availability. Failed authentication
+uses the same bearer limiter and generic `401` as other bearers. WebSockets
+recheck on each frame, and event sources on each poll.
+
 Bodies are form-encoded or JSON; errors are `{"error": "<code>"}` as in
 RFC 6749 and 8628. Wrong credentials and a wrong code give the same answer.
 

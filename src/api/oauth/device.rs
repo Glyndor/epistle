@@ -181,6 +181,10 @@ pub async fn device_authorization(
 		return oauth_error("invalid_request");
 	};
 	let fields = parse_fields(&headers, &body);
+	let Some(scopes) = super::scopes::Scopes::requested(fields.get("scope").map(String::as_str))
+	else {
+		return oauth_error("invalid_scope");
+	};
 	// RFC 8628 requires client_id; reject its absence rather than mint a code.
 	if fields
 		.get("client_id")
@@ -202,7 +206,9 @@ pub async fn device_authorization(
 			&headers,
 		)
 		.map(client_bucket);
+	let scope_text = scopes.as_string();
 	let grant = DeviceGrant {
+		scopes,
 		user_code: user_code.clone(),
 		approved_account: None,
 		expires_at: now + CODE_TTL_SECS,
@@ -222,6 +228,7 @@ pub async fn device_authorization(
 		"verification_uri_complete": format!("{verification_uri}?user_code={user_code}"),
 		"expires_in": CODE_TTL_SECS,
 		"interval": POLL_INTERVAL_SECS,
+		"scope": scope_text,
 	}))
 	.into_response()
 }
@@ -268,6 +275,18 @@ pub async fn device_approve(
 	});
 	match (grant, account) {
 		(Some(grant), Some(account)) => {
+			// The device chose the scopes, the user approves them: anything
+			// beyond the default `read` is granted only when the approval
+			// names exactly those scopes, so a device cannot get `send` or
+			// `write` out of an approval that never showed them.
+			let confirmed = fields
+				.get("scope")
+				.and_then(|value| super::scopes::Scopes::parse(value));
+			if !grant.scopes.is_default()
+				&& !confirmed.is_some_and(|confirmed| confirmed.same_set(&grant.scopes))
+			{
+				return oauth_error("invalid_grant");
+			}
 			grant.approved_account = Some(account);
 			Json(serde_json::json!({ "status": "approved" })).into_response()
 		}
@@ -336,11 +355,12 @@ pub fn redeem_device_code(authz: &AuthzServer, device_code: &str) -> Response {
 	let Some(account) = grant.approved_account.clone() else {
 		return oauth_error("authorization_pending");
 	};
+	let scopes = grant.scopes.clone();
 	// Approved: consume the code (one-time) and issue the token.
 	devices.remove(device_code);
 	drop(devices);
-	match authz.issue_token(&account, now) {
-		Some(token) => super::pkce::token_response(&token).into_response(),
+	match authz.issue_token(&account, &scopes, now) {
+		Some(token) => super::pkce::token_response(&token, &scopes),
 		None => oauth_error("server_error"),
 	}
 }

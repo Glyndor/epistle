@@ -53,12 +53,22 @@ fn now_secs() -> u64 {
 }
 
 /// The success body of a token response (RFC 6749 §5.1).
-pub(crate) fn token_response(access_token: &str) -> Json<serde_json::Value> {
-	Json(serde_json::json!({
+pub(super) fn token_response(access_token: &str, scopes: &super::scopes::Scopes) -> Response {
+	let mut response = Json(serde_json::json!({
 		"access_token": access_token,
 		"token_type": "Bearer",
 		"expires_in": ACCESS_TOKEN_TTL_SECS,
+		"scope": scopes.as_string(),
 	}))
+	.into_response();
+	response.headers_mut().insert(
+		axum::http::header::CACHE_CONTROL,
+		"no-store".parse().unwrap(),
+	);
+	response
+		.headers_mut()
+		.insert(axum::http::header::PRAGMA, "no-cache".parse().unwrap());
+	response
 }
 
 /// `POST /oauth/authorize` (authenticated): issue an authorization code bound to
@@ -80,6 +90,10 @@ pub async fn authorize(
 		return oauth_error("invalid_request");
 	};
 	let fields = parse_fields(&headers, &body);
+	let Some(scopes) = super::scopes::Scopes::requested(fields.get("scope").map(String::as_str))
+	else {
+		return oauth_error("invalid_scope");
+	};
 
 	// S256 only: a missing or `plain` method is rejected (RFC 7636 §4.3 downgrade
 	// protection — we never accept the weaker transformation).
@@ -125,6 +139,7 @@ pub async fn authorize(
 	};
 	let now = now_secs();
 	let grant = AuthCode {
+		scopes,
 		account,
 		code_challenge,
 		expires_at: now + CODE_TTL_SECS,
@@ -281,8 +296,8 @@ fn redeem_authorization_code(
 	if !constant_time::eq(computed.as_bytes(), stored.code_challenge.as_bytes()) {
 		return oauth_error("invalid_grant");
 	}
-	match authz.issue_token(&stored.account, now) {
-		Some(token) => token_response(&token).into_response(),
+	match authz.issue_token(&stored.account, &stored.scopes, now) {
+		Some(token) => token_response(&token, &stored.scopes),
 		None => oauth_error("server_error"),
 	}
 }
