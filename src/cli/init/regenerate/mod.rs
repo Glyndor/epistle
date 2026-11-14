@@ -154,8 +154,13 @@ pub(crate) fn regenerate_in(
 	// publish it. The file is the one the apply phase wrote, so it already
 	// carries the section init adds.
 	let challenge = super::compose::challenge::in_config(&answers.config_path);
-	let published_ports = published(listeners, &narrow, None, challenge);
-	let composed = ComposeFile::build(&answers, published_ports.clone(), database);
+	let panel_port = answers
+		.services
+		.panel_image
+		.as_ref()
+		.map(|_| super::compose::PANEL_PORT);
+	let published_ports = published(listeners, &narrow, None, challenge, panel_port);
+	let composed = ComposeFile::build(&answers, published_ports.clone(), database, listeners);
 	let mut text = render_document(&composed).map_err(|error| error.to_string())?;
 	let mut notes = panel_notes;
 	// A publication this release takes off every address of the host is named

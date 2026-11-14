@@ -98,6 +98,7 @@ fn a_second_change_keeps_the_host_address_the_first_one_fixed() {
 			&narrow,
 			None,
 			None,
+			None,
 		),
 		["25:25", "127.0.0.1:143:143", "127.0.0.1:8090:8090"],
 		"a mapping nobody narrowed keeps the form init writes"
@@ -287,7 +288,10 @@ fn a_loopback_listener_stays_out_of_the_map() {
 		(ListenerKind::Api, "127.0.0.1", None),
 		(ListenerKind::Smtp, "::", None),
 	]);
-	assert_eq!(published(&rows, &BTreeMap::new(), None, None), ["25:25"]);
+	assert_eq!(
+		published(&rows, &BTreeMap::new(), None, None, None),
+		["25:25"]
+	);
 	// Even pinned to a host address, a loopback bind answers nothing through
 	// the pasta mapping, so the mapping would publish a port that refuses.
 	assert_eq!(
@@ -295,6 +299,7 @@ fn a_loopback_listener_stays_out_of_the_map() {
 			&rows,
 			&BTreeMap::new(),
 			Some((ListenerKind::Api, Some("127.0.0.1".parse().unwrap()))),
+			None,
 			None,
 		),
 		["25:25"]
@@ -304,6 +309,7 @@ fn a_loopback_listener_stays_out_of_the_map() {
 			&listeners(&[(ListenerKind::Api, "0.0.0.0", None)]),
 			&BTreeMap::new(),
 			Some((ListenerKind::Api, Some("10.0.0.5".parse().unwrap()))),
+			None,
 			None,
 		),
 		["10.0.0.5:8025:8025"],
@@ -346,10 +352,11 @@ fn an_explicit_wildcard_renders_as_the_form_the_engine_accepts() {
 			&BTreeMap::new(),
 			Some((ListenerKind::Imaps, Some(address))),
 			None,
+			None,
 		);
 		assert_eq!(rendered, ["993:993"]);
 		let recovered = hosts(&compose(&["993:993"]));
-		assert_eq!(published(&rows, &recovered, None, None), ["993:993"]);
+		assert_eq!(published(&rows, &recovered, None, None, None), ["993:993"]);
 	}
 }
 

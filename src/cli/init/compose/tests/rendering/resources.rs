@@ -47,7 +47,7 @@ fn an_answer_overrides_one_value_of_one_service() {
 
 fn nofile_in(nofile: Option<u64>) -> serde_json::Value {
 	let answers = stack_answers();
-	let file = ComposeFile::build_with_nofile(&answers, Vec::new(), true, nofile);
+	let file = ComposeFile::build_with_nofile(&answers, Vec::new(), true, nofile, &[]);
 	let value: serde_json::Value =
 		serde_json::from_str(&render_document(&file).expect("render")).expect("parse");
 	value["services"]["mail"]["ulimits"].clone()

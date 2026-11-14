@@ -193,9 +193,14 @@ pub(super) fn ensure_compose_file(
 	let listeners = listeners_to_write(answers)?;
 	let narrow = compose_publish::hosts_in_file(&path)
 		.map_err(|error| compose_publish::apply_read(&path, error))?;
-	let published_ports =
-		compose_publish::published(&listeners, &narrow, None, challenge_in_effect(answers));
-	let composed = ComposeFile::build(answers, published_ports.clone(), database);
+	let published_ports = compose_publish::published(
+		&listeners,
+		&narrow,
+		None,
+		challenge_in_effect(answers),
+		panel_port(answers),
+	);
+	let composed = ComposeFile::build(answers, published_ports.clone(), database, &listeners);
 	// `serde_json::to_string_pretty` is the stable pretty-printer
 	// the tests pin on: the rendered file carries a trailing
 	// newline, two-space indentation, and the field order of the
@@ -248,9 +253,14 @@ pub(super) fn render_for(answers: &Answers, database: bool) -> Result<String, Ap
 	let path = compose_file_path(&answers.data_dir);
 	let narrow = compose_publish::hosts_in_file(&path)
 		.map_err(|error| compose_publish::apply_read(&path, error))?;
-	let published_ports =
-		compose_publish::published(&listeners, &narrow, None, challenge_in_effect(answers));
-	let composed = ComposeFile::build(answers, published_ports, database);
+	let published_ports = compose_publish::published(
+		&listeners,
+		&narrow,
+		None,
+		challenge_in_effect(answers),
+		panel_port(answers),
+	);
+	let composed = ComposeFile::build(answers, published_ports, database, &listeners);
 	render_document(&composed)
 }
 
@@ -285,6 +295,13 @@ pub(super) fn render_for_with_host_binary(
 /// certificate authority ever connecting to the host.
 fn challenge_in_effect(answers: &Answers) -> Option<AcmeChallenge> {
 	challenge::in_config(&answers.config_path)
+}
+
+/// The panel's port, when the stack runs the panel. The mail container owns
+/// the network namespace the panel joins, so the mail service's `ports:`
+/// array carries the panel's port.
+fn panel_port(answers: &Answers) -> Option<u16> {
+	answers.services.panel_image.as_ref().map(|_| PANEL_PORT)
 }
 
 fn write_readme(dir: &Path, report: &mut Report) -> Result<(), ApplyError> {
@@ -344,6 +361,7 @@ mod file;
 mod services;
 pub(in crate::cli::init) use file::ComposeFile;
 pub(crate) use services::MAIL_STOP_GRACE_SECS;
+pub(in crate::cli::init) use services::PANEL_PORT;
 pub(super) use services::{host_hard_nofile, warn_low_nofile};
 
 #[cfg(test)]

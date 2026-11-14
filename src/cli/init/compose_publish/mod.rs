@@ -188,11 +188,18 @@ pub(crate) fn ports_in_file(path: &Path) -> Result<Vec<String>, String> {
 /// with, and `None` when the configuration has no `[acme]` section: only
 /// HTTP-01 is answered on port 80, so the other challenges and a
 /// configuration that renews nothing do not publish it.
+/// `panel_port` is the port the panel listens on when the stack runs it. The
+/// panel shares the mail container's network namespace, and a container that
+/// shares another container's namespace cannot publish a port of its own, so
+/// the owner of the namespace publishes it: the mapping lands in the mail
+/// service's `ports:` array, on the host's loopback because the panel serves
+/// plain HTTP.
 pub(super) fn published(
 	listeners: &[Listener],
 	narrow: &BTreeMap<u16, IpAddr>,
 	publish: Option<(ListenerKind, Option<IpAddr>)>,
 	challenge: Option<AcmeChallenge>,
+	panel_port: Option<u16>,
 ) -> Vec<String> {
 	let mut ports = Vec::with_capacity(listeners.len());
 	for listener in listeners {
@@ -222,6 +229,15 @@ pub(super) fn published(
 				.or_else(|| plain_http_host(listener.kind)),
 		};
 		ports.push(entry(host, port));
+	}
+	if let Some(port) = panel_port {
+		// The address the operator gave the port stays; loopback is the
+		// default, the same one the API and WebDAV get.
+		let host = narrow
+			.get(&port)
+			.copied()
+			.unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST));
+		ports.push(entry(Some(host), port));
 	}
 	ports
 }
@@ -363,7 +379,16 @@ fn read_map(
 		.map_err(|error| ApplyError::ConfigEncode(format!("invalid compose JSON: {error}")))?;
 	mail_mut(&mut document)?;
 	let current = ports(&document);
-	let wanted = published(listeners, &hosts(&document), publish, challenge);
+	// The panel's port belongs to the mail container, which owns the network
+	// namespace the panel runs in. A file that already runs the panel keeps
+	// the publication, so a command that rewrites the map does not take the
+	// panel's port away.
+	let panel_port = document
+		.get("services")
+		.and_then(|services| services.get("panel"))
+		.filter(|panel| panel.is_object())
+		.map(|_| super::compose::PANEL_PORT);
+	let wanted = published(listeners, &hosts(&document), publish, challenge, panel_port);
 	Ok(Some(Map {
 		path,
 		original: existing,

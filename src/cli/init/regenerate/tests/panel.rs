@@ -46,6 +46,15 @@ fn key(text: &str) -> Option<serde_json::Value> {
 	value.get("x-epistle-panel").cloned()
 }
 
+/// The named service of a rendered compose file.
+fn service(text: &str, name: &str) -> Option<serde_json::Value> {
+	let value: serde_json::Value = serde_json::from_str(text).expect("json");
+	value
+		.get("services")
+		.and_then(|services| services.get(name))
+		.cloned()
+}
+
 #[test]
 fn the_result_says_whether_the_stack_runs_the_panel() {
 	let good = manifest(Some(GOOD));
@@ -69,12 +78,26 @@ fn no_choice_writes_no_key_and_stays_byte_identical() {
 	let answers = answers(None, true);
 	let written = render_for(&answers, true).expect("render");
 	assert_eq!(key(&written), None);
-	for case in [manifest(None), manifest(Some(GOOD))] {
-		assert_eq!(
-			again(&answers, &written, &case).expect("regenerate").text,
-			written
-		);
-	}
+	// Without the package the file does not move.
+	assert_eq!(
+		again(&answers, &written, &manifest(None))
+			.expect("regenerate")
+			.text,
+		written
+	);
+	// With the package the update adds the service, and a second update
+	// leaves the file where the first one put it.
+	let case = manifest(Some(GOOD));
+	let updated = again(&answers, &written, &case).expect("regenerate").text;
+	assert!(
+		service(&updated, "panel").is_some(),
+		"the package brings the service"
+	);
+	assert_eq!(key(&updated), None, "the operator did not choose");
+	assert_eq!(
+		again(&answers, &updated, &case).expect("regenerate").text,
+		updated
+	);
 }
 
 #[test]
@@ -95,7 +118,19 @@ fn a_demanded_panel_is_written_and_survives_an_update() {
 	assert_eq!(key(&written), Some(serde_json::json!(true)));
 	let case = manifest(Some(GOOD));
 	let result = again(&answers, &written, &case).expect("regenerate");
-	assert_eq!(result.text, written);
+	// The update adds the service the package brings, and the demand
+	// survives it.
+	assert!(
+		service(&result.text, "panel").is_some(),
+		"the package brings the service"
+	);
+	assert_eq!(key(&result.text), Some(serde_json::json!(true)));
+	assert_eq!(
+		again(&answers, &result.text, &case)
+			.expect("regenerate")
+			.text,
+		result.text
+	);
 	assert!(
 		result.notes.iter().all(|note| !note.contains("panel")),
 		"{:?}",
