@@ -181,6 +181,10 @@ pub async fn device_authorization(
 		return oauth_error("invalid_request");
 	};
 	let fields = parse_fields(&headers, &body);
+	let Some(scopes) = super::scopes::Scopes::requested(fields.get("scope").map(String::as_str))
+	else {
+		return oauth_error("invalid_scope");
+	};
 	// RFC 8628 requires client_id; reject its absence rather than mint a code.
 	if fields
 		.get("client_id")
@@ -203,6 +207,7 @@ pub async fn device_authorization(
 		)
 		.map(client_bucket);
 	let grant = DeviceGrant {
+		scopes,
 		user_code: user_code.clone(),
 		approved_account: None,
 		expires_at: now + CODE_TTL_SECS,
@@ -336,11 +341,12 @@ pub fn redeem_device_code(authz: &AuthzServer, device_code: &str) -> Response {
 	let Some(account) = grant.approved_account.clone() else {
 		return oauth_error("authorization_pending");
 	};
+	let scopes = grant.scopes.clone();
 	// Approved: consume the code (one-time) and issue the token.
 	devices.remove(device_code);
 	drop(devices);
-	match authz.issue_token(&account, now) {
-		Some(token) => super::pkce::token_response(&token).into_response(),
+	match authz.issue_token(&account, &scopes, now) {
+		Some(token) => super::pkce::token_response(&token, &scopes),
 		None => oauth_error("server_error"),
 	}
 }

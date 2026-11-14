@@ -24,12 +24,15 @@ info:
     **Authentication.** Every route of the API listener except `/healthz` and
     `/oauth/*` needs `Authorization: Bearer <token>`: the optional static token whose hash is
     `[api] token_hash`, or an API key made with `epistle api-key create`.
+    JMAP also accepts locally issued OAuth access tokens, confined to the
+    signed `sub` account and explicit `read`, `write`, `send` scopes. These
+    tokens never authenticate `/api/v1` or SCIM.
     A key carries scopes (`read`, `write`, `send`, `scim`); a request the
     scopes do not cover is answered `403 forbidden` and does not count as a
     failed authentication; an unknown token is `401 unauthenticated`.
     `x-epistle-scope` on each operation names the
-    scope it needs. Without `token_hash`, only labelled keys in `api_keys.toml`
-    authenticate bearer-protected routes. No current route becomes unreachable:
+    scope it needs. Without `token_hash`, labelled keys in `api_keys.toml`
+    authenticate bearer-protected routes, and local OAuth tokens authenticate JMAP. No current route becomes unreachable:
     SCIM accepts `scim` keys, and OAuth uses account credentials or grant codes.
     A static-only route without a per-key scope must refuse keys with `403`,
     even all-scope keys. An absent hash never matches any bearer.
@@ -1872,7 +1875,9 @@ paths:
         every `/oauth/*` path answers `401` without a bearer and `404` with a valid
         one. When the server is configured, no bearer is needed. The body
         is form-encoded or a JSON object of strings. `client_id` must be
-        non-empty and is not otherwise checked; `scope` is ignored. At most
+        non-empty and is not otherwise checked. `scope` is a space-separated
+        subset of `read write send`, defaulting to `read` when omitted. Empty
+        or unknown scopes return `400 invalid_scope`. At most
         10 grants may be pending per client address (an IPv6 /64), 100 per
         IPv6 /48 and 10,000 in all; past them the answer is `429 slow_down`.
       security: []
@@ -1943,7 +1948,9 @@ paths:
         Send `client_id` (non-empty, not otherwise checked),
         `code_challenge`, `code_challenge_method=S256` and the account's
         `login` and `password` (form or JSON) or HTTP Basic. No bearer is
-        needed. The code lives 600 seconds and is single-use. `plain` is
+        needed. `scope` is a space-separated subset of `read write send`,
+        defaulting to `read`; empty or unknown scopes return `400 invalid_scope`.
+        The code lives 600 seconds and is single-use. `plain` is
         refused. Bad credentials are `400 invalid_grant`. The
         `code_challenge` is the digest of the verifier, so it is exactly 43
         characters of `A-Z a-z 0-9 - _` (RFC 7636 section 4.2); another
@@ -1989,9 +1996,13 @@ paths:
         poll no faster than every 5 seconds or get `429 slow_down`) or
         `authorization_code` (with `code` and `code_verifier`; the code is
         consumed even when the verifier is wrong). The token is an ES256 JWT
-        with `sub` the account name, valid for 3600 seconds. It is for
-        OAUTHBEARER on IMAP and SMTP submission; the REST API does not
-        accept it as a bearer.
+        with `sub` the account name, valid for 3600 seconds. It is accepted
+        on JMAP only for that account, with the scopes stored in the grant.
+        Redemption cannot widen scopes. A missing scope claim, invalid signature,
+        issuer or audience, expiry or revocation returns `401` on JMAP,
+        counting in the ordinary bearer failure limiter. Tokens also support
+        OAUTHBEARER on IMAP and SMTP submission; REST administration refuses them.
+        The response carries `Cache-Control: no-store` and `Pragma: no-cache`.
       security: []
       x-epistle-scope: []
       requestBody:
@@ -2014,6 +2025,35 @@ paths:
           $ref: "#/components/responses/OAuthError"
         "429":
           $ref: "#/components/responses/OAuthSlowDown"
+  /oauth/revoke:
+    post:
+      operationId: oauthRevoke
+      tags: [OAuth]
+      summary: Revoke a local access token for JMAP (RFC 7009)
+      description: |-
+        Possession of the token permits revoking it. No other credential is
+        needed. Revocations survive restart and are checked on each JMAP request,
+        WebSocket frame and event-source poll. Invalid, expired and already
+        revoked tokens receive the same empty success response. A storage failure
+        returns `503` and does not report successful revocation.
+      security: []
+      x-epistle-scope: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: "#/components/schemas/RevokeRequest"
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RevokeRequest"
+      responses:
+        "200":
+          description: Empty success response, including for an invalid token.
+        "400":
+          $ref: "#/components/responses/OAuthError"
+        "503":
+          description: Revocation storage unavailable. Retry later.
   /mail/config-v1.1.xml:
     servers:
       - url: "http://autoconfig.example.org"
@@ -3016,7 +3056,7 @@ components:
           type: string
         scope:
           type: string
-          description: Ignored.
+          description: Space-separated read, write, send; omitted means read.
     DeviceAuthorization:
       type: object
       required: [device_code, user_code, verification_uri, verification_uri_complete, expires_in, interval]
@@ -3047,6 +3087,13 @@ components:
           type: string
         password:
           type: string
+    RevokeRequest:
+      type: object
+      required: [token]
+      properties:
+        token:
+          type: string
+          writeOnly: true
     AuthorizeRequest:
       type: object
       required: [client_id, code_challenge, code_challenge_method]
@@ -3058,6 +3105,9 @@ components:
         code_challenge_method:
           type: string
           enum: [S256]
+        scope:
+          type: string
+          description: Space-separated read, write, send; omitted means read.
         state:
           type: string
         login:
@@ -3079,11 +3129,14 @@ components:
           type: string
     TokenResponse:
       type: object
-      required: [access_token, token_type, expires_in]
+      required: [access_token, token_type, expires_in, scope]
       properties:
         access_token:
           type: string
           description: An ES256 JWT with `sub` the account name.
+        scope:
+          type: string
+          description: The granted space-separated scopes.
         token_type:
           type: string
           enum: [Bearer]

@@ -258,6 +258,12 @@ pub(super) const RULES: &[Rule] = &[
 		"device_approve_rejects_bad_credentials_and_unknown_code",
 	),
 	rule(
+		"/oauth/revoke",
+		"none",
+		Domain::Credentials,
+		"revocation_is_per_token_id_idempotent_and_survives_restart",
+	),
+	rule(
 		"/oauth/authorize",
 		"none",
 		Domain::Credentials,

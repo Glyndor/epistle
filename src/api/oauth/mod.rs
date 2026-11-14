@@ -32,8 +32,12 @@ use serde_json::Value;
 
 use crate::jwt::{self, Algorithm};
 
+mod access;
 mod device;
 mod pkce;
+mod revocation;
+mod scopes;
+pub(in crate::api) use access::is_jmap_path;
 
 pub use device::{device_approve, device_authorization};
 pub use pkce::{authorize, token};
@@ -53,6 +57,8 @@ const USER_CODE_ALPHABET: &[u8] = b"BCDFGHJKLMNPQRSTVWXZ23456789";
 pub struct AuthzServer {
 	/// Base64-decoded PKCS#8 DER ES256 private key used to sign access tokens.
 	signing_key: Vec<u8>,
+	/// Public point derived from this server's signing key; never an external IdP key.
+	public_key: Vec<u8>,
 	/// `iss` claim stamped on issued tokens (the configured OAuth issuer).
 	issuer: String,
 	/// `aud` claim stamped on issued tokens (the configured OAuth audience).
@@ -66,6 +72,7 @@ pub struct AuthzServer {
 
 /// A pending device authorization (RFC 8628 §3.2).
 struct DeviceGrant {
+	scopes: scopes::Scopes,
 	/// The human code the user types into the approval endpoint.
 	user_code: String,
 	/// Set to the approved account identity once approved; `None` while pending.
@@ -81,6 +88,7 @@ struct DeviceGrant {
 
 /// An issued authorization code bound to an account and a PKCE challenge.
 struct AuthCode {
+	scopes: scopes::Scopes,
 	/// The authenticated account the code was issued for.
 	account: String,
 	/// The S256 `code_challenge` the redeeming `code_verifier` must match.
@@ -98,7 +106,7 @@ struct AuthCode {
 impl AuthzServer {
 	/// Build the authorization server from the base64 PKCS#8 ES256 signing key and
 	/// the issuer/audience to stamp on issued tokens. Returns `None` if the key is
-	/// not valid base64 (fail closed: no server, no tokens).
+	/// not valid base64 or not a usable ES256 key (fail closed: no server, no tokens).
 	pub fn new(
 		signing_key_b64: &str,
 		issuer: impl Into<String>,
@@ -107,8 +115,17 @@ impl AuthzServer {
 		let signing_key = base64::engine::general_purpose::STANDARD
 			.decode(signing_key_b64.trim())
 			.ok()?;
+		use ring::signature::KeyPair;
+		let pair = ring::signature::EcdsaKeyPair::from_pkcs8(
+			&ring::signature::ECDSA_P256_SHA256_FIXED_SIGNING,
+			&signing_key,
+			&SystemRandom::new(),
+		)
+		.ok()?;
+		let public_key = pair.public_key().as_ref().to_vec();
 		Some(AuthzServer {
 			signing_key,
+			public_key,
 			issuer: issuer.into(),
 			audience: audience.into(),
 			devices: Mutex::new(HashMap::new()),
@@ -121,13 +138,15 @@ impl AuthzServer {
 	/// from `now`. The `sub` is the account name, which the verifier of this
 	/// server's own tokens returns as the identity. `None` only if signing
 	/// fails (fail closed).
-	fn issue_token(&self, account: &str, now: u64) -> Option<String> {
+	fn issue_token(&self, account: &str, scopes: &scopes::Scopes, now: u64) -> Option<String> {
 		let claims = serde_json::json!({
 			"sub": account,
 			"iss": self.issuer,
 			"aud": self.audience,
 			"iat": now,
-			"exp": now + ACCESS_TOKEN_TTL_SECS,
+			"exp": now.checked_add(ACCESS_TOKEN_TTL_SECS)?,
+			"scope": scopes.as_string(),
+			"jti": self.random_code()?,
 		});
 		jwt::sign(&claims, Algorithm::Es256, &self.signing_key).ok()
 	}
@@ -199,7 +218,13 @@ pub(crate) fn parse_fields(headers: &HeaderMap, body: &Bytes) -> HashMap<String,
 		match serde_json::from_slice::<Value>(body) {
 			Ok(Value::Object(map)) => map
 				.into_iter()
-				.filter_map(|(k, v)| v.as_str().map(|s| (k, s.to_string())))
+				.filter_map(|(k, v)| match v.as_str() {
+					Some(s) => Some((k, s.to_string())),
+					// An explicit malformed scope must not become an omitted
+					// scope and silently receive the default read permission.
+					None if k == "scope" => Some((k, String::new())),
+					None => None,
+				})
 				.collect(),
 			_ => HashMap::new(),
 		}
@@ -294,6 +319,7 @@ fn throttled(code: &'static str, seconds: u64) -> Response {
 pub fn public_router() -> Router<super::ApiState> {
 	Router::new()
 		.route("/oauth/token", post(token))
+		.route("/oauth/revoke", post(revocation::revoke))
 		.route("/oauth/device_authorization", post(device_authorization))
 }
 
