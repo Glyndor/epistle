@@ -4,7 +4,7 @@
 use axum::http::StatusCode;
 use serde_json::json;
 
-use super::base::{TOKEN, request};
+use super::base::{TOKEN, request, request_with_body};
 use super::fixtures::{queue_ids, tenant_key, world};
 use super::*;
 use crate::queue::SuppressionList;
@@ -101,4 +101,62 @@ async fn an_account_suppression_list_follows_the_account_scope() {
 			.list_for("carol"),
 		["carol-gone@elsewhere.test"]
 	);
+}
+
+#[tokio::test]
+async fn a_confined_key_cannot_add_to_the_global_suppression_list() {
+	let world = world();
+	let app = router(world.state.clone());
+	let (status, _) = request_with_body(
+		&app,
+		"POST",
+		"/api/v1/suppression",
+		Some(tenant_key()),
+		Some(json!({"address": "intruder@elsewhere.test"})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::FORBIDDEN);
+	assert!(
+		!SuppressionList::open(world.state.data_dir())
+			.expect("list")
+			.is_suppressed("intruder@elsewhere.test")
+	);
+}
+
+#[tokio::test]
+async fn a_confined_key_can_add_inside_its_account() {
+	let world = world();
+	let app = router(world.state.clone());
+	let address = "new-gone@elsewhere.test";
+	let body = Some(json!({"address": address}));
+	let (status, added) = request_with_body(
+		&app,
+		"POST",
+		"/api/v1/suppression?account=alice",
+		Some(tenant_key()),
+		body.clone(),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(added["suppressed"], address);
+	let list = SuppressionList::open(world.state.data_dir()).expect("list");
+	assert!(list.is_suppressed_for("alice", address));
+	assert!(list.is_suppressed_for("alice@a.test", address));
+	assert!(!list.is_suppressed(address), "not the global list");
+	assert!(!list.is_suppressed_for("carol", address));
+	assert!(!list.is_suppressed_for("carol@b.test", address));
+
+	let (status, _) = request_with_body(
+		&app,
+		"POST",
+		"/api/v1/suppression?account=carol",
+		Some(tenant_key()),
+		Some(json!({"address": "other-gone@elsewhere.test"})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::NOT_FOUND);
+	let list = SuppressionList::open(world.state.data_dir()).expect("list");
+	assert!(!list.is_suppressed("other-gone@elsewhere.test"));
+	assert!(!list.is_suppressed_for("carol", "other-gone@elsewhere.test"));
+	assert!(!list.is_suppressed_for("carol@b.test", "other-gone@elsewhere.test"));
 }
