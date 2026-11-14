@@ -84,6 +84,19 @@ impl SuppressionList {
 		write_marker(&self.path(address), marker(address, reason, now))
 	}
 
+	pub(crate) fn try_suppress_because_once(
+		&self,
+		address: &str,
+		reason: &str,
+		now: u64,
+	) -> std::io::Result<bool> {
+		write_marker_once(
+			&self.path(address),
+			&self.dir.join(".tmp"),
+			marker(address, reason, now),
+		)
+	}
+
 	/// The global entry for `address`, if it is suppressed.
 	pub fn entry(&self, address: &str) -> Option<Suppressed> {
 		fs::read_to_string(self.path(address))
@@ -147,6 +160,22 @@ impl SuppressionList {
 		make_dir(&dir)?;
 		write_marker(
 			&dir.join(digest_name(address)),
+			marker(address, reason, now),
+		)
+	}
+
+	pub(crate) fn try_suppress_for_because_once(
+		&self,
+		account: &str,
+		address: &str,
+		reason: &str,
+		now: u64,
+	) -> std::io::Result<bool> {
+		let dir = self.account_dir(account);
+		make_dir(&dir)?;
+		write_marker_once(
+			&dir.join(digest_name(address)),
+			&self.dir.join(".tmp"),
 			marker(address, reason, now),
 		)
 	}
@@ -238,6 +267,67 @@ fn write_marker(path: &Path, content: impl AsRef<[u8]>) -> std::io::Result<()> {
 	#[cfg(unix)]
 	std::os::unix::fs::OpenOptionsExt::mode(&mut options, FILE_MODE);
 	options.open(path)?.write_all(content.as_ref())
+}
+
+fn write_marker_once(
+	path: &Path,
+	temp_dir: &Path,
+	content: impl AsRef<[u8]>,
+) -> std::io::Result<bool> {
+	use std::fmt::Write as _;
+	use std::io::Write as _;
+	make_dir(temp_dir)?;
+	let random = ring::rand::generate::<[u8; 16]>(&ring::rand::SystemRandom::new())
+		.map_err(|_| std::io::Error::other("cannot generate a suppression marker name"))?
+		.expose();
+	let mut name = String::from("marker-");
+	for byte in random {
+		let _ = write!(name, "{byte:02x}");
+	}
+	let temp_path = temp_dir.join(name);
+	let mut options = fs::OpenOptions::new();
+	options.write(true).create_new(true);
+	#[cfg(unix)]
+	std::os::unix::fs::OpenOptionsExt::mode(&mut options, FILE_MODE);
+	let mut file = options.open(&temp_path)?;
+	if let Err(error) = file
+		.write_all(content.as_ref())
+		.and_then(|_| file.sync_all())
+	{
+		let _ = fs::remove_file(&temp_path);
+		return Err(error);
+	}
+	drop(file);
+	match fs::hard_link(&temp_path, path) {
+		Ok(()) => {
+			let _ = fs::remove_file(&temp_path);
+			Ok(true)
+		}
+		Err(error) if error.kind() == ErrorKind::AlreadyExists => {
+			let _ = fs::remove_file(&temp_path);
+			if valid_marker(path) {
+				Ok(false)
+			} else {
+				Err(std::io::Error::new(
+					ErrorKind::InvalidData,
+					"the suppression marker is not a readable entry",
+				))
+			}
+		}
+		Err(error) => {
+			let _ = fs::remove_file(&temp_path);
+			Err(error)
+		}
+	}
+}
+
+fn valid_marker(path: &Path) -> bool {
+	fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_file())
+		&& fs::read_to_string(path)
+			.ok()
+			.as_deref()
+			.and_then(parse_marker)
+			.is_some()
 }
 
 /// Remove a marker file, treating "not found" as success.

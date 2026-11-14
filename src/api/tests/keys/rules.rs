@@ -210,7 +210,7 @@ pub(super) const RULES: &[Rule] = &[
 	),
 	rule(
 		"/api/v1/suppression",
-		"read",
+		"read/write",
 		Domain::Unconfined,
 		"the_shared_suppression_list_is_not_for_a_confined_key",
 	),

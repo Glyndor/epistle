@@ -63,7 +63,12 @@ pub fn router(max_message_size: usize) -> Router<ApiState> {
 		)
 		.route("/queue", get(queue::list))
 		.route("/queue/{id}", axum::routing::delete(queue::remove))
-		.route("/suppression", get(suppression::list))
+		.route(
+			"/suppression",
+			get(suppression::list)
+				.post(suppression::add)
+				.layer(DefaultBodyLimit::max(4096)),
+		)
 		.route(
 			"/suppression/{address}",
 			axum::routing::delete(suppression::remove),

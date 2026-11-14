@@ -915,7 +915,7 @@ paths:
         - name: account
           in: query
           required: false
-          description: The sending account whose list to show.
+          description: The account name or sending address whose list to show.
           schema:
             type: string
         - name: limit
@@ -960,6 +960,72 @@ paths:
           $ref: "#/components/responses/AuthRateLimited"
         "500":
           $ref: "#/components/responses/Internal"
+    post:
+      operationId: addSuppression
+      tags: [Queue]
+      summary: Add an address to a suppression list
+      description: |-
+        Adds a recipient to the global list, or to the sending account's list
+        with `account`. The global list is refused to a key confined to an
+        account or domain. The address is validated by the server. Adding an
+        address already on the list succeeds without replacing its first
+        reason or timestamp.
+      x-epistle-scope: [write]
+      parameters:
+        - name: account
+          in: query
+          required: false
+          description: Add to this account name or sending address's list instead of the global one.
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [address]
+              properties:
+                address:
+                  type: string
+                  description: Recipient address to suppress.
+                reason:
+                  type: string
+                  maxLength: 512
+                  description: Optional reason kept with the entry. The suppression listing returns addresses only.
+      responses:
+        "200":
+          description: The normalized address now on the list.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [suppressed]
+                properties:
+                  suppressed:
+                    type: string
+        "400":
+          $ref: "#/components/responses/InvalidInput"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/AccountBoundKey"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "413":
+          description: The request body exceeds 4096 bytes.
+          content:
+            text/plain:
+              schema:
+                type: string
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "422":
+          $ref: "#/components/responses/UnprocessableBody"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
   /api/v1/suppression/{address}:
     delete:
       operationId: removeSuppression
@@ -979,7 +1045,7 @@ paths:
         - name: account
           in: query
           required: false
-          description: Remove from this sending account's list instead of the global one.
+          description: Remove from this account name or sending address's list instead of the global one.
           schema:
             type: string
       responses:
@@ -2302,8 +2368,8 @@ components:
     AccountBoundKey:
       description: |-
         `forbidden`: the key is bound to one account and this route is
-        administrative. Bound keys reach JMAP, `/api/v1/send` and
-        `/api/v1/deliveries` only.
+        administrative. Bound keys reach JMAP, `/api/v1/send`,
+        `/api/v1/deliveries` and that account's suppression list only.
       content:
         application/json:
           schema:

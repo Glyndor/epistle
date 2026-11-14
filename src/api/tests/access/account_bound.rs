@@ -2,7 +2,7 @@
 //! administrative routes refuse it with a 403 instead of treating it like an
 //! unconfined key.
 
-use super::base::{request, test_state};
+use super::base::{request, request_with_body, test_state};
 use super::*;
 use axum::http::StatusCode;
 
@@ -64,6 +64,43 @@ async fn account_bound_key_still_reaches_jmap() {
 }
 
 #[tokio::test]
+async fn an_account_bound_key_can_add_inside_its_account() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	store_key(dir.path(), "alice-only", "alice-secret", Some("alice"));
+	let app = router(test_state(dir.path(), 0));
+	let post = |path: &'static str| {
+		request_with_body(
+			&app,
+			"POST",
+			path,
+			Some("alice-secret"),
+			Some(serde_json::json!({"address": "bob@example.net"})),
+		)
+	};
+
+	let (status, body) = post("/api/v1/suppression?account=alice").await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["suppressed"], "bob@example.net");
+	let list = crate::queue::SuppressionList::open(dir.path()).expect("open");
+	assert_eq!(list.list_for("alice"), ["bob@example.net"]);
+	assert_eq!(list.list_for("alice@example.org"), ["bob@example.net"]);
+	assert!(list.list().is_empty());
+
+	let (status, body) = post("/api/v1/suppression").await;
+	assert_eq!(
+		status,
+		StatusCode::FORBIDDEN,
+		"no global list for a bound key"
+	);
+	assert_eq!(body["error"]["code"], "forbidden");
+	let (status, _) = post("/api/v1/suppression?account=carol").await;
+	assert_eq!(status, StatusCode::NOT_FOUND);
+	let list = crate::queue::SuppressionList::open(dir.path()).expect("open");
+	assert!(list.list().is_empty());
+	assert!(list.list_for("carol").is_empty());
+}
+
+#[tokio::test]
 async fn unbound_key_keeps_its_administrative_reach() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	store_key(dir.path(), "admin-key", "admin-secret", None);
@@ -102,6 +139,8 @@ fn account_bound_key_reaches_only_its_own_account() {
 fn account_scoped_paths_are_exactly_jmap_and_send() {
 	for path in [
 		"/api/v1/send",
+		"/api/v1/suppression",
+		"/api/v1/suppression/bob%40example.net",
 		"/.well-known/jmap",
 		"/jmap/session",
 		"/jmap/api",
@@ -110,6 +149,7 @@ fn account_scoped_paths_are_exactly_jmap_and_send() {
 	}
 	for path in [
 		"/api/v1/sendx",
+		"/api/v1/suppressionx",
 		"/api/v1/accounts",
 		"/jmapx",
 		"/scim/v2/Users",

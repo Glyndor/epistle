@@ -54,6 +54,7 @@ pub mod sieve;
 pub mod smtp;
 pub mod spf;
 pub mod storage;
+pub(crate) mod suppression;
 pub mod tls;
 pub mod tlsrpt;
 pub mod totp;

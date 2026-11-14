@@ -25,8 +25,6 @@ use crate::queue::{Suppressed, SuppressionList};
 const MAX_BYTES: u64 = 16 * 1024 * 1024;
 /// The most entries one import accepts. Each becomes a file on disk.
 const MAX_ENTRIES: usize = 100_000;
-/// The longest stored reason, in characters (what a marker keeps).
-pub(super) const MAX_REASON: usize = 512;
 /// How many bad lines an import names before it stops listing them.
 const MAX_PROBLEMS: usize = 10;
 /// Reason recorded for an imported line that carries none.
@@ -42,21 +40,7 @@ struct Row {
 
 /// Why a reason cannot be stored as given, or `None` when it can.
 pub(super) fn reason_problem(reason: &str) -> Option<String> {
-	if reason.chars().any(char::is_control) {
-		return Some("the reason must not contain control characters".into());
-	}
-	if reason.chars().any(super::super::term::is_invisible_format) {
-		return Some(
-			"the reason must not contain invisible formatting characters (such as a right-to-left override)"
-				.into(),
-		);
-	}
-	if reason.chars().count() > MAX_REASON {
-		return Some(format!(
-			"the reason must be at most {MAX_REASON} characters"
-		));
-	}
-	None
+	crate::suppression::reason_problem(reason)
 }
 
 fn open(config: &Config) -> Result<SuppressionList, ResourceError> {

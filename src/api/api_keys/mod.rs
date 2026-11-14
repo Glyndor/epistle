@@ -111,7 +111,8 @@ pub struct ApiKey {
 	/// The single account this key may act on, if it is not a tenant- or
 	/// server-wide administrator. An `Account(name)` principal: the key can
 	/// only read or mutate the named account, regardless of the domain
-	/// configuration. Such a key reaches only JMAP and `/api/v1/send`; every
+	/// configuration. Such a key reaches only JMAP, `/api/v1/send`,
+	/// `/api/v1/deliveries` and the named account's suppression list; every
 	/// other route refuses it with a 403 (`account_bound::confine`). `None`
 	/// (the default) leaves the key at the previous behaviour.
 	#[serde(default)]
