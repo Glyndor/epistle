@@ -16,9 +16,17 @@ permissions:
   contents: read
 
 jobs:
+  plan:
+    uses: ./.github/workflows/reusable-ci-plan.yml
+
   rust:
+    needs: plan
+    if: ${{ !cancelled() }}
     uses: ./.github/workflows/reusable-rust-ci.yml
     with:
+      run-lint: ${{ needs.plan.outputs.lint != 'false' }}
+      run-tests: ${{ needs.plan.outputs.tests != 'false' }}
+      run-msrv: ${{ needs.plan.outputs.msrv != 'false' }}
       # Pin the toolchain so CI no longer floats to whatever `stable` is that
       # day — an unpinned toolchain turned every open PR red when Rust 1.97
       # widened a clippy lint. Now on 1.100 (the org default), with that lint
@@ -54,7 +62,7 @@ jobs:
       # reader could see the promise and not the value it named. All fixed in
       # the same change, because a gate that lands red is a gate somebody
       # silences.
-      doc-warnings: true
+      doc-warnings: ${{ needs.plan.outputs.doc != 'false' }}
       coverage-threshold: 88
       # Files the no-DB coverage job cannot fairly measure — each needs a live
       # service or is thin connection-accept glue, so they are excluded here
@@ -94,7 +102,8 @@ jobs:
   dependabot-freshness:
     # Not a required check and it reads repository state, not the queued
     # commit, so it would only spend a runner inside the queue.
-    if: github.event_name != 'merge_group'
+    needs: plan
+    if: ${{ !cancelled() && github.event_name != 'merge_group' && needs.plan.outputs.freshness != 'false' }}
     uses: ./.github/workflows/reusable-dependabot-freshness.yml
     with:
       max-age-days: 15

@@ -34,6 +34,46 @@ squash commit GitHub built, so the trailer is checked on the commit that
 lands on `develop`. That makes the `Signed-off-by:` trailer in the pull
 request body count, as the squash commit message is built from it.
 
+## Selecting pull-request work
+
+The required workflows have no workflow-level path filter. Their `plan` jobs
+call `reusable-ci-plan.yml`, which runs
+`.github/scripts/ci_plan/ci_plan.py` from the pull request's base commit.
+It compares the merge base to the PR head, using NUL-delimited paths and
+treating renames as a deletion plus an addition. Unknown inputs, empty diffs,
+missing history and a base without the classifier run all work. The first PR
+introducing the classifier therefore runs everything too. A failed plan also
+leaves the callers running: only an explicit `false` skips a job.
+
+| PR change | Work selected |
+|---|---|
+| Existing Markdown documentation | No Rust, Debian, SBOM, line or folder checks |
+| Tests and test helpers | Lint, workspace tests with coverage, source line limit |
+| Production Rust or embedded build inputs | Lint, tests with coverage, doc warnings, MSRV, Debian build |
+| Cargo manifest, lockfile or Cargo configuration | Build checks, SBOM/licenses and Dependabot freshness |
+| License or attribution configuration | SBOM/licenses |
+| Added or deleted path | Folder limit as well as that path's checks |
+
+The classifier also selects checks for changes to their workflow definitions.
+Tests that read packaging scripts and workflow contracts still run when those
+inputs change. DCO always checks the commit range. Skipped required jobs keep
+their existing check names and report success; filtering their workflow
+triggers instead would leave the checks pending.
+
+Every merge group runs all required work regardless of its paths. Coverage
+executes the workspace suite once, and `rust / Test` explicitly reflects its
+result, including failure or cancellation. With coverage disabled, the reusable
+runs a standalone workspace suite instead. Debian PR and queue builds use
+`DEB_BUILD_OPTIONS=nocheck`, keeping the package build and artifact validation
+without repeating that suite. Other Debian builds retain tests by default.
+The package uses debhelper compatibility level 13, which makes `nocheck`
+skip `override_dh_auto_test` itself, as specified in the
+[debhelper compatibility checklist](https://manpages.debian.org/testing/debhelper/debhelper-compat-upgrade-checklist.7.en.html#v13).
+
+Concurrency cancels superseded PR runs only; branch and queue runs are not
+cancelled. The version-bump judge includes the calling workflow in its group
+so different callers do not cancel each other.
+
 ## Enabling it
 
 In the `protect-develop` ruleset, add the "Require merge queue" rule with:

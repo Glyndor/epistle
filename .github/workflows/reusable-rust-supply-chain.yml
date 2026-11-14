@@ -2,12 +2,16 @@ name: Rust supply chain (reusable)
 
 # Generate the supply-chain artifacts government and enterprise consumers expect:
 # a machine-readable SBOM (CycloneDX, per US EO 14028) and a third-party license
-# attribution (NOTICES). Run on every PR to keep the generators honest; the
+# attribution (NOTICES). The caller selects changes affecting these artifacts; the
 # release workflow attaches the same artifacts to each published release.
 
 on:
   workflow_call:
     inputs:
+      run-sbom:
+        description: Generate artifacts selected by the caller's plan
+        type: boolean
+        default: true
       working-directory:
         description: Directory containing the Cargo workspace
         type: string
@@ -45,11 +49,12 @@ permissions:
 
 concurrency:
   group: rust-supply-chain-${{ github.workflow }}-${{ github.ref }}-${{ inputs.working-directory }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   sbom-and-licenses:
     name: SBOM and license attribution
+    if: inputs.run-sbom
     runs-on: ubuntu-latest
     # Measured 2026-10-30: the slowest of four green runs took 4 min.
     timeout-minutes: 15

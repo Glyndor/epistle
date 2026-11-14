@@ -10,6 +10,10 @@ name: Line limit (reusable)
 on:
   workflow_call:
     inputs:
+      run-check:
+        description: Check file lengths selected by the caller's plan
+        type: boolean
+        default: true
       hard-limit:
         description: Files with more lines than this fail the build
         type: number
@@ -32,11 +36,12 @@ permissions:
 
 concurrency:
   group: line-limit-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   line-limit:
     name: line limit
+    if: inputs.run-check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
