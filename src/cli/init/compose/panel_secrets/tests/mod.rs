@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use crate::api::ApiKey;
 use crate::cli::init::apply::ReportStep;
 
+mod admin_id;
 mod create;
 mod lost;
 mod no_print;
