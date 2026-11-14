@@ -65,6 +65,7 @@ pub(super) fn build(config: &Config, inputs: Inputs<'_>) -> std::io::Result<crat
 	.with_delivery_log_days(config.delivery_log_days())
 	.with_webhook(webhook.clone())
 	.with_disabled_domains(config.disabled_domains.clone())
+	.with_domain_catalog(crate::domain::catalog::Catalog::from_config(config))
 	.with_max_message_size(max_message_size)
 	.with_max_recipients(max_recipients)
 	.with_quota(

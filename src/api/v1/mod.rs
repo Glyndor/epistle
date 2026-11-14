@@ -32,6 +32,7 @@ pub fn router(max_message_size: usize) -> Router<ApiState> {
 		.route("/openapi.json", get(crate::api::openapi::get))
 		.route("/auth/verify", post(auth::verify))
 		.route("/domains", get(domains::list))
+		.route("/domains/{domain}", get(domains::domain::get))
 		.route("/accounts", get(accounts::list).post(accounts::create))
 		.route("/accounts/{name}", axum::routing::delete(accounts::remove))
 		.route(

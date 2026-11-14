@@ -57,6 +57,8 @@ tags:
     description: Liveness, status and this description.
   - name: Accounts
     description: Accounts, passwords, two-factor, mailboxes, masked addresses and the archive.
+  - name: Domains
+    description: The hosted domains, as `epistle domain list` and `epistle domain show` print them.
   - name: Queue
     description: The outbound queue, the suppression list and the delivery log.
   - name: Send
@@ -179,7 +181,7 @@ paths:
   /api/v1/domains:
     get:
       operationId: listDomains
-      tags: [Accounts]
+      tags: [Domains]
       summary: The hosted domains in the key's reach
       x-epistle-scope: [read]
       responses:
@@ -193,6 +195,35 @@ paths:
           $ref: "#/components/responses/Unauthenticated"
         "403":
           $ref: "#/components/responses/AccountBoundKey"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+  /api/v1/domains/{domain}:
+    get:
+      operationId: getDomain
+      tags: [Domains]
+      summary: One hosted domain
+      description: |-
+        The object `epistle domain show <domain> --json` prints for the same
+        name, read from the configuration the server started with. The name is
+        compared as given except for ASCII case, and `domain` in the answer is
+        the name as asked. A domain outside a confined key's domains answers
+        exactly like one the server does not host.
+      x-epistle-scope: [read]
+      parameters:
+        - $ref: "#/components/parameters/DomainName"
+      responses:
+        "200":
+          description: The domain.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DomainView"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/AccountBoundKey"
+        "404":
+          $ref: "#/components/responses/NotFound"
         "429":
           $ref: "#/components/responses/AuthRateLimited"
   /api/v1/accounts:
@@ -2183,6 +2214,13 @@ components:
         considered. The static token holds every scope and reaches every
         domain.
   parameters:
+    DomainName:
+      name: domain
+      in: path
+      required: true
+      description: A hosted domain, as the configuration spells it; ASCII case is ignored.
+      schema:
+        type: string
     AccountName:
       name: name
       in: path
@@ -2253,8 +2291,9 @@ components:
         `not_found`. The message says what is missing: `no such account`,
         `no such dynamic account` (the account exists but is declared in the
         configuration file), `no such masked address`, `no such queue entry`,
-        `the delivery log is disabled`. An account outside a confined key's
-        domains answers exactly like one that does not exist.
+        `no such domain`, `the delivery log is disabled`. An account or a
+        domain outside a confined key's domains answers exactly like one that
+        does not exist.
       content:
         application/json:
           schema:
@@ -2425,7 +2464,7 @@ components:
           description: Always false when `valid` is false.
     Domains:
       type: object
-      required: [domains, disabled]
+      required: [domains, disabled, details]
       properties:
         domains:
           type: array
@@ -2434,6 +2473,69 @@ components:
         disabled:
           type: array
           description: The domains above that are switched off and take no mail.
+          items:
+            type: string
+        details:
+          type: array
+          description: The same domains, each the row `epistle domain list --json` prints for it.
+          items:
+            $ref: "#/components/schemas/DomainRow"
+    DomainRow:
+      type: object
+      required: [domain, enabled, role, aliases_to, aliases_from]
+      properties:
+        domain:
+          type: string
+        enabled:
+          type: boolean
+          description: "`false` for a domain in `disabled_domains`: mail for it is rejected and nobody may send as it."
+        role:
+          type: string
+          enum: [full, send-only, receive-only, disabled]
+        aliases_to:
+          type: array
+          description: The alias domains that resolve as this one.
+          items:
+            type: string
+        aliases_from:
+          type: array
+          description: The domains this one resolves as, when it is itself an alias.
+          items:
+            type: string
+    DomainView:
+      type: object
+      required: [domain, enabled, role, quota, submission_rate, aliases_to, aliases_from, accounts, aliases]
+      properties:
+        domain:
+          type: string
+          description: The domain as it was asked for.
+        enabled:
+          type: boolean
+        role:
+          type: string
+          enum: [full, send-only, receive-only, disabled]
+        quota:
+          type: [integer, "null"]
+          description: Default storage quota of the domain's accounts in bytes, when the domain overrides the server's.
+        submission_rate:
+          type: [integer, "null"]
+          description: Messages per minute a sender in the domain may submit, when the domain overrides the server's.
+        aliases_to:
+          type: array
+          items:
+            type: string
+        aliases_from:
+          type: array
+          items:
+            type: string
+        accounts:
+          type: array
+          description: Addresses in the domain held by accounts declared in the configuration file; accounts made through the API are not listed.
+          items:
+            type: string
+        aliases:
+          type: array
+          description: The `[[alias]]` addresses in the domain.
           items:
             type: string
     AccountView:

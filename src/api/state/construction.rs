@@ -66,6 +66,7 @@ impl ApiState {
 			inner: Arc::new(Inner {
 				token_hash: token_hash.map(str::to_owned),
 				data_dir: data_dir.clone(),
+				domain_catalog: crate::domain::catalog::Catalog::hosting(&domains, &[]),
 				domains,
 				store,
 				spool,
