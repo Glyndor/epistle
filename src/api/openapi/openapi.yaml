@@ -529,8 +529,9 @@ paths:
       description: |-
         The local part is the label reduced to lowercase letters, digits and
         hyphens, a dot and 8 random base32 characters; the domain is that of
-        the account's first address. Mail sent to it lands in the account
-        while it is enabled.
+        the account's first address, falling back to the first configured
+        domain only when the account has no address. Mail sent to it lands in
+        the account while it is enabled.
       x-epistle-scope: [write]
       parameters:
         - $ref: "#/components/parameters/AccountName"
@@ -567,7 +568,9 @@ paths:
         "409":
           description: |-
             `conflict`: the account is at the per-account cap of masked
-            addresses (`masked_addresses_max`). Delete one or raise the cap.
+            addresses (`masked_addresses_max`); delete one or raise the cap.
+            `conflict`: the address's domain is disabled; enable the domain
+            before creating a masked address under it.
           content:
             application/json:
               schema:

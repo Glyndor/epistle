@@ -143,7 +143,7 @@ pub async fn remove(
 /// of them the day that domain is removed. The first configured domain is
 /// only a fallback for an account that has no address of its own.
 fn pick_domain(state: &ApiState, account: &str) -> Result<String, ApiError> {
-	state
+	let domain = state
 		.store()
 		.account_views()
 		.into_iter()
@@ -155,7 +155,17 @@ fn pick_domain(state: &ApiState, account: &str) -> Result<String, ApiError> {
 				.map(|(_, domain)| domain.to_string())
 		})
 		.or_else(|| state.domains().first().cloned())
-		.ok_or_else(|| ApiError::invalid_input("No domain configured for masked addresses."))
+		.ok_or_else(|| ApiError::invalid_input("No domain configured for masked addresses."))?;
+	if state
+		.disabled_domains()
+		.iter()
+		.any(|disabled| disabled.eq_ignore_ascii_case(&domain))
+	{
+		return Err(ApiError::conflict(format!(
+			"masked addresses cannot be created for disabled domain {domain}"
+		)));
+	}
+	Ok(domain)
 }
 
 /// Map a [`StoreError`] from a masked write to the API surface.
