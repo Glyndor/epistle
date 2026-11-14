@@ -232,10 +232,13 @@ pub(super) fn published(
 	}
 	if let Some(port) = panel_port {
 		// The address the operator gave the port stays; loopback is the
-		// default, the same one the API and WebDAV get.
+		// default, the same one the API and WebDAV get. A wildcard is the
+		// wide publication, and the panel serves plain HTTP, so it narrows
+		// to loopback like the listeners without TLS do.
 		let host = narrow
 			.get(&port)
 			.copied()
+			.filter(|address| !address.to_canonical().is_unspecified())
 			.unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST));
 		ports.push(entry(Some(host), port));
 	}

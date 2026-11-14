@@ -37,6 +37,18 @@ fn the_address_the_operator_gave_the_panel_port_survives_a_re_render() {
 	);
 }
 
+#[test]
+fn a_wide_publication_of_the_panel_port_narrows_to_loopback() {
+	for wide in ["7587:7587", "0.0.0.0:7587:7587", "[::]:7587:7587"] {
+		let document = serde_json::json!({"services": {"mail": {"ports": ["25:25", wide]}}});
+		assert_eq!(
+			published(&smtp(), &hosts(&document), None, None, Some(7587)),
+			["25:25", "127.0.0.1:7587:7587"],
+			"{wide} would serve the panel's plain HTTP on every address of the host"
+		);
+	}
+}
+
 /// A compose file whose `mail` publishes `mappings`, with a `panel` service
 /// when `panel` is set, staged the way `epistle service set` stages it.
 fn staged_ports(panel: bool, mappings: &[&str]) -> Option<serde_json::Value> {
