@@ -260,7 +260,7 @@ where
 				.map(|suite| format!("{:?}", suite.suite()));
 			trace.facts.tls = version.zip(cipher);
 		}
-		match verify_chain(tlsa, &peer_chain) {
+		match verify_chain(tlsa, &peer_chain, server_name) {
 			DaneOutcome::Authenticated => trace.facts.dane = true,
 			DaneOutcome::NoRecords => {}
 			DaneOutcome::Mismatch => {

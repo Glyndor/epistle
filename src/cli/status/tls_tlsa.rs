@@ -26,7 +26,7 @@ pub(super) async fn tlsa_item(
 			));
 		}
 	};
-	if crate::dane::verify::verify_chain(&records, chain) == DaneOutcome::Authenticated {
+	if crate::dane::verify::verify_chain(&records, chain, hostname) == DaneOutcome::Authenticated {
 		return Some(Item::new(
 			"tlsa",
 			Level::Ok,
