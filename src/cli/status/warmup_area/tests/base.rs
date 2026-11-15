@@ -86,5 +86,5 @@ fn on_it_reports_each_group() {
 			"cap 50, sent 30, deferred 0.0%, bounced 0.0%, verdict good, next cap 75, waiting 0"
 		)
 	);
-	assert_eq!(report.items.len(), 5);
+	assert_eq!(report.items.len(), 7);
 }

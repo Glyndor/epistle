@@ -268,6 +268,11 @@ impl Worker {
 		let mut slowed: Option<(String, String)> = None;
 		let now = self.now_epoch();
 		let mut held: Option<Conversation> = None;
+		// The receiver group of the exchanger that answers is the queue its
+		// provider is judged by, so the group's own limit is applied where
+		// the connection is opened, and not when the conversation is
+		// claimed: the group is only known there.
+		let group_admission = super::claims::GroupAdmission::default();
 		loop {
 			if tried.len() >= MAX_EXCHANGERS {
 				let mut conversation = last.or(held).unwrap_or_else(|| {
@@ -278,7 +283,9 @@ impl Worker {
 				return conversation;
 			}
 			// A host on hold, or whose receiver group is at its warm-up
-			// cap, is not even connected to.
+			// cap, or at its own limit, is not even connected to. A provider
+			// rate limit and the group's limit both have to admit it: the
+			// stricter wins.
 			let admission = super::provider::Admission::default();
 			let on_hold = |host: &str| {
 				let held = self
@@ -287,6 +294,7 @@ impl Worker {
 					.is_some();
 				held || self.host_closed(&route.entry.envelope, host, now).is_some()
 					|| admission.held(self, host, self.now_epoch())
+					|| group_admission.blocked(self, host, now)
 			};
 			let connection = match self
 				.connector
@@ -327,10 +335,17 @@ impl Worker {
 			// A host named without a connection was on hold when asked for,
 			// and stays passed over even should its hold just have ended.
 			let hold = hold.or_else(|| {
-				(!connection.opened).then(|| crate::queue::backoff::Hold {
-					until: now.saturating_add(1),
-					deferrals: 0,
-					reason: "slowing down".to_string(),
+				(!connection.opened).then(|| match group_admission.busy() {
+					Some((group, until)) => crate::queue::backoff::Hold {
+						until,
+						deferrals: 0,
+						reason: format!("the {group} group is at its limit"),
+					},
+					None => crate::queue::backoff::Hold {
+						until: now.saturating_add(1),
+						deferrals: 0,
+						reason: "slowing down".to_string(),
+					},
 				})
 			});
 			if let Some(hold) = hold {

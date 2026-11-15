@@ -59,3 +59,56 @@ fn labels_round_trip_and_unknown_names_are_refused() {
 	assert_eq!(Group::parse("hotmail"), None);
 	assert_eq!(Group::parse(""), None);
 }
+
+#[test]
+fn the_new_groups_are_read_from_their_mx_names() {
+	let cases = [
+		("mx00.emig.gmx.net", Group::Gmx),
+		("mx01.gmx.net.", Group::Gmx),
+		("mx-ha02.web.de", Group::Gmx),
+		("mx00.mail.com", Group::Gmx),
+		("MXS.MAIL.RU", Group::Mailru),
+		("mxs.mail.ru", Group::Mailru),
+		("evilgmx.net", Group::Other),
+		("gmx.net.evil.example", Group::Other),
+		("web.de.evil.example", Group::Other),
+		("notmail.com", Group::Other),
+		("mx.gmail.ru", Group::Other),
+		("mail.ru.evil.example", Group::Other),
+	];
+	let got: Vec<(&str, Group)> = cases
+		.iter()
+		.map(|(host, _)| (*host, Group::of_exchanger(host)))
+		.collect();
+	assert_eq!(got, cases.to_vec());
+}
+
+#[test]
+fn the_new_groups_have_their_own_labels() {
+	assert_eq!(Group::Gmx.label(), "gmx");
+	assert_eq!(Group::Mailru.label(), "mailru");
+	assert_eq!(Group::parse("gmx"), Some(Group::Gmx));
+	assert_eq!(Group::parse("mailru"), Some(Group::Mailru));
+	assert_eq!(Group::parse("mail.ru"), None);
+}
+
+#[test]
+fn the_new_groups_are_providers() {
+	assert!(Group::Gmx.is_provider());
+	assert!(Group::Mailru.is_provider());
+	assert!(!Group::Other.is_provider());
+}
+
+#[test]
+fn every_group_is_listed() {
+	let labels: Vec<&str> = Group::ALL.iter().map(|group| group.label()).collect();
+	assert_eq!(
+		labels,
+		[
+			"gmail", "outlook", "yahoo", "icloud", "gmx", "mailru", "other"
+		]
+	);
+	for group in Group::ALL {
+		assert_eq!(Group::parse(group.label()), Some(group));
+	}
+}

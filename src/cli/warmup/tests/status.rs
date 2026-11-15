@@ -100,6 +100,8 @@ fn the_report_shows_each_group_the_waiting_mail_and_the_last_day() {
 		idle("outlook"),
 		idle("yahoo"),
 		idle("icloud"),
+		idle("gmx"),
+		idle("mailru"),
 		idle("other"),
 		// An account name is shown with its control characters escaped.
 		"last gmail 2025-10-13 bad: 50 -> 50 (most bad replies: bulk\\u{1b}[31m@school.example=2)\n".into(),

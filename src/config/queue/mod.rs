@@ -7,7 +7,12 @@
 //! reports off, `dmarc_reports` the outbound DMARC aggregate reports, and
 //! `dmarc_report_from` says which address they come from.
 
+use std::collections::BTreeMap;
+
 use serde::Deserialize;
+
+use crate::queue::limits::GroupLimit;
+use crate::queue::warmup::Group;
 
 /// How outbound STARTTLS authenticates the recipient MX certificate when TLS is
 /// neither mandated (MTA-STS enforce / REQUIRETLS) nor authenticated by DANE.
@@ -57,6 +62,12 @@ pub struct Queue {
 	/// Defaults to [`crate::queue::limits::DEFAULT_PER_DOMAIN_CONCURRENCY`].
 	#[serde(default = "default_per_domain_concurrency")]
 	pub per_domain_concurrency: usize,
+	/// Outbound conversations running at once with any one receiver group:
+	/// the provider behind the exchangers of the recipient domains. A
+	/// group with no entry is not limited. Absent leaves every group as
+	/// it was.
+	#[serde(default)]
+	pub per_group_concurrency: BTreeMap<Group, GroupLimit>,
 	/// How long a destination that asks to slow down is held off, in
 	/// seconds, one step per deferral in a row, the last repeating.
 	/// Defaults to [`crate::queue::backoff::DEFAULT_STEPS`].
@@ -100,6 +111,7 @@ impl Default for Queue {
 			dmarc_report_from: None,
 			concurrency: default_concurrency(),
 			per_domain_concurrency: default_per_domain_concurrency(),
+			per_group_concurrency: BTreeMap::new(),
 			backoff_steps: default_backoff_steps(),
 			provider_pause_secs: default_provider_pause_secs(),
 		}
@@ -141,7 +153,43 @@ impl super::Config {
 				"[queue] provider_pause_secs must be between 1 and 86400 seconds".into(),
 			);
 		}
+		self.validate_per_group_concurrency()?;
 		self.validate_backoff_steps()
+	}
+
+	/// The limits of the receiver groups must make sense: a group may not
+	/// have more conversations at once than the queue runs altogether, and
+	/// its wait between two connections is bounded like a backoff step.
+	fn validate_per_group_concurrency(&self) -> Result<(), super::ConfigError> {
+		use crate::queue::limits::MAX_GROUP_WAIT_SECS;
+		let queue = &self.queue;
+		let invalid = |message: String| Err(super::ConfigError::Invalid(message));
+		for (group, limit) in &queue.per_group_concurrency {
+			// `other` is every receiver that is none of the named providers:
+			// unrelated domains, not one queue, so it cannot share a limit.
+			if *group == Group::Other {
+				return invalid(
+					"[queue] per_group_concurrency cannot limit `other`: it is every receiver \
+					 that is not a named provider, not one queue"
+						.to_string(),
+				);
+			}
+			if !(1..=queue.concurrency).contains(&limit.concurrency) {
+				return invalid(format!(
+					"[queue] per_group_concurrency.{group} concurrency must be between 1 and \
+					 concurrency ({}) (got {})",
+					queue.concurrency, limit.concurrency
+				));
+			}
+			if limit.min_wait_secs > MAX_GROUP_WAIT_SECS {
+				return invalid(format!(
+					"[queue] per_group_concurrency.{group} min_wait_secs must be between 0 and \
+					 {MAX_GROUP_WAIT_SECS} seconds (got {})",
+					limit.min_wait_secs
+				));
+			}
+		}
+		Ok(())
 	}
 
 	/// The address the DMARC reports come from must be one plain mailbox

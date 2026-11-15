@@ -73,6 +73,10 @@ pub struct Worker {
 	evidence: Option<Arc<crate::evidence::service::EvidenceService>>,
 	/// How many conversations run at once, overall and per domain.
 	limits: super::limits::Limits,
+	/// The limits of the receiver groups: how many conversations each may
+	/// have at once, and the minimum wait between two of them. A group
+	/// with no entry is not limited.
+	group_limits: std::collections::BTreeMap<super::warmup::Group, super::limits::GroupLimit>,
 	/// Recipients in conversation, and the slots in use.
 	claims: claims::Claims,
 	/// Held while an entry is settled, so two passes never send the same
@@ -125,6 +129,7 @@ impl Worker {
 			delivery_log: None,
 			evidence: None,
 			limits: super::limits::Limits::default(),
+			group_limits: Default::default(),
 			claims: claims::Claims::default(),
 			settling: std::sync::Mutex::new(()),
 			backoff_steps: super::backoff::DEFAULT_STEPS.to_vec(),
@@ -166,6 +171,31 @@ impl Worker {
 	pub fn with_concurrency(mut self, total: usize, per_domain: usize) -> Self {
 		self.limits = super::limits::Limits::new(total, per_domain);
 		self
+	}
+
+	/// Limit the receiver groups: `limits` says how many conversations each
+	/// group may have at once, and how long it waits between two of them.
+	/// A group with no entry is not limited, which is how the queue
+	/// behaved before this setting existed.
+	pub fn with_per_group_concurrency(
+		mut self,
+		limits: std::collections::BTreeMap<super::warmup::Group, super::limits::GroupLimit>,
+	) -> Self {
+		self.group_limits = limits;
+		self
+	}
+
+	/// The limit of the receiver group `group`, when it has one. Never for
+	/// [`Group::Other`](super::warmup::Group::Other).
+	pub(super) fn group_limit(
+		&self,
+		group: super::warmup::Group,
+	) -> Option<&super::limits::GroupLimit> {
+		// `other` holds unrelated receivers, which never share a queue.
+		if group == super::warmup::Group::Other {
+			return None;
+		}
+		self.group_limits.get(&group)
 	}
 
 	/// Enable the per-recipient delivery log. A `0`-retention `log` is

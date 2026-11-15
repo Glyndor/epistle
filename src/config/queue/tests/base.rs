@@ -9,7 +9,7 @@ fn tlsrpt_reports_default_on_and_can_be_turned_off() {
 	assert!(!off.tlsrpt_reports);
 }
 
-fn with_queue(section: &str) -> crate::config::Config {
+pub(super) fn with_queue(section: &str) -> crate::config::Config {
 	toml::from_str(&format!(
 		"hostname = \"mail.example.org\"\ndata_dir = \"/var/lib/mail\"\n[queue]\n{section}"
 	))

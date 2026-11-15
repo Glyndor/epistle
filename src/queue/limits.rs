@@ -6,6 +6,15 @@
 //! (`[queue] per_domain_concurrency`), so a slow destination holds its own
 //! slots and no more, and a large receiver is not flooded with
 //! connections.
+//!
+//! A provider judges a sender by its own traffic, not by the recipient
+//! domain: fifty domains hosted by one provider are fifty queues towards
+//! it. The receiver group (see [`crate::queue::warmup::Group`]) is the queue
+//! they share, and `[queue] per_group_concurrency` gives each group a limit
+//! of its own.
+
+use serde::Deserialize;
+use serde::de::{self, Deserializer, MapAccess, Visitor};
 
 /// Conversations running at once, all destinations together.
 pub const DEFAULT_CONCURRENCY: usize = 8;
@@ -13,6 +22,9 @@ pub const DEFAULT_CONCURRENCY: usize = 8;
 pub const DEFAULT_PER_DOMAIN_CONCURRENCY: usize = 2;
 /// The highest `concurrency` the configuration accepts.
 pub const MAX_CONCURRENCY: usize = 1024;
+/// The longest wait between two connections to one receiver group, in
+/// seconds.
+pub const MAX_GROUP_WAIT_SECS: u64 = 3600;
 /// The most exchangers of one domain tried in one delivery attempt, the
 /// way Postfix's `smtp_mx_address_limit` bounds it: a domain that
 /// publishes hundreds of MX records cannot keep a conversation slot busy
@@ -61,6 +73,83 @@ impl Limits {
 				per_domain
 			},
 		}
+	}
+}
+
+/// The limit of one receiver group: how many conversations it may have at
+/// once, and the minimum wait between two of them.
+///
+/// The configuration writes it as a number of conversations, or as a table
+/// with `concurrency` and `min_wait_secs`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GroupLimit {
+	/// Conversations at once with the group.
+	pub concurrency: usize,
+	/// The minimum wait between two connections to the group, in seconds.
+	pub min_wait_secs: u64,
+}
+
+impl GroupLimit {
+	/// A limit of `concurrency` conversations at once, with no wait between
+	/// them.
+	pub const fn new(concurrency: usize) -> Self {
+		GroupLimit {
+			concurrency,
+			min_wait_secs: 0,
+		}
+	}
+}
+
+/// The table form of a group limit: the conversations at once and the
+/// minimum wait between two of them.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DetailedGroupLimit {
+	concurrency: usize,
+	#[serde(default)]
+	min_wait_secs: u64,
+}
+
+impl<'de> Deserialize<'de> for GroupLimit {
+	fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+	where
+		D: Deserializer<'de>,
+	{
+		struct LimitVisitor;
+
+		impl<'de> Visitor<'de> for LimitVisitor {
+			type Value = GroupLimit;
+
+			fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+				formatter.write_str(
+					"a number of conversations or a table with `concurrency` and `min_wait_secs`",
+				)
+			}
+
+			fn visit_u64<E: de::Error>(self, value: u64) -> Result<GroupLimit, E> {
+				Ok(GroupLimit::new(
+					usize::try_from(value).unwrap_or(usize::MAX),
+				))
+			}
+
+			fn visit_i64<E: de::Error>(self, value: i64) -> Result<GroupLimit, E> {
+				if value < 0 {
+					return Err(E::custom("the number of conversations cannot be negative"));
+				}
+				self.visit_u64(value as u64)
+			}
+
+			fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<GroupLimit, A::Error> {
+				let detailed =
+					DetailedGroupLimit::deserialize(de::value::MapAccessDeserializer::new(map))?;
+				Ok(GroupLimit {
+					concurrency: detailed.concurrency,
+					min_wait_secs: detailed.min_wait_secs,
+				})
+			}
+		}
+
+		deserializer.deserialize_any(LimitVisitor)
 	}
 }
 

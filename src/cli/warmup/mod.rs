@@ -23,8 +23,9 @@ pub(in crate::cli) mod view;
 
 /// Parse a receiver group name.
 fn group(value: &str) -> Result<Group, String> {
-	Group::parse(value)
-		.ok_or_else(|| format!("unknown group {value:?}: gmail, outlook, yahoo, icloud or other"))
+	Group::parse(value).ok_or_else(|| {
+		format!("unknown group {value:?}: gmail, outlook, yahoo, icloud, gmx, mailru or other")
+	})
 }
 
 /// Parse a cap: a whole number of recipients a day.
@@ -92,7 +93,7 @@ pub enum WarmupCli {
 	/// A raise is judged on its first full day: kept when the day goes
 	/// well, reverted otherwise.
 	Set {
-		/// The receiver group: gmail, outlook, yahoo, icloud or other.
+		/// The receiver group: gmail, outlook, yahoo, icloud, gmx, mailru or other.
 		#[arg(value_parser = group)]
 		group: Group,
 		/// Recipients a day.
@@ -110,7 +111,7 @@ pub enum WarmupCli {
 	},
 	/// Start a group over at its starting cap.
 	Reset {
-		/// The receiver group: gmail, outlook, yahoo, icloud or other.
+		/// The receiver group: gmail, outlook, yahoo, icloud, gmx, mailru or other.
 		#[arg(value_parser = group)]
 		group: Group,
 		/// Skip the confirmation.

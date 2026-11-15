@@ -148,7 +148,7 @@ fn start_is_confirmed_and_reaches_the_running_server() {
 	assert!(settings.enabled);
 	assert_eq!(
 		Group::ALL.map(|group| state.group(group).cap),
-		[Some(250); 5]
+		[Some(250); 7]
 	);
 	assert_eq!(
 		state.group(Group::Gmail).raise,
@@ -179,6 +179,8 @@ fn a_higher_or_lifted_cap_is_kept_unless_forced() {
 			"outlook: cap 50 (was 50)\n",
 			"yahoo: cap 50 (was 50)\n",
 			"icloud: cap 50 (was 50)\n",
+			"gmx: cap 50 (was 50)\n",
+			"mailru: cap 50 (was 50)\n",
 			"other: kept none (--force lowers it to 50)\n",
 		)
 	);
