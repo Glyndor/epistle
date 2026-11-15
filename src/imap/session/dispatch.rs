@@ -23,7 +23,7 @@ impl Session {
 			&& let Some(verb) = super::helpers::sequence_command(&tagged.command)
 		{
 			return Output::text(format!(
-				"{tag} BAD [CLIENTBUG] [UIDREQUIRED] {verb} requires UID under UIDONLY\r\n"
+				"{tag} BAD [UIDREQUIRED] {verb} requires UID under UIDONLY\r\n"
 			));
 		}
 		// SEARCHRES (RFC 5182): `$` outside a matching SEARCHRES-saved set is
@@ -33,9 +33,7 @@ impl Session {
 			&& set.saved
 			&& !self.saved_search_ok(uid_kind)
 		{
-			return Output::text(format!(
-				"{tag} NO [CLIENTBUG] [SEARCHRES] $ invalid for {verb}\r\n"
-			));
+			return Output::text(format!("{tag} NO [SEARCHRES] $ invalid for {verb}\r\n"));
 		}
 		match tagged.command {
 			Command::Capability => Output::text(format!(

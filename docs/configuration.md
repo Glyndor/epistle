@@ -625,7 +625,7 @@ stream in both directions for the rest of the connection, and one that does
 not is unaffected.
 
 The compression context is kept for the whole connection rather than reset
-per message, which is where the saving comes from — IMAP repeats the
+per message, which is where the saving comes from — IMAP repeats the same
 command names, flag names and header keys endlessly. The tagged `OK` for the
 command itself travels uncompressed, as the RFC requires. A second `COMPRESS`
 on the same connection answers `NO [COMPRESSIONACTIVE]`: restarting the
@@ -640,7 +640,7 @@ keep seeing the same explanation. This behaviour is always enabled.
 | Code | Meaning |
 |---|---|
 | `[AUTHENTICATIONFAILED]` | `LOGIN` or `AUTHENTICATE` rejected the credentials. An unknown user and a wrong password produce the same response. |
-| `[NONEXISTENT]` | The requested mailbox or message does not exist. |
+| `[NONEXISTENT]` | The requested mailbox or message does not exist. `APPEND` and `COPY` to a missing mailbox keep `[TRYCREATE]`, which RFC 9051 defines for them. |
 | `[ALREADYEXISTS]` | `CREATE` or `RENAME` found a mailbox with the requested name. |
 | `[CANNOT]` | The server does not allow the operation, such as changing a read-only mailbox or using an unsupported SASL mechanism. |
 | `[NOPERM]` | The mailbox ACL denies the operation. |
@@ -653,8 +653,9 @@ keep seeing the same explanation. This behaviour is always enabled.
 A command sent in the wrong state is answered with `BAD`: commands that need
 authentication say `not authenticated`, and commands that need a selected
 mailbox say `no mailbox selected`. Extension-specific codes such as `[LIMIT]`,
-`[TOOBIG]`, `[CLOSED]` and `[COMPRESSIONACTIVE]` remain available where their
-protocol defines them.
+`[TOOBIG]`, `[CLOSED]`, `[UIDREQUIRED]` and `[COMPRESSIONACTIVE]` remain available where
+their protocol defines them. A reply carries one code, so a failed `SELECT`
+that closed the previous mailbox answers `[CLOSED]`.
 
 ### IMAP mailbox names and folders
 

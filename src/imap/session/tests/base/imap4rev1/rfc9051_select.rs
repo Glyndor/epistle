@@ -16,7 +16,7 @@ fn failed_select_after_selected_carries_closed_and_deselects() {
 
 	let response = text(&session.command_line("a2 SELECT DoesNotExist"));
 	assert_eq!(
-		response, "a2 NO [NONEXISTENT] [CLOSED] no such mailbox\r\n",
+		response, "a2 NO [CLOSED] no such mailbox\r\n",
 		"failed SELECT after SELECT INBOX must announce the implicit close"
 	);
 
@@ -62,7 +62,7 @@ fn failed_examine_deselects_with_closed_just_like_select() {
 	let mut session = logged_in(dir.path());
 	assert!(text(&session.command_line("a1 SELECT INBOX")).contains("a1 OK"));
 	let response = text(&session.command_line("a2 EXAMINE Nope"));
-	assert_eq!(response, "a2 NO [NONEXISTENT] [CLOSED] no such mailbox\r\n");
+	assert_eq!(response, "a2 NO [CLOSED] no such mailbox\r\n");
 	let response = text(&session.command_line("a3 EXPUNGE"));
 	assert_eq!(response, "a3 BAD no mailbox selected\r\n");
 }

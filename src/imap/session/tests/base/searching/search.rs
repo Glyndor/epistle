@@ -116,9 +116,9 @@ fn uid_move_and_guards() {
 		"{}",
 		text(&output)
 	);
-	// Missing target answers NONEXISTENT.
+	// Missing target answers TRYCREATE.
 	let output = session.command_line("a9 COPY 1 Nowhere");
-	assert!(text(&output).contains("NONEXISTENT"), "{}", text(&output));
+	assert!(text(&output).contains("TRYCREATE"), "{}", text(&output));
 }
 
 #[test]

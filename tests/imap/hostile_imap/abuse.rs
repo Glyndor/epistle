@@ -158,7 +158,7 @@ async fn authenticated_rejected_literal_chain_must_have_total_deadline() {
 	let server = Harness::start(|s| s.with_read_timeout(SHORT)).await;
 	let mut client = server.authenticated().await;
 	send(&mut client, b"A APPEND Missing {1+}\r\nx").await;
-	expect(&mut client, "A NO [NONEXISTENT] no such mailbox\r\n").await;
+	expect(&mut client, "A NO [TRYCREATE] no such mailbox\r\n").await;
 	drip_until_close(client, b"", b" {1+}\r\nx").await;
 	server.healthy().await;
 }

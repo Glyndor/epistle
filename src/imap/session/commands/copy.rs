@@ -43,7 +43,7 @@ impl Session {
 		let account = account.clone();
 		let source_mailbox = source_mailbox.clone();
 		if !mailbox::exists(&data_dir, &account, target) {
-			return Output::text(format!("{tag} NO [NONEXISTENT] no such mailbox\r\n"));
+			return Output::text(format!("{tag} NO [TRYCREATE] no such mailbox\r\n"));
 		}
 		// Resolve the SEARCHRES `$` placeholder against this snapshot. The
 		// saved set is always keyed by UID; mapping through the snapshot

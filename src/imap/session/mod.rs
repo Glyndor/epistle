@@ -36,13 +36,23 @@ fn sent_literal(line: &str) -> Option<usize> {
 		.map(|literal| literal.size)
 }
 
-pub(in crate::imap::session) fn mailbox_failure_code(error: &std::io::Error) -> ResponseCode {
+fn mailbox_failure_code(error: &std::io::Error) -> ResponseCode {
 	match error.kind() {
 		std::io::ErrorKind::AlreadyExists => ResponseCode::AlreadyExists,
 		std::io::ErrorKind::NotFound => ResponseCode::NonExistent,
 		std::io::ErrorKind::InvalidInput => ResponseCode::Cannot,
 		_ => ResponseCode::ServerBug,
 	}
+}
+
+/// The tagged `NO` for a failed mailbox operation. A message that already
+/// opens with its own code (`[HASCHILDREN]`) keeps it: a reply carries one.
+pub(in crate::imap::session) fn mailbox_failure(tag: &str, error: &std::io::Error) -> Output {
+	let text = error.to_string();
+	if text.starts_with('[') {
+		return Output::text(format!("{tag} NO {text}\r\n"));
+	}
+	tagged_no(tag, mailbox_failure_code(error), &text)
 }
 
 impl Session {
@@ -164,7 +174,7 @@ impl Session {
 		};
 		match operation(&self.data_dir, &account) {
 			Ok(()) => Output::text(format!("{tag} OK {verb} completed\r\n")),
-			Err(error) => tagged_no(tag, mailbox_failure_code(&error), &error.to_string()),
+			Err(error) => mailbox_failure(tag, &error),
 		}
 	}
 

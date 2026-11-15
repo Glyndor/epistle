@@ -1,6 +1,6 @@
 //! IMAP SUBSCRIBE / UNSUBSCRIBE / LSUB (RFC 9051 §6.3.6).
 
-use super::super::{Output, Session, mailbox, mailbox_failure_code, tagged_no};
+use super::super::{Output, Session, mailbox, mailbox_failure};
 use crate::imap::list_tree::{self, Hidden};
 
 impl Session {
@@ -44,7 +44,7 @@ impl Session {
 		};
 		match operation(&self.data_dir, &account) {
 			Ok(()) => Output::text(format!("{tag} OK completed\r\n")),
-			Err(error) => tagged_no(tag, mailbox_failure_code(&error), &error.to_string()),
+			Err(error) => mailbox_failure(tag, &error),
 		}
 	}
 }

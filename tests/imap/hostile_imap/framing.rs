@@ -84,7 +84,7 @@ async fn repeated_rejected_literal_plus_payloads_never_become_commands() {
 	}
 	bomb.extend_from_slice(b"\r\nN NOOP\r\n");
 	send(&mut client, &bomb).await;
-	expect(&mut client, "A1 NO [NONEXISTENT] no such mailbox\r\n").await;
+	expect(&mut client, "A1 NO [TRYCREATE] no such mailbox\r\n").await;
 	expect(&mut client, "N OK NOOP completed\r\n").await;
 	assert!(!epistle::imap::mailbox::exists(
 		server.data.path(),

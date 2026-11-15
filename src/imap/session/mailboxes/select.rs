@@ -69,9 +69,10 @@ impl Session {
 			// client that races a SELECT sees the boundary between the two.
 			let closed = deselect_for_failed_select(&mut self.state);
 			self.saved_search = None;
+			// A reply carries one code: [CLOSED] when it applies, else the cause.
 			return Output::text(format!(
-				"{tag} NO [NONEXISTENT] {}no such mailbox\r\n",
-				if closed { "[CLOSED] " } else { "" }
+				"{tag} NO {} no such mailbox\r\n",
+				if closed { "[CLOSED]" } else { "[NONEXISTENT]" }
 			));
 		}
 		let snapshot = match self.open_snapshot(&account, mailbox) {
@@ -83,8 +84,8 @@ impl Session {
 				let closed = deselect_for_failed_select(&mut self.state);
 				self.saved_search = None;
 				return Output::text(format!(
-					"{tag} NO [SERVERBUG] {}cannot open mailbox\r\n",
-					if closed { "[CLOSED] " } else { "" }
+					"{tag} NO {} cannot open mailbox\r\n",
+					if closed { "[CLOSED]" } else { "[SERVERBUG]" }
 				));
 			}
 		};

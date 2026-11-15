@@ -47,7 +47,7 @@ fn enabled_uidonly_refuses_a_sequence_number_fetch() {
 	let fetch = text(&session.command_line("f1 FETCH 1 (FLAGS)"));
 	assert_eq!(
 		fetch,
-		"f1 BAD [CLIENTBUG] [UIDREQUIRED] FETCH requires UID under UIDONLY\r\n"
+		"f1 BAD [UIDREQUIRED] FETCH requires UID under UIDONLY\r\n"
 	);
 	let uid_fetch = text(&session.command_line("f2 UID FETCH 1:* (FLAGS)"));
 	assert!(

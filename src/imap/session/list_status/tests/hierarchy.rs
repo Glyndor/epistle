@@ -173,10 +173,7 @@ fn delete_with_children_answers_haschildren() {
 	let mut session = logged_in(dir.path());
 	session.command_line(r#"c1 CREATE "a/b""#);
 	let reply = text(&session.command_line(r#"d1 DELETE "a""#));
-	assert!(
-		reply.starts_with("d1 NO [CANNOT] [HASCHILDREN] "),
-		"{reply}"
-	);
+	assert!(reply.starts_with("d1 NO [HASCHILDREN] "), "{reply}");
 	let reply = text(&session.command_line(r#"d2 DELETE "a/b""#));
 	assert_eq!(reply, "d2 OK DELETE completed\r\n");
 }

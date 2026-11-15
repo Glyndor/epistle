@@ -56,7 +56,7 @@ impl Session {
 				tag,
 				synchronizing,
 				wire_size,
-				"NO [NONEXISTENT] no such mailbox\r\n",
+				"NO [TRYCREATE] no such mailbox\r\n",
 			);
 		}
 		// Quota enforcement (RFC 9208): refuse before reading the literal.
@@ -202,7 +202,7 @@ impl Session {
 				tag,
 				synchronizing,
 				size,
-				"NO [NONEXISTENT] no such mailbox\r\n",
+				"NO [TRYCREATE] no such mailbox\r\n",
 			);
 		}
 		let projected =

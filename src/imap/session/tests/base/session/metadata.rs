@@ -69,10 +69,7 @@ fn uidonly_rejects_sequence_commands() {
 
 	// A sequence-number FETCH is refused; UID FETCH works.
 	let response = text(&session.command_line("a4 FETCH 1 (FLAGS)"));
-	assert!(
-		response.contains("a4 BAD [CLIENTBUG] [UIDREQUIRED]"),
-		"{response}"
-	);
+	assert!(response.contains("a4 BAD [UIDREQUIRED]"), "{response}");
 
 	let response = text(&session.command_line("a5 UID FETCH 1 (FLAGS)"));
 	assert!(response.contains("* UIDFETCH 1 ("), "{response}");

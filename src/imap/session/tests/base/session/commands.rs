@@ -196,7 +196,7 @@ fn append_requires_authentication_and_known_mailbox() {
 
 	let mut session = logged_in(dir.path());
 	let output = session.command_line("a2 APPEND Missing {5}");
-	assert!(text(&output).contains("NONEXISTENT"), "{}", text(&output));
+	assert!(text(&output).contains("TRYCREATE"), "{}", text(&output));
 }
 
 #[test]
