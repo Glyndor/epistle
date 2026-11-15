@@ -1,5 +1,6 @@
 pub use super::*;
 
+pub(super) mod atomic;
 pub(super) mod base;
 pub(super) mod bounds;
 pub(super) mod lock;

@@ -9,9 +9,10 @@
 //! root, and the `mail` service under `keep-id`) are outside the block and
 //! are left alone.
 
-use std::fs::{Metadata, Permissions};
+use std::fs::Metadata;
 use std::io;
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::os::fd::{AsFd, BorrowedFd};
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 /// Move ids `from..from + count` to `to..to + count`.
@@ -109,57 +110,87 @@ pub(crate) fn count_owned(
 		uid: still(uid),
 		gid: still(gid),
 	};
-	walk(root, probe, &mut |_, _, _, _| Ok(())).map(|tally| tally.changed)
+	walk(root, probe, &mut |_, _, _| Ok(())).map(|tally| tally.changed)
 }
 
-/// The change applied to one entry: path, its metadata before the change,
-/// and the new uid and gid (`None` keeps the current one).
-type Apply<'a> = dyn FnMut(&Path, &Metadata, Option<u32>, Option<u32>) -> io::Result<()> + 'a;
+/// One entry of the walk: where it was found, the descriptor it was opened
+/// as, and what `fstat` says about that descriptor.
+pub(crate) struct Visit<'a> {
+	/// The entry's path, for the callers that report or record it.
+	#[cfg_attr(not(test), allow(dead_code))]
+	pub(crate) path: &'a Path,
+	/// The entry opened with `O_PATH | O_NOFOLLOW`; every change goes
+	/// through it.
+	pub(crate) fd: BorrowedFd<'a>,
+	/// The metadata of that descriptor, before the change.
+	pub(crate) meta: &'a Metadata,
+}
+
+/// The change applied to one entry, with the new uid and gid (`None` keeps
+/// the current one).
+type Apply<'a> = dyn FnMut(&Visit<'_>, Option<u32>, Option<u32>) -> io::Result<()> + 'a;
 
 /// Walk `root` depth first without following links, calling `apply` on each
-/// entry that [`Shift::target`] moves.
+/// entry that [`Shift::target`] moves. Each entry is opened relative to the
+/// root with symbolic links refused in the directories leading to it, so a
+/// directory replaced by a link during the walk stops it with an error
+/// instead of leading it elsewhere.
 pub(crate) fn walk(root: &Path, shift: Shift, apply: &mut Apply<'_>) -> io::Result<Tally> {
 	let mut tally = Tally::default();
-	let device = match std::fs::symlink_metadata(root) {
-		Ok(meta) => meta.dev(),
-		Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(tally),
-		Err(error) => return Err(error),
+	let Some(root_fd) = entry::open_root(root)? else {
+		return Ok(tally);
 	};
-	let mut pending: Vec<PathBuf> = vec![root.to_path_buf()];
-	while let Some(path) = pending.pop() {
-		let meta = std::fs::symlink_metadata(&path).map_err(|error| {
-			io::Error::new(error.kind(), format!("{}: {error}", path.display()))
-		})?;
+	let device = entry::stat(root_fd.as_fd())?.dev();
+	let mut pending: Vec<PathBuf> = vec![PathBuf::new()];
+	while let Some(relative) = pending.pop() {
+		let path = if relative.as_os_str().is_empty() {
+			root.to_path_buf()
+		} else {
+			root.join(&relative)
+		};
+		let fail =
+			|error: io::Error| io::Error::new(error.kind(), format!("{}: {error}", path.display()));
+		let fd = if relative.as_os_str().is_empty() {
+			root_fd.try_clone()
+		} else {
+			entry::open_below(root_fd.as_fd(), &relative)
+		}
+		.map_err(fail)?;
+		let meta = entry::stat(fd.as_fd()).map_err(fail)?;
 		tally.scanned += 1;
 		if let Some((uid, gid)) = shift.target(&meta) {
-			apply(&path, &meta, uid, gid).map_err(|error| {
-				io::Error::new(error.kind(), format!("{}: {error}", path.display()))
-			})?;
+			let visit = Visit {
+				path: &path,
+				fd: fd.as_fd(),
+				meta: &meta,
+			};
+			apply(&visit, uid, gid).map_err(fail)?;
 			tally.changed += 1;
 		}
 		if meta.is_dir() && meta.dev() == device {
-			for entry in std::fs::read_dir(&path)? {
-				pending.push(entry?.path());
+			for item in std::fs::read_dir(entry::proc_path(fd.as_fd()))? {
+				pending.push(relative.join(item?.file_name()));
 			}
 		}
 	}
 	Ok(tally)
 }
 
-/// The real change: `lchown`, then the mode bits and file capabilities that
-/// `lchown` cleared.
-fn apply(path: &Path, meta: &Metadata, uid: Option<u32>, gid: Option<u32>) -> io::Result<()> {
+/// The real change: the owner, then the mode bits and file capabilities
+/// that changing it cleared, all through the descriptor.
+fn apply(visit: &Visit<'_>, uid: Option<u32>, gid: Option<u32>) -> io::Result<()> {
+	let (fd, meta) = (visit.fd, visit.meta);
 	let capabilities = if meta.is_file() {
-		xattr::get(path, CAPABILITY)?
+		xattr::get(fd, CAPABILITY)?
 	} else {
 		None
 	};
-	std::os::unix::fs::lchown(path, uid, gid)?;
+	entry::chown(fd, uid, gid)?;
 	if !meta.file_type().is_symlink() && meta.mode() & 0o6000 != 0 {
-		std::fs::set_permissions(path, Permissions::from_mode(meta.mode() & 0o7777))?;
+		entry::chmod(fd, meta.mode() & 0o7777)?;
 	}
 	if let Some(value) = capabilities {
-		xattr::set(path, CAPABILITY, &value)?;
+		xattr::set(fd, CAPABILITY, &value)?;
 	}
 	Ok(())
 }
@@ -167,6 +198,7 @@ fn apply(path: &Path, meta: &Metadata, uid: Option<u32>, gid: Option<u32>) -> io
 /// The extended attribute that carries a file's capabilities.
 const CAPABILITY: &str = "security.capability";
 
+mod entry;
 mod xattr;
 
 #[cfg(test)]

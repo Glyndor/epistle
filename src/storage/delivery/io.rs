@@ -10,7 +10,12 @@ use crate::util::path_component::AccountName;
 
 /// Persist Sieve-assigned flags as the message's IMAP `.flags` sidecar, so
 /// a `setflag`/`addflag` filter is reflected when the mailbox is opened.
-pub(super) fn write_flag_sidecar(new_dir: &std::path::Path, id: Uuid, flag_tokens: &[String]) {
+/// Returns the sidecar's path when one was written.
+pub(super) fn write_flag_sidecar(
+	new_dir: &std::path::Path,
+	id: Uuid,
+	flag_tokens: &[String],
+) -> Option<std::path::PathBuf> {
 	use crate::util::path_component::{MessageExt, message_file};
 	let flags: Vec<crate::imap::mailbox::Flag> = flag_tokens
 		.iter()
@@ -18,13 +23,12 @@ pub(super) fn write_flag_sidecar(new_dir: &std::path::Path, id: Uuid, flag_token
 		.filter_map(|token| crate::imap::mailbox::Flag::parse(token))
 		.collect();
 	if flags.is_empty() {
-		return;
+		return None;
 	}
-	if let Ok(bytes) = serde_json::to_vec(&flags)
-		&& let Ok(path) = message_file(new_dir, id, MessageExt::Flags)
-	{
-		let _ = write_sync(&path, &bytes);
-	}
+	let bytes = serde_json::to_vec(&flags).ok()?;
+	let path = message_file(new_dir, id, MessageExt::Flags).ok()?;
+	write_sync(&path, &bytes).ok()?;
+	Some(path)
 }
 
 /// The most folders an account may hold before a Sieve `fileinto` stops

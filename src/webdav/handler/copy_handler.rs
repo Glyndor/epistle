@@ -9,7 +9,7 @@ use axum::response::{IntoResponse, Response};
 use super::super::quota::{Change, Quota};
 use super::super::report_bounds::MAX_RESOURCE_BYTES;
 use super::super::{caldav, carddav, path};
-use super::{bounds, sync_handler, uri_name};
+use super::{bounds, publish, sync_handler, uri_name};
 
 /// `COPY`/`MOVE`: resolve the `Destination` header into the same account tree,
 /// honour `Overwrite`, then copy (and, for `MOVE`, remove the source). The
@@ -150,16 +150,22 @@ pub(super) async fn copy_move(
 		reservation.invalidate();
 		return *response;
 	}
-	if let Err(response) = perform_copy(source, &dest_path, dest_was_dir).await {
-		reservation.invalidate();
-		bounds::forget_counts(&[&dest_path]);
-		return *response;
-	}
+	let moved = match perform_copy(source, &dest_path, dest_was_dir, remove).await {
+		Ok(moved) => moved,
+		Err(response) => {
+			reservation.invalidate();
+			bounds::forget_counts(&[&dest_path]);
+			return *response;
+		}
+	};
 	if !source_meta.is_dir() {
 		sync_handler::log_member(&dest_path, false).await;
 	}
 	if remove {
-		let removal = if source_meta.is_dir() {
+		// A file is moved by one rename; a collection is copied and removed.
+		let removal = if moved {
+			Ok(())
+		} else if source_meta.is_dir() {
 			tokio::fs::remove_dir_all(source).await
 		} else {
 			tokio::fs::remove_file(source).await
@@ -179,35 +185,50 @@ pub(super) async fn copy_move(
 	}
 }
 
-/// Copy `source` onto `dest`, replacing an existing destination first. A
-/// directory source is copied recursively; any child that is itself a
-/// symlink is skipped (we do not follow external links into the destination
-/// tree). On error returns the response to send.
+/// Copy `source` onto `dest`, replacing an existing destination. A file
+/// replaces a file in one step (a staging file renamed over it, or for a
+/// `MOVE` the source itself renamed), so a reader sees the old file or the
+/// whole new one. A collection is copied recursively after the destination
+/// is removed; any child that is itself a symlink is skipped (we do not
+/// follow external links into the destination tree). Returns whether the
+/// source was moved, so there is nothing left to remove. On error returns
+/// the response to send.
 async fn perform_copy(
 	source: &Path,
 	dest: &Path,
 	dest_was_dir: Option<bool>,
-) -> Result<(), Box<Response>> {
-	if let Some(is_dir) = dest_was_dir {
-		// Remove the destination without ever following a symlink: we
-		// already know the destination's existence and kind from the
-		// `symlink_metadata` gathered by the caller, which never resolves
-		// the link.
-		let removal = if is_dir {
+	remove: bool,
+) -> Result<bool, Box<Response>> {
+	let failed = || Box::new(StatusCode::INTERNAL_SERVER_ERROR.into_response());
+	let is_dir = source.is_dir();
+	// A destination of the other kind, or any destination under a collection
+	// copy, goes first; a file over a file is replaced by the rename below.
+	// Neither removal follows a symlink: the kind comes from the caller's
+	// `symlink_metadata`.
+	if let Some(dest_is_dir) = dest_was_dir
+		&& (dest_is_dir || is_dir)
+	{
+		let removal = if dest_is_dir {
 			tokio::fs::remove_dir_all(dest).await
 		} else {
 			tokio::fs::remove_file(dest).await
 		};
 		if removal.is_err() {
-			return Err(Box::new(StatusCode::INTERNAL_SERVER_ERROR.into_response()));
+			return Err(failed());
 		}
 	}
-	let result = if source.is_dir() {
-		copy_dir(source, dest).await
+	if is_dir {
+		return copy_dir(source, dest)
+			.await
+			.map(|()| false)
+			.map_err(|_| failed());
+	}
+	if remove {
+		publish::relocate(source, dest).await.map(|()| true)
 	} else {
-		tokio::fs::copy(source, dest).await.map(|_| ())
-	};
-	result.map_err(|_| Box::new(StatusCode::INTERNAL_SERVER_ERROR.into_response()))
+		publish::copy(source, dest).await.map(|()| false)
+	}
+	.map_err(|_| failed())
 }
 
 /// Recursively copy a directory tree (an iterative walk; no async recursion).
@@ -236,7 +257,7 @@ async fn copy_dir(source: &Path, dest: &Path) -> std::io::Result<()> {
 			if file_type.is_dir() {
 				stack.push((child.path(), child_to));
 			} else if file_type.is_file() {
-				tokio::fs::copy(child.path(), &child_to).await?;
+				publish::copy(&child.path(), &child_to).await?;
 			}
 		}
 	}

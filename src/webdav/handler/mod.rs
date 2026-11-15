@@ -25,6 +25,7 @@ use super::quota::{Change, LOG_RESERVE, MIN_ENTRY_BYTES, Quota};
 use super::report_bounds::{self, MAX_RESOURCE_BYTES};
 
 mod propfind_handler;
+mod publish;
 use propfind_handler::propfind;
 mod copy_handler;
 mod sync_handler;
@@ -291,7 +292,12 @@ fn options() -> Response {
 /// `GET`/`HEAD`: stream a file's bytes (or just its headers when `with_body` is
 /// false). A directory or a missing file is `404` (we do not serve listings).
 async fn get(target: &Path, with_body: bool) -> Response {
-	let metadata = match tokio::fs::metadata(target).await {
+	// One open serves the headers and the body, so both describe the same
+	// file even when the name is given a new one meanwhile.
+	let Some(file) = report_bounds::open_regular(target).await else {
+		return StatusCode::NOT_FOUND.into_response();
+	};
+	let metadata = match file.metadata().await {
 		Ok(metadata) if metadata.is_file() => metadata,
 		_ => return StatusCode::NOT_FOUND.into_response(),
 	};
@@ -313,7 +319,7 @@ async fn get(target: &Path, with_body: bool) -> Response {
 	if length > PUT_BODY_LIMIT as u64 {
 		return StatusCode::PAYLOAD_TOO_LARGE.into_response();
 	}
-	match report_bounds::read_capped(target, PUT_BODY_LIMIT as u64).await {
+	match report_bounds::read_open_capped(file, PUT_BODY_LIMIT as u64).await {
 		Some(bytes) => builder.body(Body::from(bytes)).expect("get response"),
 		None => StatusCode::NOT_FOUND.into_response(),
 	}
@@ -336,8 +342,9 @@ fn content_type(target: &Path) -> &'static str {
 /// the new resource's `ETag` so a CardDAV client can track the card.
 ///
 /// If the target is an existing symlink (escape planted in the user's tree)
-/// the request is refused with `403`, `tokio::fs::write` would otherwise
-/// follow the link and rewrite the file it points at.
+/// the request is refused with `403`. The body is written to a staging file
+/// and renamed onto the target, so a reader sees the old file or the whole
+/// new one.
 async fn put(target: &Path, quota: &Quota, request: Request) -> Response {
 	if target.is_dir() {
 		return StatusCode::METHOD_NOT_ALLOWED.into_response();
@@ -393,7 +400,7 @@ async fn put(target: &Path, quota: &Quota, request: Request) -> Response {
 		reservation.invalidate();
 		return refusal;
 	}
-	let written = tokio::fs::write(target, &body).await;
+	let written = publish::write(target, &body).await;
 	if written.is_err() {
 		reservation.invalidate();
 		bounds::forget_counts(&[target]);
