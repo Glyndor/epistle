@@ -188,3 +188,22 @@ fn a_static_claim_on_the_tagged_form_of_a_listed_address_is_kept() {
 		Resolution::Account("carol".to_string())
 	);
 }
+
+#[test]
+fn a_sql_directory_name_in_another_case_is_taken_too() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let store = open_store(dir.path());
+	store.set_sql_accounts(vec![SqlAccount {
+		name: "Bob".to_string(),
+		addresses: vec!["bsmith@example.org".to_string()],
+		password_hash: None,
+	}]);
+	for name in ["bob", "BOB"] {
+		let result = store.add(dynamic(name, "fresh@example.org"));
+		assert!(
+			matches!(result, Err(StoreError::Duplicate(_))),
+			"{result:?}"
+		);
+	}
+	assert!(store.add(dynamic("carol", "fresh@example.org")).is_ok());
+}
