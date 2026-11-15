@@ -88,6 +88,7 @@ pub(super) fn build_sender<'a>(
 		sink,
 		now: fixed_now(),
 		auto_submitted: true,
+		auto_response_suppress: true,
 	}
 }
 

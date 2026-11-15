@@ -44,6 +44,7 @@ fn every_report_built_from_headers_cut_anywhere_near_the_cap_fits_the_queue() {
 					&data,
 					now(),
 					true,
+					true,
 				),
 				build_delay_warning(
 					"mail.example.org",
@@ -51,6 +52,7 @@ fn every_report_built_from_headers_cut_anywhere_near_the_cap_fits_the_queue() {
 					&recipients(),
 					&data,
 					now(),
+					true,
 					true,
 				),
 				build(
@@ -61,6 +63,7 @@ fn every_report_built_from_headers_cut_anywhere_near_the_cap_fits_the_queue() {
 					&data,
 					now(),
 					false,
+					true,
 				),
 			];
 			for report in reports {
@@ -102,6 +105,7 @@ fn a_sender_that_would_open_a_header_gets_no_report() {
 			&recipients(),
 			&original(4000, b""),
 			now(),
+			true,
 			true,
 		);
 		assert!(report.is_none(), "{sender:?}");

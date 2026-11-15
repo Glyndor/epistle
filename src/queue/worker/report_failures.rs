@@ -42,6 +42,7 @@ impl Worker {
 				&entry.data,
 				std::time::SystemTime::now(),
 				self.auto_submitted,
+				self.auto_response_suppress,
 			) {
 			match self.send_report(id, message, "bounce") {
 				ReportOutcome::Queued => {}

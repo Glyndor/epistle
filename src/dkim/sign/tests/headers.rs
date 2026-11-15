@@ -35,6 +35,11 @@ pub(super) const FIELDS: &[(&str, &str, bool)] = &[
 	("Disposition-Notification-To", "alice@example.org", true),
 	("Return-Receipt-To", "alice@example.org", true),
 	("Auto-Submitted", "auto-generated", true),
+	(
+		"X-Auto-Response-Suppress",
+		"DR, NDR, RN, NRN, OOF, AutoReply",
+		true,
+	),
 	("Organization", "Example Org", false),
 	("X-Epistle", "1", false),
 ];
@@ -143,7 +148,7 @@ async fn signs_every_documented_field_with_both_algorithms() {
 					"{name}"
 				);
 			}
-			assert_eq!(list.len(), FIELDS.len() + 13);
+			assert_eq!(list.len(), FIELDS.len() + 14);
 		}
 		assert!(lists.windows(2).all(|pair| pair[0] == pair[1]));
 		check(&dns, &signature, &raw, DkimOutcome::Pass).await;

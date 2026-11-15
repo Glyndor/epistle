@@ -232,6 +232,7 @@ struct PolicyGroup {
 /// `auto_submitted` writes `Auto-Submitted: auto-generated`, as RFC 3834
 /// section 5 asks of a machine-generated report; `false` leaves the field
 /// out (the `system_auto_submitted` switch).
+/// `auto_response_suppress` independently controls `X-Auto-Response-Suppress`.
 #[allow(clippy::too_many_arguments)]
 pub fn build_email(
 	policy_domain: &str,
@@ -242,6 +243,7 @@ pub fn build_email(
 	reporting_domain: &str,
 	attachment: &[u8],
 	auto_submitted: bool,
+	auto_response_suppress: bool,
 ) -> Vec<u8> {
 	use base64::Engine;
 	let b64 = base64::engine::general_purpose::STANDARD.encode(attachment);
@@ -262,6 +264,9 @@ pub fn build_email(
 	if auto_submitted {
 		email.push_str("Auto-Submitted: auto-generated\r\n");
 	}
+	email.push_str(crate::smtp::identification::auto_response_suppress(
+		auto_response_suppress,
+	));
 	email.push_str("MIME-Version: 1.0\r\n");
 	email.push_str(&format!(
 		"Content-Type: multipart/report; report-type=\"tlsrpt\"; boundary=\"{boundary}\"\r\n"

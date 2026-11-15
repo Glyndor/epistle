@@ -28,6 +28,8 @@ pub struct DispatchContext {
 	/// Whether the alert emails carry `Auto-Submitted: auto-generated`
 	/// (the `system_auto_submitted` switch).
 	auto_submitted: bool,
+	/// Whether generated mail asks Exchange to suppress automatic responses.
+	auto_response_suppress: bool,
 }
 
 /// Handle returned by [`run`]. Drop it (or call [`stop`](EngineHandle::stop))
@@ -163,7 +165,14 @@ fn dispatch(
 		tokio::spawn(async move { poster.notify(&event).await });
 	}
 	if !rule.email.is_empty() {
-		let message = build_email(rule, &ctx.hostname, delta, now_unix, ctx.auto_submitted)?;
+		let message = build_email(
+			rule,
+			&ctx.hostname,
+			delta,
+			now_unix,
+			ctx.auto_submitted,
+			ctx.auto_response_suppress,
+		)?;
 		// An alert is the operator's own mail: no tenant owns it, so it has no
 		// owner and its events use the server-wide webhook.
 		ctx.spool
@@ -184,6 +193,7 @@ fn build_email(
 	delta: u64,
 	_now_unix: u64,
 	auto_submitted: bool,
+	auto_response_suppress: bool,
 ) -> Result<AcceptedMessage, super::AlertError> {
 	let from_address = format!("epistle-alerts@{hostname}");
 	let from = format!("epistle-alerts <{from_address}>");
@@ -210,11 +220,14 @@ fn build_email(
 		threshold = rule.threshold,
 		date = date,
 	);
-	let auto = if auto_submitted {
+	let mut auto = if auto_submitted {
 		format!("Auto-Submitted: {SYSTEM}\r\n")
 	} else {
 		String::new()
 	};
+	auto.push_str(crate::smtp::identification::auto_response_suppress(
+		auto_response_suppress,
+	));
 	let data = format!(
 		"From: {from}\r\n\
 		 To: {to}\r\n\
@@ -265,11 +278,56 @@ pub fn context(
 	spool: Arc<FsSpool>,
 	hostname: String,
 	auto_submitted: bool,
+	auto_response_suppress: bool,
 ) -> DispatchContext {
 	DispatchContext {
 		webhook,
 		spool,
 		hostname,
 		auto_submitted,
+		auto_response_suppress,
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn auto_response_suppress_controls_the_spooled_alert() {
+		for suppress in [false, true] {
+			let dir = tempfile::tempdir().expect("tempdir");
+			let spool = Arc::new(FsSpool::open(dir.path()).expect("spool"));
+			let ctx = context(
+				None,
+				Arc::clone(&spool),
+				"mail.example.org".into(),
+				true,
+				suppress,
+			);
+			let alert = Alert {
+				name: "bounce-storm".into(),
+				metric: "bounced".into(),
+				op: crate::config::AlertOp::Ge,
+				threshold: 50,
+				window_secs: 60,
+				cooldown_secs: 60,
+				enabled: true,
+				webhook: false,
+				email: vec!["ops@example.org".into()],
+			};
+			let rule = CompiledRule::from_alert(&alert).expect("rule");
+			dispatch(&rule, &ctx, 60, 1_790_000_000).expect("dispatch");
+			let ids = spool.list().expect("list");
+			assert_eq!(ids.len(), 1);
+			let entry = spool.load(ids[0]).expect("alert");
+			let text = String::from_utf8(entry.data).expect("UTF-8");
+			let headers = text.split_once("\r\n\r\n").expect("headers").0;
+			assert!(headers.contains("Auto-Submitted: auto-generated"));
+			assert_eq!(
+				headers.contains("X-Auto-Response-Suppress: DR, NDR, RN, NRN, OOF, AutoReply"),
+				suppress
+			);
+		}
 	}
 }

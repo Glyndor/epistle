@@ -101,6 +101,8 @@ pub struct Sender<'a> {
 	/// Whether outgoing report messages carry
 	/// `Auto-Submitted: auto-generated`.
 	pub auto_submitted: bool,
+	/// Whether generated mail asks Exchange to suppress automatic responses.
+	pub auto_response_suppress: bool,
 }
 
 /// Send the reports for every completed day before `today` (`YYYYMMDD`).
@@ -182,6 +184,7 @@ async fn deliver(
 				hostname,
 				&gzip,
 				sender.auto_submitted,
+				sender.auto_response_suppress,
 			));
 			let message = AcceptedMessage {
 				reverse_path: contact.clone(),
@@ -241,6 +244,7 @@ pub async fn run(
 	sink: Arc<dyn MessageSink>,
 	poster: Arc<dyn ReportPoster>,
 	auto_submitted: bool,
+	auto_response_suppress: bool,
 ) {
 	let mut ticker = tokio::time::interval(INTERVAL);
 	ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -258,6 +262,7 @@ pub async fn run(
 			sink: sink.as_ref(),
 			poster: poster.as_ref(),
 			auto_submitted,
+			auto_response_suppress,
 		};
 		send_pending(&sender, &today).await;
 	}

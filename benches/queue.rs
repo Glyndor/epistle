@@ -66,6 +66,7 @@ fn bounce_dsn(c: &mut Criterion) {
 				black_box(&msg.data),
 				std::time::UNIX_EPOCH,
 				true,
+				true,
 			))
 		});
 	});

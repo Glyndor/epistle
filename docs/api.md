@@ -407,7 +407,8 @@ only is delivered at once and also gets an id.
 | `list_unsubscribe` | array of strings | Up to 4 `mailto:` or `https://` URLs |
 | `list_unsubscribe_post` | boolean | Adds the RFC 8058 one-click header. Needs an `https://` URL in `list_unsubscribe` |
 | `auto_submitted`, `feedback_id` | string | `Auto-Submitted` (`no`, `auto-generated`, `auto-replied`, `auto-notified`) and `Feedback-ID` (printable ASCII, no spaces). A value in the request always wins. When `auto_submitted` is absent and the API key has the per-key setting enabled, the server writes `Auto-Submitted: auto-generated` |
-| `headers` | object | Custom headers: up to 32, name `X-` plus letters, digits and hyphens (at most 76 characters), not `X-Priority` |
+| `auto_response_suppress` | boolean | Default `false`: writes `X-Auto-Response-Suppress: DR, NDR, RN, NRN, OOF, AutoReply` when true, independently of the server mail setting and `auto_submitted`. |
+| `headers` | object | Custom headers: up to 32, name `X-` plus letters, digits and hyphens (at most 76 characters), neither `X-Priority` nor `X-Auto-Response-Suppress` |
 | `save_sent` | boolean | Whether a copy goes to the account's Sent folder. Absent follows the account setting. Transactional mail is never copied |
 | `extra` | object of strings | Correlation data, up to 10 keys (printable ASCII, no spaces, at most 64 bytes) with values of at most 256 bytes. It comes back on `/api/v1/deliveries` and in the webhook events of the message and is never written into the message |
 | `class` | `transactional`, `marketing`, `personal` | See below |

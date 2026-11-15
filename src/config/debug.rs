@@ -54,6 +54,10 @@ impl std::fmt::Debug for Config {
 			.field("bulk_recipients", &self.bulk_recipients)
 			.field("default_list_id", &self.default_list_id)
 			.field("system_auto_submitted", &self.system_auto_submitted)
+			.field(
+				"system_auto_response_suppress",
+				&self.system_auto_response_suppress,
+			)
 			.field("x_epistle_header", &self.x_epistle_header)
 			.field("organization_header", &self.organization_header)
 			.field("domain_organization", &self.domain_organization)

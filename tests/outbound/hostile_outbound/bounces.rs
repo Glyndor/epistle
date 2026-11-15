@@ -16,6 +16,7 @@ fn bounce(sender: &str, reason: &str, data: &[u8]) -> Option<AcceptedMessage> {
 		data,
 		UNIX_EPOCH,
 		true,
+		true,
 	)
 }
 
@@ -36,6 +37,7 @@ fn failing_dsn_cannot_generate_another_dsn_even_with_forged_return_path() {
 				&[ReportRecipient::new("sender@outside.test", "451 later")],
 				&forged,
 				UNIX_EPOCH,
+				true,
 				true,
 			)
 			.is_none()
@@ -88,6 +90,7 @@ fn hostile_remote_reason_and_host_are_flattened_and_capped() {
 			BODY,
 			UNIX_EPOCH,
 			true,
+			true,
 		)
 		.expect("DSN");
 		let text = String::from_utf8(dsn.data).expect("ASCII");
@@ -131,6 +134,7 @@ fn failed_recipient_cannot_inject_dsn_fields() {
 			&[recipient],
 			BODY,
 			UNIX_EPOCH,
+			true,
 			true,
 		) {
 			let text = String::from_utf8(dsn.data).expect("DSN");

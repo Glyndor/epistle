@@ -35,6 +35,15 @@ pub const X_EPISTLE_VALUE: &str = "1";
 /// The `Auto-Submitted` value for mail the server generates itself.
 pub const SYSTEM_AUTO_SUBMITTED: &str = "auto-generated";
 
+/// The complete header line when suppression is enabled.
+pub fn auto_response_suppress(enabled: bool) -> &'static str {
+	if enabled {
+		"X-Auto-Response-Suppress: DR, NDR, RN, NRN, OOF, AutoReply\r\n"
+	} else {
+		""
+	}
+}
+
 /// Recipients above which a `transactional` submission counts as bulk by
 /// default: twenty-one. Two recipients is an ordinary notice to two people,
 /// not bulk mail, and an unsubscribe address on it would be the sender's
@@ -54,6 +63,8 @@ pub struct Policy {
 	pub list_id: bool,
 	/// Write `Auto-Submitted: auto-generated` on server-generated mail.
 	pub system_auto_submitted: bool,
+	/// Write Exchange auto-response suppression on server-generated mail.
+	pub system_auto_response_suppress: bool,
 	/// Write `X-Epistle: 1`.
 	pub x_epistle: bool,
 	/// Write `Organization` for a domain that has one configured.
@@ -71,6 +82,7 @@ impl Default for Policy {
 			bulk_recipients: DEFAULT_BULK_RECIPIENTS,
 			list_id: true,
 			system_auto_submitted: true,
+			system_auto_response_suppress: true,
 			x_epistle: true,
 			organization: true,
 			domain_organization: BTreeMap::new(),
@@ -87,6 +99,7 @@ impl Policy {
 			bulk_recipients: config.bulk_recipients,
 			list_id: config.default_list_id,
 			system_auto_submitted: config.system_auto_submitted,
+			system_auto_response_suppress: config.system_auto_response_suppress,
 			x_epistle: config.x_epistle_header,
 			organization: config.organization_header,
 			domain_organization: config

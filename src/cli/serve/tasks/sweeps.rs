@@ -28,6 +28,7 @@ pub(in crate::cli::serve) fn spawn_dmarc_flush(
 	let hostname = config.hostname.clone();
 	let org_email = config.dmarc_report_from();
 	let auto_submitted = config.system_auto_submitted;
+	let auto_response_suppress = config.system_auto_response_suppress;
 	tokio::spawn(async move {
 		let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
 		interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -48,6 +49,7 @@ pub(in crate::cli::serve) fn spawn_dmarc_flush(
 				sink: sink.as_ref(),
 				now,
 				auto_submitted,
+				auto_response_suppress,
 			};
 			crate::dmarc::aggregate::flush_pending(&sender, &today).await;
 		}
@@ -75,6 +77,7 @@ pub(in crate::cli::serve) fn spawn_tlsrpt_reports(
 		sink,
 		Arc::new(poster),
 		config.system_auto_submitted,
+		config.system_auto_response_suppress,
 	));
 	Ok(())
 }

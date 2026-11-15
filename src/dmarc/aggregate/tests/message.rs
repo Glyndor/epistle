@@ -55,6 +55,7 @@ fn report_message_carries_rfc_5322_headers_and_attachment_filename() {
 		now,
 		&attachment,
 		true,
+		true,
 	);
 	let text = std::str::from_utf8(&body).expect("utf-8 message");
 
@@ -117,6 +118,7 @@ fn attachment_payload_decodes_to_valid_gzip_xml() {
 		"reporter.example",
 		now,
 		&attachment,
+		true,
 		true,
 	);
 	let text = std::str::from_utf8(&body).expect("utf-8");

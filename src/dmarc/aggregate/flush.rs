@@ -122,6 +122,7 @@ pub async fn flush_pending(sender: &Sender<'_>, today: &str) {
 					sender.now,
 					&gz,
 					sender.auto_submitted,
+					sender.auto_response_suppress,
 				);
 				let message = AcceptedMessage {
 					reverse_path: format!("postmaster@{reporting}"),

@@ -17,6 +17,7 @@ fn bounce_of(original: &[u8]) -> Option<AcceptedMessage> {
 		original,
 		now(),
 		true,
+		true,
 	)
 }
 
