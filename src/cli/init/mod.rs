@@ -92,6 +92,7 @@ pub fn run(args: Args) -> ExitCode {
 		meminfo: std::path::Path::new("/proc/meminfo"),
 		panel_manifest: std::path::Path::new(compose::panel_package::MANIFEST),
 		clock: &crate::clock::sync::probe,
+		boot: &|path, out| crate::cli::status::print_boot_summary_at(path, out),
 	};
 	run_with(args, &probes, &mut crate::cli::style::stderr())
 }
@@ -109,6 +110,8 @@ struct Probes<'a> {
 	panel_manifest: &'a std::path::Path,
 	/// Whether the host keeps its clock synchronised.
 	clock: &'a dyn Fn() -> crate::clock::sync::HostClock,
+	/// Prints whether the stack would come back after a reboot.
+	boot: &'a dyn Fn(&std::path::Path, &mut dyn Write),
 }
 
 /// [`run`] with the probes and the stream for the detection notices and
@@ -265,6 +268,7 @@ fn run_with(args: Args, probes: &Probes, out: &mut dyn Write) -> ExitCode {
 			report_ptr(&answers, probes, out);
 			offer_warmup(&answers.data_dir, out);
 			turned_on::render(&answers, out);
+			(probes.boot)(&answers.config_path, out);
 			let mut report = lines(|text| outcome.report.write_to(text).is_ok());
 			if answers.mode == answers::Mode::Automatic && answers.dns.is_some() {
 				let published = dns_step::publish(

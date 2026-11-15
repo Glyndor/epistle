@@ -41,6 +41,7 @@ fn dry_run(
 		meminfo: std::path::Path::new("/nonexistent/meminfo"),
 		panel_manifest: manifest,
 		clock: &|| crate::clock::sync::HostClock::Synced,
+		boot: &|_, _| {},
 	};
 	let mut out = Vec::new();
 	let code = run_with(args, &probes, &mut out);

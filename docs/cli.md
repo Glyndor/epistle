@@ -38,6 +38,7 @@ forward). Policy refusals exited `2` before they had their own code.
 | `app-password` | `list`, `create`, `rotate`, `rename`, `revoke` | `app-passwords`, `app-password-create`, `app-password-revoke` |
 | `api-key` | `list`, `create`, `set`, `revoke`, `rotate` | `api-keys`, `api-key-create`, `api-key-revoke` |
 | `suppression` | `list`, `show`, `add`, `remove`, `export`, `import` | `suppression`, `suppression --remove ADDR` |
+| `boot` | the stack would come back after a reboot: ten items, below | a restart policy, the network wait, a mount or an image of a disabled service is not right | linger, the user manager, the boot unit, its file list, Podman's socket, an image of an enabled service or the port floor is not right |
 | `warmup` | `status`, `plan`, `start`, `enable`, `disable`, `pause`, `resume`, `set`, `reset` | |
 | `domain` | `list`, `show`, `add`, `remove`, `set`, `disable`, `enable`, `alias add\|remove`, `import` | |
 | `db` | `upgrade`, `status` | |
@@ -341,6 +342,27 @@ after 5 s. `--config` defaults to `/etc/epistle/mail.toml`.
 | `subid` | the ranges `glyndor-epistle` holds in `/etc/subuid` and `/etc/subgid` overlap no other account's | `glyndor-epistle` has no range in a table | a range overlaps another account's; the finding names that account and the shared interval (see [Moving an overlapping range](#moving-an-overlapping-subordinate-id-range)) |
 | `warmup` | one finding per receiver group (cap, sent today, deferred and bounced share, verdict, next cap, waiting); also `off` when the warm-up is not running | a group's verdict is `very_bad`; the warm-up is off while the address looks new and 200 or more recipients went out today or are queued (see [warm-up](operations/warmup.md)); the warm-up files cannot be read | |
 | `deliverability` | every sender panel is enrolled (the list in `[deliverability] enrolled`) | one finding per panel the operator has not enrolled in: the panel, what it is and where it lives (see [sender panels](operations/providers.md)) | |
+
+The `boot` area reads, without starting or changing anything, what the next
+reboot depends on, as `glyndor-epistle`. Each item is `ok`, `warn` or `fail`
+and the message carries the command that fixes it:
+
+1. `linger`: `/var/lib/systemd/linger/glyndor-epistle` exists (`fail`; `sudo loginctl enable-linger glyndor-epistle`).
+2. `user manager`: `user@<uid>.service` is active and `/run/user/<uid>` exists (`fail`).
+3. `boot unit`: `podup-epistle.service` is installed, enabled and its last result is `success` (`fail`).
+4. `unit files`: the `-f` list inside the unit equals the files the stack runs from now (`fail`).
+5. `podman socket`: `podman.socket` is enabled and active (`fail`).
+6. `restart policy`: no enabled service has the policy `no` (`warn`).
+7. `network wait`: the unit orders itself after `podman-user-wait-network-online.service`, systemd loads it and `network-online.target` is active (`warn`).
+8. `port floor`: `net.ipv4.ip_unprivileged_port_start` is at or below the lowest port the listeners use, both now (`/proc/sys`) and in the configuration systemd applies at the next boot (`systemd-analyze cat-config sysctl.d` and `/etc/sysctl.conf`) (`fail`; a configuration that cannot be read is `warn`).
+9. `mounts`: `data_dir` and the container storage exist, and no `/etc/fstab` mount that covers them is missing from the mount table (`warn`).
+10. `images`: every image `compose.yaml` names is in the account's container storage, because the unit starts with `--pull never` (`fail` for an enabled service, `warn` for one with `profiles`; `sudo epistle stack update`, the command that pulls).
+
+Where there is no `compose.yaml` the area is `ok` with no items. The unit
+repairs say `sudo epistle stack start`, which starts the containers that exist
+without recreating them and installs the unit. `epistle init`, `stack up` and
+`stack update` print this summary at their end, and `status --json` carries it
+under `boot`.
 
 The `clock` area adds two read-only probes. The host probe asks the
 kernel via `adjtimex`, with `timedatectl show -p NTPSynchronized` when
@@ -1262,14 +1284,40 @@ sequence and its exit code becomes epistle's exit code.
 | `sudo epistle stack down` | Runs `podup autostart uninstall`, then `podup down`. Database volumes and bind-mounted data are kept. |
 | `sudo epistle stack ps [--json]` | Lists running services as a table or JSON. |
 | `sudo epistle stack logs [--follow] [SERVICE]` | Streams service logs. |
-| `sudo epistle stack restart [SERVICE]` | Restarts the stack or one service. |
+| `sudo epistle stack restart [SERVICE]` | Restarts the stack or one service, then checks the boot unit like `apply`. |
 | `sudo epistle stack apply` | Applies what commands run with `--no-restart` left waiting: `podup up -d` to recreate what changed, then one restart of `mail`. |
-| `sudo epistle stack stop [SERVICE]` / `sudo epistle stack start [SERVICE]` | Stop or start the whole stack, or one service, without removing containers or the autostart unit. `stack stop mail` is how to take the mail server down for `epistle restore` while the database stays up to receive the dump. |
+| `sudo epistle stack stop [SERVICE]` / `sudo epistle stack start [SERVICE]` | Stop or start the whole stack, or one service, without removing containers. `stop` leaves the autostart unit as it is. `start` starts the containers that exist and never recreates, builds or pulls, and then installs the boot unit if it is missing, disabled or out of date. `stack stop mail` is how to take the mail server down for `epistle restore` while the database stays up to receive the dump. |
 | `sudo epistle stack update` | Renders `compose.yaml` again with this release's code, shows what changed and replaces it, then runs `podup up -d` so only changed services are recreated. In default mode it also restarts `mail` when its definition did not change, so it runs the host binary the new .deb installed; in custom image mode it runs `podup pull` first. Before any of that it dumps the stack's database to `<data_dir>/backups/pre-<version>-<timestamp>.sql.gz` (mode 0600, the newest three `pre-*` dumps kept while the update runs), because the new server migrates the schema when it starts; a failed dump stops the update before anything changes. Afterwards it waits up to five minutes for `mail` to report healthy and runs the `config`, `ports` and `db` checks of `epistle status`; on a stack that runs the certificates container it also waits for `certs` to settle, judged the way `stack certs` judges it (two `podup ps` looks fifteen seconds apart, with the same start in both), and runs the `tls` check as well, since that is the check that reports the container; a failure names the area and exits non-zero, and the apt upgrade prints it framed with the rollback command. When all of that passes, it deletes the `pre-<version>-*` dumps it took (a dump `db upgrade` took stays) and the images the previous compose file named and the new one does not, such as an older ClamAV digest or the version-tagged epistle image of a stack created by an earlier release. An image is removed only when no container of the service account uses it, so one that is still in use, or that carries another name, stays and the update says so; a failed update keeps the dumps and the images. Data and volumes are kept. Before it writes the new file it moves the storage and OAuth signing keys out of data_dir (when the configuration is a symlink, the file it points to is the one that is updated and the link stays), and once `db` runs it takes SUPERUSER away from an `epistle` role an older release created (see [the container stack](operations/container.md#the-database-roles)). |
 | `sudo epistle stack resources [--json]` | Lists each service's `mem_limit` and `pids_limit` from `compose.yaml`, and their sum. Does not run `podup`. |
 | `sudo epistle stack resources set SERVICE [--memory SIZE] [--pids N] [--json]` | Changes the limit of `mail`, `db`, `clamav` or `freshclam` (`SIZE` is a whole number with `k`, `m` or `g`) in `compose.yaml`; `mail` is refused less than five messages of `max_message_size` and 256 MiB (381 MiB at the default 25 MiB), so the budget derived from its limit holds one message, where `init` records answered limits, so `stack update` keeps it. The running container keeps its old limit until `sudo epistle stack update` recreates it. `set` and `stack update` take the same lock on `compose.yaml` (`.compose.yaml.lock` beside it), so one waits for the other and neither loses the other's change. |
 | `sudo epistle stack certs enable\|disable [--yes]` | Asks before it changes anything (`--yes` skips the question). `enable` moves the ACME renewal, the TLSA refresh and the DNS credential into a `certs` container and recreates `mail` without the credential or the ACME account key; it refuses a configuration without `[acme] challenge = "dns-01"` and a `[dns]` provider, and it refuses a DNS credential it cannot read and an install with no ACME account key anywhere, before it touches the stack. The account key is copied to `secrets/acme_account.key` beside data_dir and the copy under `<data_dir>/acme` is removed only once `mail` and `certs` are up; a failure puts the previous `compose.yaml` back. No command creates an account key: a key that is nowhere is refused, because a new key is a new account with the authority. The compose file is rewritten under the lock beside it (`.compose.yaml.lock`), the same one `stack update`, `stack resources set` and `dns provider set` take, so one waits for the other and none loses the other's change. `disable` copies the key back and returns to one `mail` that renews. See [the split plan](operations/container-split.md). |
 | `sudo epistle stack rollback [--to VERSION] [--yes]` | Asks before it changes anything (`--yes` skips the question; without a terminal and without `--yes` it exits 2). Puts back the binary the last upgrade replaced (the preinst keeps the two newest under `/var/lib/epistle-rollback`, root:root mode 0700) and, when the new release already migrated the schema, restores the dump `stack update` took before the restart. A stack running the certificates container is first returned to one `mail` with `stack certs disable`, since an older binary may not know `serve --role`. See [Rolling back an upgrade](#rolling-back-an-upgrade). |
+
+### Boot unit: what starts the stack, and what each command does
+
+A reboot only starts the containers that exist. The user unit
+`podup-epistle.service` (installed by `podup autostart install`) runs
+`podup up -d --no-build --pull never`, so nothing is built, pulled or
+recreated at boot, and an image that is not in the account's container
+storage makes the start fail. A version change is `sudo epistle stack update`,
+the only command that pulls.
+
+| Command | Containers | Boot unit |
+|---|---|---|
+| `stack up` | Creates what is missing and recreates what changed in `compose.yaml`; containers that exist and match are only started | Always installs it |
+| `stack start` | Starts the existing containers, recreates nothing | Installs it, without starting it, when missing, disabled, not loaded or out of date |
+| `stack apply`, `stack update`, `stack restart`, `stack certs enable\|disable`, `db upgrade`, a service edit that recreates a container | As each documents | Same check as `start`, once the command has succeeded |
+| `stack stop`, `stack down` | Stop (`down` also removes) | `down` removes it; `stop` leaves it; neither checks it afterwards |
+
+The check reads the unit, compares the compose files it lists with the ones
+the stack runs from now (`compose.yaml` and `compose.override.yaml` when it
+exists), and installs the unit only when it differs, with `podup autostart
+install --no-start` followed by `systemctl --user enable`. It never starts the
+unit (the `enable --now` of a plain `autostart install` would run its `up -d`
+at once, which can recreate a container whose definition changed), and its
+only podup call is that install: it never runs `up`, `build`, `pull`,
+`restart` or `down`. A stack taken down with `stack down` has no unit until
+the next `stack up`.
 
 Keep container customizations in
 `<data_dir>/compose/compose.override.yaml`. Init preserves this file and its
@@ -1279,8 +1327,8 @@ Init regenerates the base file on reruns, and so does `stack update`: it
 takes the database choice, a custom mail image, the DNS token forwarding and
 the config path from the existing `compose.yaml`, and the published ports
 from the listeners in the config. Anything else edited in `compose.yaml` is
-replaced, so keep it in the override. Run stack up again after adding or
-removing an override so the autostart unit records the current file list.
+replaced, so keep it in the override. Add or remove an override and the next `stack start`, `apply`, `update` or
+`up` records the current file list in the autostart unit.
 
 The default compose file runs the host's `/usr/bin/epistle`
 (provided by the `.deb`, a statically linked musl binary) bind-mounted
@@ -1381,14 +1429,16 @@ Apt shows these lines at the end of the upgrade:
 | `/run/user/<uid> does not exist` or `the user manager of glyndor-epistle did not answer` | The manager had not started when the wait ended, so the socket was not enabled or the stack was not updated. | `sudo systemctl start user@$(id -u glyndor-epistle).service`, then `sudo epistle stack update` |
 | `could not enable the Podman API socket` | The manager answered but refused the unit. | `systemctl --user enable --now podman.socket` as `glyndor-epistle` |
 | `the stack did not come back healthy after this upgrade` | `epistle stack update` failed; the error above the frame says which check. | `sudo epistle stack update`, or `sudo epistle stack rollback` |
+| `podup-epistle.service exists but is not enabled` | The upgrade did not update the stack, and the stack does not start at boot. | `sudo epistle stack start`, then `sudo epistle stack update` |
 | `could not look up the uid of glyndor-epistle` | The account is missing or the name service did not answer. | `getent passwd glyndor-epistle`, then `sudo dpkg-reconfigure epistle` |
 
 To diagnose an upgrade that printed one of these, read the lines above it in
 the apt output, then `systemctl status user@$(id -u glyndor-epistle).service`
 and `journalctl -u user@$(id -u glyndor-epistle).service -b` for the manager,
-and `sudo epistle status` for the stack. `epistle init` checks the account,
-the ranges, linger and the port floor again and refuses to continue when one
-is still missing.
+and `sudo epistle status` for the stack. `epistle init` does not repeat those steps: it ends with the `boot`
+summary, which reports linger, the user manager, the unit and the port floor
+with the command that fixes each one, and it does not refuse to continue.
+The same report is `sudo epistle check boot`.
 
 ### Rolling back an upgrade
 
