@@ -171,3 +171,20 @@ fn a_settings_file_others_could_write_is_not_built_on() {
 	);
 	assert_eq!(run_args(dir.path(), 30, &["status"]).0, 1);
 }
+
+#[test]
+fn the_new_groups_are_accepted() {
+	for name in ["gmx", "mailru"] {
+		assert!(
+			matches!(parse(&["plan", "--group", name]), Ok(WarmupCli::Plan(_))),
+			"plan --group {name}"
+		);
+		assert!(parse(&["set", name, "--cap", "10"]).is_ok(), "set {name}");
+	}
+	let error = parse(&["plan", "--group", "rambler"]).expect_err("an unknown group");
+	assert!(
+		error.contains("unknown group \"rambler\"")
+			&& error.contains("gmail, outlook, yahoo, icloud, gmx, mailru or other"),
+		"{error}"
+	);
+}

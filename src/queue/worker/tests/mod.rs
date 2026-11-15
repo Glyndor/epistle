@@ -6,6 +6,8 @@ pub(super) mod classes;
 pub(super) mod delivery_log;
 pub(super) mod evidence;
 pub(super) mod fairness;
+pub(super) mod group_limits;
+pub(super) mod group_pause;
 pub(super) mod parallel;
 pub(super) mod recipient_kinds;
 pub(super) mod recipients;
