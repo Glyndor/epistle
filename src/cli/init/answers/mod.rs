@@ -110,6 +110,11 @@ pub struct Services {
 	/// (left out below 4 GiB) or keep what an existing stack runs.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub antivirus: Option<bool>,
+	/// How many times a day `freshclam` asks the signature servers for new
+	/// databases, 1 to 50 (the most ClamAV accepts from one client). Absent
+	/// keeps what an existing stack runs, or 12, the ClamAV default.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub freshclam_checks: Option<u8>,
 	/// The panel service. Absent runs the panel when the `epistle-panel`
 	/// package is installed and the management API is on; `false` keeps it out
 	/// of a stack that has the package; `true` demands it and makes `init`
@@ -149,6 +154,7 @@ impl Default for Services {
 			antivirus: None,
 			panel: None,
 			panel_image: None,
+			freshclam_checks: None,
 			imap: true,
 			submission: true,
 			pop3: false,
@@ -315,6 +321,7 @@ impl Answers {
 		 # api = false                      # labelled API keys only; no static token generated\n\
 		 database = false                  # bring up the stack's PostgreSQL (directory, bans, antispam); init must state this explicitly, no default\n\
 		 # antivirus = true                 # clamav and freshclam; left out, off below 4 GiB of memory\n\
+		 # freshclam_checks = 12            # signature checks per day, 1 to 50; left out, an existing stack keeps its number, a new one runs 12\n\
 		 # panel = false                    # the web panel; left out, it runs when the epistle-panel package is installed and api is true\n\n\
 		 # [first_account]                  # optional first mailbox; with password_file = \"-\" the password comes from stdin\n\
 		 # address = \"alice@example.org\"   # in one of the domains; the local part is the account name\n\

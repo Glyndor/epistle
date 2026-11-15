@@ -350,6 +350,20 @@ submission, an IMAP read, a 20 MB message and an EICAR scan.
 | `clamav` | root, then clamav | `CHOWN`, `FOWNER`, `SETGID`, `SETUID` | `/tmp` (512 MiB) | `2g` | 128 |
 | `freshclam` | 100 (clamav) | none | `/var/log/clamav` (16 MiB) | `1g` | 32 |
 
+`freshclam` runs in its own container with no socket in common with `clamd`,
+so it cannot tell it that the databases changed. It starts from a copy of the
+image's `freshclam.conf` without `NotifyClamd` (otherwise every update would log
+`Clamd was NOT notified`), and `clamd` notices a changed database by itself at
+its `SelfCheck`, 600 seconds in the generated `clamd.conf`. The updater asks the
+signature servers 12 times a day. To change that, put it in the answers file,
+1 to 50 (what ClamAV accepts from one client); `init` records it in
+`compose.yaml` under `x-epistle-freshclam-checks` and `stack update` keeps it:
+
+```toml
+[services]
+freshclam_checks = 24
+```
+
 `clamav` keeps its root entrypoint: it chowns and chmods the socket volume and
 clamd then steps down to the `clamav` user. Ports below 1024 reach `mail`
 through the `ip_unprivileged_port_start` sysctl of its own network namespace,

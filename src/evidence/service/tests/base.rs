@@ -426,3 +426,29 @@ fn a_lock_that_cannot_be_taken_is_an_error_not_a_server_nobody_believes() {
 		.expect_err("the lock could not be taken");
 	assert_ne!(error.kind(), std::io::ErrorKind::WouldBlock);
 }
+
+#[test]
+fn a_clean_stop_is_recorded_only_while_the_clock_is_believed() {
+	use crate::evidence::test_support::accepted;
+	let now = crate::storage::delivery_log::now_epoch();
+	let believed = tempfile::tempdir().expect("tempdir");
+	let service = EvidenceService::open(believed.path(), Vec::new(), MessageCrypto::disabled())
+		.expect("open");
+	service.record_clean_stop();
+	let recorded = crate::evidence::timeref::stop::read(service.root()).expect("recorded");
+	assert!(recorded.abs_diff(now) < 60, "{recorded} vs {now}");
+
+	// A log whose newest record is hours old: the clock is not believed at
+	// the start, so the stop explains nothing and is not written.
+	let doubted = tempfile::tempdir().expect("tempdir");
+	let root = root_of(doubted.path());
+	std::fs::create_dir_all(&root).expect("root");
+	Chain::open(&root)
+		.expect("chain")
+		.append_at(now - 3 * 3600, accepted(1))
+		.expect("an old record");
+	let service =
+		EvidenceService::open(doubted.path(), Vec::new(), MessageCrypto::disabled()).expect("open");
+	service.record_clean_stop();
+	assert_eq!(crate::evidence::timeref::stop::read(service.root()), None);
+}

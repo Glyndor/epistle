@@ -130,6 +130,10 @@ pub(crate) fn regenerate_in(
 				.get("x-epistle-antivirus")
 				.and_then(Value::as_bool)
 				.filter(|on| !on),
+			freshclam_checks: document
+				.get("x-epistle-freshclam-checks")
+				.and_then(Value::as_u64)
+				.and_then(|checks| u8::try_from(checks).ok()),
 			// The operator's choice survives the update; whether the panel runs
 			// is decided below from the package and the listeners.
 			panel: document.get("x-epistle-panel").and_then(Value::as_bool),
@@ -244,8 +248,7 @@ fn dns_forwarding(service: &Value, config_dir: &Path, data_dir: &Path) -> Option
 			let relabelled = volume.get("bind").is_some();
 			let read_only = volume["read_only"].as_bool() == Some(true);
 			(relabelled
-				&& read_only
-				&& volume["target"].as_str() == Some(source)
+				&& read_only && volume["target"].as_str() == Some(source)
 				&& Path::new(source) != config_dir
 				&& !shared.iter().any(|dir| dir == Path::new(source)))
 			.then(|| PathBuf::from(source))

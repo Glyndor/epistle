@@ -184,7 +184,18 @@ fn check_dns(
 
 pub(super) use super::paths::lexically_normalised;
 
-fn check_services(services: &Services, _errors: &mut Vec<Invalid>, warnings: &mut Vec<Warning>) {
+fn check_services(services: &Services, errors: &mut Vec<Invalid>, warnings: &mut Vec<Warning>) {
+	if let Some(checks) = services.freshclam_checks
+		&& !(1..=crate::cli::init::compose::MAX_FRESHCLAM_CHECKS).contains(&checks)
+	{
+		errors.push(Invalid::Resources {
+			field: "services.freshclam_checks".to_string(),
+			reason: format!(
+				"{checks} is outside 1 to {}, the checks per day ClamAV accepts from one client",
+				crate::cli::init::compose::MAX_FRESHCLAM_CHECKS
+			),
+		});
+	}
 	if !services.imap && !services.submission {
 		warnings.push(Warning {
 			field: "services".to_string(),

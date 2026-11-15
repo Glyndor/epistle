@@ -275,3 +275,28 @@ fn a_live_server_that_does_not_believe_the_clock_does_not_confirm_it_to_a_comman
 		"a command believed a clock the running server does not"
 	);
 }
+
+#[test]
+fn a_start_after_a_recorded_clean_stop_believes_a_clock_hours_past_the_newest_record() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let today = at(DAY + 3, 1);
+	{
+		let chain = Chain::open(dir.path()).expect("chain");
+		chain.append_at(today, accepted(1)).expect("first record");
+	}
+	let wall = today + 7 * 3600;
+	let judged = || {
+		Chain::open_at(dir.path(), wall)
+			.expect("chain")
+			.time()
+			.read_at(wall, std::time::Instant::now())
+	};
+	assert!(!judged().sound, "no stop was recorded");
+	crate::evidence::timeref::stop::record(dir.path(), today + 60).expect("record");
+	assert!(judged().sound, "the recorded stop explains the gap");
+	crate::evidence::timeref::stop::clear(dir.path());
+	assert!(
+		!judged().sound,
+		"a server that started since took the explanation away"
+	);
+}

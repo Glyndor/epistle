@@ -200,6 +200,7 @@ fn disabling_both_imap_and_submission_warns() {
 		antivirus: None,
 		panel: None,
 		panel_image: None,
+		freshclam_checks: None,
 		imap: false,
 		submission: false,
 		pop3: false,

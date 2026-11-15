@@ -206,6 +206,13 @@ fn keep_existing(answers: &mut Answers, compose: &Path) {
 		let off = document.get("x-epistle-antivirus") == Some(&serde_json::Value::Bool(false));
 		answers.services.antivirus = Some(!off);
 	}
+	// The checks per day an earlier `init` recorded stand likewise.
+	if answers.services.freshclam_checks.is_none() {
+		answers.services.freshclam_checks = document
+			.get("x-epistle-freshclam-checks")
+			.and_then(serde_json::Value::as_u64)
+			.and_then(|checks| u8::try_from(checks).ok());
+	}
 	// The panel choice an earlier `init` recorded stands until the answers say otherwise.
 	if answers.services.panel.is_none() {
 		answers.services.panel = document

@@ -42,6 +42,7 @@ fn plan_renders_kept_listeners_when_existing_config_has_them() {
 		antivirus: None,
 		panel: None,
 		panel_image: None,
+		freshclam_checks: None,
 		imap: true,
 		submission: true,
 		pop3: false,

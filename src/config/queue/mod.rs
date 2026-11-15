@@ -276,7 +276,7 @@ impl super::Config {
 	/// invariants; the warnings here flag values that still work but
 	/// deviate from the recommendation. `epistle limits set` and the
 	/// start-up banner print the same lines.
-	pub fn retry_schedule_warnings(&self) -> Vec<&'static str> {
+	pub fn retry_schedule_warnings(&self) -> Vec<String> {
 		use crate::queue::schedule::{
 			DEFAULT_BASE_SECS, DEFAULT_GIVE_UP_SECS, SHOULD_GIVE_UP_SECS, SHOULD_RETRY_BASE_SECS,
 		};
@@ -284,19 +284,26 @@ impl super::Config {
 			.queue_give_up_secs
 			.filter(|secs| *secs != 0)
 			.unwrap_or(DEFAULT_GIVE_UP_SECS);
-		let base = self.queue_retry_base_secs.unwrap_or(DEFAULT_BASE_SECS);
+		// Only a value the operator set counts: the default is a short
+		// first retry on purpose (a first temporary failure such as
+		// greylisting), so running on it is not a deviation to report.
+		let base = self
+			.queue_retry_base_secs
+			.filter(|secs| *secs != 0 && *secs != DEFAULT_BASE_SECS);
 		let mut warnings = Vec::new();
 		if give_up < SHOULD_GIVE_UP_SECS {
 			warnings.push(
 				"queue_give_up_secs is below the 4 days RFC 5321 §4.5.4.1 recommends; \
-				 recipients will bounce sooner than the standard expects",
+				 recipients will bounce sooner than the standard expects"
+					.to_owned(),
 			);
 		}
-		if base < SHOULD_RETRY_BASE_SECS {
-			warnings.push(
-				"queue_retry_base_secs is below the 30 minutes the RFC recommends; \
-				 the first retry is sooner than receivers expect",
-			);
+		if let Some(base) = base.filter(|base| *base < SHOULD_RETRY_BASE_SECS) {
+			warnings.push(format!(
+				"queue_retry_base_secs is {base} seconds, below the {SHOULD_RETRY_BASE_SECS} \
+				 seconds (30 minutes) the RFC recommends; the first retry is sooner than \
+				 receivers expect (the default is {DEFAULT_BASE_SECS} seconds)"
+			));
 		}
 		warnings
 	}

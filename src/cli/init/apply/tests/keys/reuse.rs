@@ -92,6 +92,7 @@ fn apply_does_not_regenerate_the_self_signed_cert_pair() {
 		antivirus: None,
 		panel: None,
 		panel_image: None,
+		freshclam_checks: None,
 		imap: false,
 		submission: true,
 		pop3: false,

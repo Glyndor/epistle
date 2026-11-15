@@ -44,6 +44,7 @@ fn a_healthy_status_is_ok_and_a_stale_one_warns() {
 		dir.path(),
 		&Status {
 			time: 1000,
+			clock_sound: true,
 			days: 3,
 			records: 40,
 			stamped: 3,
@@ -72,6 +73,7 @@ fn disabled_timestamps_warn() {
 		dir.path(),
 		&Status {
 			time: 1000,
+			clock_sound: true,
 			..Status::default()
 		},
 	);
@@ -100,6 +102,7 @@ fn a_verification_past_half_the_time_it_is_given_warns_before_the_gate_closes() 
 			dir.path(),
 			&Status {
 				time: 1000,
+				clock_sound: true,
 				days: 3,
 				records: 40,
 				audit_millis: millis,
@@ -122,4 +125,29 @@ fn a_verification_past_half_the_time_it_is_given_warns_before_the_gate_closes() 
 		item.detail
 	);
 	assert!(slow.detail.contains("in 300 s"), "{}", slow.detail);
+}
+
+#[test]
+fn a_clock_nobody_believes_says_that_sealing_and_deletion_are_paused() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let at = |clock_sound: bool| {
+		write(
+			dir.path(),
+			&Status {
+				time: 1000,
+				clock_sound,
+				..Status::default()
+			},
+		);
+		evaluate(dir.path(), 1100)
+	};
+	assert_eq!(at(true).status, Level::Ok);
+	let paused = at(false);
+	assert_eq!(paused.status, Level::Warn);
+	let item = paused
+		.items
+		.iter()
+		.find(|item| item.name == "sealing and deletion")
+		.expect("the pause is named");
+	assert!(item.detail.starts_with("paused:"), "{}", item.detail);
 }
