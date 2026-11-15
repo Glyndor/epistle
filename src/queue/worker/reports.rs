@@ -1,6 +1,7 @@
 //! What the worker does with the outcome of a recipient: suppression, the
 //! failure webhook, the failure report (DSN) and the delay warning.
 
+use super::Refusal;
 use super::Worker;
 use super::conversation::Conversation;
 use crate::queue::bounce::ReportRecipient;
@@ -272,14 +273,11 @@ impl Worker {
 					if verdict.class == FailureClass::PolicyRejected {
 						// Not the address: the remote does not want mail from
 						// us. The operator has to look at the sending side.
-						tracing::warn!(
-							%id,
-							remote,
-							%reason,
-							"remote refused mail on policy grounds: check the sending \
-							 reputation (IP and domain listings, SPF, DKIM, DMARC)"
-						);
-						self.metric(|m| m.outbound_policy_rejected());
+						let refusal = Refusal::of(reason, remote, &self.ehlo_hostname);
+						tracing::warn!(%id, remote, %reason, "{}", refusal.advice());
+						if refusal == Refusal::Reputation {
+							self.metric(|m| m.outbound_policy_rejected());
+						}
 					}
 					// Only a reply proving the address bad suppresses it; a
 					// policy refusal, a full or disabled mailbox, a message

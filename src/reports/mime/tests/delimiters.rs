@@ -4,9 +4,7 @@ fn report_body(payload: &str, ending: &str) -> Option<Vec<u8>> {
 	let raw = format!(
 		"Content-Type: multipart/mixed; boundary=b\r\n\r\n--b\r\nContent-Type: application/tlsrpt+json\r\n\r\n{payload}\r\n{ending}"
 	);
-	find_report_part(raw.as_bytes(), Kind::TlsRpt)
-		.ok()
-		.map(|part| part.bytes)
+	find_report_part(raw.as_bytes()).ok().map(|part| part.bytes)
 }
 
 #[test]
@@ -31,7 +29,7 @@ fn inline_boundary_text_preserves_json() {
 #[test]
 fn delimiter_transport_padding_is_accepted() {
 	let raw = b"Content-Type: multipart/mixed; boundary=b\r\n\r\n--b \t\r\nContent-Type: application/tlsrpt+json\r\n\r\n{}\r\n--b-- \t\r\n";
-	let found = find_report_part(raw, Kind::TlsRpt).ok();
+	let found = find_report_part(raw).ok();
 	assert!(
 		found.map(|part| part.bytes).as_deref() == Some(b"{}"),
 		"delimiter transport padding must preserve the complete report payload"

@@ -9,6 +9,7 @@ use crate::storage::{FsSpool, RecipientStatus, SpoolEntry};
 use super::client::DeliveryError;
 use super::resolver::Connector;
 use conversation::Conversation;
+use refusal::Refusal;
 
 mod attempt;
 mod blocking;
@@ -16,6 +17,7 @@ mod claims;
 mod conversation;
 mod evidence;
 mod provider;
+mod refusal;
 mod report_failures;
 mod reports;
 mod scheduler;

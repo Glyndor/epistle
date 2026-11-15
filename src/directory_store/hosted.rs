@@ -11,6 +11,8 @@ use super::AccountStore;
 pub struct HostedDomains {
 	/// The hosted domains.
 	pub domains: Vec<String>,
+	/// The server's own name, which need not be a hosted domain.
+	pub hostname: String,
 	/// Alias domain to hosted domain.
 	pub domain_aliases: HashMap<String, String>,
 	/// Hosted domains that are switched off.
@@ -28,6 +30,7 @@ impl HostedDomains {
 	pub fn of(config: &crate::config::Config) -> Self {
 		HostedDomains {
 			domains: config.domains.clone(),
+			hostname: config.hostname.clone(),
 			domain_aliases: config.domain_aliases.clone(),
 			disabled: config.disabled_domains.clone(),
 			send_off: config.receive_only_domains.clone(),

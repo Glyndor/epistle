@@ -41,7 +41,7 @@ fn finds_the_gzip_attachment() {
 			("application/gzip".into(), "base64".into(), b64(&gz)),
 		],
 	);
-	let found = find_report_part(&message, Kind::Dmarc).expect("found");
+	let found = find_report_part(&message).expect("found");
 	assert_eq!(found.bytes, gz);
 	assert_eq!(found.encoding, Encoding::Gzip);
 }
@@ -91,7 +91,7 @@ fn finds_the_zip_attachment_by_filename() {
 	// The filename here is `example.org.zip`, not `report.xml`, because
 	// the part's Content-Disposition overrides the in-zip name for our
 	// filename detector.
-	let found = find_report_part(&message, Kind::Dmarc).expect("found by filename");
+	let found = find_report_part(&message).expect("found by filename");
 	assert_eq!(found.encoding, Encoding::Zip);
 	assert_eq!(found.bytes, zip);
 }
@@ -110,7 +110,7 @@ fn finds_the_tlsrpt_part() {
 		"BOUND",
 		&[("application/tlsrpt+gzip".into(), "base64".into(), b64(&gz))],
 	);
-	let found = find_report_part(&message, Kind::TlsRpt).expect("found");
+	let found = find_report_part(&message).expect("found");
 	assert_eq!(found.bytes, gz);
 	assert_eq!(found.encoding, Encoding::Gzip);
 }
@@ -124,7 +124,7 @@ fn a_message_without_a_report_part_is_none() {
 			("text/html".into(), "7bit".into(), "<p>hi</p>".into()),
 		],
 	);
-	let err = find_report_part(&message, Kind::Dmarc).expect_err("no report part");
+	let err = find_report_part(&message).expect_err("no report part");
 	assert!(matches!(err, WalkError::NoReportPart), "{err:?}");
 }
 
@@ -148,7 +148,7 @@ fn finds_a_single_part_report() {
 	message.push_str("\r\n");
 	message.push_str(&b64(&gz));
 	let message = message.into_bytes();
-	let found = find_report_part(&message, Kind::Dmarc).expect("single-part found");
+	let found = find_report_part(&message).expect("single-part found");
 	assert_eq!(found.bytes, gz);
 }
 
@@ -181,7 +181,7 @@ fn nesting_past_the_bound_is_refused() {
 		out.into_bytes()
 	}
 	let message = build("A", "B", "C");
-	let err = find_report_part(&message, Kind::Dmarc).expect_err("too deep");
+	let err = find_report_part(&message).expect_err("too deep");
 	assert!(
 		matches!(err, WalkError::NoReportPart),
 		"too-deep nest stops at the bound and looks like no report, got {err:?}"
@@ -204,7 +204,7 @@ fn a_message_without_a_closing_boundary_is_refused() {
 	message.push_str("\r\n");
 	// No closing boundary "--BOUND--".
 	let message = message.into_bytes();
-	let err = find_report_part(&message, Kind::Dmarc).expect_err("missing closing");
+	let err = find_report_part(&message).expect_err("missing closing");
 	assert!(
 		matches!(err, WalkError::Malformed("missing closing boundary")),
 		"{err:?}"
@@ -228,7 +228,7 @@ fn base64_larger_than_max_compressed_is_refused() {
 	message.push_str("Content-Transfer-Encoding: base64\r\n\r\n");
 	message.push_str(&b64(&payload));
 	let message = message.into_bytes();
-	let err = find_report_part(&message, Kind::Dmarc).expect_err("base64 bomb");
+	let err = find_report_part(&message).expect_err("base64 bomb");
 	assert!(matches!(err, WalkError::TooLarge), "{err:?}");
 }
 
@@ -244,7 +244,7 @@ fn a_message_with_too_many_parts_is_refused() {
 	}
 	message.push_str("--BOUND--\r\n");
 	let message = message.into_bytes();
-	let err = find_report_part(&message, Kind::Dmarc).expect_err("too many parts");
+	let err = find_report_part(&message).expect_err("too many parts");
 	assert!(
 		matches!(err, WalkError::Malformed("too many parts")),
 		"{err:?}"
@@ -268,7 +268,7 @@ fn boundary_over_70_octets_is_refused_with_bounded_work() {
 	);
 	raw.extend(std::iter::repeat_n(b'-', body_len));
 	reset_scan_steps();
-	let err = find_report_part(&raw, Kind::Dmarc).expect_err("oversized boundary refused");
+	let err = find_report_part(&raw).expect_err("oversized boundary refused");
 	let steps = reset_scan_steps();
 	assert!(
 		matches!(err, WalkError::Malformed("boundary too long")),
@@ -339,10 +339,10 @@ fn doubling_the_crafted_input_at_most_doubles_the_step_count() {
 	let small = build_multipart_with_clean_body(&boundary, small_body);
 	let large = build_multipart_with_clean_body(&boundary, large_body);
 	reset_scan_steps();
-	let small_found = find_report_part(&small, Kind::Dmarc).expect("small parses");
+	let small_found = find_report_part(&small).expect("small parses");
 	let small_steps = reset_scan_steps();
 	reset_scan_steps();
-	let large_found = find_report_part(&large, Kind::Dmarc).expect("large parses");
+	let large_found = find_report_part(&large).expect("large parses");
 	let large_steps = reset_scan_steps();
 	// linear: count(2N) <= 2 * count(N) + slack
 	assert!(
@@ -431,7 +431,7 @@ fn delimiter_scan_stays_bounded_on_a_near_match_ending_in_a_different_byte() {
 	let body_len: usize = 1 << 20; // 1 MiB
 	let raw = build_multipart_with_near_match_body(&boundary, body_len);
 	reset_scan_steps();
-	let _ = find_report_part(&raw, Kind::Dmarc);
+	let _ = find_report_part(&raw);
 	let steps = reset_scan_steps();
 	// The find_subslice algorithm would record O(body_len * 72)
 	// compares for the boundary search, which is around 75 million

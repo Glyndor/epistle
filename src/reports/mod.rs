@@ -2,9 +2,11 @@
 //!
 //! The DMARC and TLS-RPT TXT records we publish point `rua=` at
 //! `postmaster@<domain>` and `tlsrpt@<domain>`. The deliverer copies each
-//! report to its named account and then hands the raw bytes to
-//! [`ingest`], which finds the part, decompresses it, parses it and
-//! appends one JSONL line per report under `data_dir/reports/`.
+//! message to its named account and then hands the raw bytes to
+//! [`ingest`], which finds the report part, decides from the part which
+//! kind it is, decompresses it, parses it and appends one JSONL line per
+//! report under `data_dir/reports/`. Both mailboxes receive both kinds,
+//! because senders do not always use the address the record names.
 //!
 //! Errors do not block delivery. The mail still lands in the mailbox; the
 //! operator can read the raw report there. The hook only logs and counts.
@@ -62,6 +64,14 @@ impl Parsed {
 		}
 	}
 
+	/// The kind of report this is.
+	fn kind(&self) -> Kind {
+		match self {
+			Parsed::Dmarc(_) => Kind::Dmarc,
+			Parsed::TlsRpt(_) => Kind::TlsRpt,
+		}
+	}
+
 	/// Sum of failing rows (DMARC) or failed sessions (TLS-RPT) the
 	/// metrics counter will add.
 	fn failing_count(&self) -> u64 {
@@ -72,28 +82,33 @@ impl Parsed {
 	}
 }
 
-/// Ingest one inbound report message. Failures are logged at `warn` with
-/// the reason and counted via `reports_dropped`; they do not affect
-/// delivery (the mail still reaches the named mailbox). `metrics` is
-/// optional: when `None`, the report is still parsed and persisted, only
-/// the counters are skipped (the operator's terminal still sees the log
-/// line).
-pub fn ingest(data_dir: &Path, kind: Kind, message: &AcceptedMessage, metrics: Option<&Metrics>) {
-	let parsed = if kind == Kind::TlsRpt && !message.tlsrpt_verified {
-		Err("TLS-RPT requires a verified reporting-domain DKIM signature without l=".into())
-	} else {
-		ingest_inner(kind, &message.data)
-	};
-	let report = match parsed {
-		Ok(report) => report,
-		Err(reason) => {
+/// Ingest one inbound message addressed to a report mailbox. What the
+/// message carries decides how it is read, not the mailbox it came to: a
+/// TLS-RPT part goes to the TLS-RPT reader and a DMARC one to the DMARC
+/// reader. A message with no report part is logged once at `info` as not a
+/// report, with its content types, and is not a failure. Failures are
+/// logged at `warn` with the reason and counted via `reports_dropped`; they
+/// do not affect delivery (the mail still reaches the named mailbox).
+/// `metrics` is optional: when `None`, the report is still parsed and
+/// persisted, only the counters are skipped (the operator's terminal still
+/// sees the log line).
+pub fn ingest(data_dir: &Path, message: &AcceptedMessage, metrics: Option<&Metrics>) {
+	let report = match read_report(&message.data, message.tlsrpt_verified) {
+		Ok(Some(report)) => report,
+		Ok(None) => {
+			let content_types = mime::content_types(&message.data).join(", ");
+			tracing::info!(%content_types, "message is not a report");
+			return;
+		}
+		Err(failure) => {
 			if let Some(metrics) = metrics {
 				metrics.reports_dropped();
 			}
-			tracing::warn!(kind = kind.dir_name(), %reason, "report ingestion failed");
+			tracing::warn!(kind = failure.kind, reason = %failure.reason, "report ingestion failed");
 			return;
 		}
 	};
+	let kind = report.kind();
 	if let Some(metrics) = metrics {
 		metrics.report_ingested(kind);
 		let failing = report.failing_count();
@@ -117,6 +132,14 @@ pub fn ingest(data_dir: &Path, kind: Kind, message: &AcceptedMessage, metrics: O
 	);
 }
 
+/// Why a message that carries a report could not be read as one.
+#[derive(Debug)]
+struct ReadFailure {
+	/// The kind the message declared, or `"unknown"` when it declared none.
+	kind: &'static str,
+	reason: String,
+}
+
 fn persist(data_dir: &Path, report: &Parsed) -> std::io::Result<()> {
 	let today = today_string();
 	match report {
@@ -133,18 +156,49 @@ fn today_string() -> String {
 	crate::dmarc::aggregate::unix_to_day(ts)
 }
 
-fn ingest_inner(kind: Kind, raw: &[u8]) -> Result<Parsed, String> {
-	let part = mime::find_report_part(raw, kind).map_err(|e| e.to_string())?;
-	let (encoding, bytes) = (part.encoding, part.bytes);
-	let inflated = decompress::inflate_attachment(&bytes, encoding).map_err(|e| e.to_string())?;
-	match kind {
+/// Read the report `raw` carries: `Ok(None)` when it carries none.
+/// `tlsrpt_verified` says the reporting domain signed the message, which a
+/// TLS-RPT report needs before it is believed.
+fn read_report(raw: &[u8], tlsrpt_verified: bool) -> Result<Option<Parsed>, ReadFailure> {
+	let part = match mime::find_report_part(raw) {
+		Ok(part) => part,
+		Err(mime::WalkError::NoReportPart) => return Ok(None),
+		Err(error) => {
+			return Err(ReadFailure {
+				kind: "unknown",
+				reason: error.to_string(),
+			});
+		}
+	};
+	let mut kind = part.kind;
+	let failure = |kind: Kind, reason: String| ReadFailure {
+		kind: kind.dir_name(),
+		reason,
+	};
+	let inflated = decompress::inflate_attachment(&part.bytes, part.encoding)
+		.map_err(|error| failure(kind, error.to_string()))?;
+	// A generic `application/gzip` or zip is read as DMARC by its type, but a
+	// sender may pack a TLS-RPT JSON document in one: the content settles it.
+	if kind == Kind::Dmarc
+		&& inflated.iter().find(|byte| !byte.is_ascii_whitespace()) == Some(&b'{')
+	{
+		kind = Kind::TlsRpt;
+	}
+	if kind == Kind::TlsRpt && !tlsrpt_verified {
+		return Err(failure(
+			kind,
+			"TLS-RPT requires a verified reporting-domain DKIM signature without l=".into(),
+		));
+	}
+	let parsed = match kind {
 		Kind::Dmarc => dmarc::parse(&inflated)
 			.map(Parsed::Dmarc)
-			.map_err(|e| e.to_string()),
+			.map_err(|error| failure(kind, error.to_string())),
 		Kind::TlsRpt => tlsrpt::parse(&inflated)
 			.map(Parsed::TlsRpt)
-			.map_err(|e| e.to_string()),
-	}
+			.map_err(|error| failure(kind, error.to_string())),
+	};
+	parsed.map(Some)
 }
 
 /// Days of history `prune` keeps. The same shape as `[storage]

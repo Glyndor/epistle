@@ -28,9 +28,8 @@ pub fn signer_frame(data: &[u8]) {
 pub fn mime(raw: &[u8]) {
 	std::hint::black_box(crate::imap::fetch::render_for_fuzzing(raw));
 	std::hint::black_box(crate::api::jmap::email_body_for_fuzzing(raw));
-	for kind in [crate::reports::Kind::Dmarc, crate::reports::Kind::TlsRpt] {
-		let _ = crate::reports::mime::find_report_part(raw, kind);
-	}
+	let _ = crate::reports::mime::find_report_part(raw);
+	std::hint::black_box(crate::reports::mime::content_types(raw));
 	std::hint::black_box(crate::dmarc::author::author(raw));
 	std::hint::black_box(crate::dmarc::from_domain(raw));
 	std::hint::black_box(crate::dkim::canon::body(

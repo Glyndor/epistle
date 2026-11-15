@@ -52,16 +52,7 @@ impl ApiState {
 			.map(|(name, _, _)| name)
 			.collect();
 		let stats = crate::api::jmap::backfill_blob_ownership(&data_dir, &account_names);
-		if stats.written > 0 || stats.conflicts > 0 || stats.errors > 0 {
-			tracing::info!(
-				scanned = stats.scanned,
-				written = stats.written,
-				skipped = stats.skipped,
-				conflicts = stats.conflicts,
-				errors = stats.errors,
-				"jmap blob-ownership backfill complete"
-			);
-		}
+		stats.log();
 		ApiState {
 			inner: Arc::new(Inner {
 				token_hash: token_hash.map(str::to_owned),

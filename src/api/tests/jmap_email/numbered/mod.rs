@@ -1,5 +1,6 @@
 pub use super::*;
 
+pub(in crate::api::tests) mod backfill_errors;
 pub(in crate::api::tests) mod jmap_b;
 pub(in crate::api::tests) mod jmap_c;
 pub(in crate::api::tests) mod jmap_d;

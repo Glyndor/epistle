@@ -25,7 +25,7 @@ fn truncated_zip_mime_is_counted_as_dropped() {
 	};
 	let dir = tempfile::tempdir().expect("tempdir");
 	let metrics = Metrics::new();
-	ingest(dir.path(), Kind::Dmarc, &message, Some(&metrics));
+	ingest(dir.path(), &message, Some(&metrics));
 	assert_eq!(metrics.snapshot().get("reports_dropped"), Some(&1));
 	assert!(!dir.path().join("reports").exists());
 }
@@ -33,7 +33,7 @@ fn truncated_zip_mime_is_counted_as_dropped() {
 #[test]
 fn uncompressed_tls_json_content_type_reaches_parser() {
 	let raw = format!("Content-Type: application/tlsrpt+json\r\n\r\n{EMPTY_TLS}");
-	let Parsed::TlsRpt(report) = ingest_inner(Kind::TlsRpt, raw.as_bytes()).expect("plain JSON")
+	let Some(Parsed::TlsRpt(report)) = read_report(raw.as_bytes(), true).expect("plain JSON")
 	else {
 		panic!("wrong report kind");
 	};
@@ -45,8 +45,8 @@ fn uncompressed_tls_json_filename_reaches_parser() {
 	let raw = format!(
 		"Content-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=report.json\r\n\r\n{EMPTY_TLS}"
 	);
-	let Parsed::TlsRpt(report) =
-		ingest_inner(Kind::TlsRpt, raw.as_bytes()).expect("plain JSON filename")
+	let Some(Parsed::TlsRpt(report)) =
+		read_report(raw.as_bytes(), true).expect("plain JSON filename")
 	else {
 		panic!("wrong report kind");
 	};

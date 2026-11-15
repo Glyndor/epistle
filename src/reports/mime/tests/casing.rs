@@ -1,9 +1,7 @@
 use super::*;
 
 fn decoded(raw: &str) -> Option<Vec<u8>> {
-	find_report_part(raw.as_bytes(), Kind::TlsRpt)
-		.ok()
-		.map(|part| part.bytes)
+	find_report_part(raw.as_bytes()).ok().map(|part| part.bytes)
 }
 
 #[test]
