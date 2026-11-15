@@ -34,7 +34,10 @@ fn canonical(mailbox: &str) -> String {
 /// Subscribe to a mailbox (the mailbox must already exist).
 pub fn subscribe(data_dir: &Path, account: &str, mailbox: &str) -> std::io::Result<()> {
 	if !super::mailbox::exists(data_dir, account, mailbox) {
-		return Err(std::io::Error::other("no such mailbox"));
+		return Err(std::io::Error::new(
+			std::io::ErrorKind::NotFound,
+			"no such mailbox",
+		));
 	}
 	let normalized = canonical(mailbox);
 	let mut subs = list_subscribed(data_dir, account);

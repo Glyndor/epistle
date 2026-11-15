@@ -38,12 +38,12 @@ impl Session {
 			return Output::text(format!("{tag} BAD no mailbox selected\r\n"));
 		};
 		if remove_source && *read_only {
-			return Output::text(format!("{tag} NO mailbox is read-only\r\n"));
+			return Output::text(format!("{tag} NO [CANNOT] mailbox is read-only\r\n"));
 		}
 		let account = account.clone();
 		let source_mailbox = source_mailbox.clone();
 		if !mailbox::exists(&data_dir, &account, target) {
-			return Output::text(format!("{tag} NO [TRYCREATE] no such mailbox\r\n"));
+			return Output::text(format!("{tag} NO [NONEXISTENT] no such mailbox\r\n"));
 		}
 		// Resolve the SEARCHRES `$` placeholder against this snapshot. The
 		// saved set is always keyed by UID; mapping through the snapshot
@@ -83,11 +83,13 @@ impl Session {
 		let mut dest_ids = Vec::new();
 		for sequence_number in &matched {
 			let Some(message) = snapshot.by_sequence(*sequence_number) else {
-				return Output::text(format!("{tag} NO message vanished\r\n"));
+				return Output::text(format!("{tag} NO [UNAVAILABLE] message vanished\r\n"));
 			};
 			let data = match snapshot.read(message) {
 				Ok(data) => data,
-				Err(_) => return Output::text(format!("{tag} NO message unavailable\r\n")),
+				Err(_) => {
+					return Output::text(format!("{tag} NO [SERVERBUG] message unavailable\r\n"));
+				}
 			};
 			// RFC 9051 §6.4.7: the copy keeps the source's INTERNALDATE.
 			let date = InternalDate {
@@ -105,7 +107,7 @@ impl Session {
 			);
 			match copied {
 				Ok(id) => dest_ids.push(id),
-				Err(_) => return Output::text(format!("{tag} NO copy failed\r\n")),
+				Err(_) => return Output::text(format!("{tag} NO [SERVERBUG] copy failed\r\n")),
 			}
 		}
 
@@ -125,7 +127,7 @@ impl Session {
 			for (offset, sequence_number) in matched.iter().enumerate() {
 				let current = sequence_number - u32::try_from(offset).unwrap_or(0);
 				if snapshot.remove_at(current).is_err() {
-					return Output::text(format!("{tag} NO move failed\r\n"));
+					return Output::text(format!("{tag} NO [SERVERBUG] move failed\r\n"));
 				}
 				if !uidonly {
 					response.push_str(&format!("* {current} EXPUNGE\r\n"));

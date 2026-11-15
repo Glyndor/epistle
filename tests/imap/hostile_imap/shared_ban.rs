@@ -131,7 +131,7 @@ impl Listeners {
 		.await;
 		match line(&mut client).await.expect("LOGIN reply").as_deref() {
 			Some("L OK LOGIN completed\r\n") => true,
-			Some("L NO LOGIN failed\r\n") => false,
+			Some("L NO [AUTHENTICATIONFAILED] LOGIN failed\r\n") => false,
 			other => panic!("unexpected LOGIN reply {other:?}"),
 		}
 	}

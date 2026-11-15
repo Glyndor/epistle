@@ -270,7 +270,7 @@ impl Server {
 			let Ok(line) = String::from_utf8(line) else {
 				response_writer::write_response(
 					&mut *stream,
-					b"* BAD non-ASCII command\r\n",
+					b"* BAD [CLIENTBUG] non-ASCII command\r\n",
 					&clock,
 					session.is_authenticated(),
 				)

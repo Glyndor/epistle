@@ -43,13 +43,13 @@ async fn a_traversal_in_the_mailbox_name_writes_and_reads_nothing_outside_the_ac
 				&format!("M SETMETADATA \"{name}\" (/private/a \"planted\")")
 			)
 			.await,
-			["M NO no such mailbox\r\n"],
+			["M NO [NONEXISTENT] no such mailbox\r\n"],
 			"{name:?}"
 		);
 		// The canary has an entry of the same name: a read that escaped would return it.
 		assert_eq!(
 			ask(&mut client, &format!("M GETMETADATA \"{name}\" /private/a")).await,
-			["M NO no such mailbox\r\n"],
+			["M NO [NONEXISTENT] no such mailbox\r\n"],
 			"{name:?}"
 		);
 		assert_eq!(tree(server.data.path()), before, "{name:?}");
@@ -70,7 +70,7 @@ async fn an_entry_name_that_is_not_well_formed_stores_nothing() {
 	for bad in ["private/a", "/", "/a//b", "/a/", "/a*", "/a%", "/a/*/b"] {
 		assert_eq!(
 			ask(&mut client, &format!("M SETMETADATA INBOX ({bad} \"v\")")).await,
-			["M BAD invalid entry name\r\n"],
+			["M BAD [CLIENTBUG] invalid entry name\r\n"],
 			"{bad:?}"
 		);
 		// One good entry before the bad one must not be written either.
@@ -80,7 +80,7 @@ async fn an_entry_name_that_is_not_well_formed_stores_nothing() {
 				&format!("M SETMETADATA INBOX (/private/early \"v\" {bad} \"w\")")
 			)
 			.await,
-			["M BAD invalid entry name\r\n"],
+			["M BAD [CLIENTBUG] invalid entry name\r\n"],
 			"{bad:?}"
 		);
 		assert_eq!(tree(server.data.path()), before, "{bad:?}");
@@ -116,7 +116,7 @@ async fn malformed_argument_lists_are_bad_and_leave_the_session_usable() {
 	] {
 		assert_eq!(
 			ask(&mut client, bad).await,
-			["M BAD invalid arguments\r\n"],
+			["M BAD [CLIENTBUG] invalid arguments\r\n"],
 			"{bad:?}"
 		);
 	}

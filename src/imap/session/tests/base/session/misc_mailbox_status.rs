@@ -61,7 +61,11 @@ fn status_requires_authentication_and_existing_mailbox() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let mut session = Session::new("mail.example.org", dir.path().to_path_buf(), directory());
 	let output = session.command_line("a1 STATUS INBOX (MESSAGES)");
-	assert!(text(&output).contains("a1 NO"), "{}", text(&output));
+	assert!(
+		text(&output).contains("a1 BAD not authenticated"),
+		"{}",
+		text(&output)
+	);
 
 	let mut session = logged_in(dir.path());
 	let output = session.command_line("a2 STATUS Missing (MESSAGES)");

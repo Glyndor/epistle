@@ -16,14 +16,14 @@ impl Session {
 		}
 		let tag = tagged.tag;
 		if self.imap4rev2 && super::helpers::recent_command(&tagged.command) {
-			return Output::text(format!("{tag} BAD invalid arguments\r\n"));
+			return Output::text(format!("{tag} BAD [CLIENTBUG] invalid arguments\r\n"));
 		}
 		// UIDONLY (RFC 9586): refuse commands that use message sequence numbers.
 		if self.uidonly
 			&& let Some(verb) = super::helpers::sequence_command(&tagged.command)
 		{
 			return Output::text(format!(
-				"{tag} BAD [UIDREQUIRED] {verb} requires UID under UIDONLY\r\n"
+				"{tag} BAD [CLIENTBUG] [UIDREQUIRED] {verb} requires UID under UIDONLY\r\n"
 			));
 		}
 		// SEARCHRES (RFC 5182): `$` outside a matching SEARCHRES-saved set is
@@ -33,7 +33,9 @@ impl Session {
 			&& set.saved
 			&& !self.saved_search_ok(uid_kind)
 		{
-			return Output::text(format!("{tag} NO [SEARCHRES] $ invalid for {verb}\r\n"));
+			return Output::text(format!(
+				"{tag} NO [CLIENTBUG] [SEARCHRES] $ invalid for {verb}\r\n"
+			));
 		}
 		match tagged.command {
 			Command::Capability => Output::text(format!(
@@ -50,7 +52,9 @@ impl Session {
 			}
 			Command::Compress { algorithm } => {
 				if algorithm != "DEFLATE" {
-					return Output::text(format!("{tag} BAD unsupported COMPRESS algorithm\r\n"));
+					return Output::text(format!(
+						"{tag} BAD [CANNOT] unsupported COMPRESS algorithm\r\n"
+					));
 				}
 				if self.compressing {
 					// RFC 4978 §3: a second COMPRESS is NO, not BAD. The
@@ -71,7 +75,7 @@ impl Session {
 			// must refuse the command without leaking the namespace layout.
 			Command::Namespace => {
 				if self.account().is_none() {
-					return Output::text(format!("{tag} NO not authenticated\r\n"));
+					return Output::text(format!("{tag} BAD not authenticated\r\n"));
 				}
 				Output::text(format!(
 					"* NAMESPACE ((\"\" \"/\")) NIL NIL\r\n{tag} OK NAMESPACE completed\r\n"
@@ -115,7 +119,7 @@ impl Session {
 			},
 			Command::Idle => {
 				if self.account().is_none() {
-					return Output::text(format!("{tag} NO not authenticated\r\n"));
+					return Output::text(format!("{tag} BAD not authenticated\r\n"));
 				}
 				let mut output = Output::text("+ idling\r\n".to_string());
 				output.idle = true;

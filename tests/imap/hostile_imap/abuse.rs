@@ -26,7 +26,9 @@ async fn pipelined_5000_bad_commands_close_at_twentieth_error() {
 		match line(&mut client).await {
 			Ok(None) => break,
 			Err(e) if is_close(&e) => break,
-			Ok(Some(reply)) if count < 19 => assert_eq!(reply, "A BAD unknown command\r\n"),
+			Ok(Some(reply)) if count < 19 => {
+				assert_eq!(reply, "A BAD [CLIENTBUG] unknown command\r\n")
+			}
 			Ok(Some(reply)) => {
 				assert_eq!(reply, "* BYE too many errors\r\n");
 				closed(&mut client).await;
@@ -146,7 +148,7 @@ async fn repeated_rejected_literal_plus_cannot_extend_preauth_deadline() {
 	let server = Harness::start(|s| s.with_preauth_timeout(SHORT)).await;
 	let mut client = server.connect().await;
 	send(&mut client, b"A APPEND INBOX {1+}\r\nx").await;
-	expect(&mut client, "A NO not authenticated\r\n").await;
+	expect(&mut client, "A BAD not authenticated\r\n").await;
 	drip_until_close(client, b"", b" {1+}\r\nx").await;
 	server.healthy().await;
 }
@@ -156,7 +158,7 @@ async fn authenticated_rejected_literal_chain_must_have_total_deadline() {
 	let server = Harness::start(|s| s.with_read_timeout(SHORT)).await;
 	let mut client = server.authenticated().await;
 	send(&mut client, b"A APPEND Missing {1+}\r\nx").await;
-	expect(&mut client, "A NO [TRYCREATE] no such mailbox\r\n").await;
+	expect(&mut client, "A NO [NONEXISTENT] no such mailbox\r\n").await;
 	drip_until_close(client, b"", b" {1+}\r\nx").await;
 	server.healthy().await;
 }

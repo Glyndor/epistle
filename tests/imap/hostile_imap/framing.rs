@@ -84,7 +84,7 @@ async fn repeated_rejected_literal_plus_payloads_never_become_commands() {
 	}
 	bomb.extend_from_slice(b"\r\nN NOOP\r\n");
 	send(&mut client, &bomb).await;
-	expect(&mut client, "A1 NO [TRYCREATE] no such mailbox\r\n").await;
+	expect(&mut client, "A1 NO [NONEXISTENT] no such mailbox\r\n").await;
 	expect(&mut client, "N OK NOOP completed\r\n").await;
 	assert!(!epistle::imap::mailbox::exists(
 		server.data.path(),
@@ -101,7 +101,7 @@ async fn oversized_literal_plus_in_rejected_tail_closes() {
 	let server = Harness::start(|s| s).await;
 	let mut client = server.connect().await;
 	send(&mut client, b"A1 APPEND INBOX {1+}\r\nx {4294967295+}\r\n").await;
-	expect(&mut client, "A1 NO not authenticated\r\n").await;
+	expect(&mut client, "A1 BAD not authenticated\r\n").await;
 	expect(&mut client, "* BYE literal too large\r\n").await;
 	closed(&mut client).await;
 	server.healthy().await;
@@ -114,7 +114,7 @@ async fn tag_control_bytes_are_bad_and_never_echoed() {
 		let mut client = server.connect().await;
 		let command = [b'A', byte, b' ', b'N', b'O', b'O', b'P', b'\r', b'\n'];
 		send(&mut client, &command).await;
-		expect(&mut client, "* BAD malformed command\r\n").await;
+		expect(&mut client, "* BAD [CLIENTBUG] malformed command\r\n").await;
 		noop(&mut client).await;
 		logout(&mut client).await;
 		server.healthy().await;
@@ -130,8 +130,8 @@ async fn crlf_inside_quoted_astring_rejects_both_fragments() {
 		b"A1 CREATE \"broken\r\nstill-quoted\"\r\nN NOOP\r\n",
 	)
 	.await;
-	expect(&mut client, "A1 BAD invalid arguments\r\n").await;
-	expect(&mut client, "* BAD malformed command\r\n").await;
+	expect(&mut client, "A1 BAD [CLIENTBUG] invalid arguments\r\n").await;
+	expect(&mut client, "* BAD [CLIENTBUG] malformed command\r\n").await;
 	expect(&mut client, "N OK NOOP completed\r\n").await;
 	assert!(!epistle::imap::mailbox::exists(
 		server.data.path(),
@@ -161,7 +161,7 @@ async fn every_invalid_high_octet_is_bad_without_losing_framing() {
 		let mut client = server.connect().await;
 		let command = [b'A', b'1', b' ', byte, b'\r', b'\n'];
 		send(&mut client, &command).await;
-		expect(&mut client, "* BAD non-ASCII command\r\n").await;
+		expect(&mut client, "* BAD [CLIENTBUG] non-ASCII command\r\n").await;
 		noop(&mut client).await;
 		logout(&mut client).await;
 		server.healthy().await;

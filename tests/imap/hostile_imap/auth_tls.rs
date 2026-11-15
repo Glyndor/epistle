@@ -43,15 +43,15 @@ async fn select_fetch_and_append_before_login_never_expose_or_store_mail() {
 
 async fn preauth_commands<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin>(client: &mut S) {
 	for (command, reply) in [
-		("A1 SELECT INBOX\r\n", "A1 NO not authenticated\r\n"),
+		("A1 SELECT INBOX\r\n", "A1 BAD not authenticated\r\n"),
 		(
 			"A2 FETCH 1:* (BODY[])\r\n",
 			"A2 BAD no mailbox selected\r\n",
 		),
-		("A3 APPEND INBOX {4}\r\n", "A3 NO not authenticated\r\n"),
+		("A3 APPEND INBOX {4}\r\n", "A3 BAD not authenticated\r\n"),
 		(
 			"A4 APPEND INBOX {4+}\r\nEVIL\r\n",
-			"A4 NO not authenticated\r\n",
+			"A4 BAD not authenticated\r\n",
 		),
 	] {
 		send(client, command.as_bytes()).await;
@@ -79,7 +79,7 @@ async fn logindisabled_refuses_valid_cleartext_credentials() {
 	.await;
 	expect(&mut client, "A1 NO [PRIVACYREQUIRED] STARTTLS first\r\n").await;
 	send(&mut client, b"A2 SELECT INBOX\r\n").await;
-	expect(&mut client, "A2 NO not authenticated\r\n").await;
+	expect(&mut client, "A2 BAD not authenticated\r\n").await;
 	logout(&mut client).await;
 	let mut control = server.authenticated().await;
 	logout(&mut control).await;
@@ -99,7 +99,11 @@ async fn third_failed_login_gets_bye_no_and_close() {
 		if attempt == 3 {
 			expect(&mut client, "* BYE too many failures\r\n").await;
 		}
-		expect(&mut client, &format!("A{attempt} NO LOGIN failed\r\n")).await;
+		expect(
+			&mut client,
+			&format!("A{attempt} NO [AUTHENTICATIONFAILED] LOGIN failed\r\n"),
+		)
+		.await;
 	}
 	closed(&mut client).await;
 	let mut control = server.authenticated().await;
@@ -140,7 +144,7 @@ async fn starttls_does_not_execute_pipelined_plaintext_commands() {
 	match server.try_upgrade(client).await {
 		Ok(mut client) => {
 			send(&mut client, b"V SELECT INBOX\r\n").await;
-			expect(&mut client, "V NO not authenticated\r\n").await;
+			expect(&mut client, "V BAD not authenticated\r\n").await;
 			send(
 				&mut client,
 				format!("L LOGIN tester {PASSWORD}\r\n").as_bytes(),

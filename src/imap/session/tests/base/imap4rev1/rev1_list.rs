@@ -79,7 +79,7 @@ fn rev1_list_explicit_return_attributes_are_honored() {
 		);
 		assert_eq!(
 			text(&session.command_line(r#"l LIST "" "Sent" RETURN (BOGUS)"#)),
-			"l BAD invalid arguments\r\n"
+			"l BAD [CLIENTBUG] invalid arguments\r\n"
 		);
 	}
 }

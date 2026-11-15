@@ -141,10 +141,13 @@ pub fn create(data_dir: &Path, account: &str, mailbox: &str) -> std::io::Result<
 	let account = AccountName::new(account)?;
 	let mailbox = mailbox_path::canonical(mailbox.strip_suffix('/').unwrap_or(mailbox));
 	let dir = MailboxName::folder(&mailbox)
-		.map_err(|_| std::io::Error::other("invalid mailbox name"))?
+		.map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid mailbox name"))?
 		.messages_dir(&account, data_dir)?;
 	if dir.is_dir() {
-		return Err(std::io::Error::other("mailbox already exists"));
+		return Err(std::io::Error::new(
+			std::io::ErrorKind::AlreadyExists,
+			"mailbox already exists",
+		));
 	}
 	let mut changes = hierarchy::create_superiors(data_dir, &account, &mailbox)?;
 	hierarchy::make_mailbox(data_dir, &account, &dir)?;
@@ -162,12 +165,21 @@ pub fn delete(data_dir: &Path, account: &str, mailbox: &str) -> std::io::Result<
 	let dir = MailboxName::folder(&mailbox)
 		.ok()
 		.and_then(|folder| folder.folder_dir(&account_name, data_dir).ok().flatten())
-		.ok_or_else(|| std::io::Error::other("cannot delete this mailbox"))?;
+		.ok_or_else(|| {
+			std::io::Error::new(
+				std::io::ErrorKind::InvalidInput,
+				"cannot delete this mailbox",
+			)
+		})?;
 	if !dir.is_dir() {
-		return Err(std::io::Error::other("no such mailbox"));
+		return Err(std::io::Error::new(
+			std::io::ErrorKind::NotFound,
+			"no such mailbox",
+		));
 	}
 	if hierarchy::has_children(data_dir, account, &mailbox) {
-		return Err(std::io::Error::other(
+		return Err(std::io::Error::new(
+			std::io::ErrorKind::InvalidInput,
 			"[HASCHILDREN] delete the mailboxes under it first",
 		));
 	}

@@ -61,7 +61,7 @@ impl Session {
 		qresync: Option<(u32, u64)>,
 	) -> Output {
 		let Some(account) = self.account().map(str::to_string) else {
-			return Output::text(format!("{tag} NO not authenticated\r\n"));
+			return Output::text(format!("{tag} BAD not authenticated\r\n"));
 		};
 		if !mailbox::exists(&self.data_dir, &account, mailbox) {
 			// RFC 9051 §6.3.2: a failed SELECT deselects. The NO response
@@ -70,7 +70,7 @@ impl Session {
 			let closed = deselect_for_failed_select(&mut self.state);
 			self.saved_search = None;
 			return Output::text(format!(
-				"{tag} NO {}no such mailbox\r\n",
+				"{tag} NO [NONEXISTENT] {}no such mailbox\r\n",
 				if closed { "[CLOSED] " } else { "" }
 			));
 		}
@@ -83,7 +83,7 @@ impl Session {
 				let closed = deselect_for_failed_select(&mut self.state);
 				self.saved_search = None;
 				return Output::text(format!(
-					"{tag} NO {}cannot open mailbox\r\n",
+					"{tag} NO [SERVERBUG] {}cannot open mailbox\r\n",
 					if closed { "[CLOSED] " } else { "" }
 				));
 			}

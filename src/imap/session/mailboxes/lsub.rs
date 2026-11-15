@@ -1,6 +1,6 @@
 //! IMAP SUBSCRIBE / UNSUBSCRIBE / LSUB (RFC 9051 §6.3.6).
 
-use super::super::{Output, Session, mailbox};
+use super::super::{Output, Session, mailbox, mailbox_failure_code, tagged_no};
 use crate::imap::list_tree::{self, Hidden};
 
 impl Session {
@@ -11,7 +11,7 @@ impl Session {
 		pattern: &str,
 	) -> Output {
 		let Some(account) = self.account().map(str::to_string) else {
-			return Output::text(format!("{tag} NO not authenticated\r\n"));
+			return Output::text(format!("{tag} BAD not authenticated\r\n"));
 		};
 		let mut response = String::new();
 		let subscriptions = mailbox::list_subscribed(&self.data_dir, &account);
@@ -40,11 +40,11 @@ impl Session {
 		operation: impl FnOnce(&std::path::Path, &str) -> std::io::Result<()>,
 	) -> Output {
 		let Some(account) = self.account().map(str::to_string) else {
-			return Output::text(format!("{tag} NO not authenticated\r\n"));
+			return Output::text(format!("{tag} BAD not authenticated\r\n"));
 		};
 		match operation(&self.data_dir, &account) {
 			Ok(()) => Output::text(format!("{tag} OK completed\r\n")),
-			Err(error) => Output::text(format!("{tag} NO {error}\r\n")),
+			Err(error) => tagged_no(tag, mailbox_failure_code(&error), &error.to_string()),
 		}
 	}
 }
