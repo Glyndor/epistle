@@ -172,6 +172,7 @@ fn two_api_key_handles_lose_no_writes() {
 			scopes: vec![Scope::Read.as_str().to_string()],
 			domains: Vec::new(),
 			account: None,
+			auto_submitted: false,
 		})
 		.expect("cli add reader");
 	});
@@ -186,6 +187,7 @@ fn two_api_key_handles_lose_no_writes() {
 			scopes: vec![Scope::Write.as_str().to_string()],
 			domains: Vec::new(),
 			account: None,
+			auto_submitted: false,
 		})
 		.expect("server add writer");
 

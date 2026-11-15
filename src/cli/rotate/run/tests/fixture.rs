@@ -65,6 +65,7 @@ pub(super) fn server() -> Server {
 			scopes: vec!["read".to_string()],
 			domains: Vec::new(),
 			account: None,
+			auto_submitted: false,
 		})
 		.unwrap();
 		key_hashes.push(hash);

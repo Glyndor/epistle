@@ -118,6 +118,7 @@ pub(super) fn apply(
 			scopes: SCOPES.iter().map(|scope| (*scope).to_string()).collect(),
 			domains: Vec::new(),
 			account: None,
+			auto_submitted: false,
 		}),
 		KeyAction::Rotate => store.rotate(LABEL, hash),
 		KeyAction::Renew => store.renew(LABEL, hash, expires_at),

@@ -152,6 +152,7 @@ async fn jmap_email_changes_for_a_foreign_account_is_account_not_found() {
 		scopes: vec!["read".into(), "write".into()],
 		domains: Vec::new(),
 		account: Some("alice".into()),
+		auto_submitted: false,
 	})
 	.expect("add");
 	keys.add(ApiKey {
@@ -162,6 +163,7 @@ async fn jmap_email_changes_for_a_foreign_account_is_account_not_found() {
 		scopes: vec!["read".into(), "write".into()],
 		domains: Vec::new(),
 		account: Some("bob".into()),
+		auto_submitted: false,
 	})
 	.expect("add");
 	drop(keys);

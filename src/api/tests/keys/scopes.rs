@@ -23,6 +23,7 @@ async fn read_scoped_key_is_admitted_on_get() {
 			scopes: vec!["read".to_string()],
 			domains: Vec::new(),
 			account: None,
+			auto_submitted: false,
 		})
 		.expect("add key");
 	drop(key_store);
@@ -48,6 +49,7 @@ async fn read_scoped_key_is_rejected_on_send() {
 			scopes: vec!["read".to_string()],
 			domains: Vec::new(),
 			account: None,
+			auto_submitted: false,
 		})
 		.expect("add key");
 	drop(key_store);
@@ -82,6 +84,7 @@ async fn queue_removal_requires_the_write_scope() {
 			scopes: vec!["read".to_string()],
 			domains: Vec::new(),
 			account: None,
+			auto_submitted: false,
 		})
 		.expect("add key");
 	drop(key_store);
@@ -120,6 +123,7 @@ async fn send_scoped_key_is_rejected_on_write() {
 			scopes: vec!["send".to_string()],
 			domains: Vec::new(),
 			account: None,
+			auto_submitted: false,
 		})
 		.expect("add key");
 	drop(key_store);
@@ -159,6 +163,7 @@ async fn send_scoped_key_is_admitted_on_send() {
 			scopes: vec!["send".to_string()],
 			domains: Vec::new(),
 			account: None,
+			auto_submitted: false,
 		})
 		.expect("add key");
 	drop(key_store);
@@ -195,6 +200,7 @@ async fn a_key_without_the_scope_does_not_spend_the_failure_budget() {
 			scopes: vec!["read".to_string()],
 			domains: Vec::new(),
 			account: None,
+			auto_submitted: false,
 		})
 		.expect("add key");
 	drop(key_store);

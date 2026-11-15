@@ -69,6 +69,7 @@ pub(in super::super) fn ann_only(dir: &std::path::Path, scopes: &[&str]) -> (Rou
 		scopes: scopes.iter().map(|scope| scope.to_string()).collect(),
 		domains: Vec::new(),
 		account: Some("ann".to_string()),
+		auto_submitted: false,
 	})
 	.expect("add key");
 	drop(keys);

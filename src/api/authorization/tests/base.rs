@@ -9,6 +9,7 @@ fn key(domains: &[&str], account: Option<&str>) -> ApiKey {
 		scopes: vec!["read".into()],
 		domains: domains.iter().map(|d| (*d).to_string()).collect(),
 		account: account.map(str::to_string),
+		auto_submitted: false,
 	}
 }
 

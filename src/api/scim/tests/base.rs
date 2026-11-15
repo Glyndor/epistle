@@ -54,6 +54,7 @@ pub(in super::super) fn build_state() -> (tempfile::TempDir, ApiState) {
 		scopes: vec![Scope::Scim.as_str().to_string()],
 		domains: Vec::new(),
 		account: None,
+		auto_submitted: false,
 	})
 	.expect("add scim key");
 	keys.add(ApiKey {
@@ -64,6 +65,7 @@ pub(in super::super) fn build_state() -> (tempfile::TempDir, ApiState) {
 		scopes: vec![Scope::Read.as_str().to_string()],
 		domains: Vec::new(),
 		account: None,
+		auto_submitted: false,
 	})
 	.expect("add read key");
 	drop(keys);

@@ -112,6 +112,7 @@ async fn an_account_bound_key_only_sees_its_own_records() {
 				.collect(),
 			domains: Vec::new(),
 			account: Some("alice".into()),
+			auto_submitted: false,
 		})
 		.expect("add key");
 	let app = router(state_with_log(dir.path()));

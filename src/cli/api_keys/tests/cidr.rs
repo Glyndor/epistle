@@ -33,6 +33,7 @@ fn key(label: &str, cidr: Option<&str>) -> NewKey {
 		domains: Vec::new(),
 		account: None,
 		class: None,
+		auto_submitted: false,
 	}
 }
 

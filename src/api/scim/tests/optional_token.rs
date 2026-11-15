@@ -17,6 +17,7 @@ async fn scim_routes_accept_a_labelled_key_without_a_static_token() {
 		ip_cidr: None,
 		domains: Vec::new(),
 		account: None,
+		auto_submitted: false,
 	})
 	.unwrap();
 	let store = std::sync::Arc::new(

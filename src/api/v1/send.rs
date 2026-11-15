@@ -172,6 +172,7 @@ pub async fn send(
 			date: &date,
 			message_id: &message_id,
 		},
+		principal.auto_submitted(),
 		state.max_message_size(),
 	)?;
 

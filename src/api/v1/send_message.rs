@@ -20,6 +20,7 @@ pub(super) struct Envelope<'a> {
 pub(super) fn build(
 	request: &SendRequest,
 	envelope: &Envelope<'_>,
+	auto_submitted: bool,
 	max_message_size: usize,
 ) -> Result<Vec<u8>, ApiError> {
 	let mut headers = vec![format!("From: {}\r\n", envelope.from)];
@@ -44,7 +45,7 @@ pub(super) fn build(
 	headers.push(line(compose::unstructured("Subject", &request.subject))?);
 	headers.push(format!("Date: {}\r\n", envelope.date));
 	headers.push(format!("Message-ID: {}\r\n", envelope.message_id));
-	headers.extend(request.extra_headers()?);
+	headers.extend(request.extra_headers(auto_submitted)?);
 
 	if request.attachments.len() + request.inline.len() > MAX_PARTS {
 		return Err(ApiError::invalid_input("Too many attachments."));

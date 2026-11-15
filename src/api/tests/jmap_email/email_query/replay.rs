@@ -138,6 +138,7 @@ async fn q56_foreign_existing_account_returns_account_not_found() {
 		scopes: vec!["read".into()],
 		domains: Vec::new(),
 		account: Some("alice".into()),
+		auto_submitted: false,
 	})
 	.expect("account-bound key");
 	drop(keys);

@@ -36,6 +36,7 @@ fn two_tenant_state(dir: &std::path::Path) -> (Router, String) {
 			scopes: vec!["read".to_string(), "write".to_string(), "send".to_string()],
 			domains: vec!["a.example".to_string()],
 			account: None,
+			auto_submitted: false,
 		})
 		.expect("add key");
 	drop(key_store);
@@ -91,6 +92,7 @@ fn single_account_key_state(dir: &std::path::Path) -> (Router, String) {
 			scopes: vec!["read".to_string(), "write".to_string()],
 			domains: Vec::new(),
 			account: Some("ann".to_string()),
+			auto_submitted: false,
 		})
 		.expect("add key");
 	drop(key_store);

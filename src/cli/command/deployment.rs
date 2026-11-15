@@ -91,7 +91,7 @@ macro_rules! deployment_commands {
 				/// Print the result as one JSON object on stdout.
 				#[arg(long, global = true)]
 				json: bool,
-				/// API key action (`list`, `create`, `revoke`, `rotate`).
+				/// API key action (`list`, `create`, `set`, `revoke`, `rotate`).
 				#[command(subcommand)]
 				action: api_keys::ApiKeyCli,
 			},

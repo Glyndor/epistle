@@ -24,6 +24,7 @@ fn state_with_carol(dir: &std::path::Path) -> ApiState {
 			scopes: vec!["read".into(), "write".into(), "send".into()],
 			domains: Vec::new(),
 			account: Some("carol".to_string()),
+			auto_submitted: false,
 		})
 		.expect("add key");
 	drop(key_store);

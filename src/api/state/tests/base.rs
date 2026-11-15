@@ -42,6 +42,7 @@ fn key(label: &str, secret: &str) -> ApiKey {
 		scopes: vec![Scope::Read.as_str().to_string()],
 		domains: Vec::new(),
 		account: None,
+		auto_submitted: false,
 	}
 }
 

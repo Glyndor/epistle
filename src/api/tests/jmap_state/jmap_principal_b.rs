@@ -69,6 +69,7 @@ pub(in super::super) fn key(
 		scopes: vec!["read".to_string(), "write".to_string(), "send".to_string()],
 		domains: domains.iter().map(|d| (*d).to_string()).collect(),
 		account: account.map(str::to_string),
+		auto_submitted: false,
 	}
 }
 

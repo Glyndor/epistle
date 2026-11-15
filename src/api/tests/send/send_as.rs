@@ -35,6 +35,7 @@ fn app(dir: &std::path::Path) -> Router {
 			scopes: ["read", "write", "send"].map(str::to_string).to_vec(),
 			domains: Vec::new(),
 			account: Some(account.to_string()),
+			auto_submitted: false,
 		})
 		.expect("add key");
 	}

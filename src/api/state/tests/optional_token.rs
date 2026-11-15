@@ -54,6 +54,7 @@ async fn every_scope_key_is_not_the_static_identity() {
 		scopes: ["read", "write", "send", "scim"]
 			.map(str::to_owned)
 			.to_vec(),
+		auto_submitted: false,
 	})
 	.unwrap();
 	state = state.with_api_keys(std::sync::Arc::new(

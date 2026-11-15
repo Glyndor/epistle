@@ -77,6 +77,7 @@ fn key(
 		scopes: scopes.iter().map(|scope| (*scope).to_string()).collect(),
 		domains: domains.iter().map(|domain| (*domain).to_string()).collect(),
 		account: None,
+		auto_submitted: false,
 	}
 }
 

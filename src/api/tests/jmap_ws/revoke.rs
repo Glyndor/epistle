@@ -34,6 +34,7 @@ pub(super) fn ws_state(
 				scopes: vec!["read".to_string(), "write".to_string()],
 				domains: Vec::new(),
 				account: Some(account.to_string()),
+				auto_submitted: false,
 			})
 			.expect("add key");
 	}

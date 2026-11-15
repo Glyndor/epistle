@@ -96,6 +96,7 @@ fn foreign(label: &str, scopes: &[&str], domains: &[&str], account: Option<&str>
 		scopes: scopes.iter().map(|s| (*s).to_string()).collect(),
 		domains: domains.iter().map(|s| (*s).to_string()).collect(),
 		account: account.map(str::to_string),
+		auto_submitted: false,
 	}
 }
 
