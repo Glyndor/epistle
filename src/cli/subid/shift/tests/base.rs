@@ -50,8 +50,8 @@ fn mine() -> Shift {
 
 fn recorded(root: &Path, shift: Shift) -> Vec<(PathBuf, Option<u32>, Option<u32>)> {
 	let mut seen = Vec::new();
-	walk(root, shift, &mut |path, _, uid, gid| {
-		seen.push((path.to_path_buf(), uid, gid));
+	walk(root, shift, &mut |visit, uid, gid| {
+		seen.push((visit.path.to_path_buf(), uid, gid));
 		Ok(())
 	})
 	.unwrap();
