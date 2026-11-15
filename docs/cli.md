@@ -976,8 +976,10 @@ already in that state, and the JSON result carries `domain` and `enabled`.
 
 `set` writes the per-domain default storage quota (`domain_quotas`) and the
 per-domain submission rate in messages per minute
-(`domain_submission_limits`), the same overrides `limits set quota --domain`
-and `limits set submission-rate --domain` write and `limits show` lists. Name
+(`domain_submission_limits`). It commits both limits and the role together
+in `<data_dir>/domains.toml`, also used by the management API; the configuration
+file stays read-only and the file watcher applies the change. `limits show`
+reads these effective overrides. Name
 at least one of `--quota`, `--no-quota`, `--submission-rate`,
 `--no-submission-rate`, `--send-only`, `--receive-only` or `--full`; a flag left
 out keeps its value, and `--no-…` removes the override. `--send-only`,

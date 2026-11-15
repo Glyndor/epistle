@@ -23,7 +23,7 @@ guide is the prose around it. How the headers of the mail come out is in
 | `/healthz` | Liveness | Nothing |
 
 Not in the API, because they exist only in the CLI: DKIM keys, TLS, evidence,
-warm-up, limits, domains (listing excepted), aliases, relays, backups.
+warm-up, global limits, address aliases and lists, relays, backups.
 
 The other protocols the server speaks (SMTP, IMAP, POP3, ManageSieve) and the
 WebDAV, CardDAV and CalDAV listener are not described here. The mail client
@@ -531,6 +531,13 @@ curl -s -X DELETE -H "Authorization: Bearer $KEY" "$API/api/v1/accounts/ana?queu
 | `GET /api/v1/status` | `version`, `domains`, `accounts` and `queue_size` (left out for a confined key) |
 | `GET /api/v1/domains` | The hosted domains in the key's reach, which are `disabled`, and under `details` the rows `epistle domain list --json` prints |
 | `GET /api/v1/domains/{domain}` | What `epistle domain show <domain> --json` prints. A domain outside a confined key's reach is `404` like an unknown one |
+| `POST /api/v1/domains` | Host a new domain; unconfined `write` key only; answers `201` |
+| `DELETE /api/v1/domains/{domain}` | Stop hosting an unused domain; `write`, confined to the path domain |
+| `PUT /api/v1/domains/{domain}` | Set `role`, `quota` (bytes), `submission_rate` (recipients/minute) atomically; `write`; `quota` and `submission_rate` need an unconfined key (`403` for a confined one) |
+| `POST /api/v1/domains/{domain}/enable` | Enable, keeping the stored role; `write` |
+| `POST /api/v1/domains/{domain}/disable` | Disable, keeping the stored role; `write`; refuses the last enabled domain with listeners |
+| `POST /api/v1/domains/{domain}/aliases` | Add `{"alias":"example.net"}` targeting the path domain; `write`; answers `201` |
+| `DELETE /api/v1/domains/{domain}/aliases/{alias}` | Remove an alias currently pointing to the path domain; `write` |
 | `GET`, `POST /api/v1/accounts` | List (not paged), create. A duplicate name or address is `400 invalid_input` |
 | `DELETE /api/v1/accounts/{name}` | Removes the account and its data. Only accounts made through the API; one declared in the configuration file is `404 no such dynamic account` |
 | `PUT /api/v1/accounts/{name}/password` | New password |
@@ -544,6 +551,60 @@ curl -s -X DELETE -H "Authorization: Bearer $KEY" "$API/api/v1/accounts/ana?queu
 
 Reading and writing the `Created`, `Removed` and other bodies is in the
 OpenAPI document, which also has every response code per route.
+
+### Changing hosted domains
+
+Domain writes share the commit and refusal rules of `epistle domain`. They
+write `<data_dir>/domains.toml` under its cross-process lock, with an atomic
+owner-only rename. Adding a domain also makes its SRS secret and, when DKIM
+is configured, a key under `<data_dir>/keys/dkim/`. The API container needs
+write access to data_dir; `/etc/epistle` can remain read-only. The running
+server applies changes through its file watcher, asynchronously. A successful
+write does not mean every listener has already observed it.
+
+`POST /api/v1/domains` takes `{"domain":"example.net","role":"full"}`;
+`role` defaults to `full`, and also accepts `send-only` or `receive-only`.
+`shared_dkim_key: true` opts into the configured shared DKIM key. The default
+makes a key of its own, like the CLI. Secrets are never returned.
+
+All mutations need `write`. A new hosted domain requires an unconfined key,
+even when its name appears in a confined key's allowed domains. Other domain
+writes require the path domain in the key's reach. Alias writes additionally
+require the alias name in that reach: a tenant cannot claim or remove another
+tenant's name. A foreign domain or alias answers `404 no such domain`, before
+looking up whether it exists. An unconfined key gets the CLI's precise
+unknown-domain or unknown-alias message.
+
+Names are validated on the server with the CLI's ASCII DNS-name rules,
+trimmed and lowercased. Unicode names must be supplied as ASCII A-labels.
+A trailing dot, empty label, control character or path component is refused.
+Unknown fields and mistyped JSON fields are rejected by the HTTP extractor.
+
+`PUT /api/v1/domains/example.net` takes any subset of `role`, `quota` and
+`submission_rate`. Omitted fields stay unchanged. A null quota or rate clears
+the domain override (the server default then applies); quota 0 is explicitly
+unlimited, and rate must be 1 through 4294967295. Quota is an integer byte
+count, at most 9223372036854775807. CLI unit strings such as `1G` are not JSON
+numbers. Role null also leaves it unchanged. Role and limits commit together,
+so an invalid limit cannot leave a changed role behind. Limits are the
+operator's: a key confined to some domains may change the `role` of its
+domains but any request naming `quota` or `submission_rate`, even a null that
+clears one, is `403 forbidden`; an empty body is `400 invalid_input`.
+
+Every successful mutation returns `{"changed":true,"domain":"example.net",
+"reload":"watcher"}` (the target domain for alias routes). A no-op returns
+`changed: false` and `reload: "none"`, succeeds with `200`, and does not create
+or replace the state file. Already-hosted domains and existing aliases are
+CLI refusals, `409 conflict`, rather than no-ops. Domain-in-use and
+last-enabled-domain refusals are also `409`, preserving the CLI message;
+malformed names or invalid limits are `400 invalid_input`, unknown names
+are `404 not_found`, and storage failures are `500 internal`.
+
+Each durable change emits one structured event on `epistle::api::audit`:
+`domain.added`, `domain.removed`, `domain.enabled`, `domain.disabled`,
+`domain.updated`, `domain.alias_added` or `domain.alias_removed`, with `domain`
+(the alias name for alias events) and `client_ip`. Refusals and no-ops emit no
+change event. Bearer tokens, private keys and SRS secrets are never logged.
 
 ## Webhooks
 

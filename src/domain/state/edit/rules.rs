@@ -40,6 +40,12 @@ pub fn apply(current: &Config, file: &mut DomainsFile, change: &Change) -> Resul
 			}
 			Ok(())
 		}
+		Change::Set {
+			name,
+			role,
+			quota,
+			submission_rate,
+		} => super::limits::apply(current, file, name, *role, *quota, *submission_rate),
 		Change::SetEnabled { name, enabled } => {
 			let hosted = hosted(file, name)?;
 			if !enabled {
@@ -56,6 +62,7 @@ pub fn apply(current: &Config, file: &mut DomainsFile, change: &Change) -> Resul
 			Ok(())
 		}
 		Change::AliasRemove { alias } => {
+			canonical("domain alias", alias)?;
 			let Some((key, _)) = file.alias(alias) else {
 				return Err(EditError::NotFound(format!(
 					"domain alias {alias} is not declared"
@@ -80,6 +87,7 @@ pub fn canonical(field: &str, raw: &str) -> Result<String, EditError> {
 
 /// The stored name of the hosted domain `name`.
 fn hosted(file: &DomainsFile, name: &str) -> Result<String, EditError> {
+	canonical("domain", name)?;
 	file.domain(name)
 		.map(|domain| domain.name.clone())
 		.ok_or_else(|| EditError::NotFound(format!("domain {name} is not configured")))

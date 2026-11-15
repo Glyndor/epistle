@@ -58,7 +58,7 @@ tags:
   - name: Accounts
     description: Accounts, passwords, two-factor, mailboxes, masked addresses and the archive.
   - name: Domains
-    description: The hosted domains, as `epistle domain list` and `epistle domain show` print them.
+    description: Hosted-domain reads and atomic writes shared with `epistle domain`.
   - name: Queue
     description: The outbound queue, the suppression list and the delivery log.
   - name: Send
@@ -197,6 +197,52 @@ paths:
           $ref: "#/components/responses/AccountBoundKey"
         "429":
           $ref: "#/components/responses/AuthRateLimited"
+    post:
+      operationId: addDomain
+      tags: [Domains]
+      summary: Host a new domain
+      description: |-
+        Requires an unconfined write key. Names use the CLI ASCII DNS-name rules;
+        leading/trailing whitespace is trimmed and ASCII case is folded.
+        Creates the same DKIM key and SRS secret as epistle domain add, exclusively
+        under data_dir. No configuration file is written. Duplicate names are 409.
+        The response never exposes key material or the SRS secret.
+      x-epistle-scope: [write]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddDomain"
+      responses:
+        "201":
+          description: The durable result; a changed state is applied by the file watcher.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DomainChanged"
+        "400":
+          $ref: "#/components/responses/InvalidInput"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/AccountBoundKey"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Already present, in use, or the last enabled domain; the CLI refusal message is preserved.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "422":
+          $ref: "#/components/responses/UnprocessableBody"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
   /api/v1/domains/{domain}:
     get:
       operationId: getDomain
@@ -226,6 +272,257 @@ paths:
           $ref: "#/components/responses/NotFound"
         "429":
           $ref: "#/components/responses/AuthRateLimited"
+    put:
+      operationId: setDomain
+      tags: [Domains]
+      summary: Set a hosted domain role and limits atomically
+      description: |-
+        Needs write scope and the domain in the key's reach. A foreign domain is
+        404 no such domain. Omitted fields stay unchanged; null quota or
+        submission_rate removes the domain override, falling back to server defaults.
+        quota is bytes (0 means unlimited); submission_rate is recipients per minute.
+        Naming quota or submission_rate, even as null, needs an unconfined key: a
+        key confined to some domains gets 403, since limits belong to the operator;
+        it may still change the role. An empty body object is 400. Values already in
+        effect succeed with changed false and do not write a state file. The
+        configuration file is never written.
+      x-epistle-scope: [write]
+      parameters:
+        - $ref: "#/components/parameters/DomainName"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetDomain"
+      responses:
+        "200":
+          description: The durable result; a changed state is applied by the file watcher.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DomainChanged"
+        "400":
+          $ref: "#/components/responses/InvalidInput"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/AccountBoundKey"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Already present, in use, or the last enabled domain; the CLI refusal message is preserved.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "422":
+          $ref: "#/components/responses/UnprocessableBody"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
+    delete:
+      operationId: removeDomain
+      tags: [Domains]
+      summary: Stop hosting an unused domain
+      description: |-
+        Needs write scope and the domain in the key's reach. A foreign domain is
+        404 no such domain. Refused while accounts, aliases or configuration entries
+        still use it, with the same blockers as epistle domain remove.
+      x-epistle-scope: [write]
+      parameters:
+        - $ref: "#/components/parameters/DomainName"
+      responses:
+        "200":
+          description: The durable result; a changed state is applied by the file watcher.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DomainChanged"
+        "400":
+          $ref: "#/components/responses/InvalidInput"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/AccountBoundKey"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Already present, in use, or the last enabled domain; the CLI refusal message is preserved.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
+  /api/v1/domains/{domain}/enable:
+    post:
+      operationId: enableDomain
+      tags: [Domains]
+      summary: Enable a hosted domain
+      description: |-
+        Needs write scope and the domain in the key's reach; foreign domains answer
+        404 no such domain. Preserves its stored role. Disabling the last enabled
+        domain of a server with listeners is 409. Repeating the current switch
+        succeeds with changed false and writes nothing.
+      x-epistle-scope: [write]
+      parameters:
+        - $ref: "#/components/parameters/DomainName"
+      responses:
+        "200":
+          description: The durable result; a changed state is applied by the file watcher.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DomainChanged"
+        "400":
+          $ref: "#/components/responses/InvalidInput"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/AccountBoundKey"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Already present, in use, or the last enabled domain; the CLI refusal message is preserved.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
+  /api/v1/domains/{domain}/disable:
+    post:
+      operationId: disableDomain
+      tags: [Domains]
+      summary: Disable a hosted domain
+      description: |-
+        Needs write scope and the domain in the key's reach; foreign domains answer
+        404 no such domain. Preserves its stored role. Disabling the last enabled
+        domain of a server with listeners is 409. Repeating the current switch
+        succeeds with changed false and writes nothing.
+      x-epistle-scope: [write]
+      parameters:
+        - $ref: "#/components/parameters/DomainName"
+      responses:
+        "200":
+          description: The durable result; a changed state is applied by the file watcher.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DomainChanged"
+        "400":
+          $ref: "#/components/responses/InvalidInput"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/AccountBoundKey"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Already present, in use, or the last enabled domain; the CLI refusal message is preserved.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
+  /api/v1/domains/{domain}/aliases:
+    post:
+      operationId: addDomainAlias
+      tags: [Domains]
+      summary: Declare a domain alias
+      description: |-
+        Needs write scope. A confined key must admit both the target domain and
+        the alias name; otherwise 404 no such domain. The target must be hosted.
+        Both names use CLI DNS-name validation. A taken alias or hosted-name
+        collision is 409, with the CLI refusal message.
+      x-epistle-scope: [write]
+      parameters:
+        - $ref: "#/components/parameters/DomainName"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddDomainAlias"
+      responses:
+        "201":
+          description: The durable result; a changed state is applied by the file watcher.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DomainChanged"
+        "400":
+          $ref: "#/components/responses/InvalidInput"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/AccountBoundKey"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Already present, in use, or the last enabled domain; the CLI refusal message is preserved.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "422":
+          $ref: "#/components/responses/UnprocessableBody"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
+  /api/v1/domains/{domain}/aliases/{alias}:
+    delete:
+      operationId: removeDomainAlias
+      tags: [Domains]
+      summary: Drop an alias of a hosted domain
+      description: |-
+        Needs write scope. A confined key must admit both the target domain and
+        the alias name; otherwise 404 no such domain. The alias must currently
+        point to the path domain, checked under the state lock; another domain's
+        alias or an absent alias is 404. Both names use CLI DNS-name validation.
+      x-epistle-scope: [write]
+      parameters:
+        - $ref: "#/components/parameters/DomainName"
+        - $ref: "#/components/parameters/DomainAliasName"
+      responses:
+        "200":
+          description: The durable result; a changed state is applied by the file watcher.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DomainChanged"
+        "400":
+          $ref: "#/components/responses/InvalidInput"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/AccountBoundKey"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Already present, in use, or the last enabled domain; the CLI refusal message is preserved.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
   /api/v1/accounts:
     get:
       operationId: listAccounts
@@ -2214,6 +2511,13 @@ components:
         considered. The static token holds every scope and reaches every
         domain.
   parameters:
+    DomainAliasName:
+      name: alias
+      in: path
+      required: true
+      description: An alias domain using the CLI ASCII DNS-name rules, percent-encoded; ASCII case is ignored.
+      schema:
+        type: string
     DomainName:
       name: domain
       in: path
@@ -2406,6 +2710,60 @@ components:
           schema:
             $ref: "#/components/schemas/OAuthErrorBody"
   schemas:
+    DomainChanged:
+      type: object
+      required: [changed, domain, reload]
+      properties:
+        changed:
+          type: boolean
+        domain:
+          type: string
+          description: Canonical hosted domain; for alias routes this is the target.
+        reload:
+          type: string
+          enum: [watcher, none]
+          description: The watcher applies a durable change asynchronously; none for a no-op.
+    AddDomain:
+      type: object
+      additionalProperties: false
+      required: [domain]
+      properties:
+        domain:
+          type: string
+          description: ASCII DNS name; Unicode names must use an A-label, as in the CLI.
+        role:
+          type: string
+          enum: [full, send-only, receive-only]
+          default: full
+        shared_dkim_key:
+          type: boolean
+          default: false
+    SetDomain:
+      type: object
+      additionalProperties: false
+      properties:
+        role:
+          type: [string, "null"]
+          enum: [full, send-only, receive-only, null]
+          description: Omitted or null leaves the role unchanged.
+        quota:
+          type: [integer, "null"]
+          minimum: 0
+          maximum: 9223372036854775807
+          description: Bytes; 0 means unlimited, null clears the domain override, omitted keeps it.
+        submission_rate:
+          type: [integer, "null"]
+          minimum: 1
+          maximum: 4294967295
+          description: Recipients per minute; null clears the domain override, omitted keeps it.
+    AddDomainAlias:
+      type: object
+      additionalProperties: false
+      required: [alias]
+      properties:
+        alias:
+          type: string
+          description: ASCII DNS name of the alias; the target is the path domain.
     ApiError:
       type: object
       required: [error]
@@ -2519,7 +2877,7 @@ components:
           description: Default storage quota of the domain's accounts in bytes, when the domain overrides the server's.
         submission_rate:
           type: [integer, "null"]
-          description: Messages per minute a sender in the domain may submit, when the domain overrides the server's.
+          description: Recipients per minute a sender in the domain may submit, when the domain overrides the server's.
         aliases_to:
           type: array
           items:

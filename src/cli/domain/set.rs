@@ -1,11 +1,7 @@
-//! `epistle domain set`: the per-domain storage quota, submission rate and
-//! role. The first two are the `domain_quotas` and `domain_submission_limits`
-//! maps of the configuration file that `limits set --domain` edits; both
-//! commands parse values the same way. The role is in the domain state file
-//! and is written through [`crate::domain::state::edit`].
+//! `epistle domain set`: parse CLI units, then commit role and limits through
+//! the same data-directory change as the management API.
 
-use crate::cli::config_edit::ConfigDocument;
-use crate::cli::limits::{Key, domain_map, parse_override};
+use crate::cli::limits::{Key, parse_override};
 
 use crate::dns::skip::DomainRole;
 
@@ -60,32 +56,6 @@ impl Change {
 	pub(super) fn with_role(mut self, role: Option<DomainRole>) -> Self {
 		self.role = role;
 		self
-	}
-
-	/// Whether the change touches the quota or the rate, which live in the
-	/// configuration file.
-	pub(super) fn edits_limits(&self) -> bool {
-		self.quota.is_some() || self.submission_rate.is_some()
-	}
-
-	/// Write the quota and rate of the change into `document` for `domain`.
-	/// The role is not in the configuration file.
-	pub(super) fn apply(&self, document: &mut ConfigDocument, domain: &str) -> Result<(), String> {
-		for (key, change) in [
-			(Key::Quota, self.quota),
-			(Key::SubmissionRate, self.submission_rate),
-		] {
-			let Some(change) = change else { continue };
-			let map = domain_map(key).ok_or("not a per-domain limit")?;
-			match change {
-				Some(value) => {
-					let value = i64::try_from(value).unwrap_or(i64::MAX);
-					document.set_map_entry(map, domain, value)?;
-				}
-				None => document.remove_map_entry(map, domain)?,
-			}
-		}
-		Ok(())
 	}
 }
 

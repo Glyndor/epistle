@@ -173,3 +173,76 @@ fn a_bad_write_leaves_the_running_server_as_it_was() {
 	assert_eq!(server.live.current().domains, ["example.org"]);
 	assert!(server.store.handle().current().hosts_domain("example.org"));
 }
+
+#[test]
+fn limits_installed_after_start_reach_the_directory_and_api_budget_through_the_watcher() {
+	let mut server = server(
+		"[[accounts]]\nname = 'alice'\naddresses = ['alice@example.org']\npassword_hash = '$argon2id$v=19$m=65536,t=2,p=1$YWFhYWFhYWFhYWFhYWFhYQ$0000000000000000000000000000000000000000000'\n",
+	);
+	follow(
+		&server.live,
+		Followers {
+			account_store: Arc::clone(&server.store),
+			signer: None,
+			srs: crate::storage::SrsSlot::default(),
+		},
+	);
+	let limiters = super::super::ratelimit::build_rate_limiters(&server.config);
+	let state = crate::api::ApiState::new(
+		&crate::api::api_keys::sha256_hash("watcher-limit-test"),
+		server.config.data_dir.clone(),
+		server.config.domains.clone(),
+		Arc::clone(&server.store),
+		crate::storage::FsSpool::open(&server.config.data_dir).unwrap(),
+	)
+	.with_directory(server.store.handle());
+	let state = super::super::ratelimit::wire_api_submission_limits(
+		state,
+		&server.config,
+		&limiters.send_limiter,
+		&Arc::new(crate::api::TenantLimits::default()),
+	);
+	let dir = server.store.handle();
+	assert_eq!(dir.current().quota_for("alice"), None);
+	assert_eq!(dir.current().submission_limit_for("alice"), None);
+	edit::commit(
+		&server.config,
+		&Change::Set {
+			name: "example.org".into(),
+			role: None,
+			quota: Some(Some(42)),
+			submission_rate: Some(Some(1)),
+		},
+	)
+	.unwrap();
+	assert_eq!(
+		dir.current().quota_for("alice"),
+		None,
+		"not before the watcher"
+	);
+	assert!(reloaded(&mut server));
+	assert_eq!(dir.current().quota_for("alice"), Some(42));
+	assert_eq!(dir.current().submission_limit_for("alice"), Some(1));
+	let _first = state.submission_budget("alice", &[]).charge(1, 1).unwrap();
+	assert!(
+		!state.submission_budget("alice", &[]).has_room(1),
+		"the newly installed cap is enforced"
+	);
+	edit::commit(
+		&server.config,
+		&Change::Set {
+			name: "example.org".into(),
+			role: None,
+			quota: Some(None),
+			submission_rate: Some(None),
+		},
+	)
+	.unwrap();
+	assert!(reloaded(&mut server));
+	assert_eq!(dir.current().quota_for("alice"), None);
+	assert_eq!(dir.current().submission_limit_for("alice"), None);
+	assert!(
+		state.submission_budget("alice", &[]).has_room(1),
+		"clearing the cap takes effect"
+	);
+}

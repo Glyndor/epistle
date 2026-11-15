@@ -99,11 +99,6 @@ pub struct AccountStore {
 	/// domain state file is reloaded ([`AccountStore::reload_domains`]).
 	hosted: RwLock<hosted::HostedDomains>,
 	static_accounts: Vec<Account>,
-	/// Default storage quota (bytes) per domain.
-	domain_quotas: std::collections::HashMap<String, u64>,
-	/// Per-domain submission rate limit (messages/min) applied to authenticated
-	/// senders in that domain. Mirrors `domain_quotas` in shape and lifecycle.
-	domain_submission_limits: std::collections::HashMap<String, u32>,
 	/// Multi-target aliases from the static configuration.
 	aliases: Vec<crate::config::Alias>,
 	/// App passwords (secondary mail credentials) keyed by account; the
@@ -362,8 +357,8 @@ impl AccountStore {
 			.with_credential_reset(credential_reset::names(&dynamic))
 			.with_switches(send_off, receive_off)
 			.with_account_quotas(account_quotas)
-			.with_domain_quotas(self.domain_quotas.clone())
-			.with_domain_submission_limits(self.domain_submission_limits.clone())
+			.with_domain_quotas(hosted.domain_quotas)
+			.with_domain_submission_limits(hosted.domain_submission_limits)
 			.with_forwards(forwards)
 			.with_save_sent(save_sent)
 			.with_aliases(aliases)

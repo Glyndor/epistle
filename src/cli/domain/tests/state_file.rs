@@ -1,5 +1,5 @@
 //! `epistle domain` writes `<data_dir>/domains.toml` and leaves the
-//! configuration file alone, except for the per-domain limits of `domain set`.
+//! configuration file alone, including the per-domain limits of `domain set`.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -199,8 +199,9 @@ fn the_last_enabled_domain_is_a_policy_refusal_and_nothing_changes() {
 }
 
 #[test]
-fn the_quota_of_set_still_goes_to_the_configuration_file() {
+fn the_quota_and_role_of_set_share_the_state_file() {
 	let fixture = Fixture::new("");
+	let before = fixture.mail_toml();
 	let code = fixture.run(DomainCli::Set {
 		domain: "example.org".into(),
 		quota: Some("1G".into()),
@@ -212,7 +213,11 @@ fn the_quota_of_set_still_goes_to_the_configuration_file() {
 		full: false,
 	});
 	assert_eq!(code, ExitCode::SUCCESS);
-	assert!(fixture.mail_toml().contains("domain_quotas"));
+	assert_eq!(fixture.mail_toml(), before);
+	assert_eq!(
+		fixture.loaded().domain_quotas["example.org"],
+		1024_u64.pow(3)
+	);
 	assert!(
 		!fixture.mail_toml().contains("receive_only_domains"),
 		"the role is not written to mail.toml"

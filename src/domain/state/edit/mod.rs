@@ -15,6 +15,7 @@ use crate::editable::CommitError;
 use super::file::{DomainsFile, OwnKey, StoredRole};
 
 pub mod add;
+mod limits;
 pub mod rules;
 
 /// One change to the hosted-domain state.
@@ -42,6 +43,18 @@ pub enum Change {
 		name: String,
 		/// The role.
 		role: StoredRole,
+	},
+	/// Set role and limits atomically. An absent outer option leaves a limit
+	/// alone; a present `None` clears its domain override.
+	Set {
+		/// Hosted domain.
+		name: String,
+		/// New role, or leave it alone.
+		role: Option<StoredRole>,
+		/// Quota in bytes, or clear it.
+		quota: Option<Option<u64>>,
+		/// Submissions per minute, or clear it.
+		submission_rate: Option<Option<u32>>,
 	},
 	/// Switch a domain on or off.
 	SetEnabled {
@@ -116,7 +129,19 @@ fn refusal(error: CommitError<EditError>) -> EditError {
 /// directory and write the result. `config` is the configuration as loaded:
 /// its seed is what a missing state file starts from.
 pub fn commit(config: &Config, change: &Change) -> Result<Committed, EditError> {
+	commit_checked(config, change, |_, _| Ok(()))
+}
+
+/// Commit with an additional precondition checked against the fresh state
+/// under its lock. Routes use this for alias ownership, which must not be
+/// checked against a running snapshot that may precede another writer.
+pub fn commit_checked(
+	config: &Config,
+	change: &Change,
+	check: impl FnOnce(&Config, &DomainsFile) -> Result<(), EditError>,
+) -> Result<Committed, EditError> {
 	crate::editable::commit(config, |current: &Config, file: &mut DomainsFile| {
+		check(current, file)?;
 		rules::apply(current, file, change)
 	})
 	.map_err(refusal)
