@@ -19,6 +19,7 @@ on:
       # tests/system/interop.rs includes this file with #[path].
       - "src/test_support/fixtures.rs"
       - ".github/workflows/interop.yml"
+      - ".github/actions/rust-cache/**"
       - "Cargo.toml"
       - "Cargo.lock"
       # Same exclusions as the pull_request filter below, and for the same
@@ -46,6 +47,7 @@ on:
       # tests/system/interop.rs includes this file with #[path].
       - "src/test_support/fixtures.rs"
       - ".github/workflows/interop.yml"
+      - ".github/actions/rust-cache/**"
       - "Cargo.toml"
       - "Cargo.lock"
       # Files that only exist under #[cfg(test)] cannot change what this job

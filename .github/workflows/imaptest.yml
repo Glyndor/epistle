@@ -21,6 +21,7 @@ on:
       - "tests/fixtures/imaptest.mbox"
       - ".github/scripts/imaptest.sh"
       - ".github/workflows/imaptest.yml"
+      - ".github/actions/rust-cache/**"
       - "Cargo.toml"
       - "Cargo.lock"
       # Same exclusions as the pull_request filter below, and for the same
@@ -46,6 +47,7 @@ on:
       - "tests/fixtures/imaptest.mbox"
       - ".github/scripts/imaptest.sh"
       - ".github/workflows/imaptest.yml"
+      - ".github/actions/rust-cache/**"
       - "Cargo.toml"
       - "Cargo.lock"
       # Files that only exist under #[cfg(test)] cannot change what this job

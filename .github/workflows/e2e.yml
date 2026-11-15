@@ -20,6 +20,7 @@ on:
       - 'tests/smtp/hostile_smtp/**'
       - 'docs/epistle.service'
       - '.github/workflows/e2e.yml'
+      - '.github/actions/rust-cache/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'migrations/**'
@@ -47,6 +48,7 @@ on:
       - "tests/smtp/hostile_smtp/**"
       - "docs/epistle.service"
       - ".github/workflows/e2e.yml"
+      - ".github/actions/rust-cache/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - "migrations/**"

@@ -10,6 +10,7 @@ on:
     branches: [develop, main]
     paths:
       - ".github/workflows/db.yml"
+      - ".github/actions/rust-cache/**"
       - "src/**"
       - "tests/**"
       - "migrations/**"
@@ -22,6 +23,7 @@ on:
       # list omits itself does not run on the pull request that changes
       # it, so a broken edit merges without ever having been executed.
       - ".github/workflows/db.yml"
+      - ".github/actions/rust-cache/**"
       - "src/**"
       - "tests/**"
       - "migrations/**"
