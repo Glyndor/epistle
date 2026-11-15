@@ -73,6 +73,7 @@ fn apply_does_not_rewrite_keys_when_every_answer_changes() {
 		antivirus: None,
 		panel: None,
 		panel_image: None,
+		freshclam_checks: None,
 		imap: false,
 		submission: true,
 		pop3: false,

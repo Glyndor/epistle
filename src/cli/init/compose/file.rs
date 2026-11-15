@@ -37,6 +37,13 @@ pub(in crate::cli::init) struct ComposeFile {
 		skip_serializing_if = "Option::is_none"
 	)]
 	antivirus: Option<bool>,
+	/// The signature checks per day the answers set, which `stack update`
+	/// reads back; absent when the stack runs the default.
+	#[serde(
+		rename = "x-epistle-freshclam-checks",
+		skip_serializing_if = "Option::is_none"
+	)]
+	freshclam_checks: Option<u8>,
 	/// The operator's `services.panel` choice, which `stack update` reads
 	/// back: `false` keeps the panel out of a stack that has the package,
 	/// `true` demands it. Absent leaves the package to decide.
@@ -184,6 +191,9 @@ impl ComposeFile {
 			name: "epistle".to_string(),
 			managed_image: answers.image.is_none(),
 			antivirus: (!antivirus).then_some(false),
+			freshclam_checks: antivirus
+				.then_some(answers.services.freshclam_checks)
+				.flatten(),
 			panel: answers.services.panel,
 			resources: answers.resources.clone(),
 			services,

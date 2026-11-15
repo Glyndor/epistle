@@ -387,6 +387,7 @@ mod clamav;
 mod nofile;
 mod panel;
 pub(super) use certs::ACME_ACCOUNT_SECRET;
+pub(in crate::cli::init) use clamav::MAX_FRESHCLAM_CHECKS;
 pub(crate) use nofile::{MAIL_STOP_GRACE_SECS, host_hard_nofile, mail_nofile, warn_low_nofile};
 pub(in crate::cli::init) use panel::PANEL_PORT;
 pub(super) use panel::{SECRETS as PANEL_SECRETS, api_port};

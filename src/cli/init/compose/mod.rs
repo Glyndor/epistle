@@ -228,7 +228,7 @@ pub(super) fn ensure_compose_file(
 		report.steps.push(ReportStep::Wrote(path.clone()));
 	}
 	let clamd_config = dir.join("clamd.conf");
-	let content = "LocalSocket /run/clamav/clamd.sock\nLocalSocketMode 666\nFixStaleSocket yes\nDatabaseDirectory /var/lib/clamav\nUser clamav\nForeground yes\n";
+	let content = "LocalSocket /run/clamav/clamd.sock\nLocalSocketMode 666\nFixStaleSocket yes\nDatabaseDirectory /var/lib/clamav\nSelfCheck 600\nUser clamav\nForeground yes\n";
 	// Socket mode permits mail uid 65532 across distinct rootless user namespaces.
 	if fs::read_to_string(&clamd_config).ok().as_deref() != Some(content) {
 		crate::storage::write_secret(&clamd_config, content.as_bytes())
@@ -361,7 +361,7 @@ mod file;
 mod services;
 pub(in crate::cli::init) use file::ComposeFile;
 pub(crate) use services::MAIL_STOP_GRACE_SECS;
-pub(in crate::cli::init) use services::PANEL_PORT;
+pub(in crate::cli::init) use services::{MAX_FRESHCLAM_CHECKS, PANEL_PORT};
 pub(super) use services::{host_hard_nofile, warn_low_nofile};
 
 #[cfg(test)]
@@ -385,6 +385,7 @@ pub(super) fn minimal_answers() -> crate::cli::init::Answers {
 			antivirus: None,
 			panel: None,
 			panel_image: None,
+			freshclam_checks: None,
 			imap: true,
 			submission: true,
 			pop3: false,

@@ -56,19 +56,18 @@ fn freshclam_runs_the_daemon_as_clamav_instead_of_the_image_init() {
 		fresh["user"], "100:101",
 		"uid and gid of clamav in the image"
 	);
+	let entrypoint = fresh["entrypoint"].as_array().expect("entrypoint");
 	assert_eq!(
-		fresh["entrypoint"],
-		json!([
-			"/sbin/tini",
-			"--",
-			"freshclam",
-			"--daemon",
-			"--foreground",
-			"--stdout",
-			"--checks=1"
-		]),
+		&entrypoint[..4],
+		&[
+			json!("/sbin/tini"),
+			json!("--"),
+			json!("/bin/sh"),
+			json!("-c")
+		],
 		"the image's /init chowns as root and writes under /run and /var"
 	);
+	assert_eq!(entrypoint.len(), 5, "tini, sh -c and one script");
 	assert!(
 		fresh["environment"].get("CLAMAV_NO_CLAMD").is_none(),
 		"only the image's /init reads CLAMAV_NO_CLAMD"

@@ -7,6 +7,8 @@ use hickory_resolver::config::{ProtocolConfig, ResolveHosts, ResolverConfig, Res
 
 use crate::dane::rrset::TlsaRrset;
 
+mod tlsa_log;
+
 #[cfg(test)]
 mod tests;
 
@@ -314,8 +316,20 @@ impl DnsLookup for SystemDns {
 				.await
 			{
 				Ok(lookup) => lookup,
-				Err(NetError::Dns(DnsError::NoRecordsFound(_))) => return Ok(TlsaRrset::Absent),
-				Err(_) => return Err(DnsFailure::Temporary),
+				Err(NetError::Dns(DnsError::NoRecordsFound(none))) => {
+					let kinds: Vec<RecordType> = none
+						.authorities
+						.iter()
+						.flat_map(|records| records.iter())
+						.map(|record| record.data.record_type())
+						.collect();
+					tlsa_log::log_absent(&name, &kinds);
+					return Ok(TlsaRrset::Absent);
+				}
+				Err(error) => {
+					tlsa_log::log_failure(&name, &error);
+					return Err(DnsFailure::Temporary);
+				}
 			};
 			let answers: Vec<TlsaAnswer> = lookup
 				.answers()
@@ -336,7 +350,11 @@ impl DnsLookup for SystemDns {
 					_ => None,
 				})
 				.collect();
-			crate::dane::rrset::classify(&answers)
+			let classified = crate::dane::rrset::classify(&answers);
+			if classified.is_err() {
+				tlsa_log::log_bogus(&name);
+			}
+			classified
 		})
 	}
 

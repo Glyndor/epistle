@@ -260,6 +260,20 @@ it:
   (`status.json`); a status file with no server running says nothing, and the
   server's word never makes a log that could not be read readable. A log that cannot be
   read at start is not an empty log: nothing is believed;
+- against a clean shutdown: a server that stops on SIGTERM writes the time it
+  believed to `clean-stop.json` in the evidence root, and the next server
+  start reads it and removes it once it runs. The file also holds the boot
+  identifier of the host (`/proc/sys/kernel/random/boot_id`), a second source the
+  wall clock does not control: the stop explains a gap only when the identifier
+  now differs from the recorded one. The same identifier (the clock moved inside
+  one boot) or one that cannot be read (a container without `/proc`) explains
+  nothing, and the error line says which. A clock that agrees with that time (not
+  more than an hour before it, not more than seven days after it, and the stop
+  not older than the newest record) is believed even though it is far past the
+  newest record, and the log says `the server was stopped for 6h 58m since its
+  last clean shutdown`. A crash, a kill or a first start leaves no such file
+  and is judged as above. The file cannot tell a long stop from a clock that
+  was set while the host was down, which is why the seven days are a ceiling;
 - against a timestamp authority, when timestamping is on: a token is a time
   somebody else vouches for, and the server asks for one by itself when it
   does not believe the clock;
@@ -269,6 +283,12 @@ it:
   if it is less than five minutes old; it drops the request at every check
   whether it needed it or not. With the server stopped it changes nothing for
   the command you run next: start the server first.
+
+When the clock is not believed the server logs one `error` line with the wall
+clock, the estimate (the newest record plus the monotonic clock since) and the
+difference between them, and one `info` line when a reading is believed again,
+with how long the pause lasted. `epistle status` shows `sealing and deletion`
+as paused for as long as it lasts.
 
 While the clock is not believed, nothing is sealed, purged or expired on it,
 the kept bytes and the records stay where they are, transactional mail is held,

@@ -54,6 +54,15 @@ pub(super) fn evaluate(root: &Path, now: u64) -> AreaReport {
 			),
 		));
 	}
+	if !status.clock_sound {
+		items.push(Item::new(
+			"sealing and deletion",
+			Level::Warn,
+			"paused: the clock does not agree with the evidence log, so nothing is sealed, \
+			 purged or expired until it does; the server log says by how much, and \
+			 `epistle evidence clock accept` confirms the date",
+		));
+	}
 	if let Some(pending) = &status.pending {
 		items.push(Item::new("timestamp", Level::Warn, sanitize(pending)));
 	}

@@ -484,6 +484,9 @@ async fn serve(config: Config, role: ServeRole) -> std::io::Result<()> {
 	let handles: Vec<tokio::task::JoinHandle<std::io::Result<()>>> =
 		tasks.into_iter().map(tokio::spawn).collect();
 	let stopped = wait::until_stopped(handles, &drain, acme_renewal).await;
+	if stopped.is_ok() {
+		evidence::record_stop(&evidence);
+	}
 	watcher.abort();
 	let _ = watcher.await;
 	crate::directory_store::remove_reload_status(&config.data_dir);

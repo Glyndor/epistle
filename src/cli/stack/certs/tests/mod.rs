@@ -6,6 +6,24 @@ mod lock;
 mod order;
 mod up;
 
+/// Wait until the stub script at `podup` can be run. A script written a moment
+/// ago can still be open for writing in a copy of the descriptor that another
+/// test thread's fork holds until its own exec, and the kernel then refuses to
+/// run it with `ETXTBSY` ("Text file busy"). Once a run is accepted every such
+/// copy is gone, so the test's own runs cannot meet it. The probe's line in the
+/// stub's log is removed, so the tests see only their own calls.
+fn runnable(podup: &std::path::Path, log: &std::path::Path) {
+	for _ in 0..200 {
+		match std::process::Command::new(podup).arg("probe").status() {
+			Err(error) if error.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+				std::thread::sleep(std::time::Duration::from_millis(10));
+			}
+			_ => break,
+		}
+	}
+	let _ = std::fs::remove_file(log);
+}
+
 /// A host that records every step and fails, once each, the steps named in
 /// `fail` (`render`, `place`, `write certs=true`, `podup`, `ready mail`...).
 pub(super) struct Recorder {

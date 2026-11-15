@@ -24,6 +24,7 @@ fn answers_with_image(image: Option<&str>) -> Answers {
 			antivirus: None,
 			panel: None,
 			panel_image: None,
+			freshclam_checks: None,
 			imap: true,
 			submission: true,
 			pop3: false,

@@ -213,6 +213,22 @@ impl EvidenceService {
 		self.chain.time()
 	}
 
+	/// Note that the server is stopping cleanly, so the next start can tell
+	/// the length of the stop from a clock that jumped. Written only when the
+	/// clock is believed now: an explanation made from a time nobody agrees
+	/// with would explain nothing.
+	pub fn record_clean_stop(&self) {
+		let reading = self.chain.time().read();
+		if reading.sound
+			&& let Err(error) = super::timeref::stop::record(
+				&self.root,
+				reading.time,
+				super::timeref::stop::current_boot_id().as_deref(),
+			) {
+			tracing::warn!(%error, "could not record the clean shutdown time");
+		}
+	}
+
 	/// Read the policy again. On failure the last good policy stays in force
 	/// and the error is kept for `epistle status`.
 	pub fn reload(&self) {
