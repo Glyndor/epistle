@@ -207,3 +207,117 @@ fn a_label_the_rule_refuses_creates_no_key() {
 			.is_empty()
 	);
 }
+
+fn new_key(label: &str, auto_submitted: bool) -> NewKey {
+	NewKey {
+		label: label.to_string(),
+		expires_at: Some(4_000_000_000),
+		ip_cidr: Some("10.0.0.0/8".to_string()),
+		scopes: vec!["send".to_string(), "read".to_string()],
+		domains: vec!["example.org".to_string()],
+		account: None,
+		class: None,
+		auto_submitted,
+	}
+}
+
+fn listing(config: &Config, json: bool) -> String {
+	let mut out = Vec::new();
+	assert_eq!(
+		list(config, json, &mut out, &mut Vec::new()),
+		ExitCode::SUCCESS
+	);
+	String::from_utf8(out).expect("utf8")
+}
+
+#[test]
+fn create_with_auto_submitted_persists_and_lists_it() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let config = config(dir.path());
+	assert_eq!(
+		create(
+			&config,
+			new_key("apps", true),
+			false,
+			&mut Vec::new(),
+			&mut Vec::new()
+		),
+		ExitCode::SUCCESS
+	);
+	assert!(ApiKeyStore::open(dir.path()).expect("open").keys()[0].auto_submitted);
+	let text = listing(&config, false);
+	assert!(text.contains("auto_submitted=on"), "{text}");
+	let json: serde_json::Value =
+		serde_json::from_str(&listing(&config, true)).expect("valid JSON");
+	assert_eq!(json[0]["auto_submitted"], serde_json::json!(true), "{json}");
+}
+
+#[test]
+fn create_without_auto_submitted_defaults_to_off() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let config = config(dir.path());
+	assert_eq!(
+		create(
+			&config,
+			new_key("people", false),
+			false,
+			&mut Vec::new(),
+			&mut Vec::new()
+		),
+		ExitCode::SUCCESS
+	);
+	assert!(!ApiKeyStore::open(dir.path()).expect("open").keys()[0].auto_submitted);
+	let text = listing(&config, false);
+	assert!(text.contains("auto_submitted=off"), "{text}");
+	assert!(!text.contains("auto_submitted=on"), "{text}");
+	let json: serde_json::Value =
+		serde_json::from_str(&listing(&config, true)).expect("valid JSON");
+	assert!(
+		json[0].get("auto_submitted").is_none(),
+		"a disabled key keeps the existing JSON shape: {json}"
+	);
+}
+
+#[test]
+fn set_auto_submitted_updates_the_stored_key() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let config = config(dir.path());
+	assert_eq!(
+		create(
+			&config,
+			new_key("apps", false),
+			false,
+			&mut Vec::new(),
+			&mut Vec::new()
+		),
+		ExitCode::SUCCESS
+	);
+	let before = ApiKeyStore::open(dir.path()).expect("open").keys()[0].clone();
+	for state in [true, false] {
+		let mut out = Vec::new();
+		assert_eq!(
+			set_auto_submitted(&config, "apps", state, false, &mut out),
+			ExitCode::SUCCESS
+		);
+		let store = ApiKeyStore::open(dir.path()).expect("open");
+		let after = &store.keys()[0];
+		assert_eq!(after.auto_submitted, state);
+		assert_eq!(after.hash, before.hash);
+		assert_eq!(after.scopes, before.scopes);
+		assert_eq!(after.domains, before.domains);
+		assert_eq!(after.expires_at, before.expires_at);
+		assert_eq!(after.ip_cidr, before.ip_cidr);
+		assert_eq!(after.account, before.account);
+	}
+}
+
+#[test]
+fn set_auto_submitted_on_a_missing_label_fails_and_writes_nothing() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let config = config(dir.path());
+	assert_eq!(
+		set_auto_submitted(&config, "absent", true, false, &mut Vec::new()),
+		ExitCode::from(2)
+	);
+	assert!(!dir.path().join("api_keys.toml").exists());
+}
