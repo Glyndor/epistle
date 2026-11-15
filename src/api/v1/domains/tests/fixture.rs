@@ -17,6 +17,8 @@ pub(super) const READER: &str = "reader-secret";
 pub(super) const SENDER: &str = "sender-secret";
 /// `read`, confined to a domain the server does not host.
 pub(super) const ELSEWHERE: &str = "confined-elsewhere-secret";
+pub(super) const WRITER: &str = "unconfined-domain-writer";
+pub(super) const ALIAS_WRITER: &str = "confined-alias-domain-writer";
 
 const HASH: &str = "$argon2id$v=19$m=65536,t=2,p=1$YWFhYWFhYWFhYWFhYWFhYQ$0000000000000000000000000000000000000000000";
 
@@ -79,6 +81,10 @@ fn key(
 }
 
 pub(super) fn world() -> World {
+	world_with("")
+}
+
+pub(super) fn world_with(extra: &str) -> World {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let data_dir = dir.path().canonicalize().expect("canonical");
 	let path = data_dir.join("mail.toml");
@@ -89,8 +95,12 @@ pub(super) fn world() -> World {
 		.mode(0o600)
 		.open(&path)
 		.expect("config file");
-	file.write_all(config_text(&data_dir).as_bytes())
-		.expect("write config");
+	let text = config_text(&data_dir).replacen(
+		"[domain_aliases]",
+		&format!("{extra}\n[domain_aliases]"),
+		1,
+	);
+	file.write_all(text.as_bytes()).expect("write config");
 	drop(file);
 	let config = Config::load(&path).expect("config loads");
 	let mut keys = crate::api::ApiKeyStore::open(&data_dir).expect("key store");
@@ -99,6 +109,13 @@ pub(super) fn world() -> World {
 		key("reader", READER, &["read"], &[]),
 		key("sender", SENDER, &["send"], &[]),
 		key("elsewhere", ELSEWHERE, &["read"], &["c.example"]),
+		key("writer", WRITER, &["write"], &[]),
+		key(
+			"alias-writer",
+			ALIAS_WRITER,
+			&["write"],
+			&["a.example", "alias.example"],
+		),
 	] {
 		keys.add(one).expect("add key");
 	}
@@ -122,6 +139,7 @@ pub(super) fn world() -> World {
 	.with_directory(store.handle())
 	.with_disabled_domains(config.disabled_domains.clone())
 	.with_domain_catalog(Catalog::from_config(&config));
+	let state = state.with_live_domains(crate::editable::LiveConfig::new(config));
 	World { _dir: dir, state }
 }
 

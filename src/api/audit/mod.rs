@@ -19,6 +19,9 @@ use std::net::IpAddr;
 
 use crate::config::Protocol;
 
+mod domain;
+pub use domain::{DomainEvent, log_domain_change};
+
 /// A privileged action taken against an account through the management API.
 ///
 /// Each variant maps to a stable string in the `event` field of the emitted

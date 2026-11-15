@@ -11,7 +11,12 @@ use crate::api::Principal;
 use crate::api::state::{ApiState, MatchedAuth};
 use crate::domain::catalog::DomainRow;
 
+pub(super) mod add;
+pub(super) mod aliases;
+pub(super) mod change;
 pub(super) mod domain;
+pub(super) mod set;
+pub(super) mod switch;
 
 #[derive(Serialize)]
 pub struct Domains {

@@ -43,8 +43,6 @@ impl AccountStore {
 				..super::HostedDomains::default()
 			}),
 			static_accounts,
-			domain_quotas: std::collections::HashMap::new(),
-			domain_submission_limits: std::collections::HashMap::new(),
 			aliases: Vec::new(),
 			app_passwords,
 			dynamic: RwLock::new(dynamic.accounts),
@@ -82,7 +80,7 @@ impl AccountStore {
 
 	/// Set the per-domain default storage quotas and rebuild the directory.
 	pub fn with_domain_quotas(mut self, quotas: std::collections::HashMap<String, u64>) -> Self {
-		self.domain_quotas = quotas;
+		self.hosted.get_mut().expect("hosted lock").domain_quotas = quotas;
 		self.handle.replace(self.build_directory());
 		self
 	}
@@ -93,7 +91,10 @@ impl AccountStore {
 		mut self,
 		limits: std::collections::HashMap<String, u32>,
 	) -> Self {
-		self.domain_submission_limits = limits;
+		self.hosted
+			.get_mut()
+			.expect("hosted lock")
+			.domain_submission_limits = limits;
 		self.handle.replace(self.build_directory());
 		self
 	}

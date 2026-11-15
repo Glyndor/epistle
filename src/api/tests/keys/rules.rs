@@ -126,15 +126,39 @@ pub(super) const RULES: &[Rule] = &[
 	),
 	rule(
 		"/api/v1/domains",
-		"read",
+		"read/write",
 		Domain::Filtered,
-		"a_scoped_key_lists_only_its_own_domains",
+		"domain_creation_requires_an_unconfined_writer",
 	),
 	rule(
 		"/api/v1/domains/{domain}",
-		"read",
+		"read/write",
 		Domain::HostedParam,
-		"a_confined_key_gets_the_same_404_for_a_foreign_and_an_unknown_domain",
+		"domain_writes_are_confined_to_the_keys_domains",
+	),
+	rule(
+		"/api/v1/domains/{domain}/enable",
+		"write",
+		Domain::HostedParam,
+		"domain_writes_are_confined_to_the_keys_domains",
+	),
+	rule(
+		"/api/v1/domains/{domain}/disable",
+		"write",
+		Domain::HostedParam,
+		"domain_writes_are_confined_to_the_keys_domains",
+	),
+	rule(
+		"/api/v1/domains/{domain}/aliases",
+		"write",
+		Domain::HostedParam,
+		"domain_aliases_require_both_names_in_scope",
+	),
+	rule(
+		"/api/v1/domains/{domain}/aliases/{alias}",
+		"write",
+		Domain::HostedParam,
+		"domain_aliases_require_both_names_in_scope",
 	),
 	rule(
 		"/api/v1/accounts",

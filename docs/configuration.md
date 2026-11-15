@@ -102,7 +102,8 @@ a connection URL.
 ## The domain state file
 
 The hosted domains, the role of each, whether it is switched on and the
-domain aliases are kept in `<data_dir>/domains.toml`, so they can change while
+domain aliases and overrides set through `epistle domain set` or the management
+API are kept in `<data_dir>/domains.toml`, so they can change while
 `/etc/epistle` stays read-only for the server. `epistle domain` and the
 `/api/v1/domains` routes write it, under the same lock as `accounts.toml`, and
 the running server reloads it within a few seconds, as it reloads
@@ -134,7 +135,10 @@ enabled = true
   hosts; an entry for a domain it no longer hosts is ignored. A domain added
   with `epistle domain add` carries the DKIM key and the SRS secret made for it
   (`dkim` and `srs_secret`); an entry of the configuration file for the same
-  domain wins.
+  domain wins. A domain's optional `[domain.limits]` table replaces its quota
+  and submission-rate overrides from the configuration. An empty table clears
+  both overrides; an absent table inherits them. `domain set` and the API write
+  this table atomically with the role, without writing `/etc/epistle`.
 - **Reloads are checked.** A file that does not parse, or that gives a
   configuration the server would refuse at start, is not loaded: the running
   domains stay and the log says why. At start, such a file stops the server

@@ -6,14 +6,13 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use crate::cli::prompt;
-use crate::cli::resource::ResourceError;
 use crate::config::Config;
 use crate::dns::skip::DomainRole;
 use crate::domain::state::edit::add::{self, Signing};
 use crate::domain::state::{Change, EditError, StoredRole};
 
-use super::writers::{Mode, add_commit, alias_commit, commit, commit_state, remove_commit};
-use super::{DomainAliasSubcommand, DomainCli, list, open, set, show, state};
+use super::writers::{Mode, add_commit, alias_commit, commit_state, remove_commit};
+use super::{DomainAliasSubcommand, DomainCli, list, set, show, state};
 
 /// Seconds since the epoch, the clock the new key's selector is named after.
 fn now_epoch() -> u64 {
@@ -206,70 +205,26 @@ fn names_key(config: &Config, domain: &str) -> bool {
 	}
 }
 
-/// `domain set`: the role goes to the state file, the quota and the rate to
-/// the configuration file. When both are asked the configuration file's
-/// commit reports the whole change.
-fn set_domain(
-	path: &Path,
-	config: &Config,
-	domain: &str,
-	change: set::Change,
-	mode: Mode,
-) -> Outcome {
-	let domain = domain.trim().to_ascii_lowercase();
+/// `domain set`: role and limits share one atomic data-directory commit.
+fn set_domain(config: &Config, domain: &str, change: set::Change, mode: Mode) -> Outcome {
+	let edit = Change::Set {
+		name: domain.trim().to_ascii_lowercase(),
+		role: stored(change.role),
+		quota: change.quota,
+		submission_rate: change.submission_rate.map(|value| value.map(|n| n as u32)),
+	};
 	let mut out = std::io::stdout().lock();
 	let mut err = super::style::stderr();
-	if !change.edits_limits() {
-		let Some(role) = stored(change.role) else {
-			return Outcome::Error("domain set: nothing to change".into());
-		};
-		let edit = Change::SetRole {
-			name: domain.clone(),
-			role,
-		};
-		return match commit_state(
-			config,
-			&edit,
-			set::commit(&domain, &change),
-			mode,
-			&mut out,
-			&mut err,
-		) {
-			Ok((code, _)) => Outcome::Code(code),
-			Err(error) => from_edit(error, true),
-		};
-	}
-	if let Some(role) = stored(change.role) {
-		let edit = Change::SetRole {
-			name: domain.clone(),
-			role,
-		};
-		let result = if mode.dry_run {
-			crate::domain::state::edit::preview(config, &edit)
-		} else {
-			crate::domain::state::edit::commit(config, &edit)
-		};
-		if let Err(error) = result {
-			return from_edit(error, true);
-		}
-	}
-	let mut document = match open(path) {
-		Ok(document) => document,
-		Err(error) => return Outcome::Error(error),
-	};
-	if let Err(error) = change.apply(&mut document, &domain) {
-		return Outcome::Error(error);
-	}
-	match commit(
-		document,
-		set::commit(&domain, &change),
-		(mode.dry_run, mode.json),
+	match commit_state(
+		config,
+		&edit,
+		set::commit(domain, &change),
+		mode,
 		&mut out,
 		&mut err,
 	) {
-		Ok(code) => Outcome::Code(code),
-		Err(ResourceError::Refusal(message)) => Outcome::Refusal(message),
-		Err(ResourceError::Failure(message)) => Outcome::Error(message),
+		Ok((code, _)) => Outcome::Code(code),
+		Err(error) => from_edit(error, true),
 	}
 }
 
@@ -384,7 +339,7 @@ pub(super) fn execute(path: &Path, action: DomainCli, dry_run: bool, json: bool)
 				(false, false, true) => Some(DomainRole::Full),
 				(false, false, false) => None,
 			};
-			set_domain(path, &config, &domain, change.with_role(role), mode)
+			set_domain(&config, &domain, change.with_role(role), mode)
 		}
 		DomainCli::Disable { domain, yes } => {
 			drop(out);

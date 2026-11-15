@@ -9,7 +9,8 @@
 //! file does not host is left out, the way removing the domain used to
 //! remove the entry. A domain added through the file brings the DKIM key and
 //! the SRS secret it was given, unless the configuration file already names
-//! one for it.
+//! one for it. A present `limits` table replaces the configuration's two
+//! per-domain limit overrides, including an explicit clearing of either.
 
 use crate::config::{Config, DkimDomain, SrsDomain};
 
@@ -185,6 +186,20 @@ impl Config {
 			.into_iter()
 			.filter(|(name, _)| hosted(name))
 			.collect();
+		for domain in &file.domains {
+			let Some(limits) = &domain.limits else {
+				continue;
+			};
+			self.domain_quotas.remove(&domain.name);
+			self.domain_submission_limits.remove(&domain.name);
+			if let Some(quota) = limits.quota {
+				self.domain_quotas.insert(domain.name.clone(), quota);
+			}
+			if let Some(rate) = limits.submission_rate {
+				self.domain_submission_limits
+					.insert(domain.name.clone(), rate);
+			}
+		}
 	}
 }
 

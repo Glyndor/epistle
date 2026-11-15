@@ -17,6 +17,10 @@ pub struct HostedDomains {
 	pub disabled: Vec<String>,
 	/// Hosted domains nobody may send as (`receive_only_domains`).
 	pub send_off: Vec<String>,
+	/// Per-domain storage quota overrides, reloaded with the domains.
+	pub domain_quotas: HashMap<String, u64>,
+	/// Per-domain submission-rate overrides, reloaded with the domains.
+	pub domain_submission_limits: HashMap<String, u32>,
 }
 
 impl HostedDomains {
@@ -27,6 +31,8 @@ impl HostedDomains {
 			domain_aliases: config.domain_aliases.clone(),
 			disabled: config.disabled_domains.clone(),
 			send_off: config.receive_only_domains.clone(),
+			domain_quotas: config.domain_quotas.clone(),
+			domain_submission_limits: config.domain_submission_limits.clone(),
 		}
 	}
 }

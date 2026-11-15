@@ -4,9 +4,8 @@
 //! Every change is written to `<data_dir>/domains.toml` through
 //! [`crate::domain::state::edit`], the layer the `/api/v1/domains` routes
 //! write through too, and the running server reloads the file within
-//! seconds: nothing restarts `mail`. Only `domain set --quota` and
-//! `--submission-rate` still edit the configuration file, since the
-//! per-domain limits live there.
+//! seconds: nothing restarts `mail`. Role and per-domain limits are
+//! committed together without editing the configuration file.
 //!
 //! `domain add` prints the DNS records the operator now needs to publish,
 //! the `dns-records` output scoped to the new domain. `domain remove` refuses
@@ -19,7 +18,6 @@ use std::process::ExitCode;
 
 use clap::{Args, Subcommand};
 
-use super::config_edit::ConfigDocument;
 use super::style;
 
 pub(in crate::cli) mod own_key;
@@ -107,8 +105,8 @@ pub enum DomainCli {
 	},
 	/// Set the role, storage quota or submission rate of one domain.
 	///
-	/// The quota and rate are the per-domain overrides `limits set --domain`
-	/// writes. A flag that is left out keeps its value; `--no-quota` and
+	/// The quota and rate replace the per-domain overrides from the configuration.
+	/// A flag that is left out keeps its value; `--no-quota` and
 	/// `--no-submission-rate` remove the override. `--send-only`,
 	/// `--receive-only` and `--full` change the role: which DNS records the
 	/// domain needs and who may send as it.
@@ -216,10 +214,6 @@ pub(super) fn run(path: &Path, action: DomainCli, dry_run: bool, json: bool) -> 
 			ExitCode::from(super::exit::REFUSED)
 		}
 	}
-}
-
-fn open(path: &Path) -> Result<ConfigDocument, String> {
-	ConfigDocument::open(path)
 }
 
 #[cfg(test)]

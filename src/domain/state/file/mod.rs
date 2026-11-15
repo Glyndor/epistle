@@ -12,6 +12,10 @@
 //! "example.net" = "example.org"
 //! ```
 //!
+//! An optional `[domain.limits]` table replaces both per-domain overrides
+//! from the configuration; an empty table clears both. An absent table
+//! keeps inheriting the configuration's overrides.
+//!
 //! A domain added through the file carries the key and the SRS secret that
 //! `domain add` made for it (`dkim` and `srs_secret`), since the
 //! configuration file is not written. The file holds a secret, so it is
@@ -78,6 +82,18 @@ pub struct OwnKey {
 	pub rsa_key_file: Option<PathBuf>,
 }
 
+/// A complete replacement for the configuration's per-domain overrides.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DomainLimits {
+	/// Per-account quota in bytes; absent means no domain override.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub quota: Option<u64>,
+	/// Submissions per minute; absent means no domain override.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub submission_rate: Option<u32>,
+}
+
 /// One hosted domain.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -97,6 +113,10 @@ pub struct HostedDomain {
 	/// The SRS secret `domain add` made for the domain.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub srs_secret: Option<String>,
+	/// Absent inherits the configuration's limits. A present table replaces
+	/// both overrides, including an explicitly cleared override.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub limits: Option<DomainLimits>,
 }
 
 fn switched_on() -> bool {
@@ -112,6 +132,7 @@ impl HostedDomain {
 			enabled: true,
 			dkim: None,
 			srs_secret: None,
+			limits: None,
 		}
 	}
 

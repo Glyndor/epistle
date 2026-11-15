@@ -3,9 +3,7 @@
 //! stays under the per-file code-line budget.
 
 use std::io::Write;
-use std::process::ExitCode;
 
-use crate::cli::config_edit::ConfigDocument;
 use crate::config::Config;
 
 use crate::dns::provider::RecordKind;
@@ -70,64 +68,6 @@ pub(super) struct Commit<'a> {
 	pub fields: serde_json::Value,
 	/// Print the records to publish for this domain after a change.
 	pub records_for: Option<&'a str>,
-}
-
-/// Validate and commit an edit of the configuration file, then restart
-/// mail: what `domain set` does for the per-domain quota and rate, which stay
-/// in the configuration file. `(dry_run, json)`: a dry run prints the diff;
-/// with `json` stdout gets one object.
-pub(super) fn commit(
-	document: ConfigDocument,
-	commit: Commit,
-	(dry_run, json): (bool, bool),
-	out: &mut impl Write,
-	status: &mut impl Write,
-) -> Result<ExitCode, crate::cli::resource::ResourceError> {
-	let failure = |e: std::io::Error| crate::cli::resource::ResourceError::Failure(e.to_string());
-	let Commit {
-		subject,
-		verb,
-		already,
-		action,
-		fields,
-		..
-	} = commit;
-	if dry_run {
-		let diff = document.dry_run()?;
-		if json {
-			let object = crate::cli::json_out::dry_run_object(action, fields, diff);
-			return writeln!(out, "{object}")
-				.map(|()| ExitCode::SUCCESS)
-				.map_err(failure);
-		}
-		write!(out, "{diff}").map_err(failure)?;
-		return Ok(ExitCode::SUCCESS);
-	}
-	let config = document.config()?;
-	let outcome = document.commit()?;
-	let changed = outcome == crate::cli::config_edit::Outcome::Changed;
-	if !changed {
-		writeln!(status, "{subject} already {already}; nothing changed.").map_err(failure)?;
-		if json {
-			let reload = Some(crate::cli::json_out::Reload::None);
-			let object = crate::cli::json_out::change_object(action, false, fields, reload);
-			writeln!(out, "{object}").map_err(failure)?;
-		}
-		return Ok(ExitCode::SUCCESS);
-	}
-	writeln!(status, "{subject} {verb}.").map_err(failure)?;
-	let (code, reload) = crate::cli::config_edit::after_change_reporting(
-		&config,
-		outcome,
-		true,
-		status,
-		crate::cli::stack::run,
-	)?;
-	if json {
-		let object = crate::cli::json_out::change_object(action, true, fields, Some(reload));
-		writeln!(out, "{object}").map_err(failure)?;
-	}
-	Ok(code)
 }
 
 /// The DNS records of `domain` as the lines `--json` reports under
