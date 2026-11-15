@@ -39,6 +39,7 @@ jobs:
   verify:
     name: Verify tag
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     outputs:
@@ -190,6 +191,7 @@ jobs:
     needs: verify
     if: ${{ !inputs.images-only }}
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
     # The image, not dpkg, provides the toolchain: this is upstream 1.100, the
     # same version ci.yml pins, so the .deb users install is built by the
     # compiler that validated the code. Debian's own rustc is too old anyway -
@@ -305,6 +307,7 @@ jobs:
     needs: [verify, build-deb]
     if: ${{ !inputs.images-only }}
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
       # The provenance attestation has to be made in the job that produced
@@ -385,6 +388,7 @@ jobs:
     needs: [verify, build]
     if: ${{ !inputs.images-only }}
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
     env:
@@ -474,6 +478,7 @@ jobs:
     # A rehearsal stops before this job.
     if: ${{ !inputs.images-only && !inputs.dry-run }}
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: write
     env:
@@ -543,6 +548,7 @@ jobs:
     # rehearsal skips it too and builds nothing.
     if: ${{ always() && !inputs.dry-run && needs.verify.result == 'success' && (needs.publish.result == 'success' || inputs.images-only) }}
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
     permissions:
       contents: read
       packages: write
@@ -615,6 +621,7 @@ jobs:
     needs: [verify, image-build]
     if: ${{ always() && needs.image-build.result == 'success' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
       packages: write
