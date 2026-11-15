@@ -8,3 +8,4 @@ pub(super) mod mail_ports;
 pub(super) mod mail_probes;
 pub(super) mod mounts;
 pub(super) mod network;
+pub(super) mod panel;

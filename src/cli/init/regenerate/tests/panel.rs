@@ -46,6 +46,15 @@ fn key(text: &str) -> Option<serde_json::Value> {
 	value.get("x-epistle-panel").cloned()
 }
 
+/// The named service of a rendered compose file.
+fn service(text: &str, name: &str) -> Option<serde_json::Value> {
+	let value: serde_json::Value = serde_json::from_str(text).expect("json");
+	value
+		.get("services")
+		.and_then(|services| services.get(name))
+		.cloned()
+}
+
 #[test]
 fn the_result_says_whether_the_stack_runs_the_panel() {
 	let good = manifest(Some(GOOD));
@@ -69,12 +78,26 @@ fn no_choice_writes_no_key_and_stays_byte_identical() {
 	let answers = answers(None, true);
 	let written = render_for(&answers, true).expect("render");
 	assert_eq!(key(&written), None);
-	for case in [manifest(None), manifest(Some(GOOD))] {
-		assert_eq!(
-			again(&answers, &written, &case).expect("regenerate").text,
-			written
-		);
-	}
+	// Without the package the file does not move.
+	assert_eq!(
+		again(&answers, &written, &manifest(None))
+			.expect("regenerate")
+			.text,
+		written
+	);
+	// With the package the update adds the service, and a second update
+	// leaves the file where the first one put it.
+	let case = manifest(Some(GOOD));
+	let updated = again(&answers, &written, &case).expect("regenerate").text;
+	assert!(
+		service(&updated, "panel").is_some(),
+		"the package brings the service"
+	);
+	assert_eq!(key(&updated), None, "the operator did not choose");
+	assert_eq!(
+		again(&answers, &updated, &case).expect("regenerate").text,
+		updated
+	);
 }
 
 #[test]
@@ -95,7 +118,19 @@ fn a_demanded_panel_is_written_and_survives_an_update() {
 	assert_eq!(key(&written), Some(serde_json::json!(true)));
 	let case = manifest(Some(GOOD));
 	let result = again(&answers, &written, &case).expect("regenerate");
-	assert_eq!(result.text, written);
+	// The update adds the service the package brings, and the demand
+	// survives it.
+	assert!(
+		service(&result.text, "panel").is_some(),
+		"the package brings the service"
+	);
+	assert_eq!(key(&result.text), Some(serde_json::json!(true)));
+	assert_eq!(
+		again(&answers, &result.text, &case)
+			.expect("regenerate")
+			.text,
+		result.text
+	);
 	assert!(
 		result.notes.iter().all(|note| !note.contains("panel")),
 		"{:?}",
@@ -182,4 +217,105 @@ fn the_plain_entry_point_keeps_the_recorded_choice() {
 	let listeners = listeners_to_write(&answers).expect("listeners");
 	let result = regenerate(&answers.data_dir, &listeners, &written).expect("regenerate");
 	assert_eq!(key(&result.text), Some(serde_json::json!(false)));
+}
+
+const SECRETS: [&str; 3] = ["panel_api_token", "panel_session_secret", "panel_admin_id"];
+
+/// Whether the rendered file carries the panel in any of its three forms: the
+/// service, its secrets and the publication.
+fn carries_panel(text: &str) -> (bool, bool, bool) {
+	let value: serde_json::Value = serde_json::from_str(text).expect("json");
+	let ports = value["services"]["mail"]["ports"].to_string();
+	(
+		value["services"].get("panel").is_some(),
+		SECRETS
+			.iter()
+			.any(|name| value["secrets"].get(*name).is_some()),
+		ports.contains(":7587"),
+	)
+}
+
+#[test]
+fn an_update_adds_the_service_the_secrets_and_the_port_and_is_then_stable() {
+	let answers = answers(None, true);
+	let written = render_for(&answers, true).expect("render");
+	assert_eq!(carries_panel(&written), (false, false, false));
+	let case = manifest(Some(GOOD));
+	let updated = again(&answers, &written, &case).expect("regenerate").text;
+	assert_eq!(carries_panel(&updated), (true, true, true));
+	let value: serde_json::Value = serde_json::from_str(&updated).expect("json");
+	assert_eq!(value["services"]["panel"]["image"], GOOD.trim());
+	for name in SECRETS {
+		assert!(value["secrets"][name]["file"].is_string(), "{name}");
+	}
+	assert_eq!(
+		again(&answers, &updated, &case).expect("regenerate").text,
+		updated,
+		"a second update changes nothing"
+	);
+}
+
+#[test]
+fn a_purged_package_takes_the_service_the_secrets_and_the_port_away() {
+	let answers = answers(None, true);
+	let written = render_for(&answers, true).expect("render");
+	let with = again(&answers, &written, &manifest(Some(GOOD)))
+		.expect("regenerate")
+		.text;
+	assert_eq!(carries_panel(&with), (true, true, true));
+	let purged = again(&answers, &with, &manifest(None)).expect("regenerate");
+	assert_eq!(carries_panel(&purged.text), (false, false, false));
+	assert!(!purged.panel);
+}
+
+#[test]
+fn a_declined_panel_stays_out_of_a_stack_that_has_the_package() {
+	let answers = answers(Some(false), true);
+	let written = render_for(&answers, true).expect("render");
+	let result = again(&answers, &written, &manifest(Some(GOOD))).expect("regenerate");
+	assert_eq!(carries_panel(&result.text), (false, false, false));
+	assert_eq!(key(&result.text), Some(serde_json::json!(false)));
+}
+
+#[test]
+fn the_panel_is_not_rendered_when_the_api_is_off_and_the_note_says_so() {
+	let answers = answers(None, false);
+	let written = render_for(&answers, true).expect("render");
+	let result = again(&answers, &written, &manifest(Some(GOOD))).expect("regenerate");
+	assert_eq!(carries_panel(&result.text), (false, false, false));
+	assert!(!result.panel);
+	assert!(
+		result
+			.notes
+			.iter()
+			.any(|note| note.contains("management API is off")),
+		"{:?}",
+		result.notes
+	);
+	// The resolver alone: the image stays unset and the note is the same.
+	let mut resolved = answers.clone();
+	let case = manifest(Some(GOOD));
+	let notes = crate::cli::init::compose::panel_package::resolve(
+		&mut resolved,
+		&case.manifest,
+		false,
+		true,
+	)
+	.expect("a missing API is a note, not an error");
+	assert_eq!(resolved.services.panel_image, None);
+	assert!(notes[0].contains("management API is off"), "{notes:?}");
+}
+
+#[test]
+fn the_address_an_operator_gave_the_panel_port_survives_an_update() {
+	let answers = answers(None, true);
+	let written = render_for(&answers, true).expect("render");
+	let case = manifest(Some(GOOD));
+	let updated = again(&answers, &written, &case).expect("regenerate").text;
+	let edited = updated.replace("127.0.0.1:7587:7587", "10.0.0.5:7587:7587");
+	assert_ne!(edited, updated);
+	assert_eq!(
+		again(&answers, &edited, &case).expect("regenerate").text,
+		edited
+	);
 }

@@ -1296,8 +1296,36 @@ the panel out of a stack that has the package, `true` makes `init` fail when the
 package is missing, and a missing key leaves the package to decide. The choice
 is kept in `x-epistle-panel` in `compose.yaml`, so `stack update` keeps it.
 The panel needs the management API: with the package installed and
-`services.api` off, `init` and `stack update` say so and add no panel. This
-release reads the file and records the choice; it does not add the service yet.
+`services.api` off, `init` and `stack update` say so and add no panel.
+
+With the package installed and the API on, the stack runs a `panel` service
+beside `mail`. It is the panel's own image, hardened like the others: a
+read-only root file system, every capability dropped, `no-new-privileges`, the
+uid 65532 the image declares, a tmpfs `/tmp`, and the limits
+`[resources.panel]` sets (512 MiB and 128 processes by default). Its three
+files — the API key, the session secret and the admin id — reach it as
+read-only compose secrets under `/run/secrets`, and it reads them through
+`EPISTLE_API_TOKEN_FILE`, `EPISTLE_PANEL_SESSION_SECRET_FILE` and
+`EPISTLE_PANEL_ADMIN_ID_FILE`, so no secret is ever in the environment. Its
+healthcheck asks the runtime for its own sign-in page
+(`http://127.0.0.1:7587/`), because the image carries no shell and no curl.
+
+**The panel shares the mail container's network namespace**
+(`network_mode: "service:mail"`), and that is what lets it reach the API: the
+management API binds `127.0.0.1` inside the mail container, where it is closed
+to the network by design, and no container in a network of its own reaches the
+host's loopback. So the panel talks to the API on `127.0.0.1` of that
+namespace, and to nothing else of the host's own services. The API sees every
+panel request from one address, `127.0.0.1`.
+
+The panel's own port is published by the mail container, which owns that
+namespace: a container that shares another container's namespace cannot
+publish a port of its own, so `compose.yaml` carries
+`127.0.0.1:7587:7587` in the `ports:` array of `mail` while the panel runs.
+The port is on the host's loopback because the panel serves plain HTTP: TLS is
+the operator's reverse proxy, the same reason the API and WebDAV are published
+on loopback. The panel's address is therefore `http://127.0.0.1:7587`, and
+its admin area is at `/app/<id>` (see `epistle panel admin-id`).
 
 Apt upgrades refresh the stack only when `podup-epistle.service` exists
 and is enabled for `glyndor-epistle`. Failures print a warning and leave
