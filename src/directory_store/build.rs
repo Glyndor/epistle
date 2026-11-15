@@ -22,8 +22,9 @@ use super::{DynamicAccount, LdapAccount, SqlAccount};
 
 /// `(address, account)` pairs for every account across all sources.
 /// LDAP first, SQL next, then static config, then dynamic, so static
-/// config and dynamic accounts take precedence over the external
-/// directories (the directory's maps keep the last writer). Between
+/// config takes precedence over the external directories (the directory's
+/// maps keep the last writer). A dynamic account does not: an address an
+/// external directory holds stays with it. Between
 /// static and dynamic accounts the first claim of an address wins (static
 /// before dynamic, file order within each): a later claim stays on disk
 /// and is reported by `AccountStore::address_collisions`.
@@ -33,6 +34,16 @@ pub(super) fn address_accounts<'a>(
 	static_accounts: &'a [Account],
 	dynamic: &'a [DynamicAccount],
 ) -> Vec<(String, String)> {
+	// An address an external directory holds is not taken from it by a
+	// dynamic account, whatever order they were loaded in: the external
+	// directory refreshes on a timer, so the account may have been created
+	// before the directory listed the address.
+	let external: HashSet<String> = ldap
+		.iter()
+		.flat_map(|account| account.addresses.iter())
+		.chain(sql.iter().flat_map(|account| account.addresses.iter()))
+		.map(|address| crate::util::address::normalize(address))
+		.collect();
 	ldap.iter()
 		.flat_map(|account| {
 			account
@@ -46,7 +57,7 @@ pub(super) fn address_accounts<'a>(
 				.iter()
 				.map(|address| (address.clone(), account.name.clone()))
 		}))
-		.chain(first_claims(static_accounts, dynamic))
+		.chain(first_claims(static_accounts, dynamic, &external))
 		.collect()
 }
 
@@ -55,8 +66,13 @@ pub(super) fn address_accounts<'a>(
 fn first_claims<'a>(
 	static_accounts: &'a [Account],
 	dynamic: &'a [DynamicAccount],
+	external: &'a HashSet<String>,
 ) -> impl Iterator<Item = (String, String)> + 'a {
 	let mut seen = HashSet::new();
+	let static_names: HashSet<&str> = static_accounts
+		.iter()
+		.map(|account| account.name.as_str())
+		.collect();
 	static_accounts
 		.iter()
 		.map(|account| (&account.addresses, &account.name))
@@ -67,6 +83,15 @@ fn first_claims<'a>(
 		)
 		.flat_map(|(addresses, name)| addresses.iter().map(move |a| (a.clone(), name.clone())))
 		.filter(move |(address, _)| seen.insert(crate::util::address::normalize(address)))
+		.filter(move |(address, name)| {
+			// Static config still wins over the external directories; a
+			// dynamic claim on an address they hold, or on a tagged form of it,
+			// does not.
+			static_names.contains(name.as_str())
+				|| !super::mutators::claim_forms(address)
+					.iter()
+					.any(|form| external.contains(form))
+		})
 }
 
 /// `(account, hash)` pairs for every account with a stored argon2id

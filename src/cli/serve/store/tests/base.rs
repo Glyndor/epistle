@@ -45,3 +45,12 @@ fn the_server_store_delivers_everywhere_with_no_disabled_domain() {
 		Resolution::Account("alice".to_string())
 	);
 }
+
+#[test]
+fn a_masked_limit_of_zero_is_announced_and_only_zero() {
+	use super::super::masked_off_notice;
+	let notice = masked_off_notice(0).expect("a notice for 0");
+	assert!(notice.contains("masked_addresses_max = 0"));
+	assert_eq!(masked_off_notice(1), None);
+	assert_eq!(masked_off_notice(100), None);
+}

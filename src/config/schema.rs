@@ -357,8 +357,9 @@ pub struct Config {
 	/// Maximum masked email addresses one account may own. 0 disables
 	/// masked addresses entirely; the default of 100 is generous for the
 	/// usual disposable-alias use cases (a signup per service) and stops a
-	/// runaway loop from minting the whole address space. `429 Too Many
-	/// Requests` answers requests above the limit.
+	/// runaway loop from minting the whole address space. `409 Conflict`
+	/// answers requests above the limit. Releases before this one read 0 as
+	/// no limit; the server warns at startup when it finds a 0.
 	#[serde(default = "default_masked_addresses_max")]
 	pub masked_addresses_max: usize,
 	/// Outbound event webhooks. Present enables notifications, unless it

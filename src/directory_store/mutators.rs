@@ -97,18 +97,40 @@ impl AccountStore {
 		Ok(previous.expect("closure ran"))
 	}
 
+	/// Every address held by an account the SQL or LDAP backend loaded.
+	pub(super) fn directory_addresses(&self) -> impl Iterator<Item = String> {
+		let sql = self.sql_accounts.read().unwrap_or_else(|p| p.into_inner());
+		let ldap = self.ldap_accounts.read().unwrap_or_else(|p| p.into_inner());
+		let mut all: Vec<String> = Vec::new();
+		all.extend(sql.iter().flat_map(|a| a.addresses.iter().cloned()));
+		all.extend(ldap.iter().flat_map(|a| a.addresses.iter().cloned()));
+		all.into_iter()
+	}
+
+	/// Every account name the SQL or LDAP backend loaded.
+	pub(super) fn directory_names(&self) -> impl Iterator<Item = String> {
+		let sql = self.sql_accounts.read().unwrap_or_else(|p| p.into_inner());
+		let ldap = self.ldap_accounts.read().unwrap_or_else(|p| p.into_inner());
+		let mut all: Vec<String> = Vec::new();
+		all.extend(sql.iter().map(|a| a.name.clone()));
+		all.extend(ldap.iter().map(|a| a.name.clone()));
+		all.into_iter()
+	}
+
 	/// Whether `raw` already routes somewhere: a static account, a dynamic
-	/// account other than `except`, a static `[[alias]]`, or a masked
-	/// address. Callers are inside the locked mutate closure, so the
-	/// check and the following write see the same accounts.
+	/// account other than `except`, an account from the SQL or LDAP
+	/// directory, a static `[[alias]]`, or a masked address. Callers are
+	/// inside the locked mutate closure, so the check and the following
+	/// write see the same accounts.
 	pub(super) fn address_taken(
 		&self,
 		dynamic: &[DynamicAccount],
 		except: Option<&str>,
 		raw: &str,
 	) -> bool {
+		let forms = claim_forms(raw);
 		let wanted = normalize(raw);
-		let same = |address: &String| normalize(address) == wanted;
+		let same = |address: &String| forms.contains(&normalize(address));
 		let used_by_account = self
 			.static_accounts
 			.iter()
@@ -120,6 +142,7 @@ impl AccountStore {
 					.flat_map(|existing| existing.addresses.iter()),
 			)
 			.any(same);
+		let used_by_directory = self.directory_addresses().any(|address| same(&address));
 		let used_by_alias = self.aliases.iter().any(|alias| same(&alias.address));
 		let used_by_masked = self
 			.masked
@@ -127,7 +150,7 @@ impl AccountStore {
 			.unwrap_or_else(|poisoned| poisoned.into_inner())
 			.get(&wanted)
 			.is_some();
-		used_by_account || used_by_alias || used_by_masked
+		used_by_account || used_by_directory || used_by_alias || used_by_masked
 	}
 
 	/// Add an address to a dynamic account. Runs the same domain check
@@ -290,4 +313,29 @@ impl AccountStore {
 	pub fn dynamic_accounts(&self) -> Vec<DynamicAccount> {
 		self.dynamic.read().expect("store lock").clone()
 	}
+}
+
+/// The held addresses that block a claim on `raw`, normalized: the address
+/// itself and, when it carries a `+tag`, the address without it.
+/// `alice+tag@host` delivers to `alice@host` unless it is held itself, so a
+/// claim on the tagged form would divert the mail of whoever holds the base
+/// address. Every check of a claim against an existing holder uses this, so
+/// they cannot disagree about which claims collide.
+pub(super) fn claim_forms(raw: &str) -> Vec<String> {
+	let exact = normalize(raw);
+	let mut forms = Vec::with_capacity(2);
+	if let Some(base) = base_address(&exact) {
+		forms.push(base);
+	}
+	forms.push(exact);
+	forms
+}
+
+/// `local@domain` without a `+tag` in the local part, or `None` when the
+/// address carries no tag. Delivery strips the same tag (see
+/// `Directory::resolve`).
+fn base_address(normalized: &str) -> Option<String> {
+	let (local, domain) = normalized.rsplit_once('@')?;
+	let cut = local.find('+').filter(|cut| *cut > 0)?;
+	Some(format!("{}@{domain}", &local[..cut]))
 }

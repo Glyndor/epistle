@@ -10,6 +10,9 @@ use crate::directory_store::AccountStore;
 /// aliases, with the disabled domains, the per-domain quotas and the
 /// per-domain submission limits that every directory rebuilt from it carries.
 pub(super) fn open_account_store(config: &Config) -> std::io::Result<AccountStore> {
+	if let Some(notice) = masked_off_notice(config.masked_addresses_max) {
+		tracing::warn!("{notice}");
+	}
 	Ok(AccountStore::open(
 		&config.data_dir,
 		config.domains.clone(),
@@ -23,6 +26,15 @@ pub(super) fn open_account_store(config: &Config) -> std::io::Result<AccountStor
 	.with_domain_submission_limits(config.domain_submission_limits.clone())
 	.with_aliases(config.alias.clone())
 	.with_masked_max(config.masked_addresses_max))
+}
+
+/// What to tell the operator when `masked_addresses_max` is 0. An older
+/// release read 0 as "no cap"; it now turns masked addresses off, so a
+/// config written for the old meaning would lose the feature without a word.
+fn masked_off_notice(max: usize) -> Option<&'static str> {
+	(max == 0).then_some(
+		"masked_addresses_max = 0 turns masked addresses off: every request to create one is refused. Releases before this one read 0 as no limit; remove the line for the default of 100, or set the number you want",
+	)
 }
 
 #[cfg(test)]
