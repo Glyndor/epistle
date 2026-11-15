@@ -27,8 +27,9 @@
 //!
 //! - a clean shutdown the server recorded ([`stop`]) says the gap since the
 //!   newest record is a stop, not a clock gone wrong: a clock that agrees with
-//!   the time of that stop, within [`MAX_KNOWN_STOP_SECS`], is believed, and the
-//!   log says how long the server was stopped.
+//!   the time of that stop, within [`MAX_KNOWN_STOP_SECS`], is believed when the
+//!   host has booted since (its boot identifier changed), and the log says how
+//!   long the server was stopped.
 //!
 //! A reading that is not believed is not used. [`Reading::time`] is then the
 //! best estimate (the last believed time plus the monotonic clock), which
@@ -126,7 +127,7 @@ struct State {
 	refused_at: Option<Instant>,
 	/// The time of the last clean shutdown, which explains a gap since the
 	/// newest record.
-	stop: Option<u64>,
+	stop: Option<stop::StopNote>,
 }
 
 /// The shared time reference. One per process, behind an `Arc`.
@@ -162,7 +163,7 @@ impl TimeRef {
 	}
 
 	/// The same reference, told when the server last stopped cleanly.
-	pub fn after_stop(self, stop: Option<u64>) -> Self {
+	pub fn after_stop(self, stop: Option<stop::StopNote>) -> Self {
 		if let Ok(mut state) = self.state.lock() {
 			state.stop = stop;
 		}
@@ -225,7 +226,7 @@ impl TimeRef {
 		// How long the server was stopped, when a recorded clean shutdown
 		// explains why the clock is far from the newest record.
 		let stopped_for = match (state.anchor, state.stop) {
-			(None, Some(stop))
+			(None, Some(stop::StopNote::Rebooted(stop)))
 				if !state.unknown
 					&& !near_floor(&state)
 					&& stop.saturating_add(START_SLACK_SECS) >= state.floor
@@ -324,8 +325,19 @@ impl TimeRef {
 					"the wall clock and the estimate from the evidence log (its newest record plus the \
 					 monotonic clock since) differ by {}; nothing is deleted, sealed or expired, and \
 					 transactional mail is held, until they agree, a timestamp authority confirms the \
-					 date, or `epistle evidence clock accept` does",
-					span(wall.abs_diff(estimate))
+					 date, or `epistle evidence clock accept` does{}",
+					span(wall.abs_diff(estimate)),
+					match state.stop {
+						Some(stop::StopNote::SameBoot) => {
+							"; a clean shutdown was recorded, but the host has not booted since, \
+							 so the gap is not a stop"
+						}
+						Some(stop::StopNote::BootUnknown) => {
+							"; a clean shutdown was recorded, but the boot identifier of the host \
+							 could not be read, so the record is not used"
+						}
+						_ => "",
+					}
 				);
 			}
 		}

@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 
 use super::*;
 use crate::cli::trace::capture::{CapturedEvent, run_with_capture};
+use crate::evidence::timeref::stop::StopNote;
 
 const NOW: u64 = 1_792_000_000;
 const HOUR: u64 = 3600;
@@ -24,7 +25,7 @@ fn errors(events: &[CapturedEvent]) -> Vec<&CapturedEvent> {
 fn a_start_after_a_recorded_clean_stop_is_believed_and_says_how_long_it_was_stopped() {
 	let newest = NOW - 7 * HOUR;
 	let stop = newest + 120;
-	let time = TimeRef::new(newest).after_stop(Some(stop));
+	let time = TimeRef::new(newest).after_stop(Some(StopNote::Rebooted(stop)));
 	let mut said = None;
 	let events = run_with_capture(|| said = Some(time.read_at(NOW, Instant::now())));
 	let reading = said.expect("read");
@@ -44,7 +45,7 @@ fn a_start_after_a_recorded_clean_stop_is_believed_and_says_how_long_it_was_stop
 #[test]
 fn the_explanation_is_given_once() {
 	let newest = NOW - 7 * HOUR;
-	let time = TimeRef::new(newest).after_stop(Some(newest + 120));
+	let time = TimeRef::new(newest).after_stop(Some(StopNote::Rebooted(newest + 120)));
 	let start = Instant::now();
 	let events = run_with_capture(|| {
 		for second in 0..3 {
@@ -86,13 +87,13 @@ fn a_start_with_no_recorded_stop_keeps_the_error_and_names_the_gap() {
 #[test]
 fn a_clock_far_past_the_recorded_stop_is_a_jump_and_not_a_stop() {
 	let newest = NOW - 3 * HOUR;
-	let time = TimeRef::new(newest).after_stop(Some(newest + 60));
+	let time = TimeRef::new(newest).after_stop(Some(StopNote::Rebooted(newest + 60)));
 	let wall = newest + 60 + MAX_KNOWN_STOP_SECS + 1;
 	let mut said = None;
 	let events = run_with_capture(|| said = Some(time.read_at(wall, Instant::now())));
 	assert!(!said.expect("read").sound);
 	assert_eq!(errors(&events).len(), 1, "{events:?}");
-	let edge = TimeRef::new(newest).after_stop(Some(newest + 60));
+	let edge = TimeRef::new(newest).after_stop(Some(StopNote::Rebooted(newest + 60)));
 	assert!(
 		edge.read_at(newest + 60 + MAX_KNOWN_STOP_SECS, Instant::now())
 			.sound
@@ -104,7 +105,7 @@ fn a_clock_behind_the_recorded_stop_is_not_believed() {
 	// The clock went back two days since the server stopped: not a stop.
 	let newest = NOW - 3 * HOUR;
 	let stop = newest + 60;
-	let time = TimeRef::new(newest).after_stop(Some(stop));
+	let time = TimeRef::new(newest).after_stop(Some(StopNote::Rebooted(stop)));
 	let wall = stop - 2 * DAY;
 	let mut said = None;
 	let events = run_with_capture(|| said = Some(time.read_at(wall, Instant::now())));
@@ -123,13 +124,13 @@ fn a_recorded_stop_older_than_the_newest_record_explains_nothing() {
 	// The server ran after that stop (it wrote records) and then died.
 	let newest = NOW - 7 * HOUR;
 	let stale = newest - DAY;
-	let time = TimeRef::new(newest).after_stop(Some(stale));
+	let time = TimeRef::new(newest).after_stop(Some(StopNote::Rebooted(stale)));
 	assert!(!time.read_at(NOW, Instant::now()).sound);
 }
 
 #[test]
 fn a_log_that_could_not_be_read_is_not_explained_by_a_stop() {
-	let time = TimeRef::unknown().after_stop(Some(NOW - HOUR));
+	let time = TimeRef::unknown().after_stop(Some(StopNote::Rebooted(NOW - HOUR)));
 	let mut said = None;
 	let events = run_with_capture(|| said = Some(time.read_at(NOW, Instant::now())));
 	assert!(!said.expect("read").sound);
@@ -186,4 +187,60 @@ fn a_clock_that_is_fine_from_the_start_writes_nothing() {
 		assert!(time.read_at(NOW, Instant::now()).sound);
 	});
 	assert!(events.is_empty(), "{events:?}");
+}
+
+#[test]
+fn a_gap_inside_one_boot_is_not_a_stop_and_the_error_says_so() {
+	let newest = NOW - 7 * HOUR;
+	let note = StopNote::judge(newest + 60, Some("boot-a"), Some("boot-a"));
+	assert_eq!(note, StopNote::SameBoot);
+	let time = TimeRef::new(newest).after_stop(Some(note));
+	let mut said = None;
+	let events = run_with_capture(|| said = Some(time.read_at(NOW, Instant::now())));
+	assert!(!said.expect("read").sound);
+	let errors = errors(&events);
+	assert_eq!(errors.len(), 1, "{events:?}");
+	assert!(
+		message(errors[0]).contains("has not booted since"),
+		"{}",
+		message(errors[0])
+	);
+	assert!(
+		events
+			.iter()
+			.all(|event| event.level != tracing::Level::INFO)
+	);
+}
+
+#[test]
+fn a_new_boot_with_a_gap_inside_the_ceiling_is_a_stop() {
+	let newest = NOW - 7 * HOUR;
+	let note = StopNote::judge(newest + 60, Some("boot-a"), Some("boot-b"));
+	assert_eq!(note, StopNote::Rebooted(newest + 60));
+	let time = TimeRef::new(newest).after_stop(Some(note));
+	let mut said = None;
+	let events = run_with_capture(|| said = Some(time.read_at(NOW, Instant::now())));
+	assert!(said.expect("read").sound);
+	assert_eq!(events.len(), 1, "{events:?}");
+	assert_eq!(events[0].level, tracing::Level::INFO);
+}
+
+#[test]
+fn a_boot_that_cannot_be_read_is_not_believed_and_the_error_says_so() {
+	let newest = NOW - 7 * HOUR;
+	for (recorded, current) in [(None, Some("boot-b")), (Some("boot-a"), None), (None, None)] {
+		let note = StopNote::judge(newest + 60, recorded, current);
+		assert_eq!(note, StopNote::BootUnknown);
+		let time = TimeRef::new(newest).after_stop(Some(note));
+		let mut said = None;
+		let events = run_with_capture(|| said = Some(time.read_at(NOW, Instant::now())));
+		assert!(!said.expect("read").sound);
+		let errors = errors(&events);
+		assert_eq!(errors.len(), 1, "{events:?}");
+		assert!(
+			message(errors[0]).contains("could not be read"),
+			"{}",
+			message(errors[0])
+		);
+	}
 }

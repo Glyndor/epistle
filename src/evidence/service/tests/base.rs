@@ -435,7 +435,8 @@ fn a_clean_stop_is_recorded_only_while_the_clock_is_believed() {
 	let service = EvidenceService::open(believed.path(), Vec::new(), MessageCrypto::disabled())
 		.expect("open");
 	service.record_clean_stop();
-	let recorded = crate::evidence::timeref::stop::read(service.root()).expect("recorded");
+	let (recorded, boot) = crate::evidence::timeref::stop::read(service.root()).expect("recorded");
+	assert_eq!(boot, crate::evidence::timeref::stop::current_boot_id());
 	assert!(recorded.abs_diff(now) < 60, "{recorded} vs {now}");
 
 	// A log whose newest record is hours old: the clock is not believed at

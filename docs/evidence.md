@@ -262,7 +262,12 @@ it:
   read at start is not an empty log: nothing is believed;
 - against a clean shutdown: a server that stops on SIGTERM writes the time it
   believed to `clean-stop.json` in the evidence root, and the next server
-  start reads it and removes it once it runs. A clock that agrees with that time (not
+  start reads it and removes it once it runs. The file also holds the boot
+  identifier of the host (`/proc/sys/kernel/random/boot_id`), a second source the
+  wall clock does not control: the stop explains a gap only when the identifier
+  now differs from the recorded one. The same identifier (the clock moved inside
+  one boot) or one that cannot be read (a container without `/proc`) explains
+  nothing, and the error line says which. A clock that agrees with that time (not
   more than an hour before it, not more than seven days after it, and the stop
   not older than the newest record) is believed even though it is far past the
   newest record, and the log says `the server was stopped for 6h 58m since its

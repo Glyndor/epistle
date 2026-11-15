@@ -220,8 +220,11 @@ impl EvidenceService {
 	pub fn record_clean_stop(&self) {
 		let reading = self.chain.time().read();
 		if reading.sound
-			&& let Err(error) = super::timeref::stop::record(&self.root, reading.time)
-		{
+			&& let Err(error) = super::timeref::stop::record(
+				&self.root,
+				reading.time,
+				super::timeref::stop::current_boot_id().as_deref(),
+			) {
 			tracing::warn!(%error, "could not record the clean shutdown time");
 		}
 	}
