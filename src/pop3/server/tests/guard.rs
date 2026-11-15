@@ -129,7 +129,7 @@ async fn a_valid_user_between_failed_passwords_still_reaches_the_cap() {
 		"{seen}"
 	);
 	assert_eq!(
-		seen.matches("-ERR authentication failed").count(),
+		seen.matches("-ERR [AUTH] authentication failed").count(),
 		MAX_ERROR_STREAK as usize - 1,
 		"{seen}"
 	);

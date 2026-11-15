@@ -161,6 +161,19 @@ control, its test and the residual risks, see the [threat model](threat-model.md
     places and 87 MB at two. A build from source against glibc may keep the
     memory of freed hashes (glibc raises its mmap threshold after the first
     one), so its resident size stays well above that.
+- **POP3 and ManageSieve say whether a failure can pass.** The text after the
+  code stays, so a client that ignores codes keeps working. POP3 answers a
+  refused login `-ERR [AUTH] authentication failed` (RFC 3206), the same line
+  whether the user, the password or a ban was the cause, and a connection over
+  a cap `-ERR [SYS/TEMP] too many connections ...`. The sign-in that finds the
+  password gate full gets `-ERR [SYS/TEMP] try again later`. `[LOGIN-DELAY]` is
+  never sent: the server enforces no minimum interval between logins, and a
+  code on a ban would tell a banned account from a wrong password.
+  ManageSieve answers a storage error that can pass (`NO (TRYLATER) "Storage
+  error."`, RFC 5804 section 1.3) and `AUTHENTICATE` before TLS `NO
+  (ENCRYPT-NEEDED)`. `(AUTH-TOO-WEAK)` and `(WARNINGS)` are never sent: only
+  PLAIN over TLS is offered, with no policy that calls it too weak, and the
+  script check accepts or refuses a script, with no warning in between.
 
 ## Authorization
 

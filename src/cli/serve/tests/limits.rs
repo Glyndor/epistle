@@ -167,7 +167,7 @@ async fn serve_applies_the_client_caps_to_every_listener() {
 	third_is_refused(
 		"pop3s",
 		ports[1],
-		"-ERR too many connections from your address",
+		"-ERR [SYS/TEMP] too many connections from your address",
 	)
 	.await;
 	third_is_refused(

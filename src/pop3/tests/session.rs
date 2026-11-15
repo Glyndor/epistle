@@ -130,7 +130,7 @@ fn bad_password_fails_without_oracle() {
 	let mut session = Session::new(FakeBackend::new(inbox()));
 	session.handle(Command::User("alice".into()));
 	let r = session.handle(Command::Pass(fixtures::second_password().into()));
-	assert_eq!(r, Response::Err("authentication failed".to_string()));
+	assert_eq!(r, Response::Err("[AUTH] authentication failed".to_string()));
 	// Still in AUTHORIZATION: message commands stay rejected.
 	assert!(matches!(session.handle(Command::Stat), Response::Err(_)));
 }
@@ -332,7 +332,7 @@ async fn pop3_failures_now_reach_the_directory() {
 	// Wrong password: directory returns None, ban store records a
 	// failure for both the peer IP and the resolved account.
 	let r = session.handle(Command::Pass(wrong_password().into()));
-	assert_eq!(r, Response::Err("authentication failed".to_string()));
+	assert_eq!(r, Response::Err("[AUTH] authentication failed".to_string()));
 
 	assert!(
 		ban_store.call_count("record_failure") >= 2,

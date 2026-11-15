@@ -348,8 +348,10 @@ fn store_error(error: StoreError) -> Response {
 		StoreError::TooManyScripts => {
 			Response::NoCode("QUOTA/MAXSCRIPTS", "Too many scripts.".to_string())
 		}
+		// Both can pass: the disk may recover and a changed store can be read
+		// again, so the client is told to retry (RFC 5804 section 1.3).
 		StoreError::Io | StoreError::StateMismatch => {
-			Response::No(Some("Storage error.".to_string()))
+			Response::NoCode("TRYLATER", "Storage error.".to_string())
 		}
 	}
 }

@@ -29,7 +29,7 @@ async fn a_client_over_its_cap_gets_an_err_and_a_close() {
 	assert!(first.refusal().is_none() && second.refusal().is_none());
 	assert_eq!(
 		connect(addr).await.refusal(),
-		Some("-ERR too many connections from your address\r\n")
+		Some("-ERR [SYS/TEMP] too many connections from your address\r\n")
 	);
 }
 
@@ -49,6 +49,6 @@ async fn a_full_listener_says_so_even_to_a_new_client() {
 	let _held = connect(addr).await;
 	assert_eq!(
 		connect(addr).await.refusal(),
-		Some("-ERR too many connections, try again later\r\n")
+		Some("-ERR [SYS/TEMP] too many connections, try again later\r\n")
 	);
 }
