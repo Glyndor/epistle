@@ -310,6 +310,27 @@ pub fn appenduid(data_dir: &Path, account: &str, mailbox: &str, id: Uuid) -> Opt
 	Some((snapshot.uid_validity(), uid))
 }
 
+/// Take back messages [`append`] stored in `mailbox`, by id: a multi-message
+/// write that stops half way calls this so the mailbox keeps none of the
+/// copies it had written. Ids that are no longer there are ignored.
+pub fn remove_appended(data_dir: &Path, account: &str, mailbox: &str, ids: &[Uuid]) {
+	if ids.is_empty() {
+		return;
+	}
+	let Ok(mut snapshot) = Snapshot::open(data_dir, account, mailbox, &MessageCrypto::disabled())
+	else {
+		return;
+	};
+	let uids: Vec<u32> = snapshot
+		.messages()
+		.filter(|message| ids.contains(&message.id))
+		.map(|message| message.uid)
+		.collect();
+	if let Err(error) = snapshot.remove_uids(&uids) {
+		tracing::warn!(%error, "cannot take back the copies of a failed multi-message write");
+	}
+}
+
 /// The `(UIDVALIDITY, UID)` for the message in `mailbox` whose
 /// `Message-ID:` matches `message_id`. Used by the save-sent dedup
 /// path so a client APPEND that targets a Message-ID the server

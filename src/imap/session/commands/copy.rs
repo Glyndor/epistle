@@ -27,6 +27,7 @@ impl Session {
 		let saved_search = self.saved_search.clone();
 		// Cloned before `self.state` is borrowed mutably below.
 		let training = self.training.clone();
+		let quota = self.effective_quota();
 		let State::Selected {
 			account,
 			snapshot,
@@ -79,15 +80,39 @@ impl Session {
 			}
 		}
 
-		// Copy all before removing any: a failed copy must not lose mail.
+		// The quota check and the writes are one step under the account's
+		// admission lock, the one APPEND and delivery take: parallel
+		// commands of one account share a single admission. A MOVE leaves
+		// the account as large as it found it, so it is not measured
+		// against the quota, but it holds the lock all the same.
+		let lock = crate::smtp::quota::delivery_lock_for(&data_dir, &account);
+		let admission = lock.lock().unwrap_or_else(|e| e.into_inner());
+		if let Some(limit) = quota.filter(|_| !remove_source) {
+			let size: u64 = matched
+				.iter()
+				.filter_map(|sequence_number| snapshot.by_sequence(*sequence_number))
+				.map(|message| message.size)
+				.sum();
+			let reserved = crate::smtp::quota::reserved_bytes(&data_dir, &account);
+			let usage = mailbox::account_usage(&data_dir, &account, &crypto);
+			if usage.saturating_add(reserved).saturating_add(size) > limit {
+				return Output::text(format!("{tag} NO [OVERQUOTA] storage quota exceeded\r\n"));
+			}
+		}
+
+		// Copy all before removing any: a failed copy must not lose mail,
+		// and the copies already written are taken back, so a copy that
+		// stops half way leaves nothing in the destination.
 		let mut dest_ids = Vec::new();
 		for sequence_number in &matched {
 			let Some(message) = snapshot.by_sequence(*sequence_number) else {
+				mailbox::remove_appended(&data_dir, &account, target, &dest_ids);
 				return Output::text(format!("{tag} NO [UNAVAILABLE] message vanished\r\n"));
 			};
 			let data = match snapshot.read(message) {
 				Ok(data) => data,
 				Err(_) => {
+					mailbox::remove_appended(&data_dir, &account, target, &dest_ids);
 					return Output::text(format!("{tag} NO [SERVERBUG] message unavailable\r\n"));
 				}
 			};
@@ -107,7 +132,10 @@ impl Session {
 			);
 			match copied {
 				Ok(id) => dest_ids.push(id),
-				Err(_) => return Output::text(format!("{tag} NO [SERVERBUG] copy failed\r\n")),
+				Err(_) => {
+					mailbox::remove_appended(&data_dir, &account, target, &dest_ids);
+					return Output::text(format!("{tag} NO [SERVERBUG] copy failed\r\n"));
+				}
 			}
 		}
 
@@ -141,6 +169,7 @@ impl Session {
 				));
 			}
 		}
+		drop(admission);
 		// A message that goes into Junk, or a move out of it, teaches the
 		// account corpus. The queue never waits, so the reply does not
 		// depend on it.
