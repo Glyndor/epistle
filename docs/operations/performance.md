@@ -187,8 +187,8 @@ numbers across machines — but the shape is consistent:
   super-linearly. This is the cost a real session pays once per `SELECT`, not
   per message, but the workload makes it visible. The STORE stage benefits
   directly from the no-op skip and the single-allocation `render_flags` covered
-  above (see [#237](https://github.com/Glyndor/epistle/issues/237) for the
-  `store_flags`/`render_flags` work).
+  above (that `store_flags`/`render_flags` work was done in
+  [#237](https://github.com/Glyndor/epistle/issues/237), now closed).
 
 On the development machine the run printed roughly **540 msgs/sec at N=200** —
 where delivery fsyncs dominate — falling to about **50 msgs/sec at N=2000** as
@@ -202,7 +202,7 @@ rather than the headline number.
 The profiling pass above identified `Snapshot::open` as the cost that scales
 with mailbox size: a cheap `read_dir` followed, **per message**, by opening the
 `.uid`, `.flags` and `.modseq` sidecars plus a `metadata()` call for the size.
-[Issue #236](https://github.com/Glyndor/epistle/issues/236) addresses that
+[Issue #236](https://github.com/Glyndor/epistle/issues/236), now closed, answered that
 directly with a per-mailbox metadata index — a rebuildable read-acceleration
 cache that keeps the filesystem-first store fast at scale **without an external
 database** and **without adding write amplification**. It lives in
