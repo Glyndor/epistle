@@ -74,7 +74,7 @@ fn check_reply(step: &Step, output: &Output) {
 	if step.line.chars().any(|c| c.is_ascii_control()) {
 		assert_eq!(
 			lines,
-			["* BAD malformed command"],
+			["* BAD [CLIENTBUG] malformed command"],
 			"a line with a control character ran"
 		);
 		return;
