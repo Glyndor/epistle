@@ -3,9 +3,9 @@
 
 use super::raw::{Script, start};
 use super::{DEADLINE, config};
-use crate::directory_store::ldap::{LdapAuthenticator, LdapBusy};
 use crate::directory_store::ldap::limits::Limits;
 use crate::directory_store::ldap::load_with_limits;
+use crate::directory_store::ldap::{LdapAuthenticator, LdapBusy};
 use ldap3::LdapError;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
