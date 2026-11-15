@@ -35,7 +35,8 @@ fn worker_for(
 		.get_timestamp()
 		.expect("v7 timestamp")
 		.to_unix()
-		.0 + 1;
+		.0
+		+ 1;
 	let worker = Worker::new(spool, Arc::new(remote.clone()), "mail.sender.example")
 		.with_per_group_concurrency(limits);
 	worker.set_now(start);
