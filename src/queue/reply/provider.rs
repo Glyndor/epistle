@@ -73,13 +73,16 @@ fn names_ip_or_list(text: &str) -> bool {
 		matches!(
 			*word,
 			"ip" | "ips"
-				| "list" | "listed"
+				| "list"
+				| "listed"
 				| "blocklist"
 				| "blacklist"
 				| "blocklisted"
 				| "blacklisted"
-				| "dnsbl" | "rbl"
-				| "spamhaus" | "spamcop"
+				| "dnsbl"
+				| "rbl"
+				| "spamhaus"
+				| "spamcop"
 		)
 	}) {
 		return true;
