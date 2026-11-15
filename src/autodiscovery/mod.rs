@@ -214,11 +214,7 @@ type DomainSet = Arc<std::sync::RwLock<Arc<[String]>>>;
 
 /// The router of the public endpoint, and the domain set it follows: the
 /// client setup documents and, when `policy` names one, the MTA-STS policy.
-fn build(
-	hostname: String,
-	domains: Vec<String>,
-	policy: Option<PathBuf>,
-) -> (Router, DomainSet) {
+fn build(hostname: String, domains: Vec<String>, policy: Option<PathBuf>) -> (Router, DomainSet) {
 	let domains: DomainSet = Arc::new(std::sync::RwLock::new(lowercase(&domains)));
 	let state = Discovery {
 		hostname,
