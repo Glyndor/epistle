@@ -62,3 +62,24 @@ fn a_name_no_hosted_domain_holds_is_left_out() {
 fn no_entry_gives_no_record() {
 	assert!(extra_txt_records(&domains(&["example.org"]), &[]).is_empty());
 }
+
+#[test]
+fn a_600_byte_value_is_carried_whole_and_splits_into_three_valid_strings() {
+	let value = "k".repeat(600);
+	let records = extra_txt_records(&domains(&["example.org"]), &[extra("example.org", &value)]);
+	assert_eq!(records.len(), 1);
+	let strings = txt_strings(&records[0].record.value);
+	assert_eq!(
+		strings.len(),
+		3,
+		"{:?}",
+		strings.iter().map(String::len).collect::<Vec<_>>()
+	);
+	assert!(strings.iter().all(|s| s.len() <= 255));
+	assert_eq!(strings.concat(), value);
+	assert_eq!(
+		crate::dns::txt::txt_character_strings(&records[0].record.value),
+		strings,
+		"the same cut the derived records use"
+	);
+}

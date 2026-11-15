@@ -136,6 +136,15 @@ impl DnsPublish {
 					"[dns_publish] extra_txt value must not be empty".into(),
 				));
 			}
+			// A value that carries the version tag of a record epistle derives
+			// would share its slot at the name and replace or be replaced by
+			// that record: epistle publishes those itself.
+			if let Some(tag) = crate::dns::provider::txt_purpose(&extra.value) {
+				return Err(ConfigError::Invalid(format!(
+					"[dns_publish] extra_txt value for \"{}\" starts with {tag}: epistle publishes that record itself, so it cannot be supplied",
+					extra.name
+				)));
+			}
 			let name = extra.name.trim().to_ascii_lowercase();
 			let hosted = domains.iter().any(|domain| {
 				let domain = domain.trim().to_ascii_lowercase();
