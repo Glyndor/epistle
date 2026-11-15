@@ -62,6 +62,13 @@ pub struct Queue {
 	/// Defaults to [`crate::queue::backoff::DEFAULT_STEPS`].
 	#[serde(default = "default_backoff_steps")]
 	pub backoff_steps: Vec<u64>,
+	/// Minimum pause for provider rate limits, in seconds (default 600).
+	#[serde(default = "default_provider_pause_secs")]
+	pub provider_pause_secs: u64,
+}
+
+const fn default_provider_pause_secs() -> u64 {
+	crate::queue::backoff::DEFAULT_PROVIDER_PAUSE_SECS
 }
 
 fn default_backoff_steps() -> Vec<u64> {
@@ -94,6 +101,7 @@ impl Default for Queue {
 			concurrency: default_concurrency(),
 			per_domain_concurrency: default_per_domain_concurrency(),
 			backoff_steps: default_backoff_steps(),
+			provider_pause_secs: default_provider_pause_secs(),
 		}
 	}
 }
@@ -127,6 +135,11 @@ impl super::Config {
 				"[queue] per_domain_concurrency must be between 1 and concurrency ({}) (got {})",
 				queue.concurrency, queue.per_domain_concurrency
 			));
+		}
+		if !(1..=crate::queue::backoff::MAX_STEP_SECS).contains(&queue.provider_pause_secs) {
+			return invalid(
+				"[queue] provider_pause_secs must be between 1 and 86400 seconds".into(),
+			);
 		}
 		self.validate_backoff_steps()
 	}

@@ -41,7 +41,7 @@ fn every_class_of_failure_has_its_own_verdict() {
 		// Basic codes alone.
 		("550 mailbox unavailable", Other, true, false),
 		("551 user not local", InvalidAddress, true, true),
-		("553 mailbox name not allowed", InvalidAddress, true, true),
+		("553 mailbox name not allowed", Other, true, false),
 		("552 storage allocation exceeded", MailboxFull, false, false),
 		("554 transaction failed", Other, true, false),
 		("450 mailbox busy", Other, false, false),

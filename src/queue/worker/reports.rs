@@ -78,17 +78,21 @@ impl Worker {
 		}
 	}
 
-	/// Truncate `reply` to the first 200 bytes of UTF-8 (the first
-	/// 200 bytes of the remote SMTP reply line; longer values are not
-	/// interesting to log).
-	fn bounded_reply(reply: &str) -> String {
+	/// Keep the enhanced code at the head and reserve room for the fixed
+	/// provider cause. The entire log reply still fits its 200-byte bound.
+	pub(super) fn bounded_reply(reply: &str) -> String {
+		let suffix = crate::queue::reply::provider_cause(reply)
+			.map(|cause| format!("; cause: {}", cause.sentence()))
+			.unwrap_or_default();
+		let limit = 200usize.saturating_sub(suffix.len());
 		let mut out = String::new();
 		for ch in reply.chars() {
-			if out.len() + ch.len_utf8() > 200 {
+			if out.len() + ch.len_utf8() > limit {
 				break;
 			}
 			out.push(ch);
 		}
+		out.push_str(&suffix);
 		out
 	}
 
@@ -216,9 +220,11 @@ impl Worker {
 				}
 				Err(DeliveryError::Transient(reason)) => {
 					let class = classify_reason(reason, false).class.label();
+					let cause =
+						crate::queue::reply::provider_cause(reason).map(|cause| cause.sentence());
 					let before = entry.envelope.recipient_state(recipient);
 					let attempts = before.attempts;
-					tracing::debug!(%id, %recipient, remote, class, %reason, "delivery deferred");
+					tracing::debug!(%id, %recipient, remote, class, cause, %reason, "delivery deferred");
 					if logs_deferral(&before, reason) {
 						self.log_outcome(
 							&entry.envelope,
@@ -241,7 +247,9 @@ impl Worker {
 				Err(DeliveryError::Permanent(reason)) => {
 					let verdict = classify_reason(reason, true);
 					let class = verdict.class.label();
-					tracing::warn!(%id, %recipient, remote, class, %reason, "delivery failed");
+					let cause =
+						crate::queue::reply::provider_cause(reason).map(|cause| cause.sentence());
+					tracing::warn!(%id, %recipient, remote, class, cause, %reason, "delivery failed");
 					self.record_outcome(
 						&entry.envelope,
 						super::evidence::Recorded {

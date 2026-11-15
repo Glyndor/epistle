@@ -15,6 +15,7 @@ mod blocking;
 mod claims;
 mod conversation;
 mod evidence;
+mod provider;
 mod report_failures;
 mod reports;
 mod scheduler;
@@ -80,6 +81,10 @@ pub struct Worker {
 	/// How long a destination that asks to slow down is held off, by the
 	/// number of times in a row it did (seconds).
 	backoff_steps: Vec<u64>,
+	/// Minimum provider pause; receiver-group connection counts are bounded by
+	/// the four known providers, independent of spool size.
+	provider_pause_secs: u64,
+	provider_connections: provider::Connections,
 	/// The longest one delivery attempt to one domain may take.
 	attempt_limit: Duration,
 	/// The destinations on hold, as the spool shows them: rebuilt from the
@@ -121,6 +126,8 @@ impl Worker {
 			claims: claims::Claims::default(),
 			settling: std::sync::Mutex::new(()),
 			backoff_steps: super::backoff::DEFAULT_STEPS.to_vec(),
+			provider_pause_secs: super::backoff::DEFAULT_PROVIDER_PAUSE_SECS,
+			provider_connections: Default::default(),
 			attempt_limit: super::timeouts::ATTEMPT,
 			holds: Default::default(),
 			warmup: None,
@@ -471,16 +478,7 @@ impl Worker {
 			Err(error) => return Err(error),
 		}
 		if let Some(slow) = slow {
-			let mut holds = self.holds();
-			holds.note(slow.domain, slow.until, slow.deferrals, &slow.reason);
-			if let Some(host) = &slow.host {
-				holds.note(
-					super::destination::Destination::exchanger(host),
-					slow.until,
-					slow.deferrals,
-					&slow.reason,
-				);
-			}
+			self.remember_slow(&slow);
 		}
 		self.after_conversation(id, entry, conversation);
 		Ok(())

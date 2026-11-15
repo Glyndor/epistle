@@ -92,3 +92,23 @@ fn concurrency_defaults_and_parses() {
 		toml::from_str("concurrency = 20\nper_domain_concurrency = 4").expect("parse");
 	assert_eq!((parsed.concurrency, parsed.per_domain_concurrency), (20, 4));
 }
+
+#[test]
+fn provider_pause_defaults_parses_and_rejects_out_of_range() {
+	assert_eq!(Queue::default().provider_pause_secs, 600);
+	assert_eq!(with_queue("").queue.provider_pause_secs, 600);
+	for seconds in [1, 900, 86400] {
+		let config = with_queue(&format!("provider_pause_secs = {seconds}"));
+		assert_eq!(config.queue.provider_pause_secs, seconds);
+		assert!(config.validate_queue_limits().is_ok());
+	}
+	for seconds in [0, 86401] {
+		let error = with_queue(&format!("provider_pause_secs = {seconds}"))
+			.validate_queue_limits()
+			.expect_err("out of range");
+		assert_eq!(
+			error.to_string(),
+			"invalid configuration: [queue] provider_pause_secs must be between 1 and 86400 seconds"
+		);
+	}
+}
