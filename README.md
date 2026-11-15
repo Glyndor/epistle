@@ -4,7 +4,7 @@ A self-hosted mail server for your own domains. epistle runs SMTP, IMAP, POP3
 and JMAP with modern email security, on rootless Podman, driven from one CLI.
 It has no web interface: you run it through the CLI and its API.
 
-[![CI](https://github.com/Glyndor/epistle/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/Glyndor/epistle/actions/workflows/ci.yml)
+[![CI](https://github.com/Glyndor/epistle/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Glyndor/epistle/actions/workflows/ci.yml)
 
 ## Features
 
