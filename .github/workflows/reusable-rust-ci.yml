@@ -101,15 +101,11 @@ jobs:
           rustup toolchain install "$TOOLCHAIN" --profile minimal --component rustfmt,clippy
           rustup default "$TOOLCHAIN"
 
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - id: cargo-cache
+        uses: ./.github/actions/rust-cache
         with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            ${{ inputs.working-directory }}/target
-          key: rust-lint-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: rust-lint-${{ runner.os }}-
+          prefix: rust-lint
+          working-directory: ${{ inputs.working-directory }}
 
       - name: rustfmt
         run: cargo fmt --all --check
@@ -125,6 +121,15 @@ jobs:
       - name: fuzz lockfile in sync
         if: hashFiles('fuzz/Cargo.toml') != ''
         run: cargo metadata --locked --format-version 1 --manifest-path fuzz/Cargo.toml > /dev/null
+
+      - name: Save the cargo cache
+        if: ${{ success() }}
+        uses: ./.github/actions/rust-cache
+        with:
+          mode: save
+          cache-hit: ${{ steps.cargo-cache.outputs.cache-hit }}
+          prefix: rust-lint
+          working-directory: ${{ inputs.working-directory }}
 
   test:
     name: Test
@@ -188,18 +193,23 @@ jobs:
             sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y --no-install-recommends $APT_PACKAGES
           fi
 
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - id: cargo-cache
+        uses: ./.github/actions/rust-cache
         with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            ${{ inputs.working-directory }}/target
-          key: rust-test-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: rust-test-${{ runner.os }}-
+          prefix: rust-test
+          working-directory: ${{ inputs.working-directory }}
 
       - name: Tests
         run: cargo test --locked --all-features --workspace
+
+      - name: Save the cargo cache
+        if: ${{ success() }}
+        uses: ./.github/actions/rust-cache
+        with:
+          mode: save
+          cache-hit: ${{ steps.cargo-cache.outputs.cache-hit }}
+          prefix: rust-test
+          working-directory: ${{ inputs.working-directory }}
 
   test-extra:
     name: Test (${{ matrix.os }})
@@ -232,18 +242,23 @@ jobs:
           rustup toolchain install "$TOOLCHAIN" --profile minimal
           rustup default "$TOOLCHAIN"
 
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - id: cargo-cache
+        uses: ./.github/actions/rust-cache
         with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            ${{ inputs.working-directory }}/target
-          key: rust-test-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: rust-test-${{ runner.os }}-
+          prefix: rust-test
+          working-directory: ${{ inputs.working-directory }}
 
       - name: Tests
         run: cargo test --locked --all-features --workspace
+
+      - name: Save the cargo cache
+        if: ${{ success() }}
+        uses: ./.github/actions/rust-cache
+        with:
+          mode: save
+          cache-hit: ${{ steps.cargo-cache.outputs.cache-hit }}
+          prefix: rust-test
+          working-directory: ${{ inputs.working-directory }}
 
   extra-platforms-gate:
     name: Extra platforms
@@ -315,19 +330,15 @@ jobs:
             sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y --no-install-recommends $APT_PACKAGES
           fi
 
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      # The tool version is part of the key: a cache built under an older
+      # pin must not survive a version bump via the `command -v ... ||`
+      # short-circuit below, or the pin would be silently ignored.
+      - id: cargo-cache
+        uses: ./.github/actions/rust-cache
         with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            ~/.cargo/bin
-            ${{ inputs.working-directory }}/target
-          # The tool version is part of the key: a cache built under an older
-          # pin must not survive a version bump via the `command -v ... ||`
-          # short-circuit below, or the pin would be silently ignored.
-          key: rust-cov-${{ runner.os }}-${{ inputs.llvm-cov-version }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: rust-cov-${{ runner.os }}-${{ inputs.llvm-cov-version }}-
+          prefix: rust-cov-${{ inputs.llvm-cov-version }}
+          working-directory: ${{ inputs.working-directory }}
+          extra-path: ~/.cargo/bin
 
       - name: Install cargo-llvm-cov
         env:
@@ -362,6 +373,16 @@ jobs:
           sys.exit(0)
           EOF
 
+      - name: Save the cargo cache
+        if: ${{ success() }}
+        uses: ./.github/actions/rust-cache
+        with:
+          mode: save
+          cache-hit: ${{ steps.cargo-cache.outputs.cache-hit }}
+          prefix: rust-cov-${{ inputs.llvm-cov-version }}
+          working-directory: ${{ inputs.working-directory }}
+          extra-path: ~/.cargo/bin
+
   msrv:
     name: MSRV (${{ inputs.msrv }})
     if: inputs.run-msrv && inputs.msrv != ''
@@ -383,18 +404,23 @@ jobs:
           rustup toolchain install "$MSRV" --profile minimal
           rustup default "$MSRV"
 
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - id: cargo-cache
+        uses: ./.github/actions/rust-cache
         with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            ${{ inputs.working-directory }}/target
-          key: rust-msrv-${{ inputs.msrv }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: rust-msrv-${{ inputs.msrv }}-
+          prefix: rust-msrv-${{ inputs.msrv }}
+          working-directory: ${{ inputs.working-directory }}
 
       - name: Build on the declared MSRV
         run: cargo build --locked --all-features
+
+      - name: Save the cargo cache
+        if: ${{ success() }}
+        uses: ./.github/actions/rust-cache
+        with:
+          mode: save
+          cache-hit: ${{ steps.cargo-cache.outputs.cache-hit }}
+          prefix: rust-msrv-${{ inputs.msrv }}
+          working-directory: ${{ inputs.working-directory }}
 
   msrv-gate:
     name: MSRV
