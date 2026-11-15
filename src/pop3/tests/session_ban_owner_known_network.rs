@@ -130,7 +130,7 @@ async fn pop3_banned_account_from_unknown_network_is_refused() {
 	));
 	assert_eq!(
 		session.handle(Command::Pass(fixture_password().into())),
-		Response::Err("authentication failed".to_string()),
+		Response::Err("[AUTH] authentication failed".to_string()),
 		"a banned account from an unknown network must be refused with the same shape a wrong password produces"
 	);
 	assert_eq!(

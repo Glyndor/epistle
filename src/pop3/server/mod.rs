@@ -38,8 +38,8 @@ const MAX_CONNECTIONS: usize = 500;
 /// What a connection over a cap is told before it is closed.
 fn refusal(why: Refusal) -> &'static [u8] {
 	match why {
-		Refusal::ListenerFull => b"-ERR too many connections, try again later\r\n",
-		Refusal::ClientFull => b"-ERR too many connections from your address\r\n",
+		Refusal::ListenerFull => b"-ERR [SYS/TEMP] too many connections, try again later\r\n",
+		Refusal::ClientFull => b"-ERR [SYS/TEMP] too many connections from your address\r\n",
 	}
 }
 

@@ -70,7 +70,7 @@ async fn twentieth_consecutive_auth_plain_failure_closes() {
 			if attempt == 20 {
 				"-ERR too many errors\r\n"
 			} else {
-				"-ERR authentication failed\r\n"
+				"-ERR [AUTH] authentication failed\r\n"
 			},
 		)
 		.await;
@@ -94,7 +94,7 @@ async fn twentieth_user_pass_failure_must_close_even_with_user_between_attempts(
 			if attempt == 20 {
 				"-ERR too many errors\r\n"
 			} else {
-				"-ERR authentication failed\r\n"
+				"-ERR [AUTH] authentication failed\r\n"
 			},
 		)
 		.await;

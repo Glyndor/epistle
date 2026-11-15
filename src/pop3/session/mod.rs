@@ -12,6 +12,10 @@ use super::bounds::{MAX_MESSAGE_OCTETS, MAX_SESSION_MESSAGES};
 use super::command::Command;
 use crate::smtp::directory::hash_gate::Verdict;
 
+/// What a refused login answers (RFC 3206 `[AUTH]`): the same text whichever
+/// of the user or the password was wrong, or whether the source is banned.
+pub(crate) const AUTH_FAILED: &str = "[AUTH] authentication failed";
+
 /// Storage backing a POP3 session. Implementations talk to the real mailbox;
 /// tests supply an in-memory fake.
 pub trait Backend {
@@ -343,7 +347,7 @@ impl<B: Backend> Session<B> {
 			Verdict::Refused => {
 				// No oracle: same message whether user or pass was wrong.
 				self.user = None;
-				Response::Err("authentication failed".to_string())
+				Response::Err(AUTH_FAILED.to_string())
 			}
 			Verdict::Busy => {
 				self.user = None;
