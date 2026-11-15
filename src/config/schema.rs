@@ -7,9 +7,9 @@ use serde::Deserialize;
 
 use super::defaults::{default_bulk_recipients, default_masked_addresses_max, default_yes};
 use super::{
-	Account, Acme, Alert, Alias, Antispam, Api, Arc, Attachments, Auth, Database, Dkim,
-	DnsProviders, DnsPublish, Ldap, Listener, Llm, LogFormat, MtaSts, Oauth, Otel, Privileges,
-	Queue, SrsDomain, Storage, SubjectPass, Tenant, Tls, Transport, Webhook,
+	Account, Acme, Alert, Alias, Antispam, Api, Arc, Attachments, Auth, Database, Deliverability,
+	Dkim, DnsProviders, DnsPublish, Ldap, Listener, Llm, LogFormat, MtaSts, Oauth, Otel,
+	Privileges, Queue, SrsDomain, Storage, SubjectPass, Tenant, Tls, Transport, Webhook,
 };
 
 /// Top-level server configuration.
@@ -158,6 +158,11 @@ pub struct Config {
 	/// server's reconcile loop. See [`DnsPublish`].
 	#[serde(default)]
 	pub dns_publish: DnsPublish,
+	/// The sender panels the operator has enrolled in. The list only feeds
+	/// the reminder `epistle check deliverability` prints; it changes no
+	/// behaviour of the server. See [`Deliverability`].
+	#[serde(default)]
+	pub deliverability: Deliverability,
 	/// Default storage quota (bytes) per domain, applied to accounts in that
 	/// domain that have no quota of their own.
 	#[serde(default)]

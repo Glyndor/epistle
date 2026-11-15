@@ -2027,6 +2027,7 @@ skip = ["client-locators"]   # groups of records automatic mode does not publish
 dane = true   # publish the DANE TLSA record; the zone has to be signed with DNSSEC
 senders = ["news.example.org"]   # names that send mail, besides the hosted domains
 null_records = true   # keep the null SPF and null MX true in automatic mode (default false)
+extra_txt = [{ name = "example.org", value = "google-site-verification=..." }]   # TXT records you supply
 ```
 
 | Key | Default | Meaning |
@@ -2036,6 +2037,7 @@ null_records = true   # keep the null SPF and null MX true in automatic mode (de
 | `dane` | `false` | Whether the DANE TLSA record may be published. Turn it on for a zone that is signed with DNSSEC; while it is off the record is left out of the wanted set and the certificate refresh publishes none. |
 | `senders` | `[]` | Names that send mail besides the hosted domains. `epistle dns lockdown` leaves each of them its own SPF and gives every other name under a hosted domain, at any depth, a null SPF and a null MX (except a name with an SPF or MX of its own, a CNAME or a delegation). Each entry is an ASCII DNS name, once, at or under a hosted domain; only the exact name is a sender, not the names under it. |
 | `null_records` | `false` | Keep the null SPF and null MX that `epistle dns lockdown` publishes true in automatic mode. Each run covers a name added to the zone since, at any depth, and withdraws the records epistle published at a name that became a sender, got an SPF or MX of its own or was delegated; a record somebody else wrote is never touched. They go into the ledger like the other records. The DMARC policy ramp stays a command you run. |
+| `extra_txt` | `[]` | TXT records you supply: a domain verification token (the one Google Postmaster Tools asks for) or any other TXT epistle does not derive from the configuration. Each entry is `{ name = "...", value = "..." }`, a DNS name at or under a hosted domain and a value that is not empty; a name outside the hosted domains, an empty value, or a value that starts with the version tag of a record epistle publishes itself (`v=spf1`, `v=DMARC1`, `v=DKIM1`, `v=STSv1`, `v=TLSRPTv1`) is refused when the file is read. A value longer than 255 bytes is split into TXT strings the way the derived records are. The records are wanted like the ones epistle derives: `epistle dns-records` prints them, `epistle dns publish` writes them, and they stay published while they are in the list. |
 
 `skip` names a group of records, not a DNS type: `autoconfig` is a CNAME and
 shares its type with the `mta-sts` name, which a deployment may want to keep.
@@ -2068,6 +2070,32 @@ every run, so a credential that was rotated, or created after the server
 started, is picked up without a restart; when the build fails the provider of
 the last run keeps writing and the reason is logged (the credential itself
 never is). See [`dns.md`](dns.md#publishing-the-record-set).
+
+### `[deliverability]`
+
+The sender panels the operator has enrolled in. Google and Microsoft carry
+most of the traffic of a mail server, and each provider has a portal where
+the sender watches what the provider thinks of the sending addresses: the
+spam rate, the complaints, the standing of the sending IP. Enrolling in one
+is a step in the provider's own page; the list here only records that the
+operator did it.
+
+```toml
+[deliverability]
+enrolled = ["postmaster", "snds"]
+```
+
+| Key | Default | Meaning |
+|---|---|---|
+| `enrolled` | `[]` | The panels that are done. `epistle check deliverability` warns about the ones that are not, one warning each, and never blocks: the exit code does not change and no behaviour of the server depends on the list. |
+
+The names are `postmaster` (Google Postmaster Tools), `snds` (Microsoft
+SNDS), `jmrp` (Microsoft JMRP), `yahoo-cfl` (Yahoo Complaint Feedback Loop)
+and `apple` (the Apple iCloud Mail postmaster contact). A name that is not
+one of them is refused when the file is read, and the error names the
+panels that exist. The enrolment of each panel, what it shows and the
+limits it asks the sender to stay inside are in
+[sender panels](operations/providers.md).
 
 ### `[ldap]`
 LDAP or Active Directory backend. A login that no local or SQL account claims is checked with a bind against the directory, and its users are loaded for recipient resolution. Absent disables it. A malformed section aborts startup. The login is escaped (RFC 4515) before it goes into `user_filter`, and an unknown user and a wrong password get the same refusal.

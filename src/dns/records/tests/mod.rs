@@ -5,4 +5,5 @@ pub(super) mod base;
 pub(super) mod c;
 pub(super) mod caa;
 pub(super) mod delegation;
+pub(super) mod extra_txt;
 pub(super) mod txt_and_tlsa;

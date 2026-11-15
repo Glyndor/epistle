@@ -73,6 +73,7 @@ network at all and are reached only through Unix sockets.
 | [Storage](docs/storage.md) | On-disk layout, at-rest encryption, the spool hardening |
 | [DNS setup](docs/dns.md) | The records to publish and the supported DNS providers |
 | [IP warm-up](docs/operations/warmup.md) | Ramping a new sending address up per receiver group |
+| [Sender panels](docs/operations/providers.md) | Enrolling in the provider portals (Postmaster Tools, SNDS, the Yahoo complaint loop), what each shows and the limits it asks the sender to stay inside |
 | [Attachments](docs/attachments.md) | What the attachment policy detects, its defaults and limits |
 | [Evidence of sending](docs/evidence.md) | Mail classes, the signed and timestamped evidence log, bundles a third party can check |
 | [Recovery after a compromise](docs/operations/recovery.md) | What rotating keys fixes and does not, the order to work in, what to tell users |

@@ -22,6 +22,7 @@ mod clip;
 mod database;
 mod debug;
 mod defaults;
+mod deliverability;
 mod dkim;
 mod dns;
 mod dns_publish;
@@ -70,10 +71,13 @@ pub use attachments::{
 };
 pub use auth::Auth;
 pub use database::{Database, DatabaseTls};
+pub use deliverability::{Deliverability, Portal};
 pub use dkim::{DKIM_RSA_REQUIRED_FROM, Dkim, DkimDomain};
 pub use dns::{Dns, DnsProviders};
 pub(crate) use dns::{SUPPORTED_PROVIDERS, is_supported_provider};
-pub use dns_publish::{DEFAULT_INTERVAL_SECS as DNS_PUBLISH_DEFAULT_INTERVAL_SECS, DnsPublish};
+pub use dns_publish::{
+	DEFAULT_INTERVAL_SECS as DNS_PUBLISH_DEFAULT_INTERVAL_SECS, DnsPublish, ExtraTxt,
+};
 pub use error::ConfigError;
 pub use ldap::Ldap;
 pub use listener::{Listener, ListenerKind, Protocol};

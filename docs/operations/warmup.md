@@ -135,7 +135,9 @@ not leave such an account out of the verdict.
 The warm-up only paces volume. Receivers still check SPF, DKIM, DMARC
 and the PTR record (`epistle check dns`), and their own tools show what
 they think of you: Google Postmaster Tools and Microsoft SNDS. Register
-the address there before you start.
+the address there before you start. The enrolment of every sender panel,
+what it shows and the limits it asks you to stay inside are in
+[sender panels](providers.md).
 
 ## Files
 

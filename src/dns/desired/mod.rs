@@ -77,7 +77,7 @@ pub fn for_domains(config: &Config, domains: &[String]) -> Result<Desired, Vec<S
 	// to be one the operator says is signed: that is the
 	// `[dns_publish] dane` flag, and the record filter reads it.
 	let tlsa = served_association(config, &mut warnings);
-	let records = records::build_records_for_roles(
+	let mut records = records::build_records_for_roles(
 		domains,
 		&config.hostname,
 		(&dkim_default, &dkim_per_domain),
@@ -96,6 +96,14 @@ pub fn for_domains(config: &Config, domains: &[String]) -> Result<Desired, Vec<S
 		),
 		&config.roles(),
 	);
+	// The TXT records the operator supplies (a domain verification token,
+	// for instance) are wanted like the ones epistle derives: they are
+	// printed by `epistle dns-records`, published by `epistle dns publish`
+	// and kept published while they are in the list.
+	records.extend(records::extra_txt_records(
+		domains,
+		&config.dns_publish.extra_txt,
+	));
 	// The filter lives here, once: the reconcile loop and `epistle dns
 	// publish` read this set, so a record the configuration skips is out
 	// of both.

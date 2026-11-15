@@ -34,7 +34,7 @@ impl Config {
 		self.validate_send_only_domains()?;
 		self.validate_receive_only_domains()?;
 		self.dns.validate()?;
-		self.dns_publish.validate()?;
+		self.dns_publish.validate(&self.domains)?;
 		self.validate_dns_senders()?;
 		self.validate_accounts()?;
 		self.validate_srs()?;
