@@ -466,8 +466,7 @@ async fn serve(config: Config, role: ServeRole) -> std::io::Result<()> {
 				server = server.with_scram_enabled(config.auth.scram);
 				server = server.with_submission_listener(matches!(
 					listener_config.kind,
-					ListenerKind::Submission
-						| ListenerKind::Submissions
+					ListenerKind::Submission | ListenerKind::Submissions
 				));
 				server = server.with_drain(Arc::clone(&drain));
 				if let Some(budget) = memory_budget.as_ref() {
