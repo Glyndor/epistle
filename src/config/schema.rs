@@ -9,7 +9,8 @@ use super::defaults::{default_bulk_recipients, default_masked_addresses_max, def
 use super::{
 	Account, Acme, Alert, Alias, Antispam, Api, Arc, Attachments, Auth, Database, Deliverability,
 	Dkim, DnsProviders, DnsPublish, Ldap, Listener, Llm, LogFormat, MtaSts, Oauth, Otel,
-	Privileges, Queue, SrsDomain, Storage, SubjectPass, Tenant, Tls, Transport, Webhook,
+	OwnIpBlocklist, Privileges, Queue, SrsDomain, Storage, SubjectPass, Tenant, Tls, Transport,
+	Webhook,
 };
 
 /// Top-level server configuration.
@@ -70,6 +71,9 @@ pub struct Config {
 	/// body (RFC 5782 §2.3). Absent disables the URL-host screen.
 	#[serde(default)]
 	pub dnsbl_url_zones: Vec<String>,
+	/// Periodic DNS blocklist checks of the server's own public addresses.
+	#[serde(default)]
+	pub own_ip_blocklist: OwnIpBlocklist,
 	/// Seconds to delay a first-time (no-reputation) unauthenticated sender
 	/// before accepting. 0 disables the slowdown (the default). Requires a
 	/// configured database.

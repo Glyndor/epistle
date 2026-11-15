@@ -210,6 +210,9 @@ async fn serve(config: Config, role: ServeRole) -> std::io::Result<()> {
 			crypto.clone(),
 		)?),
 	);
+	if role != ServeRole::Certs {
+		tasks::spawn_own_ip_blocklist(&config, Arc::clone(&metrics));
+	}
 	tasks::spawn_storage_maintenance(&config);
 	tasks::spawn_ban_sweep(reputation_pool.clone(), policy.known_network_window_secs);
 	let TlsStack {

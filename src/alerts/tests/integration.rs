@@ -11,7 +11,7 @@ use crate::smtp::session::AcceptedMessage;
 use crate::storage::FsSpool;
 use crate::webhook::{Webhook, WebhookEvent};
 
-async fn capture_server(captured: Arc<Mutex<Vec<WebhookEvent>>>) -> String {
+pub(super) async fn capture_server(captured: Arc<Mutex<Vec<WebhookEvent>>>) -> String {
 	use axum::extract::State;
 	use axum::http::HeaderMap;
 	async fn handler(

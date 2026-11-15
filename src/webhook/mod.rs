@@ -128,6 +128,16 @@ pub enum WebhookEvent {
 		/// The window length in seconds (the rule's `window_secs`).
 		window_secs: u64,
 	},
+	/// One of the server's own public addresses appeared in a DNS blocklist.
+	OwnIpBlocklisted {
+		/// The public address found in the blocklist.
+		address: String,
+		/// The DNS blocklist zone that returned the listing.
+		zone: String,
+		/// The provider's delisting page, when it is known.
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		delist_url: Option<String>,
+	},
 	/// A DKIM key rotation was withdrawn because the new selector never
 	/// showed its key in DNS; the previous key keeps signing.
 	DkimRotationFailed {

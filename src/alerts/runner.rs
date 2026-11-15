@@ -10,6 +10,7 @@ use tokio::task::JoinHandle;
 use tokio::time::{self, MissedTickBehavior};
 
 use crate::config::Alert;
+use crate::dnsbl::own::Listing;
 use crate::metrics::Metrics;
 use crate::smtp::session::AcceptedMessage;
 use crate::storage::FsSpool;
@@ -112,9 +113,15 @@ async fn task_one(
 	ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
 	// The first tick fires immediately; treat it as warmup: just record the
 	// baseline counter value and skip evaluation. From the second tick on,
-	// every interval produces a real delta and a possible fire.
-	ticker.tick().await;
-	state.prev_sample = Some(metrics.snapshot().get(rule.metric).copied().unwrap_or(0));
+	// every interval produces a real delta and a possible fire. The own-IP
+	// counter is a transition counter, so its first sample is evaluated
+	// against zero and a listing found during startup is not lost.
+	if rule.metric == crate::metrics::OWN_IP_BLOCKLISTED {
+		state.prev_sample = Some(0);
+	} else {
+		ticker.tick().await;
+		state.prev_sample = Some(metrics.snapshot().get(rule.metric).copied().unwrap_or(0));
+	}
 	loop {
 		let next = stop.notified();
 		tokio::select! {
@@ -129,7 +136,7 @@ async fn task_one(
 					.unwrap_or(0);
 				state.prev_sample = Some(now_value);
 				if evaluate(&rule, &mut state, delta, now_unix) == Verdict::Fire
-					&& let Err(error) = dispatch(&rule, &ctx, delta, now_unix)
+					&& let Err(error) = dispatch(&rule, &ctx, delta, now_unix, &metrics)
 				{
 					tracing::warn!(%error, rule = %rule.name, "alert dispatch failed");
 				}
@@ -145,7 +152,18 @@ fn dispatch(
 	ctx: &DispatchContext,
 	delta: u64,
 	now_unix: u64,
+	metrics: &Metrics,
 ) -> Result<(), super::AlertError> {
+	let listings = if rule.metric == crate::metrics::OWN_IP_BLOCKLISTED {
+		// The newest `delta` listings are the ones this firing is about; the
+		// older ones were announced when they appeared.
+		let mut found = metrics.own_ip_listings();
+		found.sort_by_key(|listing| std::cmp::Reverse(listing.first_seen));
+		found.truncate(usize::try_from(delta).unwrap_or(usize::MAX));
+		found
+	} else {
+		Vec::new()
+	};
 	if rule.webhook {
 		let Some(poster) = ctx.webhook.as_ref() else {
 			tracing::warn!(
@@ -154,15 +172,27 @@ fn dispatch(
 			);
 			return Ok(());
 		};
-		let event = WebhookEvent::MetricAlert {
-			name: rule.name.clone(),
-			metric: rule.metric.to_string(),
-			value: delta,
-			threshold: rule.threshold,
-			window_secs: rule.window_secs,
-		};
-		let poster = Arc::clone(poster);
-		tokio::spawn(async move { poster.notify(&event).await });
+		if rule.metric == crate::metrics::OWN_IP_BLOCKLISTED {
+			for listing in &listings {
+				let event = WebhookEvent::OwnIpBlocklisted {
+					address: listing.address.to_string(),
+					zone: listing.zone.clone(),
+					delist_url: listing.delist_url.clone(),
+				};
+				let poster = Arc::clone(poster);
+				tokio::spawn(async move { poster.notify(&event).await });
+			}
+		} else {
+			let event = WebhookEvent::MetricAlert {
+				name: rule.name.clone(),
+				metric: rule.metric.to_string(),
+				value: delta,
+				threshold: rule.threshold,
+				window_secs: rule.window_secs,
+			};
+			let poster = Arc::clone(poster);
+			tokio::spawn(async move { poster.notify(&event).await });
+		}
 	}
 	if !rule.email.is_empty() {
 		let message = build_email(
@@ -172,6 +202,7 @@ fn dispatch(
 			now_unix,
 			ctx.auto_submitted,
 			ctx.auto_response_suppress,
+			&listings,
 		)?;
 		// An alert is the operator's own mail: no tenant owns it, so it has no
 		// owner and its events use the server-wide webhook.
@@ -194,12 +225,30 @@ fn build_email(
 	_now_unix: u64,
 	auto_submitted: bool,
 	auto_response_suppress: bool,
+	listings: &[Listing],
 ) -> Result<AcceptedMessage, super::AlertError> {
 	let from_address = format!("epistle-alerts@{hostname}");
 	let from = format!("epistle-alerts <{from_address}>");
 	let subject = format!("[epistle] alert: {}", rule.name);
 	let date = crate::clock::rfc5322(SystemTime::now());
 	let message_id = format!("<{}-alerts@{hostname}>", uuid::Uuid::now_v7());
+	let listing_section = if listings.is_empty() {
+		String::new()
+	} else {
+		let lines = listings
+			.iter()
+			.map(|listing| {
+				let link = listing
+					.delist_url
+					.as_deref()
+					.map(|url| format!("; delist: {url}"))
+					.unwrap_or_default();
+				format!("  {} listed in {}{}", listing.address, listing.zone, link)
+			})
+			.collect::<Vec<_>>()
+			.join("\r\n");
+		format!("\r\n Listings:\r\n{lines}\r\n")
+	};
 	let body = format!(
 		"An alert rule fired.\r\n\
 		 \r\n\
@@ -208,6 +257,7 @@ fn build_email(
 		 Window:    {window} s\r\n\
 		 Delta:     {delta}\r\n\
 		 Condition: {op} {threshold}\r\n\
+		 {listing_section}\
 		 Fired at:  {date}\r\n\
 		 \r\n\
 		 This message was generated automatically by the alert engine. Check\r\n\
@@ -218,6 +268,7 @@ fn build_email(
 		delta = delta,
 		op = op_str(rule.op),
 		threshold = rule.threshold,
+		listing_section = listing_section,
 		date = date,
 	);
 	let mut auto = if auto_submitted {
@@ -317,7 +368,7 @@ mod tests {
 				email: vec!["ops@example.org".into()],
 			};
 			let rule = CompiledRule::from_alert(&alert).expect("rule");
-			dispatch(&rule, &ctx, 60, 1_790_000_000).expect("dispatch");
+			dispatch(&rule, &ctx, 60, 1_790_000_000, &Metrics::new()).expect("dispatch");
 			let ids = spool.list().expect("list");
 			assert_eq!(ids.len(), 1);
 			let entry = spool.load(ids[0]).expect("alert");
