@@ -189,6 +189,9 @@ pub struct Config {
 	/// the field out of that mail.
 	#[serde(default = "default_yes")]
 	pub system_auto_submitted: bool,
+	/// Write the explicit Exchange auto-response suppression list on server mail.
+	#[serde(default = "default_yes")]
+	pub system_auto_response_suppress: bool,
 	/// Write `X-Epistle: 1` on every submission. On by default: it names the
 	/// software the message left, with no version, and a receiver ignores it.
 	/// The value is fixed and a client cannot write or change it. `false`

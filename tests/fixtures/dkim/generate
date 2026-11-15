@@ -178,7 +178,7 @@ def signer_oracle():
 	# This is the documented signing policy, implemented independently.
 	oversign = ["from", "to", "cc", "subject", "reply-to", "date", "message-id",
 		"list-unsubscribe", "list-unsubscribe-post", "content-type",
-		"disposition-notification-to", "return-receipt-to", "auto-submitted"]
+		"disposition-notification-to", "return-receipt-to", "auto-submitted", "x-auto-response-suppress"]
 	fixture_path("signer-raw.eml").write_bytes(wire(HEADERS, BODY))
 	names = [n.lower() for n, _ in reversed(HEADERS)] + oversign
 	for key, algorithm in [("ed25519", "ed25519-sha256"), ("rsa2048", "rsa-sha256")]:

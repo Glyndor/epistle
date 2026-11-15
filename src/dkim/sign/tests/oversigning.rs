@@ -111,7 +111,8 @@ async fn transit_headers_are_excluded_and_can_change() {
 	let (signer, dns) = fixture(true);
 	// `X-Epistle` is the one `X-` field in the signature: it is one of ours
 	// (see `smtp::identification`), so it is signed like any other field the
-	// server writes. A custom `X-` header from a client still is not.
+	// server writes, and so is `X-Auto-Response-Suppress`. A custom `X-`
+	// header from a client still is not.
 	let raw = format!(
 		"Received: old hop\r\nReturn-Path: <old@example.org>\r\nAuthentication-Results: old\r\nX-Custom: old\r\nReceived-SPF: old\r\n{}",
 		message()
@@ -122,7 +123,8 @@ async fn transit_headers_are_excluded_and_can_change() {
 		.map(|field| names(field))
 	{
 		assert!(!list.iter().any(|name| {
-			(name.starts_with("x-") && name != "x-epistle")
+			(name.starts_with("x-")
+				&& !["x-epistle", "x-auto-response-suppress"].contains(&name.as_str()))
 				|| [
 					"received",
 					"return-path",

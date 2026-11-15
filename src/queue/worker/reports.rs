@@ -490,6 +490,7 @@ impl Worker {
 				&entry.data,
 				std::time::SystemTime::now(),
 				self.auto_submitted,
+				self.auto_response_suppress,
 			) {
 			// The warning is advisory and attempted once, whatever came of it.
 			let _ = self.send_report(id, message, "delay warning");

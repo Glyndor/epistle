@@ -66,6 +66,8 @@ async fn headers_that_would_override_the_message_are_refused() {
 		"MIME-Version",
 		"Bcc",
 		"X-Priority",
+		"X-Auto-Response-Suppress",
+		"x-auto-response-suppress",
 	] {
 		let (status, code) = refused("headers", json!({ name: "v" })).await;
 		assert_eq!(status, StatusCode::BAD_REQUEST, "{name} must be refused");
@@ -102,4 +104,40 @@ async fn a_sender_the_account_does_not_own_is_refused() {
 	let (status, code) = refused("sender", json!("mallory@elsewhere.example")).await;
 	assert_eq!(status, StatusCode::FORBIDDEN);
 	assert_eq!(code, "forbidden_from");
+}
+
+#[tokio::test]
+async fn auto_response_suppress_is_explicitly_opt_in() {
+	for (fields, expected) in [
+		(json!({"text": "x"}), false),
+		(
+			json!({"text": "x", "auto_submitted": "auto-generated"}),
+			false,
+		),
+		(json!({"text": "x", "auto_response_suppress": false}), false),
+		(json!({"text": "x", "auto_response_suppress": true}), true),
+	] {
+		let dir = tempfile::tempdir().expect("tempdir");
+		let (status, body) = send(dir.path(), fields).await;
+		assert_eq!(status, StatusCode::OK, "{body}");
+		let (_, raw) = queued(dir.path());
+		let text = String::from_utf8(raw).expect("UTF-8");
+		let headers = text.split_once("\r\n\r\n").expect("header block").0;
+		let values: Vec<_> = headers
+			.lines()
+			.filter_map(|line| {
+				let (name, value) = line.split_once(':')?;
+				name.eq_ignore_ascii_case("X-Auto-Response-Suppress")
+					.then(|| value.trim())
+			})
+			.collect();
+		assert_eq!(
+			values,
+			if expected {
+				vec!["DR, NDR, RN, NRN, OOF, AutoReply"]
+			} else {
+				vec![]
+			}
+		);
+	}
 }

@@ -69,6 +69,7 @@ pub(super) fn spawn_queue_worker(
 	)
 	.with_bounce_sink(sink)
 	.with_system_auto_submitted(config.system_auto_submitted)
+	.with_system_auto_response_suppress(config.system_auto_response_suppress)
 	.with_mta_sts(mta_sts, Arc::clone(&spf_dns))
 	.with_dane(Arc::clone(&spf_dns))
 	.with_metrics(metrics.clone())

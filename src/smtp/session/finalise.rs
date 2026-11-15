@@ -89,6 +89,7 @@ fn exclude_over_quota(
 			&message.data,
 			std::time::SystemTime::now(),
 			session.identification.system_auto_submitted,
+			session.identification.system_auto_response_suppress,
 		) {
 		session.policy.push_quota_report(report);
 	}

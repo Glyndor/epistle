@@ -54,6 +54,8 @@ impl ReportRecipient {
 /// `auto_submitted` writes the `Auto-Submitted: auto-generated` field RFC
 /// 3834 asks for on a machine-generated message; `false` leaves it out
 /// (the `system_auto_submitted` switch).
+/// `auto_response_suppress` independently controls `X-Auto-Response-Suppress`.
+#[allow(clippy::too_many_arguments)]
 pub fn build(
 	hostname: &str,
 	original_reverse_path: &str,
@@ -62,6 +64,7 @@ pub fn build(
 	original_data: &[u8],
 	now: std::time::SystemTime,
 	auto_submitted: bool,
+	auto_response_suppress: bool,
 ) -> Option<AcceptedMessage> {
 	let recipients: Vec<ReportRecipient> = failed_recipients
 		.iter()
@@ -74,6 +77,7 @@ pub fn build(
 		original_data,
 		now,
 		auto_submitted,
+		auto_response_suppress,
 	)
 }
 
@@ -87,6 +91,7 @@ pub fn build_failed(
 	original_data: &[u8],
 	now: std::time::SystemTime,
 	auto_submitted: bool,
+	auto_response_suppress: bool,
 ) -> Option<AcceptedMessage> {
 	build_report(
 		Kind::Failed,
@@ -96,6 +101,7 @@ pub fn build_failed(
 		original_data,
 		now,
 		auto_submitted,
+		auto_response_suppress,
 	)
 }
 
@@ -110,6 +116,7 @@ pub fn build_delay_warning(
 	original_data: &[u8],
 	now: std::time::SystemTime,
 	auto_submitted: bool,
+	auto_response_suppress: bool,
 ) -> Option<AcceptedMessage> {
 	build_report(
 		Kind::Delayed,
@@ -119,6 +126,7 @@ pub fn build_delay_warning(
 		original_data,
 		now,
 		auto_submitted,
+		auto_response_suppress,
 	)
 }
 
@@ -167,6 +175,7 @@ fn is_smtp_reply(reason: &str) -> bool {
 		&& bytes.get(3).is_none_or(|b| *b == b' ')
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_report(
 	kind: Kind,
 	hostname: &str,
@@ -175,6 +184,7 @@ fn build_report(
 	original_data: &[u8],
 	now: std::time::SystemTime,
 	auto_submitted: bool,
+	auto_response_suppress: bool,
 ) -> Option<AcceptedMessage> {
 	if original_reverse_path.is_empty() || delivery_report::is_delivery_report(original_data) {
 		// Never bounce a bounce: the null reverse-path marks the ones this
@@ -236,11 +246,14 @@ fn build_report(
 	// The server writes this notice, so it is `auto-generated`: a DSN that
 	// claims to be a reply invites an auto-responder to answer a bounce
 	// (RFC 3834 section 5).
-	let auto = if auto_submitted {
+	let mut auto = if auto_submitted {
 		format!("Auto-Submitted: {SYSTEM}\r\n")
 	} else {
 		String::new()
 	};
+	auto.push_str(crate::smtp::identification::auto_response_suppress(
+		auto_response_suppress,
+	));
 
 	let body = format!(
 		"From: Mail Delivery System <MAILER-DAEMON@{hostname}>\r\n\

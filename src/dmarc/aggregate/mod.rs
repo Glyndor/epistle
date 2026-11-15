@@ -78,6 +78,8 @@ pub struct Sender<'a> {
 	/// Whether outgoing report messages carry
 	/// `Auto-Submitted: auto-generated`.
 	pub auto_submitted: bool,
+	/// Whether generated mail asks Exchange to suppress automatic responses.
+	pub auto_response_suppress: bool,
 }
 
 /// Write one delivery record to the per-domain JSONL file for today.

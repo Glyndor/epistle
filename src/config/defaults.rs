@@ -11,7 +11,8 @@ pub(super) fn default_masked_addresses_max() -> usize {
 
 /// Default for the identification switches that are on unless the operator
 /// turns them off: a `Feedback-ID`, the bulk unsubscribe address, the list
-/// id, `Auto-Submitted` on server-generated mail and `Organization`.
+/// id, `Auto-Submitted` and `X-Auto-Response-Suppress` on server-generated
+/// mail, and `Organization`.
 pub(super) fn default_yes() -> bool {
 	true
 }

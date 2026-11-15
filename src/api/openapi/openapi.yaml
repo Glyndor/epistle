@@ -3273,6 +3273,10 @@ components:
             Written as `Auto-Submitted`. Case-insensitive. A value in the
             request always wins. When absent and the API key has the per-key
             setting enabled, the server writes `auto-generated`.
+        auto_response_suppress:
+          type: boolean
+          default: false
+          description: "Writes `X-Auto-Response-Suppress: DR, NDR, RN, NRN, OOF, AutoReply` when true. Independent of auto_submitted and the server mail setting."
         feedback_id:
           type: string
           description: Written as `Feedback-ID`. Printable ASCII without spaces.
@@ -3281,7 +3285,7 @@ components:
           maxProperties: 32
           additionalProperties:
             type: string
-          description: Custom headers. A name is `X-` followed by letters, digits and hyphens, at most 76 characters, and not `X-Priority`.
+          description: Custom headers. A name is `X-` followed by letters, digits and hyphens, at most 76 characters, and neither `X-Priority` nor `X-Auto-Response-Suppress`.
         save_sent:
           type: boolean
           description: Whether a copy goes to the account's Sent folder. Absent follows the account setting. Transactional mail is never copied.

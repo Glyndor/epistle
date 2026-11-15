@@ -47,6 +47,7 @@ const SIGNED_HEADERS: &[&str] = &[
 	"disposition-notification-to",
 	"return-receipt-to",
 	"auto-submitted",
+	"x-auto-response-suppress",
 	"organization",
 	"x-epistle",
 ];
@@ -70,6 +71,7 @@ const OVERSIGNED_HEADERS: &[&str] = &[
 	// legitimately writes `Auto-Submitted`, so oversigning it costs
 	// nothing at delivery and stops a forged "this was automatic" claim.
 	"auto-submitted",
+	"x-auto-response-suppress",
 ];
 
 /// A DKIM signer: always ed25519, optionally also RSA for dual-signing.

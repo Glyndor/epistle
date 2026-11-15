@@ -33,7 +33,7 @@ pub(super) const MAX_EXTRA_KEY_LEN: usize = 64;
 pub(super) const MAX_EXTRA_VALUE_LEN: usize = 256;
 
 /// `X-` headers the server writes itself from a named field.
-const RESERVED_CUSTOM: &[&str] = &["x-priority"];
+const RESERVED_CUSTOM: &[&str] = &["x-priority", "x-auto-response-suppress"];
 
 #[derive(Deserialize)]
 pub struct SendRequest {
@@ -75,6 +75,9 @@ pub struct SendRequest {
 	list_unsubscribe_post: bool,
 	#[serde(default)]
 	auto_submitted: Option<String>,
+	/// Ask Exchange receivers to suppress automatic responses.
+	#[serde(default)]
+	auto_response_suppress: bool,
 	#[serde(default)]
 	feedback_id: Option<String>,
 	/// Custom headers; every name starts with `X-`.
@@ -262,6 +265,9 @@ impl SendRequest {
 				lines.push("Auto-Submitted: auto-generated\r\n".to_string());
 			}
 			None => {}
+		}
+		if self.auto_response_suppress {
+			lines.push(crate::smtp::identification::auto_response_suppress(true).to_string());
 		}
 		if let Some(value) = &self.feedback_id {
 			if value.is_empty() || !value.bytes().all(|b| (0x21..0x7f).contains(&b)) {

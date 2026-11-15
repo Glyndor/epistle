@@ -93,6 +93,8 @@ pub struct Worker {
 	/// `Auto-Submitted: auto-generated` (the `system_auto_submitted`
 	/// switch).
 	auto_submitted: bool,
+	/// Whether generated mail asks Exchange to suppress automatic responses.
+	auto_response_suppress: bool,
 }
 
 impl Worker {
@@ -125,7 +127,14 @@ impl Worker {
 			holds: Default::default(),
 			warmup: None,
 			auto_submitted: true,
+			auto_response_suppress: true,
 		}
+	}
+
+	/// Control Exchange auto-response suppression on failure and delay notices.
+	pub fn with_system_auto_response_suppress(mut self, enabled: bool) -> Self {
+		self.auto_response_suppress = enabled;
+		self
 	}
 
 	/// Write `Auto-Submitted` on the failure and delay notices this worker
