@@ -86,6 +86,7 @@ pub(super) fn spawn_queue_worker(
 		config.queue.concurrency,
 		config.queue.per_domain_concurrency,
 	)
+	.with_per_group_concurrency(config.queue.per_group_concurrency.clone())
 	.with_backoff(config.queue.backoff_steps.clone())
 	.with_provider_pause(config.queue.provider_pause_secs)
 	.with_delivery_log(crate::storage::DeliveryLog::open(

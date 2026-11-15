@@ -58,3 +58,84 @@ or says that the mailbox is not allowed for this/that user. An ambiguous
 `mailbox name not allowed`, a sender error, or a policy-looking reply does
 not suppress. Enhanced statuses still take precedence: `553 5.1.1` identifies
 a bad recipient, whereas `553 5.7.26` is a sending authentication problem.
+
+## Receiver groups
+
+A provider judges a sender by the traffic it sees, not by the domain the
+mail is for. One provider hosts thousands of recipient domains behind
+the same exchangers, so fifty of them are fifty queues towards it, and
+that is the pattern that gets a sending address throttled.
+
+The queue therefore groups the recipients by the provider that receives
+them, read from the exchanger that answers, and gives each group one
+queue of its own.
+
+### The groups
+
+| Group | Receiver | Recognised by these MX names |
+|---|---|---|
+| `gmail` | Gmail and Google Workspace | `google.com`, `googlemail.com` |
+| `outlook` | Outlook.com, Hotmail and Microsoft 365 | `outlook.com`, `hotmail.com`, `mx.microsoft` |
+| `yahoo` | Yahoo and AOL | `yahoodns.net`, `yahoo.com` |
+| `icloud` | iCloud Mail | `icloud.com` |
+| `gmx` | GMX, Web.de and mail.com | `gmx.net`, `web.de`, `mail.com` |
+| `mailru` | Mail.ru | `mail.ru` |
+| `other` | every other receiver | — |
+
+A host counts as a provider only when the provider's name ends it on a
+label boundary: `mx00.emig.gmx.net` is GMX, `mx-ha02.web.de` is GMX,
+`mxs.mail.ru` is Mail.ru, while `gmx.net.evil.example` is nobody. The
+group is read from the exchanger that answers, never from the recipient
+domain, so a domain is counted with the provider that really receives
+it. The same groups drive the [IP warm-up](warmup.md).
+
+### The limits
+
+In `[queue]`, `per_group_concurrency` gives each group the number of
+conversations it may have at once, and how long it waits between two of
+its connections:
+
+```toml
+[queue.per_group_concurrency]
+gmail = 2
+outlook = 2
+gmx = { concurrency = 1, min_wait_secs = 30 }
+```
+
+The value is either the number of conversations at once, or a table with
+`concurrency` (between 1 and the queue's `concurrency`) and
+`min_wait_secs` (between 0 and 3600 seconds). A group with no entry is
+not limited.
+
+The table is absent on a server that existed before this setting, and
+that server keeps its behaviour exactly as it was. `epistle init` writes
+it for a new installation, with the six named providers at the same
+share a single recipient domain gets.
+
+### What it does
+
+- **One queue per provider.** The conversations of every recipient
+  domain a provider hosts share the group's slots, so fifty domains
+  behind one provider open one set of conversations towards it, not
+  fifty. Two groups never share: a Gmail limit never holds back an
+  Outlook conversation.
+- **The group is full.** The conversation is not attempted: its
+  recipients wait for the next slot with no attempt counted, no backoff
+  of their own and nothing in the delivery log, the way a recipient
+  waiting for the warm-up cap waits.
+- **The wait between connections.** After a conversation with a group
+  ends, the group waits `min_wait_secs` before the next connection to
+  it, so a provider sees a steady stream instead of a burst. The wait
+  is kept in memory, in the worker: a restart forgets it.
+- **The stricter limit wins.** A provider that asked us to slow down
+  holds its group to one connection until the pause is over. A group
+  limit never loosens that: the group admits a connection only when
+  both the limit and the pause allow it.
+
+### Checking it
+
+`epistle queue list` shows the outbound queue and names the destinations
+on hold; `epistle queue destinations` lists those holds and
+`epistle queue release-destination` releases one. The group of a delivery
+is read from the exchanger that answered, which the delivery log records
+as the remote of every session.

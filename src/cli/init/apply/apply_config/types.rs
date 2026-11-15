@@ -44,6 +44,11 @@ pub(in crate::cli::init::apply) struct DesiredConfig {
 	/// The attachment policy for a new install. Never merged into an
 	/// existing configuration: see [`NEW_INSTALL_ONLY`].
 	pub(in crate::cli::init::apply) attachments: DesiredAttachments,
+	/// The `[queue]` section `init` writes: the receiver groups and how
+	/// many conversations each may have at once. Written only into a new
+	/// configuration: see [`NEW_INSTALL_ONLY`].
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub(in crate::cli::init::apply) queue: Option<DesiredQueue>,
 }
 
 /// Sections and keys `init` writes only into a configuration it creates.
@@ -54,6 +59,7 @@ pub(in crate::cli::init::apply) const NEW_INSTALL_ONLY: &[(&str, Option<&str>)] 
 	("antispam", Some("clamd_on_error")),
 	("dkim", Some("domain")),
 	("srs_domain", None),
+	("queue", None),
 ];
 
 /// One `[[srs_domain]]` entry `init` writes for a domain of a new install.
@@ -175,6 +181,36 @@ pub(in crate::cli::init::apply) struct DesiredDns {
 pub(in crate::cli::init::apply) struct DesiredDatabase {
 	pub(in crate::cli::init::apply) url: String,
 	pub(in crate::cli::init::apply) password_file: String,
+}
+
+/// The `[queue]` section `init` writes for a new install: the receiver
+/// groups and the conversations each of them may have at once.
+///
+/// A provider judges a sender by the traffic it sees, not by the domain
+/// the mail is for: fifty recipient domains hosted by one provider are
+/// fifty queues towards it. The receiver group (read from the exchanger
+/// that answers, the same mapping the IP warm-up uses) is the queue they
+/// share, and each group gets a limit of its own.
+#[derive(Debug, Serialize)]
+pub(in crate::cli::init::apply) struct DesiredQueue {
+	/// The conversations at once with each receiver group.
+	pub(in crate::cli::init::apply) per_group_concurrency:
+		std::collections::BTreeMap<String, usize>,
+}
+
+/// The receiver groups `init` writes a limit for, and the conversations
+/// each of them may have at once: the same share a recipient domain gets
+/// (`per_domain_concurrency`), so a provider that hosts one domain only
+/// is not throttled by the setting. Every receiver that is not one of
+/// these providers shares the `other` group, which is left unlimited.
+pub(super) fn desired_group_limits() -> std::collections::BTreeMap<String, usize> {
+	use crate::queue::limits::DEFAULT_PER_DOMAIN_CONCURRENCY;
+	use crate::queue::warmup::Group;
+	Group::ALL
+		.into_iter()
+		.filter(|group| *group != Group::Other)
+		.map(|group| (group.label().to_string(), DEFAULT_PER_DOMAIN_CONCURRENCY))
+		.collect()
 }
 
 /// The outcome of trying to merge the desired config with whatever is

@@ -5,6 +5,14 @@
 //! Everything here is sized by what is in conversation right now, never by
 //! the spool: a claim is released when its conversation ends, is dropped,
 //! or panics, and a domain with no conversation left has no entry.
+//!
+//! The receiver groups are counted the same way. A provider judges a
+//! sender by its own traffic, so the conversations of every domain hosted
+//! by one provider share the group's slots: the group has a cap of its own
+//! and waits a minimum time between two of its connections (see
+//! [`crate::queue::limits::GroupLimit`]). The group of a conversation is
+//! known only when its exchanger answers, so the slot is taken there and
+//! not when the conversation is claimed.
 
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
@@ -14,7 +22,9 @@ use std::task::{Context, Poll};
 
 use uuid::Uuid;
 
-use crate::queue::limits::Limits;
+use super::Worker;
+use crate::queue::limits::{GroupLimit, Limits};
+use crate::queue::warmup::Group;
 
 /// The recipients in conversation and the slots in use, in this worker.
 #[derive(Default)]
@@ -31,6 +41,11 @@ struct ClaimState {
 	domains: HashMap<String, usize>,
 	/// Conversations running per sender. A sender with none has no key.
 	senders: HashMap<String, usize>,
+	/// Conversations running per receiver group. A group with none has no
+	/// key.
+	groups: HashMap<Group, usize>,
+	/// The earliest time a receiver group may take another conversation.
+	ready: HashMap<Group, u64>,
 	running: usize,
 }
 
@@ -134,6 +149,127 @@ impl Claims {
 			sender: sender.to_string(),
 			recipients: free,
 		})
+	}
+
+	/// Take a conversation slot of the receiver group `group`, when the
+	/// group has room under `limit` and its minimum wait has passed at
+	/// `now`. `Err(until)` when it may not: the group is at its cap, or
+	/// its wait has not passed yet, and `until` says when it may be used
+	/// again.
+	pub(super) fn take_group(&self, group: Group, limit: &GroupLimit, now: u64) -> Result<(), u64> {
+		let mut state = self.state();
+		if let Some(ready) = state
+			.ready
+			.get(&group)
+			.copied()
+			.filter(|ready| *ready > now)
+		{
+			return Err(ready);
+		}
+		if state.groups.get(&group).copied().unwrap_or(0) >= limit.concurrency {
+			return Err(now.saturating_add(1));
+		}
+		*state.groups.entry(group).or_default() += 1;
+		Ok(())
+	}
+
+	/// Release the conversation slot of the receiver group `group`. The
+	/// group may take another one after `min_wait_secs` seconds.
+	pub(super) fn release_group(&self, group: Group, min_wait_secs: u64, now: u64) {
+		let mut state = self.state();
+		if let Some(count) = state.groups.get_mut(&group) {
+			*count = count.saturating_sub(1);
+			if *count == 0 {
+				state.groups.remove(&group);
+			}
+		}
+		state.ready.insert(group, now.saturating_add(min_wait_secs));
+	}
+}
+
+/// One conversation slot of a receiver group. Dropping it releases the
+/// slot, and the group waits its minimum wait before taking another.
+pub(super) struct GroupSlot<'a> {
+	worker: &'a Worker,
+	/// The group the slot belongs to.
+	pub(super) group: Group,
+	min_wait_secs: u64,
+}
+
+impl Drop for GroupSlot<'_> {
+	fn drop(&mut self) {
+		self.worker
+			.claims
+			.release_group(self.group, self.min_wait_secs, self.worker.now_epoch());
+	}
+}
+
+/// The receiver-group admission of one conversation: the slot of the group
+/// it is speaking to, and the group that kept it from speaking.
+///
+/// A conversation speaks to one exchanger at a time: moving to another
+/// group releases the slot of the one before.
+#[derive(Default)]
+pub(super) struct GroupAdmission<'a> {
+	state: Mutex<AdmissionState<'a>>,
+}
+
+#[derive(Default)]
+struct AdmissionState<'a> {
+	/// The slot of the group the conversation is speaking to.
+	slot: Option<GroupSlot<'a>>,
+	/// The group that kept the conversation from speaking, and when it may
+	/// be spoken to.
+	busy: Option<(Group, u64)>,
+}
+
+impl<'a> GroupAdmission<'a> {
+	fn state(&self) -> std::sync::MutexGuard<'_, AdmissionState<'a>> {
+		self.state
+			.lock()
+			.unwrap_or_else(|poisoned| poisoned.into_inner())
+	}
+
+	/// Whether the receiver group of `host` may not be spoken to now. The
+	/// group's slot is taken when it may.
+	pub(super) fn blocked(&self, worker: &'a Worker, host: &str, now: u64) -> bool {
+		let group = Group::of_exchanger(host);
+		let Some(limit) = worker.group_limit(group) else {
+			return false;
+		};
+		let mut state = self.state();
+		// The slot this conversation already holds for the group is enough.
+		if state.slot.as_ref().is_some_and(|slot| slot.group == group) {
+			state.busy = None;
+			return false;
+		}
+		// The slot of another group is of no use here.
+		state.slot = None;
+		match worker.claims.take_group(group, limit, now) {
+			Ok(()) => {
+				state.slot = Some(GroupSlot {
+					worker,
+					group,
+					min_wait_secs: limit.min_wait_secs,
+				});
+				state.busy = None;
+				false
+			}
+			Err(until) => {
+				// The group that frees first is the one to wait for.
+				state.busy = Some(match state.busy {
+					Some((group, earlier)) if earlier <= until => (group, earlier),
+					_ => (group, until),
+				});
+				true
+			}
+		}
+	}
+
+	/// The group that kept the conversation from speaking, and when it may
+	/// be spoken to.
+	pub(super) fn busy(&self) -> Option<(Group, u64)> {
+		self.state().busy
 	}
 }
 

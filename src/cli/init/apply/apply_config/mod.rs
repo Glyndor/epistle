@@ -231,6 +231,9 @@ pub(super) fn build_config(
 			macros: "quarantine",
 			encrypted_archives: "flag",
 		},
+		queue: Some(DesiredQueue {
+			per_group_concurrency: desired_group_limits(),
+		}),
 	})
 }
 

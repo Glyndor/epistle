@@ -65,7 +65,7 @@ pub struct StartArgs {
 	/// Recipients a day the address sends, or is to send.
 	#[arg(long, value_parser = volume)]
 	daily_volume: Option<u32>,
-	/// Only this receiver group: gmail, outlook, yahoo, icloud or other.
+	/// Only this receiver group: gmail, outlook, yahoo, icloud, gmx, mailru or other.
 	#[arg(long, value_parser = super::group, conflicts_with = "all")]
 	group: Option<Group>,
 	/// Every receiver group (the default).

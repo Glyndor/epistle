@@ -11,7 +11,8 @@ use super::schedule::{Event, EventKind};
 /// The body of a `warmup.ok`, `warmup.held` or `warmup.backoff` event.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WarmupReport {
-	/// The receiver group: `gmail`, `outlook`, `yahoo`, `icloud`, `other`.
+	/// The receiver group: `gmail`, `outlook`, `yahoo`, `icloud`, `gmx`,
+	/// `mailru`, `other`.
 	pub group: String,
 	/// The UTC day judged, `YYYY-MM-DD`.
 	pub day: String,
