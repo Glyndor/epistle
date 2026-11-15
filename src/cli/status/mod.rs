@@ -13,6 +13,7 @@ mod clock;
 mod clock_area;
 mod config_area;
 mod db_area;
+mod deliverability_area;
 mod disk_area;
 mod dns_area;
 mod dns_dkim;
@@ -93,6 +94,8 @@ pub enum CheckArea {
 	Clock,
 	/// The evidence verifies; transactional mail is not held.
 	Evidence,
+	/// The sender panels the operator has not enrolled in. Only warns.
+	Deliverability,
 }
 
 impl CheckArea {
@@ -115,6 +118,7 @@ impl CheckArea {
 		CheckArea::Resources,
 		CheckArea::Clock,
 		CheckArea::Evidence,
+		CheckArea::Deliverability,
 	];
 
 	/// The name used on the command line and as the JSON key.
@@ -137,6 +141,7 @@ impl CheckArea {
 			CheckArea::Resources => "resources",
 			CheckArea::Clock => "clock",
 			CheckArea::Evidence => "evidence",
+			CheckArea::Deliverability => "deliverability",
 		}
 	}
 }
@@ -307,6 +312,7 @@ async fn check_area(area: CheckArea, ctx: &Ctx) -> AreaReport {
 		CheckArea::Resources => resources_area::check(ctx).await,
 		CheckArea::Clock => clock_area::check(ctx).await,
 		CheckArea::Evidence => evidence_area::check(ctx).await,
+		CheckArea::Deliverability => deliverability_area::check(ctx).await,
 	}
 }
 

@@ -87,6 +87,7 @@ that never restart accept the option and ignore it.
 | [Bans and the IP allow list](#authentication-bans) | `epistle ban …` |
 | [Outbound queue: retry, hold, release](#outbound-queue) | `epistle queue …` |
 | [IP warm-up for a new sending address](operations/warmup.md) | `epistle warmup …` |
+| [Enrol in the sender panels](operations/providers.md) | `epistle check deliverability` |
 | [Evidence of sending: verify, export, check](evidence.md) | `epistle evidence …` |
 | [Antispam: DNSBL, greylisting, ClamAV](#antispam-epistle-antispam) | `epistle antispam …` |
 | [Attachment policy and checking a message](#attachments-epistle-attachments) | `epistle attachments policy\|check` |
@@ -339,6 +340,7 @@ after 5 s. `--config` defaults to `/etc/epistle/mail.toml`.
 | `evidence` | the last verification of the evidence is under an hour old and found nothing to flag | the server has not verified yet, timestamp tokens are pending or failing, timestamps are disabled, a task reported an error, the last verification took half of the time it is given or more, or it is older than an hour | transactional mail is held (clear it with `epistle evidence acknowledge` once understood), or the status cannot be read |
 | `subid` | the ranges `glyndor-epistle` holds in `/etc/subuid` and `/etc/subgid` overlap no other account's | `glyndor-epistle` has no range in a table | a range overlaps another account's; the finding names that account and the shared interval (see [Moving an overlapping range](#moving-an-overlapping-subordinate-id-range)) |
 | `warmup` | one finding per receiver group (cap, sent today, deferred and bounced share, verdict, next cap, waiting); also `off` when the warm-up is not running | a group's verdict is `very_bad`; the warm-up is off while the address looks new and 200 or more recipients went out today or are queued (see [warm-up](operations/warmup.md)); the warm-up files cannot be read | |
+| `deliverability` | every sender panel is enrolled (the list in `[deliverability] enrolled`) | one finding per panel the operator has not enrolled in: the panel, what it is and where it lives (see [sender panels](operations/providers.md)) | |
 
 The `clock` area adds two read-only probes. The host probe asks the
 kernel via `adjtimex`, with `timedatectl show -p NTPSynchronized` when

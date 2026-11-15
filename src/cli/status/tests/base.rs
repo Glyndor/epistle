@@ -170,7 +170,8 @@ fn status_covers_every_area_in_a_stable_order() {
 			"warmup",
 			"resources",
 			"clock",
-			"evidence"
+			"evidence",
+			"deliverability"
 		]
 	);
 }

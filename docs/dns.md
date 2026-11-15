@@ -455,6 +455,20 @@ set at all: `[dns_publish] skip` names the group (see
 through the ledger like a record the configuration no longer needs. A record
 that is in the zone and was never in the ledger is left alone.
 
+A TXT record epistle cannot derive from the configuration is supplied by the
+operator: `[dns_publish] extra_txt` takes the name and the value, and the
+record joins the set like the ones epistle derives. The verification token
+Google Postmaster Tools asks for is one of them:
+
+```toml
+[dns_publish]
+extra_txt = [{ name = "example.org", value = "google-site-verification=..." }]
+```
+
+`epistle dns-records` prints it, `epistle dns publish` writes it, and it
+stays published while it is in the list. The sender panels and what each
+one asks for are in [sender panels](operations/providers.md).
+
 What epistle wrote is kept in a ledger, one file per zone under
 `<data_dir>/dns-publish/<zone>.json`: the name, type, value, the release that
 wrote it and when. Own versus foreign comes from the ledger alone, never from
