@@ -427,7 +427,13 @@ impl ApiKeyStore {
 				key.auto_submitted = auto_submitted;
 				Ok(())
 			},
-		)?;
+		)
+		// Keep the closure's own error kind (`NotFound`), which the
+		// blanket conversion would turn into `Other`.
+		.map_err(|error| match error {
+			crate::storage::locked::EditError::Io(error)
+			| crate::storage::locked::EditError::Mutate(error) => error,
+		})?;
 		self.keys = new_state.keys;
 		Ok(())
 	}

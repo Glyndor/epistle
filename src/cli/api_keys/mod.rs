@@ -344,7 +344,13 @@ pub enum ApiKeyCli {
 		/// The label of the API key to change.
 		label: String,
 		/// Add `Auto-Submitted: auto-generated` when the request omits it.
-		#[arg(long, value_name = "STATE", value_parser = crate::cli::account::parse_on_off)]
+		#[arg(
+			long,
+			value_name = "STATE",
+			value_parser = crate::cli::account::parse_on_off,
+			action = clap::ArgAction::Set,
+			required = true
+		)]
 		auto_submitted: bool,
 	},
 	/// Revoke an API key by label.
