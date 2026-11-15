@@ -44,7 +44,7 @@ async fn a_new_listing_alerts_once_and_a_relisting_alerts_again() {
 	let metrics = Arc::new(Metrics::new());
 	let dir = tempfile::tempdir().expect("tempdir");
 	let spool = Arc::new(FsSpool::open(dir.path()).expect("spool"));
-	let ctx = context(Some(webhook), spool, "mail.example.org".into(), true);
+	let ctx = context(Some(webhook), spool, "mail.example.org".into(), true, true);
 	let handle = run(vec![rule()], Arc::clone(&metrics), ctx).expect("engine");
 
 	metrics.own_ip_blocklisted(listing(1));

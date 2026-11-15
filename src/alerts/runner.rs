@@ -368,7 +368,7 @@ mod tests {
 				email: vec!["ops@example.org".into()],
 			};
 			let rule = CompiledRule::from_alert(&alert).expect("rule");
-			dispatch(&rule, &ctx, 60, 1_790_000_000).expect("dispatch");
+			dispatch(&rule, &ctx, 60, 1_790_000_000, &Metrics::new()).expect("dispatch");
 			let ids = spool.list().expect("list");
 			assert_eq!(ids.len(), 1);
 			let entry = spool.load(ids[0]).expect("alert");
