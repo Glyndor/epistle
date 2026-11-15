@@ -97,24 +97,29 @@ pub async fn upload(
 		.find(|view| view.name == account)
 		.map(|view| view.addresses)
 		.unwrap_or_default();
-	if let Err(message) = state.tenant_limits().check_aggregate_quota(
+	// The size is reserved against the tenant before its usage is read and
+	// stays reserved until the blob is stored, like the account's own.
+	let tenant_reservation = match state.tenant_limits().reserve_aggregate_quota(
 		state.store(),
 		state.data_dir(),
 		state.crypto(),
 		&account_addresses,
 		size,
 	) {
-		return (
-			StatusCode::INSUFFICIENT_STORAGE,
-			Json(json!({
-				"type": "urn:ietf:params:jmap:error:limit",
-				"limit": "tenant_storage",
-				"status": 507,
-				"detail": message,
-			})),
-		)
-			.into_response();
-	}
+		Ok(reservation) => reservation,
+		Err(message) => {
+			return (
+				StatusCode::INSUFFICIENT_STORAGE,
+				Json(json!({
+					"type": "urn:ietf:params:jmap:error:limit",
+					"limit": "tenant_storage",
+					"status": 507,
+					"detail": message,
+				})),
+			)
+				.into_response();
+		}
+	};
 	// The blob's media type is the request Content-Type, echoed back and
 	// persisted so downloads serve it (RFC 8620 §6.1).
 	let content_type = headers
@@ -167,6 +172,7 @@ pub async fn upload(
 	// The blob is stored: the bytes it took are the account's now, and the
 	// reservation is no longer needed.
 	drop(reservation);
+	drop(tenant_reservation);
 	(
 		StatusCode::OK,
 		Json(json!({
