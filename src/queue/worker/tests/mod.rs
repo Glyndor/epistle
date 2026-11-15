@@ -16,3 +16,5 @@ pub(super) mod schedule;
 pub(super) mod spool_holds;
 pub(super) mod tenant_webhook;
 pub(super) mod webhook;
+
+mod providers;

@@ -6,7 +6,10 @@
 //! basic code cannot: a 552 can be a full mailbox or a message too big, a 550
 //! a missing mailbox or a spam rejection. Without one, the basic code
 //! decides, conservatively: only replies that are about the address itself
-//! (551, 553) count as a bad address.
+//! (551, or a 553 explicitly naming a bad mailbox) count as a bad address.
+
+mod provider;
+pub use provider::{ProviderCause, provider_cause};
 
 /// What a delivery failure was about.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -151,9 +154,49 @@ pub fn classify(code: u16, text: &str) -> Verdict {
 		Some(_) => verdict(Other, true, false),
 		// Exceeded storage allocation (RFC 5321 §4.5.3.1.10): retried.
 		None if code == 552 => verdict(MailboxFull, false, false),
-		None if matches!(code, 551 | 553) => verdict(InvalidAddress, true, true),
+		None if code == 551 || (code == 553 && missing_mailbox(text)) => {
+			verdict(InvalidAddress, true, true)
+		}
 		None => verdict(Other, true, false),
 	}
+}
+
+/// A bare 553 is ambiguous: require an explicit recipient-mailbox error.
+fn missing_mailbox(text: &str) -> bool {
+	let text = text.to_ascii_lowercase();
+	if [
+		"sender",
+		"mail from",
+		"authentication",
+		"spf",
+		"dkim",
+		"dmarc",
+		"policy",
+	]
+	.iter()
+	.any(|word| text.contains(word))
+	{
+		return false;
+	}
+	[
+		"no such user",
+		"no such mailbox",
+		"no such recipient",
+		"user unknown",
+		"unknown user",
+		"unknown recipient",
+		"unknown mailbox",
+		"mailbox does not exist",
+		"recipient does not exist",
+		"mailbox not found",
+		"recipient not found",
+		"mailbox name not allowed for this user",
+		"mailbox not allowed for this user",
+		"mailbox name not allowed for that user",
+		"mailbox not allowed for that user",
+	]
+	.iter()
+	.any(|phrase| text.contains(phrase))
 }
 
 /// Classify a failure reason as the queue stores it: a normalized reply

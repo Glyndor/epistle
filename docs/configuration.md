@@ -2288,6 +2288,7 @@ Outbound queue settings. Absent keeps the secure defaults.
 | `concurrency` | Outbound SMTP conversations running at once, all destinations together, default `8`, between 1 and 1024. A slow or silent destination holds its own conversations and no others. Read and change it with `epistle limits show` and `epistle limits set queue-concurrency N`. |
 | `per_domain_concurrency` | Outbound conversations running at once with any one recipient domain, default `2`, between 1 and `concurrency`. The cap covers every exchanger of the domain together. `epistle limits set queue-per-domain-concurrency N`. |
 | `backoff_steps` | How long a destination that asks to slow down is held off, in seconds, one step per deferral in a row with the last repeating: default `[60, 300, 900, 3600]` (1, 5, 15 and 60 minutes), 1 to 16 steps of 1 to 86400 seconds each. `epistle limits set queue-backoff 1m,5m,15m,1h`. |
+| `provider_pause_secs` | Minimum pause in seconds after `4.7.28` or a temporary Yahoo `TSS04` reply, default `600` (10 minutes), from 1 to 86400. The queue waits for the greater of this value and the current `backoff_steps` step. Known receiver groups share the pause across their MX hosts and resume with at most one connection while rate-limit replies remain pending. See [provider rejection causes](operations/queue.md). |
 
 How the queue delivers:
 
