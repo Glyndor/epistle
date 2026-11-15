@@ -39,3 +39,6 @@ pub(super) async fn check(ctx: &Ctx) -> AreaReport {
 	);
 	AreaReport::from_items(items, summary)
 }
+
+#[cfg(test)]
+mod tests;

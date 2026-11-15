@@ -153,3 +153,6 @@ impl Deliverability {
 			.collect()
 	}
 }
+
+#[cfg(test)]
+mod tests;
