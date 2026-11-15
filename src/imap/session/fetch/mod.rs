@@ -106,19 +106,21 @@ impl Session {
 			let Some(message) = snapshot.by_sequence(sequence_number) else {
 				continue;
 			};
-			let needs_data =
-				items.iter().any(|item| {
-					matches!(
-						item,
-						FetchItem::Preview
-							| FetchItem::Body | FetchItem::Binary
-							| FetchItem::BinarySize
-							| FetchItem::Envelope | FetchItem::Structure { .. }
-							| FetchItem::Section(_)
-							| FetchItem::Rfc822 | FetchItem::Rfc822Header
-							| FetchItem::Rfc822Text
-					)
-				});
+			let needs_data = items.iter().any(|item| {
+				matches!(
+					item,
+					FetchItem::Preview
+						| FetchItem::Body
+						| FetchItem::Binary
+						| FetchItem::BinarySize
+						| FetchItem::Envelope
+						| FetchItem::Structure { .. }
+						| FetchItem::Section(_)
+						| FetchItem::Rfc822
+						| FetchItem::Rfc822Header
+						| FetchItem::Rfc822Text
+				)
+			});
 			let data = if needs_data {
 				match snapshot.read(message) {
 					Ok(data) => data,
