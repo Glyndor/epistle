@@ -4,6 +4,12 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    # Seeds the cargo caches that pull requests and the merge queue restore from:
+    # a cache written on a pull request or on a queue ref is invisible to every
+    # other one, and only `main` and `develop` are visible to all of them. The
+    # plan job runs everything for an event that is not a pull request.
+    - cron: "17 2 * * *"
   # Required checks `rust / Format & lint`, `rust / Test` and `rust / Coverage`: the merge queue fires
   # `merge_group` on a temporary `gh-readonly-queue/...` branch and a required check that
   # does not report there leaves the queue waiting forever.

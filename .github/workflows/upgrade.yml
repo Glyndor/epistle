@@ -24,6 +24,7 @@ on:
       - "migrations/**"
       - "tests/system/upgrade.rs"
       - ".github/workflows/upgrade.yml"
+      - ".github/actions/rust-cache/**"
       - "Cargo.toml"
       - "Cargo.lock"
       # Same exclusions as the pull_request filter below, and for the same
@@ -47,6 +48,7 @@ on:
       - "migrations/**"
       - "tests/system/upgrade.rs"
       - ".github/workflows/upgrade.yml"
+      - ".github/actions/rust-cache/**"
       - "Cargo.toml"
       - "Cargo.lock"
       # Files that only exist under #[cfg(test)] cannot change what this job
@@ -119,6 +121,11 @@ jobs:
           # toolchain happens to agree.
           rustup toolchain install 1.100.0 --profile minimal
           rustup default 1.100.0
+
+      - id: cargo-cache
+        uses: ./.github/actions/rust-cache
+        with:
+          prefix: rust-upgrade
 
       - name: Resolve the latest published release tag
         id: latest
@@ -419,3 +426,11 @@ jobs:
           name: epistle-upgrade-log
           path: ${{ env.CONF_DIR }}/server-new.log
           if-no-files-found: ignore
+
+      - name: Save the cargo cache
+        if: ${{ success() }}
+        uses: ./.github/actions/rust-cache
+        with:
+          mode: save
+          cache-hit: ${{ steps.cargo-cache.outputs.cache-hit }}
+          prefix: rust-upgrade

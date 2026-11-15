@@ -21,6 +21,7 @@ on:
       - "tests/fixtures/imaptest.mbox"
       - ".github/scripts/imaptest.sh"
       - ".github/workflows/imaptest.yml"
+      - ".github/actions/rust-cache/**"
       - "Cargo.toml"
       - "Cargo.lock"
       # Same exclusions as the pull_request filter below, and for the same
@@ -46,6 +47,7 @@ on:
       - "tests/fixtures/imaptest.mbox"
       - ".github/scripts/imaptest.sh"
       - ".github/workflows/imaptest.yml"
+      - ".github/actions/rust-cache/**"
       - "Cargo.toml"
       - "Cargo.lock"
       # Files that only exist under #[cfg(test)] cannot change what this job
@@ -113,6 +115,11 @@ jobs:
           rustup toolchain install 1.100.0 --profile minimal
           rustup default 1.100.0
 
+      - id: cargo-cache
+        uses: ./.github/actions/rust-cache
+        with:
+          prefix: rust-imaptest
+
       - name: Build
         run: cargo build --locked
 
@@ -121,3 +128,11 @@ jobs:
 
       - name: Run imaptest
         run: .github/scripts/imaptest.sh target/debug/epistle imaptest-source
+
+      - name: Save the cargo cache
+        if: ${{ success() }}
+        uses: ./.github/actions/rust-cache
+        with:
+          mode: save
+          cache-hit: ${{ steps.cargo-cache.outputs.cache-hit }}
+          prefix: rust-imaptest

@@ -10,6 +10,7 @@ on:
     branches: [develop, main]
     paths:
       - ".github/workflows/db.yml"
+      - ".github/actions/rust-cache/**"
       - "src/**"
       - "tests/**"
       - "migrations/**"
@@ -22,6 +23,7 @@ on:
       # list omits itself does not run on the pull request that changes
       # it, so a broken edit merges without ever having been executed.
       - ".github/workflows/db.yml"
+      - ".github/actions/rust-cache/**"
       - "src/**"
       - "tests/**"
       - "migrations/**"
@@ -134,6 +136,12 @@ jobs:
           # tests ran against the same schema.
           rustup toolchain install 1.100.0 --profile minimal
           rustup default 1.100.0
+
+      - id: cargo-cache
+        uses: ./.github/actions/rust-cache
+        with:
+          prefix: rust-db
+          extra-path: ~/.cargo/bin
 
       - name: Install cargo-llvm-cov
         env:
@@ -265,3 +273,12 @@ jobs:
               )
           sys.exit(1 if missing or below else 0)
           EOF
+
+      - name: Save the cargo cache
+        if: ${{ success() }}
+        uses: ./.github/actions/rust-cache
+        with:
+          mode: save
+          cache-hit: ${{ steps.cargo-cache.outputs.cache-hit }}
+          prefix: rust-db
+          extra-path: ~/.cargo/bin

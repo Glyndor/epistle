@@ -20,6 +20,7 @@ on:
       - 'tests/smtp/hostile_smtp/**'
       - 'docs/epistle.service'
       - '.github/workflows/e2e.yml'
+      - '.github/actions/rust-cache/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'migrations/**'
@@ -47,6 +48,7 @@ on:
       - "tests/smtp/hostile_smtp/**"
       - "docs/epistle.service"
       - ".github/workflows/e2e.yml"
+      - ".github/actions/rust-cache/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - "migrations/**"
@@ -123,6 +125,11 @@ jobs:
           # the artifact the .deb ships.
           rustup toolchain install 1.100.0 --profile minimal
           rustup default 1.100.0
+
+      - id: cargo-cache
+        uses: ./.github/actions/rust-cache
+        with:
+          prefix: rust-e2e
 
       - name: Build release binary
         run: cargo build --locked --release
@@ -225,3 +232,11 @@ jobs:
           name: epistle-e2e-log-${{ matrix.os }}
           path: ${{ env.CONF_DIR }}/server.log
           if-no-files-found: ignore
+
+      - name: Save the cargo cache
+        if: ${{ success() }}
+        uses: ./.github/actions/rust-cache
+        with:
+          mode: save
+          cache-hit: ${{ steps.cargo-cache.outputs.cache-hit }}
+          prefix: rust-e2e

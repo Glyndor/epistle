@@ -67,6 +67,7 @@ jobs:
     # the check name branch rules and the release PR already know.
     name: cargo audit${{ inputs.ref != '' && format(' ({0})', inputs.ref) || '' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: ${{ inputs.working-directory }}
@@ -189,6 +190,7 @@ jobs:
   deny:
     name: cargo deny${{ inputs.ref != '' && format(' ({0})', inputs.ref) || '' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: ${{ inputs.working-directory }}
