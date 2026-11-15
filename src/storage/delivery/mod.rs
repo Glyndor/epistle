@@ -197,9 +197,15 @@ impl LocalDelivery {
 			&tmp_path,
 			&self.crypto.encode_for_account(account.as_str(), data)?,
 		)?;
-		fs::rename(&tmp_path, message_file(&new_dir, id, MessageExt::Eml)?)?;
-		// imap4flags: persist the Sieve-assigned flags as the IMAP sidecar.
-		io::write_flag_sidecar(&new_dir, id, flags);
+		// imap4flags: persist the Sieve-assigned flags as the IMAP sidecar
+		// before the rename that makes the message visible.
+		let sidecar = io::write_flag_sidecar(&new_dir, id, flags);
+		if let Err(error) = fs::rename(&tmp_path, message_file(&new_dir, id, MessageExt::Eml)?) {
+			if let Some(path) = sidecar {
+				let _ = fs::remove_file(path);
+			}
+			return Err(error);
+		}
 		let name = mailbox.unwrap_or("INBOX");
 		let changes = [
 			Change::email(Op::Created, id),

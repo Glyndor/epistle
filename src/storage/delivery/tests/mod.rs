@@ -3,6 +3,7 @@ pub use super::*;
 pub(super) mod base;
 pub(super) mod containment;
 pub(super) mod default_mailboxes;
+pub(super) mod flags_first;
 pub(super) mod forward;
 pub(super) mod list_copy;
 pub(super) mod lists;

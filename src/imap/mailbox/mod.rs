@@ -268,9 +268,16 @@ pub fn append_dated(
 			.set_modified(date.time)?;
 		super::internal_date::write_zone(&account_dir, id, date.zone)?;
 	}
-	std::fs::rename(&tmp, message_file(&account_dir, id, MessageExt::Eml)?)?;
+	// The flags file goes in first: the rename below is what makes the
+	// message visible, and a reader that sees it finds its flags in place.
 	if !flags.is_empty() {
 		super::flags::write_flags(&account_dir, id, flags)?;
+	}
+	if let Err(error) = std::fs::rename(&tmp, message_file(&account_dir, id, MessageExt::Eml)?) {
+		if !flags.is_empty() {
+			let _ = std::fs::remove_file(message_file(&account_dir, id, MessageExt::Flags)?);
+		}
+		return Err(error);
 	}
 	if new_mailbox {
 		changes.push(Change::mailbox(Op::Created, mailbox));
