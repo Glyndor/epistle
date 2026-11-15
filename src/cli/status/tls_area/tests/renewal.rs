@@ -32,7 +32,7 @@ fn tls_ctx(dir: &Path, days: i64) -> (Ctx, String) {
 	let mut ctx = ctx(
 		dir,
 		&format!(
-			"[tls]\ncert_file = {:?}\nkey_file = {:?}\n",
+			"[tls]\ncert_file = {:?}\nkey_file = {:?}\n[dns_publish]\ndane = true\n",
 			cert_path.display().to_string(),
 			key_path.display().to_string()
 		),

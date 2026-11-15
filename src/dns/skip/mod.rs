@@ -138,6 +138,12 @@ impl SkipSet {
 		self
 	}
 
+	/// The same set, also skipping `group`.
+	pub fn with_group(mut self, group: SkipGroup) -> Self {
+		self.groups.insert(group);
+		self
+	}
+
 	/// Whether `group` is skipped for the record or check named `name`:
 	/// the configuration skips it everywhere, or the role of the domain
 	/// `name` is in omits it.

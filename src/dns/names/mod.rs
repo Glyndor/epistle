@@ -14,6 +14,37 @@ pub const MAX_NAME_LEN: usize = crate::util::validation::MAX_DOMAIN;
 /// The longest label of a DNS name (RFC 1035 section 2.3.4).
 pub const MAX_LABEL_LEN: usize = crate::util::validation::MAX_LABEL;
 
+/// The labels of the names that reach the public HTTPS endpoint of a
+/// deployment: the Thunderbird autoconfig document, the Microsoft
+/// Autodiscover document, and the MTA-STS policy. Each one is published as
+/// a CNAME to the mail hostname, and the certificate the endpoint presents
+/// has to cover it: a client that fetches `https://autoconfig.<domain>/`
+/// verifies the name it asked for, not the name the CNAME points at.
+pub const PUBLIC_LABELS: [&str; 3] = ["autoconfig", "autodiscover", "mta-sts"];
+
+/// The names of `domain` that reach the public endpoint: one per label in
+/// [`PUBLIC_LABELS`].
+pub fn public_names(domain: &str) -> Vec<String> {
+	PUBLIC_LABELS
+		.iter()
+		.map(|label| format!("{label}.{domain}"))
+		.collect()
+}
+
+/// Whether `name` is one of the public names of a hosted domain: a label
+/// in [`PUBLIC_LABELS`] over a domain of `domains`.
+pub fn is_public_name(name: &str, domains: &[String]) -> bool {
+	let Some((label, rest)) = name.split_once('.') else {
+		return false;
+	};
+	if !PUBLIC_LABELS.contains(&label) {
+		return false;
+	}
+	domains
+		.iter()
+		.any(|domain| domain.eq_ignore_ascii_case(rest))
+}
+
 /// The comparable form of a DNS name: trimmed, without the trailing root
 /// dot, lowercase, and every non-ASCII label as its A-label (IDNA), so a
 /// provider that lists `Bücher.Example.` and a config that says

@@ -301,8 +301,8 @@ Requires inbound senders to use verified TLS. Two parts:
 
 1. TXT at `_mta-sts.example.org`: `v=STSv1; id=<changes when the policy changes>`.
 2. A policy file served over HTTPS at
-   `https://mta-sts.example.org/.well-known/mta-sts.txt` (your web/proxy serves
-   this — the mail server does not):
+   `https://mta-sts.example.org/.well-known/mta-sts.txt` (the public endpoint
+   of the server serves it, or your own web/proxy does):
 
    ```
    version: STSv1
@@ -328,6 +328,18 @@ envelope target, the JSONL store lives at
 ### DANE (optional, needs DNSSEC)
 If the zone is DNSSEC-signed, publish a `TLSA` record for `mail.example.org:25`
 so senders authenticate your TLS certificate without relying on a public CA.
+
+The record is published only when the configuration says so:
+`[dns_publish] dane = true`. While it is off the record is left out of the
+wanted set and the certificate refresh publishes none either, so a zone that
+is not signed never carries a record that the resolvers that do not validate
+would apply (RFC 7672 §2.1).
+
+The record names the certificate in service, and only that one: with
+`[acme]` on, the pair in service is the bootstrap pair until the authority
+answers, and the renewal loop replaces it. A record that named the bootstrap
+would make every sender that honours DANE refuse the mail, so the record
+waits for the issued certificate.
 
 With a `[dns]` provider, epistle refreshes that record after every certificate
 change (ACME renewal or a replaced `[tls]` pair):
@@ -361,13 +373,16 @@ So users configure a client from just their address and password:
   implicit TLS and STARTTLS, IMAP over implicit TLS and STARTTLS, POP3S, and
   the `_pop3` "unavailable" marker). The ManageSieve, JMAP and CalDAV/CardDAV
   locators come from `epistle dns-records`, which follows the listeners you
-  enabled; there is no autodiscover SRV, `autoconfig` and `autodiscover` are
-  CNAMEs.
+  enabled; the client setup locator `_autoconfig._tcp` (RFC 6186 §3.1) comes
+  from the `autoconfigs` listener. There is no autodiscover SRV:
+  `autoconfig` and `autodiscover` are CNAMEs.
 - Point `autoconfig.example.org` and `autodiscover.example.org` at the host and
   add an `autoconfigs` listener (port 443). It serves the documents over HTTPS
   with the server certificate, so no TLS proxy is needed; the certificate must
   cover both names (add them to `[acme] domains`). Keep the plain `autoconfig`
   listener only if a proxy already terminates TLS for those names.
+  `epistle init` writes the listener and asks the authority for a certificate
+  that covers those names and `mta-sts.<domain>` for every hosted domain.
 - Apple devices have no autodiscovery of their own: send users to
   `https://autoconfig.example.org/mobileconfig?email=<address>` (or hand them
   the file from `epistle mobileconfig`). The profile carries no password.

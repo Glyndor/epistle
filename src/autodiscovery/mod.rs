@@ -9,11 +9,12 @@
 //! `mail autoconfig` / `mail autodiscover` CLI commands.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::Router;
 use axum::extract::{Query, State};
-use axum::http::{StatusCode, header};
+use axum::http::{Method, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 
@@ -144,6 +145,10 @@ struct Discovery {
 	/// The lowercase domains a client is given settings for, replaced when
 	/// the hosted domains change while the server runs.
 	domains: Arc<std::sync::RwLock<Arc<[String]>>>,
+	/// The MTA-STS policy file this endpoint serves, when the configuration
+	/// names a policy directory. `None` answers 404: a deployment that
+	/// writes no policy publishes no policy.
+	policy: Option<PathBuf>,
 }
 
 impl Discovery {
@@ -166,15 +171,29 @@ fn lowercase(domains: &[String]) -> Arc<[String]> {
 
 /// [`router`] for the domains of `config` that are switched on: a disabled
 /// domain takes no mail, so a client is not given settings for it.
+///
+/// The router also serves the public MTA-STS policy when the configuration
+/// names a policy directory. The `mta-sts.<domain>` name reaches the same
+/// public endpoint a client reaches, so one listener on port 443 answers
+/// the client setup documents and the policy a sender fetches.
 pub fn router_for(config: &crate::config::Config) -> Router {
-	router(config.hostname.clone(), config.enabled_domains())
+	build(
+		config.hostname.clone(),
+		config.enabled_domains(),
+		config.mta_sts.policy_dir.clone(),
+	)
+	.0
 }
 
 /// [`router_for`] the hosted domains of a running server: the set follows
 /// every reload of the domain state.
 pub fn router_live(live: &crate::editable::LiveConfig) -> Router {
 	let config = live.current();
-	let (router, domains) = build(config.hostname.clone(), config.enabled_domains());
+	let (router, domains) = build(
+		config.hostname.clone(),
+		config.enabled_domains(),
+		config.mta_sts.policy_dir.clone(),
+	);
 	live.on_change(move |config| {
 		*domains.write().expect("autodiscovery domains lock") =
 			lowercase(&config.enabled_domains());
@@ -184,16 +203,23 @@ pub fn router_live(live: &crate::editable::LiveConfig) -> Router {
 
 /// Router serving the autoconfig/autodiscover documents.
 pub fn router(hostname: String, domains: Vec<String>) -> Router {
-	build(hostname, domains).0
+	build(hostname, domains, None).0
 }
 
 type DomainSet = Arc<std::sync::RwLock<Arc<[String]>>>;
 
-fn build(hostname: String, domains: Vec<String>) -> (Router, DomainSet) {
+/// The router of the public endpoint, and the domain set it follows: the
+/// client setup documents and, when `policy` names one, the MTA-STS policy.
+fn build(
+	hostname: String,
+	domains: Vec<String>,
+	policy: Option<PathBuf>,
+) -> (Router, DomainSet) {
 	let domains: DomainSet = Arc::new(std::sync::RwLock::new(lowercase(&domains)));
 	let state = Discovery {
 		hostname,
 		domains: Arc::clone(&domains),
+		policy,
 	};
 	let router = Router::new()
 		.route("/mail/config-v1.1.xml", get(autoconfig_handler))
@@ -210,8 +236,22 @@ fn build(hostname: String, domains: Vec<String>) -> (Router, DomainSet) {
 			get(autodiscover_v2_handler),
 		)
 		.route("/mobileconfig", get(mobileconfig_handler))
+		.route(
+			crate::mtasts::server::POLICY_PATH,
+			get(mta_sts_policy_handler).head(mta_sts_policy_handler),
+		)
 		.with_state(state);
 	(router, domains)
+}
+
+/// Serve the public MTA-STS policy (RFC 8461 section 3.2) from the
+/// directory the configuration names. A configuration without a policy
+/// directory answers 404: the endpoint exists, the policy does not.
+async fn mta_sts_policy_handler(State(state): State<Discovery>, method: Method) -> Response {
+	let Some(path) = state.policy.clone() else {
+		return StatusCode::NOT_FOUND.into_response();
+	};
+	crate::mtasts::server::policy_response(&path, &method).await
 }
 
 fn xml(body: String) -> Response {

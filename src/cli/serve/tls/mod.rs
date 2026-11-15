@@ -205,10 +205,10 @@ pub(super) fn follows_acme_files(config: &Config, role: ServeRole) -> bool {
 
 /// Whether the configuration skips the TLSA record. The DANE association
 /// belongs to the `tlsa` group, so a configuration that skips it publishes
-/// no TLSA record, not on a certificate rotation either.
+/// no TLSA record, not on a certificate rotation either. The group is in
+/// the set while the operator has not said the zone is signed.
 fn skips_tlsa(config: &Config) -> bool {
 	config
-		.dns_publish
 		.skip_set()
 		.contains(crate::dns::skip::SkipGroup::Tlsa)
 }

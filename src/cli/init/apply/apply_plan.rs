@@ -319,5 +319,12 @@ fn listener_entries(
 			port: crate::config::ListenerKind::Acme.default_port(),
 		});
 	}
+	// The public HTTPS endpoint (port 443): the client setup documents and
+	// the public MTA-STS policy.
+	entries.push(ListenerEntry {
+		kind: "autoconfigs".to_string(),
+		addr: mail_addr,
+		port: crate::config::ListenerKind::Autoconfigs.default_port(),
+	});
 	entries
 }

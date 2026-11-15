@@ -359,5 +359,10 @@ pub use apply_plan::plan;
 /// at the apply-internal `apply_config` module.
 pub(crate) use apply_config::listeners_to_write;
 
+/// The directory the public MTA-STS policy lives in. Re-exported for the
+/// same reason: the end-of-run summary names the directory the policy is
+/// written to, and it has to be the one the config carries.
+pub(crate) use apply_config::mta_sts_policy_dir;
+
 #[cfg(test)]
 mod tests;

@@ -36,6 +36,10 @@ pub(in crate::cli::init::apply) struct DesiredConfig {
 	/// should request certificates for.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub(in crate::cli::init::apply) acme: Option<DesiredAcme>,
+	/// The `[mta_sts]` section init writes: the directory the public
+	/// policy is written to and served from. Absent is not a shape init
+	/// writes: a deployment without a policy publishes no policy.
+	pub(in crate::cli::init::apply) mta_sts: DesiredMtaSts,
 	pub(in crate::cli::init::apply) antispam: DesiredAntispam,
 	/// The attachment policy for a new install. Never merged into an
 	/// existing configuration: see [`NEW_INSTALL_ONLY`].
@@ -92,6 +96,17 @@ pub(in crate::cli::init::apply) struct DesiredAntispam {
 	/// What a scan clamd cannot run does; absent without clamd.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub(super) clamd_on_error: Option<&'static str>,
+}
+
+/// The `[mta_sts]` section `init` writes: where the public policy lives.
+///
+/// `policy_dir` is the directory `serve` writes `mta-sts.txt` into at
+/// startup and the public endpoint reads it from. `mode` and `max_age` are
+/// the operator's: init writes neither, so the schema defaults apply on a
+/// new install and a value the operator set by hand survives a re-run.
+#[derive(Debug, Serialize)]
+pub(in crate::cli::init::apply) struct DesiredMtaSts {
+	pub(in crate::cli::init::apply) policy_dir: String,
 }
 
 #[derive(Debug, Serialize)]

@@ -72,8 +72,8 @@ fn build_config_writes_exactly_one_listener_when_every_optional_service_is_off()
 		.expect("build_config with everything off");
 	assert_eq!(
 		desired.listeners.len(),
-		1,
-		"exactly one listener when every optional service is off, got {:?}",
+		2,
+		"the smtp listener and the public endpoint when every optional service is off, got {:?}",
 		desired.listeners
 	);
 	let listener = &desired.listeners[0];
@@ -81,6 +81,10 @@ fn build_config_writes_exactly_one_listener_when_every_optional_service_is_off()
 	assert_eq!(
 		listener.addr, mail_addr,
 		"smtp listener must carry the mail bind address"
+	);
+	assert_eq!(
+		desired.listeners[1].kind, "autoconfigs",
+		"the public endpoint is written for every installation"
 	);
 }
 

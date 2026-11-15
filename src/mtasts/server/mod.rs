@@ -1,7 +1,7 @@
 //! HTTPS endpoint for the public MTA-STS policy.
 
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -22,7 +22,8 @@ use crate::config::Tls;
 use crate::metrics::Metrics;
 use crate::tls::{TlsError, https::FileAcceptor};
 
-const POLICY_PATH: &str = "/.well-known/mta-sts.txt";
+/// The path the policy is served at (RFC 8461 section 3.2).
+pub const POLICY_PATH: &str = "/.well-known/mta-sts.txt";
 const MAX_REQUEST_HEAD: usize = 8 * 1024;
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -145,6 +146,23 @@ async fn policy(State(path): State<PathBuf>, method: Method, uri: Uri) -> Respon
 	if uri.path() != POLICY_PATH {
 		return StatusCode::NOT_FOUND.into_response();
 	}
+	policy_response(&path, &method).await
+}
+
+/// Serve the policy file at `path`.
+///
+/// `GET` and `HEAD` answer the bytes with the content type and the cache
+/// lifetime the policy asks for. Any other method answers 405 with the
+/// `Allow` header. A file that is not there answers 404, a file that cannot
+/// be read answers 500, and contents that do not parse answer 500: a sender
+/// that reads a policy it cannot parse has to treat the domain as having no
+/// policy, and the server must not serve one it does not understand
+/// itself.
+///
+/// The function is shared with the endpoint the autodiscovery listener
+/// serves, so the policy a sender reads is the same one whichever public
+/// endpoint reaches it.
+pub(crate) async fn policy_response(path: &Path, method: &Method) -> Response {
 	if method != Method::GET && method != Method::HEAD {
 		return (
 			StatusCode::METHOD_NOT_ALLOWED,
@@ -152,7 +170,7 @@ async fn policy(State(path): State<PathBuf>, method: Method, uri: Uri) -> Respon
 		)
 			.into_response();
 	}
-	let bytes = match tokio::fs::read(&path).await {
+	let bytes = match tokio::fs::read(path).await {
 		Ok(bytes) => bytes,
 		Err(error) if error.kind() == io::ErrorKind::NotFound => {
 			return StatusCode::NOT_FOUND.into_response();

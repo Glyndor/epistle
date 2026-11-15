@@ -118,13 +118,15 @@ fn mail_published_ports_match_the_listeners_the_config_will_bind() {
 		.collect();
 	// `render` skips the disk; the desired listeners for the
 	// minimal answers are smtp, imap, imaps, submission,
-	// submissions, acme (all `::`, no loopback) and the schema
-	// defaults are 25, 143, 993, 587, 465, 80. The implicit-TLS
-	// siblings ship alongside the STARTTLS listeners because
-	// real-world clients default to 993 and 465 first; the
+	// submissions, acme, autoconfigs (all `::`, no loopback) and the
+	// schema defaults are 25, 143, 993, 587, 465, 80, 443. The
+	// implicit-TLS siblings ship alongside the STARTTLS listeners
+	// because real-world clients default to 993 and 465 first; the
 	// `acme` listener ships because the default `minimal_answers`
 	// carry a public hostname (`mail.example.org`) and init's
-	// public-hostname heuristic enables ACME automatically.
+	// public-hostname heuristic enables ACME automatically; the
+	// `autoconfigs` listener is the public endpoint every install
+	// carries.
 	let expected: Vec<String> = vec![
 		"25:25".to_string(),
 		"143:143".to_string(),
@@ -132,6 +134,7 @@ fn mail_published_ports_match_the_listeners_the_config_will_bind() {
 		"587:587".to_string(),
 		"465:465".to_string(),
 		"80:80".to_string(),
+		"443:443".to_string(),
 	];
 	let mut expected_sorted = expected.clone();
 	expected_sorted.sort();

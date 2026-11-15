@@ -326,11 +326,12 @@ A public install has to let inbound TCP through the host firewall (or fronting l
 | 25 | SMTP | Inbound mail from other servers. |
 | 80 | HTTP | Certificate issuance with `[acme] challenge = "http-01"` (the default): the HTTP-01 challenge responder (`acme` listener). Open to the public internet, the CA connects from outside. Not needed with `tls-alpn-01` or `dns-01`. |
 | 143 | IMAP+STARTTLS | Mail clients that negotiate TLS on connect. |
+| 443 | HTTPS | The public endpoint (`autoconfigs` listener): the Thunderbird autoconfig document, the Microsoft Autodiscover document, the Apple `.mobileconfig` profile and the public MTA-STS policy. `init` writes the listener and the certificate that covers the three names. |
 | 465 | Submissions | Mail clients that use implicit TLS for submission. |
 | 587 | Submission+STARTTLS | Mail clients that submit with STARTTLS. |
 | 993 | IMAPS | Mail clients that use implicit TLS for IMAP. |
 
-Optional ports the operator turns on per `[[listeners]]`: `995` (POP3S) when `services.pop3 = true`, `4190` (ManageSieve) when `services.managesieve = true`, `8090` (WebDAV) when `services.webdav = true`, `8025` (loopback management API) when `services.api = true`, `443` (`autoconfigs`) when the operator wants Thunderbird/Outlook/Apple autodiscovery over HTTPS (or `8091`, `autoconfig`, behind a TLS proxy).
+Optional ports the operator turns on per `[[listeners]]`: `995` (POP3S) when `services.pop3 = true`, `4190` (ManageSieve) when `services.managesieve = true`, `8090` (WebDAV) when `services.webdav = true`, `8025` (loopback management API) when `services.api = true`. The plain `autoconfig` listener (`8091`) is for a deployment that keeps its own TLS proxy in front of those names.
 
 With the default `http-01` challenge, port 80 has to be open even when no certificate renewal is in flight: the first certificate and every renewal are validated through the same responder, so closing it means the first certificate never lands. Port 80 is needed only with `http-01`. With `tls-alpn-01` the CA connects to port 443 instead, and with `dns-01` it connects to nothing on this host (see [`[acme]`](#acme)).
 
@@ -349,7 +350,7 @@ max_age = 604800
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
-| `policy_dir` | path | unset | Directory where `serve` writes `mta-sts.txt` at startup. Unset disables writing. |
+| `policy_dir` | path | unset | Directory where `serve` writes `mta-sts.txt` at startup. Unset disables writing. `epistle init` writes `<data_dir>/mta-sts`. |
 | `mode` | `testing`, `enforce`, or `none` | `testing` | Enforcement mode announced to sending mail servers. |
 | `max_age` | unsigned integer | `604800` | Policy cache lifetime in seconds. |
 
@@ -364,12 +365,20 @@ a content hash for its `id=` value. Identical policy contents keep the same ID;
 changing the mode, hostname, or cache lifetime changes it. Restart `serve`
 after changing these settings and publish the regenerated DNS records.
 
-Run [`epistle mta-sts-serve`](cli.md#epistle-mta-sts-serve) with the same policy
-directory and make it reachable at
-`https://mta-sts.<domain>/.well-known/mta-sts.txt` on port 443. Its default
-bind address is `0.0.0.0:8443`. The HTTPS certificate must cover
-`mta-sts.<domain>` for each domain, even when the CNAME points to the mail
-hostname. Supply that certificate and its private key with `--cert` and `--key`.
+The policy is fetched from `https://mta-sts.<domain>/.well-known/mta-sts.txt`,
+so it has to be served on port 443 under a certificate that covers
+`mta-sts.<domain>`, even when the CNAME points to the mail hostname. The
+public endpoint of the server (the `autoconfigs` listener) serves it when
+`policy_dir` names a directory: the same port 443 that answers the client
+setup documents answers the policy. `epistle init` writes both the
+`autoconfigs` listener and a `policy_dir`, and asks the authority for a
+certificate that covers `mta-sts.<domain>` (and `autoconfig.<domain>` and
+`autodiscover.<domain>`) of every hosted domain.
+
+A deployment that serves the policy elsewhere (behind a proxy of its own)
+uses [`epistle mta-sts-serve`](cli.md#epistle-mta-sts-serve) with the same
+policy directory. Its default bind address is `0.0.0.0:8443`. Supply the
+certificate and its private key with `--cert` and `--key`.
 
 ### `[tls]`
 TLS material, shared by all transports. Required by `submissions`/`imap`/`imaps`/`manage-sieve`; enables STARTTLS on `smtp`/`submission`.
@@ -2015,6 +2024,7 @@ runs. The first run is two minutes after the start.
 [dns_publish]
 interval_secs = 21600   # six hours, the default; 0 turns the loop off
 skip = ["client-locators"]   # groups of records automatic mode does not publish
+dane = true   # publish the DANE TLSA record; the zone has to be signed with DNSSEC
 senders = ["news.example.org"]   # names that send mail, besides the hosted domains
 null_records = true   # keep the null SPF and null MX true in automatic mode (default false)
 ```
@@ -2023,6 +2033,7 @@ null_records = true   # keep the null SPF and null MX true in automatic mode (de
 |---|---|---|
 | `interval_secs` | `21600` | Seconds between two runs. `0` turns the loop off; otherwise from `600` (ten minutes) to `604800` (one week). |
 | `skip` | `[]` | The named groups of records automatic mode must not publish. An unknown name is refused when the file is read, and the error names the groups that exist. |
+| `dane` | `false` | Whether the DANE TLSA record may be published. Turn it on for a zone that is signed with DNSSEC; while it is off the record is left out of the wanted set and the certificate refresh publishes none. |
 | `senders` | `[]` | Names that send mail besides the hosted domains. `epistle dns lockdown` leaves each of them its own SPF and gives every other name under a hosted domain, at any depth, a null SPF and a null MX (except a name with an SPF or MX of its own, a CNAME or a delegation). Each entry is an ASCII DNS name, once, at or under a hosted domain; only the exact name is a sender, not the names under it. |
 | `null_records` | `false` | Keep the null SPF and null MX that `epistle dns lockdown` publishes true in automatic mode. Each run covers a name added to the zone since, at any depth, and withdraws the records epistle published at a name that became a sender, got an SPF or MX of its own or was delegated; a record somebody else wrote is never touched. They go into the ledger like the other records. The DMARC policy ramp stays a command you run. |
 
@@ -2035,7 +2046,7 @@ The groups are:
 | `client-locators` | The SRV client locators (`_imap._tcp`, `_imaps._tcp`, `_submission._tcp`, `_submissions._tcp`, `_jmap._tcp` and the other locators the listeners enable) and the `autoconfig` and `autodiscover` names. |
 | `mta-sts` | The `_mta-sts` TXT record and the `mta-sts` CNAME it needs. |
 | `tls-rpt` | The `_smtp._tls` TXT record (TLS-RPT, RFC 8460). |
-| `tlsa` | The DANE TLSA record at `_25._tcp.<hostname>`. The certificate refresh publishes none either. |
+| `tlsa` | The DANE TLSA record at `_25._tcp.<hostname>`. The certificate refresh publishes none either. It is also skipped while `[dns_publish] dane` is off. |
 | `caa` | The CAA record that locks issuance to the CA. |
 
 The core records are in no group and are never skipped: MX, SPF, DKIM, DMARC
