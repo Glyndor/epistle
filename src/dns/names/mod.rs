@@ -37,7 +37,10 @@ pub fn is_public_name(name: &str, domains: &[String]) -> bool {
 	let Some((label, rest)) = name.split_once('.') else {
 		return false;
 	};
-	if !PUBLIC_LABELS.contains(&label) {
+	if !PUBLIC_LABELS
+		.iter()
+		.any(|public| public.eq_ignore_ascii_case(label))
+	{
 		return false;
 	}
 	domains

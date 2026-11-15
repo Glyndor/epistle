@@ -5,6 +5,9 @@ use std::io::{self, Write};
 
 use crate::config::Config;
 
+/// The file name of the public policy inside `[mta_sts] policy_dir`.
+pub const POLICY_FILE: &str = "mta-sts.txt";
+
 /// Policy bytes and their content-derived DNS identifier.
 pub struct Publication {
 	/// UTF-8 policy document, including its final newline.
@@ -57,7 +60,7 @@ pub fn write_policy(config: &Config) -> io::Result<()> {
 			file.set_permissions(fs::Permissions::from_mode(0o644))?;
 		}
 		file.sync_all()?;
-		fs::rename(&temporary, dir.join("mta-sts.txt"))
+		fs::rename(&temporary, dir.join(POLICY_FILE))
 	})();
 	if result.is_err() {
 		let _ = fs::remove_file(&temporary);

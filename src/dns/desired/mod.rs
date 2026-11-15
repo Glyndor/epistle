@@ -129,6 +129,15 @@ pub fn for_domains(config: &Config, domains: &[String]) -> Result<Desired, Vec<S
 fn served_association(config: &Config, warnings: &mut Vec<String>) -> Option<String> {
 	let served = crate::tls::served_tls(config)?;
 	if !stays_in_service(config, &served) {
+		// A zone that is not declared signed publishes no DANE record
+		// whatever the certificate is, so waiting for the issued one is
+		// not an input that failed and must not hold back the publisher.
+		if config
+			.skip_set()
+			.contains(crate::dns::skip::SkipGroup::Tlsa)
+		{
+			return None;
+		}
 		warnings.push(format!(
 			"the certificate in service ({}) is the one the authority replaces at the first \
 			 issuance, so the DANE record is not published until the issued certificate is \

@@ -180,7 +180,11 @@ pub fn router_for(config: &crate::config::Config) -> Router {
 	build(
 		config.hostname.clone(),
 		config.enabled_domains(),
-		config.mta_sts.policy_dir.clone(),
+		config
+			.mta_sts
+			.policy_dir
+			.as_ref()
+			.map(|dir| dir.join(crate::mtasts::publish::POLICY_FILE)),
 	)
 	.0
 }
