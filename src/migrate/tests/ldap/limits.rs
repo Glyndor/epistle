@@ -3,9 +3,9 @@
 
 use super::raw::{Script, start};
 use super::{DEADLINE, config};
-use crate::directory_store::ldap::LdapAuthenticator;
 use crate::directory_store::ldap::limits::Limits;
 use crate::directory_store::ldap::load_with_limits;
+use crate::directory_store::ldap::{LdapAuthenticator, LdapBusy};
 use ldap3::LdapError;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
@@ -68,7 +68,7 @@ async fn silent_server_does_not_hold_the_login_worker() {
 		.expect("logins exceeded the deadline")
 		.expect("login thread panicked");
 	worker.join().expect("login thread joined");
-	assert_eq!(outcome, (None, None));
+	assert_eq!(outcome, (Err(LdapBusy::Reached), Err(LdapBusy::Reached)));
 	assert_eq!(connections.load(Ordering::SeqCst), 2, "one try per login");
 }
 

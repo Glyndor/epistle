@@ -13,25 +13,38 @@
 //!
 //! ## The bind-while-blocking tradeoff
 //!
-//! `authenticate` blocks the calling tokio worker thread for the duration of one
-//! LDAP bind. Authentication is infrequent (once per session, not per message),
-//! so the cost is acceptable. A single worker thread *serializes* binds: a slow
-//! LDAP server throttles concurrent logins to one at a time. A small pool of
-//! worker threads is a future optimization; one worker keeps the model simple
-//! and correct.
+//! `authenticate` blocks the calling thread for the duration of one LDAP bind,
+//! so a caller on a tokio worker hands the worker over first (see
+//! `crate::util::blocking::may_block`). Every wait is bounded: the connection
+//! attempt, each request on the worker, and the caller's wait for the reply
+//! all give up after a deadline and fail closed. A single worker thread
+//! *serializes* binds: a slow LDAP server throttles concurrent logins to one
+//! at a time. A small pool of worker threads is a future optimization; one
+//! worker keeps the model simple and correct.
 //!
 //! ## Security
 //!
 //! - Fail closed: any LDAP error, a missing entry, or a failed user bind maps to
 //!   `None`. There is no distinction between "unknown user" and "wrong password"
-//!   — both return `None`, so there is no user-enumeration oracle.
+//!   — both return `None`, and both cost the same number of connections and
+//!   binds, so there is no user-enumeration oracle in the count of round trips.
+//! - Design tradeoff when the directory cannot answer (busy, down, slow): the
+//!   login gets the temporary failure, with the same `auth.busy` event for
+//!   every login. A refused local password still counts against its account
+//!   and the client, so an attacker can try the local passwords of known
+//!   accounts at the usual strike rate; any other login counts against the
+//!   client address alone, so an outage cannot lock out accounts whose
+//!   passwords are right.
 //! - Filter injection is prevented by escaping the login per RFC 4515 before it
 //!   is substituted into the configured search filter.
 //! - Plaintext `ldap://` is supported but discouraged: credentials cross the
 //!   wire in the clear. Prefer `ldaps://` or StartTLS (`tls = true`).
 
-use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{Receiver, SyncSender, channel, sync_channel};
 use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
 use ldap3::{Ldap as LdapConnAsyncHandle, LdapConnAsync, LdapConnSettings, SearchEntry};
 use limits::{Limits, capped_search, within};
@@ -43,12 +56,52 @@ use crate::smtp::address::Address;
 use crate::util::address::normalize;
 use crate::util::path_component::{AccountName, DigestName};
 
+/// How long one TCP connect may take. Past it the attempt fails closed; the
+/// whole login is bounded by [`Limits::AUTH`].
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+/// How many logins may wait for the worker. A login that finds the queue
+/// full is turned away as [`LdapBusy`] instead of waiting behind them.
+const QUEUE_DEPTH: usize = 32;
+
+/// The directory could not be asked in time. This is not a verdict on the
+/// credential, so it is not a failed login for the account; the two cases
+/// differ in what the client cost the directory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LdapBusy {
+	/// The request cost the directory nothing: the queue was full, it
+	/// expired while it waited, or no connection could be made (refused,
+	/// unresolvable, or not accepted in time). A directory that is down
+	/// is no reason to count its clients' attempts against them.
+	NotSent,
+	/// The worker took the request and opened a connection to the directory,
+	/// which then did not answer in time or broke off. The attempt was
+	/// made, so the caller counts it against the client.
+	Reached,
+}
+
+/// How one login ended on the worker.
+enum Outcome {
+	/// The bind succeeded for this account.
+	Account(String),
+	/// The directory answered and refused: no such entry or a wrong password.
+	Refused,
+	/// The directory could not be reached or stopped answering.
+	Unavailable,
+}
+
 /// One authentication request handed to the worker thread: the login to look up,
 /// the password to bind with, and the channel the worker replies on.
 struct AuthRequest {
 	login: String,
 	password: String,
-	reply: Sender<Option<String>>,
+	reply: std::sync::mpsc::Sender<Option<String>>,
+	/// When the caller stops waiting. A request still queued after this is
+	/// dropped unanswered: nobody is listening, and binding for it would
+	/// only keep the worker from the logins that are.
+	expires: Instant,
+	/// Set by the worker once it holds a connection to the directory for
+	/// this request.
+	reached: Arc<AtomicBool>,
 }
 
 /// A live LDAP directory authenticator backed by a dedicated worker thread.
@@ -59,8 +112,10 @@ pub struct LdapAuthenticator {
 	/// The request sender. An `Option` so [`Drop`] can drop it (closing the
 	/// channel and ending the worker loop) *before* joining the worker thread —
 	/// joining while the sender is still alive would deadlock.
-	requests: Option<Sender<AuthRequest>>,
+	requests: Option<SyncSender<AuthRequest>>,
 	worker: Option<JoinHandle<()>>,
+	/// How long [`Self::authenticate`] waits for the worker's reply.
+	deadline: Duration,
 }
 
 impl std::fmt::Debug for LdapAuthenticator {
@@ -78,7 +133,13 @@ impl LdapAuthenticator {
 
 	/// [`LdapAuthenticator::new`] with an explicit per-login budget.
 	pub(crate) fn with_limits(config: Ldap, limits: Limits) -> Self {
-		let (tx, rx) = channel::<AuthRequest>();
+		Self::with_queue(config, limits, QUEUE_DEPTH)
+	}
+
+	/// [`Self::with_limits`] with room for `queue` logins waiting for the
+	/// worker. The caller waits at most `limits.timeout` for one login.
+	pub(crate) fn with_queue(config: Ldap, limits: Limits, queue: usize) -> Self {
+		let (tx, rx) = sync_channel::<AuthRequest>(queue);
 		let worker = std::thread::Builder::new()
 			.name("ldap-auth".to_string())
 			.spawn(move || worker_loop(config, limits, rx))
@@ -86,26 +147,36 @@ impl LdapAuthenticator {
 		LdapAuthenticator {
 			requests: Some(tx),
 			worker: Some(worker),
+			deadline: limits.timeout,
 		}
 	}
 
-	/// Authenticate a login with a password against the LDAP server, returning
-	/// the mapped account name on success or `None` on any failure.
+	/// Authenticate a login with a password against the LDAP server: the
+	/// mapped account name on success, `None` when the directory refused the
+	/// login, and [`LdapBusy`] when it could not be asked in time.
 	///
-	/// Synchronous: it sends the request to the worker thread and blocks on the
-	/// reply. A dead worker (its receiver dropped) fails closed as `None`.
-	pub fn authenticate(&self, login: &str, password: &str) -> Option<String> {
+	/// Synchronous: it queues the request for the worker thread and blocks on
+	/// the reply, for at most the deadline. A full queue, a missed deadline,
+	/// an unreachable server and a dead worker are all `Err(LdapBusy)`.
+	pub fn authenticate(&self, login: &str, password: &str) -> Result<Option<String>, LdapBusy> {
 		let (reply_tx, reply_rx) = channel();
+		let reached = Arc::new(AtomicBool::new(false));
 		let request = AuthRequest {
 			login: login.to_string(),
 			password: password.to_string(),
 			reply: reply_tx,
+			expires: Instant::now() + self.deadline,
+			reached: Arc::clone(&reached),
 		};
-		let requests = self.requests.as_ref()?;
-		if requests.send(request).is_err() {
-			return None;
-		}
-		reply_rx.recv().ok().flatten()
+		let requests = self.requests.as_ref().ok_or(LdapBusy::NotSent)?;
+		requests.try_send(request).map_err(|_| LdapBusy::NotSent)?;
+		reply_rx.recv_timeout(self.deadline).map_err(|_| {
+			if reached.load(Ordering::SeqCst) {
+				LdapBusy::Reached
+			} else {
+				LdapBusy::NotSent
+			}
+		})
 	}
 }
 
@@ -132,29 +203,49 @@ fn worker_loop(config: Ldap, limits: Limits, requests: Receiver<AuthRequest>) {
 		.build()
 	{
 		Ok(runtime) => runtime,
-		// A runtime that cannot be built means every request fails closed.
+		// A runtime that cannot be built answers nothing: each caller's
+		// reply channel closes and it reports the directory as busy.
 		Err(_) => {
-			for request in requests {
-				let _ = request.reply.send(None);
-			}
+			for _request in requests {}
 			return;
 		}
 	};
 	for request in requests {
-		// The whole login is bounded: a server that never answers must not
-		// hold this serialized worker, and with it every later login.
-		let outcome = runtime
-			.block_on(async {
-				tokio::time::timeout(
-					limits.timeout,
-					authenticate_once(&config, limits, &request.login, &request.password),
-				)
-				.await
-			})
-			.unwrap_or(None);
-		// A receiver that has gone away just means the caller timed out; ignore.
-		let _ = request.reply.send(outcome);
+		// Nobody is waiting for this one any more.
+		let Some(left) = time_left(request.expires, Instant::now()) else {
+			continue;
+		};
+		// A server that stops answering mid-exchange must not hold the
+		// worker, and with it every later login, past the caller's deadline.
+		let outcome = runtime.block_on(async {
+			tokio::time::timeout(
+				left,
+				authenticate_once(
+					&config,
+					limits,
+					&request.login,
+					&request.password,
+					&request.reached,
+				),
+			)
+			.await
+		});
+		// Unavailable and timed out send nothing: the closed channel is the
+		// caller's signal that the directory could not be asked.
+		if let Ok(Outcome::Account(account)) = outcome {
+			let _ = request.reply.send(Some(account));
+		} else if let Ok(Outcome::Refused) = outcome {
+			let _ = request.reply.send(None);
+		}
 	}
+}
+
+/// How long a request still has before its caller stops waiting, `None`
+/// once that moment has passed.
+fn time_left(expires: Instant, now: Instant) -> Option<Duration> {
+	expires
+		.checked_duration_since(now)
+		.filter(|left| !left.is_zero())
 }
 
 /// Resolve and bind one login. Returns the mapped account name on success.
@@ -171,66 +262,121 @@ async fn authenticate_once(
 	limits: Limits,
 	login: &str,
 	password: &str,
-) -> Option<String> {
+	reached: &AtomicBool,
+) -> Outcome {
 	// An empty password would, on many servers, be an unauthenticated bind that
 	// "succeeds" — reject it outright so it never reaches the user bind.
 	if password.is_empty() {
-		return None;
+		return Outcome::Refused;
 	}
 	let filter = build_filter(&config.user_filter, login);
 
 	// (1)+(2): service-bind, then search for the login's entry.
-	let entry = search_entry(config, limits, &filter).await?;
+	let entry = match search_entry(config, limits, &filter, reached).await {
+		Ok(Some(entry)) => entry,
+		Ok(None) => {
+			return spend_the_user_bind(config, password, reached).await;
+		}
+		Err(Unreachable) => return Outcome::Unavailable,
+	};
 
 	// (3): map the entry to an account name and recover its DN for the bind.
-	let account = account_name(config, &entry)?;
+	let Some(account) = account_name(config, &entry) else {
+		return spend_the_user_bind(config, password, reached).await;
+	};
 	let user_dn = entry.dn;
 	if user_dn.is_empty() {
-		return None;
+		return spend_the_user_bind(config, password, reached).await;
 	}
 
-	// (4): bind as the user on a fresh connection. Success authenticates.
-	let mut user_conn = connect(config).await.ok()?;
-	let bound = user_conn
-		.simple_bind(&user_dn, password)
-		.await
-		.ok()
-		.and_then(|result| result.success().ok())
-		.is_some();
+	// (4): bind as the user on a fresh connection. Success authenticates; an
+	// answer that refuses the bind is a wrong password, no answer is not.
+	let Ok(mut user_conn) = connect(config, reached).await else {
+		return Outcome::Unavailable;
+	};
+	let bound = user_conn.simple_bind(&user_dn, password).await;
 	let _ = user_conn.unbind().await;
-	bound.then_some(account)
+	match bound.map(|result| result.success().is_ok()) {
+		Ok(true) => Outcome::Account(account),
+		Ok(false) => Outcome::Refused,
+		Err(_) => Outcome::Unavailable,
+	}
+}
+
+/// The directory could not be reached, or answered with an error that is not
+/// about the login (a failed service bind, a search error).
+struct Unreachable;
+
+/// Make the round trips of step (4) for a login that has no entry: a fresh
+/// connection and a bind that cannot succeed. A login the directory knows
+/// costs a connection and a bind for the user on top of the search; without
+/// this one an unknown login would end a connection early and the count of
+/// round trips would say which logins exist. It also ends the way step (4)
+/// does: refused when the directory answered, unavailable when it did not.
+async fn spend_the_user_bind(config: &Ldap, password: &str, reached: &AtomicBool) -> Outcome {
+	let Ok(mut conn) = connect(config, reached).await else {
+		return Outcome::Unavailable;
+	};
+	let unused_dn = format!("cn=unknown-login,{}", config.base_dn);
+	let bound = conn.simple_bind(&unused_dn, password).await;
+	let _ = conn.unbind().await;
+	// The same classification step (4) gives a known login: whether the
+	// directory answered decides it, never whether the entry exists.
+	match bound {
+		Ok(_) => Outcome::Refused,
+		Err(_) => Outcome::Unavailable,
+	}
 }
 
 /// Open a fresh connection, service-bind, and search for the single entry
-/// matching `filter` under the base DN. Returns the first matching entry, or
-/// `None` on any error or no match.
-async fn search_entry(config: &Ldap, limits: Limits, filter: &str) -> Option<SearchEntry> {
-	let mut conn = connect(config).await.ok()?;
+/// matching `filter` under the base DN. `Ok` carries the first matching
+/// entry, or `None` when the directory has none; `Err` is any failure to ask.
+async fn search_entry(
+	config: &Ldap,
+	limits: Limits,
+	filter: &str,
+	reached: &AtomicBool,
+) -> Result<Option<SearchEntry>, Unreachable> {
+	let mut conn = connect(config, reached).await.map_err(|_| Unreachable)?;
+	let found = service_search(&mut conn, config, limits, filter).await;
+	let _ = conn.unbind().await;
+	found
+}
+
+async fn service_search(
+	conn: &mut LdapConnAsyncHandle,
+	config: &Ldap,
+	limits: Limits,
+	filter: &str,
+) -> Result<Option<SearchEntry>, Unreachable> {
 	conn.simple_bind(&config.bind_dn, &config.bind_password)
 		.await
-		.ok()?
+		.map_err(|_| Unreachable)?
 		.success()
-		.ok()?;
+		.map_err(|_| Unreachable)?;
 	let attrs = vec![
 		config.account_attribute.as_str(),
 		config.mail_attribute.as_str(),
 	];
-	let entry = capped_search(&mut conn, &config.base_dn, filter, attrs, limits.entries)
+	let entries = capped_search(conn, &config.base_dn, filter, attrs, limits.entries)
 		.await
-		.ok()
-		.and_then(|entries| entries.into_iter().next());
-	let _ = conn.unbind().await;
-	entry
+		.map_err(|_| Unreachable)?;
+	Ok(entries.into_iter().next())
 }
 
 /// Open an async connection honoring the TLS toggle and spawn its driver future
 /// (via [`ldap3::drive!`]) on the current runtime. `ldaps://` URLs always
 /// negotiate TLS; for `ldap://` URLs the toggle requests StartTLS.
-async fn connect(config: &Ldap) -> ldap3::result::Result<LdapConnAsyncHandle> {
-	let settings =
-		LdapConnSettings::new().set_starttls(config.tls && config.url.starts_with("ldap://"));
+async fn connect(
+	config: &Ldap,
+	reached: &AtomicBool,
+) -> ldap3::result::Result<LdapConnAsyncHandle> {
+	let settings = LdapConnSettings::new()
+		.set_starttls(config.tls && config.url.starts_with("ldap://"))
+		.set_conn_timeout(CONNECT_TIMEOUT);
 	let (conn, ldap) = LdapConnAsync::with_settings(settings, &config.url).await?;
 	ldap3::drive!(conn);
+	reached.store(true, Ordering::SeqCst);
 	Ok(ldap)
 }
 
@@ -366,7 +512,7 @@ async fn load_ldap_accounts_async(
 	config: &Ldap,
 	cap: usize,
 ) -> ldap3::result::Result<Vec<LdapAccount>> {
-	let mut conn = connect(config).await?;
+	let mut conn = connect(config, &AtomicBool::new(false)).await?;
 	conn.simple_bind(&config.bind_dn, &config.bind_password)
 		.await?
 		.success()?;

@@ -7,6 +7,7 @@ pub(super) mod disabled_domain;
 pub(super) mod exact;
 pub(super) mod gate;
 pub(super) mod iteration;
+pub(super) mod ldap_busy;
 pub(super) mod list;
 pub(super) mod masked;
 pub(super) mod protocol;
