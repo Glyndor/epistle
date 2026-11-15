@@ -20,6 +20,9 @@ mod tests_basic_limits;
 mod tests_basic_recipients;
 
 #[cfg(test)]
+mod tests_postmaster_hostname;
+
+#[cfg(test)]
 mod tests_enhanced;
 
 #[cfg(test)]

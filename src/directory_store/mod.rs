@@ -353,6 +353,7 @@ impl AccountStore {
 			.with_catch_all(catch_all)
 			.with_domain_aliases(hosted.domain_aliases)
 			.with_disabled_domains(hosted.disabled)
+			.with_server_name(hosted.hostname)
 			.with_send_off_domains(hosted.send_off)
 			.with_scram(scram)
 			.with_totp(totp)

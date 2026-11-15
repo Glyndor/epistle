@@ -90,6 +90,10 @@ pub struct Directory {
 	/// Hosted domains switched off: mail for them is rejected like mail for
 	/// an unknown user and nobody may send as an address in them.
 	disabled_domains: HashSet<String>,
+	/// The name this server gives itself (lowercased), which need not be a
+	/// hosted domain. Mail to `postmaster` at it is accepted all the same
+	/// (RFC 5321 section 4.5.1).
+	server_name: Option<String>,
 	/// Hosted domains that only receive (`receive_only_domains`): nobody may
 	/// send as an address in them (lowercased).
 	send_off_domains: HashSet<String>,
@@ -218,6 +222,7 @@ impl Directory {
 			catch_all: HashMap::new(),
 			domain_aliases: HashMap::new(),
 			disabled_domains: HashSet::new(),
+			server_name: None,
 			send_off_domains: HashSet::new(),
 			send_off: HashSet::new(),
 			receive_off: HashSet::new(),
@@ -269,6 +274,14 @@ impl Directory {
 	/// `tlsrpt@<domain>` recipients against the served domain set.
 	pub fn domains(&self) -> Vec<String> {
 		self.domains.iter().cloned().collect()
+	}
+
+	/// The domains whose `postmaster@` and `tlsrpt@` mail may be a report:
+	/// the hosted ones and the server's own name, lowercased.
+	pub fn report_domains(&self) -> Vec<String> {
+		let mut domains = self.domains();
+		domains.extend(self.server_name.clone());
+		domains
 	}
 
 	/// Whether `domain` is hosted here, directly or as an alias domain:

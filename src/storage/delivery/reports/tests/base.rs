@@ -2,7 +2,6 @@
 
 use super::*;
 use crate::directory_store::DirectoryHandle;
-use crate::reports::Kind;
 use crate::smtp::session::AcceptedMessage;
 use crate::smtp::sink::MessageSink;
 use crate::storage::LocalDelivery;
@@ -203,22 +202,16 @@ fn an_oversized_report_is_dropped_and_counted() {
 	assert_eq!(snap.get("reports_dropped"), Some(&1));
 }
 
-/// `report_kind` only fires for `postmaster@` or `tlsrpt@` against a
+/// `is_report_target` only fires for `postmaster@` or `tlsrpt@` against a
 /// domain the directory serves. Other locals and unserved domains are no-ops.
 #[test]
-fn report_kind_matches_only_postmaster_and_tlsrpt() {
+fn only_postmaster_and_tlsrpt_of_a_served_domain_are_report_targets() {
 	let domains = vec!["example.org".to_string()];
-	assert_eq!(
-		report_kind("postmaster", "example.org", &domains),
-		Some(Kind::Dmarc)
-	);
-	assert_eq!(
-		report_kind("tlsrpt", "example.org", &domains),
-		Some(Kind::TlsRpt)
-	);
-	assert_eq!(report_kind("alice", "example.org", &domains), None);
-	assert_eq!(report_kind("postmaster", "other.example", &domains), None);
-	assert_eq!(report_kind("postmaster", "example.com", &domains), None);
+	assert!(is_report_target("postmaster", "example.org", &domains));
+	assert!(is_report_target("tlsrpt", "example.org", &domains));
+	assert!(!is_report_target("alice", "example.org", &domains));
+	assert!(!is_report_target("postmaster", "other.example", &domains));
+	assert!(!is_report_target("postmaster", "example.com", &domains));
 }
 
 #[test]
@@ -320,4 +313,67 @@ fn unsigned_tlsrpt_still_reaches_mailbox_without_ingest() {
 		(1, 1, 0, false),
 		"unsigned TLS-RPT must reach the mailbox once without ingest or persistence"
 	);
+}
+
+/// A report the server sends itself goes to `postmaster@<its hostname>`, which
+/// is no hosted domain: it is delivered and read all the same.
+#[test]
+fn a_report_to_postmaster_at_the_server_name_is_ingested_and_delivered() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let metrics = std::sync::Arc::new(crate::metrics::Metrics::new());
+	let directory = DirectoryHandle::new(
+		crate::smtp::directory::Directory::new(
+			["example.org".to_string()],
+			[(
+				"postmaster@example.org".to_string(),
+				"postmaster".to_string(),
+			)],
+		)
+		.with_server_name("mail.example.org"),
+	);
+	let delivery = LocalDelivery::new(dir.path(), directory)
+		.expect("delivery")
+		.with_metrics(metrics.clone());
+	let payload = build_message(
+		"BOUND",
+		&[(
+			"application/gzip".into(),
+			"base64".into(),
+			b64(&dmarc_report_bytes()),
+		)],
+	);
+	delivery
+		.deliver(message(&["postmaster@mail.example.org"], &payload))
+		.expect("deliver");
+	let new_dir = dir.path().join("accounts").join("postmaster").join("new");
+	assert_eq!(
+		std::fs::read_dir(&new_dir).map(|e| e.count()).unwrap_or(0),
+		1
+	);
+	assert_eq!(metrics.snapshot().get("dmarc_reports_ingested"), Some(&1));
+}
+
+/// One message to both report mailboxes is read once.
+#[test]
+fn a_message_to_both_report_mailboxes_is_ingested_once() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let metrics = std::sync::Arc::new(crate::metrics::Metrics::new());
+	let delivery = LocalDelivery::new(dir.path(), directory())
+		.expect("delivery")
+		.with_metrics(metrics.clone());
+	let payload = build_message(
+		"BOUND",
+		&[(
+			"application/gzip".into(),
+			"base64".into(),
+			b64(&dmarc_report_bytes()),
+		)],
+	);
+	delivery
+		.deliver(message(
+			&["postmaster@example.org", "tlsrpt@example.org"],
+			&payload,
+		))
+		.expect("deliver");
+	assert_eq!(metrics.snapshot().get("dmarc_reports_ingested"), Some(&1));
 }

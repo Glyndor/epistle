@@ -20,6 +20,7 @@ pub(super) fn open_account_store(config: &Config) -> std::io::Result<AccountStor
 		config.accounts.clone(),
 	)
 	.map_err(|error| std::io::Error::other(error.to_string()))?
+	.with_server_name(config.hostname.clone())
 	.with_disabled_domains(config.disabled_domains.clone())
 	.with_send_off_domains(config.receive_only_domains.clone())
 	.with_domain_quotas(config.domain_quotas.clone())

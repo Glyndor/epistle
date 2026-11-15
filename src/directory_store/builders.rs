@@ -63,6 +63,14 @@ impl AccountStore {
 		Ok(store)
 	}
 
+	/// Name the server, so `postmaster` at it is accepted although it is not
+	/// a hosted domain, and rebuild the directory.
+	pub fn with_server_name(mut self, hostname: String) -> Self {
+		self.hosted.get_mut().expect("hosted lock").hostname = hostname;
+		self.handle.replace(self.build_directory());
+		self
+	}
+
 	/// Switch off hosted domains and rebuild the directory.
 	pub fn with_disabled_domains(mut self, domains: Vec<String>) -> Self {
 		self.hosted.get_mut().expect("hosted lock").disabled = domains;

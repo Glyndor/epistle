@@ -237,10 +237,6 @@ impl LocalDelivery {
 			return Err(SinkError::Unavailable("no recipient accounts".into()));
 		}
 		let mut delivered = Delivered::default();
-		// (Kind, domain) pairs already ingested for this message, so the report
-		// hook fires once per matching report even when an alias fans out to
-		// several accounts.
-		let mut ingested = reports::Ingested::new();
 		let mut listed = lists::ListedCopies::new(message);
 		let mut refused = 0;
 		let mut stored = 0;
@@ -253,7 +249,6 @@ impl LocalDelivery {
 				delivered_to,
 				listed.for_list(list.as_ref()),
 				mailbox,
-				&mut ingested,
 				&mut stored,
 			) {
 				Ok(one) => one,
@@ -275,13 +270,13 @@ impl LocalDelivery {
 			return Err(SinkError::MailboxFull(delivered.over_quota[0].clone()));
 		}
 		// Report-ingest hook: fires after normal delivery, never affects
-		// outcome, and never fires twice for the same (Kind, domain).
+		// outcome, and reads the message once however many recipients are report
+		// mailboxes.
 		reports::ingest_for_recipients(
 			&self.data_dir,
 			&self.directory,
 			self.metrics.as_ref(),
 			message,
-			&mut ingested,
 		);
 		Ok(delivered)
 	}
@@ -296,7 +291,6 @@ impl LocalDelivery {
 		delivered_to: &str,
 		message: &AcceptedMessage,
 		hint: Option<&str>,
-		_ingested: &mut reports::Ingested,
 		stored_copies: &mut usize,
 	) -> Result<Delivered, SinkError> {
 		let stored = trace::final_copy(&message.reverse_path, delivered_to, &message.data);

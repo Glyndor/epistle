@@ -12,7 +12,7 @@ fn unsigned_tls_report_is_dropped_without_persistence() {
 	};
 	let directory = tempfile::tempdir().expect("temporary report directory");
 	let metrics = Metrics::new();
-	ingest(directory.path(), Kind::TlsRpt, &message, Some(&metrics));
+	ingest(directory.path(), &message, Some(&metrics));
 	let snapshot = metrics.snapshot();
 	let observed = (
 		snapshot.get("reports_dropped").copied().unwrap_or(0),
@@ -109,7 +109,7 @@ async fn authenticate_and_ingest(mut message: AcceptedMessage, dns: &KeyDns) -> 
 	message.tlsrpt_verified = crate::dkim::verify_tlsrpt(dns, &message.data).await;
 	let directory = tempfile::tempdir().expect("temporary report directory");
 	let metrics = Metrics::new();
-	ingest(directory.path(), Kind::TlsRpt, &message, Some(&metrics));
+	ingest(directory.path(), &message, Some(&metrics));
 	let snapshot = metrics.snapshot();
 	(
 		snapshot.get("reports_dropped").copied().unwrap_or(0),
