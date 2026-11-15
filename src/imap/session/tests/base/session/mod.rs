@@ -7,10 +7,7 @@ mod basic;
 mod capabilities;
 
 #[cfg(test)]
-mod codes_auth;
-
-#[cfg(test)]
-mod codes_mailbox;
+mod codes;
 
 #[cfg(test)]
 mod commands;
