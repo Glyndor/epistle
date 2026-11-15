@@ -3,7 +3,7 @@
 //! sibling so `src/cli/init/apply/mod.rs` keeps under the per-file line limit.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::cli::init::answers::{Answers, Services};
 use crate::cli::init::apply::ApplyError;
@@ -134,6 +134,18 @@ pub(super) fn build_config(
 			addr: mail_addr,
 		});
 	}
+	// The public HTTPS endpoint (port 443): the client setup documents
+	// (Thunderbird autoconfig, Microsoft Autodiscover) and the public
+	// MTA-STS policy. It is written for every installation: the names
+	// that reach it are published for every hosted domain, and a name
+	// that resolves to a server that answers nothing is a name that
+	// makes a client wait and then give up. The certificate it presents
+	// is the server's own pair (see `[tls]`), which the ACME block asks
+	// for the discovery names of every hosted domain.
+	listeners.push(DesiredListener {
+		kind: "autoconfigs".to_string(),
+		addr: mail_addr,
+	});
 
 	let dkim = match (dkim_ed25519, dkim_rsa) {
 		(Some(ed), Some(rsa)) => DesiredDkim {
@@ -206,6 +218,9 @@ pub(super) fn build_config(
 		dns,
 		database,
 		acme: acme_block,
+		mta_sts: DesiredMtaSts {
+			policy_dir: mta_sts_policy_dir(&answers.data_dir).display().to_string(),
+		},
 		antispam: DesiredAntispam {
 			clamd_socket: (answers.services.antivirus != Some(false))
 				.then(|| "/run/clamav/clamd.sock".to_string()),
@@ -217,6 +232,13 @@ pub(super) fn build_config(
 			encrypted_archives: "flag",
 		},
 	})
+}
+
+/// The directory the public MTA-STS policy lives in: inside the data
+/// directory, so the container that serves the mail reads the same file
+/// the process that writes it wrote.
+pub(crate) fn mta_sts_policy_dir(data_dir: &Path) -> PathBuf {
+	data_dir.join("mta-sts")
 }
 
 /// A fresh secret for each domain of a new installation.
@@ -375,6 +397,14 @@ fn desired_listeners(services: &Services, acme_enabled: bool) -> Vec<Listener> {
 			port: None,
 		});
 	}
+	// The public HTTPS endpoint (port 443): the client setup documents and
+	// the public MTA-STS policy. It is written for every installation, so
+	// the names that reach it resolve to a server that answers.
+	listeners.push(Listener {
+		kind: ListenerKind::Autoconfigs,
+		addr: MAIL_BIND_ADDR,
+		port: None,
+	});
 	listeners
 }
 

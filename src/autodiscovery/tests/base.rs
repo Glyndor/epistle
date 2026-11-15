@@ -16,6 +16,7 @@ fn state() -> Discovery {
 		domains: std::sync::Arc::new(std::sync::RwLock::new(
 			vec!["example.org".to_string()].into(),
 		)),
+		policy: None,
 	}
 }
 

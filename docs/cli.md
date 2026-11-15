@@ -1788,6 +1788,15 @@ What this build does:
   that does not validate never reaches its destination;
 - generates a self-signed certificate under `<data_dir>/keys/cert.pem` and
   `keys/key.pem` so the produced config validates out of the box;
+- writes the public endpoint (the `autoconfigs` listener on port 443) into the
+  configuration, so the `autoconfig.<domain>` and `autodiscover.<domain>` names
+  the DNS records point at answer, and writes the `[mta_sts] policy_dir`
+  (`<data_dir>/mta-sts`) the public MTA-STS policy is written to and served
+  from. With `[acme]` on, the certificate asked for covers the mail hostname
+  and the `autoconfig.`, `autodiscover.` and `mta-sts.` names of every hosted
+  domain, because a client verifies the certificate against the name it asked
+  for and not against the name the CNAME points at. The end of the run lists
+  what was turned on and the one edit that turns each thing off;
 - creates the parent directory of `config_path` with mode `0750` when it
   does not exist (a fresh install has no `/etc/epistle/`), and prints it
   as a plan step so the operator sees it before confirming;

@@ -177,6 +177,14 @@ impl Config {
 		// very connections the server exposes, so excluding it
 		// here would reject every config that names a separate
 		// `hostname` and `domains` (the documented shape).
+		//
+		// The public names of a hosted domain (`autoconfig.`,
+		// `autodiscover.` and `mta-sts.` over it) are names this
+		// server is responsible for too: the public endpoint serves
+		// the client setup documents and the MTA-STS policy under
+		// them, and a client verifies the certificate against the
+		// name it asked for, not against the name the CNAME points
+		// at.
 		let mut configured: HashSet<String> = self
 			.domains
 			.iter()
@@ -186,7 +194,9 @@ impl Config {
 		configured.insert(self.hostname.to_ascii_lowercase());
 		for domain in &acme.domains {
 			validate_dns_name("acme domain", domain)?;
-			if !configured.contains(&domain.to_ascii_lowercase()) {
+			if !configured.contains(&domain.to_ascii_lowercase())
+				&& !crate::dns::names::is_public_name(domain, &self.domains)
+			{
 				return Err(ConfigError::Invalid(format!(
 					"[acme] domain \"{domain}\" is not a configured domain"
 				)));

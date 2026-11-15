@@ -40,6 +40,16 @@ pub struct DnsPublish {
 	/// every record the configuration needs is published.
 	#[serde(default)]
 	pub skip: Vec<SkipGroup>,
+	/// Whether the DANE TLSA record may be published.
+	///
+	/// Off by default: a TLSA record is only safe in a zone that is
+	/// signed with DNSSEC. A validating resolver ignores the record in
+	/// an unsigned zone, and a resolver that does not validate applies
+	/// it — so a record naming a certificate the server no longer
+	/// presents makes the senders that honour DANE refuse the mail
+	/// (RFC 7672). The operator turns it on for a zone that is signed.
+	#[serde(default)]
+	pub dane: bool,
 	/// The names under a hosted domain that send mail. Hosted domains
 	/// themselves count and need no entry; every other name under them is
 	/// not a sender, and `epistle dns lockdown` gives it a null SPF and a
@@ -59,6 +69,7 @@ impl Default for DnsPublish {
 		DnsPublish {
 			interval_secs: DEFAULT_INTERVAL_SECS,
 			skip: Vec::new(),
+			dane: false,
 			senders: Vec::new(),
 			null_records: false,
 		}

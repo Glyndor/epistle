@@ -72,27 +72,11 @@ pub fn for_domains(config: &Config, domains: &[String]) -> Result<Desired, Vec<S
 	if !errors.is_empty() {
 		return Err(errors);
 	}
-	// The TLSA association names the leaf certificate in service: the
-	// pair the authority issued when there is one, the `[tls]` pair
-	// otherwise. It is not always the one `[tls]` names.
-	let tlsa = crate::tls::served_tls(config).as_ref().and_then(|served| {
-		match std::fs::read_to_string(&served.tls.cert_file) {
-			// A certificate in service is expected to give a TLSA record:
-			// a file without one is an input that failed, never "no TLSA
-			// needed", or the publisher would retire the record it wrote.
-			Ok(pem) => records::tlsa_full_cert(&pem).or_else(|| {
-				warnings.push(format!(
-					"{} holds no certificate, so the TLSA record cannot be computed",
-					served.tls.cert_file.display()
-				));
-				None
-			}),
-			Err(error) => {
-				warnings.push(format!("cannot read certificate: {error}"));
-				None
-			}
-		}
-	});
+	// The TLSA association names the leaf certificate in service, and only
+	// when that certificate is the one that stays in service. The zone has
+	// to be one the operator says is signed: that is the
+	// `[dns_publish] dane` flag, and the record filter reads it.
+	let tlsa = served_association(config, &mut warnings);
 	let records = records::build_records_for_roles(
 		domains,
 		&config.hostname,
@@ -121,6 +105,73 @@ pub fn for_domains(config: &Config, domains: &[String]) -> Result<Desired, Vec<S
 		warnings,
 		skipped,
 	})
+}
+
+/// The DANE association of the certificate in service, when that
+/// certificate is the one that stays in service.
+///
+/// The association is the `3 0 1` value of the leaf certificate, hashed
+/// (RFC 7672). Two things have to hold for it to be published:
+///
+/// - The certificate in service has to be the one that stays there. With
+///   `[acme]` on, the pair in service is the bootstrap one until the
+///   authority answers, and the renewal loop replaces it: a record
+///   naming the bootstrap names a certificate the server stops
+///   presenting, and every sender that honours DANE refuses the mail.
+///   Without `[acme]` the operator's own pair is the one in service.
+/// - The zone has to be one the operator says is signed. That is the
+///   `[dns_publish] dane` flag, and it is read by the record filter
+///   (see [`crate::dns::skip`]), not here.
+///
+/// A certificate that cannot be read is an input that failed, never "no
+/// DANE record needed": the warning marks the set incomplete, so the
+/// publisher retires nothing on its strength.
+fn served_association(config: &Config, warnings: &mut Vec<String>) -> Option<String> {
+	let served = crate::tls::served_tls(config)?;
+	if !stays_in_service(config, &served) {
+		// A zone that is not declared signed publishes no DANE record
+		// whatever the certificate is, so waiting for the issued one is
+		// not an input that failed and must not hold back the publisher.
+		if config
+			.skip_set()
+			.contains(crate::dns::skip::SkipGroup::Tlsa)
+		{
+			return None;
+		}
+		warnings.push(format!(
+			"the certificate in service ({}) is the one the authority replaces at the first \
+			 issuance, so the DANE record is not published until the issued certificate is \
+			 in service",
+			served.tls.cert_file.display()
+		));
+		return None;
+	}
+	match std::fs::read_to_string(&served.tls.cert_file) {
+		Ok(pem) => records::tlsa_full_cert(&pem).or_else(|| {
+			warnings.push(format!(
+				"{} holds no certificate, so the TLSA record cannot be computed",
+				served.tls.cert_file.display()
+			));
+			None
+		}),
+		Err(error) => {
+			warnings.push(format!("cannot read certificate: {error}"));
+			None
+		}
+	}
+}
+
+/// Whether the certificate in service is the one that stays in service.
+///
+/// With `[acme]` on, the pair in service is the issued one only after the
+/// authority has answered; before that it is the bootstrap pair, which
+/// the renewal loop replaces. Without `[acme]` there is no renewal loop
+/// and the operator's own pair is the one in service.
+fn stays_in_service(config: &Config, served: &crate::tls::ServedTls) -> bool {
+	match &config.acme {
+		Some(_) => served.source == crate::tls::CertSource::Acme,
+		None => true,
+	}
 }
 
 /// The default `[dkim]` selector, and its optional RSA partner, as

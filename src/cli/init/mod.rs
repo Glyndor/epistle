@@ -29,6 +29,7 @@ mod ptr;
 mod regenerate;
 pub(crate) mod resources;
 mod review;
+mod turned_on;
 
 pub use answers::Answers;
 pub(crate) use apply::prepare_keys_for_update;
@@ -263,6 +264,7 @@ fn run_with(args: Args, probes: &Probes, out: &mut dyn Write) -> ExitCode {
 			}
 			report_ptr(&answers, probes, out);
 			offer_warmup(&answers.data_dir, out);
+			turned_on::render(&answers, out);
 			let mut report = lines(|text| outcome.report.write_to(text).is_ok());
 			if answers.mode == answers::Mode::Automatic && answers.dns.is_some() {
 				let published = dns_step::publish(

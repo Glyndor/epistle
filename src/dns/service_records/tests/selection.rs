@@ -250,6 +250,7 @@ fn the_records_of_a_full_deployment_carry_every_locator() {
 		"kind = 'manage-sieve'",
 		"kind = 'api'",
 		"kind = 'web-dav'",
+		"kind = 'autoconfigs'",
 	]);
 	let names: Vec<String> = published_srv(&config)
 		.into_iter()

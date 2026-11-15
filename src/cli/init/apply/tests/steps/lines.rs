@@ -281,18 +281,20 @@ fn listener_entries_match_schema_default_ports() {
 	// Belt and braces on the count too: a future kind added to the
 	// answers set without a matching plan entry shows up here as a
 	// shorter `entries` vector, not as a wrong port. The expected
-	// count is ten: smtp + imap + imaps (the implicit-TLS sibling
+	// count is eleven: smtp + imap + imaps (the implicit-TLS sibling
 	// of imap) + submission + submissions (the implicit-TLS sibling
 	// of submission) + pop3s + manage-sieve + web-dav + api +
-	// acme. Init binds the implicit-TLS ports (993, 465) whenever
-	// it binds their STARTTLS siblings, because real-world clients
-	// default to the implicit ports first; the `acme` listener on
-	// port 80 ships alongside because the test answers carry a
-	// public hostname and the auto-enable heuristic turns ACME on.
+	// acme + autoconfigs. Init binds the implicit-TLS ports (993,
+	// 465) whenever it binds their STARTTLS siblings, because
+	// real-world clients default to the implicit ports first; the
+	// `acme` listener on port 80 ships alongside because the test
+	// answers carry a public hostname and the auto-enable heuristic
+	// turns ACME on; the `autoconfigs` listener on port 443 ships
+	// because the public endpoint is written for every install.
 	assert_eq!(
 		entries.len(),
-		10,
-		"expected ten entries (smtp + imap + imaps + submission + submissions + pop3s + manage-sieve + web-dav + api + acme), \
+		11,
+		"expected eleven entries (smtp + imap + imaps + submission + submissions + pop3s + manage-sieve + web-dav + api + acme + autoconfigs), \
 		 got {entries:?}"
 	);
 	for entry in &entries {

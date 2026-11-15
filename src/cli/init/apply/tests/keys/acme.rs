@@ -80,8 +80,13 @@ fn build_config_enables_acme_by_default_for_public_hostname() {
 	);
 	assert_eq!(
 		acme.domains,
-		vec!["mail.example.org".to_string()],
-		"acme.domains must include the hostname; got {:?}",
+		vec![
+			"mail.example.org".to_string(),
+			"autoconfig.example.org".to_string(),
+			"autodiscover.example.org".to_string(),
+			"mta-sts.example.org".to_string(),
+		],
+		"acme.domains must cover the hostname and the public names of the hosted domain; got {:?}",
 		acme.domains
 	);
 	let kinds: Vec<&str> = desired.listeners.iter().map(|l| l.kind.as_str()).collect();
