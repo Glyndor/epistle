@@ -274,7 +274,11 @@ impl Directory {
 					// - Nothing else was decided (a login only the directory
 					//   holds, or nobody): it counts against the client alone,
 					//   never the account, or an outage would lock out people
-					//   whose passwords are right.
+					//   whose passwords are right, and only when the attempt
+					//   used a directory connection. One that never left the
+					//   queue, or found no directory to reach, counts for
+					//   nothing: otherwise saturating or downing the
+					//   directory would lock out every client behind it.
 					// `auth.busy` is written for every login, with the same
 					// fields.
 					let reached = busy == crate::directory_store::LdapBusy::Reached;
@@ -289,7 +293,7 @@ impl Directory {
 							ip,
 							protocol,
 						);
-					} else {
+					} else if reached {
 						self.record_client_failure(ip, protocol);
 					}
 					return hash_gate::Verdict::Busy;

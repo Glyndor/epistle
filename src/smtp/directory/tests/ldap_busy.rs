@@ -135,18 +135,25 @@ async fn a_refused_local_password_counts_against_account_and_client_in_either_st
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_login_the_directory_could_not_decide_counts_against_the_client_alone() {
-	for silent in [true, false] {
-		assert_eq!(
-			kinds(&rows_after("nobody-here", silent)),
-			["ip"],
-			"reached: {silent}: an outage must not lock an account out"
-		);
-	}
+async fn a_login_the_directory_could_not_decide_counts_against_the_client_alone_when_reached() {
+	assert_eq!(
+		kinds(&rows_after("nobody-here", true)),
+		["ip"],
+		"an outage must not lock an account out"
+	);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn undecided_attempts_add_up_against_the_client() {
+async fn an_attempt_that_never_reached_the_directory_counts_for_nothing() {
+	assert_eq!(
+		kinds(&rows_after("nobody-here", false)),
+		Vec::<&str>::new(),
+		"no connection was used, so no strike"
+	);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_down_directory_does_not_ban_the_clients_that_ask_it() {
 	let directory = directory_with(ldap_that_is_down());
 	for _ in 0..5 {
 		assert_eq!(
@@ -154,10 +161,12 @@ async fn undecided_attempts_add_up_against_the_client() {
 			Verdict::Busy
 		);
 	}
-	assert_eq!(
-		attempt(&directory, OPEN, fixtures::password()),
-		Verdict::Refused,
-		"the client is banned: saturating the directory gives it no free attempts"
+	assert!(
+		matches!(
+			attempt(&directory, OPEN, fixtures::password()),
+			Verdict::Admitted { .. }
+		),
+		"a client turned away while the directory is down is not banned"
 	);
 }
 
