@@ -67,6 +67,7 @@ fn podup_stub(dir: &std::path::Path) -> String {
 	.expect("podup");
 	use std::os::unix::fs::PermissionsExt;
 	std::fs::set_permissions(&podup, std::fs::Permissions::from_mode(0o755)).expect("mode");
+	super::runnable(&podup, &dir.join("podup.argv"));
 	podup.display().to_string()
 }
 
