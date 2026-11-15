@@ -80,7 +80,7 @@ queue of its own.
 | `icloud` | iCloud Mail | `icloud.com` |
 | `gmx` | GMX, Web.de and mail.com | `gmx.net`, `web.de`, `mail.com` |
 | `mailru` | Mail.ru | `mail.ru` |
-| `other` | every other receiver | — |
+| `other` | every other receiver | — (never limited: unrelated receivers share nothing) |
 
 A host counts as a provider only when the provider's name ends it on a
 label boundary: `mx00.emig.gmx.net` is GMX, `mx-ha02.web.de` is GMX,
@@ -105,7 +105,8 @@ gmx = { concurrency = 1, min_wait_secs = 30 }
 The value is either the number of conversations at once, or a table with
 `concurrency` (between 1 and the queue's `concurrency`) and
 `min_wait_secs` (between 0 and 3600 seconds). A group with no entry is
-not limited.
+not limited, and `other` cannot have one: its receivers are unrelated
+to each other, so they never share a queue.
 
 The table is absent on a server that existed before this setting, and
 that server keeps its behaviour exactly as it was. `epistle init` writes

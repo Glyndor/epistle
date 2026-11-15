@@ -165,6 +165,15 @@ impl super::Config {
 		let queue = &self.queue;
 		let invalid = |message: String| Err(super::ConfigError::Invalid(message));
 		for (group, limit) in &queue.per_group_concurrency {
+			// `other` is every receiver that is none of the named providers:
+			// unrelated domains, not one queue, so it cannot share a limit.
+			if *group == Group::Other {
+				return invalid(
+					"[queue] per_group_concurrency cannot limit `other`: it is every receiver \
+					 that is not a named provider, not one queue"
+						.to_string(),
+				);
+			}
 			if !(1..=queue.concurrency).contains(&limit.concurrency) {
 				return invalid(format!(
 					"[queue] per_group_concurrency.{group} concurrency must be between 1 and \

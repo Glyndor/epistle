@@ -185,11 +185,16 @@ impl Worker {
 		self
 	}
 
-	/// The limit of the receiver group `group`, when it has one.
+	/// The limit of the receiver group `group`, when it has one. Never for
+	/// [`Group::Other`](super::warmup::Group::Other).
 	pub(super) fn group_limit(
 		&self,
 		group: super::warmup::Group,
 	) -> Option<&super::limits::GroupLimit> {
+		// `other` holds unrelated receivers, which never share a queue.
+		if group == super::warmup::Group::Other {
+			return None;
+		}
 		self.group_limits.get(&group)
 	}
 
