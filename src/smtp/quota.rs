@@ -9,7 +9,9 @@
 //! known; SMTP has no per-recipient reply there (that is LMTP), so when
 //! other recipients can take it the message is accepted for them and the
 //! sender gets a DSN for the full mailbox, and only when every recipient
-//! is full is the whole message refused with `552 5.2.2`. The API refuses
+//! is full is the whole message refused, with the same temporary
+//! `452 4.2.2` as at `RCPT TO`: a full mailbox is never a permanent
+//! failure (RFC 3463), so the sender retries. The API refuses
 //! the request instead.
 
 use std::collections::HashMap;

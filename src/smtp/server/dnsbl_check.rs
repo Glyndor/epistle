@@ -12,27 +12,44 @@ use crate::smtp::reply::Reply;
 use crate::smtp::session::{AcceptedMessage, Session};
 
 use super::Server;
+use super::refusal_text::{list_name, quoted};
 
 /// Outcome of [`Server::screen_dnsbl`]: one of the three blocklists fired.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Each carries what was listed and the zone that listed it.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum DnsblRejection {
 	/// Client IP listed on an IP blocklist zone.
-	ClientIp,
+	ClientIp { ip: IpAddr, zone: String },
 	/// Envelope sender's domain listed on an RHSBL zone.
-	SenderDomain,
+	SenderDomain { domain: String, zone: String },
 	/// Host of a URL in the body listed on a URIBL zone.
-	UrlHost,
+	UrlHost { zone: String },
 }
 
 impl DnsblRejection {
-	/// The SMTP reply (code 554 + detail) sent on the wire.
-	pub(super) fn reply(self) -> Reply {
+	/// The SMTP reply (code 554 + detail) sent on the wire: what was
+	/// listed, when it is the sender's own, and the list that matched.
+	pub(super) fn reply(&self) -> Reply {
 		let detail = match self {
-			Self::ClientIp => "5.7.1 client host blocked by DNS blocklist",
-			Self::SenderDomain => "5.7.1 sender domain blocked by DNS blocklist",
-			Self::UrlHost => "5.7.1 message body links blocked by DNS blocklist",
+			Self::ClientIp { ip, zone } => {
+				format!(
+					"5.7.1 client host {ip} blocked by {} (result: listed)",
+					list_name(zone)
+				)
+			}
+			Self::SenderDomain { domain, zone } => format!(
+				"5.7.1 sender domain {} blocked by {} (result: listed)",
+				quoted(domain),
+				list_name(zone)
+			),
+			Self::UrlHost { zone } => {
+				format!(
+					"5.7.1 message body links blocked by {} (result: listed)",
+					list_name(zone)
+				)
+			}
 		};
-		Reply::single(554, detail)
+		Reply::single(554, &detail)
 	}
 }
 
@@ -61,7 +78,7 @@ impl Server {
 		{
 			tracing::info!(%ip, %zone, "rejecting DNSBL-listed client");
 			self.record_dnsbl_reject(message, peer);
-			return Some(DnsblRejection::ClientIp);
+			return Some(DnsblRejection::ClientIp { ip, zone });
 		}
 		// RHSBL: envelope sender's domain against the domain blocklist zones.
 		if self.dnsbl.has_domain_zones()
@@ -74,7 +91,7 @@ impl Server {
 		{
 			tracing::info!(%domain, %zone, "rejecting DNSBL-listed sender domain");
 			self.record_dnsbl_reject(message, peer);
-			return Some(DnsblRejection::SenderDomain);
+			return Some(DnsblRejection::SenderDomain { domain, zone });
 		}
 		// URIBL: hosts of every URL found in the body.
 		if self.dnsbl.has_url_zones() {
@@ -91,7 +108,7 @@ impl Server {
 					"rejecting DNSBL-listed URL host"
 				);
 				self.record_dnsbl_reject(message, peer);
-				return Some(DnsblRejection::UrlHost);
+				return Some(DnsblRejection::UrlHost { zone });
 			}
 		}
 		None

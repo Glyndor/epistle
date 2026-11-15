@@ -10,7 +10,7 @@ use crate::smtp::reply::Reply;
 use crate::smtp::session::{AcceptedMessage, Session};
 use crate::smtp::trace::{format_auth_results, spf_domain};
 
-use super::Server;
+use super::{Server, refusal_text};
 
 impl Server {
 	/// Authenticate `message` from `peer` when the session did not log in
@@ -39,10 +39,16 @@ impl Server {
 			match outcome {
 				crate::spf::SpfOutcome::Fail => {
 					self.metrics.rejected(crate::metrics::RejectReason::Spf);
-					return Err(Reply::single(550, "5.7.23 SPF validation failed"));
+					return Err(refusal_text::spf_failed(
+						ip,
+						domain.as_deref().unwrap_or("unknown"),
+					));
 				}
 				crate::spf::SpfOutcome::TempError => {
-					return Err(Reply::single(451, "4.4.3 SPF check temporarily failed"));
+					return Err(refusal_text::spf_unavailable(
+						ip,
+						domain.as_deref().unwrap_or("unknown"),
+					));
 				}
 				outcome => {
 					auth_headers.push_str(&format!(
@@ -133,10 +139,13 @@ impl Server {
 						crate::dmarc::DmarcOutcome::Reject => {
 							self.metrics.rejected(crate::metrics::RejectReason::Dmarc);
 							self.train_corpus(message, peer, true);
-							return Err(Reply::single(550, "5.7.1 rejected by DMARC policy"));
+							return Err(refusal_text::dmarc_rejected(
+								from.as_deref().unwrap_or("the From domain"),
+								published,
+							));
 						}
 						crate::dmarc::DmarcOutcome::TempError => {
-							return Err(Reply::single(451, "4.4.3 DMARC check temporarily failed"));
+							return Err(refusal_text::dmarc_unavailable(from.as_deref()));
 						}
 						_ => {}
 					}

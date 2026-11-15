@@ -31,4 +31,7 @@ pub(super) mod tests_oauth;
 pub(super) mod tests_send_as;
 
 #[cfg(test)]
+pub(super) mod tests_submission_listener;
+
+#[cfg(test)]
 pub(super) mod tests_switches;

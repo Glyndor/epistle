@@ -189,7 +189,7 @@ fn inner_finalise(
 			if let Some(charge) = charge {
 				charge.refund();
 			}
-			Action::Continue(Reply::single(552, "5.2.2 mailbox full"))
+			Action::Continue(Reply::single(452, "4.2.2 mailbox full"))
 		}
 	}
 }

@@ -124,7 +124,7 @@ impl SinkError {
 	pub fn smtp_reply(&self) -> crate::smtp::reply::Reply {
 		use crate::smtp::reply::Reply;
 		match self {
-			SinkError::MailboxFull(_) => Reply::single(552, "5.2.2 mailbox full"),
+			SinkError::MailboxFull(_) => Reply::single(452, "4.2.2 mailbox full"),
 			SinkError::Unavailable(_) | SinkError::Gone(_) => {
 				Reply::single(451, "4.3.0 temporary storage failure, try again")
 			}
