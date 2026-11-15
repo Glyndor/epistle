@@ -61,11 +61,15 @@ async fn lock_collection(collection: &Path) -> OwnedMutexGuard<()> {
 	lock.lock_owned().await
 }
 
-/// Whether `name` is one of the log's own files, which are bookkeeping and
-/// never a member of the collection.
+/// Whether `name` is one of the log's own files or a file being written, which
+/// are bookkeeping and never a member of the collection.
 pub fn is_internal(name: &str) -> bool {
-	name == CHANGELOG || name == CHANGELOG_TMP
+	name == CHANGELOG || name == CHANGELOG_TMP || name.ends_with(STAGING_SUFFIX)
 }
+
+/// The ending of the name a file has while it is being written, before a
+/// rename gives it its own name.
+pub const STAGING_SUFFIX: &str = ".dav-staging";
 
 /// One recorded change.
 #[derive(Debug, Clone, PartialEq, Eq)]

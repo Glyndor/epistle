@@ -109,7 +109,23 @@ pub fn wants_data(body: &str, data_element: &str) -> bool {
 /// Read `disk` into memory, at most `limit` bytes. `None` when the file is
 /// longer, even if it grew after its size was read.
 pub async fn read_capped(disk: &Path, limit: u64) -> Option<Vec<u8>> {
-	let file = tokio::fs::File::open(disk).await.ok()?;
+	read_open_capped(open_regular(disk).await?, limit).await
+}
+
+/// Open `disk` for reading without following a link at its name and without
+/// waiting on a pipe.
+pub async fn open_regular(disk: &Path) -> Option<tokio::fs::File> {
+	tokio::fs::OpenOptions::new()
+		.read(true)
+		.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+		.open(disk)
+		.await
+		.ok()
+}
+
+/// Read an open file into memory, at most `limit` bytes; `None` when it is
+/// longer.
+pub async fn read_open_capped(file: tokio::fs::File, limit: u64) -> Option<Vec<u8>> {
 	let mut data = Vec::new();
 	file.take(limit.saturating_add(1))
 		.read_to_end(&mut data)

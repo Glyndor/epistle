@@ -29,7 +29,7 @@ use super::path;
 use super::reply::{Added, Reply};
 use super::report_bounds::{
 	MAX_FILTER_BODY, MAX_REPORT_BYTES, MAX_REPORT_HREFS, Refusal, distinct_hrefs, read_capped,
-	wants_data,
+	read_open_capped, wants_data,
 };
 
 /// The CardDAV XML namespace.
@@ -153,7 +153,12 @@ const HEAD: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
 /// unknown href; one that does not fit what is left of the reply is
 /// answered `507` so the client asks for it on its own.
 async fn push_card(reply: &mut Reply, href: &str, disk: &Path, data: bool) {
-	let Ok(metadata) = tokio::fs::metadata(disk).await else {
+	// One open gives the etag and the body, so both describe the same file
+	// even if the name is given a new one meanwhile.
+	let Some(file) = super::report_bounds::open_regular(disk).await else {
+		return;
+	};
+	let Ok(metadata) = file.metadata().await else {
 		return;
 	};
 	if !metadata.is_file() {
@@ -166,7 +171,7 @@ async fn push_card(reply: &mut Reply, href: &str, disk: &Path, data: bool) {
 		}
 		return;
 	}
-	match read_capped(disk, metadata.len().min(reply.remaining())).await {
+	match read_open_capped(file, metadata.len().min(reply.remaining())).await {
 		Some(bytes) => {
 			if reply.member(href, &etag, Some(("C:address-data", &bytes))) == Added::NoRoom {
 				reply.too_large(href);
