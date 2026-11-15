@@ -67,6 +67,18 @@ pub(super) async fn commit(
 	change: Change,
 	alias_target: Option<String>,
 ) -> Result<Committed, ApiError> {
+	commit_with(state, change, alias_target, false).await
+}
+
+/// The in-use refusal names other tenants' aliases, accounts and tenants.
+/// With `redact_in_use` it says only that the domain is in use, for a key
+/// that does not see those entities anywhere else.
+pub(super) async fn commit_with(
+	state: &ApiState,
+	change: Change,
+	alias_target: Option<String>,
+	redact_in_use: bool,
+) -> Result<Committed, ApiError> {
 	let config = config(state)?;
 	tokio::task::spawn_blocking(move || {
 		crate::domain::state::edit::commit_checked(&config, &change, |_, file| {
@@ -91,7 +103,10 @@ pub(super) async fn commit(
 	})
 	.await
 	.map_err(|_| ApiError::internal())?
-	.map_err(refusal)
+	.map_err(|error| match error {
+		EditError::InUse(_) if redact_in_use => ApiError::conflict("domain is still in use"),
+		other => refusal(other),
+	})
 }
 
 pub(super) fn audit(done: &Committed, event: DomainEvent, domain: &str, ip: ClientIp) {
@@ -107,8 +122,10 @@ pub async fn remove(
 	Path(raw): Path<String>,
 ) -> Result<Json<Changed>, ApiError> {
 	let domain = canonical("domain", &raw)?;
-	in_scope(&Principal::for_token(&state, &auth), &domain)?;
-	let done = commit(&state, Change::Remove { name: raw }, None).await?;
+	let principal = Principal::for_token(&state, &auth);
+	in_scope(&principal, &domain)?;
+	let redact = !principal.is_unrestricted();
+	let done = commit_with(&state, Change::Remove { name: raw }, None, redact).await?;
 	audit(&done, DomainEvent::Removed, &domain, ip);
 	Ok(Json(Changed::of(&done, domain)))
 }

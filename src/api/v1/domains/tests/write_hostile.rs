@@ -243,3 +243,31 @@ async fn invalid_limits_do_not_apply_the_role_and_null_clears_inherited_limits()
 	assert!(!config.domain_quotas.contains_key("a.example"));
 	assert_eq!(config.domain_submission_limits["a.example"], 7);
 }
+
+#[tokio::test]
+async fn a_confined_key_is_not_told_which_other_tenants_use_the_domain() {
+	let world = world_with(
+		"[[alias]]\naddress = \"team@other.example\"\nmembers = [\"bob@a.example\"]\n\
+		 [[tenant]]\nname = \"rival-tenant\"\ndomains = [\"a.example\"]\n",
+	);
+	let (status, body) = call(
+		&world,
+		"DELETE",
+		"/api/v1/domains/a.example",
+		CONFINED,
+		None,
+	)
+	.await;
+	assert_eq!(status, StatusCode::CONFLICT, "{body}");
+	assert_eq!(body["error"]["message"], "domain is still in use");
+	let text = body.to_string();
+	for secret in ["other.example", "rival-tenant", "bob@a.example"] {
+		assert!(!text.contains(secret), "{secret} leaked: {text}");
+	}
+	let (status, body) = call(&world, "DELETE", "/api/v1/domains/a.example", WRITER, None).await;
+	assert_eq!(status, StatusCode::CONFLICT, "{body}");
+	let text = body["error"]["message"].as_str().unwrap();
+	for detail in ["team@other.example", "rival-tenant"] {
+		assert!(text.contains(detail), "{detail} missing: {text}");
+	}
+}

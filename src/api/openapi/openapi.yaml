@@ -331,7 +331,12 @@ paths:
       description: |-
         Needs write scope and the domain in the key's reach. A foreign domain is
         404 no such domain. Refused while accounts, aliases or configuration entries
-        still use it, with the same blockers as epistle domain remove.
+        still use it, with the same blockers as epistle domain remove. The 409 names
+        them only for an unconfined key; a confined key gets "domain is still in use",
+        so it learns nothing about other tenants. An account created through the API
+        at the same moment can still land on the domain being removed, because the
+        check reads accounts.toml while account creation checks the running
+        snapshot; the command has the same race.
       x-epistle-scope: [write]
       parameters:
         - $ref: "#/components/parameters/DomainName"

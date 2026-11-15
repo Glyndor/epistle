@@ -532,7 +532,7 @@ curl -s -X DELETE -H "Authorization: Bearer $KEY" "$API/api/v1/accounts/ana?queu
 | `GET /api/v1/domains` | The hosted domains in the key's reach, which are `disabled`, and under `details` the rows `epistle domain list --json` prints |
 | `GET /api/v1/domains/{domain}` | What `epistle domain show <domain> --json` prints. A domain outside a confined key's reach is `404` like an unknown one |
 | `POST /api/v1/domains` | Host a new domain; unconfined `write` key only; answers `201` |
-| `DELETE /api/v1/domains/{domain}` | Stop hosting an unused domain; `write`, confined to the path domain |
+| `DELETE /api/v1/domains/{domain}` | Stop hosting an unused domain; `write`, confined to the path domain. The `409` names what still uses it for an unconfined key; a confined key gets only `domain is still in use`. An account created through the API at the same moment can still land on the domain being removed (the in-use check reads `accounts.toml` while account creation checks the running snapshot), as with `epistle domain remove` |
 | `PUT /api/v1/domains/{domain}` | Set `role`, `quota` (bytes), `submission_rate` (recipients/minute) atomically; `write`; `quota` and `submission_rate` need an unconfined key (`403` for a confined one) |
 | `POST /api/v1/domains/{domain}/enable` | Enable, keeping the stored role; `write` |
 | `POST /api/v1/domains/{domain}/disable` | Disable, keeping the stored role; `write`; refuses the last enabled domain with listeners |
