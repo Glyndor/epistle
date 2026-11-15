@@ -61,7 +61,16 @@ pub(super) fn run(config: &Config, path: &Path, action: DbCli, json: bool) -> Ex
 				}
 			};
 			let target = crate::cli::init::images::postgres();
-			match flow::upgrade(&mut stack, target) {
+			let upgraded = flow::upgrade(&mut stack, target);
+			if upgraded.is_ok() {
+				// The stack runs again, so the unit that starts it at boot
+				// has to be there; the upgrade itself changes no unit.
+				super::stack::autostart::run(
+					"podup",
+					&super::stack::compose_path(&config.data_dir),
+				);
+			}
+			match upgraded {
 				Ok(()) if json => {
 					let result = serde_json::json!({
 						"result": "done", "action": "upgrade", "postgres": target,
