@@ -43,10 +43,12 @@ mod alerts;
 mod bans;
 mod directory;
 mod oauth;
+mod own_ip_blocklist;
 mod sweeps;
 
 pub(in crate::cli) use alerts::single_signature_dkim_warning;
 pub(super) use alerts::{build_arc_sealer, log_single_signature_dkim_warning, spawn_alert_engine};
+pub(super) use own_ip_blocklist::spawn_own_ip_blocklist;
 #[cfg(test)]
 pub(super) use bans::run_ban_sweep_once;
 pub(super) use bans::{build_greylist, spawn_ban_sweep};

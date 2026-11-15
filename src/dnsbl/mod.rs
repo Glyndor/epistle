@@ -10,6 +10,8 @@ use std::net::IpAddr;
 
 use crate::spf::{DnsFailure, DnsLookup};
 
+pub(crate) mod own;
+
 /// The result of checking an identifier against the configured blocklists.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DnsblOutcome {

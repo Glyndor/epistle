@@ -5,7 +5,13 @@
 //! path, and rendered on demand for the `/metrics` endpoint.
 
 use std::collections::BTreeMap;
+use std::net::IpAddr;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+
+use crate::dnsbl::own::Listing;
+
+pub(crate) const OWN_IP_BLOCKLISTED: &str = "own_ip_blocklisted";
 
 /// Why an inbound message was rejected, for the per-reason counter label.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,6 +118,7 @@ const COUNTERS: &[(&str, &str)] = &[
 	("accept_failed", "accept_failed"),
 	("warmup_held", "warmup_held"),
 	("warmup_backoff", "warmup_backoff"),
+	(OWN_IP_BLOCKLISTED, OWN_IP_BLOCKLISTED),
 ];
 
 /// Failed accepts on any listener. Process-wide rather than per
@@ -182,6 +189,8 @@ pub struct Metrics {
 	subjectpass_challenged: AtomicU64,
 	warmup_held: AtomicU64,
 	warmup_backoff: AtomicU64,
+	own_ip_blocklisted: AtomicU64,
+	own_ip_listings: Mutex<BTreeMap<IpAddr, Listing>>,
 }
 
 impl Metrics {
@@ -390,6 +399,31 @@ impl Metrics {
 		self.warmup_backoff.fetch_add(1, Ordering::Relaxed);
 	}
 
+	pub(crate) fn own_ip_blocklisted(&self, listing: Listing) {
+		self.own_ip_blocklisted.fetch_add(1, Ordering::Relaxed);
+		let mut listings = self
+			.own_ip_listings
+			.lock()
+			.unwrap_or_else(|poisoned| poisoned.into_inner());
+		listings.insert(listing.address, listing);
+	}
+
+	pub(crate) fn clear_own_ip_listing(&self, address: IpAddr) {
+		let mut listings = self
+			.own_ip_listings
+			.lock()
+			.unwrap_or_else(|poisoned| poisoned.into_inner());
+		listings.remove(&address);
+	}
+
+	pub(crate) fn own_ip_listings(&self) -> Vec<Listing> {
+		let listings = self
+			.own_ip_listings
+			.lock()
+			.unwrap_or_else(|poisoned| poisoned.into_inner());
+		listings.values().cloned().collect()
+	}
+
 	/// Count an inbound report that was too large, malformed, or whose
 	/// encoding we did not support.
 	pub fn reports_dropped(&self) {
@@ -514,6 +548,7 @@ impl Metrics {
 			"accept_failed" => &ACCEPT_FAILED,
 			"warmup_held" => &self.warmup_held,
 			"warmup_backoff" => &self.warmup_backoff,
+			OWN_IP_BLOCKLISTED => &self.own_ip_blocklisted,
 			other => unreachable!("unknown counter field {other}"),
 		}
 	}

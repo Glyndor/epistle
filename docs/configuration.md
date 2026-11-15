@@ -1110,7 +1110,9 @@ Each request is a JSON object whose `event` field names the event:
 `message_received`, `delivery_failed`, `metric_alert`, `dkim_rotation_failed`
 (a rotated DKIM key never showed up in DNS, so the previous key keeps signing),
 `outbound_virus` (the antivirus refused a message one of your accounts sent;
-it carries `account` and `signature`), and `test`. When `secret` is
+it carries `account` and `signature`), `own_ip_blocklisted` (one of the
+server's own public addresses is in a DNS blocklist; it carries `address`,
+`zone` and, when known, `delist_url`), and `test`. When `secret` is
 set, `X-Webhook-Signature: sha256=<hex>` carries the HMAC-SHA256 of the body.
 
 The events for each recipient of outbound mail (`delivered`, `delayed`,
@@ -1172,7 +1174,7 @@ secret = "…"                       # signs only acme's events
   other, signed with that webhook's secret. It is never also posted to the
   default.
 - A domain of no tenant, a tenant without a `[tenant.webhook]`, and the events
-  that belong to the server (`metric_alert`, `dkim_rotation_failed`, the warm-up
+  that belong to the server (`metric_alert`, `dkim_rotation_failed`, `own_ip_blocklisted`, the warm-up
   events, `test`, forwarded mail and bounces, whose sender is the null address or
   the server's) use the `[webhook]`. An alert with `webhook = true` posts to it,
   not to a tenant's.
@@ -1308,7 +1310,44 @@ email = ["ops@example.org"]
 cooldown_secs = 900
 ```
 
-The counter names accepted by `metric` (the ones `Metrics::snapshot` exposes) are: `abuse_dropped`, `accepted`, `accept_failed`, `auth_hash_gate_rejected`, `auth_login_failed`, `auth_login_succeeded`, `bayes_learning_failed`, `bayes_learning_refused`, `bayes_learning_unreadable`, `bayes_training_dropped`, `bounced`, `clock_drift_exceeded`, `connections`, `database_unavailable`, `deferred`, `dmarc_report_rows_failing`, `dmarc_reports_ingested`, `forwarded`, `mta_sts_connections_dropped`, `outbound_policy_rejected`, `outbound_virus`, `quarantined`, `rejected_dmarc`, `rejected_dnsbl`, `rejected_header_fields`, `rejected_loop`, `rejected_rate_limit`, `rejected_reputation`, `rejected_scanner`, `rejected_spf`, `relayed`, `reports_dropped`, `scanner_clamd_failed`, `scanner_clamd_skipped`, `send_limited_new_recipients`, `sieve_inspection_truncated`, `sieve_rejected`, `subjectpass_challenged`, `subjectpass_passed`, `tlsrpt_failed_sessions`, `tlsrpt_reports_ingested`, `vacation_sent`, `warmup_backoff`, `warmup_held`, `webhook_failed`, `webhook_sent`.
+The counter names accepted by `metric` (the ones `Metrics::snapshot` exposes) are: `abuse_dropped`, `accepted`, `accept_failed`, `auth_hash_gate_rejected`, `auth_login_failed`, `auth_login_succeeded`, `bayes_learning_failed`, `bayes_learning_refused`, `bayes_learning_unreadable`, `bayes_training_dropped`, `bounced`, `clock_drift_exceeded`, `connections`, `database_unavailable`, `deferred`, `dmarc_report_rows_failing`, `dmarc_reports_ingested`, `forwarded`, `mta_sts_connections_dropped`, `outbound_policy_rejected`, `outbound_virus`, `own_ip_blocklisted`, `quarantined`, `rejected_dmarc`, `rejected_dnsbl`, `rejected_header_fields`, `rejected_loop`, `rejected_rate_limit`, `rejected_reputation`, `rejected_scanner`, `rejected_spf`, `relayed`, `reports_dropped`, `scanner_clamd_failed`, `scanner_clamd_skipped`, `send_limited_new_recipients`, `sieve_inspection_truncated`, `sieve_rejected`, `subjectpass_challenged`, `subjectpass_passed`, `tlsrpt_failed_sessions`, `tlsrpt_reports_ingested`, `vacation_sent`, `warmup_backoff`, `warmup_held`, `webhook_failed`, `webhook_sent`.
+
+### `[own_ip_blocklist]`
+A periodic check of the server's own `public_ipv4` and `public_ipv6` against
+DNS blocklist zones, so a listing is found before the big providers start
+answering `550 5.7.1`. It is on by default, it only warns, and nothing about
+how mail is sent changes. A lookup that fails or times out leaves the address
+`UNKNOWN`; it is never treated as clean. IPv6 is looked up in the
+nibble-reversed form. Nothing runs when neither public address is set.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `enabled` | `true` | Turns the check off with `false`. |
+| `zones` | `[]` | Zones to query. Empty uses `dnsbl_zones`. No zone is built in: a zone that needs a paid key or limits queries stays out until you add it. At most 16, each a fully qualified DNS name. |
+| `period_secs` | `3600` | Seconds between checks, at least `300`; a smaller value is refused on load. Each check sends one query per zone and address, each bounded to 10 seconds. |
+
+The result is kept in `<data_dir>/own-ip-blocklist.json`, so a restart does
+not announce a listing again. A new listing is logged as a warning, shown by
+`epistle status` in the `dns` area (the zone, and the provider's delisting
+page when the zone is Spamhaus or Barracuda; other zones carry no link), and
+counted in `own_ip_blocklisted`. An address is announced once per listing:
+only after it was seen clean and is listed again is it announced anew. To be
+told, add a rule such as:
+
+```toml
+[[alerts]]
+name = "own-ip-listed"
+metric = "own_ip_blocklisted"
+op = ">="
+threshold = 1
+window_secs = 300
+webhook = true
+email = ["ops@example.org"]
+cooldown_secs = 3600
+```
+
+The webhook event is `own_ip_blocklisted` (address, zone and, when known,
+`delist_url`); the email lists the same.
 
 ### `[clock_external]`
 

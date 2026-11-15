@@ -635,7 +635,7 @@ The server posts events to the URL in `[webhook]` (`epistle webhook set URL
 | `suppressed` | The recipient was on a suppression list | `spool_id`, `recipient`, `extra` |
 | `canceled` | An operator removed the entry through the API or `epistle queue remove` | `spool_id`, `recipient`, `extra` |
 | `message_received` | A message was delivered to a local recipient | `account` (the recipient address), `from` (the envelope sender, empty for a bounce), `subject`, `message_id` (the last two may be `null`) |
-| `metric_alert`, `dkim_rotation_failed`, `outbound_virus`, `warmup.ok`, `warmup.held`, `warmup.backoff` | Operator events | See [configuration](configuration.md#webhook) and [warm-up](operations/warmup.md) |
+| `metric_alert`, `dkim_rotation_failed`, `own_ip_blocklisted`, `outbound_virus`, `warmup.ok`, `warmup.held`, `warmup.backoff` | Operator events | See [configuration](configuration.md#webhook) and [warm-up](operations/warmup.md) |
 | `test` | Only `epistle webhook test` | `message` |
 
 `extra` is left out when empty; `spool_id` is the `queued` id the send

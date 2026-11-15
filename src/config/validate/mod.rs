@@ -35,6 +35,7 @@ impl Config {
 		self.validate_receive_only_domains()?;
 		self.dns.validate()?;
 		self.dns_publish.validate(&self.domains)?;
+		self.own_ip_blocklist.validate(&self.dnsbl_zones)?;
 		self.validate_dns_senders()?;
 		self.validate_accounts()?;
 		self.validate_srs()?;
