@@ -64,6 +64,7 @@ impl Server {
 			max_session_time: std::time::Duration::from_secs(super::DEFAULT_MAX_SESSION_TIME_SECS),
 			auth_protocol: crate::config::Protocol::Submission,
 			scram_enabled: true,
+			submission_listener: false,
 			#[cfg(test)]
 			strip_for_test: None,
 		}
@@ -89,6 +90,14 @@ impl Server {
 	/// so the choice has no practical effect).
 	pub fn with_auth_protocol(mut self, protocol: crate::config::Protocol) -> Self {
 		self.auth_protocol = protocol;
+		self
+	}
+
+	/// Serve a submission listener: a client that has not authenticated is
+	/// answered `530` at `MAIL FROM` and asked to start TLS or to
+	/// authenticate. Off by default, the receiving listener.
+	pub fn with_submission_listener(mut self, submission: bool) -> Self {
+		self.submission_listener = submission;
 		self
 	}
 

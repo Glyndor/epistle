@@ -22,6 +22,7 @@ pub use session_time::{DEFAULT_MAX_SESSION_TIME_SECS, SessionLimits};
 mod builder;
 mod data_rate;
 mod dnsbl_check;
+mod refusal_text;
 mod run;
 pub(crate) use run::MAX_ERROR_STREAK;
 mod run_accept_log;
@@ -145,6 +146,9 @@ pub struct Server {
 	/// behaviour; `false` hides both mechanisms on the wire and refuses an
 	/// explicit `AUTH` against them. PLAIN/LOGIN stay in.
 	scram_enabled: bool,
+	/// Whether this is a submission listener; see
+	/// [`Server::with_submission_listener`].
+	submission_listener: bool,
 	/// Shared per-account submission rate limiter for authenticated senders.
 	send_limiter: Option<Arc<crate::smtp::ratelimit::SendLimiter>>,
 	/// Server-wide default submission rate limit (messages/min) for
@@ -410,6 +414,7 @@ impl Server {
 			.with_auth_protocol(self.auth_protocol)
 			.with_metrics(Arc::clone(&self.metrics))
 			.with_scram_enabled(self.scram_enabled)
+			.with_submission_listener(self.submission_listener)
 			.with_max_message_size(self.max_message_size)
 			.with_max_recipients(self.max_recipients)
 			.with_identification(self.identification.clone())

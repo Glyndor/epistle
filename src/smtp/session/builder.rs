@@ -56,6 +56,14 @@ impl Session {
 		self
 	}
 
+	/// Mark this session as served by a submission listener: `MAIL FROM`
+	/// before authentication is answered `530`, naming what is missing,
+	/// instead of being taken as inbound mail.
+	pub fn with_submission_listener(mut self, submission: bool) -> Self {
+		self.submission_listener = submission;
+		self
+	}
+
 	/// Set which identification and reputation headers the mail this
 	/// session generates gets.
 	pub fn with_identification(mut self, policy: crate::smtp::identification::Policy) -> Self {
