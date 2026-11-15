@@ -135,6 +135,12 @@ jobs:
           rustup toolchain install 1.100.0 --profile minimal
           rustup default 1.100.0
 
+      - id: cargo-cache
+        uses: ./.github/actions/rust-cache
+        with:
+          prefix: rust-db
+          extra-path: ~/.cargo/bin
+
       - name: Install cargo-llvm-cov
         env:
           # Kept equal to the `llvm-cov-version` default in
@@ -265,3 +271,12 @@ jobs:
               )
           sys.exit(1 if missing or below else 0)
           EOF
+
+      - name: Save the cargo cache
+        if: ${{ success() }}
+        uses: ./.github/actions/rust-cache
+        with:
+          mode: save
+          cache-hit: ${{ steps.cargo-cache.outputs.cache-hit }}
+          prefix: rust-db
+          extra-path: ~/.cargo/bin

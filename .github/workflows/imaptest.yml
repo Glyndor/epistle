@@ -113,6 +113,11 @@ jobs:
           rustup toolchain install 1.100.0 --profile minimal
           rustup default 1.100.0
 
+      - id: cargo-cache
+        uses: ./.github/actions/rust-cache
+        with:
+          prefix: rust-imaptest
+
       - name: Build
         run: cargo build --locked
 
@@ -121,3 +126,11 @@ jobs:
 
       - name: Run imaptest
         run: .github/scripts/imaptest.sh target/debug/epistle imaptest-source
+
+      - name: Save the cargo cache
+        if: ${{ success() }}
+        uses: ./.github/actions/rust-cache
+        with:
+          mode: save
+          cache-hit: ${{ steps.cargo-cache.outputs.cache-hit }}
+          prefix: rust-imaptest

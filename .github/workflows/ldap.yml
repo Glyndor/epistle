@@ -172,6 +172,11 @@ jobs:
           rustup toolchain install 1.100.0 --profile minimal
           rustup default 1.100.0
 
+      - id: cargo-cache
+        uses: ./.github/actions/rust-cache
+        with:
+          prefix: rust-ldap
+
       - name: Run LDAP integration tests
         # If this command prints "skipping", the env block above is
         # broken: tests/system/ldap.rs skips the entire suite when
@@ -182,3 +187,11 @@ jobs:
       - name: Stop OpenLDAP
         if: always()
         run: docker rm -f epistle-ldap || true
+
+      - name: Save the cargo cache
+        if: ${{ success() }}
+        uses: ./.github/actions/rust-cache
+        with:
+          mode: save
+          cache-hit: ${{ steps.cargo-cache.outputs.cache-hit }}
+          prefix: rust-ldap

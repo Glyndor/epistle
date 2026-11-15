@@ -1,0 +1,63 @@
+name: Rust cache
+description: >-
+  Restores the cargo registry and the target directory, and saves them only from
+  a push or a schedule on develop or main. A cache written by a pull request or
+  by a merge queue ref is visible to nothing else, so saving there only spends
+  the repository quota and evicts the caches the default branches seeded.
+
+inputs:
+  prefix:
+    description: Key prefix, unique per workflow or job.
+    required: true
+  mode:
+    description: "`restore` (default) or `save`. Call `save` as the last step of the job."
+    required: false
+    default: restore
+  extra-path:
+    description: Extra path to cache besides the registry and the target directory, such as ~/.cargo/bin.
+    required: false
+    default: ""
+  working-directory:
+    description: Directory holding `target`.
+    required: false
+    default: .
+  cache-hit:
+    description: In `save` mode, the `cache-hit` output of the restore step; an exact hit is not saved again.
+    required: false
+    default: ""
+
+outputs:
+  cache-hit:
+    description: "`true` when the exact key was restored."
+    value: ${{ steps.restore.outputs.cache-hit }}
+
+runs:
+  using: composite
+  steps:
+    - id: restore
+      if: ${{ inputs.mode == 'restore' }}
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          ~/.cargo/registry/index
+          ~/.cargo/registry/cache
+          ~/.cargo/git/db
+          ${{ inputs.working-directory }}/target
+          ${{ inputs.extra-path }}
+        key: ${{ inputs.prefix }}-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: ${{ inputs.prefix }}-${{ runner.os }}-
+
+    - if: >-
+        ${{ inputs.mode == 'save'
+        && inputs.cache-hit != 'true'
+        && (github.event_name == 'push' || github.event_name == 'schedule')
+        && (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') }}
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          ~/.cargo/registry/index
+          ~/.cargo/registry/cache
+          ~/.cargo/git/db
+          ${{ inputs.working-directory }}/target
+          ${{ inputs.extra-path }}
+        key: ${{ inputs.prefix }}-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
