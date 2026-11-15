@@ -1,5 +1,6 @@
 pub use super::*;
 
+pub(super) mod auto_submitted;
 pub(super) mod class;
 pub(super) mod send_as;
 pub(super) mod send_bcc;

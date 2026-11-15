@@ -1458,6 +1458,11 @@ paths:
         A request body larger than `[server] max_message_size` (25 MiB by
         default) is refused before it is read with a plain-text `413`; one
         whose built message is larger answers `413 message_too_large`.
+
+        When the request omits `auto_submitted` and the API key has the
+        per-key setting enabled, the server writes
+        `Auto-Submitted: auto-generated`. A value in the request always wins.
+        Other credentials and other send paths do not receive this default.
       x-epistle-scope: [send]
       requestBody:
         required: true
@@ -3264,7 +3269,10 @@ components:
         auto_submitted:
           type: string
           enum: ["no", auto-generated, auto-replied, auto-notified]
-          description: Written as `Auto-Submitted`. Case-insensitive.
+          description: |-
+            Written as `Auto-Submitted`. Case-insensitive. A value in the
+            request always wins. When absent and the API key has the per-key
+            setting enabled, the server writes `auto-generated`.
         feedback_id:
           type: string
           description: Written as `Feedback-ID`. Printable ASCII without spaces.

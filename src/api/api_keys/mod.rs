@@ -117,6 +117,10 @@ pub struct ApiKey {
 	/// (the default) leaves the key at the previous behaviour.
 	#[serde(default)]
 	pub account: Option<String>,
+	/// Whether mail sent with this key gets `Auto-Submitted: auto-generated`
+	/// when the request omits the header.
+	#[serde(default)]
+	pub auto_submitted: bool,
 }
 
 impl ApiKey {
@@ -231,6 +235,9 @@ pub struct ApiKeySummary {
 	pub domains: Vec<String>,
 	/// The account the key is bound to, if any.
 	pub account: Option<String>,
+	/// Whether mail sent with this key gets `Auto-Submitted: auto-generated`
+	/// when the request omits the header.
+	pub auto_submitted: bool,
 }
 
 /// Filesystem-backed store of management API keys.
@@ -390,8 +397,50 @@ impl ApiKeyStore {
 		Ok(())
 	}
 
+	/// Set whether mail sent with `label` gets `Auto-Submitted:
+	/// auto-generated` when the request omits the header. `NotFound` if the
+	/// label is absent.
+	pub fn set_auto_submitted(&mut self, label: &str, auto_submitted: bool) -> std::io::Result<()> {
+		let label_owned = label.to_string();
+		let new_state = crate::storage::locked::edit(
+			&self.path,
+			|text| {
+				toml::from_str::<ApiKeyFile>(text)
+					.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+			},
+			|state| {
+				toml::to_string_pretty(state)
+					.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+			},
+			ApiKeyFile::default,
+			|state: &mut ApiKeyFile| -> std::io::Result<()> {
+				let key = state
+					.keys
+					.iter_mut()
+					.find(|existing| existing.label == label_owned)
+					.ok_or_else(|| {
+						std::io::Error::new(
+							std::io::ErrorKind::NotFound,
+							format!("no such API key \"{label}\""),
+						)
+					})?;
+				key.auto_submitted = auto_submitted;
+				Ok(())
+			},
+		)
+		// Keep the closure's own error kind (`NotFound`), which the
+		// blanket conversion would turn into `Other`.
+		.map_err(|error| match error {
+			crate::storage::locked::EditError::Io(error)
+			| crate::storage::locked::EditError::Mutate(error) => error,
+		})?;
+		self.keys = new_state.keys;
+		Ok(())
+	}
+
 	/// Replace the secret of `label` with the one hashing to `hash`, keeping
-	/// its scopes, domains, expiry and CIDR. One atomic rewrite of the file:
+	/// its scopes, domains, expiry, CIDR and `auto_submitted` setting. One
+	/// atomic rewrite of the file:
 	/// the file watcher swaps the old secret for the new one in a single step,
 	/// so there is no moment with both or neither accepted. `NotFound` if the
 	/// label is absent.
@@ -468,6 +517,7 @@ impl ApiKeyStore {
 				scopes: key.scopes.clone(),
 				domains: key.domains.clone(),
 				account: key.account.clone(),
+				auto_submitted: key.auto_submitted,
 			})
 			.collect();
 		rows.sort_by(|a, b| a.label.cmp(&b.label));

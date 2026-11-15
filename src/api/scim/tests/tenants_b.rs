@@ -120,6 +120,7 @@ fn two_reachable_tenants() -> (tempfile::TempDir, ApiState, Arc<AccountStore>) {
 		scopes: vec![Scope::Scim.as_str().to_string()],
 		domains: domains.clone(),
 		account: None,
+		auto_submitted: false,
 	})
 	.expect("add key");
 	drop(keys);

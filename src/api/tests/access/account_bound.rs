@@ -20,6 +20,7 @@ fn store_key(dir: &std::path::Path, label: &str, secret: &str, account: Option<&
 				.collect(),
 			domains: Vec::new(),
 			account: account.map(str::to_string),
+			auto_submitted: false,
 		})
 		.expect("add key");
 }
@@ -123,6 +124,7 @@ fn account_bound_key_reaches_only_its_own_account() {
 		scopes: vec!["read".to_string()],
 		domains: Vec::new(),
 		account: Some("alice".to_string()),
+		auto_submitted: false,
 	};
 	let principal = crate::api::Principal::of_key(&key, None);
 	assert!(

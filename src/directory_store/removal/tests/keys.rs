@@ -13,6 +13,7 @@ fn key(label: &str, account: Option<&str>) -> ApiKey {
 		scopes: vec!["read".to_string()],
 		domains: Vec::new(),
 		account: account.map(str::to_string),
+		auto_submitted: false,
 	}
 }
 

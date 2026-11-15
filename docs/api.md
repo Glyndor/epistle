@@ -190,12 +190,16 @@ without a restart.
 | `--domain NAME` | Confine the key to a domain (repeat for more). Without it the key reaches every domain |
 | `--account NAME` | Bind the key to one account. It then reaches only JMAP, `POST /api/v1/send`, `GET /api/v1/deliveries` and that account's suppression list, acting as that account, and cannot hold `scim` or `--domain` |
 | `--class CLASS` | The mail class `POST /api/v1/send` gives mail sent with the key when the request names none (see [Class and evidence](#class-and-evidence)) |
+| `--auto-submitted` | Add `Auto-Submitted: auto-generated` to mail sent with this key through `POST /api/v1/send` when the request omits the header. Off by default. A value in the request always wins. Other send paths and server-generated mail, including bounces, are not changed |
 
 `epistle api-key rotate LABEL` replaces the secret and keeps everything else,
-the class included; `epistle api-key revoke LABEL` removes the key;
-`epistle api-key list` shows the label, expiry, network, scopes, domains and
-account, never the key. The expiry is printed as an RFC 3339 instant, with
-`(expired)` after one that has passed; `--json` keeps the epoch.
+the class included; `epistle api-key set LABEL --auto-submitted on|off`
+changes the `Auto-Submitted` setting; `epistle api-key revoke LABEL` removes
+the key; `epistle api-key list` shows the label, expiry, network, scopes,
+domains, account and `auto_submitted` setting, never the key. The expiry is
+printed as an RFC 3339 instant, with `(expired)` after one that has passed;
+`--json` keeps the epoch and adds `"auto_submitted": true` only when the
+setting is enabled, so disabled keys keep their existing JSON shape.
 
 ### The panel's key
 
@@ -402,7 +406,7 @@ only is delivered at once and also gets an id.
 | `importance` (or `priority`) | `high`, `normal`, `low` | Writes `Importance` and `X-Priority` |
 | `list_unsubscribe` | array of strings | Up to 4 `mailto:` or `https://` URLs |
 | `list_unsubscribe_post` | boolean | Adds the RFC 8058 one-click header. Needs an `https://` URL in `list_unsubscribe` |
-| `auto_submitted`, `feedback_id` | string | `Auto-Submitted` (`no`, `auto-generated`, `auto-replied`, `auto-notified`) and `Feedback-ID` (printable ASCII, no spaces) |
+| `auto_submitted`, `feedback_id` | string | `Auto-Submitted` (`no`, `auto-generated`, `auto-replied`, `auto-notified`) and `Feedback-ID` (printable ASCII, no spaces). A value in the request always wins. When `auto_submitted` is absent and the API key has the per-key setting enabled, the server writes `Auto-Submitted: auto-generated` |
 | `headers` | object | Custom headers: up to 32, name `X-` plus letters, digits and hyphens (at most 76 characters), not `X-Priority` |
 | `save_sent` | boolean | Whether a copy goes to the account's Sent folder. Absent follows the account setting. Transactional mail is never copied |
 | `extra` | object of strings | Correlation data, up to 10 keys (printable ASCII, no spaces, at most 64 bytes) with values of at most 256 bytes. It comes back on `/api/v1/deliveries` and in the webhook events of the message and is never written into the message |

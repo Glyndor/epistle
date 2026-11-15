@@ -34,6 +34,7 @@ pub(in super::super) fn push_state(dir: &std::path::Path) -> Router {
 				scopes: vec!["read".to_string(), "write".to_string()],
 				domains: Vec::new(),
 				account: account.map(str::to_string),
+				auto_submitted: false,
 			})
 			.expect("add key");
 	}

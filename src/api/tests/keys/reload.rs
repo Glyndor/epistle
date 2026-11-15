@@ -23,6 +23,7 @@ fn read_key(secret: &str) -> crate::api::ApiKey {
 		scopes: vec!["read".to_string()],
 		domains: Vec::new(),
 		account: None,
+		auto_submitted: false,
 	}
 }
 

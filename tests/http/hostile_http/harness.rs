@@ -98,6 +98,7 @@ impl Harness {
 			scopes: vec!["read".into(), "write".into(), "send".into()],
 			domains: Vec::new(),
 			account: Some("alice".into()),
+			auto_submitted: false,
 		})
 		.expect("account-bound key");
 		drop(keys);

@@ -338,6 +338,7 @@ const CASES: &[(&str, &[&str], Expect)] = &[
 	("tls show", &[], Refused(1)),
 	("api-key list", &[], Done),
 	("api-key create", &["ci", "--scope", "read"], Done),
+	("api-key set", &["ci", "--auto-submitted", "on"], Done),
 	("api-key rotate", &["ci"], Done),
 	("api-key revoke", &["ci", "--yes"], Done),
 	("account remove", &["alice", "--queue", "drain", "--yes"], Done),

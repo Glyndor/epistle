@@ -16,6 +16,7 @@ fn key(label: &str, secret: &str) -> ApiKey {
 		scopes: vec![Scope::Read.as_str().to_string()],
 		domains: Vec::new(),
 		account: None,
+		auto_submitted: false,
 	}
 }
 
@@ -296,4 +297,136 @@ fn a_second_key_behind_the_same_secret_is_refused() {
 		"{error}"
 	);
 	assert_eq!(store.keys().len(), 1);
+}
+
+const ZERO_HASH: &str = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+
+/// A key file written before the `auto_submitted` field existed loads with
+/// the setting off, in the store and in the summary.
+#[test]
+fn legacy_key_without_auto_submitted_defaults_to_false() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	std::fs::write(
+		dir.path().join("api_keys.toml"),
+		format!("[[keys]]\nlabel = \"old\"\nhash = \"{ZERO_HASH}\"\nscopes = [\"send\"]\n"),
+	)
+	.expect("write fixture");
+	let store = ApiKeyStore::open(dir.path()).expect("legacy file must load");
+	assert!(!store.keys()[0].auto_submitted);
+	assert!(!store.list()[0].auto_submitted);
+	let set = ApiKeySet::open(dir.path()).expect("legacy file must load in the set");
+	assert!(!set.snapshot()[0].auto_submitted);
+}
+
+/// The setting is written with the key, survives a reopen and is shown by
+/// the summary.
+#[test]
+fn auto_submitted_is_stored_and_summarized() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut store = ApiKeyStore::open(dir.path()).expect("open");
+	let mut enabled = key("apps", "secret1");
+	enabled.auto_submitted = true;
+	store.add(enabled).expect("add");
+	store.add(key("people", "secret2")).expect("add");
+
+	let reopened = ApiKeyStore::open(dir.path()).expect("reopen");
+	let stored = |label: &str| {
+		reopened
+			.keys()
+			.iter()
+			.find(|key| key.label == label)
+			.expect("stored")
+			.auto_submitted
+	};
+	assert!(stored("apps"));
+	assert!(!stored("people"), "the other key is not touched");
+	let listed: Vec<_> = reopened
+		.list()
+		.into_iter()
+		.map(|row| (row.label, row.auto_submitted))
+		.collect();
+	assert_eq!(
+		listed,
+		vec![("apps".to_string(), true), ("people".to_string(), false)]
+	);
+}
+
+/// Changing the setting later rewrites that one field of that one key.
+#[test]
+fn set_auto_submitted_changes_only_that_field() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut store = ApiKeyStore::open(dir.path()).expect("open");
+	let mut full = key("apps", "secret1");
+	full.expires_at = Some(4_000_000_000);
+	full.ip_cidr = Some("10.0.0.0/8".to_string());
+	full.scopes = vec!["send".to_string(), "read".to_string()];
+	full.domains = vec!["a.example".to_string()];
+	full.account = Some("alice".to_string());
+	store.add(full.clone()).expect("add");
+	store.add(key("other", "secret2")).expect("add");
+
+	store.set_auto_submitted("apps", true).expect("set on");
+	let reopened = ApiKeyStore::open(dir.path()).expect("reopen");
+	let changed = reopened
+		.keys()
+		.iter()
+		.find(|key| key.label == "apps")
+		.expect("kept");
+	assert!(changed.auto_submitted);
+	assert_eq!(changed.hash, full.hash);
+	assert_eq!(changed.scopes, full.scopes);
+	assert_eq!(changed.domains, full.domains);
+	assert_eq!(changed.account, full.account);
+	assert_eq!(changed.expires_at, full.expires_at);
+	assert_eq!(changed.ip_cidr, full.ip_cidr);
+	let other = reopened
+		.keys()
+		.iter()
+		.find(|key| key.label == "other")
+		.expect("kept");
+	assert!(!other.auto_submitted, "another key's setting is untouched");
+
+	store.set_auto_submitted("apps", false).expect("set off");
+	let reopened = ApiKeyStore::open(dir.path()).expect("reopen");
+	assert!(!reopened.keys()[0].auto_submitted);
+}
+
+/// A label that is not there is `NotFound` and the file is not rewritten.
+#[test]
+fn set_auto_submitted_rejects_an_unknown_label() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let mut store = ApiKeyStore::open(dir.path()).expect("open");
+	store.add(key("apps", "secret1")).expect("add");
+	let path = dir.path().join("api_keys.toml");
+	let before = std::fs::read(&path).expect("read");
+	let error = store
+		.set_auto_submitted("missing", true)
+		.expect_err("unknown label");
+	assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+	assert_eq!(std::fs::read(&path).expect("read"), before);
+	assert!(!store.keys()[0].auto_submitted);
+}
+
+/// A value that is not a boolean is refused by the loader and by the
+/// watcher's reload, and the running set keeps what it had.
+#[test]
+fn invalid_auto_submitted_value_is_rejected() {
+	let bad = format!(
+		"[[keys]]\nlabel = \"bad\"\nhash = \"{ZERO_HASH}\"\nscopes = [\"send\"]\nauto_submitted = \"yes\"\n"
+	);
+	let dir = tempfile::tempdir().expect("tempdir");
+	std::fs::write(dir.path().join("api_keys.toml"), &bad).expect("write fixture");
+	assert!(ApiKeyStore::open(dir.path()).is_err());
+	assert!(ApiKeySet::open(dir.path()).is_err());
+
+	let set = ApiKeySet::empty();
+	set.reload_from(&format!(
+		"[[keys]]\nlabel = \"good\"\nhash = \"{ZERO_HASH}\"\nscopes = [\"send\"]\nauto_submitted = true\n"
+	))
+	.expect("valid reload");
+	assert!(set.reload_from(&bad).is_err());
+	let snapshot = set.snapshot();
+	assert_eq!(snapshot.len(), 1);
+	assert_eq!(snapshot[0].label, "good");
+	assert!(snapshot[0].auto_submitted, "the running set is unchanged");
 }

@@ -58,7 +58,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 	ApiKeyStore::open(&dir)?.add(ApiKey {
 		label: "upgrade".into(), hash: sha256_hash("Upgrade-contract-api-0125!"),
 		expires_at: None, ip_cidr: None, scopes: vec!["read".into()],
-		domains: vec![], account: None,
+		domains: vec![], account: None, auto_submitted: false,
 	})?;
 	std::fs::write(dir.join("static_tokens.toml"), toml::to_string_pretty(&std::collections::BTreeMap::from([
 		("hashes", vec![

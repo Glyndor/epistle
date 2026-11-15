@@ -133,3 +133,33 @@ fn an_account_bound_key_takes_no_domain_list() {
 	let error = parsed.expect_err("--account with --domain must not parse");
 	assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
 }
+
+#[test]
+fn set_auto_submitted_refuses_a_state_other_than_on_or_off() {
+	let (dir, config) = setup();
+	let create = ["create", "ci", "--scope", "send"];
+	assert_eq!(api_key(&config, &create), ExitCode::SUCCESS);
+	let path = dir.path().join("api_keys.toml");
+	let before = std::fs::read(&path).expect("read keys");
+	for state in ["yes", "true", "1", ""] {
+		let argv = [
+			"epistle",
+			"api-key",
+			"--config",
+			config.path().to_str().expect("utf8 path"),
+			"set",
+			"ci",
+			"--auto-submitted",
+			state,
+		];
+		assert!(Cli::try_parse_from(argv).is_err(), "{state:?} was accepted");
+	}
+	assert_eq!(std::fs::read(&path).expect("read keys"), before);
+	assert!(!ApiKeyStore::open(dir.path()).expect("open").keys()[0].auto_submitted);
+
+	assert_eq!(
+		api_key(&config, &["set", "ci", "--auto-submitted", "on"]),
+		ExitCode::SUCCESS
+	);
+	assert!(ApiKeyStore::open(dir.path()).expect("open").keys()[0].auto_submitted);
+}

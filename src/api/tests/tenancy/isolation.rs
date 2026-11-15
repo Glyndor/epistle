@@ -22,6 +22,7 @@ fn scoped_state(dir: &std::path::Path) -> ApiState {
 			scopes: vec!["read".to_string(), "write".to_string()],
 			domains: vec!["a.example".to_string()],
 			account: None,
+			auto_submitted: false,
 		})
 		.expect("add key");
 	drop(key_store);

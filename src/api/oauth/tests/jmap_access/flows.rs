@@ -115,6 +115,7 @@ async fn static_and_api_key_authentication_keep_working_with_oauth_enabled() {
 			scopes: vec!["read".into()],
 			domains: Vec::new(),
 			account: None,
+			auto_submitted: false,
 		})
 		.unwrap();
 	use base64::Engine;

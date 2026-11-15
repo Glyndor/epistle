@@ -77,6 +77,7 @@ fn run_stores_the_expiry_whichever_flag_gave_it() {
 			domains: Vec::new(),
 			account: None,
 			class: None,
+			auto_submitted: false,
 		};
 		assert_eq!(
 			run(&config, action, false, &mut Vec::new()),

@@ -18,6 +18,7 @@ fn add(dir: &std::path::Path, expires_at: Option<u64>) {
 			scopes: vec!["read".to_string(), "write".to_string()],
 			domains: Vec::new(),
 			account: None,
+			auto_submitted: false,
 		})
 		.expect("add");
 }

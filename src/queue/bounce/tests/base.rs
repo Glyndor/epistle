@@ -224,3 +224,43 @@ fn caps_quoted_headers() {
 	.expect("bounce built");
 	assert!(bounce.data.len() < 10_000);
 }
+
+/// The `Auto-Submitted` fields of the bounce's own header block, not of the
+/// original headers it quotes further down.
+fn own_auto_submitted(data: &[u8]) -> Vec<String> {
+	let text = String::from_utf8(data.to_vec()).expect("ascii");
+	let (head, _) = text.split_once("\r\n\r\n").expect("header block");
+	head.lines()
+		.filter(|line| line.to_ascii_lowercase().starts_with("auto-submitted:"))
+		.map(str::to_string)
+		.collect()
+}
+
+/// A message an API key marked `Auto-Submitted: auto-generated` bounces with
+/// the bounce's own setting, never with what the sender's key wrote.
+#[test]
+fn bounce_keeps_its_own_auto_submitted_value() {
+	let sent =
+		b"From: alice@example.org\r\nSubject: hi\r\nAuto-Submitted: auto-generated\r\n\r\nbody\r\n";
+	let build_with = |system_auto_submitted| {
+		build(
+			"mail.example.org",
+			"alice@example.org",
+			&["bob@elsewhere.example".to_string()],
+			"550 5.1.1 no such user",
+			sent,
+			UNIX_EPOCH + Duration::from_secs(1_780_662_896),
+			system_auto_submitted,
+		)
+		.expect("bounce built")
+	};
+	assert_eq!(
+		own_auto_submitted(&build_with(false).data),
+		Vec::<String>::new(),
+		"the original's header must not become the bounce's"
+	);
+	assert_eq!(
+		own_auto_submitted(&build_with(true).data),
+		vec!["Auto-Submitted: auto-generated".to_string()]
+	);
+}

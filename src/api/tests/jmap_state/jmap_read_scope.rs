@@ -28,6 +28,7 @@ fn app(dir: &std::path::Path) -> axum::Router {
 				scopes: vec![scope.to_string()],
 				domains: Vec::new(),
 				account: Some("alice".to_string()),
+				auto_submitted: false,
 			})
 			.expect("add key");
 	}

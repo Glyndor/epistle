@@ -225,7 +225,7 @@ impl SendRequest {
 
 	/// The header lines for the optional fields, in the order they are
 	/// written, after From, To, Cc and Subject.
-	pub(super) fn extra_headers(&self) -> Result<Vec<String>, ApiError> {
+	pub(super) fn extra_headers(&self, auto_submitted: bool) -> Result<Vec<String>, ApiError> {
 		let mut lines = Vec::new();
 		if let Some(value) = &self.in_reply_to {
 			lines.push(line(compose::structured(
@@ -248,14 +248,20 @@ impl SendRequest {
 			lines.push(format!("X-Priority: {priority}\r\n"));
 		}
 		lines.extend(self.unsubscribe()?);
-		if let Some(value) = &self.auto_submitted {
-			// RFC 3834 section 5 and RFC 5436.
-			let known = ["no", "auto-generated", "auto-replied", "auto-notified"];
-			let value = value.to_ascii_lowercase();
-			if !known.contains(&value.as_str()) {
-				return Err(invalid("auto_submitted is not an RFC 3834 value"));
+		match &self.auto_submitted {
+			Some(value) => {
+				// RFC 3834 section 5 and RFC 5436.
+				let known = ["no", "auto-generated", "auto-replied", "auto-notified"];
+				let value = value.to_ascii_lowercase();
+				if !known.contains(&value.as_str()) {
+					return Err(invalid("auto_submitted is not an RFC 3834 value"));
+				}
+				lines.push(format!("Auto-Submitted: {value}\r\n"));
 			}
-			lines.push(format!("Auto-Submitted: {value}\r\n"));
+			None if auto_submitted => {
+				lines.push("Auto-Submitted: auto-generated\r\n".to_string());
+			}
+			None => {}
 		}
 		if let Some(value) = &self.feedback_id {
 			if value.is_empty() || !value.bytes().all(|b| (0x21..0x7f).contains(&b)) {

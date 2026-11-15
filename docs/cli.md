@@ -36,7 +36,7 @@ forward). Policy refusals exited `2` before they had their own code.
 | `account catch-all` | `list`, `add`, `remove` | |
 | `account 2fa` | `show`, `disable` | |
 | `app-password` | `list`, `create`, `rotate`, `rename`, `revoke` | `app-passwords`, `app-password-create`, `app-password-revoke` |
-| `api-key` | `list`, `create`, `revoke`, `rotate` | `api-keys`, `api-key-create`, `api-key-revoke` |
+| `api-key` | `list`, `create`, `set`, `revoke`, `rotate` | `api-keys`, `api-key-create`, `api-key-revoke` |
 | `suppression` | `list`, `show`, `add`, `remove`, `export`, `import` | `suppression`, `suppression --remove ADDR` |
 | `warmup` | `status`, `plan`, `start`, `enable`, `disable`, `pause`, `resume`, `set`, `reset` | |
 | `domain` | `list`, `show`, `add`, `remove`, `set`, `disable`, `enable`, `alias add\|remove`, `import` | |
@@ -1991,10 +1991,11 @@ Only `epistle init` turns one into the other: it derives the name from the addre
 | `epistle app-password rotate N LABEL [--yes\|-y] [--dry-run]` | Replace the secret and print the new one once. The label, expiry, address range and `save-sent` setting stay; the old secret stops working in the same write, and the running server picks the change up from the file within a few seconds (`reload` says `loaded`, `no-server` or `timed-out`). Asks first, because every client using the old secret stops working. `--dry-run` checks that the credential exists and prints no secret. |
 | `epistle app-password rename N LABEL NEW_LABEL [--dry-run]` | Give the credential a new label; the secret and the settings stay, so clients keep working. Refuses a label that is taken (exit 2). `previous_label` in the JSON result holds the old one. |
 | `epistle app-password revoke N LABEL [--yes\|-y]` | Revoke it. Asks first. |
-| `epistle api-key list [--json]` | API keys: label, expiry (RFC 3339, `--json` keeps the epoch), CIDR, scopes, domains, bound account. Never the key. |
-| `epistle api-key create LABEL --scope S [--scope …] [--domain D] [--account N] [--expires-at WHEN \| --expires-in 90d] [--ip-cidr CIDR] [--class CLASS]` | Create a key; prints it once. `--ip-cidr` is an allowlist of one CIDR for the client address. `--class` (`transactional`, `marketing` or `personal`) is the [mail class](evidence.md) `/api/v1/send` grants to mail the request gives none. `WHEN` is an epoch, a date, an RFC 3339 instant or a duration; no key expires unless one is given, and `status` warns about the ones that do not (see [Expiry is opt-in](api.md#expiry-is-opt-in)). Scopes: `read`, `write`, `send`, `scim`. `--domain` confines it to domains. `--account` binds it to one account (static or dynamic): it then reaches only JMAP, `/api/v1/send`, `/api/v1/deliveries` and that account's suppression list, cannot hold `scim`, and takes no `--domain`. |
+| `epistle api-key list [--json]` | API keys: label, expiry (RFC 3339, `--json` keeps the epoch), CIDR, scopes, domains, bound account and `auto_submitted` setting. Never the key. JSON adds `"auto_submitted": true` only for enabled keys, preserving the existing object shape for disabled keys. |
+| `epistle api-key create LABEL --scope S [--scope …] [--domain D] [--account N] [--expires-at WHEN \| --expires-in 90d] [--ip-cidr CIDR] [--class CLASS] [--auto-submitted]` | Create a key; prints it once. `--ip-cidr` is an allowlist of one CIDR for the client address. `--class` (`transactional`, `marketing` or `personal`) is the [mail class](evidence.md) `/api/v1/send` grants to mail the request gives none. `--auto-submitted` makes `/api/v1/send` add `Auto-Submitted: auto-generated` when the request omits that header; it is off by default and a request value always wins. `WHEN` is an epoch, a date, an RFC 3339 instant or a duration; no key expires unless one is given, and `status` warns about the ones that do not (see [Expiry is opt-in](api.md#expiry-is-opt-in)). Scopes: `read`, `write`, `send`, `scim`. `--domain` confines it to domains. `--account` binds it to one account (static or dynamic): it then reaches only JMAP, `/api/v1/send`, `/api/v1/deliveries` and that account's suppression list, cannot hold `scim`, and takes no `--domain`. |
+| `epistle api-key set LABEL --auto-submitted on\|off` | Change whether `/api/v1/send` adds `Auto-Submitted: auto-generated` when the request omits that header. Other settings and the secret stay unchanged. |
 | `epistle api-key revoke LABEL [--yes\|-y]` | Revoke a key. Asks first. |
-| `epistle api-key rotate LABEL` | New secret, same scopes; prints it once. |
+| `epistle api-key rotate LABEL` | New secret, same scopes and settings; prints it once. |
 
 `account list --aliases` hangs under each account the `[[alias]]` entries (the
 ones `epistle alias list` shows) that have one of the account's addresses as a

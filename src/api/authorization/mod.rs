@@ -70,6 +70,7 @@ pub struct Principal {
 	/// key. `None` for the configured static token, which admits every scope
 	/// by design.
 	credential: Option<Credential>,
+	auto_submitted: bool,
 }
 
 impl std::fmt::Debug for Principal {
@@ -97,6 +98,7 @@ impl Principal {
 			account: Some(account),
 			domains: None,
 			credential: Some(credential),
+			auto_submitted: false,
 		}
 	}
 	/// The reach of the configured static token: every scope, every account,
@@ -107,6 +109,7 @@ impl Principal {
 			account: None,
 			domains: None,
 			credential: None,
+			auto_submitted: false,
 		}
 	}
 
@@ -118,6 +121,7 @@ impl Principal {
 			account: None,
 			domains: Some(Vec::new()),
 			credential,
+			auto_submitted: false,
 		}
 	}
 
@@ -156,6 +160,7 @@ impl Principal {
 			account: key.account.clone(),
 			domains,
 			credential,
+			auto_submitted: key.auto_submitted,
 		}
 	}
 
@@ -218,6 +223,12 @@ impl Principal {
 	/// key up again, from the same peer, when the caller identity needs it.
 	pub fn credential(&self) -> Option<&Credential> {
 		self.credential.as_ref()
+	}
+
+	/// Whether mail sent with this credential gets `Auto-Submitted:
+	/// auto-generated` when the request omits the header.
+	pub fn auto_submitted(&self) -> bool {
+		self.auto_submitted
 	}
 
 	/// Whether the credential holds `scope`.

@@ -131,6 +131,16 @@ fn api_key_create_rotate_revoke() {
 			"scopes": ["read"], "domains": [], "account": null, "expires_at": null, "ip_cidr": null,
 		})
 	);
+	assert_eq!(
+		run(
+			&env.config,
+			&["api-key", "set", "ci", "--auto-submitted", "on"]
+		),
+		(
+			0,
+			json!({"result": "saved", "action": "set", "label": "ci", "auto_submitted": true})
+		)
+	);
 	let (code, mut rotated) = run(&env.config, &["api-key", "rotate", "ci"]);
 	assert_eq!(code, 0);
 	let second = rotated["key"].take();
