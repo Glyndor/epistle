@@ -48,7 +48,6 @@ mod sweeps;
 
 pub(in crate::cli) use alerts::single_signature_dkim_warning;
 pub(super) use alerts::{build_arc_sealer, log_single_signature_dkim_warning, spawn_alert_engine};
-pub(super) use own_ip_blocklist::spawn_own_ip_blocklist;
 #[cfg(test)]
 pub(super) use bans::run_ban_sweep_once;
 pub(super) use bans::{build_greylist, spawn_ban_sweep};
@@ -56,6 +55,7 @@ pub(in crate::cli) use directory::connect_database;
 pub(super) use directory::{build_ldap_authenticator, spawn_ldap_directory, spawn_sql_directory};
 pub(super) use oauth::build_authz_server;
 pub(in crate::cli) use oauth::build_oauth_verifier;
+pub(super) use own_ip_blocklist::spawn_own_ip_blocklist;
 pub(super) use sweeps::{
 	dmarc_journal_dir, retention_days, spawn_dmarc_flush, spawn_storage_maintenance,
 	spawn_tlsrpt_reports,
