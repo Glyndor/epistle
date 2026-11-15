@@ -47,19 +47,19 @@ async fn hostile_names(names: &[String]) {
 		for (command, reply) in [
 			(
 				format!("A SELECT \"{name}\"\r\n"),
-				"A NO no such mailbox\r\n",
+				"A NO [NONEXISTENT] no such mailbox\r\n",
 			),
 			(
 				format!("A CREATE \"{name}\"\r\n"),
-				"A NO invalid mailbox name\r\n",
+				"A NO [CANNOT] invalid mailbox name\r\n",
 			),
 			(
 				format!("A RENAME Real \"{name}\"\r\n"),
-				"A NO cannot rename\r\n",
+				"A NO [CANNOT] cannot rename\r\n",
 			),
 			(
 				format!("A RENAME \"{name}\" Other\r\n"),
-				"A NO cannot rename\r\n",
+				"A NO [CANNOT] cannot rename\r\n",
 			),
 		] {
 			send(&mut client, command.as_bytes()).await;

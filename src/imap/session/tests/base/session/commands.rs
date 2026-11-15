@@ -191,7 +191,7 @@ fn append_requires_authentication_and_known_mailbox() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let mut session = Session::new("mail.example.org", dir.path().to_path_buf(), directory());
 	let output = session.command_line("a1 APPEND INBOX {5}");
-	assert!(text(&output).contains("a1 NO"));
+	assert!(text(&output).contains("a1 BAD not authenticated"));
 	assert_eq!(output.collect_literal, None);
 
 	let mut session = logged_in(dir.path());

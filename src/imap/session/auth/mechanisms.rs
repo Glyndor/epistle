@@ -104,7 +104,8 @@ COMPRESS=DEFLATE",
 		}
 		// Only negotiate a mechanism that is currently advertised (channel
 		// binding present for -PLUS, a verifier present for the OAuth ones).
-		let unsupported = || Output::text(format!("{tag} NO unsupported SASL mechanism\r\n"));
+		let unsupported =
+			|| Output::text(format!("{tag} NO [CANNOT] unsupported SASL mechanism\r\n"));
 		let Some(parsed) = crate::sasl::Mechanism::parse(mechanism) else {
 			return unsupported();
 		};
@@ -206,7 +207,9 @@ COMPRESS=DEFLATE",
 			Some(PendingAuth::External { tag }) => self.auth_external(&tag, line),
 			Some(PendingAuth::Bearer { tag }) => self.oauth_bearer(&tag, Some(line.to_string())),
 			Some(PendingAuth::BearerError { tag }) => self.auth_failure(&tag),
-			None => Output::text("* BAD unexpected authentication response\r\n".to_string()),
+			None => {
+				Output::text("* BAD [CLIENTBUG] unexpected authentication response\r\n".to_string())
+			}
 		}
 	}
 
@@ -291,11 +294,13 @@ COMPRESS=DEFLATE",
 			*login_failures += 1;
 			if *login_failures >= 3 {
 				return Output::closing(format!(
-					"* BYE too many failures\r\n{tag} NO authentication failed\r\n"
+					"* BYE too many failures\r\n{tag} NO [AUTHENTICATIONFAILED] authentication failed\r\n"
 				));
 			}
 		}
-		Output::text(format!("{tag} NO authentication failed\r\n"))
+		Output::text(format!(
+			"{tag} NO [AUTHENTICATIONFAILED] authentication failed\r\n"
+		))
 	}
 
 	fn pending_auth_tag(&self) -> String {

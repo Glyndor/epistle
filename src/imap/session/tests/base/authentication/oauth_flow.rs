@@ -66,7 +66,10 @@ fn a_rejected_token_gets_the_error_challenge_then_no() {
 			let json = String::from_utf8(B64.decode(json).expect("base64")).expect("utf8");
 			assert_eq!(json, r#"{"status":"invalid_token"}"#);
 			let done = text(&session.auth_response("AQ=="));
-			assert_eq!(done, "a NO authentication failed\r\n", "{mechanism}");
+			assert_eq!(
+				done, "a NO [AUTHENTICATIONFAILED] authentication failed\r\n",
+				"{mechanism}"
+			);
 			assert_eq!(session.account(), None);
 		}
 	}
@@ -80,7 +83,10 @@ fn cancelling_after_the_error_challenge_still_counts_as_a_failure() {
 	for round in 0..2 {
 		session.command_line(&format!("a AUTHENTICATE OAUTHBEARER {bad}"));
 		let done = text(&session.auth_response("*"));
-		assert_eq!(done, "a NO authentication failed\r\n", "round {round}");
+		assert_eq!(
+			done, "a NO [AUTHENTICATIONFAILED] authentication failed\r\n",
+			"round {round}"
+		);
 	}
 	// The third failure closes the connection without another challenge.
 	let last = session.command_line(&format!("a AUTHENTICATE OAUTHBEARER {bad}"));
@@ -109,7 +115,10 @@ fn acknowledging_the_error_challenge_counts_and_the_third_failure_closes() {
 		for round in 0..2 {
 			assert!(attempt(&mut session).collect_auth, "round {round}");
 			let done = text(&session.auth_response("AQ=="));
-			assert_eq!(done, "a NO authentication failed\r\n", "round {round}");
+			assert_eq!(
+				done, "a NO [AUTHENTICATIONFAILED] authentication failed\r\n",
+				"round {round}"
+			);
 		}
 		let last = attempt(&mut session);
 		assert!(!last.collect_auth, "with_initial {with_initial}");
@@ -130,7 +139,7 @@ fn an_initial_response_of_equals_is_an_empty_message_and_is_refused() {
 		assert!(first.collect_auth, "{mechanism}");
 		assert_eq!(
 			text(&session.auth_response("")),
-			"a NO authentication failed\r\n"
+			"a NO [AUTHENTICATIONFAILED] authentication failed\r\n"
 		);
 		assert_eq!(session.account(), None);
 	}

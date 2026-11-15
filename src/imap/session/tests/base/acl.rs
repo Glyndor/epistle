@@ -56,7 +56,10 @@ fn acl_on_missing_mailbox_is_no() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let mut session = logged_in(dir.path());
 	let response = text(&session.command_line("a2 GETACL Nope"));
-	assert!(response.contains("a2 NO no such mailbox"), "{response}");
+	assert!(
+		response.contains("a2 NO [NONEXISTENT] no such mailbox"),
+		"{response}"
+	);
 }
 
 #[test]

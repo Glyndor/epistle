@@ -631,6 +631,32 @@ command itself travels uncompressed, as the RFC requires. A second `COMPRESS`
 on the same connection answers `NO [COMPRESSIONACTIVE]`: restarting the
 context underneath a client that is already decoding would desynchronise it.
 
+### IMAP failure response codes
+
+IMAP failures carry the response codes from RFC 5530. The code comes first
+and the existing human-readable text follows, so clients that ignore codes
+keep seeing the same explanation. This behaviour is always enabled.
+
+| Code | Meaning |
+|---|---|
+| `[AUTHENTICATIONFAILED]` | `LOGIN` or `AUTHENTICATE` rejected the credentials. An unknown user and a wrong password produce the same response. |
+| `[NONEXISTENT]` | The requested mailbox or message does not exist. `APPEND` and `COPY` to a missing mailbox keep `[TRYCREATE]`, which RFC 9051 defines for them. |
+| `[ALREADYEXISTS]` | `CREATE` or `RENAME` found a mailbox with the requested name. |
+| `[CANNOT]` | The server does not allow the operation, such as changing a read-only mailbox or using an unsupported SASL mechanism. |
+| `[NOPERM]` | The mailbox ACL denies the operation. |
+| `[CLIENTBUG]` | The client sent a malformed command, invalid arguments or invalid literal framing. |
+| `[SERVERBUG]` | The server failed while storing or reading mailbox data. |
+| `[UNAVAILABLE]` | A temporary dependency is unavailable; the client can retry later. |
+| `[OVERQUOTA]` | The operation would exceed the account's storage quota. |
+| `[PRIVACYREQUIRED]` | The operation requires TLS, usually `STARTTLS` before `LOGIN`. |
+
+A command sent in the wrong state is answered with `BAD`: commands that need
+authentication say `not authenticated`, and commands that need a selected
+mailbox say `no mailbox selected`. Extension-specific codes such as `[LIMIT]`,
+`[TOOBIG]`, `[CLOSED]`, `[UIDREQUIRED]` and `[COMPRESSIONACTIVE]` remain available where
+their protocol defines them. A reply carries one code, so a failed `SELECT`
+that closed the previous mailbox answers `[CLOSED]`.
+
 ### IMAP mailbox names and folders
 
 Folders nest. The hierarchy delimiter is `/`, so `Work/Project` is the

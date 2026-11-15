@@ -26,21 +26,42 @@ fn hostile_mailbox_names_are_refused_with_the_exact_response() {
 	session.command_line("a2 CREATE Real");
 
 	let cases = [
-		(r#"b1 CREATE "../x""#, "b1 NO invalid mailbox name\r\n"),
-		(r#"b2 CREATE "a//b""#, "b2 NO invalid mailbox name\r\n"),
-		(r#"b3 CREATE "..""#, "b3 NO invalid mailbox name\r\n"),
+		(
+			r#"b1 CREATE "../x""#,
+			"b1 NO [CANNOT] invalid mailbox name\r\n",
+		),
+		(
+			r#"b2 CREATE "a//b""#,
+			"b2 NO [CANNOT] invalid mailbox name\r\n",
+		),
+		(
+			r#"b3 CREATE "..""#,
+			"b3 NO [CANNOT] invalid mailbox name\r\n",
+		),
 		(
 			r#"b4 CREATE "Archive\\2024""#,
-			"b4 NO invalid mailbox name\r\n",
+			"b4 NO [CANNOT] invalid mailbox name\r\n",
 		),
-		(r#"b5 RENAME Real "../x""#, "b5 NO cannot rename\r\n"),
-		(r#"b6 RENAME "../Real" Other"#, "b6 NO cannot rename\r\n"),
+		(
+			r#"b5 RENAME Real "../x""#,
+			"b5 NO [CANNOT] cannot rename\r\n",
+		),
+		(
+			r#"b6 RENAME "../Real" Other"#,
+			"b6 NO [CANNOT] cannot rename\r\n",
+		),
 		(
 			r#"b7 DELETE "../Real""#,
-			"b7 NO cannot delete this mailbox\r\n",
+			"b7 NO [CANNOT] cannot delete this mailbox\r\n",
 		),
-		(r#"b8 SELECT "../Real""#, "b8 NO no such mailbox\r\n"),
-		(r#"b9 SELECT "../../x""#, "b9 NO no such mailbox\r\n"),
+		(
+			r#"b8 SELECT "../Real""#,
+			"b8 NO [NONEXISTENT] no such mailbox\r\n",
+		),
+		(
+			r#"b9 SELECT "../../x""#,
+			"b9 NO [NONEXISTENT] no such mailbox\r\n",
+		),
 	];
 	for (command, expected) in cases {
 		let reply = text(&session.command_line(command));

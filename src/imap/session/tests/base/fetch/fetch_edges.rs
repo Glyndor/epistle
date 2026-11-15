@@ -102,7 +102,7 @@ fn fetch_edges_binary_literal8_and_invalid_selectors() {
 		exact(
 			&mut session,
 			&format!("f FETCH 1 ({item})"),
-			b"f BAD invalid arguments\r\n",
+			b"f BAD [CLIENTBUG] invalid arguments\r\n",
 			"malformed section selectors must receive tagged BAD",
 		);
 	}

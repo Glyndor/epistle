@@ -16,7 +16,7 @@ fn login_with_wrong_password_fails_and_third_failure_closes() {
 	let mut session = Session::new("mail.example.org", dir.path().to_path_buf(), directory());
 	for round in 0..2 {
 		let output = session.command_line(&format!("a{round} LOGIN alice wrong"));
-		assert!(text(&output).contains("NO LOGIN failed"));
+		assert!(text(&output).contains("NO [AUTHENTICATIONFAILED] LOGIN failed"));
 		assert!(!output.close);
 	}
 	let output = session.command_line("a3 LOGIN alice wrong");
@@ -29,7 +29,7 @@ fn unauthenticated_select_is_refused() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let mut session = Session::new("mail.example.org", dir.path().to_path_buf(), directory());
 	let output = session.command_line("a1 SELECT INBOX");
-	assert!(text(&output).contains("a1 NO"));
+	assert!(text(&output).contains("a1 BAD not authenticated"));
 }
 
 #[test]

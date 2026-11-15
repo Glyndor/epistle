@@ -13,6 +13,7 @@ mod fetch;
 mod helpers;
 mod list_status;
 mod mailboxes;
+mod response;
 mod search_fields;
 mod search_header;
 mod sort_keys;
@@ -21,6 +22,9 @@ mod thread_references;
 
 pub(crate) use auth::parse_bearer;
 
+pub(in crate::imap::session) use response::{
+	ResponseCode, bad_state, tagged_bad, tagged_no, untagged_bad,
+};
 pub use state::{DEFAULT_QUOTA_BYTES, Output, PendingLiteral, SavedSearch, Session, State};
 
 /// The size of the non-synchronizing literal a tagged APPEND or REPLACE
@@ -30,6 +34,25 @@ fn sent_literal(line: &str) -> Option<usize> {
 	super::command::literal_announcement_in_line(line)
 		.filter(|literal| !literal.synchronizing)
 		.map(|literal| literal.size)
+}
+
+fn mailbox_failure_code(error: &std::io::Error) -> ResponseCode {
+	match error.kind() {
+		std::io::ErrorKind::AlreadyExists => ResponseCode::AlreadyExists,
+		std::io::ErrorKind::NotFound => ResponseCode::NonExistent,
+		std::io::ErrorKind::InvalidInput => ResponseCode::Cannot,
+		_ => ResponseCode::ServerBug,
+	}
+}
+
+/// The tagged `NO` for a failed mailbox operation. A message that already
+/// opens with its own code (`[HASCHILDREN]`) keeps it: a reply carries one.
+pub(in crate::imap::session) fn mailbox_failure(tag: &str, error: &std::io::Error) -> Output {
+	let text = error.to_string();
+	if text.starts_with('[') {
+		return Output::text(format!("{tag} NO {text}\r\n"));
+	}
+	tagged_no(tag, mailbox_failure_code(error), &text)
 }
 
 impl Session {
@@ -58,17 +81,17 @@ impl Session {
 				return self.auth(&request.tag, &request.mechanism, request.initial);
 			}
 			Err(ParseError::Malformed) => {
-				return Output::text("* BAD malformed command\r\n".to_string());
+				return untagged_bad(ResponseCode::ClientBug, "malformed command");
 			}
 			Err(ParseError::Unknown(tag)) => {
-				return Output::text(format!("{tag} BAD unknown command\r\n"));
+				return tagged_bad(&tag, ResponseCode::ClientBug, "unknown command");
 			}
 			Err(ParseError::BadArguments(tag)) => {
 				// RFC 7888 §4: when an APPEND/REPLACE command fails to parse
 				// but the line announced a non-synchronizing literal, the
 				// payload is already on the wire and must be discarded so it
 				// does not arrive as the next command.
-				let mut output = Output::text(format!("{tag} BAD invalid arguments\r\n"));
+				let mut output = tagged_bad(&tag, ResponseCode::ClientBug, "invalid arguments");
 				output.discard_literal = sent_literal(line);
 				return output;
 			}
@@ -87,10 +110,10 @@ impl Session {
 
 	fn login(&mut self, tag: &str, username: &str, password: &str) -> Output {
 		if !self.tls_active {
-			return Output::text(format!("{tag} NO [PRIVACYREQUIRED] STARTTLS first\r\n"));
+			return tagged_no(tag, ResponseCode::PrivacyRequired, "STARTTLS first");
 		}
 		let State::NotAuthenticated { login_failures } = &mut self.state else {
-			return Output::text(format!("{tag} BAD already authenticated\r\n"));
+			return bad_state(tag, "already authenticated");
 		};
 		let verdict = self.directory.authenticate_verdict(
 			username,
@@ -100,10 +123,13 @@ impl Session {
 		);
 		match verdict {
 			Verdict::Admitted { account, .. } => self.auth_success(tag, account, "LOGIN completed"),
-			Verdict::Busy => Output::text(format!("{tag} NO [UNAVAILABLE] Try again later\r\n")),
+			Verdict::Busy => tagged_no(tag, ResponseCode::Unavailable, "Try again later"),
 			Verdict::Refused => {
 				*login_failures += 1;
-				let response = format!("{tag} NO LOGIN failed\r\n");
+				let response = format!(
+					"{tag} NO [{}] LOGIN failed\r\n",
+					ResponseCode::AuthenticationFailed.value()
+				);
 				if *login_failures >= 3 {
 					Output::closing(format!("* BYE too many failures\r\n{response}"))
 				} else {
@@ -144,18 +170,18 @@ impl Session {
 		operation: impl FnOnce(&std::path::Path, &str) -> std::io::Result<()>,
 	) -> Output {
 		let Some(account) = self.account().map(str::to_string) else {
-			return Output::text(format!("{tag} NO not authenticated\r\n"));
+			return bad_state(tag, "not authenticated");
 		};
 		match operation(&self.data_dir, &account) {
 			Ok(()) => Output::text(format!("{tag} OK {verb} completed\r\n")),
-			Err(error) => Output::text(format!("{tag} NO {error}\r\n")),
+			Err(error) => mailbox_failure(tag, &error),
 		}
 	}
 
 	/// ENABLE (RFC 5161): echo only the extensions we support (RFC 7162).
 	fn enable(&mut self, tag: &str, capabilities: &[String]) -> Output {
 		if self.account().is_none() {
-			return Output::text(format!("{tag} BAD ENABLE only after authentication\r\n"));
+			return bad_state(tag, "ENABLE only after authentication");
 		}
 		// UIDONLY (RFC 9586) must be enabled before a mailbox is selected.
 		if capabilities
@@ -163,7 +189,7 @@ impl Session {
 			.any(|c| c.eq_ignore_ascii_case("UIDONLY"))
 			&& matches!(self.state, State::Selected { .. })
 		{
-			return Output::text(format!("{tag} BAD UIDONLY not allowed when selected\r\n"));
+			return bad_state(tag, "UIDONLY not allowed when selected");
 		}
 		let enabled: Vec<&str> = capabilities
 			.iter()
@@ -195,7 +221,7 @@ impl Session {
 	pub fn idle_done(&mut self) -> Output {
 		match self.idle_tag.take() {
 			Some(tag) => Output::text(format!("{tag} OK IDLE terminated\r\n")),
-			None => Output::text("* BAD not idling\r\n".to_string()),
+			None => bad_state("*", "not idling"),
 		}
 	}
 

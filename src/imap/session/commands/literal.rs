@@ -40,7 +40,7 @@ impl Session {
 		// A rejected `UTF8 (~{n+})` also drains the `)` after the literal.
 		let wire_size = size + usize::from(utf8);
 		let Some(account) = self.account().map(str::to_string) else {
-			return reject_literal(tag, synchronizing, wire_size, "NO not authenticated\r\n");
+			return reject_literal(tag, synchronizing, wire_size, "BAD not authenticated\r\n");
 		};
 		// RFC 6855 §4: the UTF8 data item is only meaningful once enabled.
 		if utf8 && !self.utf8_accept {
@@ -48,7 +48,7 @@ impl Session {
 				tag,
 				synchronizing,
 				wire_size,
-				"BAD UTF8 APPEND requires ENABLE UTF8=ACCEPT\r\n",
+				"BAD [CLIENTBUG] UTF8 APPEND requires ENABLE UTF8=ACCEPT\r\n",
 			);
 		}
 		if !mailbox::exists(&self.data_dir, &account, mailbox) {
@@ -82,7 +82,7 @@ impl Session {
 						tag,
 						synchronizing,
 						wire_size,
-						"BAD unsupported flag\r\n",
+						"BAD [CLIENTBUG] unsupported flag\r\n",
 					);
 				}
 			}
@@ -96,7 +96,7 @@ impl Session {
 				synchronizing,
 				wire_size,
 				&format!(
-					"BAD too many keywords (max {})\r\n",
+					"BAD [LIMIT] too many keywords (max {})\r\n",
 					crate::imap::keyword::MAX_KEYWORDS_PER_MESSAGE
 				),
 			);
@@ -150,10 +150,15 @@ impl Session {
 				account,
 			} = &self.state
 			else {
-				return reject_literal(tag, synchronizing, size, "NO no mailbox selected\r\n");
+				return reject_literal(tag, synchronizing, size, "BAD no mailbox selected\r\n");
 			};
 			if *read_only {
-				return reject_literal(tag, synchronizing, size, "NO mailbox is read-only\r\n");
+				return reject_literal(
+					tag,
+					synchronizing,
+					size,
+					"NO [CANNOT] mailbox is read-only\r\n",
+				);
 			}
 			let total = u32::try_from(snapshot.len()).unwrap_or(u32::MAX);
 			let target_uid = if uid {
@@ -162,16 +167,31 @@ impl Session {
 				{
 					Some(seq) => snapshot.by_sequence(seq).map(|m| m.uid).unwrap_or(0),
 					None => {
-						return reject_literal(tag, synchronizing, size, "NO no such message\r\n");
+						return reject_literal(
+							tag,
+							synchronizing,
+							size,
+							"NO [NONEXISTENT] no such message\r\n",
+						);
 					}
 				}
 			} else if sequence >= 1 && sequence <= total {
 				snapshot.by_sequence(sequence).map(|m| m.uid).unwrap_or(0)
 			} else {
-				return reject_literal(tag, synchronizing, size, "NO no such message\r\n");
+				return reject_literal(
+					tag,
+					synchronizing,
+					size,
+					"NO [NONEXISTENT] no such message\r\n",
+				);
 			};
 			if target_uid == 0 {
-				return reject_literal(tag, synchronizing, size, "NO no such message\r\n");
+				return reject_literal(
+					tag,
+					synchronizing,
+					size,
+					"NO [NONEXISTENT] no such message\r\n",
+				);
 			}
 			(account.clone(), selected.clone(), target_uid)
 		};
@@ -203,7 +223,12 @@ impl Session {
 			match Flag::parse(token) {
 				Some(flag) => flags.push(flag),
 				None => {
-					return reject_literal(tag, synchronizing, size, "BAD unsupported flag\r\n");
+					return reject_literal(
+						tag,
+						synchronizing,
+						size,
+						"BAD [CLIENTBUG] unsupported flag\r\n",
+					);
 				}
 			}
 		}
@@ -213,7 +238,7 @@ impl Session {
 				synchronizing,
 				size,
 				&format!(
-					"BAD too many keywords (max {})\r\n",
+					"BAD [LIMIT] too many keywords (max {})\r\n",
 					crate::imap::keyword::MAX_KEYWORDS_PER_MESSAGE
 				),
 			);

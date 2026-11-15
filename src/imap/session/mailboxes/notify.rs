@@ -11,7 +11,7 @@ impl Session {
 	/// other mailbox the request names (§5.1). Requires authentication.
 	pub(in crate::imap::session) fn notify(&mut self, tag: &str, request: NotifyRequest) -> Output {
 		let Some(account) = self.account().map(str::to_string) else {
-			return Output::text(format!("{tag} NO not authenticated\r\n"));
+			return Output::text(format!("{tag} BAD not authenticated\r\n"));
 		};
 		let mut response = String::new();
 		match request {

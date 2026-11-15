@@ -16,7 +16,7 @@ use crate::util::path_containment::contained_child;
 use super::journal;
 
 fn invalid() -> io::Error {
-	io::Error::other("invalid mailbox name")
+	io::Error::new(io::ErrorKind::InvalidInput, "invalid mailbox name")
 }
 
 /// Create every missing superior of `name` as an empty mailbox, shortest
@@ -74,7 +74,7 @@ pub(super) fn rename_subtree(
 	from: &str,
 	to: &str,
 ) -> io::Result<()> {
-	let cannot = || io::Error::other("cannot rename");
+	let cannot = || io::Error::new(io::ErrorKind::InvalidInput, "cannot rename");
 	if MailboxName::folder(from).is_err() || MailboxName::folder(to).is_err() {
 		return Err(cannot());
 	}
@@ -83,7 +83,7 @@ pub(super) fn rename_subtree(
 	}
 	let source = folder_dir(data_dir, account, from).ok_or_else(cannot)?;
 	if !source.is_dir() {
-		return Err(io::Error::other("no such mailbox"));
+		return Err(io::Error::new(io::ErrorKind::NotFound, "no such mailbox"));
 	}
 	let mut moves = Vec::new();
 	for name in super::list(data_dir, account.as_str()) {
@@ -98,7 +98,10 @@ pub(super) fn rename_subtree(
 			return Err(cannot());
 		};
 		if new_dir.exists() {
-			return Err(cannot());
+			return Err(io::Error::new(
+				io::ErrorKind::AlreadyExists,
+				"cannot rename",
+			));
 		}
 		moves.push((name, target, old_dir, new_dir));
 	}

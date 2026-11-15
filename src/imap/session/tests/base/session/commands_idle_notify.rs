@@ -22,7 +22,7 @@ fn idle_requires_authentication() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let mut session = Session::new("mail.example.org", dir.path().to_path_buf(), directory());
 	let output = session.command_line("a1 IDLE");
-	assert!(text(&output).contains("a1 NO"));
+	assert!(text(&output).contains("a1 BAD not authenticated"));
 	assert!(!output.idle);
 }
 
@@ -95,7 +95,11 @@ fn notify_requires_authentication() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let mut session = Session::new("mail.example.org", dir.path().to_path_buf(), directory());
 	let output = session.command_line("a1 NOTIFY SET (selected (MessageNew))");
-	assert!(text(&output).contains("a1 NO"), "{}", text(&output));
+	assert!(
+		text(&output).contains("a1 BAD not authenticated"),
+		"{}",
+		text(&output)
+	);
 }
 
 #[test]

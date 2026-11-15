@@ -7,6 +7,9 @@ mod basic;
 mod capabilities;
 
 #[cfg(test)]
+mod codes;
+
+#[cfg(test)]
 mod commands;
 
 #[cfg(test)]

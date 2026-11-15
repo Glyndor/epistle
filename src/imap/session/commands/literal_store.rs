@@ -10,7 +10,7 @@ impl Session {
 	/// Called by the network layer with the complete APPEND/REPLACE literal.
 	pub fn literal_done(&mut self, data: &[u8]) -> Output {
 		let Some(pending) = self.pending_append.take() else {
-			return Output::text("* BAD unexpected literal\r\n".to_string());
+			return Output::text("* BAD [CLIENTBUG] unexpected literal\r\n".to_string());
 		};
 		let PendingLiteral {
 			tag,
@@ -25,7 +25,7 @@ impl Session {
 			.flatten();
 		let data = encoded.as_deref().unwrap_or(data);
 		let Some(account) = self.account().map(str::to_string) else {
-			return Output::text(format!("{tag} NO not authenticated\r\n"));
+			return Output::text(format!("{tag} BAD not authenticated\r\n"));
 		};
 		let verb = if replace.is_some() {
 			"REPLACE"
@@ -86,7 +86,7 @@ impl Session {
 				&self.crypto,
 			) {
 				Ok(id) => id,
-				Err(_) => return Output::text(format!("{tag} NO {verb} failed\r\n")),
+				Err(_) => return Output::text(format!("{tag} NO [SERVERBUG] {verb} failed\r\n")),
 			}
 		};
 		// UIDPLUS: report the UIDVALIDITY and UID assigned (RFC 4315).
@@ -173,7 +173,7 @@ impl Session {
 	) -> String {
 		let mut snapshot = match self.open_snapshot(account, selected) {
 			Ok(snapshot) => snapshot,
-			Err(_) => return format!("{tag} NO REPLACE failed\r\n"),
+			Err(_) => return format!("{tag} NO [SERVERBUG] REPLACE failed\r\n"),
 		};
 		// Compute the sequence number the target occupies in the current
 		// snapshot before we remove it. When the target is no longer
@@ -192,7 +192,7 @@ impl Session {
 		// generic expunge path (which only removes \Deleted messages)
 		// would not work.
 		if snapshot.remove_uids(&[uid]).is_err() {
-			return format!("{tag} NO REPLACE failed\r\n");
+			return format!("{tag} NO [SERVERBUG] REPLACE failed\r\n");
 		}
 		// Keep the live selected snapshot consistent with the expunge.
 		if let State::Selected {
@@ -221,7 +221,7 @@ impl Session {
 	/// on the mailbox.
 	pub fn literal_bad_trailer(&mut self) -> Output {
 		let Some(pending) = self.pending_append.take() else {
-			return Output::text("* BAD unexpected literal\r\n".to_string());
+			return Output::text("* BAD [CLIENTBUG] unexpected literal\r\n".to_string());
 		};
 		let verb = if pending.replace.is_some() {
 			"REPLACE"
@@ -229,7 +229,7 @@ impl Session {
 			"APPEND"
 		};
 		Output::text(format!(
-			"{} BAD {} literal must be followed by CRLF\r\n",
+			"{} BAD [CLIENTBUG] {} literal must be followed by CRLF\r\n",
 			pending.tag, verb
 		))
 	}

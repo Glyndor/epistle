@@ -38,11 +38,13 @@ pub(in super::super) async fn read_until(
 
 #[test]
 fn detects_bad_responses() {
-	assert!(is_bad_response(b"a1 BAD invalid arguments\r\n"));
-	assert!(is_bad_response(b"* BAD malformed command\r\n"));
+	assert!(is_bad_response(b"a1 BAD [CLIENTBUG] invalid arguments\r\n"));
+	assert!(is_bad_response(b"* BAD [CLIENTBUG] malformed command\r\n"));
 	// Successful and NO responses are not abuse signals.
 	assert!(!is_bad_response(b"a1 OK LOGIN completed\r\n"));
-	assert!(!is_bad_response(b"a1 NO LOGIN failed\r\n"));
+	assert!(!is_bad_response(
+		b"a1 NO [AUTHENTICATIONFAILED] LOGIN failed\r\n"
+	));
 }
 
 #[tokio::test]
@@ -183,7 +185,11 @@ async fn non_ascii_command_is_bad() {
 	assert!(read_chunk(&mut client).await.starts_with("* OK"));
 	client.write_all(&[0xff, 0xfe]).await.expect("write");
 	client.write_all(b"\r\n").await.expect("write");
-	assert!(read_chunk(&mut client).await.contains("BAD non-ASCII"));
+	assert!(
+		read_chunk(&mut client)
+			.await
+			.contains("BAD [CLIENTBUG] non-ASCII")
+	);
 	drop(client);
 	let _ = task.await;
 }

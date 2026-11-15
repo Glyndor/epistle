@@ -27,7 +27,7 @@ fn rev1_check_completes_without_changing_selection() {
 		);
 		assert_eq!(
 			text(&session.command_line("c CHECK extra")),
-			"c BAD invalid arguments\r\n"
+			"c BAD [CLIENTBUG] invalid arguments\r\n"
 		);
 	}
 }

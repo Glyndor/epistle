@@ -170,7 +170,7 @@ async fn discarded_literal_keeps_read_deadline() {
 		"rejected IMAP literal must close at the read deadline"
 	);
 	assert_eq!(
-		reply, "a2 NO not authenticated\r\n* BYE read timeout\r\n",
+		reply, "a2 BAD not authenticated\r\n* BYE read timeout\r\n",
 		"stalled IMAP discard must receive the exact timeout response"
 	);
 	task.await.expect("server task").expect("server result");

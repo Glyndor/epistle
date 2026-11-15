@@ -100,7 +100,7 @@ impl Session {
 				let mut flags = message.flags.clone();
 				flags.push(Flag::Seen);
 				if snapshot.store_flags(sequence_number, flags).is_err() {
-					return Output::text(format!("{tag} NO cannot store flags\r\n"));
+					return Output::text(format!("{tag} NO [SERVERBUG] cannot store flags\r\n"));
 				}
 			}
 			let Some(message) = snapshot.by_sequence(sequence_number) else {
@@ -124,7 +124,11 @@ impl Session {
 			let data = if needs_data {
 				match snapshot.read(message) {
 					Ok(data) => data,
-					Err(_) => return Output::text(format!("{tag} NO message unavailable\r\n")),
+					Err(_) => {
+						return Output::text(format!(
+							"{tag} NO [SERVERBUG] message unavailable\r\n"
+						));
+					}
 				}
 			} else {
 				Vec::new()

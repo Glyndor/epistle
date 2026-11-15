@@ -23,7 +23,7 @@ fn child_info(request: &ListCommand) -> String {
 impl Session {
 	pub(super) fn list(&mut self, tag: &str, request: &ListCommand) -> Output {
 		let Some(account) = self.account().map(str::to_string) else {
-			return Output::text(format!("{tag} NO not authenticated\r\n"));
+			return Output::text(format!("{tag} BAD not authenticated\r\n"));
 		};
 		let subscriptions = mailbox::list_subscribed(&self.data_dir, &account);
 		let subscribed: HashSet<&str> = subscriptions.iter().map(String::as_str).collect();
@@ -135,13 +135,13 @@ impl Session {
 
 	pub(super) fn status(&mut self, tag: &str, mailbox: &str, items: &[StatusItem]) -> Output {
 		let Some(account) = self.account().map(str::to_string) else {
-			return Output::text(format!("{tag} NO not authenticated\r\n"));
+			return Output::text(format!("{tag} BAD not authenticated\r\n"));
 		};
 		if !mailbox::exists(&self.data_dir, &account, mailbox) {
-			return Output::text(format!("{tag} NO no such mailbox\r\n"));
+			return Output::text(format!("{tag} NO [NONEXISTENT] no such mailbox\r\n"));
 		}
 		let Some(parts) = self.status_parts(&account, mailbox, items) else {
-			return Output::text(format!("{tag} NO cannot open mailbox\r\n"));
+			return Output::text(format!("{tag} NO [SERVERBUG] cannot open mailbox\r\n"));
 		};
 		Output::text(format!(
 			"* STATUS {} ({parts})\r\n{tag} OK STATUS completed\r\n",
