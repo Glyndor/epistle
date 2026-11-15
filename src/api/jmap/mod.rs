@@ -69,6 +69,8 @@ pub(crate) mod state;
 pub(crate) use dispatcher::MAX_REQUEST_LIMITS;
 use dispatcher::{ResolveError, Resolver};
 
+#[cfg(test)]
+pub(crate) use blobs::LISTED_FAILURES;
 pub use blobs::{account_usage_bytes, backfill_blob_ownership, reclaim_blobs};
 
 #[cfg(test)]
