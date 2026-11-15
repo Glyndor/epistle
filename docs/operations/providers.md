@@ -53,8 +53,7 @@ Since November 2025 a domain that does not meet the rules gets more
 temporary and permanent rejections, and a new domain follows a shorter
 schedule.
 
-The requirements are in the [email sender guidelines]
-(<https://support.google.com/a/answer/81126>) and in their
+The requirements are in the [email sender guidelines](<https://support.google.com/a/answer/81126>) and in their
 [FAQ](<https://support.google.com/a/answer/14229414>).
 
 ## Microsoft
@@ -70,8 +69,9 @@ The requirements are in the [email sender guidelines]
    access does not expire any more.
 3. When an address is blocked, run the three steps of the unblock portal.
 
-**What it shows:** the complaints. JMRP, inside SNDS, sends the reports
-when a recipient marks the message as junk.
+**What it shows:** JMRP, inside SNDS, sends the complaint reports when a
+recipient marks the message as junk. The guidance this page cites does not
+list what else SNDS shows.
 
 **Limits**
 
@@ -79,18 +79,25 @@ when a recipient marks the message as junk.
 |---|---|
 | Authentication | above 5,000 messages a day to `outlook.com`, `hotmail.com` or `live.com`: SPF passes, DKIM passes, and DMARC is published with at least `p=none` and aligned (with SPF, with DKIM, or with both) |
 | SPF | an SPF record with more than 10 DNS lookups fails |
+
+Recommended:
+
+| Limit | Value |
+|---|---|
 | Sender | a valid `From` or `Reply-To` that can receive replies |
 | Addresses | the invalid ones removed |
 | Forwards and lists | ARC |
-| DMARC reports | Outlook sends the aggregate reports (`rua`) and does not send `ruf` |
+| Unsubscribe | a visible, working unsubscribe link |
+
+Outlook sends the aggregate DMARC reports (`rua`) and does not send `ruf`.
 
 Mail that does not meet the requirements has gone to the Junk folder since
-5 May 2025. The rejection that follows is `550 5.7.515 Access denied,
-sending domain ... does not meet the required authentication level`; the
-date the rejection starts is still to be announced.
+5 May 2025. The post announces a rejection, `550 5.7.515 Access denied,
+sending domain ... does not meet the required authentication level`, and
+says the date it starts is still to be announced. Whether it is in force
+today is not confirmed here: check the post.
 
-The requirements are in the [high-volume sender post]
-(<https://techcommunity.microsoft.com/blog/microsoftdefenderforoffice365blog/strengthening-email-ecosystem-outlooks-new-requirements-for-high-volume-senders/4399730>),
+The requirements are in the [high-volume sender post](<https://techcommunity.microsoft.com/blog/microsoftdefenderforoffice365blog/strengthening-email-ecosystem-outlooks-new-requirements-for-high-volume-senders/4399730>),
 published on 2 April 2025 and updated on 30 April 2025.
 
 ## Yahoo and AOL
@@ -134,8 +141,7 @@ later, `553` and `554` mean do not retry. A `553` or a `554` does not only
 mean an invalid address: the page lists DMARC and DKIM failures, the
 content and Spamhaus among its causes.
 
-The requirements are in the [sender best practices]
-(<https://senders.yahooinc.com/best-practices/>); the replies are in the
+The requirements are in the [sender best practices](<https://senders.yahooinc.com/best-practices/>); the replies are in the
 [SMTP error codes](<https://senders.yahooinc.com/smtp-error-codes/>).
 Support writes to `mail-questions@yahooinc.com`.
 
