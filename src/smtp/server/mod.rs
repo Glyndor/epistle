@@ -17,11 +17,13 @@ pub use super::session::{AcceptedMessage, Session};
 pub use super::sink::MessageSink;
 pub use crate::directory_store::DirectoryHandle;
 pub use data_rate::{DEFAULT_DATA_RATE_GRACE_SECS, DEFAULT_MIN_DATA_RATE, DataRate};
+pub use inbound_policy::InboundPolicy;
 pub use session_time::{DEFAULT_MAX_SESSION_TIME_SECS, SessionLimits};
 
 mod builder;
 mod data_rate;
 mod dnsbl_check;
+mod inbound_policy;
 mod refusal;
 mod refusal_checks;
 mod refusal_text;
@@ -171,6 +173,9 @@ pub struct Server {
 	refusal_detail: crate::config::RefusalDetail,
 	/// Whether a final refusal carries a reference (`[smtp] reject_reference`).
 	refusal_reference: bool,
+	/// The inbound decisions the operator sets: trusted relays, the
+	/// full-mailbox answer, the greylist mask and the reputation floor.
+	inbound: InboundPolicy,
 	/// Per-tenant aggregate limits (accounts, storage, rate). On top of the
 	/// per-account limiter; empty is the identity.
 	tenant_limits: Option<Arc<crate::api::TenantLimits>>,
@@ -448,7 +453,9 @@ impl Server {
 			session =
 				session.with_inbound_ip_limit(Arc::clone(&ip_limit.limiter), ip_limit.per_min);
 		}
-		session = session.with_refusal_detail(self.refusal_detail);
+		session = session
+			.with_refusal_detail(self.refusal_detail)
+			.with_mailbox_full(self.inbound.mailbox_full);
 		if let Some(sender_limit) = &self.inbound_sender_limit {
 			session = session
 				.with_inbound_sender_limit(Arc::clone(&sender_limit.limiter), sender_limit.per_min);

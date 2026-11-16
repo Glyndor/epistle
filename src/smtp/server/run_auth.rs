@@ -26,6 +26,12 @@ impl Server {
 	) -> Result<(String, bool), Reply> {
 		let mut auth_headers = String::new();
 		let mut passed = false;
+		// A relay the operator listed in `[smtp] trusted_networks` hands over
+		// mail for other senders' domains, which its own address never
+		// passes. Nothing is verified for it, so nothing is claimed.
+		if self.inbound.trusts(peer) {
+			return Ok((auth_headers, passed));
+		}
 		if let (Some(dns), Some(ip), None) = (&self.spf, peer, session.authenticated()) {
 			let domain = spf_domain(&message.reverse_path, session.helo_domain());
 			let outcome = match &domain {

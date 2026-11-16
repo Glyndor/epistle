@@ -21,6 +21,7 @@ impl std::fmt::Debug for Config {
 			.field("dnsbl_domain_zones", &self.dnsbl_domain_zones)
 			.field("dnsbl_url_zones", &self.dnsbl_url_zones)
 			.field("smtp", &self.smtp)
+			.field("forwarding", &self.forwarding)
 			.field(
 				"first_time_sender_delay_secs",
 				&self.first_time_sender_delay_secs,

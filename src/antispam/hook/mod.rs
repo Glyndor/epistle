@@ -1,14 +1,18 @@
 //! External scanner hook: hand a message to an HTTP filter (ClamAV/Rspamd
 //! behind a small service) and act on its verdict.
 //!
-//! The hook is advisory and fails open: any transport or parse error yields
-//! `Accept`, so a scanner outage never blocks mail. The trait is
-//! test-injectable; the real implementation POSTs the raw message over HTTP.
+//! The hook is advisory and by default fails open: any transport or parse
+//! error yields `Accept`, so a scanner outage never blocks mail. An operator
+//! who would rather hold mail back than let it pass unscanned sets
+//! `scanner_hook_on_error = "defer"`. The trait is test-injectable; the real
+//! implementation POSTs the raw message over HTTP.
 
 use std::pin::Pin;
 use std::time::Duration;
 
 use serde::Deserialize;
+
+use crate::config::ClamdOnError;
 
 /// What the external scanner recommends for a message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,32 +53,58 @@ struct HookResponse {
 /// Parse a scanner response body into a verdict. Unknown actions and malformed
 /// bodies are treated as `Accept` (fail open).
 pub fn parse_verdict(body: &[u8]) -> HookVerdict {
-	match serde_json::from_slice::<HookResponse>(body) {
-		Ok(response) => match response.action.to_ascii_lowercase().as_str() {
-			"reject" => HookVerdict::Reject,
-			"quarantine" | "junk" => HookVerdict::Quarantine,
-			_ => HookVerdict::Accept,
-		},
-		Err(_) => HookVerdict::Accept,
-	}
+	read_verdict(body).unwrap_or(HookVerdict::Accept)
+}
+
+/// The verdict a scanner response body carries, or `None` when the body is
+/// not the JSON answer a scanner gives. An action the hook does not know is
+/// a verdict (`Accept`), not an error.
+fn read_verdict(body: &[u8]) -> Option<HookVerdict> {
+	let response = serde_json::from_slice::<HookResponse>(body).ok()?;
+	Some(match response.action.to_ascii_lowercase().as_str() {
+		"reject" => HookVerdict::Reject,
+		"quarantine" | "junk" => HookVerdict::Quarantine,
+		_ => HookVerdict::Accept,
+	})
 }
 
 /// Real hook: POSTs the raw message to a configured HTTP endpoint.
 pub struct HttpHook {
 	client: reqwest::Client,
 	url: String,
+	on_error: ClamdOnError,
 }
 
 impl HttpHook {
-	/// Build a hook posting to `url`, with a bounded timeout.
+	/// Build a hook posting to `url`, with a bounded timeout of 30 seconds
+	/// that accepts the message when the call fails.
 	pub fn new(url: &str) -> Result<Self, reqwest::Error> {
-		let client = reqwest::Client::builder()
-			.timeout(Duration::from_secs(30))
-			.build()?;
+		Self::with_options(url, Duration::from_secs(30), ClamdOnError::Accept)
+	}
+
+	/// Build a hook posting to `url` that gives the scanner `timeout` to
+	/// answer, and does `on_error` when the call fails: the transport
+	/// breaks, the deadline passes, the answer is too large or it is not a
+	/// verdict.
+	pub fn with_options(
+		url: &str,
+		timeout: Duration,
+		on_error: ClamdOnError,
+	) -> Result<Self, reqwest::Error> {
+		let client = reqwest::Client::builder().timeout(timeout).build()?;
 		Ok(HttpHook {
 			client,
 			url: url.to_string(),
+			on_error,
 		})
+	}
+
+	/// What a failed call does.
+	fn failed(&self) -> HookVerdict {
+		match self.on_error {
+			ClamdOnError::Accept => HookVerdict::Accept,
+			ClamdOnError::Defer => HookVerdict::Defer,
+		}
 	}
 }
 
@@ -85,15 +115,18 @@ impl MailHook for HttpHook {
 			let response = match self.client.post(&self.url).body(body).send().await {
 				Ok(response) => response,
 				Err(error) => {
-					tracing::warn!(%error, "scanner hook request failed; accepting");
-					return HookVerdict::Accept;
+					tracing::warn!(%error, on_error = ?self.on_error, "scanner hook request failed");
+					return self.failed();
 				}
 			};
 			match read_capped(response).await {
-				Some(bytes) => parse_verdict(&bytes),
+				Some(bytes) => read_verdict(&bytes).unwrap_or_else(|| {
+					tracing::warn!(on_error = ?self.on_error, "scanner hook answer is not a verdict");
+					self.failed()
+				}),
 				None => {
-					tracing::warn!("scanner hook answer too large or unreadable; accepting");
-					HookVerdict::Accept
+					tracing::warn!(on_error = ?self.on_error, "scanner hook answer too large or unreadable");
+					self.failed()
 				}
 			}
 		})

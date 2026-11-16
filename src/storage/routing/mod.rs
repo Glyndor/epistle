@@ -160,6 +160,12 @@ impl SplitDelivery {
 		self
 	}
 
+	/// Hold forwards, Sieve redirects and vacation replies to `guard`.
+	pub fn with_forwarding(mut self, guard: Arc<crate::forwarding::Guard>) -> Self {
+		self.local = self.local.with_forwarding(guard);
+		self
+	}
+
 	/// Apply these delivery rules to locally delivered mail.
 	pub fn with_rules(mut self, rules: Vec<crate::rules::Rule>) -> Self {
 		self.rules = rules;

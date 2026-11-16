@@ -35,6 +35,7 @@ mod dns_publish;
 mod domain_role;
 mod env;
 mod error;
+mod forwarding;
 mod ldap;
 mod listener;
 mod load;
@@ -93,6 +94,7 @@ pub use dns_publish::{
 	DEFAULT_INTERVAL_SECS as DNS_PUBLISH_DEFAULT_INTERVAL_SECS, DnsPublish, ExtraTxt,
 };
 pub use error::ConfigError;
+pub use forwarding::{ForwardPolicy, Forwarding};
 pub use ldap::Ldap;
 pub use listener::{Listener, ListenerKind, Protocol};
 pub use log_format::LogFormat;
@@ -106,7 +108,7 @@ pub use queue::{OutboundTls, Queue, SuppressionScope};
 pub use reports::Reports;
 pub use scanner::{Antispam, ClamdOnError, ClamdOnFound};
 pub use schema::Config;
-pub use smtp::{RefusalDetail, Smtp};
+pub use smtp::{MailboxFull, RefusalDetail, Smtp};
 pub use srs::SrsDomain;
 pub use storage::{
 	BlobBackendConfig, Cleanup, CleanupRule, CleanupScope, FolderNames, Folders, S3BlobConfig,

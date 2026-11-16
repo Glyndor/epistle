@@ -11,7 +11,7 @@
 
 use serde::Deserialize;
 
-use super::{AttachmentMode, Config, ContentAction};
+use super::{AttachmentMode, Config, ContentAction, ForwardPolicy};
 
 mod checks;
 mod validate;
@@ -113,6 +113,13 @@ pub struct AntispamScope {
 	/// scope only annotate or refuse. Absent keys keep the next wider
 	/// scope's value.
 	pub checks: CheckScope,
+	/// Where the mail of this scope may be forwarded to (see `[forwarding]`).
+	/// Absent keeps the next wider scope's value. An operator setting: the
+	/// account's own Sieve script cannot change it.
+	pub forward_policy: Option<ForwardPolicy>,
+	/// The most copies one account of this scope may forward in a minute.
+	/// Absent keeps the next wider scope's value, at least 1.
+	pub forward_per_min: Option<u32>,
 }
 
 /// Longest first-time delay a scope may set: the connection waits it out.

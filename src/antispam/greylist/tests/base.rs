@@ -138,3 +138,64 @@ fn memory_store_matches_the_decision_contract() {
 	let store = MemoryGreylist::new();
 	run_against(&store);
 }
+
+fn triplet_from(ip: &str) -> Triplet<'static> {
+	Triplet {
+		client_ip: ip.parse().unwrap(),
+		sender: "sender@example.org",
+		recipient: "bob@example.net",
+	}
+}
+
+#[test]
+fn the_default_mask_keys_on_the_whole_address_as_before() {
+	let t = triplet_from("192.0.2.10");
+	assert_eq!(t.key(), "192.0.2.10|sender@example.org|bob@example.net");
+	assert_eq!(t.key_masked(Mask::default()), t.key());
+	let v6 = triplet_from("2001:db8::5");
+	assert_eq!(v6.key_masked(Mask::default()), v6.key());
+}
+
+#[test]
+fn clients_of_one_network_share_a_triplet_under_a_mask() {
+	let mask = Mask { v4: 24, v6: 64 };
+	assert_eq!(
+		triplet_from("192.0.2.10").key_masked(mask),
+		triplet_from("192.0.2.200").key_masked(mask)
+	);
+	assert_ne!(
+		triplet_from("192.0.2.10").key_masked(mask),
+		triplet_from("192.0.3.10").key_masked(mask)
+	);
+	assert_eq!(
+		triplet_from("2001:db8:0:1::5").key_masked(mask),
+		triplet_from("2001:db8:0:1:ffff::9").key_masked(mask)
+	);
+	assert_ne!(
+		triplet_from("2001:db8:0:1::5").key_masked(mask),
+		triplet_from("2001:db8:0:2::5").key_masked(mask)
+	);
+}
+
+#[test]
+fn a_retry_from_another_host_of_the_network_is_accepted_under_a_mask() {
+	let store = MemoryGreylist::new();
+	let mask = Mask { v4: 24, v6: 128 };
+	let first = triplet_from("192.0.2.10");
+	let retry = triplet_from("192.0.2.77");
+	assert_eq!(
+		block_on(decide_masked(&store, &first, mask, 1000, DELAY)),
+		Decision::Defer
+	);
+	assert_eq!(
+		block_on(decide_masked(&store, &retry, mask, 1100, DELAY)),
+		Decision::Accept
+	);
+	// With the whole address as the key it would have been a new sender.
+	let strict = MemoryGreylist::new();
+	block_on(decide(&strict, &first, 1000, DELAY));
+	assert_eq!(
+		block_on(decide(&strict, &retry, 1100, DELAY)),
+		Decision::Defer
+	);
+}

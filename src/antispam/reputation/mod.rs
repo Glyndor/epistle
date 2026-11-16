@@ -59,7 +59,13 @@ const MIN_OBSERVATIONS: i64 = 3;
 impl ReputationScore {
 	/// Interpret the tallies. Pure: no storage, fully unit-testable.
 	pub fn verdict(self) -> Verdict {
-		if self.ham + self.spam < MIN_OBSERVATIONS {
+		self.verdict_with(MIN_OBSERVATIONS)
+	}
+
+	/// [`Self::verdict`] with the observations a judgement needs set by
+	/// `min_observations`.
+	pub fn verdict_with(self, min_observations: i64) -> Verdict {
+		if self.ham + self.spam < min_observations {
 			return Verdict::Unknown;
 		}
 		if self.spam > self.ham {
@@ -113,8 +119,19 @@ pub enum Screen {
 /// Screen `value` by looking up its reputation and mapping the verdict. A
 /// lookup error yields `Allow` — a database hiccup must never block mail.
 pub async fn screen(pool: &PgPool, scope: Scope, value: &str) -> Screen {
+	screen_with(pool, scope, value, MIN_OBSERVATIONS).await
+}
+
+/// [`screen`] with the observations a judgement needs set by
+/// `min_observations`.
+pub async fn screen_with(
+	pool: &PgPool,
+	scope: Scope,
+	value: &str,
+	min_observations: i64,
+) -> Screen {
 	match lookup(pool, scope, value).await {
-		Ok(Some(score)) => match score.verdict() {
+		Ok(Some(score)) => match score.verdict_with(min_observations) {
 			Verdict::Suspect => Screen::Reject,
 			Verdict::Trusted => Screen::Allow,
 			Verdict::Unknown => Screen::FirstTime,

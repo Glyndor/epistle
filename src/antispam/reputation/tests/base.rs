@@ -28,3 +28,18 @@ fn verdict_suspect_when_spam_leads() {
 		Verdict::Suspect
 	);
 }
+
+#[test]
+fn the_default_verdict_needs_three_observations() {
+	let score = ReputationScore { ham: 0, spam: 2 };
+	assert_eq!(score.verdict(), Verdict::Unknown);
+	assert_eq!(score.verdict(), score.verdict_with(MIN_OBSERVATIONS));
+}
+
+#[test]
+fn a_higher_floor_keeps_a_domain_unknown_for_longer() {
+	let score = ReputationScore { ham: 1, spam: 5 };
+	assert_eq!(score.verdict_with(3), Verdict::Suspect);
+	assert_eq!(score.verdict_with(6), Verdict::Suspect);
+	assert_eq!(score.verdict_with(7), Verdict::Unknown);
+}

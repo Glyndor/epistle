@@ -79,6 +79,7 @@ impl Server {
 		}
 		// IP screen: client address against the IP blocklist zones.
 		if let Some(ip) = peer
+			&& !self.inbound.trusts(peer)
 			&& self.dnsbl.has_ip_zones()
 			&& let crate::dnsbl::DnsblOutcome::Listed { zone } = self.dnsbl.check(ip, dns).await
 		{

@@ -17,7 +17,7 @@
 use std::net::IpAddr;
 use std::sync::Arc;
 
-use crate::config::RefusalDetail;
+use crate::config::{MailboxFull, RefusalDetail};
 use crate::smtp::directory::Directory;
 use crate::smtp::diskspace::DiskGuard;
 use crate::smtp::ratelimit::{InboundLimit, SendLimiter};
@@ -61,6 +61,9 @@ pub(crate) struct TransactionPolicy {
 	pending_charge: Option<Charge>,
 	/// How much the text of an inbound limit refusal tells the sender.
 	refusal_detail: RefusalDetail,
+	/// How a full mailbox is refused (`[smtp] mailbox_full`), at `RCPT TO`
+	/// and at the end of DATA alike.
+	mailbox_full: MailboxFull,
 }
 
 impl TransactionPolicy {
@@ -105,6 +108,18 @@ impl TransactionPolicy {
 	pub(crate) fn with_refusal_detail(mut self, detail: RefusalDetail) -> Self {
 		self.refusal_detail = detail;
 		self
+	}
+
+	/// How a full mailbox is refused.
+	pub(crate) fn with_mailbox_full(mut self, how: MailboxFull) -> Self {
+		self.mailbox_full = how;
+		self
+	}
+
+	/// The reply for a recipient whose mailbox is full: `452 4.2.2`, or
+	/// `552 5.2.2` when the operator made a full mailbox permanent.
+	pub(crate) fn mailbox_full_reply(&self) -> Reply {
+		crate::smtp::quota::full_reply(self.mailbox_full)
 	}
 
 	/// Attach a shared disk-space guard for `data_dir`. When set, MAIL FROM
