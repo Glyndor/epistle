@@ -98,6 +98,7 @@ that never restart accept the option and ignore it.
 | [SRS secret of each domain](#srs-epistle-srs) | `epistle srs show\|split\|rotate` |
 | [Every secret and how it is rotated, and rotating them](#secrets-and-credentials-epistle-rotate) | `epistle rotate --all --dry-run`, `epistle rotate --all`, `epistle rotate --accounts-only` |
 | [Blob storage (filesystem or S3)](#blob-storage-epistle-storage-blobs) | `epistle storage blobs …` |
+| [Listing what the cleanup would remove](#cleanup-epistle-storage-cleanup) | `epistle storage cleanup [--json]` |
 | [Keys per tenant and key rotation](#tenant-keys-epistle-storage-tenant-keys) | `epistle storage tenant-keys migrate` |
 | [Rotate DKIM, renew TLS, rotate an API key](#rotations-epistle-dkim-epistle-tls-epistle-api-key) | `epistle dkim rotate`, `epistle dkim cleanup`, `epistle tls renew`, `epistle api-key rotate` |
 | [Containers: up, logs, update](#stack-epistle-stack) | `epistle stack …` |
@@ -758,6 +759,21 @@ stay there and stop being served, and the command says so every time the backend
 changes. Moving from `fs` to `s3` is refused while `<data_dir>/blobs/` holds any
 file, unless you pass `--force`. Leaving S3 cannot be checked from here, so it is
 never refused. Supports `--dry-run` and `--config FILE`.
+
+## Cleanup (`epistle storage cleanup`)
+
+```sh
+epistle storage cleanup [--json]
+```
+
+Lists what the hourly cleanup of Trash, Junk and Rejects would remove now: one
+line per account and folder with mail past its retention, tab separated
+(account, folder, days, messages), and the total on the error stream. It never
+removes anything. The server does, once an hour, on a clock its time reference
+believes; this command has no such reference, so it judges by the clock of the
+machine it runs on and says so. Without `[storage.cleanup]` nothing is removed
+and it says that. The retention rules are in
+[`[storage.cleanup]`](configuration.md#storagecleanup).
 
 ## Tenant keys (`epistle storage tenant-keys`)
 

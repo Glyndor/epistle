@@ -97,6 +97,7 @@ fn from_config_enabled_without_key_fails_closed() {
 		delivery_log_days: 0,
 		blobs: None,
 		folders: Default::default(),
+		cleanup: None,
 	};
 	let result = MessageCrypto::from_config(Some(&storage));
 	assert!(matches!(result, Err(CryptoError::NoKeySource)));
@@ -118,6 +119,7 @@ fn from_config_loads_key_from_file() {
 		delivery_log_days: 0,
 		blobs: None,
 		folders: Default::default(),
+		cleanup: None,
 	};
 	let crypto = MessageCrypto::from_config(Some(&storage)).expect("build");
 	assert!(crypto.enabled());
@@ -143,6 +145,7 @@ fn from_config_keeps_key_loaded_when_disabled() {
 		delivery_log_days: 0,
 		blobs: None,
 		folders: Default::default(),
+		cleanup: None,
 	};
 	let ciphertext = MessageCrypto::from_config(Some(&enabled))
 		.expect("build enabled")
@@ -159,6 +162,7 @@ fn from_config_keeps_key_loaded_when_disabled() {
 		delivery_log_days: 0,
 		blobs: None,
 		folders: Default::default(),
+		cleanup: None,
 	};
 	let crypto = MessageCrypto::from_config(Some(&disabled)).expect("build disabled");
 	assert!(!crypto.enabled());
@@ -183,6 +187,7 @@ fn from_config_rejects_malformed_key() {
 		delivery_log_days: 0,
 		blobs: None,
 		folders: Default::default(),
+		cleanup: None,
 	};
 	assert!(matches!(
 		MessageCrypto::from_config(Some(&storage)),

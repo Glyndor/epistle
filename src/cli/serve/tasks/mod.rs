@@ -67,6 +67,9 @@ pub(in crate::cli) use bayes::open_bayes;
 
 mod bind;
 
+mod cleanup;
+mod clock_gate;
+
 mod dkim_rotation;
 
 pub(crate) mod dns_reconcile;

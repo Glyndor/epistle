@@ -1728,7 +1728,7 @@ guide's "Data at rest".
 | `encryption_key_file` | Path to a file holding the base64 32-byte key (ideally outside `data_dir`); takes precedence over `encryption_key_env`. |
 | `tenant_keys` | Seal each account's new mail and JMAP blobs with the key of its `[[tenant]]` when every address of the account is in that one tenant and the tenant has an `encryption_key_file` (default `false`). Needs `encrypt_at_rest = true` and filesystem blobs. Rejected with `backend = "s3"` until a backend-aware migration exists. Mail already stored keeps its key until `epistle storage tenant-keys migrate`. See the security guide's "Keys per tenant". |
 | `retired_key_files` | Previous server keys, each a `0600` file, kept only to read what they sealed while `epistle storage tenant-keys migrate` moves it under the current key. Nothing is written with them, and one equal to the current key is refused. |
-| `deleted_retention_days` | Days to keep expunged messages in `<account>/.archive/` before the hourly sweeper removes them (default `0`). Setting this to a positive value moves expunged messages into the archive instead of deleting them; restore with `epistle archive restore` or `POST /api/v1/accounts/{name}/archive/{id}/restore`. Archived messages count toward the account's quota. |
+| `deleted_retention_days` | Days to keep expunged messages in `<account>/.archive/` before the hourly sweeper removes them (default `0`). Setting this to a positive value moves expunged messages into the archive instead of deleting them; restore with `epistle archive restore` or `POST /api/v1/accounts/{name}/archive/{id}/restore`. Archived messages count toward the account's quota. The purge runs only on a clock the server's time reference believes. |
 | `delivery_log_days` | Days to keep one line of per-recipient delivery state under `<data_dir>/deliverylog/YYYY-MM-DD.jsonl` (default `30`; `0` turns the log off). The log is metadata only; the hourly sweep removes files older than this window. Records cover delivered, deferred (one per recipient per message for each distinct reply, at most eight: a retry deferred for the same reason as the one before adds no record), failed, suppressed and canceled outcomes, each with the number of the attempt it came from, never the subject or body, and never a message body. Read with `epistle delivery list` or `GET /api/v1/deliveries`. |
 | _DMARC / TLS-RPT report retention_ | The constant `reports::RETENTION_DAYS` (90 days) controls how long ingested reports live under `data_dir/reports/{dmarc,tlsrpt}/YYYYMMDD/` before the hourly sweeper removes them. The retention ceiling is hard-coded: `epistle reports --days N` cannot read past it. The same sweep covers `data_dir/reports/tlsrpt-outbound/`, the TLS sessions of our own deliveries kept for the TLS-RPT reports we send (see `[queue] tlsrpt_reports`); a day there is normally deleted once its reports went out. |
 
@@ -1783,6 +1783,68 @@ trash = "Papelera"
 sent = "Enviados"
 drafts = "Borradores"
 archive = "Archivo"
+```
+
+### `[storage.cleanup]`
+Automatic removal of old mail from Trash, Junk, Rejects and any folder by
+name. Nothing is removed unless this table is present: without it, and with a
+table that has no rule, the behaviour is the one before it existed.
+
+The hourly run visits the accounts in order and removes at most `max_per_run`
+messages in all. A run that reaches the cap remembers the account it stopped
+in (`<data_dir>/cleanup-cursor`) and the next run starts there, so a large
+backlog is worked off over several hours instead of in one burst. A message
+leaves the way an IMAP `EXPUNGE` removes it: when `[storage]
+deleted_retention_days` is above `0` it goes to the archive and can be
+restored, and the QRESYNC log and the JMAP change journal record it.
+
+A message is due when it has been in its folder for the retention. That is the
+later of its INTERNALDATE and the change time of its file, so mail that was
+moved into Trash today does not go on the next run because it arrived two years
+ago: a COPY or MOVE keeps the INTERNALDATE, and the file's change time is the
+file system's, which no client can set back. The run acts only on a clock the
+server's time reference believes (see [Evidence](evidence.md)); on one it does
+not, it removes nothing and logs that once. The log carries counts only.
+
+| Key | Meaning |
+|---|---|
+| `max_per_run` | Most messages one hourly run removes, all accounts together, at least 1. Default `1000`. |
+| `[[storage.cleanup.rule]]` | One retention rule, below. |
+
+| Rule key | Meaning |
+|---|---|
+| `scope` | `server`, `tenant`, `domain` or `account`. The narrower scope wins: account, then domain, then tenant, then server. |
+| `name` | The tenant (its `[[tenant]]` `name`), the domain or the account the rule covers. Absent for `server`, required for the others. A tenant or domain must be declared; an invalid one stops the start. |
+| `folder` | `trash`, `junk` or `rejects`, or the name of any other folder. `trash` and `junk` match the folder with that role (the one the account recorded, else the one the English name gives), `rejects` the folder of that name, and a folder name matches that folder; within a scope the folder name beats the role. `junk` covers `Junk` and `Rejects` unless a `rejects` rule says otherwise. |
+| `days` | Days a message stays, from `0` to `36500`. `0` keeps it for ever, and beats a longer rule of a wider scope. |
+
+An account can ask for a shorter retention of its own (`<account>/.cleanup`,
+`folder<TAB>days`, read by the cleanup). It can shorten what the operator set
+and never lengthen it; where the operator set `0` or no rule it sets no cap,
+so the account's value applies. Setting that file from the CLI, the API and the
+panel is not available yet. `epistle storage cleanup` lists what would be
+removed and removes nothing.
+
+```toml
+[storage.cleanup]
+max_per_run = 500
+
+[[storage.cleanup.rule]]
+scope = "server"
+folder = "trash"
+days = 30
+
+[[storage.cleanup.rule]]
+scope = "domain"
+name = "example.org"
+folder = "rejects"
+days = 7
+
+[[storage.cleanup.rule]]
+scope = "account"
+name = "keeper@example.org"
+folder = "trash"
+days = 0
 ```
 
 ### `[storage.blobs]`

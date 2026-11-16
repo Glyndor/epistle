@@ -25,7 +25,9 @@ pub(super) fn guard(command: &Command) -> Result<Option<FileLock>, String> {
 		| Command::ReportAbuse { config, .. } => config,
 		Command::Storage {
 			config,
-			action: crate::cli::storage::blobs::StorageCli::Blobs { .. },
+			action:
+				crate::cli::storage::blobs::StorageCli::Blobs { .. }
+				| crate::cli::storage::blobs::StorageCli::Cleanup,
 			..
 		} => config,
 		// The rotation rewrites the API key, app password and account stores.

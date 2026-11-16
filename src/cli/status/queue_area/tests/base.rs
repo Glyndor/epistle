@@ -171,6 +171,7 @@ fn sealed_envelopes_are_read_with_the_configured_key() {
 		delivery_log_days: 0,
 		blobs: None,
 		folders: Default::default(),
+		cleanup: None,
 	};
 	let crypto = crate::storage::MessageCrypto::from_config(Some(&storage)).expect("crypto");
 	crate::storage::FsSpool::open_with_crypto(dir.path(), crypto)

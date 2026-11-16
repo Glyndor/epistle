@@ -155,6 +155,7 @@ fn turning_encryption_off_keeps_reading_already_encrypted_envelopes() {
 		delivery_log_days: 0,
 		blobs: None,
 		folders: Default::default(),
+		cleanup: None,
 	};
 	let on_crypto = MessageCrypto::from_config(Some(&enabled)).expect("build on");
 	let spool_on = FsSpool::open_with_crypto(dir.path(), on_crypto).expect("open on");
@@ -181,6 +182,7 @@ fn turning_encryption_off_keeps_reading_already_encrypted_envelopes() {
 		delivery_log_days: 0,
 		blobs: None,
 		folders: Default::default(),
+		cleanup: None,
 	};
 	let off_crypto = MessageCrypto::from_config(Some(&disabled)).expect("build off");
 	let spool_off = FsSpool::open_with_crypto(dir.path(), off_crypto).expect("open off");
