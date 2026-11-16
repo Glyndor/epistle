@@ -72,7 +72,7 @@ pub use acme::{Acme, AcmeChallenge};
 pub use alerts::{Alert, AlertOp};
 pub use alias::Alias;
 pub use antispam::{Llm, SubjectPass};
-pub use antispam_scope::{AntispamScope, AttachmentScope, SenderLists};
+pub use antispam_scope::{AntispamScope, AttachmentScope, CheckPolicy, CheckScope, SenderLists};
 pub use api::Api;
 pub use api_limiter::ApiLimiter;
 pub use arc::Arc;

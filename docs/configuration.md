@@ -2481,6 +2481,7 @@ max_attachment_bytes = 5000000
 | `greylist_delay_secs` | Greylisting for this scope, in seconds (at most 86400). `0` turns it off here even when the server greylists; a number turns it on here even when the server does not (the greylist store is then built at start). |
 | `first_time_sender_delay_secs` | The wait of a sender never seen before (at most 300, the connection waits it out). Needs `[database]` like the server-wide key. |
 | `attachments` | `mode`, `macros`, `encrypted_archives`, `block_extensions`, `block_mime_types` and `max_attachment_bytes`, as in `[attachments]`, and only stronger. |
+| `checks` | `dkim`, `dkim_require_signature`, `arc` and `reverse_dns`: whether the DKIM, ARC and reverse-DNS checks of inbound mail only annotate or refuse. See "Strict checks per scope" below. |
 
 **Entries** are `user@example.com` (that address), `example.com` (that domain
 and not its subdomains) and `*.example.com` (every subdomain at any depth, and
@@ -2516,6 +2517,53 @@ recipients is judged by the strictest values of its recipients: the lowest
 thresholds, a reject threshold if any recipient has one, and the longest
 delays. Quarantine digests, release rules, notice texts, a per-tenant audit log
 and operator notices are not part of this change.
+
+**Strict checks per scope.** `[antispam_scope.checks]` turns the DKIM, ARC and
+reverse-DNS results of unauthenticated inbound mail from a note in the headers
+into a refusal, for the recipients of that scope only:
+
+```toml
+[[antispam_scope]]
+domain = "example.org"
+[antispam_scope.checks]
+dkim = "reject"                 # off | annotate | reject
+dkim_require_signature = false  # true: also refuse mail with no passing signature
+arc = "annotate"
+reverse_dns = "reject"
+```
+
+| Key | Default | `annotate` | `reject` |
+|---|---|---|---|
+| `dkim` | `annotate` | The result is in `Authentication-Results` (today's behaviour). `off` is the same: DMARC needs the result, so DKIM is always evaluated. | Every signature failed: `550 5.7.21`. A DNS error on a key: `451 4.7.20`. |
+| `dkim_require_signature` | `false` | Not used. | With `dkim = "reject"`, mail with no passing signature is refused with `550 5.7.20`, including mail from a domain that publishes no DKIM key. |
+| `arc` | `off` | `arc=pass`, `fail` or `none` is added to `Authentication-Results`. `off` is today's behaviour: the chain is only read to seal. | A broken chain: `550 5.7.29`. A DNS error: `451 4.7.29`. No chain is never refused. |
+| `reverse_dns` | `off` | `iprev=pass`, `fail`, `none` or `temperror` is added to `Authentication-Results`. `off` is today's behaviour: no PTR lookup. | A missing PTR, or none whose name resolves back to the address: `550 5.7.25`. A DNS error: `451 4.7.25`. |
+
+Rules, the same for the three checks:
+
+- A scope that sets nothing changes nothing, and so does a server with no
+  `[[antispam_scope]]`. The default is the server's own behaviour today, so
+  the ARC and reverse-DNS checks are `off` until a scope turns them on
+  (there is no server-wide `[antispam]` key for them).
+- `reject` never refuses on a lookup that failed: a temporary DNS error is a
+  `4xx`, the sender retries, and only a result that says the check failed is
+  a `5xx`.
+- A sender whose domain publishes no DKIM key, or that does not sign, is not
+  refused by `dkim = "reject"` unless `dkim_require_signature = true` says so
+  for the domain.
+- The most specific scope in reach wins for a recipient (account, then
+  domain, then tenant); a message for several recipients gets the strictest
+  value any of them has, `reject` over `annotate` over `off`, and is refused
+  as a whole, as with `bayes_reject_at`: one transaction that names recipients
+  of two scopes with different settings is refused for both, because SMTP
+  answers once for the whole message. Splitting such a transaction with a
+  `452` at `RCPT TO` is not done.
+- The refusal text follows `[smtp] reject_detail` like the SPF and DMARC
+  ones. The checks run with the SPF check: they need `[dns]` and an
+  unauthenticated peer, and a message from a logged-in account is not
+  touched.
+- Not part of this setting: `5.7.22` (a signature that passes but not for the
+  author's domain), a per-listener value and a counter in the metrics.
 
 **Allow lists never override authentication.** An `allow` entry names the
 envelope sender, which anybody can write, so matching it is never enough. The

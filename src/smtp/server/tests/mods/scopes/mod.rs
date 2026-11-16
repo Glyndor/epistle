@@ -14,6 +14,7 @@ use crate::smtp::session::AcceptedMessage;
 use crate::smtp::sink::MemorySink;
 
 mod attachments;
+mod checks;
 mod favoured;
 mod refusals;
 mod thresholds;
