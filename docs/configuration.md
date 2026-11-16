@@ -2196,7 +2196,8 @@ enrolled = ["postmaster", "snds"]
 
 | Key | Default | Meaning |
 |---|---|---|
-| `enrolled` | `[]` | The panels that are done. `epistle check deliverability` warns about the ones that are not, one warning each, and never blocks: the exit code does not change and no behaviour of the server depends on the list. |
+| `enrolled` | `[]` | The panels that are done. `epistle check deliverability` warns about the ones that are not, one warning each, and never blocks: the exit code does not change and no behaviour of the server depends on the list. A panel is only reported when the delivery log shows mail answered by an exchanger of its provider; a server that has not delivered to that provider hears nothing about its panel. |
+| `remind` | `true` | `false` turns the reminder off: the check says so and lists nothing. Nothing else changes. |
 
 The names are `postmaster` (Google Postmaster Tools), `snds` (Microsoft
 SNDS), `jmrp` (Microsoft JMRP), `yahoo-cfl` (Yahoo Complaint Feedback Loop)

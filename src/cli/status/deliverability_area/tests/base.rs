@@ -3,18 +3,13 @@
 
 use std::process::ExitCode;
 
-use super::check;
 use crate::cli::status::report::Level;
 use crate::cli::status::test_support::ctx;
 use crate::cli::status::{CheckArea, execute};
 use crate::config::Portal;
 
 fn report(extra: &str) -> crate::cli::status::report::AreaReport {
-	let dir = tempfile::tempdir().expect("tempdir");
-	let ctx = ctx(dir.path(), extra);
-	tokio::runtime::Runtime::new()
-		.expect("runtime")
-		.block_on(check(&ctx))
+	super::support::report_after(extra, &super::support::EVERY_PROVIDER)
 }
 
 fn names(report: &crate::cli::status::report::AreaReport) -> Vec<&str> {
@@ -65,10 +60,8 @@ fn the_area_never_fails_on_its_own() {
 #[test]
 fn the_check_never_blocks_the_exit_code() {
 	let dir = tempfile::tempdir().expect("tempdir");
-	let path = {
-		let ctx = ctx(dir.path(), "");
-		ctx.path
-	};
+	let path = ctx(dir.path(), "").path;
+	super::support::deliver(&dir.path().join("data"), super::support::EVERY_PROVIDER[0]);
 	let mut out = Vec::new();
 	let code = execute(&path, &[CheckArea::Deliverability], false, true, &mut out);
 	let text = String::from_utf8(out).expect("utf8");
@@ -81,6 +74,7 @@ fn the_check_never_blocks_the_exit_code() {
 fn the_area_is_part_of_the_status_run_and_the_json_key_is_deliverability() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let path = ctx(dir.path(), "").path;
+	super::support::deliver(&dir.path().join("data"), super::support::EVERY_PROVIDER[0]);
 	assert!(CheckArea::ALL.contains(&CheckArea::Deliverability));
 	assert_eq!(CheckArea::Deliverability.name(), "deliverability");
 	let mut out = Vec::new();
