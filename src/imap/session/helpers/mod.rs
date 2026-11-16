@@ -163,7 +163,10 @@ fn internal_day(message: &mailbox::MessageRef) -> i64 {
 }
 
 /// The RFC 6154 special-use attribute for a well-known mailbox name, or an
-/// empty string. Matching is case-insensitive on the leaf name.
+/// empty string. Matching is case-insensitive on the leaf name. The session
+/// answers through the account's recorded roles; this is the name table
+/// alone, which an account with no roles gets.
+#[cfg(test)]
 pub(super) fn special_use_attribute(name: &str) -> &'static str {
 	crate::imap::special_use::attribute(name)
 }

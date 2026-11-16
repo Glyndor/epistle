@@ -307,7 +307,10 @@ fn submit_email(
 		.and_then(Value::as_object)
 		.and_then(|update| update.get("mailboxIds"))
 		.and_then(Value::as_object)
-		.is_some_and(|ids| ids.keys().any(|key| key.eq_ignore_ascii_case("Sent")));
+		.is_some_and(|ids| {
+			let sent = crate::imap::special_use::sent_folder(state.data_dir(), account);
+			ids.keys().any(|key| key.eq_ignore_ascii_case(&sent))
+		});
 	let sent_copy = prepared.class.allows_sent_copy().then(|| stamped.clone());
 	let message = crate::smtp::session::AcceptedMessage {
 		reverse_path: mail_from,

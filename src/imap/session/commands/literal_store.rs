@@ -41,7 +41,8 @@ impl Session {
 		// APPEND-only path so the IMAP4rev2 sequence number for the
 		// replacement stays coherent.
 		if replace.is_none()
-			&& mailbox.eq_ignore_ascii_case("Sent")
+			&& crate::imap::special_use::Roles::load(&self.data_dir, &account).role_of(&mailbox)
+				== Some(crate::imap::special_use::Role::Sent)
 			&& let Some(message_id) = crate::storage::first_message_id(data)
 		{
 			let dedup_outcome = self.append_skip_stored_sent(&tag, &account, &mailbox, &message_id);

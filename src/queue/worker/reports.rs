@@ -110,10 +110,10 @@ impl Worker {
 			return Ok(due);
 		};
 		let account = &envelope.reverse_path;
-		let (skipped, due): (Vec<String>, Vec<String>) = due.into_iter().partition(|recipient| {
-			suppression.is_suppressed(recipient)
-				|| suppression.is_suppressed_for(account, recipient)
-		});
+		let now = self.now_epoch();
+		let (skipped, due): (Vec<String>, Vec<String>) = due
+			.into_iter()
+			.partition(|recipient| suppression.is_blocked(account, recipient, now));
 		if !skipped.is_empty() {
 			tracing::debug!(%id, ?skipped, "not delivering to suppressed recipients");
 			self.spool.update_envelope(id, |envelope| {
@@ -297,15 +297,17 @@ impl Worker {
 		}
 	}
 
-	/// Record `recipient` on the suppression lists, global and the sending
-	/// account's, with the reply that proved it bad, so future mail to it is
-	/// not even attempted.
+	/// Count a permanent bounce of mail from `account` to `recipient`, with
+	/// the reply that proved it bad. At the operator's threshold the address
+	/// is suppressed in the scopes and for the lifetime they chose, so future
+	/// mail to it is not even attempted.
 	fn suppress(&self, account: &str, recipient: &str, reason: &str) {
 		if let Some(suppression) = &self.suppression {
 			let now = self.now_epoch();
-			suppression.suppress_because(recipient, reason, now);
-			if !account.is_empty() {
-				suppression.suppress_for_because(account, recipient, reason, now);
+			if let Err(error) =
+				suppression.record_bounce(&self.suppression_rules, account, recipient, reason, now)
+			{
+				tracing::warn!(kind = ?error.kind(), "cannot record a suppression");
 			}
 		}
 	}

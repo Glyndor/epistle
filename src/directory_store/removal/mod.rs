@@ -254,7 +254,16 @@ pub async fn remove_account(
 	.map_err(StoreError::Io)?;
 
 	let suppression = SuppressionList::open(data_dir).map_err(StoreError::Io)?;
-	let suppressed_addresses = suppression.remove_all_for(name).map_err(StoreError::Io)?;
+	let mut suppressed_addresses = suppression.remove_all_for(name).map_err(StoreError::Io)?;
+	// The bounce counts and lists are keyed by the sending address as well as
+	// by the account name, and a recreated account must start with none.
+	for address in &addresses {
+		suppressed_addresses = suppressed_addresses.saturating_add(
+			suppression
+				.remove_all_for(address)
+				.map_err(StoreError::Io)?,
+		);
+	}
 
 	let correspondents = CorrespondentStore::open(data_dir).map_err(StoreError::Io)?;
 	let correspondent_addresses = correspondents

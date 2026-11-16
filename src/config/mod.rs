@@ -101,13 +101,16 @@ pub use oauth_lifetimes::DEFAULT_ACCESS_TTL_SECS;
 pub use otel::Otel;
 pub use own_ip_blocklist::OwnIpBlocklist;
 pub use privileges::Privileges;
-pub use queue::{OutboundTls, Queue};
+pub use queue::{OutboundTls, Queue, SuppressionScope};
 pub use reports::Reports;
 pub use scanner::{Antispam, ClamdOnError, ClamdOnFound};
 pub use schema::Config;
 pub use smtp::{RefusalDetail, Smtp};
 pub use srs::SrsDomain;
-pub use storage::{BlobBackendConfig, S3BlobConfig, Storage};
+pub use storage::{
+	BlobBackendConfig, Cleanup, CleanupRule, CleanupScope, FolderNames, Folders, S3BlobConfig,
+	Storage, cleanup_selector_word,
+};
 pub use tenant::Tenant;
 pub use tls::Tls;
 pub use transport::{Transport, TransportKind, select as select_transport};

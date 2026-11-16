@@ -37,7 +37,7 @@ forward). Policy refusals exited `2` before they had their own code.
 | `account 2fa` | `show`, `disable` | |
 | `app-password` | `list`, `create`, `rotate`, `rename`, `revoke` | `app-passwords`, `app-password-create`, `app-password-revoke` |
 | `api-key` | `list`, `create`, `set`, `revoke`, `rotate` | `api-keys`, `api-key-create`, `api-key-revoke` |
-| `suppression` | `list`, `show`, `add`, `remove`, `export`, `import` | `suppression`, `suppression --remove ADDR` |
+| `suppression` | `list`, `show`, `add`, `remove`, `tenant list\|remove`, `export`, `import` | `suppression`, `suppression --remove ADDR` |
 | `boot` | the stack would come back after a reboot: thirteen items, below | a restart policy, the network wait, a drop-in, a mount, an image of a disabled service or a service that is down while the boot unit has not failed is not right | linger, the user manager, the boot unit, its file list, Podman's socket, an image of an enabled service, the port floor or a service that is down after the boot unit failed is not right |
 | `warmup` | `status`, `plan`, `start`, `enable`, `disable`, `pause`, `resume`, `set`, `reset` | |
 | `domain` | `list`, `show`, `add`, `remove`, `set`, `disable`, `enable`, `alias add\|remove`, `import` | |
@@ -98,6 +98,7 @@ that never restart accept the option and ignore it.
 | [SRS secret of each domain](#srs-epistle-srs) | `epistle srs show\|split\|rotate` |
 | [Every secret and how it is rotated, and rotating them](#secrets-and-credentials-epistle-rotate) | `epistle rotate --all --dry-run`, `epistle rotate --all`, `epistle rotate --accounts-only` |
 | [Blob storage (filesystem or S3)](#blob-storage-epistle-storage-blobs) | `epistle storage blobs …` |
+| [Listing what the cleanup would remove](#cleanup-epistle-storage-cleanup) | `epistle storage cleanup [--json]` |
 | [Keys per tenant and key rotation](#tenant-keys-epistle-storage-tenant-keys) | `epistle storage tenant-keys migrate` |
 | [Rotate DKIM, renew TLS, rotate an API key](#rotations-epistle-dkim-epistle-tls-epistle-api-key) | `epistle dkim rotate`, `epistle dkim cleanup`, `epistle tls renew`, `epistle api-key rotate` |
 | [Containers: up, logs, update](#stack-epistle-stack) | `epistle stack …` |
@@ -758,6 +759,21 @@ stay there and stop being served, and the command says so every time the backend
 changes. Moving from `fs` to `s3` is refused while `<data_dir>/blobs/` holds any
 file, unless you pass `--force`. Leaving S3 cannot be checked from here, so it is
 never refused. Supports `--dry-run` and `--config FILE`.
+
+## Cleanup (`epistle storage cleanup`)
+
+```sh
+epistle storage cleanup [--json]
+```
+
+Lists what the hourly cleanup of Trash, Junk and Rejects would remove now: one
+line per account and folder with mail past its retention, tab separated
+(account, folder, days, messages), and the total on the error stream. It never
+removes anything. The server does, once an hour, on a clock its time reference
+believes; this command has no such reference, so it judges by the clock of the
+machine it runs on and says so. Without `[storage.cleanup]` nothing is removed
+and it says that. The retention rules are in
+[`[storage.cleanup]`](configuration.md#storagecleanup).
 
 ## Tenant keys (`epistle storage tenant-keys`)
 
@@ -2101,10 +2117,12 @@ without the flag the output, text or JSON, is exactly what it was.
 | `epistle delivery list [--recipient ADDR] [--account NAME] [--since WHEN] [--until WHEN] [--status S] [--limit N] [--json]` | Read the per-recipient delivery log: one record per delivered, failed, suppressed or canceled recipient, and one per deferred recipient for each distinct reply, at most eight per recipient (a retry deferred for the same reason adds none), newest day first, at most `N` records (default 100, at most 100000; a larger value is a usage error). The log is read a line at a time, so memory does not grow with the size of a day's file, and days outside `--since`/`--until` are not opened. `--since` and `--until` take an RFC 3339 time or a duration such as `24h` or `7d` counted back from now; `--since` after `--until` is refused, and so is a filter given empty (`--account ""`): it is a usage error (exit 2), never "no filter". `--status` (also `--outcome`) is `delivered`, `deferred`, `failed`, `suppressed` or `canceled`. Metadata only, never a subject or body. The time of each record is an RFC 3339 UTC instant; `--json` keeps the epoch second. `epistle delivery` alone is `delivery list`. Needs `[storage] delivery_log_days` above 0. |
 | `epistle delivery show ID [--json]` | Every record of one message, oldest first. `ID` is the spool id of the `SPOOL` column of `delivery list`. The time of each record is an RFC 3339 UTC instant; `--json` keeps the epoch second. The remote host and its reply are escaped for the terminal. Exits 2 for an id that is not a UUID or that has no record. |
 | `epistle delivery export [filters] [--limit N] [--json]` | The records that pass the same filters as `list` as CSV: `time,outcome,spool_id,account,from,recipient,remote,reply,attempt`, time as RFC 3339 UTC, newest day first, at most `N` records (default 10000, at most 100000). A field a spreadsheet would run as a formula (the reply of a remote server can begin with `=`) is written with a leading apostrophe. With `--json` the records are the objects `list --json` prints, `extra` included. |
-| `epistle suppression list [--account SENDER] [--json]` | List suppressed (hard-bounced) recipients. A recipient suppressed by a bounce also shows, tab separated, when and the remote reply that proved the address bad. |
+| `epistle suppression list [--account SENDER] [--json]` | List suppressed (hard-bounced) recipients. A recipient suppressed by a bounce also shows, tab separated, when and the remote reply that proved the address bad, and, when `[queue] suppression_days` gave it a lifetime, `until` and when it ends (`--json` adds an `until` key to those rows only). |
 | `epistle suppression add ADDR [--account SENDER] [--reason TEXT]` | Suppress a recipient by hand. Mail queued for it is dropped without a bounce on the next delivery pass. With `--account` it applies to that sender only. `--reason` is kept with the entry and shown by `list`, `show` and `export` (at most 512 characters, no control characters; the default says it was added by hand). Adding an address already present succeeds without replacing its stored reason or time; JSON output reports `unchanged`. Exits 1, printing nothing, when the entry could not be written. |
 | `epistle suppression remove ADDR [--account SENDER]` | Deliver to the recipient again. |
 | `epistle suppression show ADDR [--account SENDER] [--json]` | One entry: the address, the list it is in, when and why. Exits 2 when the address is not suppressed in that list. |
+| `epistle suppression tenant list TENANT [--json]` | The addresses suppressed for a tenant (`[queue] suppression_scopes` with `tenant`), with the end of each entry that has one. |
+| `epistle suppression tenant remove TENANT ADDRESS [--json]` | Deliver to the address again for that tenant. |
 | `epistle suppression export [--account SENDER] [--json]` | Write the list as CSV on stdout: a header `address,since,reason`, then one entry per line with the time as RFC 3339 UTC. A field that begins with `=`, `+`, `-` or `@` (after any apostrophes) is written with one more leading apostrophe so a spreadsheet does not run it as a formula, and `import` takes exactly one off, so a value that really starts with an apostrophe survives the round trip. With `--json`, one array of `{address, since, reason}`. |
 | `epistle suppression import FILE [--account SENDER] [--reason TEXT] [--dry-run] [--json]` | Suppress every address of a file in the form `export` writes, or a plain list with one address per line. UTF-8 text of at most 16 MiB and 100000 entries; blank lines and lines starting with `#` are skipped. The whole file is checked first: one bad line refuses it with exit 2, naming the first ten bad lines, and nothing is written. An address that is already suppressed keeps its entry. The time must be a real RFC 3339 time (`2026-02-30T00:00:00Z` is refused); the file must be a regular file, a named pipe or a device is refused. `--reason` is the reason for lines that give none. The result counts `added`, `already` and `duplicates` (an address repeated in the file); `--dry-run` counts and writes nothing. If a write fails part way the error says how many entries were written; running the import again skips them. Run as root, the file is read through a private copy like the other input files. |
 | `epistle report-abuse` | Read an offending message on stdin, print an RFC 5965 ARF report to send to the sender's abuse address. |

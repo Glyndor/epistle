@@ -41,6 +41,13 @@ impl Server {
 		self
 	}
 
+	/// The operator's folder policy: the names an account's first folders get
+	/// and whether the spam filters share one folder.
+	pub fn with_folders(mut self, folders: Arc<super::super::special_use::FolderPolicy>) -> Self {
+		self.folders = folders;
+		self
+	}
+
 	/// Cap concurrent connections for this listener (0 keeps the default).
 	pub fn with_max_connections(mut self, max: usize) -> Self {
 		if max > 0 {

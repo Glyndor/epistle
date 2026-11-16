@@ -9,6 +9,12 @@ use crate::config::validate_dns_name;
 
 impl Config {
 	pub(super) fn validate_tenants(&self) -> Result<(), ConfigError> {
+		if let Some(storage) = &self.storage {
+			storage.folders.validate(self)?;
+			if let Some(cleanup) = &storage.cleanup {
+				cleanup.validate(self)?;
+			}
+		}
 		if let Some(storage) = &self.storage
 			&& storage.tenant_keys
 			&& !storage.encrypt_at_rest

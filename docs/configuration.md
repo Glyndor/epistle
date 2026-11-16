@@ -1728,7 +1728,7 @@ guide's "Data at rest".
 | `encryption_key_file` | Path to a file holding the base64 32-byte key (ideally outside `data_dir`); takes precedence over `encryption_key_env`. |
 | `tenant_keys` | Seal each account's new mail and JMAP blobs with the key of its `[[tenant]]` when every address of the account is in that one tenant and the tenant has an `encryption_key_file` (default `false`). Needs `encrypt_at_rest = true` and filesystem blobs. Rejected with `backend = "s3"` until a backend-aware migration exists. Mail already stored keeps its key until `epistle storage tenant-keys migrate`. See the security guide's "Keys per tenant". |
 | `retired_key_files` | Previous server keys, each a `0600` file, kept only to read what they sealed while `epistle storage tenant-keys migrate` moves it under the current key. Nothing is written with them, and one equal to the current key is refused. |
-| `deleted_retention_days` | Days to keep expunged messages in `<account>/.archive/` before the hourly sweeper removes them (default `0`). Setting this to a positive value moves expunged messages into the archive instead of deleting them; restore with `epistle archive restore` or `POST /api/v1/accounts/{name}/archive/{id}/restore`. Archived messages count toward the account's quota. |
+| `deleted_retention_days` | Days to keep expunged messages in `<account>/.archive/` before the hourly sweeper removes them (default `0`). Setting this to a positive value moves expunged messages into the archive instead of deleting them; restore with `epistle archive restore` or `POST /api/v1/accounts/{name}/archive/{id}/restore`. Archived messages count toward the account's quota. The purge runs only on a clock the server's time reference believes. |
 | `delivery_log_days` | Days to keep one line of per-recipient delivery state under `<data_dir>/deliverylog/YYYY-MM-DD.jsonl` (default `30`; `0` turns the log off). The log is metadata only; the hourly sweep removes files older than this window. Records cover delivered, deferred (one per recipient per message for each distinct reply, at most eight: a retry deferred for the same reason as the one before adds no record), failed, suppressed and canceled outcomes, each with the number of the attempt it came from, never the subject or body, and never a message body. Read with `epistle delivery list` or `GET /api/v1/deliveries`. |
 | _DMARC / TLS-RPT report retention_ | The constant `reports::RETENTION_DAYS` (90 days) controls how long ingested reports live under `data_dir/reports/{dmarc,tlsrpt}/YYYYMMDD/` before the hourly sweeper removes them. The retention ceiling is hard-coded: `epistle reports --days N` cannot read past it. The same sweep covers `data_dir/reports/tlsrpt-outbound/`, the TLS sessions of our own deliveries kept for the TLS-RPT reports we send (see `[queue] tlsrpt_reports`); a day there is normally deleted once its reports went out. |
 
@@ -1740,6 +1740,112 @@ sealed with the same key under the message id as associated data, so an
 envelope cannot be swapped onto another message. Spool files and directories
 are pinned to `0600`/`0700`. See [`storage.md`](storage.md) for the on-disk
 format and the migration path.
+
+### `[storage.folders]`
+The roles of an account's special folders (Junk, Trash, Sent, Drafts,
+Archive) and the names they get. Everything here is optional; with the table
+absent a new account gets `Rejects`, `Sent`, `Drafts`, `Trash` and `Archive`
+as it always did.
+
+An account keeps its own record of which folder holds which role, in
+`<account>/.roles`, and that record wins over the name: a folder the account
+renamed or created under another name keeps its role in IMAP `LIST`
+(`\Junk`, `\Sent`, ...), in what moving mail teaches the spam filter, and in
+where the copy of sent mail is stored. A role the account recorded nothing
+for is still decided by the well-known English name, so an account with no
+record behaves exactly as before. Renaming a folder with a recorded role
+moves the record, and deleting it drops the record, so a delivery never
+creates the folder again.
+
+| Key | Meaning |
+|---|---|
+| `single_spam_folder` | Default `false`: the attachment policy, the scanner hook, domain reputation and the LLM deliver to `Rejects`, and the Bayes verdict and `rule.junk` to `Junk`, both advertised as `\Junk`. `true` sends all of them to the one folder with the `\Junk` role (`Junk`, or the folder the operator or the account named) and `Rejects` is not created for new accounts. A folder already holding mail stays as it is. |
+| `names.junk`, `names.trash`, `names.sent`, `names.drafts`, `names.archive` | The name a new account gets for that role, for every account of the server. A role left out keeps the English default. |
+| `tenants.<tenant>` | A table with the same five keys, for the accounts of one `[[tenant]]`, by its `name`. Narrower than the server. |
+| `domains."<domain>"` | A table with the same five keys, for the accounts of one domain. Narrower than the tenant's. |
+
+A name that differs from the English one is created only when the account has
+no folder with that role yet, and is recorded for the account, so turning a
+language on never adds a second `Sent` next to the one an account already
+has. Each name is a folder name in UTF-8, at most 16 levels deep, never `INBOX`
+and without control characters; an invalid one stops the start.
+
+```toml
+[storage.folders]
+single_spam_folder = true
+
+[storage.folders.names]
+trash = "Trash"
+
+[storage.folders.domains."example.org"]
+junk = "Correo no deseado"
+trash = "Papelera"
+sent = "Enviados"
+drafts = "Borradores"
+archive = "Archivo"
+```
+
+### `[storage.cleanup]`
+Automatic removal of old mail from Trash, Junk, Rejects and any folder by
+name. Nothing is removed unless this table is present: without it, and with a
+table that has no rule, the behaviour is the one before it existed.
+
+The hourly run visits the accounts in order and removes at most `max_per_run`
+messages in all. A run that reaches the cap remembers the account it stopped
+in (`<data_dir>/cleanup-cursor`) and the next run starts there, so a large
+backlog is worked off over several hours instead of in one burst. A message
+leaves the way an IMAP `EXPUNGE` removes it: when `[storage]
+deleted_retention_days` is above `0` it goes to the archive and can be
+restored, and the QRESYNC log and the JMAP change journal record it.
+
+A message is due when it has been in its folder for the retention. That is the
+later of its INTERNALDATE and the change time of its file, so mail that was
+moved into Trash today does not go on the next run because it arrived two years
+ago: a COPY or MOVE keeps the INTERNALDATE, and the file's change time is the
+file system's, which no client can set back. The run acts only on a clock the
+server's time reference believes (see [Evidence](evidence.md)); on one it does
+not, it removes nothing and logs that once. The log carries counts only.
+
+| Key | Meaning |
+|---|---|
+| `max_per_run` | Most messages one hourly run removes, all accounts together, at least 1. Default `1000`. |
+| `[[storage.cleanup.rule]]` | One retention rule, below. |
+
+| Rule key | Meaning |
+|---|---|
+| `scope` | `server`, `tenant`, `domain` or `account`. The narrower scope wins: account, then domain, then tenant, then server. |
+| `name` | The tenant (its `[[tenant]]` `name`), the domain or the account the rule covers. Absent for `server`, required for the others. A tenant or domain must be declared; an invalid one stops the start. |
+| `folder` | `trash`, `junk` or `rejects`, or the name of any other folder. `trash` and `junk` match the folder with that role (the one the account recorded, else the one the English name gives), `rejects` the folder of that name, and a folder name matches that folder; within a scope the folder name beats the role. `junk` covers `Junk` and `Rejects` unless a `rejects` rule says otherwise. |
+| `days` | Days a message stays, from `0` to `36500`. `0` keeps it for ever, and beats a longer rule of a wider scope. |
+
+An account can ask for a shorter retention of its own (`<account>/.cleanup`,
+`folder<TAB>days`, read by the cleanup). It can shorten what the operator set
+and never lengthen it; where the operator set `0` or no rule it sets no cap,
+so the account's value applies. Setting that file from the CLI, the API and the
+panel is not available yet. `epistle storage cleanup` lists what would be
+removed and removes nothing.
+
+```toml
+[storage.cleanup]
+max_per_run = 500
+
+[[storage.cleanup.rule]]
+scope = "server"
+folder = "trash"
+days = 30
+
+[[storage.cleanup.rule]]
+scope = "domain"
+name = "example.org"
+folder = "rejects"
+days = 7
+
+[[storage.cleanup.rule]]
+scope = "account"
+name = "keeper@example.org"
+folder = "trash"
+days = 0
+```
 
 ### `[storage.blobs]`
 Where uploaded JMAP blobs (`POST /jmap/upload/{account}`) live. Absent (or
@@ -2614,6 +2720,9 @@ Outbound queue settings. Absent keeps the secure defaults.
 | `per_group_concurrency` | Outbound conversations running at once with any one receiver group, in a table of its own: `per_group_concurrency = { gmail = 2, outlook = 2 }`, or one entry per line under `[queue.per_group_concurrency]`. The group is the provider behind the exchanger that answers, read from its MX name the same way the [IP warm-up](operations/warmup.md) reads it: `gmail`, `outlook`, `yahoo`, `icloud`, `gmx`, `mailru`. A provider judges a sender by the traffic it sees, so the domains it hosts share one queue: fifty recipient domains hosted by one provider open one set of conversations towards it, not fifty. The value is the number of conversations the group may have at once, between 1 and `concurrency`, or a table with `concurrency` and `min_wait_secs` (the minimum wait between two connections to the group, between 0 and 3600 seconds). A group with no entry is not limited, and `other` (every receiver that is not one of those providers) cannot be limited, because its domains share nothing. The table is absent on a server that existed before this setting, and `epistle init` writes it for a new installation. |
 | `backoff_steps` | How long a destination that asks to slow down is held off, in seconds, one step per deferral in a row with the last repeating: default `[60, 300, 900, 3600]` (1, 5, 15 and 60 minutes), 1 to 16 steps of 1 to 86400 seconds each. `epistle limits set queue-backoff 1m,5m,15m,1h`. |
 | `provider_pause_secs` | Minimum pause in seconds after `4.7.28` or a temporary Yahoo `TSS04` reply, default `600` (10 minutes), from 1 to 86400. The queue waits for the greater of this value and the current `backoff_steps` step. Known receiver groups share the pause across their MX hosts and resume with at most one connection while rate-limit replies remain pending. See [provider rejection causes](operations/queue.md). |
+| `suppression_scopes` | Where a permanent bounce that proves an address bad suppresses it: any of `"account"` (the sending account), `"tenant"` (kept under the sender's `[[tenant]]` by its `name`, which the server publishes at start; a sender whose domain is in no named tenant has none, a domain that moves to another tenant does not hand the old tenant's entries to it, and the entries of a tenant removed from the configuration are removed at the next start) and `"server"` (every sender). Default `["account", "tenant"]`: one customer's typo, or a misconfiguration at the remote side, no longer blocks every other customer, which the earlier behaviour (the server list and the account list) did. A message is stopped when the address is in any of the three lists, so entries made by hand, and the server entries an earlier release wrote, still hold. A sender with no address, such as a bounce, has no account to record against. |
+| `suppression_days` | Days an automatic suppression lasts, after which the address is tried again, and the window in which bounces are counted. Default `0`: for ever, as before. The hourly sweep removes the expired entries on a clock the time reference believes, and an expired entry stops blocking at once whether or not it has been removed. Entries added by hand never expire and a bounce never replaces one. |
+| `suppression_threshold` | Permanent bounces of mail from one sender to one address before it is suppressed, 1 to 100. Default `1`: the first one does. The counts are kept apart from the entries (`<data_dir>/suppression/pending/`) and only bounces inside `suppression_days` count when it is set. |
 
 How the queue delivers:
 

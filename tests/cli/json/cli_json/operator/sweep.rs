@@ -167,6 +167,8 @@ const CASES: &[(&str, &[&str], Expect)] = &[
 	("suppression export", &[], Done),
 	("suppression import", &["@TMP/sweep-suppression.txt"], Done),
 	("suppression remove", &["gone@example.net"], Done),
+	("suppression tenant list", &["acme"], Done),
+	("suppression tenant remove", &["acme", "gone@example.net"], Done),
 	("account list", &[], Done),
 	("account list", &["--aliases"], Done),
 	(
@@ -265,6 +267,7 @@ const CASES: &[(&str, &[&str], Expect)] = &[
 	("dns provider check", &[], Done),
 	("dns provider unset", &[], Done),
 	("storage blobs show", &[], Done),
+	("storage cleanup", &[], Done),
 	("storage blobs set fs", &[], Done),
 	("storage blobs set s3", &["--endpoint", "https://s3.example.net", "--bucket", "mail", "--region", "us-east-1", "--access-key-id", "AKIAEXAMPLE", "--secret-env", "EPISTLE_SWEEP_S3", "--force"], Done),
 	// The sweep has no [storage] key, so the run is refused before touching

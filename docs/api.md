@@ -566,7 +566,8 @@ returns addresses only. The address is validated by the server, and adding an
 address already on the list succeeds without replacing its first reason or
 timestamp.
 `?account=` selects one account name or sending address's list instead of the
-global one. A key confined to an account or domain may use only the list of an
+global one. `?tenant=NAME` selects a tenant's list (`GET` and `DELETE`, not both with
+`account`); like the global list it is refused to a confined key. A key confined to an account or domain may use only the list of an
 account it can act for; the global list needs an unconfined key.
 Pages end when `next_cursor` is absent.
 

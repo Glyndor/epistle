@@ -109,7 +109,10 @@ pub(in crate::cli::serve) fn spawn_blob_reclamation(config: &Config) {
 /// sidecar timestamp is older than the retention window, so the per-account
 /// `.archive/` directory cannot grow without bound. No-op when the operator
 /// has not opted in (retention = 0).
-pub(in crate::cli::serve) fn spawn_archive_sweep(config: &Config) {
+pub(in crate::cli::serve) fn spawn_archive_sweep(
+	config: &Config,
+	time: Arc<crate::evidence::timeref::TimeRef>,
+) {
 	let Some(retention_days) = config
 		.storage
 		.as_ref()
@@ -122,12 +125,15 @@ pub(in crate::cli::serve) fn spawn_archive_sweep(config: &Config) {
 	tokio::spawn(async move {
 		let mut ticker = tokio::time::interval(std::time::Duration::from_secs(3600));
 		ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+		let mut warned = false;
 		loop {
 			ticker.tick().await;
-			let now = std::time::SystemTime::now()
-				.duration_since(std::time::UNIX_EPOCH)
-				.map(|d| d.as_secs())
-				.unwrap_or(0);
+			// A purge on a wrong clock deletes kept messages early and cannot
+			// be undone, so it waits for a clock the time reference believes.
+			let Some(now) = super::clock_gate::believed(time.read(), &mut warned, "archive sweep")
+			else {
+				continue;
+			};
 			match crate::imap::archive::sweep(&data_dir, retention_days, now) {
 				Ok(0) => {}
 				Ok(removed) => {
@@ -167,12 +173,54 @@ pub(in crate::cli::serve) fn spawn_reports_sweep(config: &Config) {
 	});
 }
 
+/// The most automatic suppressions one hourly sweep removes.
+const SUPPRESSION_SWEEP_CAP: usize = 10_000;
+
+/// Spawn the hourly sweep of automatic suppressions whose lifetime ended and
+/// of the bounce counts that fell out of their window. It runs only on a clock
+/// the time reference believes, and only when the operator gave a lifetime.
+pub(in crate::cli::serve) fn spawn_suppression_sweep(
+	config: &Config,
+	time: Arc<crate::evidence::timeref::TimeRef>,
+) {
+	if config.queue.suppression_days == 0 {
+		return;
+	}
+	let rules = crate::queue::SuppressionRules::from_config(config);
+	let data_dir = config.data_dir.clone();
+	tokio::spawn(async move {
+		let mut ticker = tokio::time::interval(std::time::Duration::from_secs(3600));
+		ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+		let mut warned = false;
+		loop {
+			ticker.tick().await;
+			let Some(now) =
+				super::clock_gate::believed(time.read(), &mut warned, "suppression sweep")
+			else {
+				continue;
+			};
+			let Ok(list) = crate::queue::SuppressionList::open(&data_dir) else {
+				continue;
+			};
+			let removed = list.sweep_expired(&rules, now, SUPPRESSION_SWEEP_CAP);
+			if removed > 0 {
+				tracing::info!(removed, "suppression sweep removed expired entries");
+			}
+		}
+	});
+}
+
 /// Spawn the periodic tasks that keep on-disk storage bounded: blob
 /// reclamation, and the archive sweep when retention is configured. Grouped
 /// so `serve` starts them together and neither can be forgotten on its own.
-pub(in crate::cli::serve) fn spawn_storage_maintenance(config: &Config) {
+pub(in crate::cli::serve) fn spawn_storage_maintenance(
+	config: &Config,
+	time: Arc<crate::evidence::timeref::TimeRef>,
+) {
 	spawn_blob_reclamation(config);
-	spawn_archive_sweep(config);
+	spawn_archive_sweep(config, Arc::clone(&time));
+	super::cleanup::spawn_cleanup(config, Arc::clone(&time));
+	spawn_suppression_sweep(config, time);
 	spawn_reports_sweep(config);
 	super::super::tasks_delivery::spawn_delivery_log_sweep(config);
 }

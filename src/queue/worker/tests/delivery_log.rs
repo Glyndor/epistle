@@ -17,7 +17,7 @@ fn spool_with(dir: &std::path::Path, message: &AcceptedMessage) -> FsSpool {
 	spool
 }
 
-fn load_records(dir: &std::path::Path) -> Vec<crate::storage::DeliveryRecord> {
+pub(super) fn load_records(dir: &std::path::Path) -> Vec<crate::storage::DeliveryRecord> {
 	let mut records = Vec::new();
 	let root = dir.join("deliverylog");
 	let Ok(entries) = std::fs::read_dir(&root) else {

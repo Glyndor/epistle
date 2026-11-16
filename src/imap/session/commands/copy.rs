@@ -174,8 +174,12 @@ impl Session {
 		// account corpus. The queue never waits, so the reply does not
 		// depend on it.
 		if let Some(queue) = &training
-			&& let Some(signal) =
-				super::super::super::junk_moves::move_signal(&source_mailbox, target, remove_source)
+			&& let Some(signal) = super::super::super::junk_moves::move_signal_for(
+				&crate::imap::special_use::Roles::load(&data_dir, &account),
+				&source_mailbox,
+				target,
+				remove_source,
+			)
 			&& let Some(dir) = mailbox::mailbox_dir(&data_dir, &account, target)
 		{
 			super::super::super::junk_moves::enqueue_move(

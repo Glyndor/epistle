@@ -214,7 +214,7 @@ async fn serve(config: Config, role: ServeRole) -> std::io::Result<()> {
 	if role != ServeRole::Certs {
 		tasks::spawn_own_ip_blocklist(&config, Arc::clone(&metrics));
 	}
-	tasks::spawn_storage_maintenance(&config);
+	tasks::spawn_storage_maintenance(&config, evidence.service.time());
 	tasks::spawn_ban_sweep(reputation_pool.clone(), policy.known_network_window_secs);
 	let TlsStack {
 		tls_acceptor,
@@ -285,7 +285,10 @@ async fn serve(config: Config, role: ServeRole) -> std::io::Result<()> {
 					mode,
 				)
 				.with_crypto(crypto.clone())
-				.with_retention_days(tasks::retention_days(&config));
+				.with_retention_days(tasks::retention_days(&config))
+				.with_folders(Arc::new(
+					crate::imap::special_use::FolderPolicy::from_config(&config),
+				));
 				if let Some((_, queue)) = &bayes {
 					imap_server = imap_server.with_training(queue.clone());
 				}

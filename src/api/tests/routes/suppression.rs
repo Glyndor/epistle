@@ -334,3 +334,52 @@ async fn a_message_to_an_api_suppressed_address_is_dropped_and_logged_as_suppres
 		crate::storage::DeliveryOutcome::Suppressed
 	);
 }
+
+#[tokio::test]
+async fn a_tenants_list_is_listed_and_cleared_on_its_own() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let list = crate::queue::SuppressionList::open(dir.path()).expect("open");
+	let text = format!(
+		"hostname = 'mail.example.org'\ndata_dir = {:?}\ndomains = ['a.example']\n[[tenant]]\nname = 'acme'\ndomains = ['a.example']\n",
+		dir.path()
+	);
+	let config = crate::config::Config::parse_text(&text, std::path::Path::new("mail.toml"))
+		.expect("config");
+	let rules = crate::queue::SuppressionRules::from_config(&config);
+	list.publish_tenants(&rules).expect("publish");
+	list.record_bounce(&rules, "alice@a.example", "gone@example.net", "550", 1)
+		.expect("record");
+	let app = router(test_state(dir.path(), 0));
+
+	let (status, body) = request(
+		&app,
+		"GET",
+		"/api/v1/suppression?tenant=acme",
+		Some(TOKEN.as_str()),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["addresses"][0], "gone@example.net");
+	// The shared list is a different list.
+	let (_, body) = request(&app, "GET", "/api/v1/suppression", Some(TOKEN.as_str())).await;
+	assert_eq!(body["addresses"].as_array().map(Vec::len), Some(0));
+
+	let (status, _) = request(
+		&app,
+		"GET",
+		"/api/v1/suppression?tenant=acme&account=alice",
+		Some(TOKEN.as_str()),
+	)
+	.await;
+	assert_eq!(status, StatusCode::BAD_REQUEST);
+
+	let (status, _) = request(
+		&app,
+		"DELETE",
+		"/api/v1/suppression/gone@example.net?tenant=acme",
+		Some(TOKEN.as_str()),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert!(list.list_for_tenant("acme").is_empty());
+}

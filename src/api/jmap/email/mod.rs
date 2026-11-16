@@ -373,7 +373,12 @@ fn apply_email_update(
 				let keyword = patch
 					.get("keywords")
 					.and_then(|_| crate::imap::junk_trainer::junk_signal(&current_flags, &flags));
-				let moved = crate::imap::junk_moves::move_signal(&source, target, true);
+				let moved = crate::imap::junk_moves::move_signal_for(
+					&crate::imap::special_use::Roles::load(data_dir, account),
+					&source,
+					target,
+					true,
+				);
 				// One message teaches one verdict: the move wins when the
 				// two disagree, and nothing is queued twice when they agree.
 				if let Some(signal) = moved.or(keyword)

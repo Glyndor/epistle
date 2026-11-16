@@ -68,6 +68,12 @@ impl SplitDelivery {
 		})
 	}
 
+	/// Deliver by the operator's folder policy.
+	pub fn with_folders(mut self, folders: Arc<crate::imap::special_use::FolderPolicy>) -> Self {
+		self.local = self.local.with_folders(folders);
+		self
+	}
+
 	/// Apply the server default quota to local copies from every ingress path.
 	pub fn with_quota(mut self, default_bytes: u64) -> Self {
 		self.local = self.local.with_quota(default_bytes);

@@ -63,8 +63,11 @@ async fn permanent_failure_suppresses_then_drops_silently() {
 	assert_eq!(worker.pass().await.expect("pass"), 0);
 	assert_eq!(bounce_sink.messages().len(), 1);
 	let suppression = SuppressionList::open(dir.path()).expect("suppression");
-	assert!(suppression.is_suppressed("carol@remote.example"));
-	// The bounce is also recorded under the sending account.
+	assert!(
+		!suppression.is_suppressed("carol@remote.example"),
+		"the shared list stays empty by default"
+	);
+	// The bounce is recorded under the sending account.
 	assert!(suppression.is_suppressed_for("alice@sender.example", "carol@remote.example"));
 
 	// A new message to the suppressed recipient is dropped with no new bounce.
