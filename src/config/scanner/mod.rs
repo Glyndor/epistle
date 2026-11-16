@@ -86,6 +86,10 @@ pub struct Antispam {
 	/// subset of the junked one and the wiring does not have to pick
 	/// between two disposals for the same score.
 	pub bayes_reject_at: Option<f64>,
+	/// Allow and deny lists of senders and recipients for the whole
+	/// server; `[[antispam_scope]]` adds lists per tenant, domain and
+	/// account.
+	pub senders: crate::config::SenderLists,
 }
 
 impl Default for Antispam {
@@ -99,6 +103,7 @@ impl Default for Antispam {
 			scan_authenticated: true,
 			bayes_junk_at: DEFAULT_BAYES_JUNK_AT,
 			bayes_reject_at: None,
+			senders: crate::config::SenderLists::default(),
 		}
 	}
 }

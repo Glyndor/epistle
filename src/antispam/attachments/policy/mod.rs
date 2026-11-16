@@ -14,6 +14,10 @@ use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+mod overlay;
+
+pub use overlay::Overlay;
+
 use super::gate::{Gate, Permit};
 use super::rules::{Extensions, Reason};
 use super::{Budget, Report, inspect};
@@ -80,6 +84,10 @@ pub struct Policy {
 	macros: ContentAction,
 	encrypted_archives: ContentAction,
 	extensions: Extensions,
+	/// Largest single attachment, decoded, and the declared MIME types that
+	/// are a finding; both from `[attachments]`.
+	max_attachment_bytes: Option<u64>,
+	block_mime_types: Vec<String>,
 	max_decoded: usize,
 	timeout: Duration,
 	/// Caps on concurrent inbound inspections, total and per client.
@@ -124,6 +132,12 @@ impl Policy {
 				&normalise(&section.block_extensions),
 				&normalise(&section.allow_extensions),
 			),
+			max_attachment_bytes: section.max_attachment_bytes,
+			block_mime_types: section
+				.block_mime_types
+				.iter()
+				.map(|kind| kind.trim().to_ascii_lowercase())
+				.collect(),
 			max_decoded,
 			timeout: DEFAULT_TIMEOUT,
 			inbound: Gate::with_defaults(),
@@ -176,41 +190,100 @@ impl Policy {
 
 	/// Inspect `raw` and decide.
 	pub fn check(&self, raw: &[u8]) -> (Report, Decision) {
+		self.check_with(raw, &Overlay::default())
+	}
+
+	/// Inspect `raw` and decide, with the settings of the scopes of its
+	/// recipients on top of the policy's own.
+	pub fn check_with(&self, raw: &[u8], overlay: &Overlay) -> (Report, Decision) {
 		#[cfg(test)]
 		if let Some(CheckHook(hook)) = &self.check_hook {
 			hook();
 		}
+		let scoped;
+		let extensions = if overlay.block_extensions.is_empty() {
+			&self.extensions
+		} else {
+			scoped = self.extensions.with_blocks(&overlay.block_extensions);
+			&scoped
+		};
 		let report = inspect(
 			raw,
-			&self.extensions,
+			extensions,
 			Budget {
 				max_decoded: self.max_decoded,
 				deadline: Some(Instant::now() + self.timeout),
 			},
 		);
-		let decision = self.decide(&report);
+		let decision = self.decide_with(&report, overlay);
 		(report, decision)
 	}
 
 	/// The action for every reason in `report`, and the strongest of them.
 	pub fn decide(&self, report: &Report) -> Decision {
+		self.decide_with(report, &Overlay::default())
+	}
+
+	/// [`Self::decide`] with the settings of `overlay` on top.
+	pub fn decide_with(&self, report: &Report, overlay: &Overlay) -> Decision {
 		let mut action = Action::Deliver;
-		let mut reasons = Vec::new();
-		for reason in report.reasons() {
-			let wanted = self.action_for(reason);
+		let mut reasons = report.reasons();
+		reasons.extend(self.size_and_type_reasons(report, overlay));
+		reasons.sort();
+		reasons.dedup();
+		let mut asked = Vec::new();
+		for reason in reasons {
+			let wanted = self.action_for(reason, overlay);
 			if wanted > Action::Deliver {
-				reasons.push(reason);
+				asked.push(reason);
 				action = action.max(wanted);
 			}
 		}
-		Decision { action, reasons }
+		Decision {
+			action,
+			reasons: asked,
+		}
 	}
 
-	fn action_for(&self, reason: Reason) -> Action {
-		let ceiling = mode_action(self.mode);
+	/// The findings that need the policy's own settings: an attachment over
+	/// the size cap, and one declared as a blocked MIME type. The cap and
+	/// the types are the policy's and the overlay's together.
+	fn size_and_type_reasons(&self, report: &Report, overlay: &Overlay) -> Vec<Reason> {
+		let cap = match (self.max_attachment_bytes, overlay.max_attachment_bytes) {
+			(Some(a), Some(b)) => Some(a.min(b)),
+			(a, b) => a.or(b),
+		};
+		let mut reasons = Vec::new();
+		for part in &report.parts {
+			if cap.is_some_and(|cap| part.size as u64 > cap) {
+				reasons.push(Reason::AttachmentTooLarge);
+			}
+			if self
+				.block_mime_types
+				.iter()
+				.chain(&overlay.block_mime_types)
+				.any(|pattern| {
+					part.declared_types
+						.iter()
+						.any(|kind| overlay::mime_matches(pattern, kind))
+				}) {
+				reasons.push(Reason::BlockedMimeType);
+			}
+		}
+		reasons
+	}
+
+	fn action_for(&self, reason: Reason, overlay: &Overlay) -> Action {
+		let ceiling = mode_action(self.mode.max(overlay.mode.unwrap_or(self.mode)));
+		let macros = self.macros.max(overlay.macros.unwrap_or(self.macros));
+		let encrypted = self.encrypted_archives.max(
+			overlay
+				.encrypted_archives
+				.unwrap_or(self.encrypted_archives),
+		);
 		match reason {
-			Reason::Macro => content_action(self.macros).min(ceiling),
-			Reason::EncryptedArchive => content_action(self.encrypted_archives).min(ceiling),
+			Reason::Macro => content_action(macros).min(ceiling),
+			Reason::EncryptedArchive => content_action(encrypted).min(ceiling),
 			// Only a simple, consistent zip is judged by its names; one that
 			// reads two ways is treated as dangerous.
 			Reason::AmbiguousArchive | Reason::AmbiguousImage | Reason::ActiveImage => ceiling,

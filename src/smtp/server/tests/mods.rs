@@ -81,3 +81,6 @@ mod limits;
 
 #[cfg(test)]
 mod withdrawn;
+
+#[cfg(test)]
+mod scopes;

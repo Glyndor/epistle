@@ -129,10 +129,9 @@ impl Server {
 		// ever return `Continue`. Skip the score call so the existing
 		// single-call contracts the SMTP server's wiring relies on do
 		// not silently drift.
-		let reject_active = self
-			.bayes_reject_at
-			.is_some_and(|reject_at| reject_at <= 1.0);
-		if self.bayes_junk_at >= 1.0 && !reject_active {
+		let numbers = self.spam_numbers(message);
+		let reject_active = numbers.reject_at.is_some_and(|reject_at| reject_at <= 1.0);
+		if numbers.junk_at >= 1.0 && !reject_active {
 			return Ok(BayesOutcome::Continue);
 		}
 
@@ -148,7 +147,7 @@ impl Server {
 			}
 		};
 
-		if let Some(reject_at) = self.bayes_reject_at
+		if let Some(reject_at) = numbers.reject_at
 			&& score >= reject_at
 		{
 			tracing::info!(score, reject_at, "bayes: rejecting at DATA with 550 5.7.1");
@@ -159,12 +158,8 @@ impl Server {
 			.await?;
 			return Ok(BayesOutcome::Rejected);
 		}
-		if score >= self.bayes_junk_at {
-			tracing::info!(
-				score,
-				junk_at = self.bayes_junk_at,
-				"bayes: routing to Junk"
-			);
+		if score >= numbers.junk_at {
+			tracing::info!(score, junk_at = numbers.junk_at, "bayes: routing to Junk");
 			message.data = crate::smtp::trace::inject_spam_headers(&message.data, score);
 			// "Junk" maps to the IMAP `\Junk` special-use mailbox via
 			// the helper in `imap/session/helpers/mod.rs`. The historical

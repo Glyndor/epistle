@@ -24,6 +24,7 @@ fn report(reasons: &[Reason]) -> Report {
 			declared_types: vec!["application/octet-stream".into()],
 			real_type: RealType::Unknown,
 			reasons: reasons.to_vec(),
+			size: 0,
 		}],
 		..Report::default()
 	}

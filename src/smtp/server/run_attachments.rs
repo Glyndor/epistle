@@ -52,6 +52,7 @@ impl Server {
 			.await?;
 			return Ok(true);
 		};
+		let overlay = self.attachment_overlay(message);
 		let data = std::mem::take(&mut message.data);
 		let deadline = policy.timeout() + SLACK;
 		let policy = Arc::clone(policy);
@@ -59,7 +60,7 @@ impl Server {
 		// inspection really ends, also when this session stops waiting.
 		let task = tokio::task::spawn_blocking(move || {
 			let _permit = permit;
-			let (_, decision) = policy.check(&data);
+			let (_, decision) = policy.check_with(&data, &overlay);
 			(data, decision)
 		});
 		let Ok(Ok((data, decision))) = tokio::time::timeout(deadline, task).await else {

@@ -187,6 +187,13 @@ impl Session {
 		self
 	}
 
+	/// Refuse at `RCPT TO` what the sender lists of the antispam scopes
+	/// deny (see [`crate::antispam::scopes`]).
+	pub fn with_scopes(mut self, scopes: Arc<crate::antispam::scopes::Scopes>) -> Self {
+		self.policy = self.policy.with_scopes(scopes);
+		self
+	}
+
 	/// Replace the cap state (correspondent store, daily limit, metrics
 	/// handle). Wired by the listener at session-construction time so
 	/// the end-of-DATA check has the configured pair in scope.

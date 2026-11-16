@@ -26,6 +26,7 @@ mod builder;
 mod data;
 mod envelope;
 mod limits;
+mod scope_refusal;
 #[cfg(test)]
 mod test_hooks;
 pub use limits::*;

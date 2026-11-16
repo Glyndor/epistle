@@ -32,6 +32,7 @@ mod run_auth;
 mod run_band;
 mod run_class;
 mod run_deliver;
+mod run_scopes;
 mod run_sent;
 mod run_upgrade;
 mod run_withdrawn;
@@ -171,6 +172,8 @@ pub struct Server {
 	/// Per-tenant aggregate limits (accounts, storage, rate). On top of the
 	/// per-account limiter; empty is the identity.
 	tenant_limits: Option<Arc<crate::api::TenantLimits>>,
+	/// The antispam scopes: sender lists and per-scope attachment settings.
+	scopes: Option<Arc<crate::antispam::scopes::Scopes>>,
 	/// Shared disk-space guard for `data_dir`. `None` disables the check,
 	/// which is the right behaviour for tests but not for production: the
 	/// production wiring in `cli/serve/mod.rs` always sets it.
@@ -456,6 +459,9 @@ impl Server {
 		}
 		if let Some(limits) = &self.tenant_limits {
 			session = session.with_tenant_limits(Arc::clone(limits));
+		}
+		if let Some(scopes) = &self.scopes {
+			session = session.with_scopes(Arc::clone(scopes));
 		}
 		// Build the cap state in one go: the listener already holds
 		// `correspondents`, `daily_new_recipients`, and a metrics handle;

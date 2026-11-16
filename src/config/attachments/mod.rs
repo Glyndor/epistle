@@ -56,6 +56,12 @@ pub struct Attachments {
 	pub macros: ContentAction,
 	/// Archives with encrypted entries, which no scanner can read.
 	pub encrypted_archives: ContentAction,
+	/// Largest single attachment, in bytes after decoding. Absent means no
+	/// cap. A larger one is a finding, handled as `mode` says.
+	pub max_attachment_bytes: Option<u64>,
+	/// Declared MIME types (`application/pdf`, or `image/*` for a family)
+	/// that are a finding. Empty by default.
+	pub block_mime_types: Vec<String>,
 }
 
 /// `value` as the extension lists store it: no leading dot, lower case.
@@ -72,6 +78,23 @@ pub fn valid_extension(value: &str) -> bool {
 		&& value
 			.bytes()
 			.all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+}
+
+/// Whether `value` is `type/subtype` or `type/*`: lower case letters,
+/// digits and `.+-_` in each part, up to 127 characters.
+pub fn valid_mime_pattern(value: &str) -> bool {
+	let token = |part: &str| {
+		!part.is_empty()
+			&& part.bytes().all(|byte| {
+				byte.is_ascii_lowercase()
+					|| byte.is_ascii_digit()
+					|| matches!(byte, b'.' | b'+' | b'-' | b'_')
+			})
+	};
+	value.len() <= 127
+		&& value
+			.split_once('/')
+			.is_some_and(|(kind, sub)| token(kind) && (sub == "*" || token(sub)))
 }
 
 impl Config {
@@ -110,6 +133,25 @@ impl Config {
 			return Err(ConfigError::Invalid(format!(
 				"[attachments] {} is in both block_extensions and allow_extensions",
 				normalise_extension(both)
+			)));
+		}
+		if section.max_attachment_bytes == Some(0) {
+			return Err(ConfigError::Invalid(
+				"[attachments] max_attachment_bytes must be > 0".into(),
+			));
+		}
+		if section.block_mime_types.len() > MAX_EXTENSIONS {
+			return Err(ConfigError::Invalid(format!(
+				"[attachments] block_mime_types has more than {MAX_EXTENSIONS} entries"
+			)));
+		}
+		if let Some(bad) = section
+			.block_mime_types
+			.iter()
+			.find(|value| !valid_mime_pattern(value))
+		{
+			return Err(ConfigError::Invalid(format!(
+				"[attachments] block_mime_types: {bad:?} is not a type/subtype or type/*"
 			)));
 		}
 		Ok(())

@@ -74,13 +74,15 @@ impl Server {
 		// domain alias or a multi-target alias applies
 		// identically to how the recipient was admitted.
 		let known_correspondent = self.known_correspondent(&message);
+		let numbers = self.spam_numbers(&message);
 		// Greylisting: defer an unseen triplet's first attempt. A real
 		// MTA retries and is then accepted. The store is the
 		// in-memory one by default and the PostgreSQL-backed one
 		// when `[database]` is configured, so a restart does not
 		// re-defer legitimate senders when persistence is enabled.
 		if known_correspondent.is_none()
-			&& let (Some((store, delay)), Some(ip), None) =
+			&& numbers.greylist_delay_secs > 0
+			&& let (Some((store, _)), Some(ip), None) =
 				(&self.greylist, peer, session.authenticated())
 			&& let Some(recipient) = message.recipients.first()
 		{
@@ -93,14 +95,23 @@ impl Server {
 				sender: &message.reverse_path,
 				recipient,
 			};
-			if crate::antispam::greylist::decide(store.as_ref(), &triplet, now, *delay).await
+			if crate::antispam::greylist::decide(
+				store.as_ref(),
+				&triplet,
+				now,
+				numbers.greylist_delay_secs,
+			)
+			.await
 				== crate::antispam::greylist::Decision::Defer
 			{
 				tracing::info!(%ip, "greylisting: deferring first attempt");
 				self.refuse(
 					peer,
 					stream,
-					&refusal_text::greylisted(self.refusal_detail, now.saturating_add(*delay)),
+					&refusal_text::greylisted(
+						self.refusal_detail,
+						now.saturating_add(numbers.greylist_delay_secs),
+					),
 				)
 				.await?;
 				return Ok(());
@@ -119,6 +130,9 @@ impl Server {
 		// Who the server itself verified: a logged-in session, or
 		// this hop's SPF or DKIM pass. Never read from the headers.
 		message.sender_verified = session.authenticated().is_some() || sender_passed;
+		// A sender a list favours, once this server verified it: skips the
+		// score-based screens below and nothing else.
+		let favoured = self.sender_favoured(&message);
 		if let Some(dns) = &self.spf
 			&& message.recipients.iter().any(|recipient| {
 				recipient
@@ -200,10 +214,11 @@ impl Server {
 		// hard `Reject` branch is still honoured; a poor
 		// reputation is independent of whether the sender is
 		// known to a local account.
-		if let (Some(pool), Some(domain), None) = (
+		if let (Some(pool), Some(domain), None, false) = (
 			&self.reputation,
 			rep_domain.as_deref(),
 			session.authenticated(),
+			favoured,
 		) {
 			use crate::antispam::reputation::{Scope, Screen, screen};
 			match screen(pool, Scope::Domain, domain).await {
@@ -217,9 +232,12 @@ impl Server {
 					message.mailbox = Some("Rejects".to_string());
 				}
 				Screen::FirstTime
-					if !self.first_time_delay.is_zero() && known_correspondent.is_none() =>
+					if numbers.first_time_delay_secs > 0 && known_correspondent.is_none() =>
 				{
-					tokio::time::sleep(self.first_time_delay).await;
+					tokio::time::sleep(std::time::Duration::from_secs(
+						numbers.first_time_delay_secs,
+					))
+					.await;
 				}
 				_ => {}
 			}
@@ -276,13 +294,17 @@ impl Server {
 		// `bayes_reject_at` (when configured) refuses the DATA
 		// phase with `550 5.7.1`. Runs before the uncertain band
 		// so a high-confidence verdict never burns an LLM call.
-		match self
-			.handle_bayes_thresholds(&mut message, session.authenticated().is_some(), stream)
-			.await?
-		{
-			super::run_band::BayesOutcome::Rejected => return Ok(()),
-			super::run_band::BayesOutcome::SendToJunk | super::run_band::BayesOutcome::Continue => {
-			}
+		if !favoured
+			&& matches!(
+				self.handle_bayes_thresholds(
+					&mut message,
+					session.authenticated().is_some(),
+					stream
+				)
+				.await?,
+				super::run_band::BayesOutcome::Rejected
+			) {
+			return Ok(());
 		}
 		// Uncertain-band logic: SubjectPass (if enabled) accepts
 		// the retry that carries a valid token in the subject,
@@ -294,16 +316,17 @@ impl Server {
 		// Bayes path has already set the message's mailbox when
 		// it decided, so the band's "stay out of an upstream
 		// decision" guard skips it naturally.
-		if matches!(
-			self.handle_uncertain_band(
-				&mut message,
-				peer,
-				session.authenticated().is_some(),
-				stream
-			)
-			.await?,
-			super::run_band::BandOutcome::Challenged
-		) {
+		if !favoured
+			&& matches!(
+				self.handle_uncertain_band(
+					&mut message,
+					peer,
+					session.authenticated().is_some(),
+					stream
+				)
+				.await?,
+				super::run_band::BandOutcome::Challenged
+			) {
 			return Ok(());
 		}
 

@@ -61,7 +61,7 @@ pub(in crate::cli::serve) async fn build_greylist(
 	config: &Config,
 	pool: Option<&sqlx::PgPool>,
 ) -> Option<Arc<dyn crate::antispam::greylist::GreylistStore>> {
-	if config.greylist_delay_secs == 0 {
+	if !config.greylisting_anywhere() {
 		return None;
 	}
 	// Lifetime in seconds for an unseen triplet. Matches the memory store's
