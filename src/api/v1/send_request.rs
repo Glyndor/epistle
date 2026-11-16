@@ -147,7 +147,8 @@ impl SendRequest {
 			Some(name) => crate::evidence::MailClass::parse(name)
 				.map(Some)
 				.ok_or_else(|| {
-					ApiError::invalid_input(
+					ApiError::value_not_allowed(
+						"class",
 						"Unknown class: use transactional, marketing or personal.",
 					)
 				}),
@@ -164,28 +165,40 @@ impl SendRequest {
 	/// field, so the spool never sees a key or value out of range.
 	pub(super) fn validated_extra(&self) -> Result<BTreeMap<String, String>, ApiError> {
 		if self.extra.len() > MAX_EXTRA_KEYS {
-			return Err(invalid(&format!(
-				"extra has {} keys; the maximum is {MAX_EXTRA_KEYS}",
-				self.extra.len()
-			)));
+			return Err(out_of_range(
+				"extra",
+				&format!(
+					"extra has {} keys; the maximum is {MAX_EXTRA_KEYS}",
+					self.extra.len()
+				),
+			));
 		}
 		for (key, value) in &self.extra {
 			if key.len() > MAX_EXTRA_KEY_LEN {
-				return Err(invalid(&format!(
-					"extra key {key:?} is {} bytes; the maximum is {MAX_EXTRA_KEY_LEN}",
-					key.len()
-				)));
+				return Err(out_of_range(
+					"extra",
+					&format!(
+						"extra key {key:?} is {} bytes; the maximum is {MAX_EXTRA_KEY_LEN}",
+						key.len()
+					),
+				));
 			}
 			if !key.bytes().all(|b| (0x21..=0x7e).contains(&b)) {
-				return Err(invalid(&format!(
-					"extra key {key:?} must be printable ASCII (no spaces or control characters)"
-				)));
+				return Err(not_allowed(
+					"extra",
+					&format!(
+						"extra key {key:?} must be printable ASCII (no spaces or control characters)"
+					),
+				));
 			}
 			if value.len() > MAX_EXTRA_VALUE_LEN {
-				return Err(invalid(&format!(
-					"extra value for key {key:?} is {} bytes; the maximum is {MAX_EXTRA_VALUE_LEN}",
-					value.len()
-				)));
+				return Err(out_of_range(
+					"extra",
+					&format!(
+						"extra value for key {key:?} is {} bytes; the maximum is {MAX_EXTRA_VALUE_LEN}",
+						value.len()
+					),
+				));
 			}
 		}
 		Ok(self.extra.clone())
@@ -233,11 +246,11 @@ impl SendRequest {
 		if let Some(value) = &self.in_reply_to {
 			lines.push(line(compose::structured(
 				"In-Reply-To",
-				&message_ids(value, 1)?,
+				&message_ids("in_reply_to", value, 1)?,
 			))?);
 		}
 		if let Some(value) = &self.references {
-			let ids = message_ids(value, MAX_REFERENCES)?;
+			let ids = message_ids("references", value, MAX_REFERENCES)?;
 			lines.push(line(compose::structured("References", &ids))?);
 		}
 		if let Some(value) = &self.importance {
@@ -245,7 +258,12 @@ impl SendRequest {
 				"high" => ("high", "1 (Highest)"),
 				"normal" => ("normal", "3 (Normal)"),
 				"low" => ("low", "5 (Lowest)"),
-				_ => return Err(invalid("importance must be high, normal or low")),
+				_ => {
+					return Err(not_allowed(
+						"importance",
+						"importance must be high, normal or low",
+					));
+				}
 			};
 			lines.push(format!("Importance: {importance}\r\n"));
 			lines.push(format!("X-Priority: {priority}\r\n"));
@@ -257,7 +275,10 @@ impl SendRequest {
 				let known = ["no", "auto-generated", "auto-replied", "auto-notified"];
 				let value = value.to_ascii_lowercase();
 				if !known.contains(&value.as_str()) {
-					return Err(invalid("auto_submitted is not an RFC 3834 value"));
+					return Err(not_allowed(
+						"auto_submitted",
+						"auto_submitted is not an RFC 3834 value",
+					));
 				}
 				lines.push(format!("Auto-Submitted: {value}\r\n"));
 			}
@@ -271,18 +292,20 @@ impl SendRequest {
 		}
 		if let Some(value) = &self.feedback_id {
 			if value.is_empty() || !value.bytes().all(|b| (0x21..0x7f).contains(&b)) {
-				return Err(invalid(
+				return Err(not_allowed(
+					"feedback_id",
 					"feedback_id must be printable ASCII without spaces",
 				));
 			}
 			lines.push(format!("Feedback-ID: {value}\r\n"));
 		}
 		if self.headers.len() > MAX_CUSTOM_HEADERS {
-			return Err(invalid("too many custom headers"));
+			return Err(out_of_range("headers", "too many custom headers"));
 		}
 		for (name, value) in &self.headers {
 			if !custom_name(name) {
-				return Err(invalid(
+				return Err(not_allowed(
+					"headers",
 					"custom headers must be X- headers the server does not write itself",
 				));
 			}
@@ -297,12 +320,18 @@ impl SendRequest {
 		let urls = &self.list_unsubscribe;
 		if urls.is_empty() {
 			return match self.list_unsubscribe_post {
-				true => Err(invalid("list_unsubscribe_post needs list_unsubscribe")),
+				true => Err(missing(
+					"list_unsubscribe",
+					"list_unsubscribe_post needs list_unsubscribe",
+				)),
 				false => Ok(Vec::new()),
 			};
 		}
 		if urls.len() > MAX_UNSUBSCRIBE {
-			return Err(invalid("too many list_unsubscribe URLs"));
+			return Err(out_of_range(
+				"list_unsubscribe",
+				"too many list_unsubscribe URLs",
+			));
 		}
 		let scheme = |url: &str, prefix: &str| {
 			url.get(..prefix.len())
@@ -313,7 +342,10 @@ impl SendRequest {
 				.bytes()
 				.all(|b| (0x21..0x7f).contains(&b) && !b"<>,\"".contains(&b));
 			if !clean || !(scheme(url, "mailto:") || scheme(url, "https://")) {
-				return Err(invalid("list_unsubscribe takes mailto: and https:// URLs"));
+				return Err(not_allowed(
+					"list_unsubscribe",
+					"list_unsubscribe takes mailto: and https:// URLs",
+				));
 			}
 		}
 		let bracketed: Vec<String> = urls.iter().map(|url| format!("<{url}>")).collect();
@@ -323,7 +355,10 @@ impl SendRequest {
 		))?];
 		if self.list_unsubscribe_post {
 			if !urls.iter().any(|url| scheme(url, "https://")) {
-				return Err(invalid("list_unsubscribe_post needs an https:// URL"));
+				return Err(not_allowed(
+					"list_unsubscribe_post",
+					"list_unsubscribe_post needs an https:// URL",
+				));
 			}
 			lines.push("List-Unsubscribe-Post: List-Unsubscribe=One-Click\r\n".to_string());
 		}
@@ -333,7 +368,7 @@ impl SendRequest {
 
 /// `value` as a list of `<id@domain>` message ids, at most `max` of them,
 /// joined by single spaces.
-fn message_ids(value: &str, max: usize) -> Result<String, ApiError> {
+fn message_ids(field: &'static str, value: &str, max: usize) -> Result<String, ApiError> {
 	let ids: Vec<&str> = value.split_whitespace().collect();
 	let valid = |id: &&str| {
 		id.len() > 2
@@ -345,7 +380,8 @@ fn message_ids(value: &str, max: usize) -> Result<String, ApiError> {
 				.all(|b| (0x21..0x7f).contains(&b) && b != b'<' && b != b'>')
 	};
 	if ids.is_empty() || ids.len() > max || !ids.iter().all(valid) {
-		return Err(invalid(
+		return Err(not_allowed(
+			field,
 			"in_reply_to and references take <id@domain> message ids",
 		));
 	}
@@ -368,4 +404,16 @@ fn line(result: Result<String, compose::ComposeError>) -> Result<String, ApiErro
 
 fn invalid(message: &str) -> ApiError {
 	ApiError::invalid_input(&format!("Invalid request: {message}."))
+}
+
+fn missing(field: &'static str, message: &str) -> ApiError {
+	ApiError::field_missing(field, &format!("Invalid request: {message}."))
+}
+
+fn out_of_range(field: &'static str, message: &str) -> ApiError {
+	ApiError::field_out_of_range(field, &format!("Invalid request: {message}."))
+}
+
+fn not_allowed(field: &'static str, message: &str) -> ApiError {
+	ApiError::value_not_allowed(field, &format!("Invalid request: {message}."))
 }

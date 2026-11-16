@@ -44,8 +44,12 @@ info:
     malformed JSON, query or path values, `415` without
     `Content-Type: application/json`, `422` for a missing or mistyped field.
     An unknown path is `404` with an empty body; a known path with another
-    method is `405` with an `allow` header. Authentication-window and OAuth
-    throttling responses include `Retry-After` in seconds. Client attribution
+    method is `405` with an `allow` header. Every `429` of `/api/v1` includes
+    `Retry-After` in seconds, and every `401` includes
+    `WWW-Authenticate: Bearer`. A client that sends
+    `Accept: application/problem+json` gets each of these errors as an RFC 9457
+    problem (`#/components/schemas/Problem`) instead of the `error` object; any
+    other `Accept` keeps the `error` object. Client attribution
     uses the TCP peer unless `[api] trusted_proxies` permits a validated
     `X-Forwarded-For` chain, scanned from right to left.
 
@@ -1528,12 +1532,23 @@ paths:
             per-account or per-tenant submission rate (`sending rate limit
             exceeded; retry later`) or the daily cap on first-time
             recipients (`too many new recipients today; retry tomorrow`).
-            Nothing was sent. The message tells them apart. Authentication-window
-            refusals include `Retry-After` with the remaining seconds rounded up.
+            Nothing was sent. The message tells them apart. `Retry-After`
+            gives the seconds to wait: the remaining authentication window
+            rounded up, 60 for a submission rate limit, 86400 for the daily
+            cap on first-time recipients.
+          headers:
+            Retry-After:
+              description: Seconds to wait before the request can succeed.
+              schema:
+                type: integer
+                minimum: 1
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiError"
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
         "500":
           $ref: "#/components/responses/Internal"
         "503":
@@ -2675,10 +2690,19 @@ components:
         `unauthenticated`: no `Authorization: Bearer` header, an unknown or
         expired token, a key pinned to another client IP, or a key whose
         scopes do not cover this route. All four look the same on purpose.
+      headers:
+        WWW-Authenticate:
+          description: The scheme the API accepts (RFC 6750 section 3), always `Bearer`.
+          schema:
+            type: string
+            enum: [Bearer]
       content:
         application/json:
           schema:
             $ref: "#/components/schemas/ApiError"
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
     AccountBoundKey:
       description: |-
         `forbidden`: the key is bound to one account and this route is
@@ -2695,10 +2719,10 @@ components:
         request from it, valid or not, is refused until the window passes;
         or too many credential checks are already waiting. Window-based refusals
         include `Retry-After` with the remaining seconds rounded up. Queue
-        saturation has no fixed window.
+        saturation has no fixed window and answers `Retry-After: 1`.
       headers:
         Retry-After:
-          description: Remaining authentication window in seconds, rounded up.
+          description: Seconds to wait; the remaining authentication window rounded up, or 1 when the queue is full.
           schema:
             type: integer
             minimum: 1
@@ -2706,6 +2730,9 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/ApiError"
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
     NotFound:
       description: |-
         `not_found`. The message says what is missing: `no such account`,
@@ -2722,11 +2749,17 @@ components:
       description: |-
         `invalid_input` with the reason in `message`, or, when the HTTP layer
         could not read the request (malformed JSON, a query or path value of
-        the wrong type, an unreadable UUID), a `text/plain` message.
+        the wrong type, an unreadable UUID), a `text/plain` message. As a
+        problem, `code` is the cause (`field_missing`, `field_out_of_range`,
+        `value_not_allowed`, or `invalid_input` when none applies) and
+        `errors[].field` names the request field.
       content:
         application/json:
           schema:
             $ref: "#/components/schemas/ApiError"
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
         text/plain:
           schema:
             type: string
@@ -2902,6 +2935,49 @@ components:
             message:
               type: string
               description: For people; its wording is not a contract.
+    Problem:
+      type: object
+      description: |-
+        An RFC 9457 problem, sent as `application/problem+json` to a client
+        whose `Accept` names that type. The `error` object stays the default.
+      required: [type, title, status, detail, code, instance, request_id]
+      properties:
+        type:
+          type: string
+          description: A stable URN, `urn:epistle:problem:` followed by `code`.
+        title:
+          type: string
+          description: A short summary of the type; the same for every occurrence.
+        status:
+          type: integer
+        detail:
+          type: string
+          description: For people; its wording is not a contract.
+        code:
+          type: string
+          description: |-
+            Stable, for programs. The code of `ApiError`, except that an
+            `invalid_input` with a known cause carries that cause instead:
+            `field_missing`, `field_out_of_range` or `value_not_allowed`.
+        instance:
+          type: string
+          description: '`urn:uuid:` followed by `request_id`, naming this occurrence.'
+        request_id:
+          type: string
+          format: uuid
+          description: Also written to the server log with the code and the route.
+        errors:
+          type: array
+          description: Present for an input error whose field is known.
+          items:
+            type: object
+            required: [field, detail]
+            properties:
+              field:
+                type: string
+                description: The request field, as named in the JSON body or the query.
+              detail:
+                type: string
     Status:
       type: object
       required: [version, domains, accounts]

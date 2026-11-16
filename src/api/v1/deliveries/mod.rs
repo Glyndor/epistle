@@ -89,10 +89,9 @@ pub async fn list(
 		.map(str::trim)
 		.filter(|value| !value.is_empty())
 	{
-		Some(value) => Some(
-			DeliveryOutcome::parse(value)
-				.ok_or_else(|| ApiError::invalid_input(&format!("unknown outcome {value:?}")))?,
-		),
+		Some(value) => Some(DeliveryOutcome::parse(value).ok_or_else(|| {
+			ApiError::value_not_allowed("outcome", &format!("unknown outcome {value:?}"))
+		})?),
 		None => None,
 	};
 	let now = now_epoch();
@@ -106,9 +105,10 @@ pub async fn list(
 			Ok(Some(epoch)) => Some(epoch),
 			Ok(None) => None,
 			Err(error) => {
-				return Err(ApiError::invalid_input(&format!(
-					"since {value:?}: {error}"
-				)));
+				return Err(ApiError::value_not_allowed(
+					"since",
+					&format!("since {value:?}: {error}"),
+				));
 			}
 		},
 		None => None,

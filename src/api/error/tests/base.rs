@@ -24,7 +24,7 @@ fn constructors_map_to_expected_status_and_code() {
 			"internal",
 		),
 		(
-			ApiError::rate_limited(),
+			ApiError::rate_limited(7),
 			StatusCode::TOO_MANY_REQUESTS,
 			"rate_limited",
 		),

@@ -44,6 +44,11 @@ pub(in crate::api) fn acceptable_scopes_for(method: &axum::http::Method, path: &
 	}
 }
 
+/// What a client turned away because too many credential checks are already
+/// waiting is told to wait: a check takes well under a second, so the queue
+/// is short-lived.
+const ARGON_BUSY_RETRY_SECS: u64 = 1;
+
 /// Longest bearer token considered at all.
 const MAX_BEARER_LEN: usize = 1024;
 
@@ -152,7 +157,7 @@ pub async fn require_bearer_token(
 						.lock()
 						.unwrap_or_else(|p| p.into_inner())
 						.refund(client_ip);
-					return ApiError::rate_limited().into_response();
+					return ApiError::rate_limited(ARGON_BUSY_RETRY_SECS).into_response();
 				}
 			}
 		}
@@ -197,9 +202,5 @@ pub async fn require_bearer_token(
 }
 
 fn rate_limited(seconds: u64) -> Response {
-	let mut response = ApiError::rate_limited().into_response();
-	response
-		.headers_mut()
-		.insert(axum::http::header::RETRY_AFTER, seconds.into());
-	response
+	ApiError::rate_limited(seconds).into_response()
 }
