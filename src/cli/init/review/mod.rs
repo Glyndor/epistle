@@ -48,6 +48,9 @@ pub(super) fn render(answers: &Answers, out: &mut (impl Write + ?Sized)) -> io::
 			sanitize(first.display_name.as_deref().unwrap_or("none")),
 			first.role_aliases
 		)?;
+		if let Some(mailbox) = first.fbl_address() {
+			writeln!(out, "  Complaint mailbox: {}", sanitize(&mailbox))?;
+		}
 	} else {
 		writeln!(out, "  First mailbox: none")?;
 	}

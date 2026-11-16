@@ -210,6 +210,26 @@ Hard:
 
 Recommended: SPF, DMARC and the Certified Senders Alliance (CSA).
 
+## Reading the complaint reports
+
+Yahoo's loop and Microsoft's JMRP send each complaint to the mailbox you
+subscribe as an ARF report. epistle can read them and suppress the
+complainant, off until you name the mailbox:
+
+1. Create the mailbox on a hosted domain (an account or an alias), for
+   example `fbl@example.org`. The server never chooses the address.
+2. Subscribe that address in each provider's page above.
+3. Write down the address each provider sends the reports from, as its
+   enrolment page or the first report shows it, and set it in
+   `[reports] fbl_senders`; a provider that is not listed there is not
+   believed.
+4. Set `[reports] fbl_mailbox`. The report is still delivered to the
+   mailbox; the complaint also adds the complainant to the sending account's
+   suppression list and counts it.
+
+The checks, the counters and the alert on a rising rate are in
+[the configuration](../configuration.md#reports).
+
 ## Not covered here
 
 Other providers are not covered (Fastmail, Proton, Mail.ru, Yandex, Orange,

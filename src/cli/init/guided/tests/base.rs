@@ -176,7 +176,7 @@ fn a_file_credential_reference_with_an_environment_reference_is_asked_again() {
 #[test]
 fn first_mailbox_retries_address_and_display_name_and_derives_the_account() {
 	let input = format!(
-		"alice+tag@example.org\ntorre.control@example.org\n{}\nAlice Liddell\nno\n",
+		"alice+tag@example.org\ntorre.control@example.org\n{}\nAlice Liddell\nno\n\n",
 		"x".repeat(129)
 	);
 	let mut reader = input.as_bytes();

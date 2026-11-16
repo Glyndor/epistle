@@ -72,6 +72,7 @@ pub struct LocalDelivery {
 	crypto: MessageCrypto,
 	quota: crate::smtp::quota::MailboxQuota,
 	metrics: Option<std::sync::Arc<crate::metrics::Metrics>>,
+	fbl: Option<crate::reports::fbl::Fbl>,
 }
 
 impl LocalDelivery {
@@ -100,6 +101,7 @@ impl LocalDelivery {
 			),
 			crypto,
 			metrics: None,
+			fbl: None,
 		})
 	}
 
@@ -118,6 +120,14 @@ impl LocalDelivery {
 	/// constructor stays unchanged for every existing call site.
 	pub fn with_metrics(mut self, metrics: std::sync::Arc<crate::metrics::Metrics>) -> Self {
 		self.metrics = Some(metrics);
+		self
+	}
+
+	/// Read the spam complaints delivered to the feedback-loop mailbox of
+	/// `fbl` and suppress the complainant. `None` leaves that mailbox an
+	/// ordinary one.
+	pub fn with_fbl(mut self, fbl: Option<crate::reports::fbl::Fbl>) -> Self {
+		self.fbl = fbl;
 		self
 	}
 
@@ -278,6 +288,9 @@ impl LocalDelivery {
 			self.metrics.as_ref(),
 			message,
 		);
+		if let Some(fbl) = &self.fbl {
+			reports::process_fbl(fbl, &self.data_dir, &self.directory, &self.metrics, message);
+		}
 		Ok(delivered)
 	}
 

@@ -1341,7 +1341,92 @@ email = ["ops@example.org"]
 cooldown_secs = 900
 ```
 
-The counter names accepted by `metric` (the ones `Metrics::snapshot` exposes) are: `abuse_dropped`, `accepted`, `accept_failed`, `auth_hash_gate_rejected`, `auth_login_failed`, `auth_login_succeeded`, `bayes_learning_failed`, `bayes_learning_refused`, `bayes_learning_unreadable`, `bayes_training_dropped`, `bounced`, `clock_drift_exceeded`, `connections`, `database_unavailable`, `deferred`, `dmarc_report_rows_failing`, `dmarc_reports_ingested`, `forwarded`, `mta_sts_connections_dropped`, `outbound_policy_rejected`, `outbound_virus`, `own_ip_blocklisted`, `quarantined`, `rejected_dmarc`, `rejected_dnsbl`, `rejected_header_fields`, `rejected_loop`, `rejected_rate_limit`, `rejected_reputation`, `rejected_scanner`, `rejected_spf`, `relayed`, `reports_dropped`, `scanner_clamd_failed`, `scanner_clamd_skipped`, `send_limited_new_recipients`, `sieve_inspection_truncated`, `sieve_rejected`, `subjectpass_challenged`, `subjectpass_passed`, `tlsrpt_failed_sessions`, `tlsrpt_reports_ingested`, `vacation_sent`, `warmup_backoff`, `warmup_held`, `webhook_failed`, `webhook_sent`.
+The counter names accepted by `metric` (the ones `Metrics::snapshot` exposes) are: `abuse_dropped`, `accepted`, `accept_failed`, `auth_hash_gate_rejected`, `auth_login_failed`, `auth_login_succeeded`, `bayes_learning_failed`, `bayes_learning_refused`, `bayes_learning_unreadable`, `bayes_training_dropped`, `bounced`, `clock_drift_exceeded`, `connections`, `database_unavailable`, `deferred`, `dmarc_report_rows_failing`, `dmarc_reports_ingested`, `fbl_complaints`, `forwarded`, `mta_sts_connections_dropped`, `outbound_policy_rejected`, `outbound_virus`, `own_ip_blocklisted`, `quarantined`, `rejected_dmarc`, `rejected_dnsbl`, `rejected_header_fields`, `rejected_loop`, `rejected_rate_limit`, `rejected_reputation`, `rejected_scanner`, `rejected_spf`, `relayed`, `reports_dropped`, `scanner_clamd_failed`, `scanner_clamd_skipped`, `send_limited_new_recipients`, `sieve_inspection_truncated`, `sieve_rejected`, `subjectpass_challenged`, `subjectpass_passed`, `tlsrpt_failed_sessions`, `tlsrpt_reports_ingested`, `vacation_sent`, `warmup_backoff`, `warmup_held`, `webhook_failed`, `webhook_sent`.
+
+### `[reports]`
+Spam complaints from the providers' feedback loops. Yahoo, Microsoft and
+Mail.ru send what their users mark as spam back to the sender as ARF reports
+(RFC 5965: `multipart/report; report-type=feedback-report`) to an address you
+enrol. The receiver is off until `fbl_mailbox` names that address, and the
+server never picks one. The steps of each enrolment are in
+[sender panels](operations/providers.md).
+
+| Key | Default | Meaning |
+|---|---|---|
+| `fbl_mailbox` | absent | The hosted address the reports are sent to, for example `fbl@example.org`. It has to exist (an account or an alias) on a hosted domain. Absent turns the receiver off. |
+| `fbl_senders` | `[]` | The providers whose reports are believed: the envelope address a loop sends from (`fbl@arf.example.net`) or a domain, which covers its subdomains. The addresses are the ones the provider's enrolment page gives; they are not guessed here. Empty trusts nobody. |
+| `fbl_suppress` | `true` when `fbl_mailbox` is set | Add the complainant to the suppression list of the sending account. `false` only counts. |
+| `fbl_max_per_hour` | `100` | The most complaints that can be suppressed for one sending account in an hour. A report over the cap is logged and changes nothing. |
+
+```toml
+[reports]
+fbl_mailbox = "fbl@example.org"
+fbl_senders = ["fbl@arf.example.net"]
+```
+
+`fbl_senders` refuses at load the domains of public mailbox providers
+(`gmail.com`, `outlook.com`, `yahoo.com` and the like: anyone can hold an
+address there) and a domain the server hosts. Enrol the address or domain the
+provider's loop sends from, such as a subdomain of its own.
+
+A report counts only when all of this holds, and otherwise changes nothing
+(the message is still delivered to the mailbox):
+
+- Its envelope sender is one of `fbl_senders` **and** this server proved it
+  exactly, in the `Authentication-Results` it stamps itself: SPF passed for
+  the exact domain of the envelope sender, or a DKIM signature passed whose
+  `d=` is exactly that domain or exactly the enrolled domain. A sibling
+  domain of the same organization, a login, or a `MAIL FROM` that merely
+  matches does not count. Without a resolver (so no stamp) nothing is
+  trusted.
+- It is no larger than 256 KiB, is `multipart/report` with
+  `report-type=feedback-report` at the top level, and has exactly one
+  `message/feedback-report` part, read with the bounds of the DMARC and
+  TLS-RPT parsers. A report that fails any of this is counted in
+  `reports_dropped` and nothing of it is read.
+- `Feedback-Type` is `abuse` and `Original-Rcpt-To` names the complainant,
+  who has to be a `To` or `Cc` addressee of the quoted message. A provider
+  that redacts the recipient, or a Bcc complaint, gives the server nothing to
+  suppress. One report suppresses at most that one address.
+- The quoted headers carry the `Feedback-ID` the server writes
+  (`epistle:<class>:<domain>`, see [headers](headers.md#identification-headers))
+  for a hosted domain, a `Message-ID` of that domain, a `DKIM-Signature` by
+  that domain with one of the server's own selectors, and one `From` address
+  that is an account of that domain. A report quotes headers and usually not
+  the body, so that signature cannot be verified here: the authenticated
+  provider vouches for the quote, and these checks refuse one that is not
+  shaped like this server's mail. The server keeps no index of sent
+  `Message-ID`s. The `Feedback-ID` holds no account, so the account is the one that
+  owns the `From`. A `Feedback-ID` a client wrote itself, one for another
+  domain or one that names a sender that is not an account here is ignored:
+  the server does not claim a message it cannot show it sent.
+
+The complainant is suppressed **for that account only**, so one customer's
+complaint never costs another customer its mail, and the entry shows in the
+account's list with the reason `spam complaint via <provider> (<class>)`. The
+same report arriving twice is counted once, because the recipient is already
+on the list. With `fbl_suppress = false` there is no list to tell a repeat
+from a new report, so every trusted report is counted.
+
+Each counted complaint adds to `mail_fbl_complaints_total` and to
+`mail_fbl_complaints_by_sender_total{account,class}` in the Prometheus text,
+and to the `fbl_complaints` counter of `[[alerts]]`. A rule on it is the
+alert for a rising complaint rate: Yahoo and Microsoft watch for 0.3 %, so
+choose the count per window that is that share of what the account sends.
+
+```toml
+[[alerts]]
+name = "complaints"
+metric = "fbl_complaints"
+op = ">="
+threshold = 5
+window_secs = 3600
+email = ["ops@example.org"]
+cooldown_secs = 3600
+```
+
+The log carries the account, the class, the sending domain and the provider
+of each complaint; the recipient, the subject and the body are not logged.
 
 ### `[smtp]`
 What a refusal sent to a sender that has not authenticated tells it, and the

@@ -244,6 +244,7 @@ impl Metrics {
 			out.push_str(&format!("# HELP {name} {help}\n# TYPE {name} counter\n"));
 			out.push_str(&format!("{name} {}\n", counter.load(Ordering::Relaxed)));
 		}
+		self.render_fbl(&mut out);
 		out
 	}
 }

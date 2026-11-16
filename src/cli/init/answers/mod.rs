@@ -327,7 +327,8 @@ impl Answers {
 		 # address = \"alice@example.org\"   # in one of the domains; the local part is the account name\n\
 		 # display_name = \"Alice Liddell\"  # optional\n\
 		 # password_file = \"/run/secrets/alice\"  # its first line is the password; never written inline\n\
-		 # role_aliases = true               # point postmaster@ and abuse@ of every domain at it\n"
+		 # role_aliases = true               # point postmaster@ and abuse@ of every domain at it\n\
+		 # fbl_mailbox = \"fbl@example.org\"  # optional; point this address at the account and read the providers' spam complaints there\n"
 			.to_string()
 	}
 }
