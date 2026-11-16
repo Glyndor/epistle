@@ -553,7 +553,7 @@ expires; `epistle status` reports the container in its `tls` area with the
 days left. DKIM keys keep rotating while the split is on: `mail` keeps the
 keys and asks `certs` to publish each record through
 `<data_dir>/dns-handoff`, which both containers mount. The design and what is
-left are in [the split plan](container-split.md) and
+left are in [the container split](container-split.md) and
 [the serve split](serve-split.md).
 
 ### The DKIM signer socket
