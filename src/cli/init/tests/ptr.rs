@@ -22,6 +22,7 @@ fn dry_run_prints_the_block_and_still_exits_0_with_a_missing_ptr() {
 		meminfo: std::path::Path::new(""),
 		panel_manifest: std::path::Path::new("/nonexistent/epistle-panel/image"),
 		clock: &|| crate::clock::sync::HostClock::Synced,
+		boot: &|_, _| {},
 	};
 	let mut out = Vec::new();
 	let args = dry_run_args(dir.path(), "public_ipv4 = \"8.8.8.8\"\n");
@@ -52,6 +53,7 @@ fn a_detected_address_gets_its_ptr_checked_too() {
 		meminfo: std::path::Path::new(""),
 		panel_manifest: std::path::Path::new("/nonexistent/epistle-panel/image"),
 		clock: &|| crate::clock::sync::HostClock::Synced,
+		boot: &|_, _| {},
 	};
 	let mut out = Vec::new();
 	let code = run_with(dry_run_args(dir.path(), ""), &probes, &mut out);
@@ -77,6 +79,7 @@ fn no_address_prints_no_block_and_builds_no_resolver() {
 		meminfo: std::path::Path::new(""),
 		panel_manifest: std::path::Path::new("/nonexistent/epistle-panel/image"),
 		clock: &|| crate::clock::sync::HostClock::Synced,
+		boot: &|_, _| {},
 	};
 	let mut out = Vec::new();
 	let code = run_with(dry_run_args(dir.path(), ""), &probes, &mut out);

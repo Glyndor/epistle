@@ -252,9 +252,14 @@ fn restart_passes_the_verb_and_the_service_position_to_podup() {
 			"-f",
 			data_dir.join("compose/compose.yaml").to_str().unwrap(),
 			"restart",
-			"mail"
+			"mail",
+			"-f",
+			data_dir.join("compose/compose.yaml").to_str().unwrap(),
+			"autostart",
+			"install",
+			"--no-start"
 		],
-		"restart <service> must invoke `podup -f <compose> restart <service>`"
+		"restart <service> must invoke `podup -f <compose> restart <service>`, then check the boot unit"
 	);
 }
 

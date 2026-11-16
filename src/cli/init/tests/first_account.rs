@@ -39,6 +39,7 @@ fn init(file: std::path::PathBuf, dry_run: bool) -> (ExitCode, String) {
 		meminfo: std::path::Path::new(""),
 		panel_manifest: std::path::Path::new("/nonexistent/epistle-panel/image"),
 		clock: &|| crate::clock::sync::HostClock::Synced,
+		boot: &|_, _| {},
 	};
 	let mut out = Vec::new();
 	let code = run_with(

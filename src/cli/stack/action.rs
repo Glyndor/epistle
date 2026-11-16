@@ -203,3 +203,27 @@ pub(crate) enum StackAction {
 		services: Vec<String>,
 	},
 }
+
+impl StackAction {
+	/// Whether a success leaves containers running that the boot unit has to
+	/// bring back, so the unit is checked afterwards. `Up` installs it itself;
+	/// `Down` and `stop` leave nothing running and must leave no unit behind.
+	pub(super) fn leaves_running(&self) -> bool {
+		match self {
+			StackAction::Update
+			| StackAction::Apply
+			| StackAction::Restart { .. }
+			| StackAction::Certs { .. }
+			| StackAction::Recreate { .. }
+			| StackAction::RecreateServices { .. } => true,
+			StackAction::Passthrough { verb, .. } => *verb == "start",
+			StackAction::Up
+			| StackAction::Down
+			| StackAction::Ps { .. }
+			| StackAction::Logs { .. }
+			| StackAction::Rollback
+			| StackAction::RollbackDb
+			| StackAction::Resources { .. } => false,
+		}
+	}
+}

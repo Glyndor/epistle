@@ -25,6 +25,7 @@ mod action;
 pub(crate) use action::StackAction;
 pub use action::StackCli;
 
+pub(super) mod autostart;
 pub(super) mod certs;
 pub(super) mod dumps;
 pub(super) mod health;
@@ -129,31 +130,46 @@ pub(super) fn run(config: &Config, action: StackAction) -> ExitCode {
 		Ok(()) => "podup",
 		Err(code) => return code,
 	};
+	let leaves_running = action.leaves_running();
+	let summarises = matches!(action, StackAction::Up | StackAction::Update);
+	let code = dispatch(config, &compose, podup, action);
+	if code == ExitCode::SUCCESS && leaves_running {
+		autostart::run(podup, &compose);
+	}
+	if code == ExitCode::SUCCESS && summarises {
+		super::status::print_boot_summary(config, &mut super::style::stderr());
+	}
+	code
+}
+
+/// Run `action` against the stack at `compose`, with `podup` already known
+/// to be new enough and the Podman socket up.
+fn dispatch(config: &Config, compose: &Path, podup: &str, action: StackAction) -> ExitCode {
 	match action {
-		StackAction::Update => update::run(config, &compose, podup),
+		StackAction::Update => update::run(config, compose, podup),
 		StackAction::Rollback => {
 			super::style::error("run it as root: sudo epistle stack rollback");
 			ExitCode::FAILURE
 		}
-		StackAction::RollbackDb => rollback::restore_db(config, &compose, podup),
-		StackAction::Certs { on, yes } => certs::run(config, &compose, podup, on, yes),
+		StackAction::RollbackDb => rollback::restore_db(config, compose, podup),
+		StackAction::Certs { on, yes } => certs::run(config, compose, podup, on, yes),
 		StackAction::Up => {
 			// The ports the stack publishes on every interface on purpose
 			// are the ones podup warns about on every run; the warning is
 			// replaced by one note, and the warning about a port nobody
 			// asked to publish stays as podup printed it.
 			let mut published = port_warnings::Published::new(config);
-			let code = certs::up(&config.data_dir, &compose, podup, &mut published);
+			let code = certs::up(&config.data_dir, compose, podup, &mut published);
 			let mut out = std::io::stderr().lock();
 			published.note(&mut out);
 			code
 		}
-		StackAction::Apply => run_sequence(podup, &compose, &[&["up", "-d"], &["restart", "mail"]]),
+		StackAction::Apply => run_sequence(podup, compose, &[&["up", "-d"], &["restart", "mail"]]),
 		StackAction::Down => {
-			run_sequence(podup, &compose, &[&["autostart", "uninstall"], &["down"]])
+			run_sequence(podup, compose, &[&["autostart", "uninstall"], &["down"]])
 		}
 		StackAction::Ps { as_json } => {
-			let json = match capture_podup(podup, &compose, &["ps", "--format", "json"]) {
+			let json = match capture_podup(podup, compose, &["ps", "--format", "json"]) {
 				Ok(out) => out,
 				Err(code) => return code,
 			};
@@ -202,7 +218,7 @@ pub(super) fn run(config: &Config, action: StackAction) -> ExitCode {
 				extra.push(name);
 			}
 			let extra_ref: Vec<&str> = extra.iter().map(String::as_str).collect();
-			run_inherited(podup, &compose, &extra_ref)
+			run_inherited(podup, compose, &extra_ref)
 		}
 		StackAction::Restart { service } => {
 			let mut extra: Vec<String> = Vec::new();
@@ -211,25 +227,23 @@ pub(super) fn run(config: &Config, action: StackAction) -> ExitCode {
 				extra.push(name);
 			}
 			let extra_ref: Vec<&str> = extra.iter().map(String::as_str).collect();
-			run_inherited(podup, &compose, &extra_ref)
+			run_inherited(podup, compose, &extra_ref)
 		}
 		StackAction::Passthrough { verb, service } => {
 			let mut extra: Vec<&str> = vec![verb];
 			if let Some(name) = service.as_deref() {
 				extra.push(name);
 			}
-			run_inherited(podup, &compose, &extra)
+			run_inherited(podup, compose, &extra)
 		}
-		StackAction::Recreate { service } => {
-			run_inherited(podup, &compose, &["up", "-d", &service])
-		}
+		StackAction::Recreate { service } => run_inherited(podup, compose, &["up", "-d", &service]),
 		StackAction::RecreateServices { services } => {
 			// One `podup up -d <service>` for each: every one of them
 			// recreates exactly its own container, and the first that
 			// fails stops the rest.
 			let mut code = ExitCode::SUCCESS;
 			for service in &services {
-				code = run_inherited(podup, &compose, &["up", "-d", service]);
+				code = run_inherited(podup, compose, &["up", "-d", service]);
 				if code != ExitCode::SUCCESS {
 					break;
 				}
@@ -237,7 +251,7 @@ pub(super) fn run(config: &Config, action: StackAction) -> ExitCode {
 			code
 		}
 		StackAction::Resources { action, json } => resources::run(
-			&compose,
+			compose,
 			crate::smtp::memory_fit::largest_message(config.max_message_size),
 			action,
 			json,

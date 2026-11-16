@@ -82,7 +82,11 @@ fn update_renders_the_compose_file_again_then_restarts_mail_on_the_new_binary() 
 	);
 	assert_eq!(
 		changes(&log),
-		["--version".to_string(), call("up -d")],
+		[
+			"--version".to_string(),
+			call("up -d"),
+			call("autostart install --no-start")
+		],
 		"the rewritten file is brought up"
 	);
 	let stderr = String::from_utf8_lossy(&out.stderr);
@@ -103,7 +107,12 @@ fn update_renders_the_compose_file_again_then_restarts_mail_on_the_new_binary() 
 	assert_eq!(again.status.code(), Some(0));
 	assert_eq!(
 		changes(&log),
-		["--version".to_string(), call("up -d"), call("restart mail")],
+		[
+			"--version".to_string(),
+			call("up -d"),
+			call("restart mail"),
+			call("autostart install --no-start")
+		],
 		"a current file leaves mail's definition alone, so mail is restarted for the new binary"
 	);
 }
@@ -147,7 +156,12 @@ fn update_pulls_then_recreates_for_a_custom_image_compose() {
 	};
 	assert_eq!(
 		changes(&log),
-		["--version".to_string(), call("pull"), call("up -d")],
+		[
+			"--version".to_string(),
+			call("pull"),
+			call("up -d"),
+			call("autostart install --no-start")
+		],
 		"custom image mode must pull then up -d"
 	);
 	// Custom mode does not rewrite the operator's image.

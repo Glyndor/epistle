@@ -57,6 +57,12 @@ pub(crate) fn write_podup_shim(shim_dir: &Path, body: &str) -> PathBuf {
 	if !podman.exists() {
 		write_podman_shim(shim_dir, "#!/bin/sh\nexit 125\n");
 	}
+	// The boot unit check asks `systemctl --user` whether the unit is loaded
+	// and enabled. Without this, it would ask the machine that runs the test.
+	let systemctl = shim_dir.join("systemctl");
+	if !systemctl.exists() {
+		executable::write_executable(&systemctl, "#!/bin/sh\nexit 1\n");
+	}
 	path
 }
 
@@ -185,6 +191,7 @@ pub(crate) fn run_with_podup(args: &[&str], shim_dir: &Path) -> std::process::Ou
 	cmd.args(args);
 	cmd.env("PATH", path_with_shim_first(shim_dir));
 	cmd.env("XDG_RUNTIME_DIR", fake_podman_runtime(shim_dir));
+	cmd.env("XDG_CONFIG_HOME", shim_dir.join("xdg"));
 	cmd.env_remove("CLICOLOR_FORCE");
 	cmd.env("NO_COLOR", "1");
 	cmd.stdin(Stdio::null())
