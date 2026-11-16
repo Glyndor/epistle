@@ -1,48 +1,13 @@
-# Splitting `mail` into containers
+# The certificates container
 
-How `mail` is split into containers that each hold fewer secrets, and the
-rules that hold across the phases. Phase 1 runs today, off by default; the
-section "What runs today" says what it does. The later phases are intended,
-not built: [the container stack](container.md) describes the stack as it is.
-Which process holds which secret and parser after the split, and how the
-processes talk, is in [the serve split](serve-split.md).
+The `certs` container holds the DNS provider token and the ACME account key,
+and the process that takes SMTP from the internet holds neither. It is off by
+default: `sudo epistle stack certs enable` turns it on, and a stack that never
+runs it renders and runs as one `mail` container. [The container
+stack](container.md) describes the rest of the stack, and "Which process holds
+what" there says which process holds which secret.
 
-## Where it starts
-
-`mail` is the only container with a network. Its process, `epistle serve`, takes
-SMTP from the internet and holds in the same memory the DKIM, ARC, evidence,
-OAuth and storage keys, the DNS provider token, the ACME account key, the
-password hashes and every mailbox. `db` and `clamav` already show the pattern
-this plan follows: one job, one container, one Unix socket.
-
-## Rules every phase keeps
-
-- No network shared between components. Components talk over Unix sockets on
-  volumes that only they mount, the way `db` does.
-- Each container mounts only the volumes it needs and runs as its own uid in its
-  own user namespace range.
-- A component that receives a request checks authorization again on its side.
-  Nothing is trusted because it arrived over an internal socket.
-- State that has a single writer today (the evidence chain, rate limits, bans)
-  stays in one place and is reached through a socket, never mounted twice.
-- A phase must be removable: `epistle stack rollback` returns to the previous
-  layout, and a stack that never enables the new container keeps working.
-
-## Phases
-
-1. Certificates and DNS (described in full below).
-2. Signing: DKIM, ARC and evidence keys behind a service that signs a hash or a
-   canonical header block and returns the signature.
-3. A sandbox for parsers of hostile content (attachments, MIME walking, the
-   classifier), with no network, no secrets and no mailbox.
-4. An HTTP front that holds no keys and no data and forwards every operation
-   to the core.
-5. Outbound delivery, webhooks and other outbound HTTP, authenticated mailbox
-   access and the credential store.
-
-## Phase 1: the certificates container
-
-### What moves
+## What moves
 
 The `certs` container holds the DNS provider token, the ACME account key and the
 code that uses them:
@@ -57,17 +22,16 @@ decides when to rotate them, and it confirms that a resolver sees the new
 record before the key signs. What moves is the write of the record, which
 `mail` asks `certs` to perform through the hand-off directory.
 
-`mail` stops mounting `dns_provider_token` and the ACME account key. After this
-phase a compromise of the process that takes SMTP from the internet cannot
+`mail` stops mounting `dns_provider_token` and the ACME account key. With the container on, a compromise of the process that takes SMTP from the internet cannot
 rewrite the zone: MX, SPF, DMARC and TLSA.
 
-### What stays
+## What stays
 
 `mail` keeps the TLS private key, because it terminates TLS, and the DKIM
-signing keys until phase 2. It receives certificates and keys by volume, never
+signing keys. It receives certificates and keys by volume, never
 by request.
 
-### Interfaces
+## Interfaces
 
 `serve` already watches its certificate and key files and swaps them without a
 restart, so `mail` needs no new channel to learn that a certificate was
@@ -85,7 +49,7 @@ therefore the only thing that reaches the provider, and the key material
 never leaves `mail`. `certs` decides by itself when to renew, and it takes
 the requests it finds in the directory as it finds them.
 
-### The hand-off
+## The hand-off
 
 `mail` writes `<data_dir>/dns-handoff/requests/<id>` and waits for
 `<data_dir>/dns-handoff/results/<id>`, which `certs` writes when it has
@@ -95,7 +59,7 @@ the key in service keeps signing. A request that is older than a minute is
 refused, so a write the rotation has already given up on is never performed
 behind its back.
 
-### Failure behaviour
+## Failure behaviour
 
 - If `certs` is down, `mail` serves the certificate it has until it expires,
   and `epistle status` reports the container and the days left.
@@ -111,18 +75,18 @@ behind its back.
   `podup exec`, or on the host when there is no stack, so the operator's token
   never has to reach `mail`.
 
-### Upgrade and rollback
+## Upgrade and rollback
 
 `epistle stack update` renders the new service, moves the token mount from `mail`
 to `certs` and starts `certs` before it removes the mount from `mail`, so a
 renewal in flight is not lost. `stack rollback` restores the previous Compose
 file, which mounts the token in `mail` again.
 
-### Egress
+## Egress
 
 `certs` reaches the DNS provider and the CA, and `mail` no longer needs either.
 The Compose file cannot filter by destination under rootless Podman, so what
-this phase narrows is what each container holds and the routes each one has
+the container narrows is what each container holds and the routes each one has
 out of the host.
 
 The `certs` service runs on a network of its own: its own pasta instance, with
@@ -158,13 +122,12 @@ container, `8025` is the management API and `25` is SMTP, which the stack
 publishes on every address the host has. The API is published on the host's
 loopback, so it never answered from another container; the published mail port
 is the one that did, and it is the one to watch. `BLOCKED` on the first two
-and `REACHED` on the last is the state this phase wants.
+and `REACHED` on the last is the state the container is meant to give.
 
-### What runs today
+## What runs today
 
-Phase 1 is implemented and off by default. `sudo epistle stack certs enable`
-turns it on for a stack (see [`docs/cli.md`](../cli.md)); a stack that never
-runs it renders and runs exactly as before.
+`sudo epistle stack certs enable` turns it on for a stack (see
+[`docs/cli.md`](../cli.md)).
 
 - `certs` runs `epistle serve --role certs`: ACME renewal with `dns-01`
   through `[dns]`, the TLSA refresh after a new certificate and its retries,
@@ -180,9 +143,11 @@ runs it renders and runs exactly as before.
   `secrets/acme_account.key` beside data_dir. It mounts nothing else of
   data_dir. It cannot mount the configuration file alone: a command that edits
   the configuration replaces the file atomically, and a container bound to the
-  old file would keep reading it. The process parses only `[acme]` and `[dns]`
-  out of it and never reads the account hashes, the API token hash, the OAuth
-  configuration, the storage key or the DKIM key paths.
+  old file would keep reading it. The process drops the `[database]`,
+  `[accounts]`, `[api]`, `[storage]`, `[oauth]` and `[dkim]` tables before it
+  parses the file, so it never reads the account hashes, the API token hash,
+  the OAuth configuration, the storage key or the DKIM key paths; the file it
+  can read still carries them.
 - `mail` mounts data_dir read-write as before, with three directories over it
   read-only: `<data_dir>/acme`, `<data_dir>/dns-tlsa` and `<data_dir>/compose`.
   The rule behind the list: `certs` acts on nothing `mail` can write, and the
@@ -238,14 +203,11 @@ Behaviour worth knowing:
 - DKIM rotation and key generation stay in `mail`, which keeps the keys, and
   with the split on the rotation keeps running: `mail` asks `certs` for each
   record through the hand-off directory, as "The hand-off" above describes.
-  Where the keys go next is the signing service of phase 2, designed in
-  [the serve split](serve-split.md).
 - `certs` answers only the `dns-01` challenge, and `enable` refuses another
   challenge. `http-01` and `tls-alpn-01` need ports `mail` owns, and serving
-  them would need a channel between the two containers, which is what this
-  phase removes. An install that renews with `http-01` keeps working with the
+  them would need a channel between the two containers, which the container does not have. An install that renews with `http-01` keeps working with the
   split off.
-- DKIM key files are created by `mail` until the signing service exists.
+- DKIM key files are created by `mail`.
 - Compose under rootless Podman cannot filter egress by destination, so `certs`
   and `mail` both use `pasta`, and the address podman maps to the host is closed
   in the `certs` service with `pasta` options (see "Egress"). `certs` needs the
