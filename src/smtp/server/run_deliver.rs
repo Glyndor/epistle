@@ -101,7 +101,8 @@ impl Server {
 				now,
 				numbers.greylist_delay_secs,
 			)
-			.await == crate::antispam::greylist::Decision::Defer
+			.await
+				== crate::antispam::greylist::Decision::Defer
 			{
 				tracing::info!(%ip, "greylisting: deferring first attempt");
 				self.refuse(
