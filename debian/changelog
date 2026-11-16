@@ -1,3 +1,30 @@
+epistle (0.13.0) unstable; urgency=medium
+
+  * The stack comes back by itself after a reboot. The boot unit stays installed and only starts what exists, `status` and `check` report whether the stack would come back in a `boot` area, the services carry a retry drop-in and a network order drop-in, and a script in `deploy` proves the stack returns after a reboot.
+  * Undo send is optional and off by default. A delay can be configured, and a message held in it can be cancelled over REST, JMAP and the command line.
+  * A refusal tells a stranger as much as the operator chooses (`[smtp]` setting), and a final refusal carries a reference. SMTP answers with the right code and says what failed, local delivery failures carry enhanced status codes, and a delivery failure notice explains the cause in plain language.
+  * DKIM, ARC and reverse DNS checks can optionally refuse a message instead of only recording the result.
+  * IMAP returns the RFC 5530 response codes on failures, and POP3 and ManageSieve tell a permanent failure from a temporary one.
+  * The queue names the cause of a provider rejection code and pauses on a rate limit. One connection limit is shared per receiver group.
+  * Mail the server generates carries `X-Auto-Response-Suppress`, an API key can have a default `Auto-Submitted` value, and `status` warns when the server's own IP is listed in a blocklist.
+  * Deliverability: a guide for the provider portals, an enrolment reminder and the TXT records a provider supplies. The reminder covers only the providers the server delivers to.
+  * Reports: TLS-RPT and postmaster reports are accepted at the server name and read by content, a DMARC report names the published policy that was evaluated, and aggregate reports have a switch. Feedback-loop complaints (ARF) are read and the complainant is suppressed.
+  * OAuth token lifetimes are configurable with refresh rotation, and sign-in protections are configurable with floors they cannot go under. `/jmap` accepts the OAuth access token, bound to its account.
+  * The HTTP API answers errors as RFC 9457 problem details and sets `Retry-After` on 429. Blocklist zones have public labels, an admin event stream feeds live dashboards, hosted domains can be read and written over the API, and `POST /api/v1/suppression` adds an address to the suppression list.
+  * Hosted domains live in a state file under the data directory. Addresses and names are checked against every backend, `masked_addresses_max = 0` turns masks off, and masked addresses under a disabled domain are refused.
+  * Folders have roles per account, Trash, Junk and Rejects are cleaned up by retention, and automatic suppression has scopes.
+  * Antispam has sender lists, tighter attachment rules and spam settings per tenant, domain and account.
+  * JMAP `Email/query` supports filters, sorting and paging.
+  * `epistle stack logs` tails and merges the logs of the stack.
+  * The quota is checked under the admission lock on `COPY`, `Email/set`, `Email/copy` and blob upload, and an account's domain is admitted under its lock.
+  * `init` serves MTA-STS and autoconfig from the public endpoint, publishes TLSA only when it is safe, renders the panel service in the generated stack, creates the panel's API key and session secret, reads the panel pin file and keeps the panel choice, and `epistle panel admin-id` shows the panel's admin id.
+  * `rotate --all` keeps a journal that a cut run resumes, and it resets every account's password and second factor. The sessions of an account that is disabled or reset end.
+  * An LDAP login is bounded and answers busy instead of a wrong password. A trust-anchor TLSA match is validated for its chain and name.
+  * A Route 53 hosted zone is read and its writes are guarded, the writes of the challenge and DKIM keys are guarded and rebuild their provider, and a verified major database move removes the old cluster, its dump and image.
+  * The package depends on `wireguard-tools` for the node mesh and requires podup 5.19.0.
+
+ -- Glyndor <packages@glyndor.net>  Mon, 16 Nov 2026 12:00:00 +0000
+
 epistle (0.12.9) unstable; urgency=medium
 
   * Accounts have switches to turn sending and receiving off (`account set N --send on|off --receive on|off`). They are enforced in SMTP submission and delivery, the HTTP API, JMAP, Sieve and vacation replies, so an account can be send-only or receive-only.
