@@ -263,6 +263,7 @@ impl AccountStore {
 				.ok_or_else(|| StoreError::NotFound(name.to_string()))?;
 			target.password_hash = hash;
 			target.scram = scram;
+			target.rehashed = None;
 			super::credential_reset::password_replaced(target);
 			Ok(())
 		})?;

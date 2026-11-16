@@ -67,13 +67,26 @@ pub fn parse_plain(encoded: &str) -> Result<PlainCredentials, PlainError> {
 /// always the same, and the policy decision lives at one place per call
 /// site.
 pub fn hash_password(password: &str) -> Result<String, String> {
+	hash_password_with_cost(password, cost::current(), &fresh_salt()?)
+}
+
+fn fresh_salt() -> Result<[u8; 16], String> {
 	use ring::rand::{SecureRandom, SystemRandom};
 
 	let mut salt = [0u8; 16];
 	SystemRandom::new()
 		.fill(&mut salt)
 		.map_err(|_| "cannot gather salt entropy".to_string())?;
-	hash_password_with_cost(password, cost::current(), &salt)
+	Ok(salt)
+}
+
+/// A new hash of `password`, which just verified against `stored`, when
+/// `stored` is weaker than the cost in force (see [`cost::rewrite_cost`]):
+/// a fresh salt, and for each parameter the larger of the stored and the
+/// configured value. `None` when `stored` needs no rewrite.
+pub(crate) fn upgraded_hash(stored: &str, password: &str) -> Option<Result<String, String>> {
+	let cost = cost::rewrite_cost(stored, cost::current())?;
+	Some(fresh_salt().and_then(|salt| hash_password_with_cost(password, cost, &salt)))
 }
 
 /// [`hash_password`] at an explicit `cost` and `salt`, which the caller draws.

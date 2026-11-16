@@ -100,9 +100,11 @@ pub(super) fn carry(
 	fresh.scram.clone_from(&previous.scram);
 	fresh.totp_secret.clone_from(&previous.totp_secret);
 	fresh.reset = previous.reset;
+	fresh.rehashed.clone_from(&previous.rehashed);
 	if let Some(NewPassword { hash, scram }) = new_password {
 		fresh.password_hash = hash;
 		fresh.scram = scram;
+		fresh.rehashed = None;
 		password_replaced(fresh);
 	}
 }
@@ -138,7 +140,7 @@ impl AccountStore {
 				else {
 					continue;
 				};
-				if hash_digest(&account.password_hash) != target.digest {
+				if !account.holds_hash_digest(&target.digest) {
 					continue;
 				}
 				account.reset = Some(CredentialReset {
@@ -147,6 +149,7 @@ impl AccountStore {
 						|| account.reset.is_some_and(|reset| reset.second_factor),
 				});
 				account.password_hash = placeholder.to_string();
+				account.rehashed = None;
 				account.scram = None;
 				account.totp_secret = None;
 				reset.push(account.name.clone());

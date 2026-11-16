@@ -10,6 +10,7 @@
 
 use std::sync::RwLock;
 
+use argon2::password_hash::phc::PasswordHash;
 use argon2::{Algorithm, Argon2, Params, Version};
 
 /// Memory, in KiB, the loader requires at least: 19 MiB, the OWASP minimum.
@@ -121,6 +122,33 @@ pub(crate) fn scoped<R>(cost: Argon2Cost, body: impl FnOnce() -> R) -> R {
 	}
 	let _restore = Restore(SCOPED.with(|cell| cell.replace(Some(cost))));
 	body()
+}
+
+/// The cost a stored hash should be rewritten at, or `None` when it needs no
+/// rewrite.
+///
+/// A hash is rewritten when it is not argon2id at version 19, or when its
+/// memory, passes or lanes are below `cost`. The new cost takes the larger
+/// of the stored and the configured value of each, so a hash that is
+/// stronger than `cost` in one respect never loses that strength. A string
+/// that is not a readable argon2 hash is left alone: it could not have
+/// verified.
+pub fn rewrite_cost(phc: &str, cost: Argon2Cost) -> Option<Argon2Cost> {
+	let hash = PasswordHash::new(phc).ok()?;
+	let params = Params::try_from(&hash).ok()?;
+	let target = Argon2Cost {
+		memory_kib: params.m_cost().max(cost.memory_kib),
+		iterations: params.t_cost().max(cost.iterations),
+		parallelism: params.p_cost().max(cost.parallelism),
+	};
+	let stored = Argon2Cost {
+		memory_kib: params.m_cost(),
+		iterations: params.t_cost(),
+		parallelism: params.p_cost(),
+	};
+	let current_algorithm =
+		hash.algorithm.as_str() == "argon2id" && hash.version == Some(u32::from(Version::V0x13));
+	(!current_algorithm || target != stored).then_some(target)
 }
 
 /// Put `cost` in force for the hashes written from now on.

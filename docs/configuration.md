@@ -1094,6 +1094,38 @@ section, an unknown key fails the config load.
 | `argon2_parallelism` | Lanes of a new argon2id hash. Default `1`. Floor and ceiling: `1` to `16`. |
 | `scram_iterations` | PBKDF2-HMAC-SHA256 iterations of a new SCRAM verifier. Default `600000`. Floor and ceiling: `600000` (the OWASP figure) to `10000000`, so it can only be raised. A verifier keeps the count it was derived with; one below this value is replaced the next time its account signs in with a cleartext password, which is also how a raised count reaches the accounts that already have one. |
 
+#### Changing the argon2id cost
+
+Raise `argon2_memory_kib`, `argon2_iterations` or `argon2_parallelism`, then
+restart. Nothing is hashed again at once, because the server does not know any
+password. What happens instead:
+
+- A new or changed password is hashed at the new cost.
+- A password that is typed correctly at a sign-in (IMAP, POP3, SMTP
+  submission, the API, OAuth) is checked against its stored hash, and if that
+  hash is weaker than the cost now in force, or is not argon2id at version 19,
+  the server writes a new hash of the same password in the same write that
+  `epistle account password` uses, under the same lock. Each parameter of the new hash is the
+  larger of the stored one and the configured one, so a hash is never made
+  weaker in any respect. Only accounts in `accounts.toml` are rewritten: an
+  account in `[[accounts]]`, in SQL or in LDAP keeps the hash its own source
+  holds.
+- A failed write is logged at `warn` (event `password.rehash.failed`, with the
+  account's log pseudonym, never the hash) and the sign-in is not affected.
+  The next sign-in tries again. Two sign-ins at once write once, and a
+  password changed in the meantime is never put back.
+- The credential digest that an OAuth refresh token is bound to does not
+  change with a rewrite: the password is the same, so the grant keeps working.
+  Changing the password or the second factor still ends it.
+
+An account nobody signs in to keeps its old hash until its password is changed
+(`epistle account password`). Lowering the
+settings, down to the floors, never rewrites anything: a stronger hash stays
+as it is.
+
+The rewrite does not apply to the hash of an API key (`token_hash`), which is
+SHA-256, or to the SCRAM verifier, which has its own `scram_iterations`.
+
 ### `[auth] unicode_passwords` (`[auth] unicode_passwords = true`)
 
 The default policy (`unicode_passwords = false`) requires 12-64 printable-ASCII
