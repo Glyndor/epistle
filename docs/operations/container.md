@@ -18,9 +18,7 @@ that file at build time, so a release that moves a digest there moves it in
 the compose file `epistle stack update` renders on every install; Dependabot
 watches both files. The image carries the musl-statically linked
 release binary, the runtime data the binary needs, and nothing else.
-The list below describes the intended runtime contents. The previous Debian 12
-inventory was inspected on 2026-10-04 with `podman 5.7.0`; the Debian 13
-image has not yet been inspected or measured.
+The list below describes the intended runtime contents.
 
 - `/usr/bin/epistle`, the binary. Built with the same
   `cargo build --release --locked --target <musl>` invocation the .deb
@@ -146,8 +144,7 @@ services:
       - /var/lib/glyndor/epistle/data:/var/lib/glyndor/epistle/data
 ```
 
-Both the failing default and the working mapping were checked on this
-host: a host directory with a `0600` file owned by the operator, mounted
+Both the failing default and the working mapping were checked: a host directory with a `0600` file owned by the operator, mounted
 into the image with no userns flag, returned `Permission denied (os
 error 13)`. The same mount with `--userns=keep-id:uid=65532,gid=65532`
 let `config-check` print
@@ -426,7 +423,7 @@ Worked example: 5,000 messages, each with a 10 MiB attachment, arrive in a
 burst at a VPS with 8 GiB of memory and 500 GB of disk, installed with the
 defaults above.
 
-| What | On this host |
+| What | Worked figure |
 |---|---|
 | Size on the wire | base64 turns 10 MiB into 13.7 MiB (4/3, plus a CRLF every 76 characters); under the 25 MiB `max_message_size` |
 | Memory in flight | `mail 2g` gives a 409 MiB budget: about 29 such messages at once, 7 of them from one sending address (it may hold a quarter of the budget), about 1.2 GiB at the peak. The limits add up to 5.9 GiB of the 8 |
