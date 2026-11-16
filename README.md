@@ -80,6 +80,7 @@ network at all and are reached only through Unix sockets.
 | [Recovery after a compromise](docs/operations/recovery.md) | What rotating keys fixes and does not, the order to work in, what to tell users |
 | [Migration](docs/operations/migration.md) | Moving from Mox, Stalwart or any IMAP server |
 | [Mesh between nodes](docs/operations/mesh.md) | The optional WireGuard network between nodes of one deployment: design and open decisions |
+| [Reboot test](docs/operations/reboot-test.md) | A script that reboots a throwaway machine and proves the stack came back with nothing recreated, pulled or built |
 | [Container stack](docs/operations/container.md) | What `epistle stack` runs and how it is built |
 | [Serve split](docs/operations/serve-split.md) | Which process holds which secret and parser once `serve` is split, and how they talk |
 | [Security](docs/security.md) and [threat model](docs/threat-model.md) | The controls, what they protect and what they assume |
