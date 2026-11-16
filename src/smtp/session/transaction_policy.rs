@@ -17,6 +17,7 @@
 use std::net::IpAddr;
 use std::sync::Arc;
 
+use crate::config::RefusalDetail;
 use crate::smtp::directory::Directory;
 use crate::smtp::diskspace::DiskGuard;
 use crate::smtp::ratelimit::{InboundLimit, SendLimiter};
@@ -56,6 +57,8 @@ pub(crate) struct TransactionPolicy {
 	/// The submission-limit charge of the last message handed to the
 	/// server, kept only once the server accepts it.
 	pending_charge: Option<Charge>,
+	/// How much the text of an inbound limit refusal tells the sender.
+	refusal_detail: RefusalDetail,
 }
 
 impl TransactionPolicy {
@@ -92,6 +95,13 @@ impl TransactionPolicy {
 		per_min: u32,
 	) -> Self {
 		self.inbound_sender = Some(InboundLimit { limiter, per_min });
+		self
+	}
+
+	/// How much the text of an inbound limit refusal tells the sender; the
+	/// code and the class do not change.
+	pub(crate) fn with_refusal_detail(mut self, detail: RefusalDetail) -> Self {
+		self.refusal_detail = detail;
 		self
 	}
 
@@ -156,31 +166,41 @@ impl TransactionPolicy {
 		// Per-IP first: a peer flooding one address hits both limits,
 		// but failing fast on the per-IP one keeps the per-sender budget
 		// untouched for legitimate clients behind a shared NAT.
-		if let (Some(ip_limit), Some(ip)) = (&self.inbound_ip, peer_ip)
-			&& !ip_limit
-				.limiter
-				.check(&ip.to_string(), ip_limit.per_min, now)
-		{
-			return Some(Reply::single(
-				450,
-				"4.7.1 too many messages from this client; retry later",
-			));
+		if let (Some(ip_limit), Some(ip)) = (&self.inbound_ip, peer_ip) {
+			let key = ip.to_string();
+			if !ip_limit.limiter.check(&key, ip_limit.per_min, now) {
+				return Some(self.limit_reply("client", ip_limit, &key, now));
+			}
 		}
 		// Per-sender next, skipping the null reverse-path used by bounces
 		// so a verification failure does not exhaust a legitimate sender.
 		if let Some(sender_limit) = &self.inbound_sender
 			&& !reverse_path.is_empty()
-			&& !sender_limit.limiter.check(
-				&reverse_path.to_ascii_lowercase(),
-				sender_limit.per_min,
-				now,
-			) {
-			return Some(Reply::single(
-				450,
-				"4.7.1 too many messages from this sender; retry later",
-			));
+		{
+			let key = reverse_path.to_ascii_lowercase();
+			if !sender_limit.limiter.check(&key, sender_limit.per_min, now) {
+				return Some(self.limit_reply("sender", sender_limit, &key, now));
+			}
 		}
 		None
+	}
+
+	/// The `450 4.7.1` for an inbound limit `who` (`client` or `sender`) is
+	/// over: the standard text, a generic one when terse, and with the cap
+	/// and the time the window ends when verbose.
+	fn limit_reply(&self, who: &str, limit: &InboundLimit, key: &str, now: u64) -> Reply {
+		let text = match self.refusal_detail {
+			RefusalDetail::Terse => "try again later".to_string(),
+			RefusalDetail::Standard => {
+				format!("too many messages from this {who}; retry later")
+			}
+			RefusalDetail::Verbose => format!(
+				"too many messages from this {who} (max {}/min); retry after {}",
+				limit.per_min,
+				crate::smtp::retry_time::clock_at(limit.limiter.retry_at(key, now)),
+			),
+		};
+		Reply::single(450, &format!("4.7.1 {text}"))
 	}
 
 	/// Check local recipients against their mailbox quota.

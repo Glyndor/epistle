@@ -10,6 +10,7 @@ use crate::smtp::session::{Action, Session};
 use crate::smtp::trace::line_error_reply;
 
 use super::data_rate::{Cut, RateWindow, send_within};
+use super::refusal::Site;
 use super::run_withdrawn::end_withdrawn;
 use super::session_time::{SessionClock, end_session};
 use super::{
@@ -104,6 +105,9 @@ impl Server {
 			{
 				return end_session(&mut stream, session).await;
 			}
+			// Where this line sits decides whether a refusal to it carries a
+			// reference.
+			let site = Site::of(mode == Mode::Data, &line);
 			// In Data mode, pass raw bytes to support 8BITMIME (RFC 6152).
 			let action = 'line: {
 				if mode == Mode::Data {
@@ -191,6 +195,7 @@ impl Server {
 					} else {
 						error_streak = 0;
 					}
+					let reply = self.with_refusal_reference(reply, site, peer);
 					// Inside a transaction an unread reply counts as idle time.
 					if !send_within(&mut stream, &reply, body_window.as_ref()).await? {
 						return Ok(());

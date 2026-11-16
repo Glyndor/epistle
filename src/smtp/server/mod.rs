@@ -22,6 +22,7 @@ pub use session_time::{DEFAULT_MAX_SESSION_TIME_SECS, SessionLimits};
 mod builder;
 mod data_rate;
 mod dnsbl_check;
+mod refusal;
 mod refusal_text;
 mod run;
 pub(crate) use run::MAX_ERROR_STREAK;
@@ -162,6 +163,11 @@ pub struct Server {
 	/// Shared per-envelope-sender inbound rate limiter (limiter + cap),
 	/// consumed at MAIL FROM by unauthenticated sessions.
 	inbound_sender_limit: Option<crate::smtp::ratelimit::InboundLimit>,
+	/// How much the text of a refusal to an unauthenticated sender tells it
+	/// (`[smtp] reject_detail`); the code and the class never change.
+	refusal_detail: crate::config::RefusalDetail,
+	/// Whether a final refusal carries a reference (`[smtp] reject_reference`).
+	refusal_reference: bool,
 	/// Per-tenant aggregate limits (accounts, storage, rate). On top of the
 	/// per-account limiter; empty is the identity.
 	tenant_limits: Option<Arc<crate::api::TenantLimits>>,
@@ -437,6 +443,7 @@ impl Server {
 			session =
 				session.with_inbound_ip_limit(Arc::clone(&ip_limit.limiter), ip_limit.per_min);
 		}
+		session = session.with_refusal_detail(self.refusal_detail);
 		if let Some(sender_limit) = &self.inbound_sender_limit {
 			session = session
 				.with_inbound_sender_limit(Arc::clone(&sender_limit.limiter), sender_limit.per_min);

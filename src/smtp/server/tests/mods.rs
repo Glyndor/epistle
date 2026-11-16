@@ -47,7 +47,7 @@ mod tests_starttls;
 mod tests_author;
 
 #[cfg(test)]
-mod tests_refusal_text;
+mod refusal;
 
 #[cfg(test)]
 mod tests_dmarc_journal;

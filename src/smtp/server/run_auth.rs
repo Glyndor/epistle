@@ -40,12 +40,14 @@ impl Server {
 				crate::spf::SpfOutcome::Fail => {
 					self.metrics.rejected(crate::metrics::RejectReason::Spf);
 					return Err(refusal_text::spf_failed(
+						self.refusal_detail,
 						ip,
 						domain.as_deref().unwrap_or("unknown"),
 					));
 				}
 				crate::spf::SpfOutcome::TempError => {
 					return Err(refusal_text::spf_unavailable(
+						self.refusal_detail,
 						ip,
 						domain.as_deref().unwrap_or("unknown"),
 					));
@@ -140,12 +142,16 @@ impl Server {
 							self.metrics.rejected(crate::metrics::RejectReason::Dmarc);
 							self.train_corpus(message, peer, true);
 							return Err(refusal_text::dmarc_rejected(
+								self.refusal_detail,
 								from.as_deref().unwrap_or("the From domain"),
 								published,
 							));
 						}
 						crate::dmarc::DmarcOutcome::TempError => {
-							return Err(refusal_text::dmarc_unavailable(from.as_deref()));
+							return Err(refusal_text::dmarc_unavailable(
+								self.refusal_detail,
+								from.as_deref(),
+							));
 						}
 						_ => {}
 					}

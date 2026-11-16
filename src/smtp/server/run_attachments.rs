@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use tokio::io::AsyncWrite;
 
-use super::{Reply, Server, send};
+use super::{Reply, Server};
 use crate::antispam::attachments::policy::{Action, WARNING_HEADER};
 use crate::smtp::session::AcceptedMessage;
 
@@ -44,7 +44,8 @@ impl Server {
 		};
 		let Some(permit) = policy.admit_inbound(peer) else {
 			tracing::warn!("attachment inspection busy; deferring the message");
-			send(
+			self.refuse(
+				peer,
 				stream,
 				&Reply::single(451, "4.7.1 content scan unavailable, try again later"),
 			)
@@ -63,7 +64,8 @@ impl Server {
 		});
 		let Ok(Ok((data, decision))) = tokio::time::timeout(deadline, task).await else {
 			tracing::error!("attachment inspection failed or timed out; deferring the message");
-			send(
+			self.refuse(
+				peer,
 				stream,
 				&Reply::single(451, "4.7.1 content scan unavailable, try again later"),
 			)
@@ -74,7 +76,8 @@ impl Server {
 		if decision.action == Action::Reject {
 			tracing::info!(reasons = ?decision.reasons, "attachment policy: rejecting");
 			self.metrics.rejected(crate::metrics::RejectReason::Scanner);
-			send(
+			self.refuse(
+				peer,
 				stream,
 				&Reply::single(550, "5.7.1 attachment type not accepted"),
 			)

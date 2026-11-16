@@ -146,6 +146,13 @@ impl Session {
 		self
 	}
 
+	/// How much the text of an inbound limit refusal tells the sender
+	/// (`[smtp] reject_detail`). The reply code and class do not change.
+	pub fn with_refusal_detail(mut self, detail: crate::config::RefusalDetail) -> Self {
+		self.policy = self.policy.with_refusal_detail(detail);
+		self
+	}
+
 	/// Attach per-tenant aggregate limits. On top of the per-account
 	/// limiter in [`Self::with_send_limiter`]; the SMTP path checks both
 	/// before accepting MAIL FROM. `None` (the default) is the identity and

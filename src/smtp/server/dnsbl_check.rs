@@ -8,11 +8,12 @@
 
 use std::net::IpAddr;
 
+use crate::config::RefusalDetail;
 use crate::smtp::reply::Reply;
 use crate::smtp::session::{AcceptedMessage, Session};
 
 use super::Server;
-use super::refusal_text::{list_name, quoted};
+use super::refusal_text::{self, list_name, quoted};
 
 /// Outcome of [`Server::screen_dnsbl`]: one of the three blocklists fired.
 /// Each carries what was listed and the zone that listed it.
@@ -29,27 +30,32 @@ pub(super) enum DnsblRejection {
 impl DnsblRejection {
 	/// The SMTP reply (code 554 + detail) sent on the wire: what was
 	/// listed, when it is the sender's own, and the list that matched.
-	pub(super) fn reply(&self) -> Reply {
-		let detail = match self {
-			Self::ClientIp { ip, zone } => {
+	pub(super) fn reply(&self, detail: RefusalDetail) -> Reply {
+		let (listed, fix) = match self {
+			Self::ClientIp { ip, zone } => (
 				format!(
-					"5.7.1 client host {ip} blocked by {} (result: listed)",
+					"client host {ip} blocked by {} (result: listed)",
 					list_name(zone)
-				)
-			}
-			Self::SenderDomain { domain, zone } => format!(
-				"5.7.1 sender domain {} blocked by {} (result: listed)",
-				quoted(domain),
-				list_name(zone)
+				),
+				format!("ask {} to delist {ip}", list_name(zone)),
 			),
-			Self::UrlHost { zone } => {
+			Self::SenderDomain { domain, zone } => (
 				format!(
-					"5.7.1 message body links blocked by {} (result: listed)",
+					"sender domain {} blocked by {} (result: listed)",
+					quoted(domain),
 					list_name(zone)
-				)
-			}
+				),
+				format!("ask {} to delist {}", list_name(zone), quoted(domain)),
+			),
+			Self::UrlHost { zone } => (
+				format!(
+					"message body links blocked by {} (result: listed)",
+					list_name(zone)
+				),
+				format!("remove the links {} lists", list_name(zone)),
+			),
 		};
-		Reply::single(554, &detail)
+		refusal_text::listed(detail, listed, fix)
 	}
 }
 

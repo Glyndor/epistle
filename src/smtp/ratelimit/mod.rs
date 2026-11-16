@@ -242,6 +242,19 @@ impl WindowLimiter {
 		used.saturating_add(count) <= limit
 	}
 
+	/// The second at which the window `key` is in at `now` ends and its
+	/// budget starts over: the earliest a refused sender can succeed. A
+	/// key with no running window has nothing to wait for, so `now`.
+	pub fn retry_at(&self, key: &str, now: u64) -> u64 {
+		let state = self.state.lock().expect("send limiter");
+		match state.entries.get(&key.to_ascii_lowercase()) {
+			Some(&(start, _)) if now.saturating_sub(start) < self.window_secs => {
+				start.saturating_add(self.window_secs)
+			}
+			_ => now,
+		}
+	}
+
 	/// Give back `count` events charged for `key` at `now` by a
 	/// [`check_n`](Self::check_n) whose message was then not accepted.
 	/// Only the window that took the charge is credited: once a newer

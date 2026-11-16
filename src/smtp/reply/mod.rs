@@ -31,6 +31,22 @@ impl Reply {
 		self.code
 	}
 
+	/// The text of every line, joined by a space and without the code:
+	/// what a log line says this reply told the client.
+	pub fn text(&self) -> String {
+		self.lines.join(" ")
+	}
+
+	/// This reply with ` (ref <reference>)` at the end of its last line, so
+	/// a client can quote the reference and the operator find the same one
+	/// in the log. The code and the other lines are the same.
+	pub fn with_reference(mut self, reference: &str) -> Self {
+		if let Some(last) = self.lines.last_mut() {
+			last.push_str(&format!(" (ref {reference})"));
+		}
+		self
+	}
+
 	/// Whether this reply indicates success (2xx) or an intermediate
 	/// positive state (3xx).
 	pub fn is_positive(&self) -> bool {
