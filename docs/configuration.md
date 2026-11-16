@@ -1338,6 +1338,48 @@ cooldown_secs = 900
 
 The counter names accepted by `metric` (the ones `Metrics::snapshot` exposes) are: `abuse_dropped`, `accepted`, `accept_failed`, `auth_hash_gate_rejected`, `auth_login_failed`, `auth_login_succeeded`, `bayes_learning_failed`, `bayes_learning_refused`, `bayes_learning_unreadable`, `bayes_training_dropped`, `bounced`, `clock_drift_exceeded`, `connections`, `database_unavailable`, `deferred`, `dmarc_report_rows_failing`, `dmarc_reports_ingested`, `forwarded`, `mta_sts_connections_dropped`, `outbound_policy_rejected`, `outbound_virus`, `own_ip_blocklisted`, `quarantined`, `rejected_dmarc`, `rejected_dnsbl`, `rejected_header_fields`, `rejected_loop`, `rejected_rate_limit`, `rejected_reputation`, `rejected_scanner`, `rejected_spf`, `relayed`, `reports_dropped`, `scanner_clamd_failed`, `scanner_clamd_skipped`, `send_limited_new_recipients`, `sieve_inspection_truncated`, `sieve_rejected`, `subjectpass_challenged`, `subjectpass_passed`, `tlsrpt_failed_sessions`, `tlsrpt_reports_ingested`, `vacation_sent`, `warmup_backoff`, `warmup_held`, `webhook_failed`, `webhook_sent`.
 
+### `[smtp]`
+What a refusal sent to a sender that has not authenticated tells it, and the
+reference it carries. It changes the text of a refusal and nothing else: the
+reply code, the enhanced status code and whether the refusal is permanent or
+temporary are the same at every level.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `reject_detail` | `"standard"` | `"terse"`, `"standard"` or `"verbose"`; any other value is refused on load. See the table below. |
+| `reject_reference` | `true` | Put a reference such as `(ref 7f3a9c)` at the end of a final refusal and in the log line of the same refusal. `false` leaves the text as it was and logs no such line. |
+
+The refusals the level applies to are the SPF, DMARC and blocklist refusals,
+the per-client and per-sender limits (`inbound_rate_limit_per_ip_per_min`,
+`inbound_rate_limit_per_sender_per_min`) and a greylist deferral. The examples
+use `example.net` and `192.0.2.7`.
+
+| Level | What the text says | Example for an SPF failure |
+|---|---|---|
+| `terse` | The least a stranger can learn: the enhanced code and a generic sentence that names no check, list, policy or limit. | `550 5.7.23 message refused` |
+| `standard` | What epistle always answered. | `550 5.7.23 SPF validation failed for 192.0.2.7 as sender of example.net (result: fail)` |
+| `verbose` | The standard text plus what to fix: how to make SPF or DMARC pass, which list to ask to delist the address, domain or link, the figure of a limit (`max 100/min`) and the time to retry at (`retry after 14:05 UTC`, in UTC, rounded up to the minute, because SMTP has no `Retry-After`). | `550 5.7.23 SPF validation failed for 192.0.2.7 as sender of example.net (result: fail); add 192.0.2.7 to the SPF record of example.net or send through a host it lists` |
+
+A terse refusal keeps its class: a permanent refusal stays `5xx` and a
+temporary one stays `4xx`, so a legitimate sender is never told to retry what
+can never succeed. A blocklist zone is named by its public name only, at every
+level; the key a zone can carry in a leading label is never in a reply.
+
+The reference is six random hexadecimal digits drawn for each refusal. It is
+not a counter and it is not derived from the server, the client or the
+message, so it says nothing about any of them. It goes on a `5xx` answer to
+`MAIL`, `RCPT` and `DATA`, and on any `4xx` or `5xx` after the message body
+(the end of `DATA`, or `BDAT`). The log line (INFO, `refusing message`) carries
+the same `reference`, the reply `code`, the client `ip` and the `reply` text,
+so a sender that quotes it is found with one search. A server built without
+the setting, as in a test, sends no reference.
+
+```toml
+[smtp]
+reject_detail = "verbose"
+reject_reference = true
+```
+
 ### `[own_ip_blocklist]`
 A periodic check of the server's own `public_ipv4` and `public_ipv6` against
 DNS blocklist zones, so a listing is found before the big providers start

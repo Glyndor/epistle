@@ -407,6 +407,7 @@ async fn serve(config: Config, role: ServeRole) -> std::io::Result<()> {
 					server = server.with_subjectpass(pass);
 				}
 				server = server.with_metrics(Arc::clone(&metrics));
+				server = server.with_refusal(config.smtp.reject_detail, config.smtp.reject_reference);
 				if let Some(sealer) = &arc_sealer {
 					server = server.with_arc_sealer(Arc::clone(sealer));
 				}

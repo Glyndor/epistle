@@ -17,6 +17,7 @@ pub mod per_ip;
 pub mod quota;
 pub mod ratelimit;
 pub mod reply;
+pub(crate) mod retry_time;
 pub mod scram;
 pub mod server;
 pub mod session;

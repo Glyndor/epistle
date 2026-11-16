@@ -9,7 +9,7 @@ use super::defaults::{default_bulk_recipients, default_masked_addresses_max, def
 use super::{
 	Account, Acme, Alert, Alias, Antispam, Api, Arc, Attachments, Auth, Database, Deliverability,
 	Dkim, DnsProviders, DnsPublish, Ldap, Listener, Llm, LogFormat, MtaSts, Oauth, Otel,
-	OwnIpBlocklist, Privileges, Queue, SrsDomain, Storage, SubjectPass, Tenant, Tls, Transport,
+	OwnIpBlocklist, Privileges, Queue, Smtp, SrsDomain, Storage, SubjectPass, Tenant, Tls, Transport,
 	Webhook,
 };
 
@@ -74,6 +74,9 @@ pub struct Config {
 	/// Periodic DNS blocklist checks of the server's own public addresses.
 	#[serde(default)]
 	pub own_ip_blocklist: OwnIpBlocklist,
+	/// What a refusal tells a sender that has not authenticated.
+	#[serde(default)]
+	pub smtp: Smtp,
 	/// Seconds to delay a first-time (no-reputation) unauthenticated sender
 	/// before accepting. 0 disables the slowdown (the default). Requires a
 	/// configured database.

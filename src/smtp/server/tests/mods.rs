@@ -50,6 +50,9 @@ mod tests_author;
 mod tests_refusal_text;
 
 #[cfg(test)]
+mod tests_refusal_detail;
+
+#[cfg(test)]
 mod tests_dmarc_journal;
 
 #[cfg(test)]

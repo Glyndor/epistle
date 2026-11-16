@@ -45,6 +45,8 @@ impl Server {
 			global_submission_rate_limit_per_min: None,
 			inbound_ip_limit: None,
 			inbound_sender_limit: None,
+			refusal_detail: crate::config::RefusalDetail::default(),
+			refusal_reference: false,
 			tenant_limits: None,
 			disk_guard: None,
 			drain: None,
@@ -131,6 +133,17 @@ impl Server {
 	/// null sender (`<>`) used by bounces is always skipped.
 	pub fn with_inbound_sender_limit(mut self, limit: InboundLimit) -> Self {
 		self.inbound_sender_limit = Some(limit);
+		self
+	}
+
+	/// Set how much a refusal tells a sender that has not authenticated, and
+	/// whether a final refusal carries a reference (`[smtp]`). A server
+	/// built without this call says the standard wording and no reference;
+	/// `serve` calls it with the configuration, whose reference defaults to
+	/// on.
+	pub fn with_refusal(mut self, detail: crate::config::RefusalDetail, reference: bool) -> Self {
+		self.refusal_detail = detail;
+		self.refusal_reference = reference;
 		self
 	}
 

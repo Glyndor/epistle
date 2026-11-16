@@ -13,10 +13,10 @@ type DnsFuture<'a, T> =
 /// A resolver with a fixed set of TXT records and listed names. A TXT name
 /// in `broken` fails temporarily.
 #[derive(Default)]
-struct Dns {
-	txt: Vec<(&'static str, &'static str)>,
-	broken: Vec<&'static str>,
-	listed: Vec<&'static str>,
+pub(super) struct Dns {
+	pub(super) txt: Vec<(&'static str, &'static str)>,
+	pub(super) broken: Vec<&'static str>,
+	pub(super) listed: Vec<&'static str>,
 }
 
 impl crate::spf::DnsLookup for Dns {
@@ -54,6 +54,33 @@ impl crate::spf::DnsLookup for Dns {
 /// `eve@sender.example` at 192.0.2.7 to the hosted bob@example.org, and
 /// return the one refusal line the server answered at the end of DATA.
 async fn refusal(dns: Dns, dnsbl: crate::dnsbl::Dnsbl, from: &str, body: &str) -> String {
+	refusal_with(Setup::default(), dns, dnsbl, from, body).await
+}
+
+/// How the server under test is set: what a refusal says and whether it
+/// carries a reference.
+pub(super) struct Setup {
+	pub(super) detail: crate::config::RefusalDetail,
+	pub(super) reference: bool,
+}
+
+impl Default for Setup {
+	fn default() -> Self {
+		Self {
+			detail: crate::config::RefusalDetail::Standard,
+			reference: false,
+		}
+	}
+}
+
+/// [`refusal`] on a server set as `setup` says.
+pub(super) async fn refusal_with(
+	setup: Setup,
+	dns: Dns,
+	dnsbl: crate::dnsbl::Dnsbl,
+	from: &str,
+	body: &str,
+) -> String {
 	let sink = Arc::new(MemorySink::new());
 	let server = Server::new("mail.example.org", sink.clone() as Arc<dyn MessageSink>)
 		.with_directory(DirectoryHandle::new(Directory::new(
@@ -61,7 +88,8 @@ async fn refusal(dns: Dns, dnsbl: crate::dnsbl::Dnsbl, from: &str, body: &str) -
 			[("bob@example.org".to_string(), "bob".to_string())],
 		)))
 		.with_spf(Arc::new(dns))
-		.with_dnsbl(dnsbl);
+		.with_dnsbl(dnsbl)
+		.with_refusal(setup.detail, setup.reference);
 	let (client, server_stream) = tokio::io::duplex(64 * 1024);
 	let peer = Some("192.0.2.7".parse().expect("ip"));
 	let task = tokio::spawn(async move { server.handle(server_stream, peer).await });

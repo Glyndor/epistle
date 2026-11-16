@@ -11,7 +11,7 @@ use crate::smtp::trace::{
 	RECEIVED_HOP_LIMIT, received_header, received_hop_count, refuse_padded_headers,
 };
 
-use super::{Connection, Server, send};
+use super::{Connection, Server, refusal_text};
 
 impl Server {
 	/// Screen, stamp and hand on one received message, then send the reply
@@ -40,7 +40,8 @@ impl Server {
 		if received_hop_count(&message.data) >= RECEIVED_HOP_LIMIT {
 			tracing::warn!("rejecting message: too many Received hops (mail loop)");
 			self.metrics.rejected(crate::metrics::RejectReason::Loop);
-			send(
+			self.refuse(
+				peer,
 				stream,
 				&Reply::single(554, "5.4.6 too many hops, this message is looping"),
 			)
@@ -51,7 +52,7 @@ impl Server {
 		// Sieve filter would not read: refused, so none can be
 		// hidden from the filters by padding.
 		if let Err(refused) = refuse_padded_headers(&message.data, Some(&self.metrics)) {
-			send(stream, &refused.smtp_reply()).await?;
+			self.refuse(peer, stream, &refused.smtp_reply()).await?;
 			return Ok(());
 		}
 		// DNSBL screening: reject an unauthenticated client whose
@@ -59,7 +60,8 @@ impl Server {
 		// listed. All three lists fail open on `Unavailable`, so a
 		// misconfigured resolver does not block delivery.
 		if let Some(rejection) = self.screen_dnsbl(peer, &message, session).await {
-			send(stream, &rejection.reply()).await?;
+			self.refuse(peer, stream, &rejection.reply(self.refusal_detail))
+				.await?;
 			return Ok(());
 		}
 		// Trusted-reply fast path (plan 4.6): when the envelope
@@ -95,9 +97,10 @@ impl Server {
 				== crate::antispam::greylist::Decision::Defer
 			{
 				tracing::info!(%ip, "greylisting: deferring first attempt");
-				send(
+				self.refuse(
+					peer,
 					stream,
-					&Reply::single(451, "4.7.1 greylisted, please retry shortly"),
+					&refusal_text::greylisted(self.refusal_detail, now.saturating_add(*delay)),
 				)
 				.await?;
 				return Ok(());
@@ -109,7 +112,7 @@ impl Server {
 			match self.authenticate_inbound(&message, session, peer).await {
 				Ok(outcome) => outcome,
 				Err(reply) => {
-					send(stream, &reply).await?;
+					self.refuse(peer, stream, &reply).await?;
 					return Ok(());
 				}
 			};
@@ -143,7 +146,8 @@ impl Server {
 					name = %leak,
 					"refusing inbound: trust field survived strip"
 				);
-				send(
+				self.refuse(
+					peer,
 					stream,
 					&Reply::single(
 						550,
@@ -226,7 +230,12 @@ impl Server {
 				crate::antispam::hook::HookVerdict::Reject => {
 					self.metrics.rejected(crate::metrics::RejectReason::Scanner);
 					self.train_corpus(&message, peer, true);
-					send(stream, &Reply::single(550, "5.7.1 rejected by scanner")).await?;
+					self.refuse(
+						peer,
+						stream,
+						&Reply::single(550, "5.7.1 rejected by scanner"),
+					)
+					.await?;
 					return Ok(());
 				}
 				crate::antispam::hook::HookVerdict::Quarantine => {
@@ -235,7 +244,8 @@ impl Server {
 					message.mailbox = Some("Rejects".to_string());
 				}
 				crate::antispam::hook::HookVerdict::Defer => {
-					send(
+					self.refuse(
+						peer,
 						stream,
 						&Reply::single(451, "4.7.1 content scan unavailable, try again later"),
 					)
@@ -243,7 +253,8 @@ impl Server {
 					return Ok(());
 				}
 				crate::antispam::hook::HookVerdict::Refuse => {
-					send(
+					self.refuse(
+						peer,
 						stream,
 						&crate::smtp::sink::SinkError::ScanTooLarge.smtp_reply(),
 					)
@@ -317,14 +328,15 @@ impl Server {
 				let prepared = match self.prepare_submission(session, account, &mut message) {
 					Ok(prepared) => prepared,
 					Err(refused) => {
-						send(stream, &refused).await?;
+						self.refuse(peer, stream, &refused).await?;
 						return Ok(());
 					}
 				};
 				// Marketing mail to suppressed addresses only has
 				// nowhere to go: say so, as the API does.
 				if message.recipients.is_empty() {
-					send(
+					self.refuse(
+						peer,
 						stream,
 						&Reply::single(550, "5.7.1 every recipient is on the suppression list"),
 					)
@@ -406,7 +418,7 @@ impl Server {
 				error.smtp_reply()
 			}
 		};
-		send(stream, &reply).await?;
+		self.refuse(peer, stream, &reply).await?;
 		Ok(())
 	}
 }
