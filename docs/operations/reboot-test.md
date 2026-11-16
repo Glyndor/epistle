@@ -70,14 +70,14 @@ check fail on purpose, remove the unit before `before` is run
 is not `ok`; remove it after `before` records and the `after` run is expected to fail on the
 `boot unit` item.
 
-A CI job runs the same four commands on a runner that can start a virtual
-machine; a job on a runner that is not disposable must not run it.
+The procedure is run by hand, on a throwaway machine. It must not run on a
+machine that is not disposable.
 
 ## What is not verified
 
 The script's decisions are tested with fakes (`tests/scripts/stack_reboot.rs`):
 the refusals, the dry run, reading the status document, and comparing the
-state before and after. The reboot itself is not: no machine was rebooted to
-write it, and the `podman` output format and the `epistle` documents on a real
-stack were read from the source, not from a run on one. The first run on a
-real machine is the check of those assumptions.
+state before and after. The reboot itself is not part of those tests, and
+the `podman` output format and the `epistle` documents the script reads are
+taken from the source, not from a recorded run. A first run on a real machine
+checks those assumptions.

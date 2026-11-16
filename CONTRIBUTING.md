@@ -15,11 +15,11 @@ the project release key.
 ## Branch flow
 
 ```
-topic branch ──PR──▶ develop ──release PR──▶ main
+topic branch ──PR──▶ develop
 ```
 
 Branch off `develop`, open a pull request against `develop`, squash-merge
-back into `develop`. Releases go from `develop` into `main`.
+back into `develop`.
 
 ## Before you open a pull request
 
@@ -27,8 +27,7 @@ back into `develop`. Releases go from `develop` into `main`.
   board. Apply `type:`, `prio:`, `effort:`, `status:` and `area:` where
   they fit.
 - **Sign every commit off** with `git commit -s`. The `dco` check is
-  required on both `develop` and `main` and it reads every commit on the
-  branch.
+  required and it reads every commit on the branch.
 - **Sign off in the pull request body too.** A squash merge writes the pull
   request title and body as the commit message, so end the body with a
   `Signed-off-by:` trailer using the same identity as the commits.
@@ -46,10 +45,9 @@ user-visible behaviour, add a changelog entry under the unreleased section of
 
 Files under `migrations/` are versioned SQL and are applied in numeric
 order by `sqlx::migrate!` at startup. An applied migration is never
-edited; if a change is needed, add a new migration that follows it. The
-current files (`0001_reputation.sql`, `0002_bayes.sql`,
-`0003_bayes_scope.sql`, `0004_directory.sql`) are immutable in `develop`
-and `main`. A pull request that rewrites one is rejected at review. A
+edited; if a change is needed, add a new migration that follows it. Every file
+already in `develop` is immutable, and a pull request that rewrites one is
+rejected at review. A
 migration numbered above 0003 must not drop, rename or retype because
 `podman auto-update` cannot roll a migration back, so the discipline is
 add and dual-write in one release, read the new shape in the next, and
@@ -91,7 +89,7 @@ any that does not.
 
 ## Tests
 
-The suite that runs in CI is:
+The checks a pull request runs are:
 
 ```sh
 cargo fmt --all --check
@@ -149,8 +147,7 @@ E2E_HOST=127.0.0.1 E2E_SUBMISSION_PORT=4465 E2E_IMAPS_PORT=4993 \
 ```
 
 The test submits a message over implicit TLS with `AUTH PLAIN`, then polls
-IMAPS until it can fetch it. In CI, `e2e.yml` runs the same thing with the
-server under `systemd-run` on `ubuntu-22.04` and `ubuntu-24.04`.
+IMAPS until it can fetch it.
 
 The coverage gate is 88% with a fixed ignore regex for files that need a
 live service or are thin connection-accept glue (see `ci.yml`). The MSRV
@@ -170,35 +167,13 @@ Assert **which** failure fired, never that some failure did. A bare
 non-zero assertion is satisfied by almost any failure, including the one
 you did not mean.
 
-## Workflows
+## Required checks
 
-CI is split by responsibility rather than gathered in one file:
-
-| file | what fails there |
-|---|---|
-| `ci.yml` | format, clippy, test, coverage, MSRV, dependabot freshness |
-| `dco.yml` | a `Signed-off-by:` trailer on every commit, and only a `users.noreply.github.com` address in authors and sign-offs |
-| `line-limit.yml` | a file's code lines past the soft/hard limit |
-| `debian.yml` | the package builds and `Build-Depends` is satisfiable |
-| `db.yml` | the database integration test against a live Postgres |
-| `e2e.yml` | the full server under `systemd` on `ubuntu-22.04` and `ubuntu-24.04` |
-| `interop.yml` | protocol interop against a live Postfix |
-| `bench.yml` | the criterion targets compile (run is on-demand) |
-| `fuzz.yml` | nightly fuzz on the protocol parsers |
-| `rust-audit.yml` | `cargo audit` against current RUSTSEC |
-| `supply-chain.yml` | SBOM and license set |
-| `merge-group-triggers.yml` | a required check that would not report in the merge queue |
-| `container.yml` | the image builds and passes three smoke checks: version, `config-check` with no network, runtime user |
-| `editorconfig.yml` | a file that breaks `.editorconfig` |
-| `folder-limit.yml` | a folder with more files than the ceiling |
-| `scripts.yml` | the Python helper scripts and their tests |
-| `ldap.yml` | the LDAP code path against a real OpenLDAP |
-| `imaptest.yml` | Dovecot's imaptest scripts against a server built from the commit |
-| `upgrade.yml` | the newest published binary's data opens with this build |
-| `mutants.yml` | weekly mutation testing, never a gate on a pull request |
-| `dependabot-security-watch.yml` | a Dependabot security update that opened against `main` and sits stuck |
-| `main-guard.yml` | a pull request into `main` whose head is not `develop` |
-| `release.yml` | the tag, the changelog, the audit and the signing |
+A pull request into `develop` has to pass `rust / Format & lint`,
+`rust / Test`, `rust / Coverage`, `debian / dpkg-buildpackage`,
+`line-limit / line limit`, `sbom-and-licenses / SBOM and license attribution`
+and `dco / Signed-off-by present on every commit`. The workflow files are in
+`.github/workflows/`.
 
 ## Security
 

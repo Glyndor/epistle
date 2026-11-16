@@ -2,9 +2,7 @@
 
 What epistle writes into a message, what it takes out, and what it leaves
 alone, for each way a message enters or leaves the server. It describes the
-code as it is today, not as it is meant to become. If you build on it, read
-[Planned changes](#planned-changes) first: some of what this page says will
-move.
+code as it is.
 
 The tests read this page. `tests/contracts/headers_documented.rs` fails when the source
 writes or removes a header this page does not name, and
@@ -20,7 +18,7 @@ DKIM table below to the signed names and their repetition counts in CI.
 | **SMTP submission** (587, 465, after AUTH) | `Received`; `Message-ID` and `Date` only when the client left them out; `DKIM-Signature` on the copy that leaves the server; `Precedence: bulk` for marketing mail; the [identification headers](#identification-headers) | `Bcc` and `Resent-Bcc`; `Epistle-Class`; any `Received` the client wrote (the server writes its own); `Authentication-Results`; every `X-Epistle-*`; any `Precedence` the client wrote, for marketing mail | Everything else, including a `Return-Path` or `Delivered-To` the client wrote |
 | **REST API** (`POST /api/v1/send`) | `From`, `Subject`, `Date`, `Message-ID`, `MIME-Version`, `Content-Type` always; `To`, `Sender`, `Cc`, `Reply-To`, `In-Reply-To`, `References`, `Importance` with `X-Priority`, `List-Unsubscribe` with `List-Unsubscribe-Post`, `Auto-Submitted`, `X-Auto-Response-Suppress`, `Feedback-ID` and your `X-` headers when the request has the field; `Content-Transfer-Encoding`, `Content-Disposition`, `Content-ID` for bodies and attachments; `DKIM-Signature` on the copy that leaves the server; `Precedence: bulk` for marketing mail; the [identification headers](#identification-headers) | `X-Priority` and `X-Auto-Response-Suppress`, reserved for the named request fields. Every other `X-` name is accepted: `X-Epistle` and every name under it with a hyphen reach the message and are removed by the submission exactly as on SMTP, while `X-Epistlefoo` is the sender's and survives. No `Received` or `Authentication-Results` can be sent at all: a custom header has to be named `X-` | Nothing: the request names every header, and only the fields listed in the [API guide](api.md) turn into one |
 | **JMAP** (`Email/set` then `EmailSubmission/set`) | The headers of the Email object (`From`, `Sender`, `To`, `Cc`, `Bcc`, `Reply-To`, `Subject`, `In-Reply-To`, `References`, `MIME-Version`, `Content-*`); `Message-ID` and `Date` when missing; `DKIM-Signature` on the copy that leaves the server; `Precedence: bulk` for marketing mail; the [identification headers](#identification-headers) | `Bcc` and `Resent-Bcc` at submission; `Epistle-Class`; any `Received` the draft carries; `Authentication-Results`; every `X-Epistle-*`; any `Precedence` the draft had, for marketing mail | Nothing the draft carries besides the above. Custom `header:` properties on `Email/set` create are ignored |
-| **SMTP inbound** (25, then local delivery) | `Received`; `Received-SPF`, `Authentication-Results` and the ARC set when the sender is checked; `X-Spam-Status` and `X-Spam-Score` for a junk score; `X-Epistle-Attachment-Warning` when the attachment policy flags the message; `Return-Path` and `Delivered-To` on the stored copy; `List-Id`, `List-Post`, `List-Unsubscribe` for a list address | `Authentication-Results` with our authserv-id or an unparseable authserv-id; `Received-SPF`; `X-Spam-*`; `X-Epistle-*`; `Delivered-To`; `Return-Path`; `Epistle-Class`, before adding local fields; `TLS-Required` at delivery | Other `Authentication-Results` with a parseable foreign authserv-id, as untrusted information; `DKIM-Signature`; `ARC-*`; earlier `Received`; `Bcc`; other fields not listed as removed |
+| **SMTP inbound** (25, then local delivery) | `Received`; `Received-SPF`, `Authentication-Results` and the ARC set when the sender is checked; `X-Spam-Status` and `X-Spam-Score` for a junk score; `X-Epistle-Attachment-Warning` when the attachment policy flags the message; `Return-Path` and `Delivered-To` on the stored copy; `List-Id`, `List-Post`, `List-Unsubscribe` for a list address | `Authentication-Results` with the server's own authserv-id or an unparseable authserv-id; `Received-SPF`; `X-Spam-*`; `X-Epistle-*`; `Delivered-To`; `Return-Path`; `Epistle-Class`, before adding local fields; `TLS-Required` at delivery | Other `Authentication-Results` with a parseable foreign authserv-id, as untrusted information; `DKIM-Signature`; `ARC-*`; earlier `Received`; `Bcc`; other fields not listed as removed |
 | **Forwarding** (account forward, Sieve `redirect`) | `Delivered-To` naming the forwarding address; the ARC set when an ARC key is configured | Nothing in the message; the envelope sender is rewritten with SRS when it is enabled | The original message, headers and body. No `Resent-*` and no `X-Forwarded-*` is added |
 | **Lists** (an alias with a list id) | `List-Id`, `List-Post`, `List-Unsubscribe` on each delivered copy | The `List-Id`, the `List-Post` and the `List-Unsubscribe` the copy already carried: the list claims what it is, and adds its `mailto` unsubscribe only where the copy has none | The rest of the message |
 | **Relay to the next MTA** (the queue worker) | Nothing | Nothing | The queued bytes, as signed at submission |
@@ -313,14 +311,7 @@ their interpretations is what the safety net covers. A reserved field the
 second pass flags turns into a permanent `550 5.7.1` and never reaches a
 mailbox.
 
-## Planned changes
+## BIMI
 
-These are not done. Do not depend on any of them yet.
-
-- BIMI. Which headers it will add or read is not decided. What the DNS side
-  needs is in the [DNS guide](dns.md#bimi-optional); the server writes no BIMI
-  header today.
-
-Until BIMI lands, the `Feedback-ID`, `List-Id`, `List-Unsubscribe`,
-`Auto-Submitted`, `Organization`, `X-Epistle` and `DKIM-Signature` rows above
-are what the server does.
+The server writes no BIMI header. What the DNS side needs is in the
+[DNS guide](dns.md#bimi-optional).

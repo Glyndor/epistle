@@ -1654,33 +1654,22 @@ The shipped sources are `nts:nts.netnod.se`, `nts:nts.time.nl` and
 Physikalisch-Technische Bundesanstalt (Germany), three independent
 operators, every offset authenticated. The diagnostic median is
 insensitive to one drifting source, subject to the verdict limitation
-above. All three answered the whole NTS exchange (key exchange, cookies,
-authenticated poll) from the development host when the list was measured
-on 2026-10-22. A whole NTS exchange costs a dial, a TLS handshake, the
-key exchange and the authenticated poll, so on a slow link it comes close
-to the `2 s` budget: `nts.netnod.se` took between 1.37 s and 1.82 s on
-the development host across eight consecutive runs. The `2 s` per-source
-budget is a constant in the binary, not a key here. A miss is reported as
-a timeout, the run loses its diagnostic median, and the area gives at
-least `Warn`; no valid readings or a valid offset at the fail threshold
-gives `Fail`. Measure the three from the host that will run
-`epistle status`, because a network can answer one operator and not
-another.
+above. A whole NTS exchange costs a dial, a TLS handshake, the key exchange and
+the authenticated poll, so on a slow link it can come close to the `2 s`
+per-source budget, which is a constant in the binary, not a key here. A miss is
+reported as a timeout, the run loses its diagnostic median, and the area gives
+at least `Warn`; no valid readings or a valid offset at the fail threshold
+gives `Fail`. Check the three from the host that will run `epistle status`,
+because a network can answer one operator and not another.
 
-Two other providers are not in the list because of what they answered:
+`time.cloudflare.com` and `time.google.com` are not in the list.
+`time.google.com` publishes no NTS-KE endpoint, so it can only be a plain NTPv4
+source (`kind = "ntp"`); `time.cloudflare.com` can be used as `kind = "ntp"`, or
+as `kind = "nts"` on a network where its authenticated exchange answers.
 
-- `time.cloudflare.com` answers plain NTPv4 in 82 ms to 106 ms on every
-  attempt measured. Its NTS-KE endpoint answers the key exchange and
-  returns cookies, then never answers the authenticated poll, on every run
-  recorded for this branch and at budgets up to 15 s. Use it as
-  `kind = "ntp"`, or set `kind = "nts"` on a network where its
-  authenticated exchange does answer.
-- `time.google.com` publishes no NTS-KE endpoint, so it can only be a plain
-  NTPv4 source.
-
-Replace any of them when the chosen peers change; keep one provider per
-autonomous system, and set `kind` per source to what that source actually
-answers.
+Replace any of the shipped sources when the chosen peers change; keep one
+provider per autonomous system, and set `kind` per source to what that source
+actually answers.
 
 Two notes an operator should have. The area renders one line saying how
 many of the sources were authenticated over NTS and names them, so a run
@@ -1690,11 +1679,8 @@ authenticated readings that agree within 100 ms, so on the shipped list,
 which has no plain source, it stays dormant; it can fire when an operator
 replaces one `nts` source with a plain `ntp` one.
 
-The defaults at `warn_seconds = 1`, `fail_seconds = 5` come from the
-design that drove the first delivery. They are the same numbers
-`docs/limits.md` would expose as adjustable limits if a catalog entry
-were added later. Until then they live in `[clock_external]` and
-`Config::validate` enforces the strict-less relation.
+The defaults are `warn_seconds = 1` and `fail_seconds = 5`; `Config::validate`
+enforces that the warn threshold is strictly below the fail threshold.
 
 ### `[boot]`
 Which drop-ins `epistle` writes for the stack's boot unit. Both default to on
@@ -2620,12 +2606,11 @@ scope). A scope in reach adds its entries and never removes another's:
 **Numbers.** For `bayes_junk_at`, `bayes_reject_at`, `greylist_delay_secs`
 and `first_time_sender_delay_secs` the most specific scope in reach wins:
 account, then domain, then tenant, then the server. There is no floor: a scope
-may set any valid value, looser or stricter than the server (the issue names
-none; a provider that wants one needs a decision). A message with several
+may set any valid value, looser or stricter than the server. A message with several
 recipients is judged by the strictest values of its recipients: the lowest
 thresholds, a reject threshold if any recipient has one, and the longest
-delays. Quarantine digests, release rules, notice texts, a per-tenant audit log
-and operator notices are not part of this change.
+delays. Scopes carry no quarantine digests, release rules, notice texts, per-tenant
+audit log or operator notices.
 
 **Strict checks per scope.** `[antispam_scope.checks]` turns the DKIM, ARC and
 reverse-DNS results of unauthenticated inbound mail from a note in the headers
@@ -2704,7 +2689,7 @@ customer controls in that customer's `domain` or `account` scope, and keeps
 emptied (that turns them off); the attachment floor of the server can only be
 raised.
 
-Not done yet: editing these lists from the command line, the API and the panel
+Not available: editing these lists from the command line, the API and the panel
 with an audit entry for each change, `allow` for outbound recipients,
 attachment `strip`, an allowed-extensions list per scope, and the same lists
 on `POST /api/v1/send` and JMAP `EmailSubmission` (they apply to SMTP).

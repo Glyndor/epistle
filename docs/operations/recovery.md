@@ -48,7 +48,7 @@ Rotating the keys on a host that is still compromised achieves nothing: whoever 
 
 ## What is not available yet
 
-**Replacing the storage key**, tracked in [#1497](https://github.com/Glyndor/epistle/issues/1497). Changing only the key makes the existing mail unreadable. There is a documented path with `retired_key_files` and `epistle storage tenant-keys migrate` (see [security](../security.md#keys-per-tenant)); a re-encryption that is resumable after a crash and checks each file is still to come.
+**Replacing the storage key in one command.** Changing only the key makes the existing mail unreadable. The way to replace it is `retired_key_files` plus `epistle storage tenant-keys migrate` (see [security](../security.md#keys-per-tenant)), run with the stack stopped.
 
 ## What to tell the users
 
