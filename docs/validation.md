@@ -11,8 +11,8 @@ A rule is one of three kinds:
   or a protocol frame as something other than itself.
 - **Standard**: an RFC fixes the shape or the limit.
 - **Habit**: the project chose it so names stay short and plain. A habit can be
-  relaxed without breaking a standard, and a change to one needs an owner
-  decision.
+  relaxed without breaking a standard, and a change to one is a deliberate decision, not a
+  side effect.
 
 ## Rules
 
@@ -49,7 +49,7 @@ red instead of going unnoticed.
 - `epistle init` refuses a data directory with `$`, a control character or a
   `..` above the root. `mail.toml` only needs an absolute path.
 - An account name typed with capitals is converted to lowercase by the store and
-  refused by the rule when read as typed (owner decision of 2026-10-12).
+  refused by the rule when read as typed (deliberate: the store normalises, the rule does not).
 - The directory component rule is wider than the account rule on purpose.
 
 ## What a refusal says

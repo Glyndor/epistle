@@ -200,7 +200,7 @@ init stack's. Init keeps publishing a listener when the
 operator's keep-existing-listeners merge leaves it on a
 non-loopback address; where the host reaches it is the
 operator's decision, made with `epistle service set
-<name> --bind <address>`. For API and WebDAV I publish on loopback behind a TLS
+<name> --bind <address>`. Publish API and WebDAV on loopback behind a TLS
 reverse proxy; their HTTP transport is not encrypted by the mail `[tls]` section.
 
 `epistle service enable` starts those two on loopback instead of on SMTP's
@@ -504,7 +504,7 @@ differ. Backups do not carry these keys: save `secrets/` separately.
 
 ### DNS provider token
 
-I keep the DNS provider token in `secrets/dns_provider_token` beside `data_dir`,
+Keep the DNS provider token in `secrets/dns_provider_token` beside `data_dir`,
 with mode `0600`. `epistle dns provider set <provider> --zone <zone> --store-token`
 moves an existing inline or environment token there, updates the generated
 Compose file to mount it read-only only in `mail` (in `certs` when the stack
@@ -569,7 +569,7 @@ clients mount it.
 - Every service runs as `uid 65532` under `keep-id` today, so a client in
   another container reaches the socket as that same uid. A uid of its own for
   the signer needs a group shared with its clients and a `0750` directory,
-  which waits for decision 3 of [the serve split](serve-split.md).
+  which is part of the design in [the serve split](serve-split.md).
 - The signer does not read the caller's uid (`SO_PEERCRED`) yet: whoever
   mounts the volume can ask for a signature.
 

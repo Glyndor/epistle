@@ -796,7 +796,7 @@ record you add, and `epistle dns` does not manage BIMI records.
 
 ## DNS provider token storage
 
-I keep the provider token in an owner-only file outside `data_dir`, beside the
+Keep the provider token in an owner-only file outside `data_dir`, beside the
 storage and OAuth keys. To move the current inline or environment token:
 
 ```sh
@@ -817,7 +817,7 @@ instead. A different existing destination is refused.
 The reconcile loop, the DKIM rotations (the `[dkim]` key and every
 `[[dkim.domain]]` key), the ACME renewal with its `dns-01` challenge and the
 TLSA record, and the TLSA refresh of a `[tls]` pair build the provider again on
-every pass, so a token I replace in the `token_file` is the one the next pass
+every pass, so a token replaced in the `token_file` is the one the next pass
 writes with, with no restart. When that build fails (a token file the process
 can no longer read, say), the provider built before keeps writing and the log
 says why once; the `[dkim]` rotation instead waits until the build works. A
