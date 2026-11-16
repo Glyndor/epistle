@@ -5,7 +5,7 @@ use serde_json::Value;
 use super::host::BootHost;
 use crate::cli::status::report::{Item, Level};
 
-fn services(text: &str) -> Result<Vec<(String, Value)>, String> {
+pub(super) fn services(text: &str) -> Result<Vec<(String, Value)>, String> {
 	let document: Value = serde_json::from_str(text).map_err(|error| {
 		format!("the compose file is not the JSON epistle init writes: {error}")
 	})?;
@@ -20,7 +20,7 @@ fn services(text: &str) -> Result<Vec<(String, Value)>, String> {
 }
 
 /// A service with `profiles` is not started by a plain `up -d`.
-fn enabled(service: &Value) -> bool {
+pub(super) fn enabled(service: &Value) -> bool {
 	service["profiles"]
 		.as_array()
 		.is_none_or(|list| list.is_empty())

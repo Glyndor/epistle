@@ -5,28 +5,31 @@ use std::path::{Path, PathBuf};
 
 use super::host::Account;
 use super::*;
-use crate::cli::stack::autostart::Host;
+use crate::cli::stack::autostart::{Host, dropins};
 
-const UNIT_PATH: &str = "/home/u/.config/systemd/user/podup-epistle.service";
-const COMPOSE: &str = "/data/compose/compose.yaml";
+pub(super) const UNIT_PATH: &str = "/home/u/.config/systemd/user/podup-epistle.service";
+pub(super) const COMPOSE: &str = "/data/compose/compose.yaml";
 
 /// A host that answers from tables and records every question.
-struct Fake {
-	files: BTreeMap<PathBuf, String>,
-	user: BTreeMap<String, String>,
-	system: BTreeMap<String, String>,
-	present: BTreeSet<PathBuf>,
-	images: BTreeSet<String>,
-	boot_sysctl: Result<String, String>,
-	asked: Vec<String>,
-	pulled: Vec<String>,
+pub(super) struct Fake {
+	pub(super) files: BTreeMap<PathBuf, String>,
+	pub(super) user: BTreeMap<String, String>,
+	pub(super) system: BTreeMap<String, String>,
+	pub(super) present: BTreeSet<PathBuf>,
+	pub(super) images: BTreeSet<String>,
+	pub(super) boot_sysctl: Result<String, String>,
+	pub(super) asked: Vec<String>,
+	pub(super) pulled: Vec<String>,
+	pub(super) version: Option<u32>,
+	pub(super) ps: Result<String, String>,
+	pub(super) log: String,
 }
 
-fn unit_text() -> String {
+pub(super) fn unit_text() -> String {
 	"[Unit]\nWants=podman-user-wait-network-online.service\nAfter=podman-user-wait-network-online.service\n[Service]\nExecStart=/usr/bin/podup -f /data/compose/compose.yaml -p epistle up -d --no-build --pull never\n".to_string()
 }
 
-fn compose_text() -> String {
+pub(super) fn compose_text() -> String {
 	serde_json::json!({"services": {
 		"mail": {"image": "ghcr.io/glyndor/epistle:1", "restart": "unless-stopped"},
 		"db": {"image": "postgres:18", "restart": "unless-stopped"},
@@ -35,7 +38,7 @@ fn compose_text() -> String {
 }
 
 /// A host where everything the boot needs is in place.
-fn good() -> Fake {
+pub(super) fn good() -> Fake {
 	let mut files = BTreeMap::new();
 	files.insert(PathBuf::from(UNIT_PATH), unit_text());
 	files.insert(PathBuf::from(COMPOSE), compose_text());
@@ -50,6 +53,14 @@ fn good() -> Fake {
 	files.insert(
 		PathBuf::from("/proc/self/mountinfo"),
 		"1 0 8:1 / / rw - ext4 /dev/sda1 rw\n".into(),
+	);
+	files.insert(
+		PathBuf::from("/home/u/.config/systemd/user/podup-epistle.service.d/10-epistle.conf"),
+		dropins::user_text(),
+	);
+	files.insert(
+		dropins::system_path(1001),
+		dropins::system_text(None).unwrap(),
 	);
 	let mut user = BTreeMap::new();
 	for (query, answer) in [
@@ -98,6 +109,9 @@ fn good() -> Fake {
 		boot_sysctl: Ok("# /usr/lib/sysctl.d/30-glyndor-epistle.conf\nnet.ipv4.ip_unprivileged_port_start = 25\n".into()),
 		asked: Vec::new(),
 		pulled: Vec::new(),
+		version: Some(255),
+		ps: Ok(r#"[{"Service":"mail","State":"running","ExitCode":0},{"Service":"db","State":"running","ExitCode":0}]"#.into()),
+		log: String::new(),
 	}
 }
 
@@ -143,9 +157,18 @@ impl BootHost for Fake {
 	fn storage_dir(&self) -> PathBuf {
 		PathBuf::from("/home/u/.local/share/containers")
 	}
+	fn systemd_version(&mut self) -> Option<u32> {
+		self.version
+	}
+	fn ps_json(&mut self, _: &Path) -> Result<String, String> {
+		self.ps.clone()
+	}
+	fn unit_log(&mut self) -> Result<String, String> {
+		Ok(self.log.clone())
+	}
 }
 
-fn config() -> Config {
+pub(super) fn config() -> Config {
 	Config::parse_text(
 		"hostname = \"mail.example.org\"\ndata_dir = \"/data\"\ndomains = [\"example.org\"]\n\n[[listeners]]\nkind = \"smtp\"\naddr = \"0.0.0.0\"\nport = 25\n",
 		Path::new("/etc/epistle/mail.toml"),
@@ -153,7 +176,7 @@ fn config() -> Config {
 	.expect("config")
 }
 
-fn item<'a>(report: &'a AreaReport, name: &str) -> &'a Item {
+pub(super) fn item<'a>(report: &'a AreaReport, name: &str) -> &'a Item {
 	report
 		.items
 		.iter()
@@ -161,16 +184,16 @@ fn item<'a>(report: &'a AreaReport, name: &str) -> &'a Item {
 		.unwrap_or_else(|| panic!("no {name} item in {report:?}"))
 }
 
-fn run(host: &mut Fake) -> AreaReport {
+pub(super) fn run(host: &mut Fake) -> AreaReport {
 	check_with(host, &config())
 }
 
 #[test]
-fn a_host_where_everything_is_in_place_is_ok_on_all_ten_items() {
+fn a_host_where_everything_is_in_place_is_ok_on_all_thirteen_items() {
 	let mut host = good();
 	let report = run(&mut host);
 	assert_eq!(report.status, Level::Ok, "{report:?}");
-	assert_eq!(report.items.len(), 10, "{report:?}");
+	assert_eq!(report.items.len(), 13, "{report:?}");
 	assert!(
 		report.items.iter().all(|item| item.status == Level::Ok),
 		"{report:?}"
@@ -204,7 +227,7 @@ fn no_compose_file_means_no_stack_and_no_items() {
 	assert!(report.items.is_empty());
 }
 
-fn assert_bad(host: &mut Fake, name: &str, level: Level, fix: &str) {
+pub(super) fn assert_bad(host: &mut Fake, name: &str, level: Level, fix: &str) {
 	let report = run(host);
 	let found = item(&report, name);
 	assert_eq!(found.status, level, "{name}: {found:?}");
@@ -375,164 +398,4 @@ fn item_7_a_unit_that_does_not_wait_or_a_shim_systemd_cannot_load_warns() {
 	host.system
 		.insert("is-active network-online.target".into(), "inactive".into());
 	assert_bad(&mut host, "network wait", Level::Warn, "wait-online");
-}
-
-#[test]
-fn item_8_a_floor_above_the_lowest_port_fails_now_and_at_the_next_boot() {
-	let mut host = good();
-	host.files.insert(
-		PathBuf::from("/proc/sys/net/ipv4/ip_unprivileged_port_start"),
-		"1024\n".into(),
-	);
-	assert_bad(
-		&mut host,
-		"port floor",
-		Level::Fail,
-		"net.ipv4.ip_unprivileged_port_start = 25",
-	);
-	// Applied by hand now, but the boot configuration sets 1024.
-	let mut host = good();
-	host.boot_sysctl = Ok(
-		"net.ipv4.ip_unprivileged_port_start = 25\nnet.ipv4.ip_unprivileged_port_start=1024\n"
-			.into(),
-	);
-	assert_bad(&mut host, "port floor", Level::Fail, "next boot sets 1024");
-	// Nothing in the configuration sets it: the kernel default is 1024.
-	let mut host = good();
-	host.boot_sysctl = Ok("# nothing\nvm.swappiness = 10\n".into());
-	assert_bad(&mut host, "port floor", Level::Fail, "next boot sets 1024");
-}
-
-#[test]
-fn item_8_an_unreadable_boot_configuration_warns_instead_of_guessing() {
-	let mut host = good();
-	host.boot_sysctl = Err("cannot run systemd-analyze".into());
-	assert_bad(&mut host, "port floor", Level::Warn, "could not be read");
-}
-
-#[test]
-fn item_9_a_configured_mount_that_is_not_mounted_warns() {
-	let mut host = good();
-	host.files.insert(
-		PathBuf::from("/etc/fstab"),
-		"UUID=1 / ext4 defaults 0 1\n/dev/vdb1 /data ext4 defaults 0 2\n".into(),
-	);
-	assert_bad(&mut host, "mounts", Level::Warn, "which is not mounted");
-	host.files.insert(
-		PathBuf::from("/proc/self/mountinfo"),
-		"1 0 8:1 / / rw - ext4 /dev/sda1 rw\n2 1 8:17 / /data rw - ext4 /dev/vdb1 rw\n".into(),
-	);
-	let report = run(&mut host);
-	assert_eq!(item(&report, "mounts").status, Level::Ok, "{report:?}");
-	host.present.remove(Path::new("/data"));
-	assert_bad(&mut host, "mounts", Level::Warn, "does not exist");
-}
-
-#[test]
-fn item_10_a_missing_image_of_an_enabled_service_fails_with_stack_update() {
-	let mut host = good();
-	host.images.remove("postgres:18");
-	let report = run(&mut host);
-	let found = item(&report, "images");
-	assert_eq!(found.status, Level::Fail, "{found:?}");
-	assert!(found.detail.contains("db (postgres:18)"), "{found:?}");
-	assert!(found.detail.contains("--pull never"), "{found:?}");
-	assert!(
-		found.detail.contains("sudo epistle stack update"),
-		"{found:?}"
-	);
-	assert!(host.pulled.is_empty());
-}
-
-#[test]
-fn item_10_the_images_all_present_are_ok_and_a_disabled_service_is_only_a_warning() {
-	let mut host = good();
-	assert_eq!(item(&run(&mut host), "images").status, Level::Ok);
-	let mut doc: serde_json::Value = serde_json::from_str(&compose_text()).unwrap();
-	doc["services"]["tools"] =
-		serde_json::json!({"image": "example/tools:1", "profiles": ["debug"], "restart": "no"});
-	host.files.insert(PathBuf::from(COMPOSE), doc.to_string());
-	let report = run(&mut host);
-	let found = item(&report, "images");
-	assert_eq!(found.status, Level::Warn, "{found:?}");
-	assert!(found.detail.contains("example/tools:1"));
-	assert!(found.detail.contains("not enabled"));
-	// And its restart policy `no` is not held against the stack either.
-	assert_eq!(
-		item(&report, "restart policy").status,
-		Level::Ok,
-		"{report:?}"
-	);
-}
-
-#[test]
-fn the_summary_names_the_failing_items() {
-	let mut host = good();
-	host.present
-		.remove(Path::new("/var/lib/systemd/linger/glyndor-epistle"));
-	host.images.clear();
-	let report = run(&mut host);
-	assert_eq!(report.status, Level::Fail);
-	assert_eq!(
-		report.detail,
-		"the stack would not come back after a reboot: linger, images"
-	);
-}
-
-#[test]
-fn the_floor_reader_takes_the_last_setting_in_any_spelling() {
-	assert_eq!(
-		floor::configured("net.ipv4.ip_unprivileged_port_start = 100\n"),
-		Some(100)
-	);
-	assert_eq!(
-		floor::configured("-net/ipv4/ip_unprivileged_port_start=7\n"),
-		Some(7)
-	);
-	assert_eq!(
-		floor::configured("# net.ipv4.ip_unprivileged_port_start = 1\n"),
-		None
-	);
-	assert_eq!(
-		floor::configured(
-			"net.ipv4.ip_unprivileged_port_start=1\nnet.ipv4.ip_unprivileged_port_start=2\n"
-		),
-		Some(2)
-	);
-}
-
-#[test]
-fn the_mount_reader_skips_noauto_swap_and_the_root() {
-	let fstab =
-		"/dev/a / ext4 defaults 0 1\n/dev/b /data ext4 noauto 0 0\n/dev/c none swap sw 0 0\n";
-	assert_eq!(mounts::unmounted(fstab, "", Path::new("/data/x")), None);
-}
-
-#[test]
-fn the_summary_lists_only_what_is_not_ok_with_its_fix_and_is_silent_without_a_stack() {
-	let mut host = good();
-	let mut out = Vec::new();
-	summary::render(&run(&mut host), &mut out);
-	assert_eq!(
-		String::from_utf8(out).unwrap(),
-		"epistle: boot: the stack comes back after a reboot\n"
-	);
-	host.present
-		.remove(Path::new("/var/lib/systemd/linger/glyndor-epistle"));
-	let mut out = Vec::new();
-	summary::render(&run(&mut host), &mut out);
-	let text = String::from_utf8(out).unwrap();
-	assert!(
-		text.starts_with("epistle: boot: the stack would not come back after a reboot: linger\n"),
-		"{text}"
-	);
-	assert!(
-		text.contains("epistle:   fail linger: ") && text.contains("sudo loginctl enable-linger"),
-		"{text}"
-	);
-	assert_eq!(text.lines().count(), 2, "{text}");
-	host.files.remove(Path::new(COMPOSE));
-	let mut out = Vec::new();
-	summary::render(&run(&mut host), &mut out);
-	assert!(out.is_empty());
 }

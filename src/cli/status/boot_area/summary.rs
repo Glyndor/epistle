@@ -10,7 +10,7 @@ use std::io::Write;
 /// says it does. A host without a compose file prints nothing: it has no
 /// stack to bring back.
 pub(in crate::cli) fn print_summary(config: &Config, out: &mut (impl Write + ?Sized)) {
-	let report = boot_area::check_with(&mut boot_area::host::Live::new(), config);
+	let report = boot_area::judge(&mut boot_area::host::Live::new(), config, true);
 	render(&report, out);
 }
 

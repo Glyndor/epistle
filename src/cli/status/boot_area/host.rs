@@ -28,6 +28,12 @@ pub(super) trait BootHost: Host {
 	fn image_exists(&mut self, image: &str) -> Result<bool, String>;
 	/// Where the account's container storage lives.
 	fn storage_dir(&self) -> PathBuf;
+	/// The major version of the running systemd; `None` when it cannot be read.
+	fn systemd_version(&mut self) -> Option<u32>;
+	/// What `podup ps --format json` prints for the stack at `compose`.
+	fn ps_json(&mut self, compose: &Path) -> Result<String, String>;
+	/// What the boot unit logged this boot, oldest line first.
+	fn unit_log(&mut self) -> Result<String, String>;
 }
 
 /// The real host.
@@ -138,5 +144,31 @@ impl BootHost for Live {
 		}
 		let home = std::env::var_os("HOME").unwrap_or_default();
 		PathBuf::from(home).join(".local/share/containers")
+	}
+
+	fn systemd_version(&mut self) -> Option<u32> {
+		let text = stdout_of(Command::new("systemctl").arg("--version")).ok()?;
+		autostart::dropins::parse_version(&text)
+	}
+
+	fn ps_json(&mut self, compose: &Path) -> Result<String, String> {
+		let mut command =
+			crate::cli::stack::build_command("podup", compose, &["ps", "--format", "json"]);
+		stdout_of(&mut command).map_err(|error| format!("cannot run podup: {error}"))
+	}
+
+	fn unit_log(&mut self) -> Result<String, String> {
+		stdout_of(Command::new("journalctl").args([
+			"--user",
+			"--unit",
+			autostart::UNIT,
+			"--boot",
+			"--lines",
+			"200",
+			"--output",
+			"cat",
+			"--no-pager",
+		]))
+		.map_err(|error| format!("cannot run journalctl: {error}"))
 	}
 }
