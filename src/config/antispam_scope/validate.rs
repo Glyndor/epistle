@@ -138,6 +138,11 @@ impl Config {
 				"{label} first_time_sender_delay_secs must be at most {MAX_FIRST_TIME_DELAY_SECS}"
 			)));
 		}
+		if scope.forward_per_min == Some(0) {
+			return Err(invalid(format!(
+				"{label} forward_per_min must be at least 1; remove the key to keep the wider scope's limit"
+			)));
+		}
 		Ok(())
 	}
 

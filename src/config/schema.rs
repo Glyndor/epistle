@@ -74,9 +74,13 @@ pub struct Config {
 	/// Periodic DNS blocklist checks of the server's own public addresses.
 	#[serde(default)]
 	pub own_ip_blocklist: OwnIpBlocklist,
-	/// What a refusal tells a sender that has not authenticated.
+	/// What a refusal tells a sender that has not authenticated, the
+	/// networks that skip the sender screens and the full-mailbox answer.
 	#[serde(default)]
 	pub smtp: Smtp,
+	/// Where forwarded mail may go and how much of it an account may send.
+	#[serde(default)]
+	pub forwarding: super::Forwarding,
 	/// Seconds to delay a first-time (no-reputation) unauthenticated sender
 	/// before accepting. 0 disables the slowdown (the default). Requires a
 	/// configured database.

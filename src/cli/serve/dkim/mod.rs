@@ -115,7 +115,11 @@ pub(in crate::cli) fn build_split_with_companions(
 		.with_rules(config.rules.clone())
 		.with_identification(crate::smtp::identification::Policy::from_config(config))
 		.with_metrics(metrics.clone())
-		.with_fbl(crate::reports::fbl::Fbl::from_config(config));
+		.with_fbl(crate::reports::fbl::Fbl::from_config(config))
+		.with_forwarding(Arc::new(crate::forwarding::Guard::from_config(
+			config,
+			Arc::new(crate::antispam::scopes::Scopes::from_config(config)),
+		)));
 	let mut dkim_signer: Option<crate::dkim::ReloadableSigner> = None;
 	let mut domain_signers = Vec::new();
 	let mut per_domain_signer = None;

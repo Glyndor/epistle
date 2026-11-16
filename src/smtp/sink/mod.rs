@@ -122,9 +122,18 @@ impl SinkError {
 
 	/// The SMTP reply that refuses the message for this reason.
 	pub fn smtp_reply(&self) -> crate::smtp::reply::Reply {
+		self.smtp_reply_with(crate::config::MailboxFull::Temporary)
+	}
+
+	/// [`Self::smtp_reply`] with a full mailbox answered as `mailbox_full`
+	/// says.
+	pub fn smtp_reply_with(
+		&self,
+		mailbox_full: crate::config::MailboxFull,
+	) -> crate::smtp::reply::Reply {
 		use crate::smtp::reply::Reply;
 		match self {
-			SinkError::MailboxFull(_) => Reply::single(452, "4.2.2 mailbox full"),
+			SinkError::MailboxFull(_) => crate::smtp::quota::full_reply(mailbox_full),
 			SinkError::Unavailable(_) | SinkError::Gone(_) => {
 				Reply::single(451, "4.3.0 temporary storage failure, try again")
 			}

@@ -6,8 +6,13 @@ use std::path::PathBuf;
 use serde::Deserialize;
 
 use super::{Config, ConfigError};
+
+mod inbound;
 use crate::antispam::clamd::{DEFAULT_MAX_BYTES, DEFAULT_TIMEOUT_SECS, HEADROOM_BYTES};
 use crate::antispam::hook::HookVerdict;
+pub use inbound::{
+	DEFAULT_GREYLIST_LIFETIME_SECS, DEFAULT_HOOK_TIMEOUT_SECS, DEFAULT_REPUTATION_MIN_OBSERVATIONS,
+};
 
 /// Action to apply when clamd reports a signature.
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
@@ -90,6 +95,29 @@ pub struct Antispam {
 	/// server; `[[antispam_scope]]` adds lists per tenant, domain and
 	/// account.
 	pub senders: crate::config::SenderLists,
+	/// What a failed call to `scanner_hook_url` does: accept the message
+	/// unscanned (the default) or answer with a temporary failure
+	/// (`451 4.7.1`), as `clamd_on_error` does for clamd.
+	pub scanner_hook_on_error: ClamdOnError,
+	/// Deadline of one `scanner_hook_url` call, in seconds, from 1 to 120
+	/// (default 30). The sender's connection waits for it.
+	pub scanner_hook_timeout_secs: u64,
+	/// Longest IPv4 prefix kept apart by greylisting: clients in the same
+	/// prefix share one triplet. From 24 to 32 (default 32, one address).
+	pub greylist_mask_v4: u8,
+	/// The same for IPv6, from 48 to 128 (default 128, one address); `64`
+	/// treats a whole subscriber network as one client.
+	pub greylist_mask_v6: u8,
+	/// How long a greylist triplet is remembered, in seconds, from 3600 to
+	/// 2592000 (default 86400). Longer than every greylist delay.
+	pub greylist_lifetime_secs: u64,
+	/// Whether the sender-domain reputation screen runs when `[database]`
+	/// exists (default `true`). `false` neither records nor consults it.
+	pub reputation: bool,
+	/// Observations a sender domain needs before its reputation is judged,
+	/// from 3 to 1000 (default 3). Fewer would quarantine a domain on a
+	/// single bad message.
+	pub reputation_min_observations: u32,
 }
 
 impl Default for Antispam {
@@ -104,6 +132,13 @@ impl Default for Antispam {
 			bayes_junk_at: DEFAULT_BAYES_JUNK_AT,
 			bayes_reject_at: None,
 			senders: crate::config::SenderLists::default(),
+			scanner_hook_on_error: ClamdOnError::Accept,
+			scanner_hook_timeout_secs: DEFAULT_HOOK_TIMEOUT_SECS,
+			greylist_mask_v4: 32,
+			greylist_mask_v6: 128,
+			greylist_lifetime_secs: DEFAULT_GREYLIST_LIFETIME_SECS,
+			reputation: true,
+			reputation_min_observations: DEFAULT_REPUTATION_MIN_OBSERVATIONS,
 		}
 	}
 }
@@ -154,6 +189,7 @@ impl Config {
 				self.antispam.clamd_max_bytes
 			)));
 		}
+		self.validate_inbound_antispam()?;
 		// The attachment policy is the other content screen.
 		self.validate_attachments()
 	}

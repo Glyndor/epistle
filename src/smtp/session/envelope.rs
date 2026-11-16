@@ -219,7 +219,7 @@ impl Session {
 					.quota()
 					.is_some_and(|quota| quota.is_full(&self.directory, account)) =>
 			{
-				return Action::Continue(Reply::single(452, "4.2.2 mailbox full"));
+				return Action::Continue(self.policy.mailbox_full_reply());
 			}
 			// A local account or a multi-target alias is an acceptable recipient.
 			Resolution::Account(_) | Resolution::Alias(_) => {}

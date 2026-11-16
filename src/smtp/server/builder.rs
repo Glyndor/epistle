@@ -60,6 +60,7 @@ impl Server {
 			memory_budget: None,
 			max_connections_per_ip: MAX_CONNECTIONS_PER_IP,
 			trusted_networks: Vec::new(),
+			inbound: super::InboundPolicy::default(),
 			max_message_size: crate::smtp::session::MAX_MESSAGE_SIZE,
 			max_recipients: crate::smtp::session::DEFAULT_MAX_RECIPIENTS,
 			data_rate: super::DataRate::default(),
@@ -134,6 +135,17 @@ impl Server {
 	/// null sender (`<>`) used by bounces is always skipped.
 	pub fn with_inbound_sender_limit(mut self, limit: InboundLimit) -> Self {
 		self.inbound_sender_limit = Some(limit);
+		self
+	}
+
+	/// Apply the inbound decisions of `[smtp]` and `[antispam]`: the
+	/// operator's own relays (exempt from the per-IP connection cap and from
+	/// the checks of the connecting address), the full-mailbox answer, the
+	/// greylist mask and the reputation floor. A server built without this
+	/// call trusts nobody and decides as it always did.
+	pub fn with_inbound_policy(mut self, policy: super::InboundPolicy) -> Self {
+		self.trusted_networks = policy.trusted_networks().to_vec();
+		self.inbound = policy;
 		self
 	}
 

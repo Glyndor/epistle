@@ -153,6 +153,12 @@ impl Session {
 		self
 	}
 
+	/// How a full mailbox is refused (`[smtp] mailbox_full`): `452` or `552`.
+	pub fn with_mailbox_full(mut self, how: crate::config::MailboxFull) -> Self {
+		self.policy = self.policy.with_mailbox_full(how);
+		self
+	}
+
 	/// Attach per-tenant aggregate limits. On top of the per-account
 	/// limiter in [`Self::with_send_limiter`]; the SMTP path checks both
 	/// before accepting MAIL FROM. `None` (the default) is the identity and

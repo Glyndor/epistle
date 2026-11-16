@@ -136,3 +136,70 @@ async fn http_hook_fails_open_on_a_chunked_answer_over_the_cap() {
 	let hook = HttpHook::new(&format!("http://{addr}/scan")).expect("hook");
 	assert_eq!(hook.scan(b"raw message").await, HookVerdict::Accept);
 }
+
+/// A hook told to defer on error, with a deadline of one second.
+fn deferring(url: &str) -> HttpHook {
+	HttpHook::with_options(url, Duration::from_secs(1), ClamdOnError::Defer).expect("hook")
+}
+
+#[tokio::test]
+async fn http_hook_defers_when_unreachable_and_told_to() {
+	let hook = deferring("http://127.0.0.1:1/scan");
+	assert_eq!(hook.scan(b"raw message").await, HookVerdict::Defer);
+}
+
+#[tokio::test]
+async fn http_hook_defers_on_an_answer_that_is_not_a_verdict() {
+	let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+		.await
+		.expect("bind");
+	let addr = listener.local_addr().expect("addr");
+	let app = axum::Router::new().route("/scan", axum::routing::post(|| async { "<html>oops" }));
+	tokio::spawn(async move {
+		axum::serve(listener, app).await.expect("serve");
+	});
+	let url = format!("http://{addr}/scan");
+	assert_eq!(deferring(&url).scan(b"raw").await, HookVerdict::Defer);
+	// Left at the default, the same answer lets the message through.
+	let hook = HttpHook::new(&url).expect("hook");
+	assert_eq!(hook.scan(b"raw").await, HookVerdict::Accept);
+}
+
+#[tokio::test]
+async fn http_hook_keeps_a_real_verdict_when_told_to_defer() {
+	let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+		.await
+		.expect("bind");
+	let addr = listener.local_addr().expect("addr");
+	let app = axum::Router::new().route(
+		"/scan",
+		axum::routing::post(|| async { r#"{"action":"accept"}"# }),
+	);
+	tokio::spawn(async move {
+		axum::serve(listener, app).await.expect("serve");
+	});
+	let hook = deferring(&format!("http://{addr}/scan"));
+	assert_eq!(hook.scan(b"raw").await, HookVerdict::Accept);
+}
+
+#[tokio::test]
+async fn http_hook_gives_up_after_its_own_deadline_not_a_fixed_one() {
+	let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+		.await
+		.expect("bind");
+	let addr = listener.local_addr().expect("addr");
+	let app = axum::Router::new().route(
+		"/scan",
+		axum::routing::post(|| async {
+			tokio::time::sleep(Duration::from_secs(30)).await;
+			r#"{"action":"reject"}"#
+		}),
+	);
+	tokio::spawn(async move {
+		axum::serve(listener, app).await.expect("serve");
+	});
+	let hook = deferring(&format!("http://{addr}/scan"));
+	let started = std::time::Instant::now();
+	assert_eq!(hook.scan(b"raw").await, HookVerdict::Defer);
+	assert!(started.elapsed() < Duration::from_secs(10));
+}

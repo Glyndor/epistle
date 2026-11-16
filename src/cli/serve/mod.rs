@@ -378,6 +378,7 @@ async fn serve(config: Config, role: ServeRole) -> std::io::Result<()> {
 							.with_url_zones(config.dnsbl_url_zones.clone()),
 					)
 					.with_first_time_delay(config.first_time_sender_delay_secs)
+					.with_inbound_policy(crate::smtp::server::InboundPolicy::from_config(&config))
 					.with_max_connections(max_conn)
 					.with_max_connections_per_ip(max_connections_per_ip)
 					.with_max_message_size(max_message_size)
@@ -391,7 +392,9 @@ async fn serve(config: Config, role: ServeRole) -> std::io::Result<()> {
 					server = server.with_report_dir(dir);
 				}
 				if let Some(pool) = &reputation_pool {
-					server = server.with_reputation_pool(pool.clone());
+					if config.antispam.reputation {
+						server = server.with_reputation_pool(pool.clone());
+					}
 					if let Some((store, _)) = &bayes {
 						server = server.with_bayes(Arc::new(store.clone()));
 					}

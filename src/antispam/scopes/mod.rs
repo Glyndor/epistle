@@ -21,11 +21,14 @@
 use std::collections::HashMap;
 
 mod checks;
+mod forwarding;
 mod numbers;
 
 use crate::antispam::attachments::policy::Overlay;
 use crate::antispam::sender_lists::Matcher;
 pub use checks::Checks;
+use forwarding::ForwardOverrides;
+pub use forwarding::ForwardSettings;
 use numbers::Overrides;
 pub use numbers::SpamNumbers;
 
@@ -71,6 +74,7 @@ struct Layer {
 	attachments: Overlay,
 	numbers: Overrides,
 	checks: CheckScope,
+	forward: ForwardOverrides,
 }
 
 impl Layer {
@@ -82,6 +86,7 @@ impl Layer {
 			attachments: Overlay::default(),
 			numbers: Overrides::default(),
 			checks: CheckScope::default(),
+			forward: ForwardOverrides::default(),
 		}
 	}
 
@@ -95,6 +100,10 @@ impl Layer {
 				first_time_delay_secs: scope.first_time_sender_delay_secs,
 			},
 			checks: scope.checks,
+			forward: ForwardOverrides {
+				policy: scope.forward_policy,
+				per_min: scope.forward_per_min,
+			},
 			..Self::from_lists(&scope.senders)
 		}
 	}
@@ -106,6 +115,7 @@ impl Layer {
 			&& self.attachments.is_empty()
 			&& self.numbers.is_empty()
 			&& self.checks.is_empty()
+			&& self.forward.is_empty()
 	}
 }
 

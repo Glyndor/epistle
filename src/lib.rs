@@ -31,6 +31,7 @@ pub mod dnsbl;
 pub mod domain;
 pub mod editable;
 pub mod evidence;
+pub mod forwarding;
 #[doc(hidden)]
 pub mod fuzzing;
 pub mod imap;

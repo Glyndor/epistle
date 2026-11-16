@@ -80,30 +80,38 @@ impl Server {
 		// in-memory one by default and the PostgreSQL-backed one
 		// when `[database]` is configured, so a restart does not
 		// re-defer legitimate senders when persistence is enabled.
+		// Every recipient has a triplet of its own and all of them are
+		// recorded on the first attempt, so one retry releases the
+		// message however many recipients it names. A relay of the
+		// operator's is never greylisted.
 		if known_correspondent.is_none()
 			&& numbers.greylist_delay_secs > 0
+			&& !self.inbound.trusts(peer)
 			&& let (Some((store, _)), Some(ip), None) =
 				(&self.greylist, peer, session.authenticated())
-			&& let Some(recipient) = message.recipients.first()
 		{
 			let now = std::time::SystemTime::now()
 				.duration_since(std::time::UNIX_EPOCH)
 				.map(|d| d.as_secs())
 				.unwrap_or(0);
-			let triplet = crate::antispam::greylist::Triplet {
-				client_ip: ip,
-				sender: &message.reverse_path,
-				recipient,
-			};
-			if crate::antispam::greylist::decide(
-				store.as_ref(),
-				&triplet,
-				now,
-				numbers.greylist_delay_secs,
-			)
-			.await
-				== crate::antispam::greylist::Decision::Defer
-			{
+			let mut deferred = false;
+			for recipient in &message.recipients {
+				let triplet = crate::antispam::greylist::Triplet {
+					client_ip: ip,
+					sender: &message.reverse_path,
+					recipient,
+				};
+				deferred |= crate::antispam::greylist::decide_masked(
+					store.as_ref(),
+					&triplet,
+					self.inbound.greylist_mask,
+					now,
+					numbers.greylist_delay_secs,
+				)
+				.await
+					== crate::antispam::greylist::Decision::Defer;
+			}
+			if deferred {
 				tracing::info!(%ip, "greylisting: deferring first attempt");
 				self.refuse(
 					peer,
@@ -220,8 +228,9 @@ impl Server {
 			session.authenticated(),
 			favoured,
 		) {
-			use crate::antispam::reputation::{Scope, Screen, screen};
-			match screen(pool, Scope::Domain, domain).await {
+			use crate::antispam::reputation::{Scope, Screen, screen_with};
+			let min = self.inbound.reputation_min_observations;
+			match screen_with(pool, Scope::Domain, domain, min).await {
 				Screen::Reject => {
 					// Quarantine rather than hard-reject: poor reputation
 					// is a heuristic, so keep the mail recoverable in the
@@ -232,7 +241,9 @@ impl Server {
 					message.mailbox = Some("Rejects".to_string());
 				}
 				Screen::FirstTime
-					if numbers.first_time_delay_secs > 0 && known_correspondent.is_none() =>
+					if numbers.first_time_delay_secs > 0
+						&& known_correspondent.is_none()
+						&& !self.inbound.trusts(peer) =>
 				{
 					tokio::time::sleep(std::time::Duration::from_secs(
 						numbers.first_time_delay_secs,
@@ -438,7 +449,7 @@ impl Server {
 				if error.is_storage_fault() {
 					tracing::warn!(%error, "delivery failed");
 				}
-				error.smtp_reply()
+				error.smtp_reply_with(self.inbound.mailbox_full)
 			}
 		};
 		self.refuse(peer, stream, &reply).await?;

@@ -59,6 +59,7 @@ impl Config {
 		self.validate_alerts()?;
 		self.validate_tenants()?;
 		self.validate_antispam_scopes()?;
+		self.validate_forwarding()?;
 		self.validate_database()?;
 		self.validate_subjectpass()?;
 		self.validate_dkim()?;
