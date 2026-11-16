@@ -402,6 +402,10 @@ name = "stack_autostart"
 path = "tests/cli/stack/stack_autostart.rs"
 
 [[test]]
+name = "stack_logs"
+path = "tests/cli/stack/stack_logs.rs"
+
+[[test]]
 name = "stack_podup"
 path = "tests/cli/stack/stack_podup.rs"
 

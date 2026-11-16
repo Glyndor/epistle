@@ -3,6 +3,7 @@
 use clap::Subcommand;
 
 use super::certs::CertsCli;
+use super::logs::LogsArgs;
 use super::resources;
 
 /// The clap subcommand enum the dispatcher hands to [`run`]. The
@@ -30,15 +31,11 @@ pub enum StackCli {
 		#[arg(long)]
 		json: bool,
 	},
-	/// Stream the service logs.
-	Logs {
-		/// Follow the log output as it is produced.
-		#[arg(long)]
-		follow: bool,
-		/// Optional service name to filter on.
-		#[arg(value_name = "SERVICE")]
-		service: Option<String>,
-	},
+	/// Show the last lines of each service's log, in time order.
+	///
+	/// By default the last 200 lines of every service, interleaved by time
+	/// and with lines longer than 500 characters cut.
+	Logs(LogsArgs),
 	/// Restart the whole stack, or a single service.
 	Restart {
 		/// Optional service name to restart.
@@ -105,7 +102,7 @@ impl From<StackCli> for StackAction {
 			StackCli::Apply => StackAction::Apply,
 			StackCli::Down => StackAction::Down,
 			StackCli::Ps { json } => StackAction::Ps { as_json: json },
-			StackCli::Logs { follow, service } => StackAction::Logs { follow, service },
+			StackCli::Logs(args) => StackAction::Logs(args),
 			StackCli::Restart { service } => StackAction::Restart { service },
 			StackCli::Stop { service } => StackAction::Passthrough {
 				verb: "stop",
@@ -147,15 +144,9 @@ pub(crate) enum StackAction {
 		/// Re-serialise the parsed list as JSON instead of the table.
 		as_json: bool,
 	},
-	/// `podup -f <compose> logs [--follow] [<service>]`, stream the
-	/// logs, optionally following and optionally filtered to one
-	/// service.
-	Logs {
-		/// Pass `--follow` to podup.
-		follow: bool,
-		/// Optional service name to filter on; passed as a positional.
-		service: Option<String>,
-	},
+	/// `podup -f <compose> logs ...`, once per service, interleaved by
+	/// time; the flags are those of `LogsArgs`.
+	Logs(LogsArgs),
 	/// `podup -f <compose> restart [<service>]`, restart the whole
 	/// stack or one service.
 	Restart {
@@ -220,7 +211,7 @@ impl StackAction {
 			StackAction::Up
 			| StackAction::Down
 			| StackAction::Ps { .. }
-			| StackAction::Logs { .. }
+			| StackAction::Logs(_)
 			| StackAction::Rollback
 			| StackAction::RollbackDb
 			| StackAction::Resources { .. } => false,

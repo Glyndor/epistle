@@ -30,6 +30,7 @@ pub(super) mod certs;
 pub(super) mod dumps;
 pub(super) mod health;
 pub(super) mod images;
+mod logs;
 pub(super) mod port_warnings;
 pub(super) mod resources;
 mod retry;
@@ -57,7 +58,7 @@ use table::{Publisher, format_ports};
 /// so it refuses `--json`.
 pub(super) fn run_reporting(config: &Config, cli: StackCli, json: bool) -> ExitCode {
 	let (verb, service) = match &cli {
-		StackCli::Logs { .. } if json => {
+		StackCli::Logs(_) if json => {
 			return super::exit::refused(
 				"stack logs streams the services' raw log lines; it has no --json form",
 			);
@@ -74,7 +75,7 @@ pub(super) fn run_reporting(config: &Config, cli: StackCli, json: bool) -> ExitC
 		StackCli::Stop { service } => ("stop", service.clone()),
 		StackCli::Start { service } => ("start", service.clone()),
 		// These print their own output (or none), so no object follows.
-		StackCli::Logs { .. }
+		StackCli::Logs(_)
 		| StackCli::Resources { .. }
 		| StackCli::Rollback { .. }
 		| StackCli::RollbackDb
@@ -208,18 +209,7 @@ fn dispatch(config: &Config, compose: &Path, podup: &str, action: StackAction) -
 				}
 			}
 		}
-		StackAction::Logs { follow, service } => {
-			let mut extra: Vec<String> = Vec::new();
-			extra.push("logs".to_string());
-			if follow {
-				extra.push("--follow".to_string());
-			}
-			if let Some(name) = service {
-				extra.push(name);
-			}
-			let extra_ref: Vec<&str> = extra.iter().map(String::as_str).collect();
-			run_inherited(podup, compose, &extra_ref)
-		}
+		StackAction::Logs(args) => logs::run(podup, compose, &args),
 		StackAction::Restart { service } => {
 			let mut extra: Vec<String> = Vec::new();
 			extra.push("restart".to_string());
