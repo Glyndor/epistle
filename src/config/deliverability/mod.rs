@@ -6,8 +6,9 @@
 //! own web page, and epistle only records that the operator did it.
 //!
 //! The list names the portals that are done. `epistle check deliverability`
-//! reminds about the ones that are missing and only warns: the list changes
-//! no behaviour of the server.
+//! reminds about the ones that are missing, and only for the providers the
+//! server has delivered mail to. It only warns, and `remind = false` turns
+//! the reminder off: neither changes any behaviour of the server.
 //!
 //! The steps of each enrolment, what the portal shows and the limits the
 //! provider asks the sender to stay inside are in
@@ -130,13 +131,32 @@ impl<'de> Deserialize<'de> for Portal {
 }
 
 /// The `[deliverability]` section.
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Deliverability {
 	/// The panels the operator has enrolled in. Empty by default: every
-	/// panel is then reported as missing.
+	/// panel of a provider the server delivers to is then reported as
+	/// missing.
 	#[serde(default)]
 	pub enrolled: Vec<Portal>,
+	/// Whether `epistle check deliverability` reminds about the panels that
+	/// are not enrolled. `true` by default; `false` makes the check say so
+	/// and list nothing.
+	#[serde(default = "remind_by_default")]
+	pub remind: bool,
+}
+
+fn remind_by_default() -> bool {
+	true
+}
+
+impl Default for Deliverability {
+	fn default() -> Self {
+		Self {
+			enrolled: Vec::new(),
+			remind: remind_by_default(),
+		}
+	}
 }
 
 impl Deliverability {

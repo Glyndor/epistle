@@ -85,3 +85,12 @@ fn the_page_and_the_description_of_every_portal_are_not_empty() {
 		assert!(!portal.page().contains(char::is_whitespace), "{portal:?}");
 	}
 }
+
+#[test]
+fn the_reminder_is_on_by_default_and_the_setting_turns_it_off() {
+	assert!(parse("").expect("config").deliverability.remind);
+	assert!(Deliverability::default().remind);
+	let off = parse("[deliverability]\nremind = false\n").expect("config");
+	assert!(!off.deliverability.remind);
+	assert!(off.deliverability.enrolled.is_empty());
+}

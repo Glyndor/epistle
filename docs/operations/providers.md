@@ -6,9 +6,11 @@ the sending addresses. Enrolling in one is a step in the provider's own
 page. This page says what each step is, what the portal shows, and the
 limits the provider asks the sender to stay inside.
 
-`epistle check deliverability` names the panels that are not enrolled yet.
-It only warns: the list in `[deliverability] enrolled` changes no behaviour
-of the server.
+`epistle check deliverability` names the panels that are not enrolled yet,
+and only the ones of a provider the server has delivered mail to: a server
+that has sent nothing to Gmail is not told about Postmaster Tools. It only
+warns: the list in `[deliverability] enrolled` changes no behaviour of the
+server, and `remind = false` turns the reminder off.
 
 ## Google
 
@@ -221,7 +223,8 @@ enrolled = ["postmaster", "snds"]
 ```
 
 Every panel the list does not name is reported by `epistle check
-deliverability`, one warning each:
+deliverability`, one warning each, when the delivery log shows mail
+answered by an exchanger of its provider:
 
 | Name | Panel |
 |---|---|
@@ -236,3 +239,20 @@ the panels that exist. The list is empty by default, so every panel is
 reported until the operator marks the ones that are done. The warning
 never blocks: it does not change the exit code of `epistle check` and no
 behaviour of the server depends on it.
+
+The provider of each panel is read from the exchanger that answered, in the
+delivery log (`[storage] delivery_log_days`, 30 days by default). Gmail
+decides `postmaster`, Outlook decides `snds` and `jmrp`, Yahoo decides
+`yahoo-cfl` and iCloud decides `apple`. What a `[[transport]]` smarthost
+answered does not count, because that mail leaves from the smarthost's
+address. With the delivery log off (`delivery_log_days = 0`) the server
+cannot tell where its mail went and the check lists nothing.
+
+The reminder is only what the command prints when the operator runs it.
+Nothing is written and nothing is logged, so it does not come back by
+itself. To stop it for good without enrolling:
+
+```toml
+[deliverability]
+remind = false
+```
