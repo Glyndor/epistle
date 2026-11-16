@@ -65,6 +65,21 @@ pub struct Oauth {
 	/// second factor too.
 	#[serde(default)]
 	pub idp_enforces_second_factor: bool,
+	/// Lifetime in seconds of an access token the built-in authorization
+	/// server issues. Absent keeps one hour. Only meaningful with
+	/// `signing_key` or `signing_key_file`; the loader refuses it otherwise,
+	/// and refuses a value outside 60 to 86400.
+	#[serde(default)]
+	pub access_token_ttl_secs: Option<u64>,
+	/// Lifetime in seconds of a refresh token (RFC 6749 section 6). Absent
+	/// keeps today's behaviour: no refresh token is issued and
+	/// `grant_type=refresh_token` is refused. When set, the token endpoint
+	/// issues one with every grant and rotates it on each use. Only
+	/// meaningful with `signing_key` or `signing_key_file`; the loader
+	/// refuses it otherwise, and refuses a value outside 3600 to 31536000
+	/// or one shorter than the access token lifetime.
+	#[serde(default)]
+	pub refresh_token_ttl_secs: Option<u64>,
 }
 
 /// Why an `[oauth]` section is invalid.
@@ -82,10 +97,21 @@ pub enum OauthConfigError {
 	SigningKeyWithoutPublicKey,
 	/// Both `signing_key` and `signing_key_file` were set.
 	AmbiguousSigningKey,
+	/// A token lifetime is set without a signing key, so nothing issues tokens.
+	LifetimeWithoutSigningKey,
+	/// `access_token_ttl_secs` is outside the allowed range.
+	AccessLifetimeOutOfRange(u64),
+	/// `refresh_token_ttl_secs` is outside the allowed range.
+	RefreshLifetimeOutOfRange(u64),
+	/// `refresh_token_ttl_secs` is shorter than the access token lifetime.
+	RefreshShorterThanAccess,
 }
 
 impl std::fmt::Display for OauthConfigError {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		if let Some(text) = self.lifetime_message() {
+			return f.write_str(&text);
+		}
 		let message = match self {
 			OauthConfigError::NoKeySource => {
 				"exactly one of `public_key` or `discovery_url` must be set (got neither)"
@@ -99,6 +125,12 @@ impl std::fmt::Display for OauthConfigError {
 			}
 			OauthConfigError::AmbiguousSigningKey => {
 				"set `signing_key` or `signing_key_file`, not both"
+			}
+			OauthConfigError::LifetimeWithoutSigningKey
+			| OauthConfigError::AccessLifetimeOutOfRange(_)
+			| OauthConfigError::RefreshLifetimeOutOfRange(_)
+			| OauthConfigError::RefreshShorterThanAccess => {
+				unreachable!("lifetime_message answered above")
 			}
 		};
 		f.write_str(message)
@@ -132,6 +164,7 @@ impl Oauth {
 		{
 			return Err(OauthConfigError::SigningKeyWithoutPublicKey);
 		}
+		self.validate_lifetimes()?;
 		Ok(())
 	}
 

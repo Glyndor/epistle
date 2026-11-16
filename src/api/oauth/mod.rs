@@ -34,7 +34,9 @@ use crate::jwt::{self, Algorithm};
 
 mod access;
 mod device;
+mod issue;
 mod pkce;
+mod refresh;
 mod revocation;
 mod scopes;
 pub(in crate::api) use access::is_jmap_path;
@@ -46,8 +48,7 @@ pub use pkce::{authorize, token};
 const CODE_TTL_SECS: u64 = 600;
 /// Minimum seconds a device-flow client must wait between token polls.
 const POLL_INTERVAL_SECS: u64 = 5;
-/// Lifetime of an issued access token.
-const ACCESS_TOKEN_TTL_SECS: u64 = 3600;
+
 /// Unambiguous alphabet for the human `user_code` (no 0/O/1/I/L).
 const USER_CODE_ALPHABET: &[u8] = b"BCDFGHJKLMNPQRSTVWXZ23456789";
 
@@ -67,6 +68,10 @@ pub struct AuthzServer {
 	devices: Mutex<HashMap<String, DeviceGrant>>,
 	/// Issued, not-yet-redeemed authorization codes, keyed by the `code`.
 	codes: Mutex<HashMap<String, AuthCode>>,
+	/// Lifetime of an issued access token, in seconds.
+	access_ttl: u64,
+	/// Lifetime of a refresh token in seconds; `None` issues none.
+	refresh_ttl: Option<u64>,
 	rng: SystemRandom,
 }
 
@@ -130,12 +135,23 @@ impl AuthzServer {
 			audience: audience.into(),
 			devices: Mutex::new(HashMap::new()),
 			codes: Mutex::new(HashMap::new()),
+			access_ttl: crate::config::DEFAULT_ACCESS_TTL_SECS,
+			refresh_ttl: None,
 			rng: SystemRandom::new(),
 		})
 	}
 
-	/// Sign an access-token JWT for `account`, valid for [`ACCESS_TOKEN_TTL_SECS`]
-	/// from `now`. The `sub` is the account name, which the verifier of this
+	/// Set the token lifetimes from `[oauth]`, already validated by the loader:
+	/// the access token's in seconds, and the refresh token's, where `None`
+	/// issues no refresh token.
+	pub fn with_lifetimes(mut self, access_ttl: u64, refresh_ttl: Option<u64>) -> Self {
+		self.access_ttl = access_ttl;
+		self.refresh_ttl = refresh_ttl;
+		self
+	}
+
+	/// Sign an access-token JWT for `account`, valid for the access token
+	/// lifetime from `now`. The `sub` is the account name, which the verifier of this
 	/// server's own tokens returns as the identity. `None` only if signing
 	/// fails (fail closed).
 	fn issue_token(&self, account: &str, scopes: &scopes::Scopes, now: u64) -> Option<String> {
@@ -144,7 +160,7 @@ impl AuthzServer {
 			"iss": self.issuer,
 			"aud": self.audience,
 			"iat": now,
-			"exp": now.checked_add(ACCESS_TOKEN_TTL_SECS)?,
+			"exp": now.checked_add(self.access_ttl)?,
 			"scope": scopes.as_string(),
 			"jti": self.random_code()?,
 		});
@@ -290,6 +306,24 @@ pub(crate) fn oauth_error(code: &'static str) -> Response {
 		StatusCode::BAD_REQUEST
 	};
 	(status, Json(serde_json::json!({ "error": code }))).into_response()
+}
+
+/// Why a grant was not redeemed: what the token endpoint answers instead.
+pub(crate) enum Refusal {
+	/// An RFC 6749 / 8628 error code.
+	Error(&'static str),
+	/// `slow_down`, with the seconds to wait.
+	SlowDown(u64),
+}
+
+impl Refusal {
+	/// The response that carries this refusal.
+	pub(crate) fn response(self) -> Response {
+		match self {
+			Refusal::Error(code) => oauth_error(code),
+			Refusal::SlowDown(seconds) => oauth_rate_limited(seconds),
+		}
+	}
 }
 
 /// OAuth throttling response with the remaining wait in whole seconds.

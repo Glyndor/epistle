@@ -71,7 +71,8 @@ pub(in crate::cli::serve) fn build_authz_server(
 		&signing_key,
 		&oauth.issuer,
 		&oauth.audience,
-	))
+	)
+	.map(|authz| authz.with_lifetimes(oauth.access_token_ttl(), oauth.refresh_token_ttl())))
 }
 
 /// Map the configured algorithm name to a [`crate::jwt::Algorithm`], the default

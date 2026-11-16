@@ -55,6 +55,17 @@ pub(super) async fn revoke(
 		return super::oauth_error("server_error");
 	};
 	let Some(claims) = state.authz().and_then(|a| a.access_claims(token, now)) else {
+		// Not an access token of this server: it may be a refresh token, whose
+		// whole family ends with it (RFC 7009 section 2.1).
+		if state.authz().is_some_and(|a| a.refresh_ttl.is_some())
+			&& super::refresh::revoke(state.data_dir(), token, now).is_err()
+		{
+			return (
+				StatusCode::SERVICE_UNAVAILABLE,
+				axum::Json(serde_json::json!({"error": "temporarily_unavailable"})),
+			)
+				.into_response();
+		}
 		return StatusCode::OK.into_response();
 	};
 	let (Some(id), Some(expiry)) = (

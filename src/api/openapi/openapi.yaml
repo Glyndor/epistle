@@ -2383,8 +2383,13 @@ paths:
         `urn:ietf:params:oauth:grant-type:device_code` (with `device_code`;
         poll no faster than every 5 seconds or get `429 slow_down`) or
         `authorization_code` (with `code` and `code_verifier`; the code is
-        consumed even when the verifier is wrong). The token is an ES256 JWT
-        with `sub` the account name, valid for 3600 seconds. It is accepted
+        consumed even when the verifier is wrong) or, only when
+        `[oauth] refresh_token_ttl_secs` is set, `refresh_token` (with
+        `refresh_token` and an optional narrower `scope`; the token presented is
+        retired and a new one returned, and presenting a retired one revokes the
+        whole family). Otherwise `refresh_token` is `unsupported_grant_type`. The token is an ES256 JWT
+        with `sub` the account name, valid for 3600 seconds unless
+        `[oauth] access_token_ttl_secs` sets another lifetime. It is accepted
         on JMAP only for that account, with the scopes stored in the grant.
         Redemption cannot widen scopes. A missing scope claim, invalid signature,
         issuer or audience, expiry or revocation returns `401` on JMAP,
@@ -3646,9 +3651,14 @@ components:
       properties:
         grant_type:
           type: string
-          enum: ["urn:ietf:params:oauth:grant-type:device_code", authorization_code]
+          enum: ["urn:ietf:params:oauth:grant-type:device_code", authorization_code, refresh_token]
         device_code:
           type: string
+        refresh_token:
+          type: string
+        scope:
+          type: string
+          description: With `refresh_token`, a subset of the scopes granted.
         code:
           type: string
         code_verifier:
@@ -3666,9 +3676,12 @@ components:
         token_type:
           type: string
           enum: [Bearer]
+        refresh_token:
+          type: string
+          description: Present only when `[oauth] refresh_token_ttl_secs` is set.
         expires_in:
           type: integer
-          description: "3600."
+          description: The access token lifetime in seconds, 3600 unless configured.
     OAuthErrorBody:
       type: object
       required: [error]

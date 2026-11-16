@@ -43,6 +43,11 @@ impl Scopes {
 		self.0.len() == other.0.len() && self.0.iter().all(|scope| other.0.contains(scope))
 	}
 
+	/// Whether every scope of `self` is also in `other`.
+	pub(super) fn is_subset_of(&self, other: &Self) -> bool {
+		self.0.iter().all(|scope| other.0.contains(scope))
+	}
+
 	/// Whether the only scope is `read`, the default of an omitted scope.
 	pub(super) fn is_default(&self) -> bool {
 		self.0 == [Scope::Read]
