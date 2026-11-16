@@ -86,6 +86,17 @@ pub(in crate::cli) const CASES: &[(&[&str], bool)] = &[
 	),
 	(&["account", "show", "alice"], true),
 	(&["queue"], true),
+	(
+		&[
+			"deliverability",
+			"test",
+			"--account",
+			"alice",
+			"--to",
+			"check@mail-tester.example",
+		],
+		true,
+	),
 	(&["warmup", "status"], true),
 	(&["warmup", "status", "--json"], true),
 	(&["warmup", "enable", "--yes"], true),

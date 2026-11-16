@@ -92,6 +92,19 @@ macro_rules! account_delivery_commands {
 				#[command(subcommand)]
 				action: warmup::WarmupCli,
 			},
+			/// Send a deliverability test message.
+			///
+			/// `deliverability test` sends one message from a hosted account to an
+			/// address you name, and reports SPF, DKIM, DMARC, the reverse name and the
+			/// delivery result.
+			Deliverability {
+				/// Path to the configuration file; accepted before or after the action.
+				#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
+				config: PathBuf,
+				/// Deliverability action (`test`).
+				#[command(subcommand)]
+				action: deliverability::DeliverabilityCli,
+			},
 			/// Read the per-recipient delivery log (metadata only).
 			///
 			/// Without an action it lists the log, like `delivery list`.

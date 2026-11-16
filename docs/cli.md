@@ -89,6 +89,7 @@ that never restart accept the option and ignore it.
 | [Outbound queue: retry, hold, release](#outbound-queue) | `epistle queue …` |
 | [IP warm-up for a new sending address](operations/warmup.md) | `epistle warmup …` |
 | [Enrol in the sender panels](operations/providers.md) | `epistle check deliverability` |
+| [Send a test message and read what the outside makes of it](#deliverability-test-epistle-deliverability-test) | `epistle deliverability test --account NAME --to ADDRESS --yes` |
 | [Evidence of sending: verify, export, check](evidence.md) | `epistle evidence …` |
 | [Antispam: DNSBL, greylisting, ClamAV](#antispam-epistle-antispam) | `epistle antispam …` |
 | [Attachment policy and checking a message](#attachments-epistle-attachments) | `epistle attachments policy\|check` |
@@ -2209,6 +2210,64 @@ A held entry is not attempted and its time on hold does not count toward the
 give-up window below, so a message parked for a week is not bounced on its first
 attempt after release. A hold that arrives while the worker is already
 delivering that entry takes effect for the next attempt.
+
+## Deliverability test (`epistle deliverability test`)
+
+```sh
+epistle deliverability test --account alice --to check@mail-tester.example --yes
+```
+
+Sends one message from a hosted account to an address you name, and prints what
+the outside will make of it. It is for a new server: the question after the
+install is whether SPF, DKIM, DMARC and the reverse name hold from the real
+sending address, and this answers it without leaving the terminal. The
+destination is always yours, for example the single-use address a
+deliverability test service gives you; the command never picks one.
+
+The message is a short plain note from the account's first address, signed
+with the DKIM key the server signs that domain with, and queued in the spool. The running server delivers it from its real
+sending address within its next queue scan, which is every 30 seconds.
+`--wait SECONDS` (default 90, at most 600) is how long the command looks in
+the delivery log for the result.
+
+The report has two parts:
+
+- `delivery`: `delivered`, `deferred`, `failed`, `suppressed`, `canceled`,
+  `queued` (no record yet) or `unlogged` (the delivery log is off, see
+  `[storage] delivery_log_days`), with the remote host, its answer as logged,
+  and what it means in plain words, including the enhanced status code
+  (RFC 3463) and the provider cause the queue recognizes. A message the remote
+  accepted is `delivered`: that says the receiver took it, not that it reached
+  the inbox instead of the spam folder. A deferral is not a failure; the queue
+  retries it.
+- `checks`, each `pass`, `warn`, `FAIL` or `unknown`: `spf` (the message's
+  sender and domain from each public address of the server, with the host name
+  as the EHLO name), `dkim` (a signature for the sending domain verifies
+  against the key published in DNS), `dmarc` (SPF or DKIM passes aligned with
+  the From domain, and the policy published), `ptr` (the reverse name of each
+  public address is the EHLO name and resolves back) and `tls`. The TLS version
+  and certificate the receiver saw are not recorded by the delivery log, so
+  `tls` is always `unknown`.
+
+The public addresses are `public_ipv4` and `public_ipv6` from the
+configuration, or what the host name resolves to when they are not set.
+
+| Case | Result |
+|---|---|
+| No `--yes` | Shows what it would send and stops, exit 2. Nothing is queued and nothing is recorded. |
+| The account is unknown, disabled or has sending switched off, or its address is on a domain this server does not host or does not send for | Refused before anything is written, exit 2 for an unknown account and 3 for the rest. |
+| The destination is not an address, or is on a domain this server hosts | Refused, exit 2: mail to a hosted domain is delivered locally and says nothing about the outside. |
+| A test was queued less than a minute ago | Refused, exit 3, with the time the next one is allowed. The bound is one per minute per server, kept in `deliverability-test.json` in the data directory under a lock, so two runs that start together cannot both pass. |
+| A check fails or the message was refused for good | Exit 1, after the whole report. |
+
+`--json` prints the same report as one object. Remote answers are escaped before
+they reach the terminal. A new address has no reputation, so what a first test
+shows says little about steady state; [`epistle warmup`](operations/warmup.md)
+explains the ramp.
+
+The message is queued without an evidence record: it is a test, not mail whose
+sending is to be proved. It is stored for the sending domain's tenant and with
+the account, so the delivery log, the webhook and a bounce find it.
 
 ## Masked addresses
 

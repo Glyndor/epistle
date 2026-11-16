@@ -1,0 +1,192 @@
+//! The whole run: refusals before any write, the message in the spool, the
+//! rate record, the report and the exit code.
+
+use std::process::ExitCode;
+use std::time::Duration;
+
+use super::support::*;
+use crate::cli::deliverability::{Env, TestArgs, execute};
+use crate::storage::MessageCrypto;
+
+const T: u64 = 1_800_000_000;
+
+struct Fixture {
+	dir: tempfile::TempDir,
+	config: crate::config::Config,
+	store: crate::directory_store::AccountStore,
+	dns: crate::cli::status::dns_fake::FakeDns,
+	signer: Option<crate::dkim::PerDomainSigner>,
+}
+
+impl Fixture {
+	fn new() -> Self {
+		let dir = tempfile::tempdir().expect("dir");
+		let config = config(dir.path());
+		let store = store(dir.path(), &config, Vec::new());
+		let signer = Some(signer(dir.path()));
+		Self {
+			dir,
+			config,
+			store,
+			dns: dns(),
+			signer,
+		}
+	}
+
+	async fn run(&self, yes: bool, json: bool, now: u64) -> (ExitCode, String) {
+		let env = Env {
+			config: &self.config,
+			store: &self.store,
+			signer: self.signer.as_ref(),
+			dns: &self.dns,
+			crypto: MessageCrypto::disabled(),
+			now,
+			poll: Duration::from_millis(1),
+		};
+		let args = TestArgs {
+			account: "alice".into(),
+			to: DESTINATION.into(),
+			yes,
+			wait: 0,
+			json,
+		};
+		let mut out = Vec::new();
+		let code = execute(&env, &args, &mut out).await;
+		(code, String::from_utf8(out).expect("utf8"))
+	}
+
+	fn queued(&self) -> Vec<std::path::PathBuf> {
+		let new = self.dir.path().join("spool/new");
+		match std::fs::read_dir(new) {
+			Ok(entries) => entries
+				.flatten()
+				.map(|entry| entry.path())
+				.filter(|path| path.extension().is_some_and(|ext| ext == "eml"))
+				.collect(),
+			Err(_) => Vec::new(),
+		}
+	}
+
+	fn state_file(&self) -> std::path::PathBuf {
+		self.dir.path().join("deliverability-test.json")
+	}
+}
+
+#[tokio::test]
+async fn without_yes_nothing_is_sent_or_recorded() {
+	let fixture = Fixture::new();
+	let (code, out) = fixture.run(false, false, T).await;
+	assert_eq!(code, ExitCode::from(2));
+	assert!(out.contains("would send one test message"), "{out}");
+	assert!(out.contains(DESTINATION));
+	assert!(fixture.queued().is_empty());
+	assert!(!fixture.state_file().exists());
+}
+
+#[tokio::test]
+async fn with_yes_a_signed_message_is_queued_and_the_report_passes() {
+	let fixture = Fixture::new();
+	let (code, out) = fixture.run(true, false, T).await;
+	assert_eq!(code, ExitCode::SUCCESS, "{out}");
+	let queued = fixture.queued();
+	assert_eq!(queued.len(), 1);
+	let data = std::fs::read_to_string(&queued[0]).expect("message");
+	assert!(data.starts_with("DKIM-Signature:"), "{data}");
+	assert!(data.contains("From: alice@example.org\r\nTo: check@mail-tester.example\r\n"));
+	for check in ["spf", "dkim", "dmarc", "ptr"] {
+		assert!(
+			out.lines()
+				.any(|l| l.trim_start().starts_with(check) && l.contains("pass")),
+			"{check}: {out}"
+		);
+	}
+	assert!(out.contains("delivery  queued"), "{out}");
+	assert!(out.contains("no reputation"), "{out}");
+	assert!(fixture.state_file().exists());
+}
+
+#[tokio::test]
+async fn a_second_run_inside_a_minute_queues_nothing() {
+	let fixture = Fixture::new();
+	assert_eq!(fixture.run(true, false, T).await.0, ExitCode::SUCCESS);
+	let (code, _) = fixture.run(true, false, T + 59).await;
+	assert_eq!(code, ExitCode::from(3));
+	assert_eq!(fixture.queued().len(), 1);
+	assert_eq!(fixture.run(true, false, T + 60).await.0, ExitCode::SUCCESS);
+	assert_eq!(fixture.queued().len(), 2);
+}
+
+#[tokio::test]
+async fn a_refused_run_does_not_spend_the_minute() {
+	let fixture = Fixture::new();
+	let env = Env {
+		config: &fixture.config,
+		store: &fixture.store,
+		signer: fixture.signer.as_ref(),
+		dns: &fixture.dns,
+		crypto: MessageCrypto::disabled(),
+		now: T,
+		poll: Duration::from_millis(1),
+	};
+	let args = TestArgs {
+		account: "alice".into(),
+		to: "bob@example.org".into(),
+		yes: true,
+		wait: 0,
+		json: false,
+	};
+	assert_eq!(
+		execute(&env, &args, &mut Vec::new()).await,
+		ExitCode::from(2)
+	);
+	assert!(!fixture.state_file().exists());
+	assert!(fixture.queued().is_empty());
+	assert_eq!(fixture.run(true, false, T).await.0, ExitCode::SUCCESS);
+}
+
+#[tokio::test]
+async fn an_unsigned_message_exits_non_zero() {
+	let mut fixture = Fixture::new();
+	fixture.signer = None;
+	let (code, out) = fixture.run(true, false, T).await;
+	assert_eq!(code, ExitCode::FAILURE);
+	assert!(out.contains("FAIL"), "{out}");
+	assert!(out.contains("unsigned"), "{out}");
+}
+
+#[tokio::test]
+async fn the_json_report_is_one_object_with_the_checks() {
+	let fixture = Fixture::new();
+	let (code, out) = fixture.run(true, true, T).await;
+	assert_eq!(code, ExitCode::SUCCESS);
+	let value: serde_json::Value = serde_json::from_str(out.trim()).expect("one json object");
+	assert_eq!(value["to"], DESTINATION);
+	assert_eq!(value["delivery"]["state"], "queued");
+	let checks = value["checks"].as_array().expect("checks");
+	assert!(
+		checks
+			.iter()
+			.any(|c| c["check"] == "spf" && c["level"] == "pass")
+	);
+}
+
+#[tokio::test]
+async fn the_report_holds_no_secret() {
+	let fixture = Fixture::new();
+	let (_, out) = fixture.run(true, false, T).await;
+	assert!(!out.contains("PRIVATE KEY"));
+	assert!(!out.contains("argon2"));
+}
+
+#[tokio::test]
+async fn a_name_the_resolver_returns_is_escaped_in_the_text_report() {
+	let mut fixture = Fixture::new();
+	fixture.dns.ptr.insert(
+		"203.0.113.10".parse().expect("ip"),
+		vec!["evil\u{1b}[2J.hoster.example".into()],
+	);
+	let (code, out) = fixture.run(true, false, T).await;
+	assert_eq!(code, ExitCode::FAILURE);
+	assert!(!out.contains('\u{1b}'), "{out:?}");
+	assert!(out.contains("\\u{1b}"), "{out:?}");
+}
