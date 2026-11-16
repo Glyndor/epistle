@@ -165,12 +165,12 @@ impl AccountStore {
 		let raw = normalize(raw);
 		let raw = raw.as_str();
 		let address = address_reason::parse(raw).map_err(StoreError::Invalid)?;
-		if !self.hosts(address.domain()) {
-			return Err(StoreError::Invalid(address_reason::not_handled(
-				address.domain(),
-			)));
-		}
-		self.mutate_store(|state| {
+		self.mutate_store_hosted(|state| {
+			if !self.hosts_on_disk(address.domain())? {
+				return Err(StoreError::Invalid(address_reason::not_handled(
+					address.domain(),
+				)));
+			}
 			let existing_on_self = state
 				.accounts
 				.iter()

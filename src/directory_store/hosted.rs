@@ -3,7 +3,10 @@
 
 use std::collections::HashMap;
 
-use super::AccountStore;
+use super::{AccountStore, DynamicFile, StoreError};
+use crate::domain::state::DomainsFile;
+use crate::storage::lock::FileLock;
+use crate::storage::locked::lock_path;
 
 /// The hosted domains, the domain aliases and the domains that are switched
 /// off or only receive, as the directory needs them.
@@ -68,5 +71,47 @@ impl AccountStore {
 			*current = hosted;
 		}
 		self.handle.replace(self.build_directory());
+	}
+
+	/// Whether `domain` is hosted according to `domains.toml` as it is on
+	/// disk, which is where a removal decides. The running snapshot only
+	/// follows that file when the watcher reloads it, so a write that
+	/// admits an address by the snapshot can admit a domain a removal has
+	/// already taken out. Without the file the snapshot is the seed and
+	/// answers. A file that cannot be read refuses the write.
+	pub(super) fn hosts_on_disk(&self, domain: &str) -> Result<bool, StoreError> {
+		let path = crate::domain::state::path(self.data_dir());
+		match DomainsFile::read(&path) {
+			Ok(Some(file)) => Ok(file.domain(domain).is_some()),
+			Ok(None) => Ok(self.hosts(domain)),
+			Err(error) => Err(StoreError::Io(std::io::Error::new(
+				error.kind(),
+				format!("{}: {error}", path.display()),
+			))),
+		}
+	}
+
+	/// [`AccountStore::mutate_store`] under the lock of `domains.toml`, the
+	/// one a domain removal holds while it checks that no account uses the
+	/// domain and while it writes the file without it. A write that checks
+	/// its addresses with [`AccountStore::hosts_on_disk`] takes this first,
+	/// so the removal either sees the account or the account sees the
+	/// removal. Always this lock before the lock of `accounts.toml`: a
+	/// removal never takes the second while it holds the first.
+	pub(super) fn mutate_store_hosted<F>(&self, mutate: F) -> Result<(), StoreError>
+	where
+		F: FnOnce(&mut DynamicFile) -> Result<(), StoreError>,
+	{
+		let path = crate::domain::state::path(self.data_dir());
+		let _domains = FileLock::acquire(&lock_path(&path)).map_err(StoreError::Io)?;
+		self.mutate_store(mutate)
+	}
+
+	/// The data directory the account file lives in.
+	fn data_dir(&self) -> &std::path::Path {
+		self.path
+			.parent()
+			.filter(|parent| !parent.as_os_str().is_empty())
+			.unwrap_or(std::path::Path::new("."))
 	}
 }

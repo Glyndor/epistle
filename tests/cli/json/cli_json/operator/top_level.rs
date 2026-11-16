@@ -199,12 +199,17 @@ fn restore_dry_run_lists_the_entries() {
 	);
 	assert_eq!(code, 0);
 	// The archive is rooted at `data/`, and the dry run prefixes each entry
-	// with the `data/` it lands under.
+	// with the `data/` it lands under. Creating the account takes the lock of
+	// `domains.toml` too, so its lock file is in the data directory.
 	assert_eq!(
 		value,
 		json!({
-			"result": "dry-run", "action": "restore", "entries": 2,
-			"paths": ["data/data/.accounts.toml.lock", "data/data/accounts.toml"],
+			"result": "dry-run", "action": "restore", "entries": 3,
+			"paths": [
+				"data/data/.accounts.toml.lock",
+				"data/data/.domains.toml.lock",
+				"data/data/accounts.toml",
+			],
 		})
 	);
 }
