@@ -126,9 +126,13 @@ async fn strict_mode_rejects_self_signed_starttls() {
 	// webpki roots, so the handshake must fail closed (transient → retried).
 	let (acceptor, _leaf) = acceptor_and_leaf();
 	let result = run_with(acceptor, OutboundTls::Strict, Vec::new()).await;
-	assert!(
-		matches!(result, Err(DeliveryError::Transient(_))),
-		"{result:?}"
+	// The reason says what failed, with the status of a cryptographic
+	// failure (X.7.5) and not the rustls text.
+	assert_eq!(
+		result,
+		Err(DeliveryError::Transient(
+			"4.7.5 the TLS handshake with mail.example.org failed".into()
+		))
 	);
 }
 
@@ -163,8 +167,11 @@ async fn dane_mismatch_is_transient_even_in_opportunistic_mode() {
 	let (acceptor, _leaf) = acceptor_and_leaf();
 	let bogus = TlsaRecord::from_parts(3, 0, 1, vec![0u8; 32]).expect("tlsa record");
 	let result = run_with(acceptor, OutboundTls::Opportunistic, vec![bogus]).await;
-	assert!(
-		matches!(result, Err(DeliveryError::Transient(_))),
-		"{result:?}"
+	assert_eq!(
+		result,
+		Err(DeliveryError::Transient(
+			"4.7.5 the certificate of mail.example.org matches none of its DANE TLSA records"
+				.into()
+		))
 	);
 }

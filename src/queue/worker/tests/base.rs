@@ -292,6 +292,7 @@ async fn without_dane_plaintext_mx_still_delivers() {
 	assert_eq!(sink.messages().len(), 1);
 }
 
+mod local_failure;
 mod operator;
 
 /// Creation epoch of the single spooled message, from its UUIDv7 id.

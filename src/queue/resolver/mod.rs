@@ -7,6 +7,7 @@ use crate::mtasts::Policy;
 
 use super::client::DeliveryError;
 use super::limits::{MAX_ADDRESSES, MAX_EXCHANGERS};
+use super::local_failure::LocalFailure;
 use super::timeouts;
 
 /// Whether an exchanger, by host name, is on hold.
@@ -221,11 +222,7 @@ impl MxConnector {
 					})
 					.collect();
 				let security = mx_security(lookup.answers().iter().map(|record| record.proof))
-					.map_err(|_| {
-						DeliveryError::Transient(format!(
-							"MX answer for {domain} failed DNSSEC validation"
-						))
-					})?;
+					.map_err(|_| LocalFailure::Dnssec.transient(domain, "MX answer is bogus"))?;
 				records.sort_by_key(|mx| mx.preference);
 				let records: Vec<(u16, String)> = records
 					.iter()
@@ -260,12 +257,10 @@ impl MxConnector {
 				self.implicit(domain, denial).await
 			}
 			Err(NetError::Dns(DnsError::Nsec { proof, .. })) => self.implicit(domain, proof).await,
-			Err(NetError::Dns(DnsError::DnssecBogus)) => Err(DeliveryError::Transient(format!(
-				"MX answer for {domain} failed DNSSEC validation"
-			))),
-			Err(error) => Err(DeliveryError::Transient(format!(
-				"MX lookup failed: {error}"
-			))),
+			Err(NetError::Dns(DnsError::DnssecBogus)) => {
+				Err(LocalFailure::Dnssec.transient(domain, "MX answer is bogus"))
+			}
+			Err(error) => Err(LocalFailure::MxLookup.transient(domain, &error.to_string())),
 		}
 	}
 }
@@ -310,9 +305,7 @@ impl MxConnector {
 		let address = self.address_proof(domain).await;
 		match implicit_mx_security(denial, address) {
 			Ok(security) => Ok((vec![domain.to_string()], security)),
-			Err(_) => Err(DeliveryError::Transient(format!(
-				"implicit MX of {domain} failed DNSSEC validation"
-			))),
+			Err(_) => Err(LocalFailure::Dnssec.transient(domain, "implicit MX is bogus")),
 		}
 	}
 
@@ -399,9 +392,7 @@ pub(crate) fn candidates(
 		hosts.retain(|host| policy.permits_mx(host));
 		if hosts.is_empty() {
 			// Never contact unlisted hosts under enforce: retry later.
-			return Err(DeliveryError::Transient(format!(
-				"no MTA-STS-permitted MX for {domain}"
-			)));
+			return Err(LocalFailure::MtaStsNoServer.transient(domain, "no MX permitted"));
 		}
 	}
 	hosts.truncate(MAX_EXCHANGERS);
@@ -463,13 +454,11 @@ where
 	for host in hosts {
 		last_error = match tokio::time::timeout(timeouts::CONNECT, open(host)).await {
 			Ok(Ok(stream)) => return Ok((host.clone(), stream)),
-			Ok(Err(error)) => {
-				DeliveryError::Transient(format!("connect to {host}:25 failed: {error}"))
-			}
-			Err(_) => DeliveryError::Transient(format!(
-				"connect to {host}:25 timed out after {}s",
-				timeouts::CONNECT.as_secs()
-			)),
+			Ok(Err(error)) => LocalFailure::Unreachable.transient(host, &error.to_string()),
+			Err(_) => LocalFailure::Unreachable.transient(
+				host,
+				&format!("timed out after {}s", timeouts::CONNECT.as_secs()),
+			),
 		};
 	}
 	Err(last_error)

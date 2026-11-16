@@ -140,11 +140,13 @@ fn recipient_fields(kind: Kind, recipient: &ReportRecipient, reason: &str) -> St
 	// The status class follows the action, not the reply: a recipient that
 	// expired after a 4.2.2 has failed (5.2.2), and one being retried after a
 	// 552 5.2.2 is delayed (4.2.2).
+	let local = crate::queue::local_failure::parse(reason);
 	let enhanced = is_smtp_reply(reason)
 		.then(|| reason.get(4..).unwrap_or_default().split(' ').next())
 		.flatten()
 		.and_then(parse_enhanced)
-		.filter(|enhanced| reason.starts_with(&enhanced.class.to_string()));
+		.filter(|enhanced| reason.starts_with(&enhanced.class.to_string()))
+		.or_else(|| local.map(|(enhanced, _)| enhanced));
 	let status = match enhanced {
 		Some(enhanced) => format!("{class}.{}.{}", enhanced.subject, enhanced.detail),
 		None if recipient.expired => "5.4.7".to_string(),
@@ -157,10 +159,14 @@ fn recipient_fields(kind: Kind, recipient: &ReportRecipient, reason: &str) -> St
 	if let Some(remote) = &recipient.remote {
 		fields.push_str(&format!("Remote-MTA: dns; {}\r\n", sanitize_reason(remote)));
 	}
-	// Only a server's reply is an SMTP diagnostic; a local reason (no server
-	// answered) stays in the human-readable part.
+	// A server's reply is an SMTP diagnostic; a local reason that carries a
+	// status of its own is this server's (RFC 3464 section 2.3.6 allows an
+	// `X-` diagnostic type); any other local reason stays in the
+	// human-readable part.
 	if is_smtp_reply(reason) {
 		fields.push_str(&format!("Diagnostic-Code: smtp; {reason}\r\n"));
+	} else if let Some((_, sentence)) = local {
+		fields.push_str(&format!("Diagnostic-Code: X-epistle; {sentence}\r\n"));
 	}
 	fields.push_str("\r\n");
 	fields

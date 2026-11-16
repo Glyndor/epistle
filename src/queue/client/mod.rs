@@ -19,6 +19,7 @@ use crate::dane::policy::DaneOutcome;
 use crate::dane::rrset::TlsaRrset;
 use crate::dane::verify::verify_chain;
 
+use super::local_failure::LocalFailure;
 use super::timeouts::Phase;
 use super::tls_outcome::{
 	STARTTLS_NOT_SUPPORTED, TLSA_INVALID, TlsOutcome, VALIDATION_FAILURE, classify_handshake,
@@ -44,6 +45,10 @@ pub enum DeliveryError {
 	/// 5xx: the remote refused permanently.
 	Permanent(String),
 }
+
+/// How the reason of a failed TLS handshake starts, for [`tls_connect`] (the
+/// probe of a smarthost shows it as it is).
+const HANDSHAKE_FAILED: &str = "TLS handshake failed";
 
 /// Longest reason kept from a remote reply, in characters: the bound the
 /// envelope's own last error already has.
@@ -226,9 +231,7 @@ where
 	}
 	// DANE presence makes STARTTLS mandatory (RFC 7672 §2.2): never downgrade.
 	if tls_mandatory && !offers_starttls {
-		return Err(DeliveryError::Transient(
-			"TLS required (MTA-STS/DANE) but remote offers no STARTTLS".into(),
-		));
+		return Err(LocalFailure::TlsRequired.transient(server_name, "no STARTTLS in EHLO"));
 	}
 
 	let mut tls_active = false;
@@ -246,7 +249,14 @@ where
 			.await
 			.map_err(|(error, result_type)| {
 				trace.tls = Some(TlsOutcome::Failure(result_type));
-				error
+				match error {
+					// The text of the handshake error is for the log; the
+					// report says the fixed sentence.
+					DeliveryError::Transient(detail) if detail.starts_with(HANDSHAKE_FAILED) => {
+						LocalFailure::Handshake.transient(server_name, &detail)
+					}
+					error => error,
+				}
 			})?;
 		// DANE: authenticate the presented chain against validated TLSA records.
 		// With none, this is a no-op (opportunistic); a mismatch fails closed.
@@ -265,9 +275,7 @@ where
 			DaneOutcome::NoRecords => {}
 			DaneOutcome::Mismatch => {
 				trace.tls = Some(TlsOutcome::Failure(TLSA_INVALID));
-				return Err(DeliveryError::Transient(format!(
-					"DANE: no TLSA record matches the certificate of {server_name}"
-				)));
+				return Err(LocalFailure::TlsaMismatch.transient(server_name, "DANE mismatch"));
 			}
 		}
 		trace.tls = Some(TlsOutcome::Success);
@@ -437,7 +445,7 @@ async fn tls_connect(
 		Ok(Ok(tls)) => tls,
 		Ok(Err(error)) => {
 			return Err((
-				DeliveryError::Transient(format!("TLS handshake failed: {error}")),
+				DeliveryError::Transient(format!("{HANDSHAKE_FAILED}: {error}")),
 				classify_handshake(&error),
 			));
 		}
