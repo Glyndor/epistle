@@ -58,9 +58,12 @@ pub fn prepare(
 		marketing::mark_bulk(&mut message.data);
 		if let Some(list) = data_dir.and_then(|dir| crate::queue::SuppressionList::open(dir).ok()) {
 			let sender = message.reverse_path.clone();
+			// An entry past its lifetime stops blocking. A clock that is ahead
+			// only lets a recipient through early, which costs a bounce and
+			// loses nothing, so the wall clock is enough here.
+			let now = crate::storage::delivery_log::now_epoch();
 			message.recipients.retain(|recipient| {
-				let blocked =
-					list.is_suppressed(recipient) || list.is_suppressed_for(&sender, recipient);
+				let blocked = list.is_blocked(&sender, recipient, now);
 				if blocked {
 					suppressed.push(recipient.clone());
 				}

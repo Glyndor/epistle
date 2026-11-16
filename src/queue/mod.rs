@@ -23,5 +23,5 @@ mod worker;
 
 pub use resolver::{Connector, MxConnector};
 pub use schedule::RetrySchedule;
-pub use suppression::{Suppressed, SuppressionList};
+pub use suppression::{Origin, Rules as SuppressionRules, Suppressed, SuppressionList};
 pub use worker::Worker;

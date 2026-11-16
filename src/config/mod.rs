@@ -103,6 +103,7 @@ pub use own_ip_blocklist::OwnIpBlocklist;
 pub use privileges::Privileges;
 pub use queue::{OutboundTls, Queue};
 pub use reports::Reports;
+pub use queue::{OutboundTls, Queue, SuppressionScope};
 pub use scanner::{Antispam, ClamdOnError, ClamdOnFound};
 pub use schema::Config;
 pub use smtp::{RefusalDetail, Smtp};

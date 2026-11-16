@@ -157,7 +157,10 @@ async fn a_553_policy_bounces_once_without_suppressing_a_valid_recipient() {
 		assert!(worker.spool.list().expect("list").is_empty());
 		assert_eq!(bounces.messages().len(), 1, "{reply}");
 		let list = SuppressionList::open(dir.path()).expect("suppression");
-		assert_eq!(list.is_suppressed("bob@busy.example"), suppress, "{reply}");
+		assert!(
+			!list.is_suppressed("bob@busy.example"),
+			"a bounce does not suppress for every sender by default: {reply}"
+		);
 		assert_eq!(
 			list.is_suppressed_for("alice@sender.example", "bob@busy.example"),
 			suppress,

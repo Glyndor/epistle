@@ -279,7 +279,7 @@ async fn a_bad_address_is_suppressed_for_its_sender_too() {
 	worker.pass().await.expect("pass");
 
 	let list = SuppressionList::open(dir.path()).expect("suppression");
-	assert!(list.is_suppressed("carol@remote.example"));
+	assert!(!list.is_suppressed("carol@remote.example"));
 	assert!(list.is_suppressed_for(SENDER, "carol@remote.example"));
 }
 

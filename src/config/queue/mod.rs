@@ -32,6 +32,18 @@ pub enum OutboundTls {
 	Opportunistic,
 }
 
+/// Which list an automatic suppression is written to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SuppressionScope {
+	/// The list every sender shares.
+	Server,
+	/// The list of the sender's tenant, which every domain of the tenant reads.
+	Tenant,
+	/// The list of the sending account alone.
+	Account,
+}
+
 /// The `[queue]` configuration section.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -76,6 +88,28 @@ pub struct Queue {
 	/// Minimum pause for provider rate limits, in seconds (default 600).
 	#[serde(default = "default_provider_pause_secs")]
 	pub provider_pause_secs: u64,
+	/// The lists a permanent bounce that proves an address bad suppresses it
+	/// in: any of `account`, `tenant` and `server`. Default `["account",
+	/// "tenant"]`, so one customer's typo does not block the others. Entries
+	/// added by hand are never affected, and a block is checked in every list.
+	#[serde(default = "default_suppression_scopes")]
+	pub suppression_scopes: Vec<SuppressionScope>,
+	/// Days an automatic suppression lasts before the address is tried again,
+	/// and the window in which bounces are counted. Default `0`: for ever.
+	#[serde(default)]
+	pub suppression_days: u64,
+	/// Permanent bounces of mail from one sender to one address before it is
+	/// suppressed. Default `1`: the first one does.
+	#[serde(default = "default_suppression_threshold")]
+	pub suppression_threshold: u32,
+}
+
+fn default_suppression_scopes() -> Vec<SuppressionScope> {
+	vec![SuppressionScope::Account, SuppressionScope::Tenant]
+}
+
+const fn default_suppression_threshold() -> u32 {
+	1
 }
 
 const fn default_provider_pause_secs() -> u64 {
@@ -114,6 +148,9 @@ impl Default for Queue {
 			per_group_concurrency: BTreeMap::new(),
 			backoff_steps: default_backoff_steps(),
 			provider_pause_secs: default_provider_pause_secs(),
+			suppression_scopes: default_suppression_scopes(),
+			suppression_days: 0,
+			suppression_threshold: default_suppression_threshold(),
 		}
 	}
 }
@@ -237,6 +274,26 @@ impl super::Config {
 	/// a minute, a cap not below it, and a delay warning that comes before
 	/// the give-up window closes. The conversation caps and the backoff of
 	/// the `[queue]` section are checked with it.
+	pub(super) fn validate_suppression(&self) -> Result<(), super::ConfigError> {
+		let queue = &self.queue;
+		let invalid =
+			|message: &str| Err(super::ConfigError::Invalid(format!("[queue] {message}")));
+		if queue.suppression_scopes.is_empty() {
+			return invalid("suppression_scopes needs at least one of account, tenant, server");
+		}
+		let scopes = &queue.suppression_scopes;
+		if (1..scopes.len()).any(|at| scopes[..at].contains(&scopes[at])) {
+			return invalid("suppression_scopes names a scope twice");
+		}
+		if !(1..=100).contains(&queue.suppression_threshold) {
+			return invalid("suppression_threshold must be between 1 and 100");
+		}
+		if queue.suppression_days > 36_500 {
+			return invalid("suppression_days must be at most 36500");
+		}
+		Ok(())
+	}
+
 	pub(super) fn validate_retry_schedule(&self) -> Result<(), super::ConfigError> {
 		use crate::queue::schedule::{MIN_BASE_SECS, RetrySchedule};
 		let invalid = |message: String| Err(super::ConfigError::Invalid(message));

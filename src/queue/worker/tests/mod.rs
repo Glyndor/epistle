@@ -16,6 +16,7 @@ pub(super) mod routing;
 pub(super) mod scan;
 pub(super) mod schedule;
 pub(super) mod spool_holds;
+pub(super) mod suppression_scopes;
 pub(super) mod tenant_webhook;
 pub(super) mod webhook;
 

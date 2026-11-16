@@ -143,7 +143,11 @@ async fn a_later_domain_refusal_keeps_the_earlier_delivery_and_its_recipient() {
 			&& !suppression.is_suppressed_for(SENDER, "bob@a.example"),
 		"a delivered recipient must never be suppressed"
 	);
-	assert!(suppression.is_suppressed("dan@b.example"));
+	assert!(suppression.is_suppressed_for(SENDER, "dan@b.example"));
+	assert!(
+		!suppression.is_suppressed("dan@b.example"),
+		"the shared list stays empty by default"
+	);
 }
 
 /// Copy every file of the spool's `new/` directory aside, or back.

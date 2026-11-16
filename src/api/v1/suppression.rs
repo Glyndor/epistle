@@ -23,6 +23,8 @@ const MAX_LIMIT: usize = 100;
 pub struct ListParams {
 	/// Restrict to a sending account's per-account list.
 	account: Option<String>,
+	/// Restrict to a tenant's list, by its name. Needs an unconfined key.
+	tenant: Option<String>,
 	limit: Option<usize>,
 	/// Keyset cursor: return addresses strictly after this one.
 	after: Option<String>,
@@ -102,10 +104,18 @@ pub async fn list(
 	Query(params): Query<ListParams>,
 ) -> Result<Json<SuppressionPage>, ApiError> {
 	let principal = Principal::for_token(&state, &auth);
+	if params.tenant.is_some() && params.account.is_some() {
+		return Err(ApiError::invalid_input("give account or tenant, not both"));
+	}
 	let scope = match &params.account {
 		Some(account) => Some(account_scope(&state, &principal, account)?),
 		None => {
-			require_unconfined(&principal, "The global suppression list")?;
+			let what = if params.tenant.is_some() {
+				"A tenant's suppression list"
+			} else {
+				"The global suppression list"
+			};
+			require_unconfined(&principal, what)?;
 			None
 		}
 	};
@@ -117,9 +127,10 @@ pub async fn list(
 		));
 	}
 	let suppression = open(&state)?;
-	let all = match &scope {
-		Some(scope) => account_addresses(&suppression, scope),
-		None => suppression.list(),
+	let all = match (&scope, &params.tenant) {
+		(Some(scope), _) => account_addresses(&suppression, scope),
+		(None, Some(tenant)) => suppression.list_for_tenant(tenant),
+		(None, None) => suppression.list(),
 	};
 	let start = match &params.after {
 		Some(cursor) => all.partition_point(|a| a <= cursor),
@@ -196,22 +207,44 @@ pub struct Removed {
 	removed: String,
 }
 
-/// Remove an address from the global list, or an account's with `?account=`.
+#[derive(Deserialize)]
+pub struct RemoveParams {
+	account: Option<String>,
+	/// A tenant's list, by its name. Needs an unconfined key.
+	tenant: Option<String>,
+}
+
+/// Remove an address from the global list, an account's with `?account=`, or a
+/// tenant's with `?tenant=`.
 pub async fn remove(
 	State(state): State<ApiState>,
 	Extension(auth): Extension<MatchedAuth>,
 	Path(address): Path<String>,
-	Query(params): Query<AccountParams>,
+	Query(params): Query<RemoveParams>,
 ) -> Result<Json<Removed>, ApiError> {
 	let principal = Principal::for_token(&state, &auth);
+	if params.tenant.is_some() && params.account.is_some() {
+		return Err(ApiError::invalid_input("give account or tenant, not both"));
+	}
 	let scope = match &params.account {
 		Some(account) => Some(account_scope(&state, &principal, account)?),
 		None => {
-			require_unconfined(&principal, "The global suppression list")?;
+			let what = if params.tenant.is_some() {
+				"A tenant's suppression list"
+			} else {
+				"The global suppression list"
+			};
+			require_unconfined(&principal, what)?;
 			None
 		}
 	};
 	let suppression = open(&state)?;
+	if let Some(tenant) = &params.tenant {
+		suppression
+			.remove_for_tenant(tenant, &address)
+			.map_err(|_| ApiError::internal())?;
+		return Ok(Json(Removed { removed: address }));
+	}
 	match scope {
 		Some(scope) => {
 			for account in scope.keys {

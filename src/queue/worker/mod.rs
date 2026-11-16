@@ -51,6 +51,9 @@ pub struct Worker {
 	max_age_secs: u64,
 	/// Suppression list: recipients that hard-bounced are not retried.
 	suppression: Option<super::SuppressionList>,
+	/// Which lists a hard bounce suppresses an address in, for how long and
+	/// after how many.
+	suppression_rules: super::SuppressionRules,
 	/// Outbound transport rules (relay/socks/direct/fail). Empty = direct MX.
 	transports: Vec<crate::config::Transport>,
 	/// DNSSEC-validating resolver for DANE TLSA lookups. `None` disables DANE
@@ -122,6 +125,7 @@ impl Worker {
 			webhook: None,
 			max_age_secs: DEFAULT_MAX_AGE_SECS,
 			suppression: None,
+			suppression_rules: super::SuppressionRules::default(),
 			transports: Vec::new(),
 			dane_dns: None,
 			outbound_tls: crate::config::OutboundTls::default(),
@@ -274,6 +278,12 @@ impl Worker {
 		if secs > 0 {
 			self.max_age_secs = secs;
 		}
+		self
+	}
+
+	/// The scopes, lifetime and threshold of automatic suppression.
+	pub fn with_suppression_rules(mut self, rules: super::SuppressionRules) -> Self {
+		self.suppression_rules = rules;
 		self
 	}
 

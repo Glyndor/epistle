@@ -15,6 +15,10 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
+mod auto;
+
+pub use auto::{Origin, Rules};
+
 /// Mode of a marker file, as the spool's files: owner read and write.
 #[cfg(unix)]
 const FILE_MODE: u32 = 0o600;
@@ -213,6 +217,8 @@ impl SuppressionList {
 	/// Used by [`crate::directory_store::removal::remove_account`] to clear
 	/// the account's whole footprint in one pass.
 	pub fn remove_all_for(&self, account: &str) -> std::io::Result<u32> {
+		// The bounce counts of the account go with it.
+		let _ = fs::remove_dir_all(self.dir.join("pending").join(digest_name(account)));
 		let dir = self.account_dir(account);
 		let entries = match std::fs::read_dir(&dir) {
 			Ok(entries) => entries,
@@ -348,6 +354,12 @@ pub struct Suppressed {
 	pub since: Option<u64>,
 	/// Why: the remote reply that proved the address bad, when recorded.
 	pub reason: Option<String>,
+	/// Whether a bounce put it there. An entry added by hand is not
+	/// automatic, never ends, and a bounce never replaces it.
+	pub automatic: bool,
+	/// Epoch seconds the entry stops blocking at, for an automatic one the
+	/// operator gave a lifetime. `None` is for ever.
+	pub until: Option<u64>,
 }
 
 /// The content of a marker: the address on the first line, then the epoch
@@ -378,10 +390,17 @@ fn parse_marker(content: &str) -> Option<Suppressed> {
 		Some((since, reason)) => (since.trim().parse().ok(), Some(reason.trim().to_string())),
 		None => (None, None),
 	};
+	// A third line `auto<TAB>until` says a bounce wrote the entry. A release
+	// that does not know it stops at the second line and reads the same entry.
+	let auto = lines.next().and_then(|line| line.strip_prefix("auto\t"));
 	Some(Suppressed {
 		address,
 		since,
 		reason: reason.filter(|reason| !reason.is_empty()),
+		automatic: auto.is_some(),
+		until: auto
+			.and_then(|until| until.trim().parse::<u64>().ok())
+			.filter(|until| *until > 0),
 	})
 }
 

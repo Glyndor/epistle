@@ -75,6 +75,15 @@ pub enum SuppressionCli {
 		#[arg(long)]
 		json: bool,
 	},
+	/// Manage the list of a tenant.
+	///
+	/// A bounce can be suppressed for the whole tenant of the sender
+	/// (`[queue] suppression_scopes`). These commands list and clear that list.
+	Tenant {
+		/// The tenant action.
+		#[command(subcommand)]
+		action: TenantCli,
+	},
 	/// Write the list as CSV: address, when, why.
 	///
 	/// The output is a header line `address,since,reason` and one entry per
@@ -159,6 +168,9 @@ impl SuppressionCli {
 				account,
 				json: true,
 			},
+			Some(SuppressionCli::Tenant { action }) => SuppressionCli::Tenant {
+				action: action.with_json(),
+			},
 			Some(SuppressionCli::Export { account, .. }) => SuppressionCli::Export {
 				account,
 				json: true,
@@ -188,6 +200,97 @@ impl SuppressionCli {
 				},
 			},
 		})
+	}
+}
+
+/// Actions on a tenant's list.
+#[derive(Debug, clap::Subcommand)]
+pub enum TenantCli {
+	/// List the addresses suppressed for a tenant, with when, why and until.
+	List {
+		/// The tenant, by its `[[tenant]]` name.
+		tenant: String,
+		/// Print a JSON array of `{"address", "tenant", "since", "reason", "until"}`.
+		#[arg(long)]
+		json: bool,
+	},
+	/// Resume delivering to an address for a tenant.
+	Remove {
+		/// The tenant, by its `[[tenant]]` name.
+		tenant: String,
+		/// Recipient address to resume delivering to.
+		address: String,
+		/// Print the result as one JSON object on stdout.
+		#[arg(long)]
+		json: bool,
+	},
+}
+
+impl TenantCli {
+	fn with_json(self) -> Self {
+		match self {
+			TenantCli::List { tenant, .. } => TenantCli::List { tenant, json: true },
+			TenantCli::Remove {
+				tenant, address, ..
+			} => TenantCli::Remove {
+				tenant,
+				address,
+				json: true,
+			},
+		}
+	}
+}
+
+/// Run a tenant action.
+fn tenant(config: &Config, action: TenantCli, out: &mut impl std::io::Write) -> ExitCode {
+	let list = match SuppressionList::open(&config.data_dir) {
+		Ok(list) => list,
+		Err(error) => {
+			super::style::error(format_args!("cannot open suppression list: {error}"));
+			return ExitCode::FAILURE;
+		}
+	};
+	match action {
+		TenantCli::List { tenant, json } => {
+			let entries = list.entries_for_tenant(&tenant);
+			if json {
+				let rows: Vec<_> = entries
+					.iter()
+					.map(|entry| {
+						serde_json::json!({
+							"address": entry.address,
+							"tenant": tenant,
+							"since": entry.since.map(crate::clock::rfc3339),
+							"reason": entry.reason,
+							"until": entry.until.map(crate::clock::rfc3339),
+						})
+					})
+					.collect();
+				return super::json_out::print(out, &serde_json::Value::Array(rows));
+			}
+			for entry in &entries {
+				if writeln!(out, "{}", super::term::sanitize(&entry.address)).is_err() {
+					return ExitCode::FAILURE;
+				}
+			}
+			ExitCode::SUCCESS
+		}
+		TenantCli::Remove {
+			tenant,
+			address,
+			json,
+		} => match list.remove_for_tenant(&tenant, &address) {
+			Ok(()) => {
+				let mut report = super::json_out::Report::new(out, json);
+				report.line(format_args!("removed {address} for tenant {tenant}"));
+				let fields = serde_json::json!({ "address": address, "tenant": tenant });
+				report.change("remove", true, fields, None)
+			}
+			Err(error) => {
+				super::style::error(format_args!("cannot remove {address}: {error}"));
+				ExitCode::FAILURE
+			}
+		},
 	}
 }
 
@@ -320,6 +423,7 @@ pub(super) fn run(
 			json,
 			out,
 		)),
+		SuppressionCli::Tenant { action } => tenant(config, action, out),
 		SuppressionCli::Export { account, json } => {
 			super::resource::exit_resource(exchange::export(config, account.as_deref(), json, out))
 		}
@@ -385,12 +489,18 @@ fn list(
 		let rows: Vec<_> = entries
 			.iter()
 			.map(|entry| {
-				serde_json::json!({
+				let mut row = serde_json::json!({
 					"address": entry.address,
 					"account": account,
 					"since": since(entry),
 					"reason": entry.reason,
-				})
+				});
+				// Only an entry with a lifetime has an end, so the rows of a
+				// list with none keep the shape they always had.
+				if let Some(until) = entry.until {
+					row["until"] = serde_json::json!(crate::clock::rfc3339(until));
+				}
+				row
 			})
 			.collect();
 		return super::json_out::print(out, &serde_json::Value::Array(rows));
@@ -399,12 +509,15 @@ fn list(
 	// follow, tab separated, so `cut -f1` still yields the bare addresses.
 	for entry in &entries {
 		let address = super::term::sanitize(&entry.address);
-		let line = match (since(entry), &entry.reason) {
+		let mut line = match (since(entry), &entry.reason) {
 			(Some(since), Some(reason)) => {
 				format!("{address}\t{since}\t{}", super::term::sanitize(reason))
 			}
 			_ => address,
 		};
+		if let Some(until) = entry.until {
+			line.push_str(&format!("\tuntil {}", crate::clock::rfc3339(until)));
+		}
 		if writeln!(out, "{line}").is_err() {
 			return ExitCode::FAILURE;
 		}
