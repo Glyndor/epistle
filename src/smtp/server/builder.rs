@@ -48,6 +48,7 @@ impl Server {
 			refusal_detail: crate::config::RefusalDetail::default(),
 			refusal_reference: false,
 			tenant_limits: None,
+			scopes: None,
 			disk_guard: None,
 			drain: None,
 			quota: None,
@@ -151,6 +152,13 @@ impl Server {
 	/// limiter; the SMTP path checks both before accepting MAIL FROM.
 	pub fn with_tenant_limits(mut self, limits: Arc<crate::api::TenantLimits>) -> Self {
 		self.tenant_limits = Some(limits);
+		self
+	}
+
+	/// Apply the antispam scopes: the sender lists at `RCPT TO` and after
+	/// authentication, and the attachment settings of each recipient.
+	pub fn with_scopes(mut self, scopes: Arc<crate::antispam::scopes::Scopes>) -> Self {
+		self.scopes = Some(scopes);
 		self
 	}
 

@@ -14,6 +14,7 @@ mod acme;
 mod alerts;
 mod alias;
 mod antispam;
+mod antispam_scope;
 mod api;
 mod arc;
 mod attachments;
@@ -66,11 +67,12 @@ pub use acme::{Acme, AcmeChallenge};
 pub use alerts::{Alert, AlertOp};
 pub use alias::Alias;
 pub use antispam::{Llm, SubjectPass};
+pub use antispam_scope::{AntispamScope, AttachmentScope, SenderLists};
 pub use api::Api;
 pub use arc::Arc;
 pub use attachments::{
 	AttachmentMode, Attachments, ContentAction, MAX_EXTENSION_LEN, MAX_EXTENSIONS,
-	normalise_extension, valid_extension,
+	normalise_extension, valid_extension, valid_mime_pattern,
 };
 pub use auth::Auth;
 pub use boot::Boot;

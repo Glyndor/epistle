@@ -50,6 +50,8 @@ pub(crate) struct TransactionPolicy {
 	/// Mailbox quota of local recipients: `RCPT TO` refuses a full mailbox,
 	/// and the end of DATA catches one this message would overfill.
 	quota: Option<Arc<crate::smtp::quota::MailboxQuota>>,
+	/// The antispam scopes' sender lists, consulted at `RCPT TO`.
+	scopes: Option<Arc<crate::antispam::scopes::Scopes>>,
 	/// Failure reports (DSNs) for recipients the last accepted message
 	/// could not be stored for, waiting for the server to send them once
 	/// the message itself is delivered.
@@ -212,6 +214,17 @@ impl TransactionPolicy {
 	/// The mailbox quota checks, when wired.
 	pub(crate) fn quota(&self) -> Option<&crate::smtp::quota::MailboxQuota> {
 		self.quota.as_deref()
+	}
+
+	/// Consult the antispam scopes' sender lists at `RCPT TO`.
+	pub(crate) fn with_scopes(mut self, scopes: Arc<crate::antispam::scopes::Scopes>) -> Self {
+		self.scopes = Some(scopes);
+		self
+	}
+
+	/// The scopes' sender lists, when wired.
+	pub(crate) fn scopes(&self) -> Option<&crate::antispam::scopes::Scopes> {
+		self.scopes.as_deref()
 	}
 
 	/// Queue a failure report to send after the message is delivered.

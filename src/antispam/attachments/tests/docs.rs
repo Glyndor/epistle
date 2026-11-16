@@ -22,6 +22,8 @@ const REASONS: &[Reason] = &[
 	Reason::Macro,
 	Reason::AmbiguousMime,
 	Reason::ScanLimit,
+	Reason::AttachmentTooLarge,
+	Reason::BlockedMimeType,
 ];
 
 #[test]

@@ -119,6 +119,9 @@ impl Server {
 		// Who the server itself verified: a logged-in session, or
 		// this hop's SPF or DKIM pass. Never read from the headers.
 		message.sender_verified = session.authenticated().is_some() || sender_passed;
+		// A sender a list favours, once this server verified it: skips the
+		// score-based screens below and nothing else.
+		let favoured = self.sender_favoured(&message);
 		if let Some(dns) = &self.spf
 			&& message.recipients.iter().any(|recipient| {
 				recipient
@@ -200,10 +203,11 @@ impl Server {
 		// hard `Reject` branch is still honoured; a poor
 		// reputation is independent of whether the sender is
 		// known to a local account.
-		if let (Some(pool), Some(domain), None) = (
+		if let (Some(pool), Some(domain), None, false) = (
 			&self.reputation,
 			rep_domain.as_deref(),
 			session.authenticated(),
+			favoured,
 		) {
 			use crate::antispam::reputation::{Scope, Screen, screen};
 			match screen(pool, Scope::Domain, domain).await {
@@ -276,13 +280,17 @@ impl Server {
 		// `bayes_reject_at` (when configured) refuses the DATA
 		// phase with `550 5.7.1`. Runs before the uncertain band
 		// so a high-confidence verdict never burns an LLM call.
-		match self
-			.handle_bayes_thresholds(&mut message, session.authenticated().is_some(), stream)
-			.await?
-		{
-			super::run_band::BayesOutcome::Rejected => return Ok(()),
-			super::run_band::BayesOutcome::SendToJunk | super::run_band::BayesOutcome::Continue => {
-			}
+		if !favoured
+			&& matches!(
+				self.handle_bayes_thresholds(
+					&mut message,
+					session.authenticated().is_some(),
+					stream
+				)
+				.await?,
+				super::run_band::BayesOutcome::Rejected
+			) {
+			return Ok(());
 		}
 		// Uncertain-band logic: SubjectPass (if enabled) accepts
 		// the retry that carries a valid token in the subject,
@@ -294,16 +302,17 @@ impl Server {
 		// Bayes path has already set the message's mailbox when
 		// it decided, so the band's "stay out of an upstream
 		// decision" guard skips it naturally.
-		if matches!(
-			self.handle_uncertain_band(
-				&mut message,
-				peer,
-				session.authenticated().is_some(),
-				stream
-			)
-			.await?,
-			super::run_band::BandOutcome::Challenged
-		) {
+		if !favoured
+			&& matches!(
+				self.handle_uncertain_band(
+					&mut message,
+					peer,
+					session.authenticated().is_some(),
+					stream
+				)
+				.await?,
+				super::run_band::BandOutcome::Challenged
+			) {
 			return Ok(());
 		}
 

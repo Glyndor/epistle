@@ -197,7 +197,11 @@ impl Session {
 		let Ok(address) = Address::parse(&forward_path) else {
 			return Action::Continue(Reply::single(553, "5.1.3 invalid recipient address"));
 		};
-		match self.directory.resolve(&address) {
+		let resolution = self.directory.resolve(&address);
+		if let Some(refusal) = self.scope_refusal(&address, &resolution) {
+			return Action::Continue(refusal);
+		}
+		match &resolution {
 			// Foreign domains are relayed only for authenticated users.
 			Resolution::NotLocal => {
 				if self.authenticated.is_none() {
@@ -213,7 +217,7 @@ impl Session {
 				if self
 					.policy
 					.quota()
-					.is_some_and(|quota| quota.is_full(&self.directory, &account)) =>
+					.is_some_and(|quota| quota.is_full(&self.directory, account)) =>
 			{
 				return Action::Continue(Reply::single(452, "4.2.2 mailbox full"));
 			}

@@ -97,6 +97,7 @@ a connection URL.
 | `subjectpass` | section | disabled | Signed token for the uncertain Bayesian band: when no LLM verdict decides a message in the band, the server refuses it with `550 5.7.1` and a token the sender can put in the `Subject:`, and accepts the resend that carries it. Requires `[database]`. Disabled by default (changes what remote senders see). See [`[subjectpass]`](#subjectpass). |
 | `log_format` | `text`\|`json` | `text` | Log output format. The level filter is the `RUST_LOG` environment variable (default `info`); with it unset, the resolver's DNSSEC validator (`hickory_net::dnssec`, which logs whole responses for every unsigned zone) is off, and epistle writes one debug line per TLSA lookup instead. A `RUST_LOG` you set is used as written: `RUST_LOG=info,hickory_net::dnssec=warn` brings the library back. |
 | `rules` | array | `[]` | Delivery rules that route or flag locally delivered mail by sender/header. |
+| `antispam_scope` | array | `[]` | Antispam settings for one tenant, domain or account, on top of the server-wide sections: sender and recipient lists and stronger attachment settings. Empty changes nothing. See [`[[antispam_scope]]`](#antispam_scope). |
 | `alerts` | array | `[]` | Metric alerts: rules that fire a webhook or email when a counter crosses its configured threshold over a sample window. |
 | `tenant` | array | `[]` | Tenant definitions: named groups of domains with optional aggregate caps on accounts, domains, storage and submission rate. Empty means no tenancy is in effect. See [`[[tenant]]`](#tenant). |
 
@@ -165,6 +166,8 @@ enabled = true
 | `bayes_junk_at` | float in `[0.0, 1.0]` | `0.95` | Score at or above which an unauthenticated message is delivered to the recipient's Junk mailbox with `X-Spam-Status: Yes` and the score in `X-Spam-Score`. Authenticated mail is never scored this way. A corpus below `MIN_TRUSTED_MESSAGES` (200) ham AND spam does not decide anything: a threshold acts only on a trained corpus: the account's own, or the shared one for an account with too little of its own, an alias or a list. |
 | `bayes_reject_at` | float in `[0.0, 1.0]` | unset | Score at or above which an unauthenticated message is refused during DATA with `550 5.7.1 message rejected as spam`. Absent disables the rejection path (default). When set, must be at least `bayes_junk_at` so the rejected band is a subset of the junked one. |
 
+| `senders` | table | empty | Allow and deny lists of senders and recipients for the whole server, the widest scope of [`[[antispam_scope]]`](#antispam_scope): `allow`, `deny` and `deny_recipients`, with the entry shapes and rules given there. Empty by default: no sender is favoured or refused by name. |
+
 ```toml
 [antispam]
 clamd_socket = "/run/clamav/clamd.sock"
@@ -222,6 +225,8 @@ if clamd answers `PING` at that moment.
 | `encrypted_archives` | `allow`, `flag` or `quarantine` | `flag` | Archives no scanner can read, never above `mode`. |
 | `block_extensions` | list | empty | Extensions treated as dangerous on top of the built-in list. |
 | `allow_extensions` | list | empty | Extensions taken off the dangerous list, for names only. The always-dangerous ones are refused. |
+| `max_attachment_bytes` | integer | unset | Largest single attachment, in bytes after decoding. A larger one is the finding `attachment-too-large`, handled as `mode` says. Unset means no cap. Applies to what accounts submit too, when `mode` quarantines or rejects. |
+| `block_mime_types` | list | empty | Declared MIME types (`application/pdf`, or `image/*` for a whole family) that are the finding `blocked-mime-type`. The declared type is what the sender wrote; the bytes are judged by the other findings. |
 
 What each finding means, what `allow_extensions` can and cannot do, and the
 residual risks are in [attachments.md](attachments.md).
@@ -2306,6 +2311,96 @@ Rules:
 - `max_accounts` is enforced on `POST /api/v1/accounts` as `409 Conflict` (not `429`): waiting will not lift it, the cap lifts when an account is deleted or the operator raises it.
 - `quota_bytes` is enforced on `POST /jmap/upload` alongside the per-account quota, with the JMAP limit problem type (`urn:ietf:params:jmap:error:limit`, `limit: "tenant_storage"`, HTTP `507`).
 - `submission_rate_limit_per_min` is enforced on SMTP submission, `POST /api/v1/send` and JMAP `EmailSubmission/set` with one counter per tenant shared by the three, counted and charged like the per-account limit (one unit per recipient, once, when the message is accepted, together with the per-account limit or not at all). An account with addresses in two tenants is charged by both. The refusal is the one the per-account limit gives and does not name the tenant.
+
+### `[[antispam_scope]]`
+
+Antispam settings for one tenant, one domain or one account, on top of the
+server-wide sections. An entry names exactly one target:
+
+```toml
+[antispam.senders]                        # the whole server
+deny = ["*.spam.example.net"]
+deny_recipients = ["*.blocked.example.net"]
+
+[[antispam_scope]]
+domain = "example.org"                    # or tenant = "acme", or account = "alice"
+[antispam_scope.senders]
+allow = ["partner.example.com", "ceo@example.net"]
+deny = ["bad@example.com"]
+[antispam_scope.attachments]
+mode = "reject"                           # only stronger than [attachments] mode
+block_extensions = ["docm"]
+block_mime_types = ["audio/*"]
+max_attachment_bytes = 5000000
+```
+
+| Key | Meaning |
+|---|---|
+| `tenant` / `domain` / `account` | The target, exactly one. A tenant is the `name` of a `[[tenant]]`; a domain must be in `domains`; an account is a name from any source (the file, the API, a directory), and a name that does not exist has no effect. |
+| `senders.allow` | Envelope senders favoured when this server verified them. See "Allow lists never override authentication". |
+| `senders.deny` | Envelope senders refused at `RCPT TO` with `550 5.7.1 sender not accepted for this recipient`, before any data, so nothing is stored and no bounce goes to a forged address. |
+| `senders.deny_recipients` | Recipients an authenticated account may not write to, refused at `RCPT TO` with `550 5.7.1 sending to this recipient is not allowed`, with no queue entry. Unlike `[[transport]] kind = "fail"` it covers subdomains and answers at once. |
+| `attachments` | `mode`, `macros`, `encrypted_archives`, `block_extensions`, `block_mime_types` and `max_attachment_bytes`, as in `[attachments]`, and only stronger. |
+
+**Entries** are `user@example.com` (that address), `example.com` (that domain
+and not its subdomains) and `*.example.com` (every subdomain at any depth, and
+not `example.com`). Case does not matter; `badexample.com` and
+`example.com.example.net` are not subdomains of `example.com`. The null
+sender `<>` matches nothing, so a list cannot refuse or favour bounces. A list
+holds up to 4096 entries and an entry cannot be both in `allow` and in `deny`
+of the same scope.
+
+**Resolution.** The scopes in reach of a recipient are the server, the tenant
+that owns the recipient's domain, the domain and the account (a domain alias
+counts as the domain it delivers to; a multi-target alias has no account
+scope). A scope in reach adds its entries and never removes another's:
+
+- A `deny` of any scope in reach refuses, and no `allow` of any scope lifts it.
+  A domain cannot allow what the server denies.
+- Attachment settings only tighten. The load refuses a scope whose `mode`,
+  `macros`, `encrypted_archives` or `max_attachment_bytes` is weaker than the
+  server's, and a scope with attachment settings when `[attachments] mode` is
+  `off`. There is no way to allow an extension the server blocks; the
+  always-dangerous list stays dangerous at every scope.
+- A message with several recipients is judged by all of them: a sender denied
+  for one recipient is refused for that recipient only, an allow only counts
+  when every recipient's scopes favour the sender, and the attachment settings
+  are the strictest of any recipient's.
+
+**Allow lists never override authentication.** An `allow` entry names the
+envelope sender, which anybody can write, so matching it is never enough. The
+server favours a message only when all of these hold, checked in this order in
+the delivery code (`src/smtp/server/run_scopes.rs`):
+
+1. the message already passed SPF and DMARC: a failure was refused before
+   the lists are consulted, so a forged allowed sender gets the same `550`
+   it gets without the list;
+2. this server verified the sender itself (SPF passed for its domain, or a
+   DKIM signature of the same organization did), never a header the sender
+   wrote;
+3. the `From` header names the same organization as the envelope sender, so
+   a listed envelope that only lends its address to another `From` is not
+   favoured;
+4. every recipient's scopes allow the sender and none denies it.
+
+A favoured message skips only the score-based screens: the Bayesian junk and
+reject thresholds, the uncertain band (the LLM hook and SubjectPass) and the
+reputation screen. It never skips SPF, DMARC, DNS blocklists, greylisting,
+the virus scanner or the attachment policy. Without a DNS resolver
+(`[dns]`) nothing is ever verified, so an `allow` list has no effect.
+
+Defaults for the two kinds of operator: with no `[antispam.senders]` and no
+`[[antispam_scope]]` nothing changes, which is right for a company that runs
+mail only for its own people. A provider that sells mail puts the lists a
+customer controls in that customer's `domain` or `account` scope, and keeps
+`deny` entries of the server for what no customer may undo. The lists can be
+emptied (that turns them off); the attachment floor of the server can only be
+raised.
+
+Not done yet: editing these lists from the command line, the API and the panel
+with an audit entry for each change, `allow` for outbound recipients,
+attachment `strip`, an allowed-extensions list per scope, and the same lists
+on `POST /api/v1/send` and JMAP `EmailSubmission` (they apply to SMTP).
 
 ### `[[srs_domain]]`
 <a id="srs_domain"></a>

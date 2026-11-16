@@ -36,6 +36,8 @@ Every finding is a stable reason code. Only codes reach the
 | `macro` | An Office document carries a VBA project (OOXML or OLE2). |
 | `ambiguous-mime` | Two mail clients could read the MIME structure, a header or an encoding differently. |
 | `scan-limit` | A cap was hit (depth, parts, header size, decoded bytes, archive entries or time) and the rest was not inspected. |
+| `attachment-too-large` | An attachment is larger than `max_attachment_bytes`, after decoding. |
+| `blocked-mime-type` | An attachment is declared as a type in `block_mime_types`. |
 
 Names are read the way clients and extractors read them: RFC 2231 and RFC
 2047 decoding, Unicode NFKC folding with full-width dots and slashes, the
@@ -65,6 +67,14 @@ allow_extensions = ["svg"]
   `mode`. `scan-limit`, `ambiguous-mime`, `unreadable-archive` and
   `nested-archive` are flagged at least and quarantined at most: an odd
   message is not proof of a disguise, so they never reject on their own.
+- `attachment-too-large` and `blocked-mime-type` follow `mode`: with
+  `reject` an attachment over `max_attachment_bytes` is refused.
+- A tenant, a domain or an account can make the policy stronger for the mail
+  addressed to it with `[[antispam_scope]]` (`mode`, `macros`,
+  `encrypted_archives`, `block_extensions`, `block_mime_types`,
+  `max_attachment_bytes`), never weaker: see
+  [configuration.md](configuration.md#antispam_scope). A message for several
+  recipients gets the strictest of their settings.
 - An inspection that cannot run (too many at once, past its deadline)
   answers `451 4.7.1 content scan unavailable, try again later`.
 

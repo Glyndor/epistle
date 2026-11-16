@@ -138,6 +138,7 @@ async fn serve(config: Config, role: ServeRole) -> std::io::Result<()> {
 		llm_hook,
 		attachment_policy,
 	} = smtp_state::build_smtp_shared_state(&config, &metrics)?;
+	let scopes = Arc::new(crate::antispam::scopes::Scopes::from_config(&config));
 	let mailbox_limits = connection_limits::MailboxLimits::from_config(&config);
 	let http_limits = connection_limits::http_limits(&config);
 	let sink = crate::antispam::submission_scan::ScanningSink::wrap_resolving(
@@ -396,6 +397,9 @@ async fn serve(config: Config, role: ServeRole) -> std::io::Result<()> {
 					server = server.with_hook(Arc::clone(hook));
 				}
 				server = server.with_attachment_policy(attachment_policy.clone());
+				if !scopes.is_inert() {
+					server = server.with_scopes(Arc::clone(&scopes));
+				}
 				if let (Some(llm_hook), Some(_)) = (&llm_hook, &reputation_pool) {
 					server = server.with_llm(crate::antispam::llm::LlmHook {
 						classifier: Arc::clone(&llm_hook.classifier),

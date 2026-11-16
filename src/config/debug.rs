@@ -117,6 +117,7 @@ impl std::fmt::Debug for Config {
 			.field("ldap", &self.ldap)
 			.field("webhook", &self.webhook)
 			.field("tenants", &self.tenants)
+			.field("antispam_scopes", &self.antispam_scopes)
 			.field("privileges", &self.privileges)
 			.field("storage", &self.storage)
 			.field("queue", &self.queue)

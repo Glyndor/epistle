@@ -32,6 +32,8 @@ mod tests_newrecipients;
 #[cfg(test)]
 mod tests_recipients;
 #[cfg(test)]
+mod tests_scope_refusal;
+#[cfg(test)]
 mod tests_single_label;
 
 #[cfg(test)]

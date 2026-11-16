@@ -7,7 +7,8 @@ use serde::Deserialize;
 
 use super::defaults::{default_bulk_recipients, default_masked_addresses_max, default_yes};
 use super::{
-	Account, Acme, Alert, Alias, Antispam, Api, Arc, Attachments, Auth, Boot, Database,
+	Account, Acme, Alert, Alias, Antispam, AntispamScope, Api, Arc, Attachments, Auth, Boot,
+	Database,
 	Deliverability, Dkim, DnsProviders, DnsPublish, Ldap, Listener, Llm, LogFormat, MtaSts, Oauth,
 	Otel, OwnIpBlocklist, Privileges, Queue, Smtp, SrsDomain, Storage, SubjectPass, Tenant, Tls,
 	Transport, Webhook,
@@ -407,6 +408,10 @@ pub struct Config {
 	/// writes both.
 	#[serde(default)]
 	pub boot: Boot,
+	/// Antispam settings for one tenant, domain or account, on top of the
+	/// server-wide sections. Absent or empty changes nothing.
+	#[serde(default, rename = "antispam_scope")]
+	pub antispam_scopes: Vec<AntispamScope>,
 	/// Unprivileged user/group to drop to after privileged ports are bound.
 	/// Absent leaves the process running as whoever started it.
 	pub privileges: Option<Privileges>,
