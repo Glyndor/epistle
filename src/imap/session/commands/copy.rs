@@ -179,7 +179,8 @@ impl Session {
 				&source_mailbox,
 				target,
 				remove_source,
-			) && let Some(dir) = mailbox::mailbox_dir(&data_dir, &account, target)
+			)
+			&& let Some(dir) = mailbox::mailbox_dir(&data_dir, &account, target)
 		{
 			super::super::super::junk_moves::enqueue_move(
 				queue,
