@@ -73,6 +73,7 @@ pub fn router(max_message_size: usize) -> Router<ApiState> {
 			"/accounts/{name}/archive/{id}/restore",
 			axum::routing::post(archive::restore),
 		)
+		.route("/events", get(crate::api::events::get))
 		.route("/queue", get(queue::list))
 		.route("/queue/{id}", axum::routing::delete(queue::remove))
 		.route(

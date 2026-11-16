@@ -10,6 +10,7 @@ pub mod api_keys;
 mod audit;
 mod authorization;
 mod error;
+pub mod events;
 pub(crate) mod jmap;
 mod mail_from;
 pub mod oauth;
@@ -25,6 +26,7 @@ pub use audit::{
 	AuditEvent, log_auth_attempt, log_auth_busy, log_privilege_change, log_send_limited,
 };
 pub use authorization::{Credential, Principal};
+pub use events::EventLimits;
 pub use jmap::reclaim_blobs;
 pub use state::{ApiState, ClientIp};
 pub use tenant_limits::TenantLimits;

@@ -1084,6 +1084,72 @@ paths:
           $ref: "#/components/responses/NotFound"
         "429":
           $ref: "#/components/responses/AuthRateLimited"
+  /api/v1/events:
+    get:
+      operationId: streamEvents
+      tags: [Service]
+      summary: Notifications that something changed, for live dashboards
+      description: |-
+        A `text/event-stream` that stays open. Each event is named after a
+        topic (`queue`, `deliveries`, `suppression`, `status`, `accounts` or
+        `domains`), carries `{"topic": "<name>"}` and an opaque `id`, and
+        says nothing about what changed: no address, subject, content or
+        credential. The client fetches the detail from the route it already
+        uses. Changes are looked for once a second and a burst is one event
+        per topic. Send the last `id` as `Last-Event-ID` to be sent what came
+        after it; an id the server cannot replay from gets one event per
+        topic the key may be told about, meaning "fetch again". A key
+        confined to some domains is told only `status`, `accounts` and
+        `domains`, and only about what it reaches; a key bound to one
+        account is refused. A `:heartbeat` comment keeps an idle stream
+        alive. The stream ends after `[api] event_stream_max_secs`, or when
+        the key is revoked, expires, is narrowed or loses `read`. A key may
+        hold `[api] event_streams_per_key` streams and the server
+        `event_streams_per_server`.
+      x-epistle-scope: [read]
+      parameters:
+        - name: Last-Event-ID
+          in: header
+          required: false
+          description: The `id` of the last event received.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The event stream.
+          headers:
+            X-Accel-Buffering:
+              description: Always `no`, so an nginx in front does not buffer the stream.
+              schema:
+                type: string
+                enum: ["no"]
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/AccountBoundKey"
+        "429":
+          description: |-
+            `rate_limited`: the key already holds its streams, or the server
+            holds all it allows. `Retry-After` gives the seconds to wait. The
+            authentication limiter answers the same status for a client
+            address with too many failed credentials.
+          headers:
+            Retry-After:
+              description: Seconds to wait before trying again.
+              schema:
+                type: integer
+                minimum: 1
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
   /api/v1/queue:
     get:
       operationId: listQueue

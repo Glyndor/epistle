@@ -72,6 +72,7 @@ pub(super) fn build(config: &Config, inputs: Inputs<'_>) -> std::io::Result<crat
 	.with_live_domains(Arc::clone(live))
 	.with_max_message_size(max_message_size)
 	.with_max_recipients(max_recipients)
+	.with_event_limits(event_limits(api))
 	.with_quota(
 		config
 			.quota_bytes
@@ -100,4 +101,18 @@ pub(super) fn build(config: &Config, inputs: Inputs<'_>) -> std::io::Result<crat
 		state = state.with_authz(authz);
 	}
 	Ok(state)
+}
+
+/// The bounds on the admin event stream: the operator's, and the defaults for
+/// what `[api]` leaves out.
+fn event_limits(api: &crate::config::Api) -> crate::api::EventLimits {
+	let defaults = crate::api::EventLimits::default();
+	crate::api::EventLimits {
+		per_key: api.event_streams_per_key.unwrap_or(defaults.per_key),
+		per_server: api.event_streams_per_server.unwrap_or(defaults.per_server),
+		max_lifetime: api
+			.event_stream_max_secs
+			.map_or(defaults.max_lifetime, std::time::Duration::from_secs),
+		..defaults
+	}
 }

@@ -22,6 +22,50 @@ pub struct Api {
 	/// [`crate::config::ApiLimiter`]. Absent keeps the built-in values.
 	#[serde(default)]
 	pub limiter: crate::config::ApiLimiter,
+	/// Admin event streams (`GET /api/v1/events`) one key may hold open.
+	/// Absent means 4.
+	#[serde(default, deserialize_with = "streams_per_key")]
+	pub event_streams_per_key: Option<usize>,
+	/// Admin event streams the server holds open in all. Absent means 64.
+	#[serde(default, deserialize_with = "streams_per_server")]
+	pub event_streams_per_server: Option<usize>,
+	/// Seconds an admin event stream stays open before the client has to
+	/// reconnect. Absent means 3600.
+	#[serde(default, deserialize_with = "stream_lifetime")]
+	pub event_stream_max_secs: Option<u64>,
+}
+
+/// Read an optional whole number that must lie in `range`.
+fn within<'de, D, T>(
+	deserializer: D,
+	key: &str,
+	range: std::ops::RangeInclusive<T>,
+) -> Result<Option<T>, D::Error>
+where
+	D: serde::Deserializer<'de>,
+	T: Deserialize<'de> + PartialOrd + std::fmt::Display + Copy,
+{
+	let value = Option::<T>::deserialize(deserializer)?;
+	match value {
+		Some(value) if !range.contains(&value) => Err(serde::de::Error::custom(format!(
+			"[api] {key} is {value}; it must be between {} and {}",
+			range.start(),
+			range.end()
+		))),
+		other => Ok(other),
+	}
+}
+
+fn streams_per_key<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<usize>, D::Error> {
+	within(d, "event_streams_per_key", 1..=1024)
+}
+
+fn streams_per_server<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<usize>, D::Error> {
+	within(d, "event_streams_per_server", 1..=65536)
+}
+
+fn stream_lifetime<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<u64>, D::Error> {
+	within(d, "event_stream_max_secs", 60..=86400)
 }
 
 /// Maximum number of CIDR networks `trusted_proxies` may list. Beyond this
