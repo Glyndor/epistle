@@ -261,7 +261,7 @@ addr = "0.0.0.0"   # default: 127.0.0.1
 
 Plaintext listeners (`submission` 587, `web-dav` 8090, `api` 8025, `autoconfig` 8091, `metrics` 9090) are accepted without a `[tls]` block ONLY when bound to a loopback address. When `addr = 0.0.0.0` (or any non-loopback address) and `[tls]` is unset, a warning is emitted at validate time.
 
-`[tls]` does not encrypt `api`, `web-dav` or `autoconfig`: those three carry plain HTTP and the mail certificate is not offered on them. Configuring `[tls]` leaves them in plaintext, so the way to expose them is a TLS reverse proxy in front of a loopback listener, which is where I keep them. `epistle service enable` gives them loopback for that reason, on a host install as much as on the container stack, `epistle service set <name> --bind <address>` refuses any address outside loopback, and the generated compose map publishes them on `127.0.0.1` even when nothing narrowed it explicitly.
+`[tls]` does not encrypt `api`, `web-dav` or `autoconfig`: those three carry plain HTTP and the mail certificate is not offered on them. Configuring `[tls]` leaves them in plaintext, so the way to expose them is a TLS reverse proxy in front of a loopback listener, which is where they belong. `epistle service enable` gives them loopback for that reason, on a host install as much as on the container stack, `epistle service set <name> --bind <address>` refuses any address outside loopback, and the generated compose map publishes them on `127.0.0.1` even when nothing narrowed it explicitly.
 
 ### A listener on a private interface
 

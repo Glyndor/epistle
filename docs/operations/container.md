@@ -18,9 +18,7 @@ that file at build time, so a release that moves a digest there moves it in
 the compose file `epistle stack update` renders on every install; Dependabot
 watches both files. The image carries the musl-statically linked
 release binary, the runtime data the binary needs, and nothing else.
-The list below describes the intended runtime contents. The previous Debian 12
-inventory was inspected on 2026-10-04 with `podman 5.7.0`; the Debian 13
-image has not yet been inspected or measured.
+The list below describes the intended runtime contents.
 
 - `/usr/bin/epistle`, the binary. Built with the same
   `cargo build --release --locked --target <musl>` invocation the .deb
@@ -146,8 +144,7 @@ services:
       - /var/lib/glyndor/epistle/data:/var/lib/glyndor/epistle/data
 ```
 
-Both the failing default and the working mapping were checked on this
-host: a host directory with a `0600` file owned by the operator, mounted
+Both the failing default and the working mapping were checked: a host directory with a `0600` file owned by the operator, mounted
 into the image with no userns flag, returned `Permission denied (os
 error 13)`. The same mount with `--userns=keep-id:uid=65532,gid=65532`
 let `config-check` print
@@ -200,7 +197,7 @@ init stack's. Init keeps publishing a listener when the
 operator's keep-existing-listeners merge leaves it on a
 non-loopback address; where the host reaches it is the
 operator's decision, made with `epistle service set
-<name> --bind <address>`. For API and WebDAV I publish on loopback behind a TLS
+<name> --bind <address>`. Publish API and WebDAV on loopback behind a TLS
 reverse proxy; their HTTP transport is not encrypted by the mail `[tls]` section.
 
 `epistle service enable` starts those two on loopback instead of on SMTP's
@@ -426,7 +423,7 @@ Worked example: 5,000 messages, each with a 10 MiB attachment, arrive in a
 burst at a VPS with 8 GiB of memory and 500 GB of disk, installed with the
 defaults above.
 
-| What | On this host |
+| What | Worked figure |
 |---|---|
 | Size on the wire | base64 turns 10 MiB into 13.7 MiB (4/3, plus a CRLF every 76 characters); under the 25 MiB `max_message_size` |
 | Memory in flight | `mail 2g` gives a 409 MiB budget: about 29 such messages at once, 7 of them from one sending address (it may hold a quarter of the budget), about 1.2 GiB at the peak. The limits add up to 5.9 GiB of the 8 |
@@ -504,7 +501,7 @@ differ. Backups do not carry these keys: save `secrets/` separately.
 
 ### DNS provider token
 
-I keep the DNS provider token in `secrets/dns_provider_token` beside `data_dir`,
+Keep the DNS provider token in `secrets/dns_provider_token` beside `data_dir`,
 with mode `0600`. `epistle dns provider set <provider> --zone <zone> --store-token`
 moves an existing inline or environment token there, updates the generated
 Compose file to mount it read-only only in `mail` (in `certs` when the stack
@@ -553,7 +550,7 @@ expires; `epistle status` reports the container in its `tls` area with the
 days left. DKIM keys keep rotating while the split is on: `mail` keeps the
 keys and asks `certs` to publish each record through
 `<data_dir>/dns-handoff`, which both containers mount. The design and what is
-left are in [the split plan](container-split.md) and
+left are in [the container split](container-split.md) and
 [the serve split](serve-split.md).
 
 ### The DKIM signer socket
@@ -569,7 +566,7 @@ clients mount it.
 - Every service runs as `uid 65532` under `keep-id` today, so a client in
   another container reaches the socket as that same uid. A uid of its own for
   the signer needs a group shared with its clients and a `0750` directory,
-  which waits for decision 3 of [the serve split](serve-split.md).
+  which is part of the design in [the serve split](serve-split.md).
 - The signer does not read the caller's uid (`SO_PEERCRED`) yet: whoever
   mounts the volume can ask for a signature.
 

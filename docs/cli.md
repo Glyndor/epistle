@@ -241,7 +241,7 @@ of `--port 70000` is a usage error. Enabling the API creates `[api]` if absent, 
 a static token. Labelled keys work independently of `token_hash`. API, WebDAV and
 plain HTTP autoconfig have no TLS transport, so `set` refuses an address outside
 loopback for these listeners, even when mail certificates are configured in
-`[tls]`. I keep them behind a TLS reverse proxy on loopback.
+`[tls]`. Keep them behind a TLS reverse proxy on loopback.
 
 Without a container stack the bind in `mail.toml` is the address the server
 binds, so `set` writes the requested one there. With

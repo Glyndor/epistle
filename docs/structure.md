@@ -33,9 +33,7 @@ src/test_support/         credentials and process stubs shared by the unit tests
 
 The folders under `src/cli/` are the command groups. The few files that still
 sit directly in `src/cli/` (`delegation.rs`, `disabled_domain.rs`, `json_out.rs`,
-`resource.rs`, `role_addresses.rs`) wait for the module map tracked in #1211.
-Moving the product code from `src/` to `internal/`, as the organisation's
-layout standard asks, is a separate step that has not been taken yet.
+`resource.rs`, `role_addresses.rs`) have not been moved into a folder yet.
 
 ## The four rules
 
