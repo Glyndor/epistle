@@ -106,6 +106,12 @@ pub(super) const RULES: &[Rule] = &[
 		"confined_key_cannot_send_from_a_foreign_or_unowned_address",
 	),
 	rule(
+		"/api/v1/send/{id}",
+		"send/write",
+		Domain::Principal,
+		"another_accounts_key_gets_the_answer_for_an_id_that_does_not_exist",
+	),
+	rule(
 		"/api/v1/deliveries",
 		"read",
 		Domain::Principal,

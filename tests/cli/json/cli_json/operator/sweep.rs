@@ -200,6 +200,8 @@ const CASES: &[(&str, &[&str], Expect)] = &[
 	("account catch-all add", &["alice", "example.org"], Done),
 	("account catch-all remove", &["alice", "example.org"], Done),
 	("queue list", &[], Done),
+	("queue undo list", &[], Done),
+	("queue undo cancel", &[ID], Refused(2)),
 	("queue show", &[ID], Refused(2)),
 	("queue retry", &["--all"], Done),
 	("queue hold", &["--all"], Done),

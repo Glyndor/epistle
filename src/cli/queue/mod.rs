@@ -21,6 +21,7 @@ use crate::config::Storage;
 use crate::storage::{Envelope, FsSpool};
 
 mod destinations;
+mod undo;
 mod warmup;
 
 /// Operator actions on the outbound queue.
@@ -54,6 +55,9 @@ pub enum QueueCli {
 	},
 	/// Lift the hold on a destination so the queue contacts it again now.
 	ReleaseDestination(destinations::DestinationTarget),
+	/// The messages the send delay still holds, before anything is delivered.
+	#[command(subcommand)]
+	Undo(undo::UndoCli),
 	/// Delete one entry from the queue without delivering or bouncing it.
 	Remove {
 		/// Spool id of the entry.
@@ -124,6 +128,7 @@ pub(super) fn run(
 		QueueCli::ReleaseDestination(target) => {
 			destinations::release(&spool, &target, now, json, out)
 		}
+		QueueCli::Undo(action) => undo::run(data_dir, storage, action, json, now, out),
 		QueueCli::Remove { id, yes } => {
 			let envelope = match spool.load_envelope(id) {
 				Ok(envelope) => envelope,

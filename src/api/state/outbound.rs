@@ -20,6 +20,20 @@ impl ApiState {
 		self
 	}
 
+	/// The held submissions, shared on disk with the releaser and the
+	/// command line. Opened on use: it is a directory, not a connection.
+	pub fn undo_store(&self) -> std::io::Result<crate::storage::undo::UndoStore> {
+		crate::storage::undo::UndoStore::open(self.data_dir(), self.crypto().clone())
+	}
+
+	/// When the send delay releases the submission `id` of `account`, as epoch
+	/// seconds, while it is still held. `None` when nothing holds it: the
+	/// delay is off, or it was handed on already.
+	pub fn held_until(&self, account: &str, id: uuid::Uuid) -> Option<u64> {
+		let (owner, release_at) = self.undo_store().ok()?.lookup(id).ok()??;
+		(owner == account).then_some(release_at)
+	}
+
 	/// Submit `message` for `account` and return the id of its submission:
 	/// the queue id of whatever part leaves the server. A message whose
 	/// recipients are all local is delivered at once and queues nothing

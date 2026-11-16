@@ -1506,6 +1506,47 @@ paths:
           $ref: "#/components/responses/AuthRateLimited"
         "500":
           $ref: "#/components/responses/Internal"
+  /api/v1/send/{id}:
+    delete:
+      operationId: cancelSend
+      tags: [Send]
+      summary: Take back a message the send delay still holds
+      description: |-
+        With `[queue.undo_send]` on, what an account sends waits on disk until
+        its release time (`cancel_until` in the answer to `POST /api/v1/send`).
+        Until then this removes it, and nothing of it is delivered or queued.
+        A key bound to one account cancels that account's messages, a key
+        confined to some domains those of the accounts it reaches, an
+        unconfined key any. An id that is unknown, belongs to an account the
+        key does not reach, or was never held answers the same `404`. A message
+        already handed on answers `409 already_sent`.
+      x-epistle-scope: [send, write]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The `queued` id of the send.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: The message was taken back.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [canceled]
+                properties:
+                  canceled:
+                    type: string
+                    format: uuid
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "404":
+          description: No such pending message for this key.
+        "409":
+          description: The message was already handed on (`already_sent`).
   /api/v1/send:
     post:
       operationId: sendMail
@@ -2997,7 +3038,7 @@ components:
               description: |-
                 Stable, for programs. One of `unauthenticated` (401),
                 `forbidden`, `forbidden_from` and `sending_off` (403), `not_found` (404),
-                `invalid_input` (400), `conflict` (409), `message_too_large`
+                `invalid_input` (400), `conflict` and `already_sent` (409), `message_too_large`
                 and `scan_too_large` (413), `virus_detected`,
                 `attachment_refused`, `too_many_header_fields` and
                 `marketing_refused` (422), `rate_limited` (429), `internal`
@@ -3459,6 +3500,10 @@ components:
           description: The queue id, also the `spool_id` of delivery records and webhook events.
         class:
           $ref: "#/components/schemas/MailClass"
+        cancel_until:
+          type: string
+          format: date-time
+          description: When the send delay releases the message; until then `DELETE /api/v1/send/{id}` takes it back. Absent when nothing holds the message (the default).
         suppressed:
           type: array
           items:

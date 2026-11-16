@@ -11,6 +11,7 @@ mod masked;
 mod queue;
 mod scope;
 mod send;
+mod send_cancel;
 #[cfg(test)]
 pub(crate) use send::sink_refusal;
 mod send_from;
@@ -96,4 +97,5 @@ pub fn router(max_message_size: usize) -> Router<ApiState> {
 			"/send",
 			post(send::send).layer(DefaultBodyLimit::max(max_message_size)),
 		)
+		.route("/send/{id}", axum::routing::delete(send_cancel::cancel))
 }

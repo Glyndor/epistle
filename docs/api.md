@@ -399,6 +399,7 @@ The codes the API itself sends:
 | `not_found` | 404 | The thing is not there, or is outside the key's reach |
 | `invalid_input` | 400 | The message says which field |
 | `conflict` | 409 | A limit that waiting will not lift: the tenant is at `max_accounts`, the account at its masked-address cap, a queue entry with evidence still to write |
+| `already_sent` | 409 | `DELETE /api/v1/send/{id}` for a message the send delay already handed on. Nothing can take it back |
 | `message_too_large` | 413 | The built message is over the size limit |
 | `scan_too_large` | 413 | Too large for the content scan, and the server lets nothing pass unscanned. Retrying cannot help |
 | `virus_detected`, `attachment_refused`, `too_many_header_fields`, `marketing_refused` | 422 | Refused for its content; sending it again unchanged is refused again. Nothing was sent |
@@ -479,6 +480,37 @@ bound to it, or any other key whose `from` names one of its addresses, gets
 refusal names the account's own state and tells nothing about other addresses.
 Signing in and reading mail are not affected. The same switch is what SMTP
 submission, JMAP and the account's own forwarding and auto-replies follow.
+
+### Taking a send back
+
+When the server holds what accounts send for a few seconds (`[queue.undo_send]`
+in the [configuration](configuration.md#queueundo_send), off by default), the
+answer to `POST /api/v1/send` also carries `cancel_until`, an RFC 3339 instant:
+
+```json
+{"queued": "01a15026-ff4b-7411-a7e9-9292a7662720", "class": "personal", "cancel_until": "2026-11-16T10:00:30Z"}
+```
+
+Until then, and before anything of the message is delivered or queued,
+`DELETE /api/v1/send/{id}` (the `queued` id) takes it back:
+
+```json
+{"canceled": "01a15026-ff4b-7411-a7e9-9292a7662720"}
+```
+
+It needs the `send` or the `write` scope. A key bound to one account cancels
+that account's messages; a key confined to some domains cancels those of the
+accounts it reaches; an unconfined key cancels any. An id that is unknown,
+that belongs to an account the key does not reach, or that was never held
+(the delay is off, or the message is not one the account sent) answers the
+same `404 not_found`, so the answer says nothing about other accounts'
+messages. A message the delay already handed on answers `409 already_sent`
+to the account that sent it: from that moment it is in the queue or in
+mailboxes and cannot be taken back (an operator can still remove the queue
+entry). The id is a UUID and is not a secret: the answer depends on who asks,
+not on knowing it. The same cancel is `EmailSubmission/set` with
+`undoStatus: "canceled"` over JMAP and `epistle queue undo cancel ID` for the
+operator.
 
 ### Class and evidence
 
@@ -801,7 +833,13 @@ key does not cover answers a `forbidden` method error inside a `200`.
   `SieveScript/get`, `query`, `set`, `validate`. Anything else is
   `unknownMethod`.
 - `EmailSubmission/set` accepts `epistle:class`, with the same rule as the
-  REST `class`.
+  REST `class`. A created submission says `undoStatus`: `pending` with `sendAt`
+  (when the send delay will release it) while `[queue.undo_send]` holds it,
+  `final` with `sendAt: null` otherwise. An `update` of `undoStatus:
+  "canceled"` takes a pending one back (`updated`), and answers `cannotUnsend`
+  in `notUpdated` once it was handed on, `notFound` for a submission of
+  another account. No other update is allowed. `maxDelayedSend` stays `0`:
+  the client does not choose the delay (`sendAt` on create is not read).
 - For an account whose `send` switch is off, `EmailSubmission/set` answers
   `forbiddenToSend` ("sending is turned off for this account") in
   `notCreated`, and `VacationResponse/set` and `SieveScript/set` refuse, with

@@ -25,6 +25,10 @@ pub(in crate::api) fn acceptable_scopes_for(method: &axum::http::Method, path: &
 	if method == axum::http::Method::POST && path == "/api/v1/send" {
 		return vec![Scope::Send];
 	}
+	// Taking a send back is for the key that sent it, or one that may write.
+	if method == axum::http::Method::DELETE && path.starts_with("/api/v1/send/") {
+		return vec![Scope::Send, Scope::Write];
+	}
 	if path.starts_with("/scim/v2") {
 		return vec![Scope::Scim];
 	}
