@@ -16,9 +16,8 @@ therefore marked **N/A** here, with the reason; they are in scope for the panel,
 not the server.
 
 Status legend: **Met** — implemented, with evidence · **N/A** — not applicable
-to a headless server, with the reason · **Gap** — a genuine deficiency. Each Gap
-is followed by whether it was fixed in this sweep or is documented as accepted /
-deferred.
+to a headless server, with the reason · **Gap** — a genuine deficiency, listed under
+[Known gaps](#known-gaps).
 
 Paths are relative to the crate root. Line numbers are indicative; the cited
 function name is the stable reference.
@@ -46,18 +45,18 @@ function name is the stable reference.
 | Req (L3) | Status | Evidence |
 |---|---|---|
 | 2.1.1 Password length | Met | Length 12–64 enforced before hashing on every set/change path (`src/password::validate`, called by `src/api/v1/accounts.rs` and `src/cli/accounts/mod.rs`); the 64 cap is the documented Argon2 DoS ceiling; no silent truncation. |
-| 2.1.x Character set | Met (deliberate deviation) | The accepted set is **printable ASCII** (0x20–0x7E: letters, digits, space, standard punctuation); control characters and non-ASCII/Unicode are rejected (`src/password::validate`). This is a deliberate deviation from 2.1.1's "accept Unicode" — a defined, keyboard-typeable set per the org policy — at the cost of Unicode passphrases. |
+| 2.1.x Character set | Met (deliberate deviation) | The accepted set is **printable ASCII** (0x20–0x7E: letters, digits, space, standard punctuation); control characters and non-ASCII/Unicode are rejected (`src/password::validate`). This is a deliberate deviation from 2.1.1's "accept Unicode" — a defined, keyboard-typeable set — at the cost of Unicode passphrases. |
 | 2.1.7 Reject known-breached passwords | Met | Every set/change is checked against a bundled local breached / common-password list (`src/password/breached_common.txt`, loaded once into a set), rejecting known-weak passwords offline with no third-party call. The list is a curated starter set, meant to grow. |
 | 2.1.9 No composition rules | Met | No forced upper/lower/digit/special (ASVS v4 §2.1.9 / NIST 800-63B): `src/password::validate` enforces only length, character set and the breach list — length plus breach-rejection carry the strength. |
-| 2.2.1 Anti-automation / brute-force throttling | Partial / **Gap** | Per-connection 3-strikes close on SMTP (`src/smtp/session/mod.rs`), IMAP (`src/imap/session/auth/mod.rs`) and now ManageSieve (`src/managesieve/session/mod.rs`, fixed in this sweep); the API has a sliding-window failure budget (`src/api/state/mod.rs::AuthLimiter`). A persistent ban store is shared across connections and listeners: 5 failures in 15 minutes ban an IP, a client/account pair or an account, for 15 minutes first and doubling up to 24 hours (`src/antispam/bans/`, tables `auth_failure` and `auth_ban` in `migrations/0005_auth_bans.sql`, `docs/security.md`). It needs the PostgreSQL store; without it the per-connection limits are all there is. |
+| 2.2.1 Anti-automation / brute-force throttling | Partial / **Gap** | Per-connection 3-strikes close on SMTP (`src/smtp/session/mod.rs`), IMAP (`src/imap/session/auth/mod.rs`) and ManageSieve (`src/managesieve/session/mod.rs`); the API has a sliding-window failure budget (`src/api/state/mod.rs::AuthLimiter`). A persistent ban store is shared across connections and listeners: 5 failures in 15 minutes ban an IP, a client/account pair or an account, for 15 minutes first and doubling up to 24 hours (`src/antispam/bans/`, tables `auth_failure` and `auth_ban` in `migrations/0005_auth_bans.sql`, `docs/security.md`). It needs the PostgreSQL store; without it the per-connection limits are all there is. |
 | 2.2.3 Secure notification of auth events | Met | Auth failures are logged as counts (no credentials); delivery/security events flow to webhooks. |
 | 2.4.1 Passwords stored with an approved KDF (Argon2) | Met | argon2id PHC everywhere (`src/smtp/auth/mod.rs::hash_password`/`verify_password`); 16-byte CSPRNG salt via `ring::SystemRandom`. Config rejects any non-argon2id stored hash (`src/config/validate/mod.rs`). |
 | 2.5.x Credential recovery does not reveal the credential | Met | Verification returns a bare `false` on any error; no reset oracle in the server. |
-| 2.6 / 2.8 Look-up / OTP verifiers (TOTP) | Partial | TOTP verified with a constant-time compare and a bounded ±1 step window (`src/totp/mod.rs::verify`, `crate::util::constant_time::eq`). **No replay guard / no recovery codes.** The secret is sealed (`enc:v1:`) when `encrypt_at_rest` is on with an `encryption_key_file`, and stored as base32 otherwise (`src/directory_store/set_totp/mod.rs`). The first two are documented below (deferred — they need persistent state). |
+| 2.6 / 2.8 Look-up / OTP verifiers (TOTP) | Partial | TOTP verified with a constant-time compare and a bounded ±1 step window (`src/totp/mod.rs::verify`, `crate::util::constant_time::eq`). **No replay guard / no recovery codes.** The secret is sealed (`enc:v1:`) when `encrypt_at_rest` is on with an `encryption_key_file`, and stored as base32 otherwise (`src/directory_store/set_totp/mod.rs`). Both gaps are listed under [Known gaps](#known-gaps) (they need persistent state). |
 | 2.7 Out-of-band verifier | N/A | No SMS/email OOB second factor is offered. |
 | 2.9 Cryptographic verifier (SCRAM) | Met | SCRAM-SHA-256 / -SHA-256-PLUS: password never on the wire, channel binding to the cert (`tls-server-end-point`), downgrade flag rejected when -PLUS is offered (`src/smtp/scram/mod.rs`, `src/imap/session/auth/mod.rs`). |
 | 2.10.1 No user-enumeration oracle | Met | Unknown login and wrong password both resolve to `None` with an identical reply in every protocol (`src/smtp/directory/mod.rs::authenticate_with_ip`/`credentials`). |
-| 2.10.4 OAuth/JWT bearer fully validated | Met (hardened in this sweep) | `alg` pinned by caller (no confusion), signature verified, `iss`/`aud`/`nbf` checked, and **`exp` now required** — a token without a bounded lifetime is rejected (`src/jwt/mod.rs::check_claims`, fixed in this sweep). |
+| 2.10.4 OAuth/JWT bearer fully validated | Met | `alg` pinned by caller (no confusion), signature verified, `iss`/`aud`/`nbf` checked, and **`exp` required** — a token without a bounded lifetime is rejected (`src/jwt/mod.rs::check_claims`). |
 
 ---
 
@@ -67,7 +66,7 @@ function name is the stable reference.
 |---|---|---|
 | 3.1 No session tokens in the URL | Met | Bearer token read only from the `Authorization` header (`src/api/state/mod.rs::require_bearer_token`). |
 | 3.2 / 3.3 Session generation, timeout, invalidation | N/A | The server holds no server-side web session: mail protocols are connection-scoped (auth state dies with the TCP connection); the API is stateless bearer-token. |
-| 3.3.x Bearer-token lifetime bounded | Met | OAuth/JWT bearer tokens require `exp` (`src/jwt/mod.rs`, fixed in this sweep); API keys carry an expiry honored fail-closed (`src/api/api_keys/mod.rs::admits`). |
+| 3.3.x Bearer-token lifetime bounded | Met | OAuth/JWT bearer tokens require `exp` (`src/jwt/mod.rs`); API keys carry an expiry honored fail-closed (`src/api/api_keys/mod.rs::admits`). |
 | 3.4 Cookie-based session attributes (Secure/HttpOnly/SameSite) | N/A | No cookies are issued by the server. (In scope for `epistle-panel`.) |
 | 3.5 Token-based session (no static API secrets in code) | Met | Tokens are operator-provisioned hashes (`sha256:` digest or legacy argon2id), never in source. |
 | 3.7 / CSRF defenses | N/A | No browser-driven state-changing form; API is bearer-authenticated, not cookie/ambient-authority. |
@@ -100,7 +99,7 @@ function name is the stable reference.
 |---|---|---|
 | 5.1.x Input validation at the boundary | Met | Addresses validated and length-capped (`src/smtp/address/mod.rs`, 254/64, control chars rejected); SMTPUTF8/EAI handled. |
 | 5.1.4 Bounds on attacker-controlled sizes | Met | SMTP data line 998 (`src/smtp/line/mod.rs`), command line 512 (`src/smtp/command.rs`), message 25 MiB and ≤100 recipients (`src/smtp/session/limits.rs`), inbound trace-hop cap (`src/smtp/trace/received.rs`), outbound reply 64 KiB (`src/queue/client/mod.rs`), MTA-STS body 64 KiB (`src/mtasts/policy/mod.rs`), bounce header block 4096 (`src/queue/bounce/mod.rs`). |
-| 5.2.x Sanitize unstructured / hostile content | Met (fixed in this sweep) | A remote MTA's reply is sanitized (controls → space, length-capped) before it reaches any DSN header or body (`src/queue/bounce/mod.rs::sanitize_reason`). |
+| 5.2.x Sanitize unstructured / hostile content | Met | A remote MTA's reply is sanitized (controls → space, length-capped) before it reaches any DSN header or body (`src/queue/bounce/mod.rs::sanitize_reason`). |
 | 5.3.1 Output encoding / no header (CRLF) injection | Met | Inbound: bare CR/LF/NUL rejected by the decoder (`src/smtp/line/mod.rs`). Outbound: bounce/DSN reason sanitized (above); addresses are validated values. |
 | 5.3.4 Parameterized queries only (SQLi) | Met | Every query is a sqlx **compile-time macro** with bound `$n` params — no string-built SQL anywhere (`src/antispam/corpus/score.rs`, `src/antispam/reputation/mod.rs`). |
 | 5.3.6 No injection into LDAP/OS command | Met | No shell-out on attacker input. The optional LDAP backend escapes the login per RFC 4515 before it enters `user_filter` (`src/directory_store/ldap/mod.rs`). |
@@ -117,7 +116,7 @@ function name is the stable reference.
 | 6.2.2 Argon2id for password hashing | Met | `src/smtp/auth/mod.rs::hash_password` (argon2id PHC). |
 | 6.2.3 Constant-time comparison of secrets | Met | TOTP and SRS use length-aware constant-time compares (`src/totp/mod.rs` via `crate::util::constant_time::eq`, `src/queue/srs/mod.rs::constant_time_eq`); the API bearer compare is `==` on **SHA-256 digests** of the token — a timing leak of a pre-image-resistant digest reveals nothing about the token (justified at `src/api/state/mod.rs::token_matches`). |
 | 6.3.1 CSPRNG for all secrets | Met | `ring::rand::SystemRandom` for salts, app-password secrets, SCRAM/IMAP/SMTP nonces, ACME keys, DKIM keygen (`src/cli/util/secret.rs::generate_secret`, `src/smtp/auth/mod.rs`, `src/acme/`, `src/dkim/`). No `thread_rng`/predictable seeding in non-test code. |
-| 6.4.1 Secret key material protected at rest | Met (hardened in this sweep) | DKIM and ACME private keys are written `create_new` + `0o600` (atomic, no permissive window): ACME `src/acme/renew/mod.rs::write_secret`, manual keygen `src/cli/util/dkim_keys.rs`, and DKIM **rotation** `src/dkim/rotate/mod.rs::write_key` (fixed in this sweep — previously wrote then chmod'd). |
+| 6.4.1 Secret key material protected at rest | Met | DKIM and ACME private keys are written `create_new` + `0o600` (atomic, no permissive window): ACME `src/acme/renew/mod.rs::write_secret`, manual keygen `src/cli/util/dkim_keys.rs`, and DKIM **rotation** `src/dkim/rotate/mod.rs::write_key` (created with the final mode, never chmod'd afterwards). |
 | 6.x DKIM/JWT algorithm hygiene | Met | DKIM accepts only rsa-sha256 / ed25519-sha256 (rsa-sha1 rejected), verify uses `RSA_PKCS1_1024_8192_SHA256_FOR_LEGACY_USE_ONLY` (≥1024-bit, per RFC 8301 §3.2) / ED25519 (`src/dkim/verify/mod.rs`). ARC accepts the same two algorithms and dispatches on the one the header declares: `a=ed25519-sha256` verifies with ED25519 over the SHA-256 digest of the signed data, `a=rsa-sha256` with `RSA_PKCS1_1024_8192_SHA256_FOR_LEGACY_USE_ONLY` (≥1024-bit) over a key whose modulus is read from the record, and a record whose `k=` type does not match the declared algorithm is refused (`src/arc/key.rs`). |
 
 > **Note:** the TOTP shared secret is stored as base32 in the account store
@@ -158,7 +157,7 @@ function name is the stable reference.
 | 9.1.2 Strong TLS configuration, no weak protocols | Met | rustls negotiates only TLS 1.2/1.3; the crypto provider is pinned (`src/tls/mod.rs::ensure_crypto_provider`). |
 | 9.1.3 Fail closed on TLS misconfiguration | Met | A missing/unreadable/empty/mismatched cert or key is a fatal `TlsError` — the server refuses to start rather than serve plaintext (`src/tls/mod.rs`, tested). |
 | 9.2.1 Outbound connections use verified TLS where required | Met | Outbound `tls_connect` authenticates via PKIX (webpki roots + ServerName) whenever `pkix_required` holds (`src/queue/client/mod.rs`): no usable TLSA records, and either a mandate (MTA-STS enforce / REQUIRETLS) or `[queue] outbound_tls = "strict"` (the default). With usable TLSA records the handshake accepts any certificate and DANE authenticates it against them, also under MTA-STS enforce and REQUIRETLS (RFC 8461 section 2, RFC 8689 section 4.2.1: a DANE-EE leaf is normally self-signed, so PKIX must not run first); a mismatch fails closed. Any secure TLSA RRset, usable or not, makes STARTTLS mandatory. A remote without STARTTLS where TLS is mandatory yields a **transient** error (retry, never cleartext). Every combination is pinned by `src/queue/worker/tests/routing/policy_matrix.rs`. |
-| 9.2.x DANE / MTA-STS authentication | Met (hardened in this sweep) | DANE TLSA matched only on DNSSEC-secure responses, a bogus answer defers delivery, and a secure RRset with no usable DANE-TA/DANE-EE record still mandates TLS (`src/dane/rrset/mod.rs`); TLSA is consulted only for MX hosts named by a DNSSEC-secure MX answer (or, for a domain without MX, when the MX denial and the domain's address answer are both secure), and a bogus MX answer, denial or address answer defers delivery (`src/queue/resolver/mod.rs`, RFC 7672 section 2.2.1); a mismatch fails closed (`src/dane/`, `src/queue/client/mod.rs`). A **transient TLSA lookup failure now defers delivery** instead of downgrading to opportunistic TLS (`src/queue/worker/mod.rs::tlsa_for`, fixed in this sweep). MTA-STS enforce restricts MX and requires TLS (`src/queue/worker/mod.rs`, `src/mtasts/`); a cached policy keeps applying for its whole `max_age` when a refresh fails or the TXT record disappears, and with no cached policy a failed lookup or fetch delivers as though none were published (RFC 8461 section 3.3). |
+| 9.2.x DANE / MTA-STS authentication | Met | DANE TLSA matched only on DNSSEC-secure responses, a bogus answer defers delivery, and a secure RRset with no usable DANE-TA/DANE-EE record still mandates TLS (`src/dane/rrset/mod.rs`); TLSA is consulted only for MX hosts named by a DNSSEC-secure MX answer (or, for a domain without MX, when the MX denial and the domain's address answer are both secure), and a bogus MX answer, denial or address answer defers delivery (`src/queue/resolver/mod.rs`, RFC 7672 section 2.2.1); a mismatch fails closed (`src/dane/`, `src/queue/client/mod.rs`). A **transient TLSA lookup failure now defers delivery** instead of downgrading to opportunistic TLS (`src/queue/worker/mod.rs::tlsa_for`). MTA-STS enforce restricts MX and requires TLS (`src/queue/worker/mod.rs`, `src/mtasts/`); a cached policy keeps applying for its whole `max_age` when a refresh fails or the TXT record disappears, and with no cached policy a failed lookup or fetch delivers as though none were published (RFC 8461 section 3.3). |
 
 ---
 
@@ -166,8 +165,8 @@ function name is the stable reference.
 
 | Req (L3) | Status | Evidence |
 |---|---|---|
-| 10.2.x No malicious/unexpected code paths | Met | MIT source, reviewed; no obfuscation, no phone-home/telemetry (org policy). |
-| 10.3.1 App integrity / update authenticity | Met | Distributed as a signed `.deb` via the org apt archive (org `GLYNDOR_RELEASE_ED25519_KEY`); the server does not self-update, so it carries no in-process artifact-verification path. |
+| 10.2.x No malicious/unexpected code paths | Met | MIT source, reviewed; no obfuscation, no phone-home/telemetry. |
+| 10.3.1 App integrity / update authenticity | Met | Distributed as a signed `.deb` via the project's apt archive, signed with the release key `GLYNDOR_RELEASE_ED25519_KEY`; the server does not self-update, so it carries no in-process artifact-verification path. |
 | 10.3.2 No remote/dynamic code loading | Met | No `eval`, no plugin download-and-exec; dependencies are pinned and audited. |
 | (mail-specific) Inbound malware scanning | Met | Antivirus (ClamAV) + Bayesian / DNSBL / reputation filtering at delivery (`src/antispam/`, `src/dnsbl/`). |
 
@@ -213,68 +212,34 @@ function name is the stable reference.
 | Req (L3) | Status | Evidence |
 |---|---|---|
 | 14.1.x Secure build / dependency hygiene | Met | No new deps without justification; `SQLX_OFFLINE` reproducible build; CI lints with `-D warnings`. |
-| 14.2.1 Dependencies current and audited | Met | Pinned, Dependabot-tracked, `cargo audit` in CI (org standard). |
+| 14.2.1 Dependencies current and audited | Met | Pinned, Dependabot-tracked, `cargo audit` in CI. |
 | 14.3.2 No debug/verbose errors in production | Met | Generic client errors (V7); no stack traces. |
 | 14.4.1 Safe HTTP response headers | Partial / N/A | The server emits no `Server` header and no HTML; browser security headers (CSP/HSTS/X-Frame-Options) are the operator-proxy/panel's responsibility, not this headless API's. |
 | 14.5.1 Validate the deployment config; refuse insecure config | Met | `src/config/validate/mod.rs` runs before `Config::load` returns and **aborts startup** on any violation: plaintext listeners require `[tls]` ONLY when bound externally. `submissions`, `imaps`, `imap`, `manage-sieve` are rejected without `[tls]`; `pop3s` (implicit TLS by protocol) and `autoconfigs` (HTTPS) are rejected without `[tls]`; `submission`, `web-dav`, `api`, `autoconfig`, `metrics` are accepted without `[tls]` when loopback-bound and emit a warning otherwise. The config file must be `0600` (`check_permissions` rejects `mode & 0o077 != 0`); defaults bind `127.0.0.1`. Fail-closed by construction. |
 
 ---
 
-## Gaps found in this sweep
+## Regression tests for hardened behaviour
 
-Three genuine gaps were **fixed** with tests covering the failure path; the rest
-are **documented as deferred** because a correct fix is a feature (persistent
-state, key management, or a network/data integration), not a minimal surgical
-change — adding one half-built would be worse than tracking it honestly.
+| Behaviour | Test |
+|---|---|
+| A transient TLSA lookup failure defers delivery instead of downgrading to no DANE (V9) | `transient_tlsa_failure_defers_rather_than_downgrading` in `src/queue/worker/tests/base.rs` |
+| A remote MTA's reply cannot inject headers into a bounce (V5) | `sanitizes_crlf_in_reason_to_prevent_header_injection`, `caps_reason_length` in `src/queue/bounce/tests/base.rs` |
+| A JWT without a numeric `exp` is rejected (V2/V3) | `token_without_exp_is_rejected`, `token_with_non_numeric_exp_is_rejected` in `src/jwt/tests/base.rs` |
+| A rotated DKIM key is created with owner-only permissions and no permissive window (V6) | `write_key_creates_with_owner_only_perms_and_replaces_whole` in `src/dkim/rotate/tests/base.rs` |
+| ManageSieve closes the connection after 3 failed authentications (V2.2.1) | `repeated_auth_failures_close_the_connection` in `src/managesieve/session/tests/base.rs` |
 
-### Fixed
+## Known gaps
 
-1. **DANE downgrade on a transient TLSA lookup failure** (V9, was high).
-   `src/queue/worker/mod.rs::tlsa_for` used `unwrap_or_default()`, collapsing a
-   temporary resolver error into "no DANE" and silently downgrading a host that
-   *does* publish TLSA. Now the temporary error is propagated and the worker
-   **defers** the delivery for retry (RFC 7672 §2.1). Test:
-   `transient_tlsa_failure_defers_rather_than_downgrading` in
-   `src/queue/worker/tests/base.rs`.
+These are real ASVS L3 deficiencies. Each needs more than a surgical change: a
+correct fix is a feature (persistent state, key management, or a network/data
+integration).
 
-2. **CRLF / header injection in the bounce (DSN) builder** (V5, was high). A
-   hostile remote MTA's SMTP reply (read with its CRLFs intact) flowed unescaped
-   into DSN headers (`Diagnostic-Code:`) and body, allowing forged headers in the
-   bounce returned to the original sender. `src/queue/bounce/mod.rs::sanitize_reason`
-   now flattens every control character to a space and caps the length before the
-   reason reaches any sink. Tests:
-   `sanitizes_crlf_in_reason_to_prevent_header_injection` and `caps_reason_length`
-   in `src/queue/bounce/tests/base.rs`.
-
-3. **JWT accepted without `exp`** (V2/V3, was high). `src/jwt/mod.rs::check_claims`
-   only checked `exp` when present, so a token without a bounded lifetime never
-   expired. `exp` is now **required** (`JwtError::MissingExpiry`). Tests:
-   `token_without_exp_is_rejected`, `token_with_non_numeric_exp_is_rejected` in
-   `src/jwt/tests/base.rs`.
-
-Two further low-severity hardening fixes were applied:
-
-4. **DKIM rotation key written with a permissive window** (V6, was low).
-   `src/dkim/rotate/mod.rs::write_key` wrote the private key and then chmod'd it,
-   leaving a brief world/group-readable window. It now creates the file with
-   `create_new` + `0o600` (no permissive window; matches ACME/manual keygen).
-   Test: `write_key_creates_with_owner_only_perms_and_replaces_whole` in
-   `src/dkim/rotate/tests/base.rs`.
-
-5. **ManageSieve had no failed-auth connection close** (V2.2.1, was low). Unlike
-   SMTP/IMAP, repeated `AUTHENTICATE` failures were unbounded on one connection.
-   It now closes after 3 failures (`src/managesieve/session/mod.rs`). Test:
-   `repeated_auth_failures_close_the_connection` in
-   `src/managesieve/session/tests/base.rs`.
-
-### Documented as deferred (genuine gaps, fix is a feature)
-
-These are real ASVS L3 deficiencies, recorded honestly. Each needs more than a
-surgical change and should be tracked as its own issue.
-
-- **TOTP replay, recovery codes, and at-rest secret (V2.6/V2.8, V6.4).** The OTP
-  has no last-consumed-step replay guard and no single-use recovery codes. Each
-  needs persistent per-account state.
+- **TOTP replay and recovery codes (V2.6/V2.8).** The OTP has no
+  last-consumed-step replay guard and no single-use recovery codes. Each needs
+  persistent per-account state. The secret itself is sealed at rest when
+  `encrypt_at_rest` is on with an `encryption_key_file`
+  (`src/directory_store/set_totp/mod.rs`).
 - **The operator token is not scoped (V4.1.3 least privilege).** A single
   operator token authorizes every account's mail. This is by design (the
   consumer is the operator/panel) and is not a cross-tenant leak; an API key
@@ -301,8 +266,7 @@ surgical change and should be tracked as its own issue.
 | V13 API | 5 | 1 | 0 |
 | V14 Configuration | 4 | 1 | 0 |
 
-\* The remaining V2 gaps are the deferred items above (cross-connection brute
-force, TOTP replay/recovery/at-rest); the scoped-API-key item is the V4 partial.
-Breached-password rejection (V2.1.7) and a printable-ASCII character-set policy
-were since added with tests (`src/password`); the rest are deferred features
-tracked above.
+\* The remaining V2 gaps are the brute-force throttling that needs the
+PostgreSQL store for its shared part, and TOTP replay and recovery codes; the
+scoped-API-key item is the V4 partial. Breached-password rejection (V2.1.7) and
+a printable-ASCII character-set policy are covered by tests (`src/password`).
