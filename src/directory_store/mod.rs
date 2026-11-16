@@ -198,7 +198,7 @@ impl AccountStore {
 		}
 		for raw in &account.addresses {
 			let address = address_reason::parse(raw).map_err(StoreError::Invalid)?;
-			if !self.hosts(address.domain()) {
+			if !self.hosts_on_disk(address.domain())? {
 				return Err(StoreError::Invalid(address_reason::not_handled(
 					address.domain(),
 				)));
@@ -212,7 +212,7 @@ impl AccountStore {
 		account.name = normalize::account_name(&account.name);
 		normalize::account(&mut account);
 		account.display_name = display_name::stored(account.display_name.as_deref())?;
-		self.mutate_store(|state| {
+		self.mutate_store_hosted(|state| {
 			self.check_name_and_addresses(&account)?;
 			let name_taken = self
 				.static_accounts
@@ -253,7 +253,7 @@ impl AccountStore {
 		replacement: DynamicAccount,
 		new_password: Option<NewPassword>,
 	) -> Result<(), StoreError> {
-		self.mutate_store(|state| {
+		self.mutate_store_hosted(|state| {
 			let slot = state
 				.accounts
 				.iter()

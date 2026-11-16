@@ -19,6 +19,11 @@ new dependency is needed.
 - Removing an account while deliveries to it are finalising leaves nothing
   under its mailbox root. One round finalises every delivery after the removal returned;
   several start the removal and the final dots from one barrier.
+- Removing a hosted domain while an account is created on it, or an address is
+  added on it: the creation is admitted by `domains.toml` as it is on disk, under
+  the lock the removal holds, so the result is never an account on a domain the
+  file no longer hosts. One round holds the removal inside that lock while the
+  creation starts; another starts both from one barrier, forty times.
 - A DKIM rotation held inside the publication of the new selector, with four
   tasks signing throughout: no signature uses a selector before its TXT is
   published, signatures on both sides of the switch verify, and the previous

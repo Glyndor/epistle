@@ -50,10 +50,7 @@ fn stop_and_down_and_the_reads_never_check_the_unit() {
 			service: Some("mail".into()),
 		},
 		StackAction::Ps { as_json: false },
-		StackAction::Logs {
-			follow: false,
-			service: None,
-		},
+		StackAction::Logs(logs::LogsArgs::default()),
 		StackAction::Rollback,
 		StackAction::RollbackDb,
 	];

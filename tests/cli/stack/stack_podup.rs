@@ -219,9 +219,11 @@ fn logs_passes_the_verb_follow_and_the_service_position_to_podup() {
 			data_dir.join("compose/compose.yaml").to_str().unwrap(),
 			"logs",
 			"--follow",
+			"-n",
+			"200",
 			"mail"
 		],
-		"logs --follow <service> must invoke `podup -f <compose> logs --follow <service>`"
+		"logs --follow <service> must invoke `podup -f <compose> logs --follow -n 200 <service>`"
 	);
 }
 
@@ -289,9 +291,11 @@ fn logs_passes_the_verb_and_a_service_named_down() {
 			"-f",
 			data_dir.join("compose/compose.yaml").to_str().unwrap(),
 			"logs",
+			"-n",
+			"200",
 			"down"
 		],
-		"logs down must invoke `podup -f <compose> logs down`; never `podup -f <compose> down`"
+		"logs down must invoke `podup -f <compose> logs -n 200 down`; never `podup -f <compose> down`"
 	);
 }
 
