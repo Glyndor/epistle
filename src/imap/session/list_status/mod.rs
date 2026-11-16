@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 
 use super::super::command::{ListAttribute, ListCommand, StatusItem};
-use super::{Output, Session, helpers, mailbox};
+use super::{Output, Session, mailbox};
 use crate::imap::list_pattern;
 use crate::imap::list_tree::{self, Entry, Hidden};
 
@@ -25,6 +25,7 @@ impl Session {
 		let Some(account) = self.account().map(str::to_string) else {
 			return Output::text(format!("{tag} BAD not authenticated\r\n"));
 		};
+		let roles = crate::imap::special_use::Roles::load(&self.data_dir, &account);
 		let subscriptions = mailbox::list_subscribed(&self.data_dir, &account);
 		let subscribed: HashSet<&str> = subscriptions.iter().map(String::as_str).collect();
 		let mut response = String::new();
@@ -56,8 +57,7 @@ impl Session {
 				subscribed.contains(name)
 			} else {
 				exists
-			}) && (!request.select_special_use
-				|| (exists && !helpers::special_use_attribute(name).is_empty()))
+			}) && (!request.select_special_use || (exists && !roles.attribute(name).is_empty()))
 		};
 		let matches = |name: &str| {
 			request
@@ -73,7 +73,8 @@ impl Session {
 			Hidden::Skip
 		};
 		for entry in list_tree::select(&existing, extra, qualifies, matches, hidden) {
-			let attributes = self.list_attributes(request, &entry, subscribed.contains(entry.name));
+			let attributes =
+				self.list_attributes(request, &entry, subscribed.contains(entry.name), &roles);
 			let wire = self.mailbox_astring(entry.name);
 			let child_info = if entry.child_info {
 				child_info(request)
@@ -103,10 +104,11 @@ impl Session {
 		request: &ListCommand,
 		entry: &Entry<'_>,
 		subscribed: bool,
+		roles: &crate::imap::special_use::Roles,
 	) -> String {
 		let wants = |attribute| self.imap4rev2 || request.return_attributes.contains(&attribute);
 		let mut attributes = Vec::new();
-		let special_use = helpers::special_use_attribute(entry.name);
+		let special_use = roles.attribute(entry.name);
 		if entry.exists && !special_use.is_empty() && wants(ListAttribute::SpecialUse) {
 			attributes.push(special_use);
 		}

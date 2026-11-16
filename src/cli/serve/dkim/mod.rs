@@ -109,6 +109,9 @@ pub(in crate::cli) fn build_split_with_companions(
 				.unwrap_or(crate::imap::session::DEFAULT_QUOTA_BYTES),
 		)
 		.with_evidence(Arc::clone(&evidence.service))
+		.with_folders(Arc::new(
+			crate::imap::special_use::FolderPolicy::from_config(config),
+		))
 		.with_rules(config.rules.clone())
 		.with_identification(crate::smtp::identification::Policy::from_config(config))
 		.with_metrics(metrics.clone())

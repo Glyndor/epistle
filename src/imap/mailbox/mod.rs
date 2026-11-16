@@ -12,7 +12,7 @@ mod flag;
 mod hierarchy;
 pub(crate) mod journal;
 
-pub(crate) use defaults::ensure_defaults;
+pub(crate) use defaults::{ensure_defaults, ensure_defaults_with};
 
 pub use flag::{
 	Flag, count_keywords, dedup_flags, flag_key, flag_set_contains, keywords_in, render_flags,
@@ -192,6 +192,7 @@ pub fn delete(data_dir: &Path, account: &str, mailbox: &str) -> std::io::Result<
 		.collect();
 	changes.push(Change::mailbox(Op::Destroyed, &mailbox));
 	journal::note(data_dir, &account_name, &changes);
+	super::special_use::roles::forget(data_dir, account_name.as_str(), &mailbox);
 	Ok(())
 }
 
@@ -201,7 +202,9 @@ pub fn rename(data_dir: &Path, account: &str, from: &str, to: &str) -> std::io::
 	let account = AccountName::new(account)?;
 	let from = mailbox_path::canonical(from);
 	let to = mailbox_path::canonical(to);
-	hierarchy::rename_subtree(data_dir, &account, &from, &to)
+	hierarchy::rename_subtree(data_dir, &account, &from, &to)?;
+	super::special_use::roles::moved(data_dir, account.as_str(), &from, &to);
+	Ok(())
 }
 
 /// Existing mailbox names: INBOX plus folders, sorted. Folder directories are
@@ -460,7 +463,8 @@ pub fn lookup_message_id_in_sent(
 	account: &str,
 	message_id: &str,
 ) -> std::io::Result<Option<u32>> {
-	lookup_message_id_in_mailbox(data_dir, account, "Sent", message_id)
+	let sent = super::special_use::sent_folder(data_dir, account);
+	lookup_message_id_in_mailbox(data_dir, account, &sent, message_id)
 }
 
 /// Whether `data` carries `Message-ID: <message_id>` in its header

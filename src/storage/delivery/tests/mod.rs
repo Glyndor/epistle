@@ -12,4 +12,5 @@ pub(super) mod send_off;
 pub(super) mod sieve_limits;
 pub(super) mod sieve_names;
 pub(super) mod sieve_warnings;
+pub(super) mod spam_folder;
 pub(super) mod trace;

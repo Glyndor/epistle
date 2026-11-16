@@ -73,6 +73,7 @@ pub struct LocalDelivery {
 	quota: crate::smtp::quota::MailboxQuota,
 	metrics: Option<std::sync::Arc<crate::metrics::Metrics>>,
 	fbl: Option<crate::reports::fbl::Fbl>,
+	folders: std::sync::Arc<crate::imap::special_use::FolderPolicy>,
 }
 
 impl LocalDelivery {
@@ -102,6 +103,7 @@ impl LocalDelivery {
 			crypto,
 			metrics: None,
 			fbl: None,
+			folders: std::sync::Arc::default(),
 		})
 	}
 
@@ -112,6 +114,16 @@ impl LocalDelivery {
 			self.crypto.clone(),
 			default_bytes,
 		);
+		self
+	}
+
+	/// Deliver by the operator's folder policy: the names of the folders a
+	/// new account starts with, and one spam folder or two.
+	pub fn with_folders(
+		mut self,
+		folders: std::sync::Arc<crate::imap::special_use::FolderPolicy>,
+	) -> Self {
+		self.folders = folders;
 		self
 	}
 
@@ -178,8 +190,17 @@ impl LocalDelivery {
 		let account = AccountName::new(account)?;
 		let account_dir = account.root(&self.data_dir)?;
 		if !account_dir.child(FixedDir::New)?.is_dir() {
-			crate::imap::mailbox::ensure_defaults(&self.data_dir, account.as_str())?;
+			crate::imap::mailbox::ensure_defaults_with(
+				&self.data_dir,
+				account.as_str(),
+				&self.folders,
+			)?;
 		}
+		let target = mailbox.map(|name| {
+			self.folders
+				.delivery_target(&self.data_dir, account.as_str(), name)
+		});
+		let mailbox = target.as_deref();
 		// INBOX is the account root; named mailboxes live under folders/.
 		let base = match mailbox {
 			Some(name) => MailboxName::new(name)?

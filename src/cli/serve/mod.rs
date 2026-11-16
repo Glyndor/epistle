@@ -285,7 +285,10 @@ async fn serve(config: Config, role: ServeRole) -> std::io::Result<()> {
 					mode,
 				)
 				.with_crypto(crypto.clone())
-				.with_retention_days(tasks::retention_days(&config));
+				.with_retention_days(tasks::retention_days(&config))
+				.with_folders(Arc::new(
+					crate::imap::special_use::FolderPolicy::from_config(&config),
+				));
 				if let Some((_, queue)) = &bayes {
 					imap_server = imap_server.with_training(queue.clone());
 				}

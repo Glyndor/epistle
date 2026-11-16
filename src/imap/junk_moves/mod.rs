@@ -11,7 +11,7 @@ use std::path::Path;
 use uuid::Uuid;
 
 use super::junk_trainer::JunkSignal;
-use super::special_use::{is_junk, is_trash};
+use super::special_use::{Roles, is_junk, is_trash};
 use crate::antispam::training_queue::{LessonBudget, TrainingJob, TrainingQueue};
 use crate::util::path_component::{MessageExt, message_file};
 
@@ -29,9 +29,39 @@ use crate::util::path_component::{MessageExt, message_file};
 /// the message not being junk. Junk to Trash is the user throwing spam away,
 /// not vouching for it.
 pub fn move_signal(source: &str, target: &str, removes_source: bool) -> Option<JunkSignal> {
-	match (is_junk(source), is_junk(target)) {
+	signal(
+		is_junk(source),
+		is_junk(target),
+		is_trash(target),
+		removes_source,
+	)
+}
+
+/// [`move_signal`] for an account, whose recorded roles decide which folders
+/// are Junk and Trash: a spam folder it renamed still teaches the corpus.
+pub fn move_signal_for(
+	roles: &Roles,
+	source: &str,
+	target: &str,
+	removes_source: bool,
+) -> Option<JunkSignal> {
+	signal(
+		roles.is_junk(source),
+		roles.is_junk(target),
+		roles.is_trash(target),
+		removes_source,
+	)
+}
+
+fn signal(
+	from_junk: bool,
+	to_junk: bool,
+	to_trash: bool,
+	removes_source: bool,
+) -> Option<JunkSignal> {
+	match (from_junk, to_junk) {
 		(false, true) => Some(JunkSignal::Spam),
-		(true, false) if removes_source && !is_trash(target) => Some(JunkSignal::Ham),
+		(true, false) if removes_source && !to_trash => Some(JunkSignal::Ham),
 		_ => None,
 	}
 }

@@ -1741,6 +1741,50 @@ envelope cannot be swapped onto another message. Spool files and directories
 are pinned to `0600`/`0700`. See [`storage.md`](storage.md) for the on-disk
 format and the migration path.
 
+### `[storage.folders]`
+The roles of an account's special folders (Junk, Trash, Sent, Drafts,
+Archive) and the names they get. Everything here is optional; with the table
+absent a new account gets `Rejects`, `Sent`, `Drafts`, `Trash` and `Archive`
+as it always did.
+
+An account keeps its own record of which folder holds which role, in
+`<account>/.roles`, and that record wins over the name: a folder the account
+renamed or created under another name keeps its role in IMAP `LIST`
+(`\Junk`, `\Sent`, ...), in what moving mail teaches the spam filter, and in
+where the copy of sent mail is stored. A role the account recorded nothing
+for is still decided by the well-known English name, so an account with no
+record behaves exactly as before. Renaming a folder with a recorded role
+moves the record, and deleting it drops the record, so a delivery never
+creates the folder again.
+
+| Key | Meaning |
+|---|---|
+| `single_spam_folder` | Default `false`: the attachment policy, the scanner hook, domain reputation and the LLM deliver to `Rejects`, and the Bayes verdict and `rule.junk` to `Junk`, both advertised as `\Junk`. `true` sends all of them to the one folder with the `\Junk` role (`Junk`, or the folder the operator or the account named) and `Rejects` is not created for new accounts. A folder already holding mail stays as it is. |
+| `names.junk`, `names.trash`, `names.sent`, `names.drafts`, `names.archive` | The name a new account gets for that role, for every account of the server. A role left out keeps the English default. |
+| `tenants.<tenant>` | A table with the same five keys, for the accounts of one `[[tenant]]`, by its `name`. Narrower than the server. |
+| `domains."<domain>"` | A table with the same five keys, for the accounts of one domain. Narrower than the tenant's. |
+
+A name that differs from the English one is created only when the account has
+no folder with that role yet, and is recorded for the account, so turning a
+language on never adds a second `Sent` next to the one an account already
+has. Each name is a folder name in UTF-8, at most 16 levels deep, never `INBOX`
+and without control characters; an invalid one stops the start.
+
+```toml
+[storage.folders]
+single_spam_folder = true
+
+[storage.folders.names]
+trash = "Trash"
+
+[storage.folders.domains."example.org"]
+junk = "Correo no deseado"
+trash = "Papelera"
+sent = "Enviados"
+drafts = "Borradores"
+archive = "Archivo"
+```
+
 ### `[storage.blobs]`
 Where uploaded JMAP blobs (`POST /jmap/upload/{account}`) live. Absent (or
 `backend = "fs"`) keeps the historical default of `<data_dir>/blobs/`,

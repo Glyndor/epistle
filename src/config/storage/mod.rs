@@ -5,6 +5,10 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 
+mod folders;
+
+pub use folders::{FolderNames, Folders};
+
 /// Days of per-recipient delivery log kept when the operator sets none.
 pub const DEFAULT_DELIVERY_LOG_DAYS: u64 = 30;
 
@@ -87,6 +91,10 @@ pub struct Storage {
 	/// `backend = "s3"` redirects to a remote bucket.
 	#[serde(default)]
 	pub blobs: Option<BlobBackendConfig>,
+	/// The names of the special folders and the one-spam-folder switch,
+	/// `[storage.folders]`.
+	#[serde(default)]
+	pub folders: Folders,
 }
 
 /// The blob backend the operator configured under `[storage.blobs]`. Two
