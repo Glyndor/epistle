@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
+use super::send_recipient::Recipient;
 use crate::api::error::ApiError;
 use crate::compose;
 
@@ -38,14 +39,14 @@ const RESERVED_CUSTOM: &[&str] = &["x-priority", "x-auto-response-suppress"];
 #[derive(Deserialize)]
 pub struct SendRequest {
 	pub(super) from: String,
-	pub(super) to: Vec<String>,
+	pub(super) to: Vec<Recipient>,
 	#[serde(default)]
-	pub(super) cc: Vec<String>,
+	pub(super) cc: Vec<Recipient>,
 	/// Envelope only: never written into the message.
 	#[serde(default)]
-	pub(super) bcc: Vec<String>,
+	pub(super) bcc: Vec<Recipient>,
 	#[serde(default)]
-	pub(super) reply_to: Option<String>,
+	pub(super) reply_to: Option<Recipient>,
 	#[serde(default)]
 	pub(super) subject: String,
 	#[serde(default)]
@@ -120,14 +121,31 @@ pub struct PartRequest {
 }
 
 impl SendRequest {
-	/// Every recipient of the envelope: To, then Cc, then Bcc.
+	/// Every recipient of the envelope: To, then Cc, then Bcc, each address
+	/// once. Only addresses reach the envelope, whatever name they came with.
 	pub(super) fn recipients(&self) -> Vec<String> {
-		self.to
+		let mut out: Vec<String> = Vec::new();
+		for recipient in self.to.iter().chain(&self.cc).chain(&self.bcc) {
+			let address = crate::util::address::normalize(recipient.address());
+			if !out.contains(&address) {
+				out.push(address);
+			}
+		}
+		out
+	}
+
+	/// Refuse a display name that cannot be written safely, in any list
+	/// (`bcc` names are checked too, though no header carries them), and a
+	/// `Name <address>` string.
+	pub(super) fn check_recipients(&self) -> Result<(), ApiError> {
+		for (field, list) in [("to", &self.to), ("cc", &self.cc), ("bcc", &self.bcc)] {
+			for (index, recipient) in list.iter().enumerate() {
+				recipient.check(&format!("{field}[{index}]"))?;
+			}
+		}
+		self.reply_to
 			.iter()
-			.chain(&self.cc)
-			.chain(&self.bcc)
-			.map(|address| crate::util::address::normalize(address))
-			.collect()
+			.try_for_each(|recipient| recipient.check("reply_to"))
 	}
 
 	/// The per-request `save_sent` override. `None` means "follow the
@@ -213,11 +231,11 @@ impl SendRequest {
 				.iter()
 				.chain(&self.cc)
 				.chain(&self.bcc)
-				.map(String::as_str),
+				.chain(&self.reply_to)
+				.map(Recipient::address),
 		);
 		fields.extend(self.list_unsubscribe.iter().map(String::as_str));
 		for single in [
-			&self.reply_to,
 			&self.sender,
 			&self.in_reply_to,
 			&self.references,

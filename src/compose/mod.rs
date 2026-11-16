@@ -10,9 +10,11 @@
 
 mod encode;
 mod header;
+mod phrase;
 mod sniff;
 
 pub use header::{address_list, structured, unstructured};
+pub use phrase::mailbox;
 pub use sniff::content_type_for;
 
 /// How a leaf part is shown: as an attachment, or inline in the body.
