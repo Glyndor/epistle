@@ -20,9 +20,9 @@ mod api_limiter;
 mod arc;
 mod attachments;
 mod auth;
-mod boot;
 mod auth_settings;
 mod bans;
+mod boot;
 mod bounds;
 mod clip;
 mod database;
@@ -81,8 +81,8 @@ pub use attachments::{
 	normalise_extension, valid_extension, valid_mime_pattern,
 };
 pub use auth::Auth;
-pub use boot::Boot;
 pub use bans::Bans;
+pub use boot::Boot;
 pub use database::{Database, DatabaseTls};
 pub use deliverability::{Deliverability, Portal};
 pub use dkim::{DKIM_RSA_REQUIRED_FROM, Dkim, DkimDomain};
