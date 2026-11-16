@@ -20,6 +20,11 @@ pub struct Queued {
 	queued: String,
 	/// The class the server granted.
 	class: crate::evidence::MailClass,
+	/// When the send delay releases the message, as an RFC 3339 instant,
+	/// until which `DELETE /api/v1/send/{id}` takes it back. Absent when
+	/// nothing holds the message (the default).
+	#[serde(skip_serializing_if = "Option::is_none")]
+	cancel_until: Option<String>,
 	/// Recipients dropped because they are on a suppression list.
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	suppressed: Vec<String>,
@@ -254,6 +259,9 @@ pub async fn send(
 		state.save_sent_copy(&account, &sent_copy, save_sent);
 	}
 	Ok(Json(Queued {
+		cancel_until: state
+			.held_until(&account, id)
+			.map(crate::clock::rfc3339),
 		queued: id.to_string(),
 		class: prepared.class,
 		suppressed: prepared.suppressed,

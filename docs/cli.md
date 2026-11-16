@@ -2203,6 +2203,8 @@ decides whether to attempt it.
 | `epistle queue release <id>\|--all` | Let a held entry be attempted again. |
 | `epistle queue destinations [--json]` | The recipient domains and exchanger hosts on hold because they asked to slow down, as the spool shows them: until when (an RFC 3339 UTC instant), after how many deferrals in a row, and the reply. `epistle queue list` names them too. |
 | `epistle queue release-destination <domain>\|<host>\|--all` | Make every recipient waiting for that hold due at once, its run of deferrals forgotten; the running worker picks it up at its next scan. |
+| `epistle queue undo list [--json]` | The messages the send delay (`[queue.undo_send]`) still holds, before anything is delivered: id, sending account and seconds left. Never prints the message. |
+| `epistle queue undo cancel <id>` | Cancel a held message so nothing of it is ever delivered. A message already handed on is refused; use `queue remove` on its queue entry. |
 | `epistle queue remove <id> [--yes\|-y]` | Delete an entry without delivering or bouncing it (same as `DELETE /api/v1/queue/{id}`). Asks first; `--yes` skips the question. |
 
 A held entry is not attempted and its time on hold does not count toward the

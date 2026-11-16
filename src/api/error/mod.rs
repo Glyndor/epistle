@@ -309,6 +309,17 @@ impl ApiError {
 		}
 	}
 
+	/// `409` for a submission that can no longer be cancelled: it was already
+	/// handed on, and nothing can take it back.
+	pub fn already_sent() -> Self {
+		ApiError {
+			status: StatusCode::CONFLICT,
+			code: "already_sent",
+			message: "The message was already handed on and cannot be cancelled.".into(),
+			..Default::default()
+		}
+	}
+
 	/// `409` for a limit that waiting will never clear. A `429` here would
 	/// tell the client to retry, which is the one thing that cannot help: the
 	/// cap lifts when the caller deletes something or an admin raises it.

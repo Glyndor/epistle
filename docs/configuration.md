@@ -2789,6 +2789,34 @@ These keys are read when the server starts: after `epistle limits set` the comma
 
 `outbound_tls` never weakens an authenticated hop: MTA-STS enforce, a sender's REQUIRETLS, and DANE (TLSA records) always authenticate the certificate regardless of `outbound_tls`, and a remote that does not offer STARTTLS where TLS is mandated still defers (never cleartext). The one exception is a message one of your accounts submitted with `TLS-Required: No` (RFC 8689) and without REQUIRETLS: for that message MTA-STS and DANE are set aside, any certificate is accepted, and STARTTLS is still used when offered. Inbound mail loses the field.
 
+### `[queue.undo_send]`
+Hold the mail an account submits for a few seconds before anything is delivered, so the sender can take it back. Off by default: with no section, or `delay_secs = 0`, a submission is handled the instant it is accepted, as it always was.
+
+```toml
+[queue.undo_send]
+delay_secs = 30   # held for 30 seconds; 0 (the default) holds nothing
+max_secs = 120    # no scope may hold longer than this (default 120, at most 600)
+
+[[queue.undo_send.scope]]
+account = "ann"   # exactly one of tenant, domain or account
+delay_secs = 0    # ann's mail is not held
+```
+
+| Key | Meaning |
+|---|---|
+| `delay_secs` | Seconds a submission is held, for every account no scope says otherwise about. Default `0`, which holds nothing. At most `max_secs`. |
+| `max_secs` | The longest any scope may hold a submission, default `120`, from 0 to 600. `0` makes the feature unavailable. The load refuses a `delay_secs` above it, and a value above it is never applied. |
+| `scope` | `[[queue.undo_send.scope]]` entries, each naming exactly one of `tenant` (the `name` of a `[[tenant]]`), `domain` (a hosted domain) or `account`, and its `delay_secs` (0 to `max_secs`; `0` turns the hold off for that scope). The most specific scope that names the account wins: account, then domain, then tenant, then the server. A domain is the one all of the account's addresses sit in; an account with addresses in several domains is decided by its own scope or the server's. A scope for an account is not checked against any list. |
+
+How it works:
+
+- **What is held.** Only mail an authenticated account submits: SMTP submission after `AUTH`, `POST /api/v1/send` and JMAP `EmailSubmission/set`. Mail that arrives from elsewhere, the reports and bounces the server writes, and mail of class `transactional` (whose acceptance is recorded as evidence when it is queued) are never held.
+- **What waits.** Everything: local recipients are not delivered either, and nothing is queued, until the time. The held message is a sealed file under `data_dir/undo/pending`, written with the same guarantees as the spool (owner-only, synced, encrypted when `[storage]` encrypts), with its release time in the file name. Nothing sleeps: a restart keeps every hold and its time, and what is due goes out at once.
+- **Taking it back.** The account that sent it, or an unconfined key or the operator, cancels it until its release time: `DELETE /api/v1/send/{id}`, a JMAP `EmailSubmission/set` update with `undoStatus: "canceled"`, or `epistle queue undo cancel ID`. A cancelled message is never delivered. At or after the release time nothing can take it back: the answer is `409 already_sent` (JMAP `cannotUnsend`). The record that a message was handed on is kept for a day, so a late cancel by its sender says "already sent" and by anyone else says "not found".
+- **At release.** The message goes through the same routing as an ordinary submission, under the id the sender was given, so the queue entry carries that id. If it cannot be handed on, a transient fault retries every second for up to a day; a refusal that would come again (a mailbox that is full, a virus found) is reported to the sender as a failure notice. A crash exactly between handing the message on and forgetting it can deliver it twice.
+- **Counted once.** Rate limits, the new-recipient cap and the `Sent` copy are applied when the message is accepted, not at release. A cancelled message keeps its `Sent` copy and does not give its rate-limit units back.
+- **Turning it off.** Setting every delay to `0` and restarting stops new holds; what is still held goes out at its time.
+
 ## JMAP submission
 
 The JMAP `EmailSubmission/set` and `Email/set` (create) handlers stamp a

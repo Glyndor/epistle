@@ -152,7 +152,7 @@ impl Releaser {
 		}
 	}
 
-	/// Run [`release_due`](Self::release_due) every [`TICK`] for as long as
+	/// Run [`release_due`](Self::release_due) every second for as long as
 	/// the process lives. The store is on disk, so a restart picks up what
 	/// was waiting.
 	pub fn spawn(self: Arc<Self>) {

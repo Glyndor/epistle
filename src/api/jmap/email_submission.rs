@@ -30,7 +30,10 @@ pub(super) fn email_submission_set(
 		for (creation_id, submission) in create {
 			match submit_email(state, principal, account, &view.addresses, submission) {
 				Ok(id) => {
-					created.insert(creation_id.clone(), json!({ "id": id, "sendAt": null }));
+					created.insert(
+						creation_id.clone(),
+						super::email_submission_undo::created(state, account, &id),
+					);
 				}
 				Err(refusal) => {
 					not_created.insert(creation_id.clone(), refusal.to_json());
@@ -38,12 +41,18 @@ pub(super) fn email_submission_set(
 			}
 		}
 	}
-	json!([
-		"EmailSubmission/set",
-		{ "accountId": account, "oldState": "0", "newState": "0",
-		  "created": created, "notCreated": not_created },
-		call_id,
-	])
+	let mut response = json!({
+		"accountId": account, "oldState": "0", "newState": "0",
+		"created": created, "notCreated": not_created,
+	});
+	// The update is only for taking a held submission back; a request with
+	// none is answered as it always was.
+	if let Some(update) = args.get("update").and_then(Value::as_object) {
+		let (updated, not_updated) = super::email_submission_undo::updates(state, account, update);
+		response["updated"] = Value::Object(updated);
+		response["notUpdated"] = Value::Object(not_updated);
+	}
+	json!(["EmailSubmission/set", response, call_id])
 }
 
 /// Submit one email: read it, build the envelope, route it like SMTP

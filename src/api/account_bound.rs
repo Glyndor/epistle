@@ -29,6 +29,7 @@ use super::state::MatchedAuth;
 /// Whether `path` belongs to the surface an account-bound key may use.
 pub(crate) fn path_is_account_scoped(path: &str) -> bool {
 	path == "/api/v1/send"
+		|| path.strip_prefix("/api/v1/send/").is_some()
 		|| path == "/api/v1/deliveries"
 		|| path == "/api/v1/suppression"
 		|| path.strip_prefix("/api/v1/suppression/").is_some()

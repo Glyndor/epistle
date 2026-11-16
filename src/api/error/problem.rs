@@ -122,6 +122,7 @@ fn title(code: &str, status: StatusCode) -> &'static str {
 		"invalid_input" => "Invalid input",
 		"not_found" => "Not found",
 		"conflict" => "Conflict",
+		"already_sent" => "The message was already sent",
 		_ => status.canonical_reason().unwrap_or("Error"),
 	}
 }

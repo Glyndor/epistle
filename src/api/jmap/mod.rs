@@ -36,6 +36,7 @@ mod email_query;
 pub mod event_source;
 pub use download::download;
 mod email_submission;
+mod email_submission_undo;
 mod upload_api;
 use scope::{jmap_scope_error, required_scope};
 pub use upload_api::upload;
