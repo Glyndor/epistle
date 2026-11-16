@@ -132,7 +132,9 @@ pub enum WebhookEvent {
 	OwnIpBlocklisted {
 		/// The public address found in the blocklist.
 		address: String,
-		/// The DNS blocklist zone that returned the listing.
+		/// The public name of the DNS blocklist that returned the listing (its
+		/// last two labels, or `a DNS blocklist`), never the zone as configured:
+		/// a zone can carry the operator's key.
 		zone: String,
 		/// The provider's delisting page, when it is known.
 		#[serde(default, skip_serializing_if = "Option::is_none")]

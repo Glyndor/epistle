@@ -273,12 +273,12 @@ curl -s -H "Authorization: Bearer $KEY" "$API/api/v1/status"
 
 | Answer | Cause |
 |---|---|
-| `401` `unauthenticated` | No header, an unknown or expired key, or a key pinned to another network. The three look the same |
+| `401` `unauthenticated` | No header, an unknown or expired key, or a key pinned to another network. The three look the same. Every `401` carries `WWW-Authenticate: Bearer` |
 | `403` `forbidden` | A valid key whose scopes do not cover the route. It does not count towards the authentication failure limit |
 | `403` `forbidden` | The key is bound to one account and the route is administrative outside its suppression list, or the bound account is disabled or gone |
 | `403` `forbidden_from` | `POST /api/v1/send` from an address the credential may not act for |
 | `403` `sending_off` | `POST /api/v1/send` for an account whose sending is switched off (`epistle account set NAME --send off`) |
-| `429` `rate_limited` | The client address made 20 requests with credentials that did not hold in the last 60 seconds. Every request from it is refused, valid or not, until the window passes. The `Retry-After` header gives the remaining window in seconds, rounded up |
+| `429` `rate_limited` | The client address made 20 requests with credentials that did not hold in the last 60 seconds. Every request from it is refused, valid or not, until the window passes. The `Retry-After` header gives the remaining window in seconds, rounded up. When too many credential checks are already waiting, the answer is the same `429` with `Retry-After: 1` and the request is not counted as a failure |
 
 A valid call does not use up the budget, and it does not clear failures already
 counted. The limit is per client address (an IPv6 client counts as its /64, and
@@ -345,7 +345,51 @@ its answer is **plain text**, with no `error` object:
 | `405` | A route with another method | Empty, with an `allow` header |
 
 Handle both shapes: read `error.code` when the body is JSON, and fall back to
-the status. The codes the API itself sends:
+the status.
+
+### Problem details
+
+A client that sends `Accept: application/problem+json` gets every error the
+API decides as an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem.
+Any other `Accept` (none, `application/json`, `*/*`, or the problem type with
+`q=0`) gets the `error` object above, unchanged. The problem form is only for
+errors the API itself decides; the plain-text rejections of the HTTP layer
+stay as they are.
+
+```json
+{
+  "type": "urn:epistle:problem:field_missing",
+  "title": "A required field is missing",
+  "status": 400,
+  "detail": "At least one recipient is required.",
+  "code": "field_missing",
+  "instance": "urn:uuid:019e5c3a-7a40-7c10-9d6e-3f1b8f6a2c11",
+  "request_id": "019e5c3a-7a40-7c10-9d6e-3f1b8f6a2c11",
+  "errors": [{"field": "to", "detail": "At least one recipient is required."}]
+}
+```
+
+`type` is `urn:epistle:problem:` followed by `code`, so it is stable and names
+no host. `title` is the same for every occurrence of a type; `detail` is for
+people and its wording can change. `request_id` is a fresh identifier for the
+answer, and the server logs it (level `info`) with the status, the code, the
+method and the path, so an operator given the id finds the line. `errors`
+appears for an input error whose field is known.
+
+In the problem, an `invalid_input` carries its cause as `code`:
+
+| `code` | Meaning |
+|---|---|
+| `field_missing` | A field the request needs is absent or empty |
+| `field_out_of_range` | A length or a count over or under what the field accepts |
+| `value_not_allowed` | A value the field does not accept |
+| `invalid_input` | Anything else; the field is not named |
+
+The `error` object keeps `invalid_input` for all of them, so nothing that
+reads it breaks. A `401` carries `WWW-Authenticate: Bearer` and a `429` carries
+`Retry-After` in both forms.
+
+The codes the API itself sends:
 
 | Code | Status | Meaning |
 |---|---|---|
@@ -357,7 +401,7 @@ the status. The codes the API itself sends:
 | `message_too_large` | 413 | The built message is over the size limit |
 | `scan_too_large` | 413 | Too large for the content scan, and the server lets nothing pass unscanned. Retrying cannot help |
 | `virus_detected`, `attachment_refused`, `too_many_header_fields`, `marketing_refused` | 422 | Refused for its content; sending it again unchanged is refused again. Nothing was sent |
-| `rate_limited` | 429 | The authentication limit above, or a sending limit (next section) |
+| `rate_limited` | 429 | The authentication limit above, or a sending limit (next section). Always with `Retry-After` in seconds |
 | `internal` | 500 | The server failed. The message never carries details |
 | `scan_unavailable`, `evidence_unavailable` | 503 | Nothing was sent; retrying later works |
 | `mailbox_full` | 507 | A local recipient's mailbox is full. Nothing was queued for anyone |
@@ -461,8 +505,8 @@ keeps its mail transactional whatever the request says; the response's
 | Message size | `max_message_size`, 25 MiB by default | A built message over it: `413 message_too_large`. A request body over it: plain-text `413` |
 | Recipients | 100 per message (`to`, `cc`, `bcc` together) | `400 invalid_input` |
 | Parts | 100 attachments and inline parts together | `400 invalid_input` |
-| Submission rate | `submission_rate_limit_per_min` recipients per minute per account, shared with SMTP and JMAP; per-domain and per-tenant limits too | `429 rate_limited`, "sending rate limit exceeded; retry later". Nothing was sent |
-| New recipients | `new_recipients_per_day` first-time recipients per account per rolling 24 hours | `429 rate_limited`, "too many new recipients today; retry tomorrow" |
+| Submission rate | `submission_rate_limit_per_min` recipients per minute per account, shared with SMTP and JMAP; per-domain and per-tenant limits too | `429 rate_limited`, "sending rate limit exceeded; retry later", with `Retry-After: 60`. Nothing was sent |
+| New recipients | `new_recipients_per_day` first-time recipients per account per rolling 24 hours | `429 rate_limited`, "too many new recipients today; retry tomorrow", with `Retry-After: 86400` |
 | Mailbox quota | `quota_bytes` | `507 mailbox_full` |
 
 The message of a `429` tells the sending limits from the authentication one.

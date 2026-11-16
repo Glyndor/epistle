@@ -1,16 +1,62 @@
-//! The API error shape: `{"error": {"code", "message"}}`.
+//! The API error shape: `{"error": {"code", "message"}}`, or an RFC 9457
+//! problem when the request asks for `application/problem+json` (see
+//! [`problem`]). A `401` always carries `WWW-Authenticate: Bearer` and a
+//! `429` always carries `Retry-After`.
+
+mod problem;
 
 use axum::Json;
-use axum::http::StatusCode;
+use axum::http::header::{RETRY_AFTER, WWW_AUTHENTICATE};
+use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use serde::Serialize;
 
+pub(in crate::api) use problem::negotiate;
+
+/// What a refused input is wrong with. The default body keeps the one code
+/// `invalid_input`; the problem body names the cause.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Cause {
+	/// A field the request needs is absent or empty.
+	Missing,
+	/// A value over or under what the field accepts (a length, a count).
+	OutOfRange,
+	/// A value of the right kind that the field does not accept.
+	NotAllowed,
+}
+
+impl Cause {
+	pub(crate) fn code(self) -> &'static str {
+		match self {
+			Self::Missing => "field_missing",
+			Self::OutOfRange => "field_out_of_range",
+			Self::NotAllowed => "value_not_allowed",
+		}
+	}
+}
+
 /// An API error with a machine-readable code.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct ApiError {
 	pub status: StatusCode,
 	pub code: &'static str,
 	pub message: String,
+	/// Seconds a `429` asks the client to wait, sent as `Retry-After`.
+	pub retry_after: Option<u64>,
+	/// The cause of an `invalid_input`, when known.
+	pub cause: Option<Cause>,
+	/// The request field an `invalid_input` is about, when known.
+	pub field: Option<&'static str>,
+}
+
+/// What a response needs to be rewritten as a problem: put in its
+/// extensions by [`ApiError::into_response`], read by [`negotiate`].
+#[derive(Debug, Clone)]
+pub(crate) struct ErrorInfo {
+	status: StatusCode,
+	code: &'static str,
+	message: String,
+	field: Option<&'static str>,
 }
 
 impl ApiError {
@@ -19,6 +65,7 @@ impl ApiError {
 			status: StatusCode::UNAUTHORIZED,
 			code: "unauthenticated",
 			message: "A valid bearer token is required.".to_string(),
+			..Default::default()
 		}
 	}
 
@@ -27,6 +74,7 @@ impl ApiError {
 			status: StatusCode::NOT_FOUND,
 			code: "not_found",
 			message: message.to_string(),
+			..Default::default()
 		}
 	}
 
@@ -35,6 +83,31 @@ impl ApiError {
 			status: StatusCode::BAD_REQUEST,
 			code: "invalid_input",
 			message: message.to_string(),
+			..Default::default()
+		}
+	}
+
+	/// `400` for a required `field` that is absent or empty. The default
+	/// body is the same `invalid_input` as any other bad input.
+	pub fn field_missing(field: &'static str, message: &str) -> Self {
+		Self::invalid_field(Cause::Missing, field, message)
+	}
+
+	/// `400` for a `field` whose value is over or under what it accepts.
+	pub fn field_out_of_range(field: &'static str, message: &str) -> Self {
+		Self::invalid_field(Cause::OutOfRange, field, message)
+	}
+
+	/// `400` for a `field` whose value is not one it accepts.
+	pub fn value_not_allowed(field: &'static str, message: &str) -> Self {
+		Self::invalid_field(Cause::NotAllowed, field, message)
+	}
+
+	fn invalid_field(cause: Cause, field: &'static str, message: &str) -> Self {
+		ApiError {
+			cause: Some(cause),
+			field: Some(field),
+			..Self::invalid_input(message)
 		}
 	}
 
@@ -43,26 +116,33 @@ impl ApiError {
 			status: StatusCode::INTERNAL_SERVER_ERROR,
 			code: "internal",
 			message: "Internal error.".to_string(),
+			..Default::default()
 		}
 	}
 
-	pub fn rate_limited() -> Self {
+	/// `429` for the authentication limits; `retry_after` is the wait in
+	/// seconds, which every `429` states.
+	pub fn rate_limited(retry_after: u64) -> Self {
 		ApiError {
 			status: StatusCode::TOO_MANY_REQUESTS,
 			code: "rate_limited",
 			message: "Too many failed authentication attempts. Try again later.".to_string(),
+			retry_after: Some(retry_after),
+			..Default::default()
 		}
 	}
 
 	/// `429` for an outbound submission rate limit, with the caller-supplied
-	/// detail (which tenant rejected, which cap was hit). Distinct from
-	/// `rate_limited`, which is reserved for the auth-failure sliding window
-	/// on the bearer-token middleware.
-	pub fn rate_limited_with_message(message: impl Into<String>) -> Self {
+	/// detail (which tenant rejected, which cap was hit) and the wait in
+	/// seconds. Distinct from `rate_limited`, which is reserved for the
+	/// auth-failure sliding window on the bearer-token middleware.
+	pub fn rate_limited_with_message(message: impl Into<String>, retry_after: u64) -> Self {
 		ApiError {
 			status: StatusCode::TOO_MANY_REQUESTS,
 			code: "rate_limited",
 			message: message.into(),
+			retry_after: Some(retry_after),
+			..Default::default()
 		}
 	}
 
@@ -72,6 +152,7 @@ impl ApiError {
 			status: StatusCode::FORBIDDEN,
 			code: "forbidden",
 			message: message.to_string(),
+			..Default::default()
 		}
 	}
 
@@ -84,6 +165,7 @@ impl ApiError {
 			code: "forbidden_from",
 			message: "The sender address is not owned by an account this credential may act for."
 				.to_string(),
+			..Default::default()
 		}
 	}
 
@@ -95,6 +177,7 @@ impl ApiError {
 			status: StatusCode::FORBIDDEN,
 			code: "sending_off",
 			message: "Sending is turned off for this account.".to_string(),
+			..Default::default()
 		}
 	}
 
@@ -106,6 +189,7 @@ impl ApiError {
 			code: "forbidden",
 			message: "This key is bound to one account and only reaches JMAP, /api/v1/send, /api/v1/deliveries and its suppression list."
 				.to_string(),
+			..Default::default()
 		}
 	}
 
@@ -118,6 +202,7 @@ impl ApiError {
 			code: "forbidden",
 			message: "The account this key is bound to is disabled or no longer exists."
 				.to_string(),
+			..Default::default()
 		}
 	}
 
@@ -129,6 +214,7 @@ impl ApiError {
 			status: StatusCode::INSUFFICIENT_STORAGE,
 			code: "mailbox_full",
 			message: format!("The mailbox of {recipient} is full; nothing was sent."),
+			..Default::default()
 		}
 	}
 
@@ -139,6 +225,7 @@ impl ApiError {
 			status: StatusCode::PAYLOAD_TOO_LARGE,
 			code: "message_too_large",
 			message: format!("The message is larger than {limit} bytes once built."),
+			..Default::default()
 		}
 	}
 
@@ -150,6 +237,7 @@ impl ApiError {
 			status: StatusCode::UNPROCESSABLE_ENTITY,
 			code: "virus_detected",
 			message: format!("The message was rejected: virus detected ({signature})."),
+			..Default::default()
 		}
 	}
 
@@ -160,6 +248,7 @@ impl ApiError {
 			status: StatusCode::UNPROCESSABLE_ENTITY,
 			code: "attachment_refused",
 			message: format!("The message was rejected: attachment type not accepted ({reasons})."),
+			..Default::default()
 		}
 	}
 
@@ -170,6 +259,7 @@ impl ApiError {
 			status: StatusCode::SERVICE_UNAVAILABLE,
 			code: "scan_unavailable",
 			message: "The content scan is unavailable. Try again later.".to_string(),
+			..Default::default()
 		}
 	}
 
@@ -180,6 +270,7 @@ impl ApiError {
 			status: StatusCode::PAYLOAD_TOO_LARGE,
 			code: "scan_too_large",
 			message: "The message is too large for the content scan and was not sent.".to_string(),
+			..Default::default()
 		}
 	}
 
@@ -190,6 +281,7 @@ impl ApiError {
 			status: StatusCode::UNPROCESSABLE_ENTITY,
 			code: "too_many_header_fields",
 			message: "The message has too many header fields and was not sent.".to_string(),
+			..Default::default()
 		}
 	}
 
@@ -200,6 +292,7 @@ impl ApiError {
 			status: StatusCode::UNPROCESSABLE_ENTITY,
 			code: "marketing_refused",
 			message: format!("The message was refused: {message}."),
+			..Default::default()
 		}
 	}
 
@@ -212,6 +305,7 @@ impl ApiError {
 			code: "evidence_unavailable",
 			message: "Transactional mail cannot be recorded as evidence right now; retry later."
 				.into(),
+			..Default::default()
 		}
 	}
 
@@ -223,6 +317,7 @@ impl ApiError {
 			status: StatusCode::CONFLICT,
 			code: "conflict",
 			message: message.into(),
+			..Default::default()
 		}
 	}
 }
@@ -240,13 +335,30 @@ struct ErrorDetail {
 
 impl IntoResponse for ApiError {
 	fn into_response(self) -> Response {
+		let info = ErrorInfo {
+			status: self.status,
+			code: self.cause.map_or(self.code, Cause::code),
+			message: self.message.clone(),
+			field: self.field,
+		};
 		let body = ErrorBody {
 			error: ErrorDetail {
 				code: self.code,
 				message: self.message,
 			},
 		};
-		(self.status, Json(body)).into_response()
+		let mut response = (self.status, Json(body)).into_response();
+		if self.status == StatusCode::UNAUTHORIZED {
+			// RFC 6750 section 3: a 401 names the scheme that is accepted.
+			response
+				.headers_mut()
+				.insert(WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
+		}
+		if let Some(seconds) = self.retry_after {
+			response.headers_mut().insert(RETRY_AFTER, seconds.into());
+		}
+		response.extensions_mut().insert(info);
+		response
 	}
 }
 

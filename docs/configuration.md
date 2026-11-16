@@ -1417,6 +1417,13 @@ cooldown_secs = 3600
 The webhook event is `own_ip_blocklisted` (address, zone and, when known,
 `delist_url`); the email lists the same.
 
+A zone can carry a secret in its name (Spamhaus DQS is queried as
+`<key>.zen.dq.spamhaus.net`), so nothing that can leave the host prints it:
+`epistle status` (text and JSON), the webhook's `zone` field, the alert email
+and the refusal text of an inbound message name the list by its last two
+labels (`spamhaus.net`), or `a DNS blocklist` when the zone has no such
+suffix. The full zone stays in the server log.
+
 ### `[clock_external]`
 
 Read-only external-clock probe `epistle status` and `epistle check clock`

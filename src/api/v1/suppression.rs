@@ -111,7 +111,10 @@ pub async fn list(
 	};
 	let limit = params.limit.unwrap_or(50).min(MAX_LIMIT);
 	if limit == 0 {
-		return Err(ApiError::invalid_input("limit must be at least 1"));
+		return Err(ApiError::field_out_of_range(
+			"limit",
+			"limit must be at least 1",
+		));
 	}
 	let suppression = open(&state)?;
 	let all = match &scope {
@@ -178,9 +181,9 @@ pub async fn add(
 	)
 	.map_err(|error| match error {
 		AddError::InvalidAddress(why) => {
-			ApiError::invalid_input(&format!("invalid address: {why}"))
+			ApiError::value_not_allowed("address", &format!("invalid address: {why}"))
 		}
-		AddError::InvalidReason(problem) => ApiError::invalid_input(&problem),
+		AddError::InvalidReason(problem) => ApiError::value_not_allowed("reason", &problem),
 		AddError::Storage(_) => ApiError::internal(),
 	})?;
 	Ok(Json(Suppressed {

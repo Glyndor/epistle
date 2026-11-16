@@ -45,7 +45,10 @@ pub async fn list(
 ) -> Result<Json<QueuePage>, ApiError> {
 	let limit = params.limit.unwrap_or(50).min(MAX_LIMIT);
 	if limit == 0 {
-		return Err(ApiError::invalid_input("limit must be at least 1"));
+		return Err(ApiError::field_out_of_range(
+			"limit",
+			"limit must be at least 1",
+		));
 	}
 	let principal = Principal::for_token(&state, &auth);
 

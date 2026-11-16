@@ -142,13 +142,8 @@ pub(super) fn listed(detail: RefusalDetail, listed: String, fix: String) -> Repl
 /// name (one label, or numbers only) is `a DNS blocklist`. The log keeps
 /// the full zone.
 pub(super) fn list_name(zone: &str) -> String {
-	let labels: Vec<&str> = zone.split('.').filter(|label| !label.is_empty()).collect();
-	let public = &labels[labels.len().saturating_sub(2)..];
-	let numeric = public
-		.iter()
-		.all(|label| label.bytes().all(|b| b.is_ascii_digit()));
-	if public.len() < 2 || numeric {
-		return "a DNS blocklist".to_string();
+	match crate::dnsbl::public_name(zone) {
+		Some(name) => format!("DNS blocklist {}", quoted(&name)),
+		None => crate::dnsbl::public_label(zone),
 	}
-	format!("DNS blocklist {}", quoted(&public.join(".")))
 }

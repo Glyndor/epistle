@@ -375,6 +375,51 @@ fn every_error_code_and_status_the_api_can_answer_is_listed() {
 }
 
 #[test]
+fn the_contract_describes_problem_details_and_the_headers_of_401_and_429() {
+	let doc = doc();
+	let responses = &doc["components"]["responses"];
+	for name in ["Unauthenticated", "AuthRateLimited", "InvalidInput"] {
+		assert_eq!(
+			responses[name]["content"]["application/problem+json"]["schema"]["$ref"],
+			"#/components/schemas/Problem",
+			"{name} has no problem+json body"
+		);
+	}
+	assert_eq!(
+		responses["Unauthenticated"]["headers"]["WWW-Authenticate"]["schema"]["enum"][0],
+		"Bearer"
+	);
+	assert!(responses["AuthRateLimited"]["headers"]["Retry-After"].is_object());
+	// Every 429 a REST operation spells out itself carries `Retry-After` too.
+	for (path, method, operation) in operations(&doc) {
+		if !path.starts_with("/api/v1") {
+			continue;
+		}
+		let Some(answer) = operation["responses"].get("429") else {
+			continue;
+		};
+		let reference = answer["$ref"].as_str();
+		assert!(
+			reference == Some("#/components/responses/AuthRateLimited")
+				|| answer["headers"]["Retry-After"].is_object(),
+			"{method} {path}: its 429 does not describe Retry-After"
+		);
+	}
+	let problem = &doc["components"]["schemas"]["Problem"];
+	for field in [
+		"type",
+		"title",
+		"status",
+		"detail",
+		"code",
+		"instance",
+		"request_id",
+	] {
+		assert!(problem["properties"][field].is_object(), "Problem.{field}");
+	}
+}
+
+#[test]
 fn the_json_the_server_sends_is_the_yaml() {
 	let served = super::document().expect("the embedded description reads");
 	let served: Value = serde_json::from_str(served).expect("it is JSON");

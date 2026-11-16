@@ -38,7 +38,7 @@ fn record(config: &Config, status: Status, at: u64) {
 }
 
 #[test]
-fn a_listed_address_is_a_warning_with_the_zone_and_the_page() {
+fn a_listed_address_is_a_warning_with_the_list_and_the_page() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let config = config(dir.path(), "");
 	record(
@@ -52,7 +52,7 @@ fn a_listed_address_is_a_warning_with_the_zone_and_the_page() {
 	assert_eq!(found.len(), 1, "{found:?}");
 	assert_eq!(found[0].status, Level::Warn);
 	assert!(
-		found[0].detail.contains("LISTED in zen.spamhaus.org"),
+		found[0].detail.contains("LISTED in spamhaus.org"),
 		"{found:?}"
 	);
 	assert!(
@@ -129,4 +129,46 @@ fn an_unreadable_state_is_a_warning() {
 	let found = items_at(&config, NOW);
 	assert_eq!(found[0].status, Level::Warn, "{found:?}");
 	let _ = State::default();
+}
+
+const KEY: &str = "k3yA1b2C3d4E5f6";
+
+fn keyed_config(dir: &std::path::Path) -> Config {
+	let extra = format!("public_ipv4 = \"{V4}\"\ndnsbl_zones = [\"{KEY}.zen.dq.spamhaus.net\"]\n");
+	ctx(dir, &extra).config.expect("config")
+}
+
+fn listed_with_key(config: &Config) {
+	let zone = format!("{KEY}.zen.dq.spamhaus.net");
+	record(config, Status::Listed { zone }, NOW);
+}
+
+#[test]
+fn a_listing_never_prints_the_key_of_the_zone() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let config = keyed_config(dir.path());
+	listed_with_key(&config);
+	let found = items_at(&config, NOW + 5);
+	assert!(
+		found[0].detail.contains("LISTED in spamhaus.net"),
+		"{found:?}"
+	);
+	// The JSON form of the report is the serialized items.
+	let json = serde_json::to_string(&found).expect("json");
+	assert!(!json.contains(KEY), "{json}");
+}
+
+#[test]
+fn a_remembered_listing_never_prints_the_key_of_the_zone() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let config = keyed_config(dir.path());
+	listed_with_key(&config);
+	record(&config, Status::Unknown, NOW + 10);
+	let found = items_at(&config, NOW + 15);
+	assert!(
+		found[0].detail.contains("last known listing: spamhaus.net"),
+		"{found:?}"
+	);
+	let json = serde_json::to_string(&found).expect("json");
+	assert!(!json.contains(KEY), "{json}");
 }

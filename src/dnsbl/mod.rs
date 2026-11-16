@@ -10,7 +10,10 @@ use std::net::IpAddr;
 
 use crate::spf::{DnsFailure, DnsLookup};
 
+mod label;
 pub(crate) mod own;
+
+pub(crate) use label::{public_label, public_name};
 
 /// The result of checking an identifier against the configured blocklists.
 #[derive(Debug, Clone, PartialEq, Eq)]

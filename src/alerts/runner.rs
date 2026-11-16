@@ -176,7 +176,7 @@ fn dispatch(
 			for listing in &listings {
 				let event = WebhookEvent::OwnIpBlocklisted {
 					address: listing.address.to_string(),
-					zone: listing.zone.clone(),
+					zone: crate::dnsbl::public_label(&listing.zone),
 					delist_url: listing.delist_url.clone(),
 				};
 				let poster = Arc::clone(poster);
@@ -243,7 +243,12 @@ fn build_email(
 					.as_deref()
 					.map(|url| format!("; delist: {url}"))
 					.unwrap_or_default();
-				format!("  {} listed in {}{}", listing.address, listing.zone, link)
+				format!(
+					"  {} listed in {}{}",
+					listing.address,
+					crate::dnsbl::public_label(&listing.zone),
+					link
+				)
 			})
 			.collect::<Vec<_>>()
 			.join("\r\n");

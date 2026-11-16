@@ -28,6 +28,14 @@ pub struct Queued {
 /// The message the cap should be enforced against ("too many new
 /// recipients today; retry tomorrow"). Distinct from the auth-failure
 /// sliding window `rate_limited` so a client can tell the two apart.
+/// `Retry-After` of a send limit: its window is one minute, so a client that
+/// waits this long finds the window over.
+const SEND_LIMIT_RETRY_AFTER: u64 = 60;
+
+/// `Retry-After` of the new-recipient cap, which counts the last 24 hours:
+/// the most a client can wait for the oldest new recipient to leave the day.
+const NEW_RECIPIENT_RETRY_AFTER: u64 = 24 * 60 * 60;
+
 const NEW_RECIPIENT_LIMIT_MESSAGE: &str = "too many new recipients today; retry tomorrow";
 
 pub async fn send(
@@ -52,14 +60,15 @@ pub async fn send(
 	let explicit_class = request.class()?;
 	let recipients = request.recipients();
 	if recipients.is_empty() {
-		return Err(ApiError::invalid_input(
+		return Err(ApiError::field_missing(
+			"to",
 			"At least one recipient is required.",
 		));
 	}
 	// Bound the recipient list to the same ceiling the SMTP path enforces.
 	let max_recipients = state.max_recipients();
 	if recipients.len() > max_recipients {
-		return Err(ApiError::invalid_input("Too many recipients."));
+		return Err(ApiError::field_out_of_range("to", "Too many recipients."));
 	}
 	// Header-injection guard (mandatory), before anything is built: no CR,
 	// LF or other control character (a tab aside) in any header-bound field,
@@ -69,15 +78,17 @@ pub async fn send(
 	if request.header_bound().into_iter().any(|v| {
 		v.contains(['\r', '\n']) || v.chars().any(|c| c.is_control() && c != '\t') || v.len() > 1000
 	}) {
-		return Err(ApiError::invalid_input(
+		return Err(ApiError::value_not_allowed(
+			"headers",
 			"Header fields must not contain CR or LF or exceed 1000 bytes.",
 		));
 	}
 	// Sender and every recipient must be syntactically valid addresses.
 	if let Err(why) = address_reason::parse(&request.from) {
-		return Err(ApiError::invalid_input(&format!(
-			"Invalid sender address: {why}."
-		)));
+		return Err(ApiError::value_not_allowed(
+			"from",
+			&format!("Invalid sender address: {why}."),
+		));
 	}
 	if let Some(why) = recipients
 		.iter()
@@ -85,9 +96,10 @@ pub async fn send(
 		.chain(&request.sender)
 		.find_map(|address| address_reason::parse(address).err())
 	{
-		return Err(ApiError::invalid_input(&format!(
-			"Invalid recipient address: {why}."
-		)));
+		return Err(ApiError::value_not_allowed(
+			"to",
+			&format!("Invalid recipient address: {why}."),
+		));
 	}
 	// The request acts for one account the credential may reach, and the
 	// sender must be an address that account owns: the rule
@@ -141,6 +153,7 @@ pub async fn send(
 				crate::api::log_send_limited(&account, None, new.saturating_add(already), limit);
 				return Err(ApiError::rate_limited_with_message(
 					NEW_RECIPIENT_LIMIT_MESSAGE,
+					NEW_RECIPIENT_RETRY_AFTER,
 				));
 			}
 			Ok(CapOutcome::Allowed { .. } | CapOutcome::Uncapped) => {}
@@ -160,8 +173,9 @@ pub async fn send(
 	let date = crate::clock::rfc5322(std::time::SystemTime::now());
 	let message_id = format!("<{}@{domain}>", uuid::Uuid::now_v7());
 	let display_name = match request.from_name.as_deref() {
-		Some(raw) => crate::directory_store::display_name::validate(raw)
-			.map_err(|why| ApiError::invalid_input(&format!("Invalid from_name: {why}.")))?,
+		Some(raw) => crate::directory_store::display_name::validate(raw).map_err(|why| {
+			ApiError::value_not_allowed("from_name", &format!("Invalid from_name: {why}."))
+		})?,
 		None => state.store().display_name(&account),
 	};
 	let from = super::send_from::from_header(display_name.as_deref(), &request.from);
@@ -248,7 +262,10 @@ pub async fn send(
 
 /// `429 rate_limited` for a send over one of its submission rate limits.
 fn rate_limited() -> ApiError {
-	ApiError::rate_limited_with_message(crate::smtp::submission_budget::RATE_LIMITED)
+	ApiError::rate_limited_with_message(
+		crate::smtp::submission_budget::RATE_LIMITED,
+		SEND_LIMIT_RETRY_AFTER,
+	)
 }
 
 /// The account a send request acts for. An account-bound credential acts
