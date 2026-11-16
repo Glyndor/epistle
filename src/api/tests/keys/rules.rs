@@ -221,6 +221,12 @@ pub(super) const RULES: &[Rule] = &[
 		"the_archive_of_another_tenants_account_is_out_of_reach",
 	),
 	rule(
+		"/api/v1/events",
+		"read",
+		Domain::Filtered,
+		"an_account_change_reaches_its_own_tenant_only",
+	),
+	rule(
 		"/api/v1/queue",
 		"read",
 		Domain::Filtered,

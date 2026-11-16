@@ -459,6 +459,9 @@ codes. See [the API guide](api.md#turn-it-on).
 | `token_hash` | Optional `sha256:<hex>` (from `epistle token-hash`) or legacy argon2id PHC string. Omit for labelled keys only; an empty string is invalid. |
 | `trusted_proxies` | Optional CIDR list for trusted reverse proxies. Default `[]`. See below. |
 | `admins` | Optional list of account names allowed to authenticate to the admin panel (via `POST /api/v1/auth/verify`). Empty (default) means no account can administer the panel. |
+| `event_streams_per_key` | Streams of `GET /api/v1/events` one API key may hold open, 1 to 1024. Default `4`. The next one is refused with `429` and `Retry-After`. |
+| `event_streams_per_server` | Streams of `GET /api/v1/events` the server holds open in all, 1 to 65536. Default `64`. |
+| `event_stream_max_secs` | Seconds a stream of `GET /api/v1/events` stays open before the server closes it and the client reconnects, 60 to 86400. Default `3600`. |
 | `limiter` | The limits on failed bearer sign-ins and on password checks, the `[api.limiter]` table below. |
 
 #### `[api.limiter]`

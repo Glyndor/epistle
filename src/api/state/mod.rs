@@ -147,6 +147,8 @@ struct Inner {
 	/// JMAP `EmailSubmission/set`, the same count the SMTP listeners accept.
 	/// The default is [`crate::smtp::session::DEFAULT_MAX_RECIPIENTS`].
 	max_recipients: usize,
+	/// Notifications for the admin event stream and its open streams.
+	events: super::events::Hub,
 }
 
 mod limiter;
@@ -155,6 +157,7 @@ use limiter::{AUTH_WINDOW, ClientLimiters};
 pub use super::account_view::AccountView;
 
 mod construction;
+mod event_stream;
 mod hosted;
 mod settings;
 #[cfg(test)]

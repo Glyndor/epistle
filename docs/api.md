@@ -278,7 +278,7 @@ curl -s -H "Authorization: Bearer $KEY" "$API/api/v1/status"
 | `403` `forbidden` | The key is bound to one account and the route is administrative outside its suppression list, or the bound account is disabled or gone |
 | `403` `forbidden_from` | `POST /api/v1/send` from an address the credential may not act for |
 | `403` `sending_off` | `POST /api/v1/send` for an account whose sending is switched off (`epistle account set NAME --send off`) |
-| `429` `rate_limited` | The client address made 20 requests with credentials that did not hold in the last 60 seconds. Every request from it is refused, valid or not, until the window passes. The `Retry-After` header gives the remaining window in seconds, rounded up. When too many credential checks are already waiting, the answer is the same `429` with `Retry-After: 1` and the request is not counted as a failure |
+| `429` `rate_limited` | The client address made 20 requests with credentials that did not hold in the last 60 seconds. Every request from it is refused, valid or not, until the window passes. The `Retry-After` header gives the remaining window in seconds, rounded up. When too many credential checks are already waiting, the answer is the same `429` with `Retry-After: 1` and the request is not counted as a failure. The same code answers a stream refused by the caps of [Live updates](#live-updates) |
 
 A valid call does not use up the budget, and it does not clear failures already
 counted. The limit is per client address (an IPv6 client counts as its /64, and
@@ -570,6 +570,71 @@ global one. `?tenant=NAME` selects a tenant's list (`GET` and `DELETE`, not both
 `account`); like the global list it is refused to a confined key. A key confined to an account or domain may use only the list of an
 account it can act for; the global list needs an unconfined key.
 Pages end when `next_cursor` is absent.
+
+## Live updates
+
+`GET /api/v1/events` (scope `read`) is a `text/event-stream` for dashboards
+that would otherwise poll. It carries notifications, not data: each event
+names a topic that changed and nothing more, so the client fetches the detail
+from the route it already uses and every authorization check stays where it is.
+
+```sh
+curl -sN -H "Authorization: Bearer $KEY" "$API/api/v1/events"
+```
+
+```text
+id: 1792346437.12
+event: queue
+data: {"topic":"queue"}
+```
+
+| Topic | Something changed in |
+|---|---|
+| `queue` | The outbound queue: a message entered or left it |
+| `deliveries` | The delivery log (only while `delivery_log_days` is above `0`) |
+| `suppression` | A suppression list, the shared one or an account's |
+| `status` | What `GET /api/v1/status` counts |
+| `accounts` | An account was added, removed or changed |
+| `domains` | A hosted domain was added, removed, switched or changed |
+
+No address, subject, message content or credential is ever in an event. The
+`data` is `{"topic": "<name>"}` and the `id` is opaque: keep it, and send it
+back as `Last-Event-ID` when you reconnect.
+
+- **Coalescing.** Changes are looked for once a second, so a burst of queue
+  activity is one `queue` event, and a reader that was slow gets one event per
+  topic with the id of the last change.
+- **Resuming.** The last 256 notifications are kept in memory. A reconnect with
+  `Last-Event-ID` is sent what came after that id. If the server cannot replay
+  from it (the ring moved past it, the server restarted, or nobody was
+  connected for a while, because nothing is watched without a stream) it sends
+  one event for each topic the key may be told about, which means "fetch
+  everything again". A new connection without the header is told only what
+  happens from then on.
+- **What a key sees.** An unconfined key gets every topic. A key confined to
+  some domains gets only `status`, `accounts` and `domains`, and only when the
+  change touched a domain or an account it reaches (an account that moves
+  between tenants is told to both). It gets no `queue`, `deliveries` or
+  `suppression` event, because the data behind them is shared and cannot be
+  filtered without reading every entry. A key bound to one account is refused
+  with `403`, as on every administrative route. A missing, unknown or expired
+  key is `401`, a key without `read` is `403`, and both are problem details like
+  every other refusal.
+- **Limits.** A key may hold 4 streams and the server 64; the next is refused
+  with `429` and `Retry-After` (`[api] event_streams_per_key`,
+  `event_streams_per_server`). A comment line (`:heartbeat`) is sent every 15
+  seconds so a proxy does not close an idle stream. A stream lives one hour
+  (`event_stream_max_secs`) and is closed, and the client reconnects. The key
+  is checked again twice a second: a stream whose key was revoked, expired,
+  narrowed or lost `read` is closed. A client that stops reading is closed when
+  the ring moves past it; nothing is queued for it.
+- **Cost.** One task samples the server while at least one stream is open, and
+  none runs otherwise. It lists the queue directory once a second, so a very
+  large queue makes that listing the cost of each open server, not of each
+  stream.
+
+Behind a reverse proxy, turn response buffering off for this path; the answer
+carries `X-Accel-Buffering: no` for nginx.
 
 ## Accounts and the rest of the management API
 
@@ -870,6 +935,7 @@ RFC 6749 and 8628. Wrong credentials and a wrong code give the same answer.
 | Authenticated request rate | No limit of its own; sending has its own limits |
 | JMAP | See [JMAP](#jmap) |
 | Webhook | 15 seconds, one try |
+| Event streams (`/api/v1/events`) | 4 per key and 64 per server by default, one hour each; see [Live updates](#live-updates) |
 | Open connections | Not limited by the HTTP layer |
 
 ## Versioning and stability

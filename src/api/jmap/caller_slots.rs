@@ -27,6 +27,8 @@ pub(crate) enum Work {
 	Request,
 	/// A `POST /jmap/upload` request (`maxConcurrentUpload`).
 	Upload,
+	/// An open `GET /api/v1/events` stream.
+	AdminEvents,
 }
 
 impl Work {
@@ -36,6 +38,7 @@ impl Work {
 			Work::WebSocket => "websocket",
 			Work::Request => "request",
 			Work::Upload => "upload",
+			Work::AdminEvents => "adminevents",
 		}
 	}
 }
