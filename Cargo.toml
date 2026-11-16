@@ -524,3 +524,7 @@ path = "tests/contracts/credentials_survive_upgrade.rs"
 [[test]]
 name = "api_without_static_token"
 path = "tests/http/api_without_static_token.rs"
+
+[[test]]
+name = "stack_reboot"
+path = "tests/scripts/stack_reboot.rs"
