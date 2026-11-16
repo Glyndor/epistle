@@ -45,7 +45,12 @@ impl Cli {
 		crate::cli::config_edit::defer_restarts(self.no_restart);
 		if self.command.requires_service_user() {
 			match super::rootless::reexecute() {
-				Ok(Some(code)) => return code,
+				Ok(Some(code)) => {
+					// Only the root process can write what lives under
+					// /etc/systemd/system, and it ends here once the account's
+					// process has finished.
+					return stack::autostart::dropins::after_delegation(&self.command, code);
+				}
 				Ok(None) => {}
 				Err(error) => {
 					style::error(error);

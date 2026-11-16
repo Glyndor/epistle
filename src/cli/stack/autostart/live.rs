@@ -3,7 +3,9 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 
+use super::dropins::{self, Change, Outcome as DropIn};
 use super::{Host, Outcome, UNIT, ensure};
+use crate::config::Boot;
 
 /// The install of the boot unit, without starting it, for the stack at `compose`.
 struct Live<'a> {
@@ -92,11 +94,11 @@ pub(in crate::cli) fn current_files(compose: &Path) -> Vec<PathBuf> {
 }
 
 /// After a path that left the stack running: leave the boot unit installed,
-/// loaded, enabled and current. It changes no container and no image and
-/// starts nothing: a reboot starts the stack, this only arranges for it. A
-/// failure is a warning that names the repair: the command that ran has
-/// already done what it was asked.
-pub(in crate::cli) fn run(podup: &str, compose: &Path) {
+/// loaded, enabled and current, and its user drop-in as `boot` says. It
+/// changes no container and no image and starts nothing: a reboot starts the
+/// stack, this only arranges for it. A failure is a warning that names the
+/// repair: the command that ran has already done what it was asked.
+pub(in crate::cli) fn run(podup: &str, compose: &Path, boot: &Boot) {
 	let mut host = Live { podup, compose };
 	match ensure(&mut host, &current_files(compose)) {
 		Ok(Outcome::Unchanged) => {}
@@ -104,9 +106,41 @@ pub(in crate::cli) fn run(podup: &str, compose: &Path) {
 			"{UNIT} {}; it is installed now, so the stack comes back after a reboot",
 			reason.describe()
 		)),
+		Err(error) => {
+			crate::cli::style::warn(format_args!(
+				"the stack would not come back after a reboot: {error}; {}",
+				super::FIX
+			));
+			return;
+		}
+	}
+	harden(boot);
+}
+
+/// Leave the user drop-in of the boot unit as `boot` says, with a warning
+/// that names the repair when that cannot be done.
+pub(in crate::cli) fn harden(boot: &Boot) {
+	let path = dropins::user_path(&config_home());
+	match dropins::ensure_user(&mut dropins::Live, &path, boot) {
+		Ok(DropIn::Done(_)) => {}
+		Ok(DropIn::TooOld(version)) => crate::cli::style::warn(format_args!(
+			"systemd {version} is older than {}, which refuses a retry on a oneshot unit, so {UNIT} is not retried when its start fails",
+			dropins::RESTART_FROM
+		)),
 		Err(error) => crate::cli::style::warn(format_args!(
-			"the stack would not come back after a reboot: {error}; {}",
+			"{UNIT} is not retried when its start fails: {error}; {}",
 			super::FIX
+		)),
+	}
+}
+
+/// After `stack down`: the unit is gone, so its drop-in goes with it.
+pub(in crate::cli) fn remove_dropin() {
+	let path = dropins::user_path(&config_home());
+	match dropins::remove_user(&mut dropins::Live, &path) {
+		Ok(Change::Removed | Change::Unchanged | Change::Written) => {}
+		Err(error) => crate::cli::style::warn(format_args!(
+			"the drop-in of {UNIT} was left in place: {error}"
 		)),
 	}
 }

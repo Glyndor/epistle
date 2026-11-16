@@ -130,11 +130,21 @@ pub(super) fn run(config: &Config, action: StackAction) -> ExitCode {
 		Ok(()) => "podup",
 		Err(code) => return code,
 	};
-	let leaves_running = action.leaves_running();
+	// `up` installs the unit itself, so only the drop-in that hardens it
+	// follows; the other paths check the unit as well.
+	let installs = action.leaves_running();
+	let hardens = matches!(action, StackAction::Up);
+	let removes = matches!(action, StackAction::Down);
 	let summarises = matches!(action, StackAction::Up | StackAction::Update);
 	let code = dispatch(config, &compose, podup, action);
-	if code == ExitCode::SUCCESS && leaves_running {
-		autostart::run(podup, &compose);
+	if code == ExitCode::SUCCESS && installs {
+		autostart::run(podup, &compose, &config.boot);
+	}
+	if code == ExitCode::SUCCESS && hardens {
+		autostart::harden(&config.boot);
+	}
+	if code == ExitCode::SUCCESS && removes {
+		autostart::remove_dropin();
 	}
 	if code == ExitCode::SUCCESS && summarises {
 		super::status::print_boot_summary(config, &mut super::style::stderr());
@@ -370,7 +380,7 @@ fn exit_code_from_status(status: &std::process::ExitStatus) -> ExitCode {
 /// The argv every subcommand starts from. Kept in one place so a
 /// future change to the compose-file flag (today `-f`) is a single
 /// edit, and the tests that pin the argv can rebuild it.
-pub(super) fn build_command(podup: &str, compose: &Path, extra: &[&str]) -> Command {
+pub(in crate::cli) fn build_command(podup: &str, compose: &Path, extra: &[&str]) -> Command {
 	let mut command = Command::new(podup);
 	command.arg("-f").arg(compose);
 	let override_path = compose.with_file_name("compose.override.yaml");
