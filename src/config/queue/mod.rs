@@ -110,6 +110,10 @@ fn default_suppression_scopes() -> Vec<SuppressionScope> {
 
 const fn default_suppression_threshold() -> u32 {
 	1
+	/// Hold what accounts submit for a while so the sender can cancel it.
+	/// Absent holds nothing.
+	#[serde(default)]
+	pub undo_send: crate::config::undo_send::UndoSend,
 }
 
 const fn default_provider_pause_secs() -> u64 {
@@ -151,6 +155,7 @@ impl Default for Queue {
 			suppression_scopes: default_suppression_scopes(),
 			suppression_days: 0,
 			suppression_threshold: default_suppression_threshold(),
+			undo_send: Default::default(),
 		}
 	}
 }
@@ -191,6 +196,7 @@ impl super::Config {
 			);
 		}
 		self.validate_per_group_concurrency()?;
+		self.validate_undo_send()?;
 		self.validate_backoff_steps()
 	}
 

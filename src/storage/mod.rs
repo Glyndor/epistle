@@ -17,6 +17,7 @@ pub mod rekey;
 mod routing;
 pub(crate) mod save_sent;
 mod spool;
+pub mod undo;
 pub(crate) mod unshared;
 pub(crate) mod vacation_markers;
 pub mod vacation_store;

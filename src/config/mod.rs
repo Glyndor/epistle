@@ -57,6 +57,7 @@ mod storage;
 mod tenant;
 mod tls;
 mod transport;
+mod undo_send;
 mod validate;
 mod validate_limits;
 mod webhook;
@@ -114,6 +115,7 @@ pub use storage::{
 pub use tenant::Tenant;
 pub use tls::Tls;
 pub use transport::{Transport, TransportKind, select as select_transport};
+pub use undo_send::{DEFAULT_MAX_SECS, HARD_MAX_SECS, UndoScope, UndoSend};
 pub use webhook::Webhook;
 
 #[cfg(test)]

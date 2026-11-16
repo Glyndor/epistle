@@ -17,6 +17,7 @@ mod store;
 pub(super) mod tasks;
 mod tasks_delivery;
 mod tls;
+mod undo;
 mod webdav;
 use dkim::SplitCompanions;
 use ratelimit::RateLimiters;
@@ -143,7 +144,7 @@ async fn serve(config: Config, role: ServeRole) -> std::io::Result<()> {
 	let http_limits = connection_limits::http_limits(&config);
 	let sink = crate::antispam::submission_scan::ScanningSink::wrap_resolving(
 		config.antispam.scan_authenticated,
-		Arc::new(split),
+		undo::wrap(&config, &crypto, &directory, Arc::new(split))?,
 		clamd,
 		attachment_policy.clone(),
 		(
