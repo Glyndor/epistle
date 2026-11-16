@@ -7,6 +7,7 @@ use std::net::IpAddr;
 use super::super::report::{Item, Level};
 use crate::config::Config;
 use crate::dnsbl::own::{self, Status};
+use crate::dnsbl::public_label;
 
 /// One item per configured public address; nothing when the check is off.
 pub(super) fn items(config: &Config) -> Vec<Item> {
@@ -77,14 +78,18 @@ fn item(state: &own::State, address: IpAddr, now: u64, stale_after: u64) -> Item
 				.and_then(|listing| listing.delist_url)
 				.map(|url| format!("; delisting: {url}"))
 				.unwrap_or_default();
-			Item::new(name, Level::Warn, format!("LISTED in {zone}{link}{stale}"))
+			Item::new(
+				name,
+				Level::Warn,
+				format!("LISTED in {}{link}{stale}", public_label(&zone)),
+			)
 		}
 		Status::Unknown => {
 			// The last answer was a failure or a timeout: say what was
 			// remembered, because the listing may still stand.
 			let remembered = state
 				.listing(address)
-				.map(|listing| format!("; last known listing: {}", listing.zone))
+				.map(|listing| format!("; last known listing: {}", public_label(&listing.zone)))
 				.unwrap_or_default();
 			Item::new(
 				name,
