@@ -3,7 +3,7 @@
 //! Split from `run_deliver.rs` to keep both under the code-line limit.
 
 use crate::antispam::attachments::policy::Overlay;
-use crate::antispam::scopes::Target;
+use crate::antispam::scopes::{SpamNumbers, Target};
 use crate::dmarc::author::{AuthorDomain, author_domain};
 use crate::smtp::address::Address;
 use crate::smtp::directory::Resolution;
@@ -70,6 +70,22 @@ impl Server {
 			&& targets
 				.iter()
 				.all(|target| scopes.favours_sender(&envelope.to_string(), target))
+	}
+
+	/// The thresholds and delays that apply to `message`: the server's own,
+	/// with the tenant, domain and account of each recipient on top, and the
+	/// strictest of the recipients' when there are several.
+	pub(super) fn spam_numbers(&self, message: &AcceptedMessage) -> SpamNumbers {
+		let server = SpamNumbers {
+			junk_at: self.bayes_junk_at,
+			reject_at: self.bayes_reject_at,
+			greylist_delay_secs: self.greylist.as_ref().map_or(0, |(_, delay)| *delay),
+			first_time_delay_secs: self.first_time_delay.as_secs(),
+		};
+		match self.scopes.as_deref().filter(|scopes| !scopes.is_inert()) {
+			Some(scopes) => scopes.spam_numbers(&self.recipient_targets(message), server),
+			None => server,
+		}
 	}
 
 	/// The attachment settings the scopes of `message`'s recipients add to

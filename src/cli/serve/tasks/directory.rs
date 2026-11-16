@@ -31,7 +31,7 @@ pub(in crate::cli) async fn connect_database(
 		// The warning is omitted when the install is clearly minimal
 		// (no greylist, no Bayes, no reputation-aware delivery at all):
 		// in that case the absence is not surprising.
-		let greylist_off = config.greylist_delay_secs == 0;
+		let greylist_off = !config.greylisting_anywhere();
 		let subjectpass_off = !config.subjectpass.enabled;
 		if !greylist_off || !subjectpass_off {
 			tracing::warn!(

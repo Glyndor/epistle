@@ -131,3 +131,31 @@ fn bad_attachment_values_are_refused() {
 		"max_attachment_bytes",
 	);
 }
+
+#[test]
+fn thresholds_and_delays_of_a_scope_are_checked() {
+	refused(
+		"[[antispam_scope]]\ndomain = \"example.org\"\nbayes_junk_at = 1.5",
+		"bayes_junk_at",
+	);
+	refused(
+		"[[antispam_scope]]\ndomain = \"example.org\"\nbayes_junk_at = 0.9\nbayes_reject_at = 0.8",
+		"at least bayes_junk_at",
+	);
+	refused(
+		"[[antispam_scope]]\ndomain = \"example.org\"\ngreylist_delay_secs = 90000",
+		"greylist_delay_secs",
+	);
+	refused(
+		"[[antispam_scope]]\ndomain = \"example.org\"\nfirst_time_sender_delay_secs = 301",
+		"first_time_sender_delay_secs",
+	);
+	// The control: values at the limits load.
+	let config = load(
+		"[[antispam_scope]]\ndomain = \"example.org\"\nbayes_junk_at = 0.9\nbayes_reject_at = 0.9\n\
+		 greylist_delay_secs = 86400\nfirst_time_sender_delay_secs = 300",
+	)
+	.expect("limits load");
+	assert!(config.greylisting_anywhere());
+	assert!(!load("").expect("loads").greylisting_anywhere());
+}

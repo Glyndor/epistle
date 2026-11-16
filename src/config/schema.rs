@@ -8,10 +8,9 @@ use serde::Deserialize;
 use super::defaults::{default_bulk_recipients, default_masked_addresses_max, default_yes};
 use super::{
 	Account, Acme, Alert, Alias, Antispam, AntispamScope, Api, Arc, Attachments, Auth, Boot,
-	Database,
-	Deliverability, Dkim, DnsProviders, DnsPublish, Ldap, Listener, Llm, LogFormat, MtaSts, Oauth,
-	Otel, OwnIpBlocklist, Privileges, Queue, Smtp, SrsDomain, Storage, SubjectPass, Tenant, Tls,
-	Transport, Webhook,
+	Database, Deliverability, Dkim, DnsProviders, DnsPublish, Ldap, Listener, Llm, LogFormat,
+	MtaSts, Oauth, Otel, OwnIpBlocklist, Privileges, Queue, Smtp, SrsDomain, Storage, SubjectPass,
+	Tenant, Tls, Transport, Webhook,
 };
 
 /// Top-level server configuration.

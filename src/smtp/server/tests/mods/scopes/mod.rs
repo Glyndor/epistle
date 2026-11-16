@@ -16,6 +16,7 @@ use crate::smtp::sink::MemorySink;
 mod attachments;
 mod favoured;
 mod refusals;
+mod thresholds;
 
 /// A scorer that finds every message spam, with a corpus it trusts.
 struct SpamScorer;

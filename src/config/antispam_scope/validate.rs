@@ -2,7 +2,9 @@
 
 use std::collections::HashSet;
 
-use super::{AntispamScope, AttachmentScope, SenderLists};
+use super::{
+	AntispamScope, AttachmentScope, MAX_FIRST_TIME_DELAY_SECS, MAX_GREYLIST_DELAY_SECS, SenderLists,
+};
 use crate::antispam::sender_lists::{Entry, MAX_ENTRIES};
 use crate::config::{AttachmentMode, Config, ConfigError, valid_extension, valid_mime_pattern};
 
@@ -51,6 +53,7 @@ impl Config {
 			}
 			check_sender_lists(&format!("{label} senders"), &scope.senders)?;
 			self.validate_scope_attachments(&label, &scope.attachments)?;
+			Self::validate_scope_numbers(&label, scope)?;
 		}
 		Ok(())
 	}
@@ -100,6 +103,42 @@ impl Config {
 			)));
 		}
 		Ok((kind, name))
+	}
+
+	/// The thresholds and delays of one scope.
+	fn validate_scope_numbers(label: &str, scope: &AntispamScope) -> Result<(), ConfigError> {
+		for (key, value) in [
+			("bayes_junk_at", scope.bayes_junk_at),
+			("bayes_reject_at", scope.bayes_reject_at),
+		] {
+			if value.is_some_and(|value| !(0.0..=1.0).contains(&value)) {
+				return Err(invalid(format!("{label} {key} must be in [0.0, 1.0]")));
+			}
+		}
+		if let (Some(junk), Some(reject)) = (scope.bayes_junk_at, scope.bayes_reject_at)
+			&& reject < junk
+		{
+			return Err(invalid(format!(
+				"{label} bayes_reject_at ({reject}) must be at least bayes_junk_at ({junk})"
+			)));
+		}
+		if scope
+			.greylist_delay_secs
+			.is_some_and(|delay| delay > MAX_GREYLIST_DELAY_SECS)
+		{
+			return Err(invalid(format!(
+				"{label} greylist_delay_secs must be at most {MAX_GREYLIST_DELAY_SECS}"
+			)));
+		}
+		if scope
+			.first_time_sender_delay_secs
+			.is_some_and(|delay| delay > MAX_FIRST_TIME_DELAY_SECS)
+		{
+			return Err(invalid(format!(
+				"{label} first_time_sender_delay_secs must be at most {MAX_FIRST_TIME_DELAY_SECS}"
+			)));
+		}
+		Ok(())
 	}
 
 	/// A scope's attachment settings only tighten the server's.

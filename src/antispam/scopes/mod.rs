@@ -20,8 +20,13 @@
 
 use std::collections::HashMap;
 
+mod numbers;
+
 use crate::antispam::attachments::policy::Overlay;
 use crate::antispam::sender_lists::Matcher;
+use numbers::Overrides;
+pub use numbers::SpamNumbers;
+
 use crate::config::{AntispamScope, Config, SenderLists};
 
 /// Whose settings apply: a domain and, when one account owns the address,
@@ -62,6 +67,7 @@ struct Layer {
 	deny: Matcher,
 	deny_recipients: Matcher,
 	attachments: Overlay,
+	numbers: Overrides,
 }
 
 impl Layer {
@@ -71,12 +77,19 @@ impl Layer {
 			deny: Matcher::new(&lists.deny),
 			deny_recipients: Matcher::new(&lists.deny_recipients),
 			attachments: Overlay::default(),
+			numbers: Overrides::default(),
 		}
 	}
 
 	fn from_scope(scope: &AntispamScope) -> Self {
 		Self {
 			attachments: Overlay::from_scope(&scope.attachments),
+			numbers: Overrides {
+				junk_at: scope.bayes_junk_at,
+				reject_at: scope.bayes_reject_at,
+				greylist_delay_secs: scope.greylist_delay_secs,
+				first_time_delay_secs: scope.first_time_sender_delay_secs,
+			},
 			..Self::from_lists(&scope.senders)
 		}
 	}
@@ -86,6 +99,7 @@ impl Layer {
 			&& self.deny.is_empty()
 			&& self.deny_recipients.is_empty()
 			&& self.attachments.is_empty()
+			&& self.numbers.is_empty()
 	}
 }
 

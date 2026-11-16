@@ -2340,6 +2340,9 @@ max_attachment_bytes = 5000000
 | `senders.allow` | Envelope senders favoured when this server verified them. See "Allow lists never override authentication". |
 | `senders.deny` | Envelope senders refused at `RCPT TO` with `550 5.7.1 sender not accepted for this recipient`, before any data, so nothing is stored and no bounce goes to a forged address. |
 | `senders.deny_recipients` | Recipients an authenticated account may not write to, refused at `RCPT TO` with `550 5.7.1 sending to this recipient is not allowed`, with no queue entry. Unlike `[[transport]] kind = "fail"` it covers subdomains and answers at once. |
+| `bayes_junk_at`, `bayes_reject_at` | The junk and reject thresholds of the `[antispam]` section for the mail of this scope. Absent keeps the next wider scope's value. A reject threshold below the junk one in the same entry is refused at load; after resolution it is raised to the junk one, so the rejected band stays inside the junked one. |
+| `greylist_delay_secs` | Greylisting for this scope, in seconds (at most 86400). `0` turns it off here even when the server greylists; a number turns it on here even when the server does not (the greylist store is then built at start). |
+| `first_time_sender_delay_secs` | The wait of a sender never seen before (at most 300, the connection waits it out). Needs `[database]` like the server-wide key. |
 | `attachments` | `mode`, `macros`, `encrypted_archives`, `block_extensions`, `block_mime_types` and `max_attachment_bytes`, as in `[attachments]`, and only stronger. |
 
 **Entries** are `user@example.com` (that address), `example.com` (that domain
@@ -2366,6 +2369,16 @@ scope). A scope in reach adds its entries and never removes another's:
   for one recipient is refused for that recipient only, an allow only counts
   when every recipient's scopes favour the sender, and the attachment settings
   are the strictest of any recipient's.
+
+**Numbers.** For `bayes_junk_at`, `bayes_reject_at`, `greylist_delay_secs`
+and `first_time_sender_delay_secs` the most specific scope in reach wins:
+account, then domain, then tenant, then the server. There is no floor: a scope
+may set any valid value, looser or stricter than the server (the issue names
+none; a provider that wants one needs a decision). A message with several
+recipients is judged by the strictest values of its recipients: the lowest
+thresholds, a reject threshold if any recipient has one, and the longest
+delays. Quarantine digests, release rules, notice texts, a per-tenant audit log
+and operator notices are not part of this change.
 
 **Allow lists never override authentication.** An `allow` entry names the
 envelope sender, which anybody can write, so matching it is never enough. The

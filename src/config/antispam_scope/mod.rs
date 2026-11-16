@@ -11,7 +11,7 @@
 
 use serde::Deserialize;
 
-use super::{AttachmentMode, ContentAction};
+use super::{AttachmentMode, Config, ContentAction};
 
 mod validate;
 
@@ -76,7 +76,7 @@ impl AttachmentScope {
 }
 
 /// One `[[antispam_scope]]` entry.
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct AntispamScope {
 	/// The `name` of a `[[tenant]]`: every domain of the tenant.
@@ -91,6 +91,38 @@ pub struct AntispamScope {
 	pub senders: SenderLists,
 	/// Attachment tightening.
 	pub attachments: AttachmentScope,
+	/// `bayes_junk_at` for the mail of this scope. Absent keeps the
+	/// next wider scope's value.
+	pub bayes_junk_at: Option<f64>,
+	/// `bayes_reject_at` for the mail of this scope. Absent keeps the next
+	/// wider scope's value, which may be none.
+	pub bayes_reject_at: Option<f64>,
+	/// Greylisting for the mail of this scope, in seconds: `0` turns it off
+	/// here, a number turns it on or changes the delay, even when the
+	/// server does not greylist. Absent keeps the next wider scope's value.
+	pub greylist_delay_secs: Option<u64>,
+	/// The delay of a sender this server has never seen, in seconds (see
+	/// the top-level `first_time_sender_delay_secs`), at most 300. It needs
+	/// `[database]`, as the server-wide one does. Absent keeps the next wider
+	/// scope's value.
+	pub first_time_sender_delay_secs: Option<u64>,
+}
+
+/// Longest first-time delay a scope may set: the connection waits it out.
+pub const MAX_FIRST_TIME_DELAY_SECS: u64 = 300;
+/// Longest greylist delay a scope may set: a day, the life of a triplet.
+pub const MAX_GREYLIST_DELAY_SECS: u64 = 86_400;
+
+impl Config {
+	/// Whether greylisting is on anywhere: the server-wide delay, or the
+	/// delay of any scope. The store is built when it is.
+	pub fn greylisting_anywhere(&self) -> bool {
+		self.greylist_delay_secs > 0
+			|| self
+				.antispam_scopes
+				.iter()
+				.any(|scope| scope.greylist_delay_secs.is_some_and(|delay| delay > 0))
+	}
 }
 
 #[cfg(test)]
