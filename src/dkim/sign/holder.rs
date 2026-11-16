@@ -6,7 +6,7 @@
 //! picks the selector, so the `s=` it writes always names the key that
 //! signed even while a rotation replaces that key. Today the holder runs in
 //! the same process as the code that reads the message; the interface is
-//! the boundary a signing service takes over (`docs/operations/serve-split.md`).
+//! the boundary a signing service takes over.
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;

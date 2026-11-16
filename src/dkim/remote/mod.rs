@@ -19,7 +19,7 @@
 //! A signer that cannot be reached is [`RemoteError::Unavailable`], which
 //! is not the in-process "not signed" outcome: the caller must not send the
 //! message without the signature on that error. Nothing in `epistle serve`
-//! runs this yet (`docs/operations/serve-split.md`, step 3 of the order).
+//! runs this yet.
 
 mod client;
 pub mod frame;
