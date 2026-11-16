@@ -26,10 +26,10 @@ pub(super) fn quoted(value: &str) -> String {
 
 /// The generic temporary answer a terse server gives for anything that
 /// asks the sender to try again: it names no check, list, policy or limit.
-const TRY_LATER: &str = "try again later";
+pub(super) const TRY_LATER: &str = "try again later";
 
 /// The generic answer a terse server gives for a message it refuses.
-const REFUSED: &str = "message refused";
+pub(super) const REFUSED: &str = "message refused";
 
 /// `550 5.7.23`: `ip` is not authorized to send for `domain`.
 pub(super) fn spf_failed(detail: RefusalDetail, ip: IpAddr, domain: &str) -> Reply {

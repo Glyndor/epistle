@@ -2590,6 +2590,7 @@ max_attachment_bytes = 5000000
 | `greylist_delay_secs` | Greylisting for this scope, in seconds (at most 86400). `0` turns it off here even when the server greylists; a number turns it on here even when the server does not (the greylist store is then built at start). |
 | `first_time_sender_delay_secs` | The wait of a sender never seen before (at most 300, the connection waits it out). Needs `[database]` like the server-wide key. |
 | `attachments` | `mode`, `macros`, `encrypted_archives`, `block_extensions`, `block_mime_types` and `max_attachment_bytes`, as in `[attachments]`, and only stronger. |
+| `checks` | `dkim`, `dkim_require_signature`, `arc` and `reverse_dns`: whether the DKIM, ARC and reverse-DNS checks of inbound mail only annotate or refuse. See "Strict checks per scope" below. |
 
 **Entries** are `user@example.com` (that address), `example.com` (that domain
 and not its subdomains) and `*.example.com` (every subdomain at any depth, and
@@ -2625,6 +2626,53 @@ recipients is judged by the strictest values of its recipients: the lowest
 thresholds, a reject threshold if any recipient has one, and the longest
 delays. Quarantine digests, release rules, notice texts, a per-tenant audit log
 and operator notices are not part of this change.
+
+**Strict checks per scope.** `[antispam_scope.checks]` turns the DKIM, ARC and
+reverse-DNS results of unauthenticated inbound mail from a note in the headers
+into a refusal, for the recipients of that scope only:
+
+```toml
+[[antispam_scope]]
+domain = "example.org"
+[antispam_scope.checks]
+dkim = "reject"                 # off | annotate | reject
+dkim_require_signature = false  # true: also refuse mail with no passing signature
+arc = "annotate"
+reverse_dns = "reject"
+```
+
+| Key | Default | `annotate` | `reject` |
+|---|---|---|---|
+| `dkim` | `annotate` | The result is in `Authentication-Results` (today's behaviour). `off` is the same: DMARC needs the result, so DKIM is always evaluated. | Every signature failed: `550 5.7.21`. A DNS error on a key: `451 4.7.20`. |
+| `dkim_require_signature` | `false` | Not used. | With `dkim = "reject"`, mail with no passing signature is refused with `550 5.7.20`, including mail from a domain that publishes no DKIM key. |
+| `arc` | `off` | `arc=pass`, `fail` or `none` is added to `Authentication-Results`. `off` is today's behaviour: the chain is only read to seal. | A broken chain: `550 5.7.29`. A DNS error: `451 4.7.29`. No chain is never refused. |
+| `reverse_dns` | `off` | `iprev=pass`, `fail`, `none` or `temperror` is added to `Authentication-Results`. `off` is today's behaviour: no PTR lookup. | A missing PTR, or none whose name resolves back to the address: `550 5.7.25`. A DNS error: `451 4.7.25`. |
+
+Rules, the same for the three checks:
+
+- A scope that sets nothing changes nothing, and so does a server with no
+  `[[antispam_scope]]`. The default is the server's own behaviour today, so
+  the ARC and reverse-DNS checks are `off` until a scope turns them on
+  (there is no server-wide `[antispam]` key for them).
+- `reject` never refuses on a lookup that failed: a temporary DNS error is a
+  `4xx`, the sender retries, and only a result that says the check failed is
+  a `5xx`.
+- A sender whose domain publishes no DKIM key, or that does not sign, is not
+  refused by `dkim = "reject"` unless `dkim_require_signature = true` says so
+  for the domain.
+- The most specific scope in reach wins for a recipient (account, then
+  domain, then tenant); a message for several recipients gets the strictest
+  value any of them has, `reject` over `annotate` over `off`, and is refused
+  as a whole, as with `bayes_reject_at`: one transaction that names recipients
+  of two scopes with different settings is refused for both, because SMTP
+  answers once for the whole message. Splitting such a transaction with a
+  `452` at `RCPT TO` is not done.
+- The refusal text follows `[smtp] reject_detail` like the SPF and DMARC
+  ones. The checks run with the SPF check: they need `[dns]` and an
+  unauthenticated peer, and a message from a logged-in account is not
+  touched.
+- Not part of this setting: `5.7.22` (a signature that passes but not for the
+  author's domain), a per-listener value and a counter in the metrics.
 
 **Allow lists never override authentication.** An `allow` entry names the
 envelope sender, which anybody can write, so matching it is never enough. The
@@ -2735,6 +2783,7 @@ How the queue delivers:
 - **Timeouts** (RFC 5321 section 4.5.3.2, fixed): connect 30 s per exchanger (at most two of its addresses, 15 s each), greeting 5 min, EHLO, MAIL and other commands 5 min, each RCPT 5 min, DATA 2 min, each 64 KiB block of the message 3 min, the reply to the final dot 10 min, the STARTTLS handshake 60 s, QUIT 30 s. One whole delivery attempt to a domain, every exchanger and step together, ends after 1 hour. A timeout defers the recipients to their retry schedule.
 - **Next exchanger.** A failure before the mail transaction begins (a refused or silent connection, a `4xx` or silent greeting, a failed TLS handshake) moves on to the next MX in the same attempt, at most five per attempt, still only those MTA-STS permits and with DANE checked per host. Once `MAIL` is sent, the replies are about the message and stand.
 - **Slowing down.** A `421`, any `4.7.x` reply, or a `451`/`452` about a rate or a limit makes the recipients of that conversation wait for the next step of `backoff_steps` (an attempt counted), and holds their domain and the exchanger host that answered while they wait: no conversation starts with a held domain, every other message to it waits too (no attempt counted), and no other domain served by a held exchanger connects to that host either, so many domains hosted by one provider share its hold. The spool is the only record: each such recipient keeps its next attempt at the end of the wait and counts its slow-down deferrals in a row, which pick the next step and only go back to zero with any other answer, so the backoff grows across holds that ran out and starts over only after a delivery. There is no separate hold table to fill, evict or lose: a restart reads the holds back from the spool. `epistle queue destinations` lists them and `epistle queue release-destination` makes the waiting recipients due at once. A `452 4.5.3` (too many recipients) only sends the recipients left over in another transaction at once.
+- **Local failures.** A failure on this side of the conversation, with no reply of a server to quote, carries an enhanced status code and one fixed sentence that names the cause, in the delivery log, in `reason` of the webhook events and as `Diagnostic-Code: X-epistle; <sentence>` in the report to the sender. TLS required (MTA-STS enforce, DANE, `REQUIRETLS`) and not offered is `X.7.10`; a failed handshake, a certificate that matches no TLSA record, a TLSA lookup that fails, an MTA-STS policy that allows none of the mail servers and a DNSSEC failure are `X.7.5`; an unreachable mail server is `X.4.1`; a failed MX lookup is `X.4.3`. They are always retried (an MTA-STS or DANE failure never falls back to plain delivery), so the delay notice says `4.x.y` and the failure notice sent at expiry says `5.x.y`. Fixed behaviour, no setting. The list is also in [headers.md](headers.md).
 
 These keys are read when the server starts: after `epistle limits set` the command restarts the mail service of a stack it manages, or says the server must be restarted.
 

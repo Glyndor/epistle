@@ -6,6 +6,7 @@ pub mod cancel;
 pub mod client;
 pub mod destination;
 pub mod limits;
+pub(crate) mod local_failure;
 pub mod reply;
 pub(crate) mod resolver;
 pub mod schedule;

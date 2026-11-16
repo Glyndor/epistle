@@ -5,6 +5,7 @@ use super::Worker;
 use super::conversation::Conversation;
 use crate::dane::rrset::TlsaRrset;
 use crate::queue::client::{self, DeliveryError, Trace};
+use crate::queue::local_failure::LocalFailure;
 use crate::queue::resolver::{BoxedStream, Connection, MxSecurity};
 use crate::queue::tls_outcome::{STS_POLICY_INVALID, TlsOutcome};
 use crate::storage::SpoolEntry;
@@ -71,12 +72,8 @@ impl Worker {
 			Ok(records) => records,
 			Err(crate::spf::DnsFailure::Temporary) if route.tls_optional => TlsaRrset::Absent,
 			Err(crate::spf::DnsFailure::Temporary) => {
-				let reason = format!("transient TLSA lookup failure for {server_name}");
-				let conversation = Conversation::all(
-					route.recipients,
-					Some(server_name),
-					DeliveryError::Transient(reason),
-				);
+				let error = LocalFailure::TlsaLookup.transient(&server_name, "DNS failure");
+				let conversation = Conversation::all(route.recipients, Some(server_name), error);
 				return (conversation, true);
 			}
 		};

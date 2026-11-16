@@ -13,7 +13,10 @@ use serde::Deserialize;
 
 use super::{AttachmentMode, Config, ContentAction};
 
+mod checks;
 mod validate;
+
+pub use checks::{CheckPolicy, CheckScope};
 
 /// Sender and recipient lists of one scope. See
 /// [`crate::antispam::sender_lists`] for the entry shapes.
@@ -106,6 +109,10 @@ pub struct AntispamScope {
 	/// `[database]`, as the server-wide one does. Absent keeps the next wider
 	/// scope's value.
 	pub first_time_sender_delay_secs: Option<u64>,
+	/// Whether the DKIM, ARC and reverse-DNS checks of the mail of this
+	/// scope only annotate or refuse. Absent keys keep the next wider
+	/// scope's value.
+	pub checks: CheckScope,
 }
 
 /// Longest first-time delay a scope may set: the connection waits it out.

@@ -156,6 +156,19 @@ impl Server {
 						_ => {}
 					}
 
+					// DKIM, ARC and reverse DNS, as the recipients' scopes ask:
+					// a refusal here, or entries for the header below.
+					let strict = self
+						.strict_checks(
+							dns.as_ref(),
+							&message.data,
+							ip,
+							from.as_deref(),
+							&dkim_results,
+							self.checks(message),
+						)
+						.await?;
+
 					let mut methods: Vec<String> = Vec::new();
 
 					let mut spf_result = format!("spf={}", outcome.as_str());
@@ -181,6 +194,7 @@ impl Server {
 						dmarc_result.push_str(&format!(" header.from={from}"));
 					}
 					methods.push(dmarc_result);
+					methods.extend(strict);
 
 					auth_headers.push_str(&format_auth_results(&self.hostname, &methods));
 

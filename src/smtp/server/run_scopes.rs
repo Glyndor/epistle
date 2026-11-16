@@ -3,7 +3,7 @@
 //! Split from `run_deliver.rs` to keep both under the code-line limit.
 
 use crate::antispam::attachments::policy::Overlay;
-use crate::antispam::scopes::{SpamNumbers, Target};
+use crate::antispam::scopes::{Checks, SpamNumbers, Target};
 use crate::dmarc::author::{AuthorDomain, author_domain};
 use crate::smtp::address::Address;
 use crate::smtp::directory::Resolution;
@@ -85,6 +85,15 @@ impl Server {
 		match self.scopes.as_deref().filter(|scopes| !scopes.is_inert()) {
 			Some(scopes) => scopes.spam_numbers(&self.recipient_targets(message), server),
 			None => server,
+		}
+	}
+
+	/// What the DKIM, ARC and reverse-DNS checks do for `message`: the
+	/// scopes of its recipients, the strictest of them.
+	pub(super) fn checks(&self, message: &AcceptedMessage) -> Checks {
+		match self.scopes.as_deref().filter(|scopes| !scopes.is_inert()) {
+			Some(scopes) => scopes.checks(&self.recipient_targets(message)),
+			None => Checks::default(),
 		}
 	}
 

@@ -159,3 +159,42 @@ fn thresholds_and_delays_of_a_scope_are_checked() {
 	assert!(config.greylisting_anywhere());
 	assert!(!load("").expect("loads").greylisting_anywhere());
 }
+
+#[test]
+fn the_checks_of_a_scope_are_validated() {
+	for value in ["\"block\"", "\"Reject\"", "true", "1"] {
+		for key in ["dkim", "arc", "reverse_dns"] {
+			refused(
+				&format!(
+					"[[antispam_scope]]\ndomain = \"example.org\"\n[antispam_scope.checks]\n{key} = {value}"
+				),
+				key,
+			);
+		}
+	}
+	refused(
+		"[[antispam_scope]]\ndomain = \"example.org\"\n[antispam_scope.checks]\ndkim_require_signature = \"yes\"",
+		"dkim_require_signature",
+	);
+	refused(
+		"[[antispam_scope]]\ndomain = \"example.org\"\n[antispam_scope.checks]\nspf = \"reject\"",
+		"spf",
+	);
+	let config = load(
+		"[[antispam_scope]]\ndomain = \"example.org\"\n[antispam_scope.checks]\n\
+		 dkim = \"reject\"\ndkim_require_signature = true\narc = \"annotate\"\nreverse_dns = \"off\"",
+	)
+	.expect("loads");
+	let checks = config.antispam_scopes[0].checks;
+	assert_eq!(checks.dkim, Some(crate::config::CheckPolicy::Reject));
+	assert_eq!(checks.dkim_require_signature, Some(true));
+	assert_eq!(checks.arc, Some(crate::config::CheckPolicy::Annotate));
+	assert_eq!(checks.reverse_dns, Some(crate::config::CheckPolicy::Off));
+	assert!(
+		load("[[antispam_scope]]\ndomain = \"example.org\"")
+			.expect("loads")
+			.antispam_scopes[0]
+			.checks
+			.is_empty()
+	);
+}

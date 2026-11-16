@@ -180,3 +180,32 @@ async fn tampered_seal_signature_fails() {
 		ChainValidation::Fail
 	);
 }
+
+#[tokio::test]
+async fn a_dns_error_on_a_key_is_not_a_broken_chain() {
+	use super::super::validate::validate_checked;
+	struct Broken;
+	impl DnsLookup for Broken {
+		fn txt(&self, _name: &str) -> Fut<'_, Vec<String>> {
+			Box::pin(async { Err(DnsFailure::Temporary) })
+		}
+		fn addresses(&self, _name: &str) -> Fut<'_, Vec<IpAddr>> {
+			Box::pin(async { Ok(Vec::new()) })
+		}
+		fn mx(&self, _name: &str) -> Fut<'_, Vec<String>> {
+			Box::pin(async { Ok(Vec::new()) })
+		}
+	}
+	let key = new_key();
+	let message = sealed_message(&key, ChainValidation::None);
+	assert_eq!(
+		validate_checked(&Broken, &message).await,
+		Err(DnsFailure::Temporary)
+	);
+	// The seal still reads it as a broken chain.
+	assert_eq!(validate(&Broken, &message).await, ChainValidation::Fail);
+	assert_eq!(
+		validate_checked(&dns_for(&key), &message).await,
+		Ok(ChainValidation::Pass)
+	);
+}

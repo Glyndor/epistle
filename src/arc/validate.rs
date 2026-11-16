@@ -7,46 +7,64 @@
 //! inconsistent `cv` collapses the whole chain to `fail`.
 
 use crate::dkim::DkimOutcome;
-use crate::spf::DnsLookup;
+use crate::spf::{DnsFailure, DnsLookup};
 
 use super::chain::{ChainValidation, Instance, extract};
 use super::signature::{parse_message_signature, parse_seal};
 use super::{ams, seal};
 
-/// Validate the ARC chain on a raw message.
+/// Validate the ARC chain on a raw message. A DNS error while reading a key
+/// counts as a broken chain, which is what a seal needs to say (RFC 8617
+/// section 5.2); [`validate_checked`] tells the two apart.
 pub async fn validate(dns: &dyn DnsLookup, raw_message: &[u8]) -> ChainValidation {
+	validate_checked(dns, raw_message)
+		.await
+		.unwrap_or(ChainValidation::Fail)
+}
+
+/// Validate the ARC chain on a raw message, and say when the answer is not
+/// known because a DNS lookup failed temporarily, so the caller can retry
+/// later instead of treating the chain as broken.
+pub async fn validate_checked(
+	dns: &dyn DnsLookup,
+	raw_message: &[u8],
+) -> Result<ChainValidation, DnsFailure> {
 	let instances = match extract(raw_message) {
 		Ok(Some(instances)) => instances,
 		// No ARC headers at all: a fresh chain.
-		Ok(None) => return ChainValidation::None,
+		Ok(None) => return Ok(ChainValidation::None),
 		// Structurally broken.
-		Err(_) => return ChainValidation::Fail,
+		Err(_) => return Ok(ChainValidation::Fail),
 	};
 
 	if !cv_values_consistent(&instances) {
-		return ChainValidation::Fail;
+		return Ok(ChainValidation::Fail);
 	}
 
 	// The most recent ARC-Message-Signature must verify against the message.
 	let newest = instances.last().expect("non-empty chain");
 	let Ok(ams) = parse_message_signature(&newest.message_signature) else {
-		return ChainValidation::Fail;
+		return Ok(ChainValidation::Fail);
 	};
-	if ams::verify(dns, &ams, &newest.message_signature, raw_message).await != DkimOutcome::Pass {
-		return ChainValidation::Fail;
+	match ams::verify(dns, &ams, &newest.message_signature, raw_message).await {
+		DkimOutcome::Pass => {}
+		DkimOutcome::TempError => return Err(DnsFailure::Temporary),
+		_ => return Ok(ChainValidation::Fail),
 	}
 
 	// Every ARC-Seal in the chain must verify.
 	for instance in &instances {
 		let Ok(parsed) = parse_seal(&instance.seal) else {
-			return ChainValidation::Fail;
+			return Ok(ChainValidation::Fail);
 		};
-		if seal::verify(dns, &parsed, &instance.seal, &instances).await != DkimOutcome::Pass {
-			return ChainValidation::Fail;
+		match seal::verify(dns, &parsed, &instance.seal, &instances).await {
+			DkimOutcome::Pass => {}
+			DkimOutcome::TempError => return Err(DnsFailure::Temporary),
+			_ => return Ok(ChainValidation::Fail),
 		}
 	}
 
-	ChainValidation::Pass
+	Ok(ChainValidation::Pass)
 }
 
 /// Each seal's recorded `cv` must match its position: `none` on the first
