@@ -75,6 +75,9 @@ pub struct BanPolicy {
 	/// usual mobile / home / office / cafe combinations without the table
 	/// growing without bound.
 	pub known_network_max_per_account: u32,
+	/// How many times `threshold` the account subject needs; see
+	/// [`ACCOUNT_THRESHOLD_FACTOR`], its default.
+	pub account_threshold_factor: u32,
 }
 
 /// How long the success path throttles its row writes. One row per
@@ -100,11 +103,13 @@ impl Default for BanPolicy {
 			// and not for any kind of fleet use.
 			known_network_window_secs: 30 * 24 * 60 * 60,
 			known_network_max_per_account: 32,
+			account_threshold_factor: ACCOUNT_THRESHOLD_FACTOR,
 		}
 	}
 }
 
-/// How many times the client threshold the account subject needs. An account
+/// The default of [`BanPolicy::account_threshold_factor`]: how many times the
+/// client threshold the account subject needs. An account
 /// is attacked from many clients at once, and one client alone must not be able
 /// to fire its ban: a single client is stopped by its own counters after
 /// `threshold` failures, so it can never reach `ACCOUNT_THRESHOLD_FACTOR`
@@ -113,11 +118,11 @@ pub const ACCOUNT_THRESHOLD_FACTOR: u32 = 4;
 
 impl BanPolicy {
 	/// The failures within the window that fire a ban for `subject`: the plain
-	/// threshold for a client or a pair, [`ACCOUNT_THRESHOLD_FACTOR`] times it
+	/// threshold for a client or a pair, `account_threshold_factor` times it
 	/// for an account.
 	pub fn threshold_for(&self, subject: &str) -> u32 {
 		if subject.starts_with("account:") {
-			self.threshold.saturating_mul(ACCOUNT_THRESHOLD_FACTOR)
+			self.threshold.saturating_mul(self.account_threshold_factor)
 		} else {
 			self.threshold
 		}

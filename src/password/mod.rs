@@ -1,7 +1,9 @@
 //! Global password policy — enforced identically on every path that sets or
 //! changes an account password (the management API and the CLI).
 //!
-//! Per the org security standard: length 12–64, **printable ASCII only** by
+//! Per the org security standard: length 12–64 by default (`[auth]
+//! min_password_length` and `max_password_length` move it within the floors in
+//! [`limits`]), **printable ASCII only** by
 //! default (no control characters, no Unicode), **no composition rules** (ASVS
 //! v4 §2.1.9 and NIST 800-63B advise against them), and rejection of
 //! **known-breached / common passwords** via a bundled local list — the
@@ -21,6 +23,8 @@
 use std::collections::HashSet;
 use std::sync::OnceLock;
 
+pub mod forbidden;
+pub mod limits;
 pub mod policy;
 
 pub use policy::Policy;
@@ -46,6 +50,8 @@ pub enum Rejection {
 	IllegalCharacter,
 	/// Matches an entry in the bundled known-breached / common-password list.
 	Breached,
+	/// Matches an entry in the operator's own list of forbidden passwords.
+	Forbidden,
 }
 
 impl Rejection {
@@ -53,14 +59,15 @@ impl Rejection {
 	/// over the API or print at the CLI.
 	pub fn message(self) -> &'static str {
 		match self {
-			Rejection::TooShort | Rejection::TooLong => {
-				"Password must be between 12 and 64 characters."
-			}
+			Rejection::TooShort | Rejection::TooLong => limits::message(),
 			Rejection::IllegalCharacter => {
 				"Password may only contain printable ASCII characters (letters, digits, space and standard punctuation)."
 			}
 			Rejection::Breached => {
 				"Password appears in a known breach or common-password list; choose a different one."
+			}
+			Rejection::Forbidden => {
+				"Password is not allowed on this server; choose a different one."
 			}
 		}
 	}
@@ -88,7 +95,10 @@ pub(super) static BREACHED_RAW_TOP100K: &str = include_str!("breached_top100k.tx
 fn survives_filter(entry: &str) -> bool {
 	let lowered = entry.to_ascii_lowercase();
 	let length = lowered.chars().count();
-	if !(MIN_LENGTH..=MAX_LENGTH).contains(&length) {
+	// Judged against the widest limits the loader accepts, not the ones in
+	// force: the set is built once, and an operator who lowers the minimum
+	// later must still be protected by the entries that were short enough.
+	if !(limits::MIN_FLOOR..=limits::MAX_CEILING).contains(&length) {
 		return false;
 	}
 	lowered.bytes().all(|byte| (0x20..=0x7E).contains(&byte))

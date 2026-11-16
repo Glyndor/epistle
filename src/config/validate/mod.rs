@@ -49,6 +49,8 @@ impl Config {
 		self.validate_privileges()?;
 		self.validate_transport()?;
 		self.validate_oauth()?;
+		self.bans.validate().map_err(ConfigError::Invalid)?;
+		self.validate_auth()?;
 		self.validate_ldap()?;
 		self.validate_antispam_llm()?;
 		self.validate_scanner()?;

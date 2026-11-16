@@ -35,7 +35,7 @@ impl super::Directory {
 		let below_current = self
 			.scram
 			.get(&account.to_ascii_lowercase())
-			.is_some_and(|stored| stored.iterations < crate::smtp::scram::SCRAM_ITERATIONS);
+			.is_some_and(|stored| stored.iterations < crate::smtp::scram::iterations::current());
 		if below_current {
 			upgrader.upgrade(account, password);
 		}

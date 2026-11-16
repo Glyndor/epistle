@@ -459,6 +459,22 @@ codes. See [the API guide](api.md#turn-it-on).
 | `token_hash` | Optional `sha256:<hex>` (from `epistle token-hash`) or legacy argon2id PHC string. Omit for labelled keys only; an empty string is invalid. |
 | `trusted_proxies` | Optional CIDR list for trusted reverse proxies. Default `[]`. See below. |
 | `admins` | Optional list of account names allowed to authenticate to the admin panel (via `POST /api/v1/auth/verify`). Empty (default) means no account can administer the panel. |
+| `limiter` | The limits on failed bearer sign-ins and on password checks, the `[api.limiter]` table below. |
+
+#### `[api.limiter]`
+Failed bearer attempts are counted per client (an IPv4 address or an IPv6 /64)
+in a sliding window; a client that spends its budget is answered `429` until
+the window ends, before its token is looked at. An absent table keeps every
+default. Each value has a bound on the weak side that the loader enforces.
+
+| Key | Meaning |
+|---|---|
+| `max_failures` | Failed attempts one client may make per window. Default `20`. Floor: `1` to `100`. |
+| `window_secs` | The window, in seconds. Default `60`. Floor and ceiling: `30` to `3600`. |
+| `network_factor` | An IPv6 /48 may fail this many times a client's budget, which is what stops a client rotating through the /64s of one allocation. Default `8`. Floor: `1` to `32`. |
+| `global_max_failures` | Failures from all clients in a window after which failing requests answer `429` instead of `401`; a valid token is never refused because of it. Default `2000`. Floor: `100` to `20000`. |
+| `max_concurrent_hashes` | Argon2 checks of the configured bearer token that run at once. Default `2`. Bounds: `1` to `64`. |
+| `hash_queue` | Argon2 checks that may wait for a turn; the next one is told `429`. Default `64`. Bounds: `1` to `4096`. |
 
 `trusted_proxies` is an optional list of IPv4 and IPv6 CIDR networks, empty by
 default. Invalid CIDRs stop configuration loading. For example:
@@ -1067,6 +1083,13 @@ section, an unknown key fails the config load.
 |---|---|
 | `scram` | Offer SCRAM-SHA-256 (and SCRAM-SHA-256-PLUS where channel binding is available) and store a SCRAM verifier for each dynamic account (default `true`). With `false` the mechanisms are not advertised on SMTP, IMAP or ManageSieve, an `AUTH`/`AUTHENTICATE` with them is refused exactly like an unknown mechanism, no verifier is derived when an account is created or its password set (CLI, `/api/v1/accounts`, SCIM), and the next password change of an account that has one drops it. PLAIN and LOGIN stay available. Over SMTP the exchange ends with a `334` challenge carrying the server-final and an empty-line acknowledgement from the client (see [security](security.md#authentication)); a client that only speaks PLAIN or LOGIN keeps working. |
 | `unicode_passwords` | Accept non-ASCII passwords and normalise with NFKC on both set and verify (RFC 8265 OpaqueString profile, in spirit RFC 5802 SASLprep / RFC 7677). Default `false` keeps the historical ASCII-only policy. With the flag on the validator accepts any non-control Unicode scalar, the length is counted in scalars (still 12-64 on the normalised form), and the argon2id hash and the SCRAM verifier are derived from the same canonical form — a password set with one keyboard verifies from another. Scrambling on the client: SCRAM-SHA-256 clients already do SASLprep on the supplied credential, so a SCRAM login from a non-ASCII password works without further config. The flag is opt-in because older IMAP/POP clients mangle non-ASCII in AUTH PLAIN/LOGIN on the wire, and the operator who flips the flag is opting the deployment into the expectation that every client normalises consistently. Absent stays the historical default. |
+| `min_password_length` | Fewest characters a password may have. Default `12`. Floor the loader enforces: `8`; it must not be above `max_password_length`. The bundled breach list is consulted whatever the minimum. |
+| `max_password_length` | Most characters a password may have. Default `64`. Floor and ceiling the loader enforces: `64` to `1024` (NIST SP 800-63B asks every verifier to accept 64; a longer limit is for operators who want passphrases of any length). |
+| `forbidden_passwords_file` | Path to the operator's own list of refused passwords, checked next to the bundled breach list: one per line, `#` starts a comment, blank lines and case are ignored (`Example Corp 2026` refuses `example corp 2026`). Default unset. Read when the configuration is loaded: a file that cannot be read, is not a regular file or is larger than 16 MiB stops the server. A password on it is refused with its own message. |
+| `argon2_memory_kib` | Memory, in KiB, of a new argon2id password hash. Default `19456` (19 MiB). Floor and ceiling: `19456` to `1048576`. The floor, `argon2_iterations = 2` and `argon2_parallelism = 1` are the minimum of the OWASP Password Storage Cheat Sheet, so the cost can be raised and never lowered below it. Each hash records its own parameters: changing these never invalidates a stored password, only new hashes carry the new cost. Each running hash holds this much memory, so raise it together with the hash concurrency of `[api.limiter]`. |
+| `argon2_iterations` | Passes of a new argon2id hash. Default `2`. Floor and ceiling: `2` to `20`. |
+| `argon2_parallelism` | Lanes of a new argon2id hash. Default `1`. Floor and ceiling: `1` to `16`. |
+| `scram_iterations` | PBKDF2-HMAC-SHA256 iterations of a new SCRAM verifier. Default `600000`. Floor and ceiling: `600000` (the OWASP figure) to `10000000`, so it can only be raised. A verifier keeps the count it was derived with; one below this value is replaced the next time its account signs in with a cleartext password, which is also how a raised count reaches the accounts that already have one. |
 
 ### `[auth] unicode_passwords` (`[auth] unicode_passwords = true`)
 
@@ -1103,6 +1126,26 @@ The setting is hot-disabled by the absence in an existing `[auth]` block:
 configs that predate the field stay ASCII-only. There is no on-the-wire
 advertisement of which policy the server is running; clients discover
 it by trying a non-ASCII credential.
+
+### `[bans]`
+The sign-in ban policy. `threshold` failed sign-ins inside `window_secs` ban
+the client (or the account and client pair) for `base_secs`; each next ban of
+the same subject doubles, up to `max_secs`; the account subject needs
+`account_threshold_factor` times the failures, so one client alone cannot ban
+an account. Needs the `[database]` store, like the bans themselves. An absent
+section keeps every default, which is what the server did before these were
+settings. Each value is bounded on the weak side, because more tolerated
+failures, a shorter window or a shorter ban make guessing cheaper; a value
+outside its bounds is a load error naming the key.
+
+| Key | Meaning |
+|---|---|
+| `threshold` | Failures inside the window that fire a ban. Default `5`. Floor and ceiling: `2` to `20`. |
+| `window_secs` | The rolling window, in seconds. Default `900`. Floor and ceiling: `300` to `86400`. |
+| `base_secs` | Length of the first ban, in seconds. Default `900`. Floor and ceiling: `300` to `86400`. |
+| `max_secs` | Longest ban, in seconds. Default `86400`. Floor and ceiling: `3600` to `2592000`, and not shorter than `base_secs`. |
+| `account_threshold_factor` | How many times `threshold` the account subject needs. Default `4`. Bounds: `2` to `8`. |
+| `known_network_max_per_account` | Networks kept per account on the known-network list. Default `32`. Bounds: `1` to `256`. The window of that list is `known_network_window_secs` at the top of the file. |
 
 ### `[oauth]`
 OAuth2/OIDC bearer-token verification (OAUTHBEARER/XOAUTH2) for IMAP/SMTP/JMAP.
@@ -1164,8 +1207,6 @@ the local error when no server answered; `remote` is the server that answered
 
 `test` is sent only by `epistle webhook test`, once, to check reachability and
 signature verification. It has a single fixed field, so receivers can acknowledge
-| `access_token_ttl_secs` | Lifetime of an access token the built-in authorization server issues (needs `signing_key` or `signing_key_file`; the loader refuses it otherwise). Default `3600`. Floor and ceiling the loader enforces: `60` to `86400`. A token is only checked against the revocation list and its account, never renewed, so a long lifetime is how long a revoked grant keeps working elsewhere; lowering the value later also refuses the tokens issued under the old one that outlive the new one. |
-| `refresh_token_ttl_secs` | Turns on refresh tokens (RFC 6749 section 6) and sets their lifetime, for example `2592000` for 30 days (needs `signing_key` or `signing_key_file`). Default unset: no refresh token is issued and `grant_type=refresh_token` answers `unsupported_grant_type`, as before. Floor and ceiling: `3600` to `31536000`, and not shorter than `access_token_ttl_secs`. With it set, every grant also returns a `refresh_token`, and each use of one returns a new one and retires the old one (rotation); the new one lives the full lifetime again, so an idle client stays signed in for that long. The scope of a refresh can be narrowed, never widened. A retired token that comes back means two parties hold it: the whole family of tokens that came from that grant is deleted and both are signed out. A family also ends when the account is disabled, removed or locked, when its password is changed or reset (any path: API, CLI, SCIM, `epistle rotate`), and when `POST /oauth/revoke` receives one of its tokens. Only a hash of each token is stored, in `oauth_refresh.json` under `data_dir`; an account keeps at most 50 families, the one that expires first making room for a new one. |
 it and otherwise ignore it:
 
 ```json

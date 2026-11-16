@@ -19,6 +19,9 @@ impl Config {
 				));
 			}
 		}
+		if let Some(api) = &self.api {
+			api.limiter.validate().map_err(ConfigError::Invalid)?;
+		}
 		Ok(())
 	}
 

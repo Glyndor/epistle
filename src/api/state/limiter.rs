@@ -125,6 +125,10 @@ impl ClientKey {
 /// client that never failed has no entry, so valid traffic costs nothing here.
 pub(super) struct ClientLimiters {
 	window: Duration,
+	/// Failures one client may make in a window.
+	client_max: u32,
+	/// Failures one IPv6 /48 may make in a window.
+	net_max: u32,
 	clients: HashMap<ClientKey, AuthLimiter>,
 	/// One budget per IPv6 /48, [`NET_BUDGET_FACTOR`] times a client's.
 	nets: HashMap<ClientKey, AuthLimiter>,
@@ -139,11 +143,25 @@ impl ClientLimiters {
 	pub(super) fn new(window: Duration) -> Self {
 		Self {
 			window,
+			client_max: AUTH_MAX_FAILURES,
+			net_max: AUTH_MAX_FAILURES.saturating_mul(NET_BUDGET_FACTOR),
 			clients: HashMap::new(),
 			nets: HashMap::new(),
 			global: AuthLimiter::with_max(window, Instant::now(), GLOBAL_MAX_FAILURES),
 			last_sweep: Instant::now(),
 		}
+	}
+
+	/// A limiter with the budgets of `[api.limiter]`.
+	pub(super) fn from_config(limits: &crate::config::ApiLimiter) -> Self {
+		let window = Duration::from_secs(limits.window_secs());
+		let client_max = limits.max_failures();
+		let mut limiters = Self::new(window);
+		limiters.client_max = client_max;
+		limiters.net_max = client_max.saturating_mul(limits.network_factor());
+		limiters.global =
+			AuthLimiter::with_max(window, Instant::now(), limits.global_max_failures());
+		limiters
 	}
 
 	/// The window length. Test-only.
@@ -223,13 +241,9 @@ impl ClientLimiters {
 				table.insert(key, limiter);
 			}
 		};
-		count(&mut self.clients, ClientKey::of(ip), AUTH_MAX_FAILURES);
+		count(&mut self.clients, ClientKey::of(ip), self.client_max);
 		if let Some(net) = ClientKey::net(ip) {
-			count(
-				&mut self.nets,
-				net,
-				AUTH_MAX_FAILURES.saturating_mul(NET_BUDGET_FACTOR),
-			);
+			count(&mut self.nets, net, self.net_max);
 		}
 	}
 

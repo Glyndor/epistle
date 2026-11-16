@@ -12,6 +12,10 @@ const NOT_SECRETS: &[(&str, &str)] = &[
 	("Oauth.public_key", "the public half of the signing key"),
 	("Dns.key_name", "the name of a TSIG key, not its secret"),
 	(
+		"Auth.forbidden_passwords_file",
+		"the path of the operator's list of refused passwords, which authenticates nothing",
+	),
+	(
 		"S3BlobConfig.access_key_id",
 		"the identifier half of the S3 key pair; the secret half has its own entry",
 	),

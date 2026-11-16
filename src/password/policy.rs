@@ -14,7 +14,8 @@ use std::borrow::Cow;
 
 use unicode_normalization::UnicodeNormalization;
 
-use super::{MAX_LENGTH, MIN_LENGTH, Rejection, breached_set};
+use super::limits::{self, Limits};
+use super::{Rejection, breached_set, forbidden};
 
 /// The runtime password policy. Both the validation gate (used by every
 /// caller that sets or rotates an account password) and the byte-for-byte
@@ -77,14 +78,18 @@ impl Policy {
 	/// callers usually run `validate` first and pass its result through here
 	/// anyway.
 	pub fn prepare<'a>(&self, password: &'a str) -> Result<Cow<'a, str>, Rejection> {
+		self.prepare_with(limits::current(), password)
+	}
+
+	/// [`Policy::prepare`] against explicit length `limits` instead of the ones
+	/// in force.
+	pub(super) fn prepare_with<'a>(
+		&self,
+		limits: Limits,
+		password: &'a str,
+	) -> Result<Cow<'a, str>, Rejection> {
 		if !self.unicode_passwords {
-			let length = password.chars().count();
-			if length < MIN_LENGTH {
-				return Err(Rejection::TooShort);
-			}
-			if length > MAX_LENGTH {
-				return Err(Rejection::TooLong);
-			}
+			check_length(limits, password.chars().count())?;
 			// Printable ASCII only: 0x20 (space) through 0x7E (`~`). This
 			// rejects control characters and every non-ASCII (multibyte
 			// UTF-8) byte in one pass, matching the pre-unicode behaviour.
@@ -95,13 +100,7 @@ impl Policy {
 		}
 		// NFKC first so the length and control checks see the canonical form.
 		let normalised: String = password.nfkc().collect();
-		let length = normalised.chars().count();
-		if length < MIN_LENGTH {
-			return Err(Rejection::TooShort);
-		}
-		if length > MAX_LENGTH {
-			return Err(Rejection::TooLong);
-		}
+		check_length(limits, normalised.chars().count())?;
 		if let Some(control) = normalised.chars().find(|c| is_control(*c)) {
 			// Avoid printing the scalar itself; reveal only the code point.
 			return Err(control_rejection(control));
@@ -114,7 +113,7 @@ impl Policy {
 	/// random candidate passes both and a known breach is refused by both.
 	pub fn validate(&self, password: &str) -> Result<(), Rejection> {
 		let prepared = self.prepare(password)?;
-		check_bundled_breach(&prepared)
+		check_lists(&prepared, forbidden::contains)
 	}
 
 	/// Build from the operator's `[auth]` configuration. Absent defaults to
@@ -127,14 +126,32 @@ impl Policy {
 	}
 }
 
-/// Case-insensitive breach lookup used by every `Policy` after the candidate
+/// The length rule: `length` characters against `limits`.
+fn check_length(limits: Limits, length: usize) -> Result<(), Rejection> {
+	if length < limits.min {
+		return Err(Rejection::TooShort);
+	}
+	if length > limits.max {
+		return Err(Rejection::TooLong);
+	}
+	Ok(())
+}
+
+/// Case-insensitive lookup in the bundled breach list and in the operator's
+/// own (`operator`, which answers for the lowercase form) after the candidate
 /// has cleared length and character-set. The bundled set is keyed by the
-/// lower-case form, so a candidate that only differs in capitalisation from
-/// a known breach still hits the row.
-fn check_bundled_breach(prepared: &str) -> Result<(), Rejection> {
+/// lower-case form, so a candidate that only differs in capitalisation from a
+/// known breach still hits the row.
+pub(super) fn check_lists(
+	prepared: &str,
+	operator: impl Fn(&str) -> bool,
+) -> Result<(), Rejection> {
 	let lowered = prepared.to_ascii_lowercase();
 	if breached_set().contains(lowered.as_str()) {
 		return Err(Rejection::Breached);
+	}
+	if operator(&lowered) {
+		return Err(Rejection::Forbidden);
 	}
 	Ok(())
 }

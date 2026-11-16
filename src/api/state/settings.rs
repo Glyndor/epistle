@@ -102,6 +102,18 @@ impl ApiState {
 		self
 	}
 
+	/// Apply `[api.limiter]`: the failure budgets of the bearer limiter and
+	/// the size of the argon2 gate. Must be set before the state is shared.
+	pub fn with_auth_limits(mut self, limits: &crate::config::ApiLimiter) -> Self {
+		if let Some(inner) = Arc::get_mut(&mut self.inner) {
+			inner.auth_limiter = std::sync::Mutex::new(ClientLimiters::from_config(limits));
+			inner.argon2_gate =
+				Arc::new(tokio::sync::Semaphore::new(limits.max_concurrent_hashes()));
+			inner.argon2_queue_max = limits.hash_queue();
+		}
+		self
+	}
+
 	/// Attach the built-in OAuth authorization server. Must be set before the
 	/// state is shared (it rebuilds the `Arc` inner). When unset, the `/oauth/*`
 	/// grant routes are absent and no tokens are issued.

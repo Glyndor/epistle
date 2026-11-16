@@ -42,6 +42,7 @@ fn policy() -> BanPolicy {
 		max_secs: 600,
 		known_network_window_secs: 60 * 60,
 		known_network_max_per_account: 32,
+		account_threshold_factor: 4,
 	}
 }
 

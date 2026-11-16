@@ -18,6 +18,10 @@ pub struct Api {
 	/// Networks allowed to supply the client address through X-Forwarded-For.
 	#[serde(default, deserialize_with = "trusted_proxies")]
 	pub trusted_proxies: Vec<crate::cidr::Cidr>,
+	/// Limits on failed bearer sign-ins and on password checks; see
+	/// [`crate::config::ApiLimiter`]. Absent keeps the built-in values.
+	#[serde(default)]
+	pub limiter: crate::config::ApiLimiter,
 }
 
 /// Maximum number of CIDR networks `trusted_proxies` may list. Beyond this

@@ -1,5 +1,7 @@
 //! SASL PLAIN credential parsing and verification (RFC 4616).
 
+pub mod cost;
+
 use argon2::Argon2;
 use argon2::password_hash::PasswordVerifier;
 use argon2::password_hash::phc::PasswordHash;
@@ -65,15 +67,24 @@ pub fn parse_plain(encoded: &str) -> Result<PlainCredentials, PlainError> {
 /// always the same, and the policy decision lives at one place per call
 /// site.
 pub fn hash_password(password: &str) -> Result<String, String> {
-	use argon2::password_hash::PasswordHasher;
 	use ring::rand::{SecureRandom, SystemRandom};
 
 	let mut salt = [0u8; 16];
 	SystemRandom::new()
 		.fill(&mut salt)
 		.map_err(|_| "cannot gather salt entropy".to_string())?;
-	Argon2::default()
-		.hash_password_with_salt(password.as_bytes(), &salt)
+	hash_password_with_cost(password, cost::current(), &salt)
+}
+
+/// [`hash_password`] at an explicit `cost` and `salt`, which the caller draws.
+pub(crate) fn hash_password_with_cost(
+	password: &str,
+	cost: cost::Argon2Cost,
+	salt: &[u8; 16],
+) -> Result<String, String> {
+	use argon2::password_hash::PasswordHasher;
+	cost.hasher()?
+		.hash_password_with_salt(password.as_bytes(), salt)
 		.map(|hash| hash.to_string())
 		.map_err(|error| error.to_string())
 }
