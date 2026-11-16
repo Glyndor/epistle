@@ -45,7 +45,7 @@ control, its test and the residual risks, see the [threat model](threat-model.md
   case-folded form) and only runs on inputs that have already cleared the
   12-to-64-character printable-ASCII gate, so a strong random credential
   is unaffected.
-- **Password character set**: length 12-64 printable ASCII by default.
+- **Password character set**: length 12-64 printable ASCII by default; `[auth] min_password_length` and `max_password_length` move the length within the floors of the configuration reference (8, and 64 as the lowest maximum), and `forbidden_passwords_file` adds the operator's own refused passwords.
   Operators that need non-ASCII passwords can opt in with
   `[auth] unicode_passwords = true`. With the flag on the policy accepts
   any non-control Unicode scalar, normalises with NFKC on both set and
@@ -75,7 +75,8 @@ control, its test and the residual risks, see the [threat model](threat-model.md
   `OK` that closes the `AUTHENTICATE` — so an IMAP client sees one message
   fewer than an SMTP one.
 - **SCRAM verifiers** stored next to the argon2id hash are derived with
-  600000 PBKDF2-HMAC-SHA256 iterations (the OWASP 2023 figure), so the
+  600000 PBKDF2-HMAC-SHA256 iterations by default (the OWASP 2023 figure, and
+  the floor of `[auth] scram_iterations`, which can only raise it), so the
   verifier is not a cheaper target than the hash for someone who reads
   `accounts.toml`. A verifier from an older version keeps the iteration
   count it was derived with, which the server announces in the exchange,
@@ -335,7 +336,8 @@ instead of being read as whichever primitive the verifier happened to use.
   listener (SMTP submission, IMAP, POP3, ManageSieve, the API, OAuth
   device and PKCE grants) records every password-authentication outcome
   into the `auth_failure` table and consults the `auth_ban` table
-  before doing any password hashing. The product context's defaults:
+  before doing any password hashing. The defaults, each one a setting in
+  `[bans]` with a floor the loader enforces:
   5 failed authentications within 15 minutes fire a ban; the first ban
   lasts 15 minutes, the next on the same subject doubles (30 minutes,
   then an hour, ...), capped at 24 hours. Failures are counted on three

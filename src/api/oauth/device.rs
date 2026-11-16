@@ -332,35 +332,35 @@ fn basic_auth(headers: &HeaderMap) -> Option<(String, String)> {
 }
 
 /// Redeem a `device_code` at the token endpoint (RFC 8628 §3.4–3.5). Returns the
-/// signed access-token JSON once approved, or the appropriate pending/error
-/// response. Enforces the minimum poll interval (`slow_down`), expiry
+/// approved account and scopes to issue tokens for, or the appropriate
+/// pending/error response. Enforces the minimum poll interval (`slow_down`), expiry
 /// (`expired_token`), and one-time consumption of the code on success.
-pub fn redeem_device_code(authz: &AuthzServer, device_code: &str) -> Response {
+pub fn redeem_device_code(
+	authz: &AuthzServer,
+	device_code: &str,
+) -> Result<(String, super::scopes::Scopes), super::Refusal> {
 	let now = now_secs();
 	let mut devices = authz.devices.lock().unwrap_or_else(|p| p.into_inner());
 	let Some(grant) = devices.get_mut(device_code) else {
 		// Unknown or already-consumed code.
-		return oauth_error("invalid_grant");
+		return Err(super::Refusal::Error("invalid_grant"));
 	};
 	if grant.expires_at <= now {
 		devices.remove(device_code);
-		return oauth_error("expired_token");
+		return Err(super::Refusal::Error("expired_token"));
 	}
 	if now < grant.next_poll_at {
 		// Polling too fast: tell the client to back off (RFC 8628 §3.5).
 		grant.next_poll_at = now + POLL_INTERVAL_SECS;
-		return super::oauth_rate_limited(grant.next_poll_at - now);
+		return Err(super::Refusal::SlowDown(grant.next_poll_at - now));
 	}
 	grant.next_poll_at = now + POLL_INTERVAL_SECS;
 	let Some(account) = grant.approved_account.clone() else {
-		return oauth_error("authorization_pending");
+		return Err(super::Refusal::Error("authorization_pending"));
 	};
 	let scopes = grant.scopes.clone();
 	// Approved: consume the code (one-time) and issue the token.
 	devices.remove(device_code);
 	drop(devices);
-	match authz.issue_token(&account, &scopes, now) {
-		Some(token) => super::pkce::token_response(&token, &scopes),
-		None => oauth_error("server_error"),
-	}
+	Ok((account, scopes))
 }

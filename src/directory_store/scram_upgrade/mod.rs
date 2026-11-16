@@ -11,7 +11,7 @@
 
 use std::sync::Weak;
 
-use crate::smtp::scram::{SCRAM_ITERATIONS, ScramStored};
+use crate::smtp::scram::ScramStored;
 
 /// Hook the directory calls back into when a cleartext authentication
 /// succeeds against a dynamic account whose stored SCRAM verifier is below
@@ -92,10 +92,9 @@ impl super::AccountStore {
 				.find(|existing| existing.name == account)
 			{
 				Some(row)
-					if row
-						.scram
-						.as_ref()
-						.is_some_and(|stored| stored.iterations < SCRAM_ITERATIONS) =>
+					if row.scram.as_ref().is_some_and(|stored| {
+						stored.iterations < crate::smtp::scram::iterations::current()
+					}) =>
 				{
 					row.scram = Some(fresh);
 					Ok(())

@@ -7,7 +7,7 @@ use serde::Deserialize;
 
 use super::defaults::{default_bulk_recipients, default_masked_addresses_max, default_yes};
 use super::{
-	Account, Acme, Alert, Alias, Antispam, AntispamScope, Api, Arc, Attachments, Auth, Boot,
+	Account, Acme, Alert, Alias, Antispam, AntispamScope, Api, Arc, Attachments, Auth, Bans, Boot,
 	Database, Deliverability, Dkim, DnsProviders, DnsPublish, Ldap, Listener, Llm, LogFormat,
 	MtaSts, Oauth, Otel, OwnIpBlocklist, Privileges, Queue, Smtp, SrsDomain, Storage, SubjectPass,
 	Tenant, Tls, Transport, Webhook,
@@ -434,6 +434,11 @@ pub struct Config {
 	/// or storing a verifier.
 	#[serde(default)]
 	pub auth: Auth,
+	/// The sign-in ban policy: failures that fire a ban, its window and
+	/// lengths. Absent keeps the built-in values. Each value has a bound on
+	/// the weak side that the loader enforces.
+	#[serde(default)]
+	pub bans: Bans,
 	/// Alert rules: periodic metric comparisons that fire webhooks or email
 	/// when the configured condition holds. Absent or empty disables the
 	/// alert engine entirely (the default).

@@ -72,6 +72,7 @@ pub use reload_status::{
 };
 
 mod collisions;
+mod credential_fingerprint;
 pub mod credential_reset;
 pub use credential_reset::{CredentialReset, NewPassword, ResetTarget};
 pub mod display_name;

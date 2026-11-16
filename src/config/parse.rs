@@ -68,6 +68,7 @@ impl Config {
 	pub(crate) fn parse_text(raw: &str, path: &Path) -> Result<Self, ConfigError> {
 		let config = Self::parse_unvalidated(raw, path)?;
 		config.validate()?;
+		config.install_process_settings();
 		Ok(config)
 	}
 
@@ -78,6 +79,9 @@ impl Config {
 	pub(crate) fn parse_text_lenient(raw: &str, path: &Path) -> Result<Self, ConfigError> {
 		let mut config = Self::parse_unvalidated(raw, path)?;
 		config.validation_error = config.validate().err().map(|error| error.to_string());
+		if config.validation_error.is_none() {
+			config.install_process_settings();
+		}
 		Ok(config)
 	}
 }

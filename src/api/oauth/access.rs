@@ -31,7 +31,7 @@ impl super::AuthzServer {
 		{
 			return None;
 		}
-		if issued > now || expires <= issued || expires - issued > super::ACCESS_TOKEN_TTL_SECS {
+		if issued > now || expires <= issued || expires - issued > self.access_ttl {
 			return None;
 		}
 		let subject = claims.string("sub")?;

@@ -296,8 +296,9 @@ OAuth `429 slow_down` responses carry `Retry-After` for grant expiry or polling;
 password bans keep the same response as an incorrect password.
 
 Checks of a password (`POST /api/v1/auth/verify`, and the `/oauth` endpoints)
-are counted apart, in the shared ban table: 5 failures in 15 minutes ban the
-client or the account for 15 minutes, doubling up to 24 hours, with the same
+are counted apart, in the shared ban table: by default 5 failures in 15 minutes
+ban the client or the account for 15 minutes, doubling up to 24 hours (`[bans]`
+changes the numbers within its floors), with the same
 answer as a wrong password. That table needs `[database]`; see
 [Security](security.md).
 
@@ -783,8 +784,9 @@ cannot be bound to an account.
 
 Present only when `[oauth] signing_key` is set; otherwise every `/oauth/*`
 path answers `401` to a request with no bearer (which counts as a failed
-authentication for the 20 per minute limit) and `404` to one with a valid
-bearer. It issues ES256 access tokens, valid for one hour, for
+authentication for the failure limit, 20 per minute by default, `[api.limiter]`) and `404` to one with a valid
+bearer. It issues ES256 access tokens, valid for one hour unless
+`[oauth] access_token_ttl_secs` says otherwise, for
 OAUTHBEARER on IMAP and SMTP submission, and bearer authentication on JMAP.
 On JMAP the signed `sub` confines the token to its own live account. The token
 never authenticates `/api/v1` or SCIM. `POST /oauth/device_authorization` starts a device flow,
@@ -806,8 +808,19 @@ them. Approval and redemption cannot widen them. `write` and `send` do not imply
 `read`. `EmailSubmission/set` requires `send` even on an otherwise writable account.
 Tokens without explicit scopes must be reissued. Token responses disable caching.
 
+With `[oauth] refresh_token_ttl_secs` set, every grant also returns a
+`refresh_token`, and `POST /oauth/token` accepts `grant_type=refresh_token`
+with `refresh_token` and an optional narrower `scope` (a wider one is
+`400 invalid_scope` and spends nothing). The answer carries a new access token
+and a new refresh token, and the one presented is retired. Presenting a retired
+token again, or one of an account that was disabled, locked, removed or had its
+password changed or reset since the grant, is `400 invalid_grant`, and for a
+retired token the whole family issued from that grant is revoked too. Without
+the setting the grant type is `400 unsupported_grant_type`, as before.
+
 `POST /oauth/revoke` takes `token` as form or JSON. Possession permits revoking
-that token's signed identifier for JMAP. Invalid, expired and already revoked
+that token's signed identifier for JMAP; given a refresh token it revokes the
+whole family it belongs to. Invalid, expired and already revoked
 tokens get the same empty `200`. Revocations persist in `oauth_revocations.json`
 under the data directory, containing identifier hashes and expiries, and survive
 restart. Expired entries are pruned on revocation. A write failure gives `503`;

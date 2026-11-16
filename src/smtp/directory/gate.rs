@@ -12,7 +12,7 @@ use ring::hmac;
 
 use super::bans::BanOutcome;
 use super::*;
-use crate::smtp::scram::{SCRAM_ITERATIONS, ScramCredentials};
+use crate::smtp::scram::{ScramCredentials, iterations};
 
 /// What proved the identity that asks to be admitted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -179,7 +179,8 @@ impl Directory {
 		let tag = hmac::sign(key, username.to_ascii_lowercase().as_bytes());
 		ScramCredentials {
 			salt: tag.as_ref()[..16].to_vec(),
-			iterations: SCRAM_ITERATIONS,
+			// The decoy of an unknown name costs what a real verifier costs.
+			iterations: iterations::current(),
 			stored_key: [0u8; 32],
 			server_key: [0u8; 32],
 		}

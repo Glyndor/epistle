@@ -50,7 +50,10 @@ fn expired_device_grant_redeems_as_expired_token() {
 			client: None,
 		},
 	);
-	let response = crate::api::oauth::device::redeem_device_code(&authz, &device_code);
+	let response = crate::api::oauth::device::redeem_device_code(&authz, &device_code)
+		.err()
+		.expect("an expired grant is refused")
+		.response();
 	assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
@@ -75,7 +78,10 @@ fn polling_too_fast_yields_slow_down() {
 			client: None,
 		},
 	);
-	let response = crate::api::oauth::device::redeem_device_code(&authz, "dc");
+	let response = crate::api::oauth::device::redeem_device_code(&authz, "dc")
+		.err()
+		.expect("a fast poll is refused")
+		.response();
 	assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
 }
 
