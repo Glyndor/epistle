@@ -94,7 +94,7 @@ jobs:
     name: upgrade-survival
     # The published binary links against glibc 2.39; 22.04 ships 2.35
     # and cannot start it.
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
     # Measured 2026-10-30: the slowest of four green runs took 8 min.
     timeout-minutes: 15
     env:

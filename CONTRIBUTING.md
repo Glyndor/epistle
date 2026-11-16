@@ -247,6 +247,7 @@ CI is split by responsibility rather than gathered in one file:
 
 The workflows that emit a required check also run on `merge_group`, so the
 repository can use GitHub's merge queue; `docs/operations/merge-queue.md` says how.
+Every Linux job reads its runner from the `CI_RUNNER` variable; `docs/operations/ci-runner.md` says how.
 
 Every reusable this repository calls lives under `.github/workflows/` as
 a local copy of a named `Glyndor/.github` tag. Nothing is pulled

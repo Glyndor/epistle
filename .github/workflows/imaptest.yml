@@ -91,7 +91,7 @@ jobs:
     needs: decide
     if: ${{ !cancelled() && needs.decide.outputs.run != 'false' }}
     name: imaptest scripted
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
     timeout-minutes: 30
     env:
       IMAPTEST_IMAGE: docker.io/dovecot/imaptest@sha256:db2b7de2f7bdd5d331fbdc12463828e3e35f1571c40999df47a0ff2359d399d7

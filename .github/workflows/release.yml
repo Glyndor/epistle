@@ -38,6 +38,7 @@ jobs:
   # Gate every release on promoted, version-matched, advisory-free code.
   verify:
     name: Verify tag
+    # Fixed on GitHub's runners, never CI_RUNNER: release job; holds secrets or write/OIDC permissions.
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -306,6 +307,7 @@ jobs:
     name: Build
     needs: [verify, build-deb]
     if: ${{ !inputs.images-only }}
+    # Fixed on GitHub's runners, never CI_RUNNER: release job; holds secrets or write/OIDC permissions.
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -387,6 +389,7 @@ jobs:
     name: Sign
     needs: [verify, build]
     if: ${{ !inputs.images-only }}
+    # Fixed on GitHub's runners, never CI_RUNNER: release job; holds secrets or write/OIDC permissions.
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -477,6 +480,7 @@ jobs:
     needs: [verify, build, sign]
     # A rehearsal stops before this job.
     if: ${{ !inputs.images-only && !inputs.dry-run }}
+    # Fixed on GitHub's runners, never CI_RUNNER: release job; holds secrets or write/OIDC permissions.
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -620,6 +624,7 @@ jobs:
     name: Publish multi-arch image manifest
     needs: [verify, image-build]
     if: ${{ always() && needs.image-build.result == 'success' }}
+    # Fixed on GitHub's runners, never CI_RUNNER: release job; holds secrets or write/OIDC permissions.
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:

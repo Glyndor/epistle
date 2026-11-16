@@ -86,7 +86,7 @@ jobs:
     # five others and this is not one of them, so renaming the visible job
     # name to carry the major is safe.
     name: database integration (PostgreSQL ${{ matrix.postgres }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
     # Measured 2026-10-30: the slowest of four green runs took 36 min.
     timeout-minutes: 75
     strategy:

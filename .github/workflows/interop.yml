@@ -90,7 +90,7 @@ jobs:
     needs: decide
     if: ${{ !cancelled() && needs.decide.outputs.run != 'false' }}
     name: protocol interop
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
     # Measured 2026-10-30: the slowest of four green runs took 3 min.
     timeout-minutes: 10
     services:

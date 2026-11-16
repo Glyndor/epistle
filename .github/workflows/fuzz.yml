@@ -88,7 +88,7 @@ permissions:
 jobs:
   plan:
     name: choose targets
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
     # Measured 2026-10-30: the slowest of four green runs took 1 min.
     timeout-minutes: 5
     outputs:
@@ -115,7 +115,7 @@ jobs:
     name: cargo fuzz
     needs: plan
     if: needs.plan.outputs.targets != '[]'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
     # Measured 2026-10-30: the slowest of four green runs took 16 min.
     timeout-minutes: 30
     strategy:

@@ -101,7 +101,7 @@ jobs:
     # requiring it. interop.yml avoids the same collision by calling itself
     # `protocol interop`.
     name: LDAP directory
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
     # Measured 2026-10-30: the slowest of four green runs took 3 min.
     timeout-minutes: 10
     env:

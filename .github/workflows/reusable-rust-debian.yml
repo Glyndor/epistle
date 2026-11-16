@@ -19,10 +19,6 @@ on:
         description: Debian package name (the .deb is <package-name>_*.deb)
         type: string
         required: true
-      runner:
-        description: Runner to build on
-        type: string
-        default: "ubuntu-latest"
       debian-image:
         description: Container image to build in (a stable suite is reproducible)
         type: string
@@ -91,7 +87,7 @@ jobs:
   build:
     name: dpkg-buildpackage
     if: inputs.run-build
-    runs-on: ${{ inputs.runner }}
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
     # Measured 2026-10-30: the slowest of four green runs took 40 min.
     timeout-minutes: 80
     container:
@@ -230,7 +226,7 @@ jobs:
   vendored:
     name: build (vendored / offline)
     if: ${{ inputs.run-build && inputs.check-vendored }}
-    runs-on: ${{ inputs.runner }}
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
     # Measured 2026-10-30: the slowest of four green runs took 40 min.
     timeout-minutes: 80
     container:

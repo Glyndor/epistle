@@ -22,7 +22,7 @@ jobs:
     needs: plan
     if: ${{ !cancelled() && needs.plan.outputs.folder != 'false' }}
     name: folder limit
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
     timeout-minutes: 3
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

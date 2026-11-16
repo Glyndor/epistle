@@ -198,6 +198,10 @@ name = "workflow_release_tag_identity"
 path = "tests/workflows/workflow_release_tag_identity.rs"
 
 [[test]]
+name = "workflow_runner_variable"
+path = "tests/workflows/workflow_runner_variable.rs"
+
+[[test]]
 name = "workflow_toolchain_pins"
 path = "tests/workflows/workflow_toolchain_pins.rs"
 
