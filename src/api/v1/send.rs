@@ -259,9 +259,7 @@ pub async fn send(
 		state.save_sent_copy(&account, &sent_copy, save_sent);
 	}
 	Ok(Json(Queued {
-		cancel_until: state
-			.held_until(&account, id)
-			.map(crate::clock::rfc3339),
+		cancel_until: state.held_until(&account, id).map(crate::clock::rfc3339),
 		queued: id.to_string(),
 		class: prepared.class,
 		suppressed: prepared.suppressed,
