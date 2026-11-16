@@ -97,18 +97,22 @@ two forms are not equivalent:
 0.0.0.0:8025:8025     # the API answers on every address the host has
 ```
 
-Today `epistle init` derives the `ports:` array of the `mail` service from the
-listeners: every non-loopback listener is published as `<port>:<port>`, and a
-loopback listener gets no `ports:` entry at all. An `api` listener on
-`10.0.0.1` is published as `8025:8025`, which the engine publishes on every
-host address, so binding the listener to a private address does not by itself
-keep the API off the public interfaces. Both files are regenerated, by `init`
-on a rerun and by `stack update`, which takes the published ports from the
-listeners in the config, so an edit to `compose.yaml` does not survive. The supported place for the pinned form is
+`epistle init` derives the `ports:` array of the `mail` service from the
+listeners: every non-loopback listener is published as `<port>:<port>`, which
+the engine publishes on every host address, and a loopback listener gets no
+`ports:` entry at all. The three listeners that carry plain HTTP (`api`,
+`web-dav` and `autoconfig`) are the exception: the generated map publishes them
+on `127.0.0.1` unless it names another address, so `api` arrives as
+`127.0.0.1:8025:8025` and not as `8025:8025` on every host address. A private
+bind address does not by itself publish the API anywhere, and a wider
+publication is the operator's decision, written in the override. The map is
+regenerated, by `init` on a rerun and by `stack update`, which takes the
+published ports from the listeners in the config, so an edit to `compose.yaml`
+does not survive. The supported place for the pinned form is
 `<data_dir>/compose/compose.override.yaml`, the file every stack invocation
 passes after `compose.yaml`. Its lists are merged with the generated ones, so a
-plain `ports:` entry there is added to `8025:8025`, not put in its place, and
-the engine refuses to bind both. Replace the list with the `!override` tag and
+plain `ports:` entry there is added to the generated one, not put in its
+place, and the engine refuses to bind both. Replace the list with the `!override` tag and
 repeat every port the stack publishes:
 
 ```yaml
@@ -136,10 +140,9 @@ Two things stay true whichever way the port is published:
   `autoconfig` and `metrics` (and `submission`) bind outside loopback with no
   `[tls]` section without being rejected: validation logs `no-TLS listener
   bound externally; configure [tls] or front with a TLS proxy` and the server
-  starts. Nothing refuses the configuration. Hardening follows (an opt-in flag,
-  then a rejection), so until then a private network is carrying the bearer key
-  in clear: put a TLS proxy in front, or accept the exposure only inside the
-  tunnel. [Listeners](configuration.md#listeners) has the whole list.
+  starts. Nothing refuses the configuration, so a private network carries the
+  bearer key in clear: put a TLS proxy in front, or accept the exposure only
+  inside the tunnel. [Listeners](configuration.md#listeners) has the whole list.
 - **The key, not the address, is what an attacker needs.** Pin every key with
   `--ip-cidr` and `--expires-at`, and give each program its own key with only
   the scopes it uses. The allowlist is a second gate, not a replacement for
@@ -956,5 +959,4 @@ unknown error code by its status.
 
 `/jmap`, `/scim/v2` and `/oauth` follow their RFCs and are as stable as the
 parts of them this server implements; the OpenAPI document lists what it
-implements. The mail headers are covered in [Message headers](headers.md),
-which marks what is planned to change.
+implements. The mail headers are covered in [Message headers](headers.md).

@@ -260,8 +260,11 @@ with no explicit address stays `PORT:PORT`, and the
 host address one `set` wrote survives a later `enable`, `disable`, `init` rerun
 or `stack update`, since every writer of the map reads it back first. If
 `compose.override.yaml` already publishes a port for the same service, `set`
-leaves it alone and says that the override merges with the generated map, or
-replaces it where it carries `!override`. That notice is read out of the file
+leaves it alone and says that the override merges with the generated map. An
+override that replaces the list with `!override` and carries the port of that
+listener decides where the port is published, so `set` refuses, names the file,
+the line and the entry to change, and leaves the configuration and the
+generated map alone. That notice is read out of the file
 rather than parsed, so it sees the block form, the flow form (`mail: {ports:
 [...]}`) and ranges of ports, in block or inline; it does not see a `ports` key
 behind an anchor, an alias or a value a template fills in at run time, and a
@@ -389,12 +392,8 @@ The three defaults, `nts.netnod.se`, `nts.time.nl` and `ptbtime2.ptb.de`
 (all NTS), are three operators in three countries, so every offset of a
 default run is authenticated, with a diagnostic median that is insensitive
 to one drifting source. This median does not exclude that source from the
-verdict. Each answered the whole NTS exchange inside the budget when the
-list was chosen. `time.cloudflare.com` answers plain NTPv4 but its key
-exchange returns cookies and the authenticated poll then goes unanswered
-on the networks measured, and `time.google.com` publishes no NTS-KE
-endpoint, so neither is in the default list; either can replace a source
-as a plain `ntp` entry. Replace them when the chosen peers change; the
+verdict. `time.cloudflare.com` and `time.google.com` are not in the default
+list; either can be added as a plain `ntp` entry. The
 list and the protocol per source are both yours to set, and a host that
 answers NTS on your network can be configured as `nts`. The two ports the probes
 dial are `4460/tcp` (NTS-KE, RFC 8915) for the `nts` sources and
@@ -2126,7 +2125,7 @@ without the flag the output, text or JSON, is exactly what it was.
 | `epistle suppression export [--account SENDER] [--json]` | Write the list as CSV on stdout: a header `address,since,reason`, then one entry per line with the time as RFC 3339 UTC. A field that begins with `=`, `+`, `-` or `@` (after any apostrophes) is written with one more leading apostrophe so a spreadsheet does not run it as a formula, and `import` takes exactly one off, so a value that really starts with an apostrophe survives the round trip. With `--json`, one array of `{address, since, reason}`. |
 | `epistle suppression import FILE [--account SENDER] [--reason TEXT] [--dry-run] [--json]` | Suppress every address of a file in the form `export` writes, or a plain list with one address per line. UTF-8 text of at most 16 MiB and 100000 entries; blank lines and lines starting with `#` are skipped. The whole file is checked first: one bad line refuses it with exit 2, naming the first ten bad lines, and nothing is written. An address that is already suppressed keeps its entry. The time must be a real RFC 3339 time (`2026-02-30T00:00:00Z` is refused); the file must be a regular file, a named pipe or a device is refused. `--reason` is the reason for lines that give none. The result counts `added`, `already` and `duplicates` (an address repeated in the file); `--dry-run` counts and writes nothing. If a write fails part way the error says how many entries were written; running the import again skips them. Run as root, the file is read through a private copy like the other input files. |
 | `epistle report-abuse` | Read an offending message on stdin, print an RFC 5965 ARF report to send to the sender's abuse address. |
-| `epistle reports [--days N]` | Summarise the DMARC aggregate and TLS-RPT reports that arrived for our domains over the last `N` days (default 7). Per policy domain: reporters seen, total rows, and failing rows by `source_ip` (DMARC) or failing sessions by `result_type` and `sending_mta_ip` (TLS-RPT). Reads the JSONL store under `data_dir/reports/`; never writes to it. |
+| `epistle reports [--days N]` | Summarise the DMARC aggregate and TLS-RPT reports that arrived for the hosted domains over the last `N` days (default 7). Per policy domain: reporters seen, total rows, and failing rows by `source_ip` (DMARC) or failing sessions by `result_type` and `sending_mta_ip` (TLS-RPT). Reads the JSONL store under `data_dir/reports/`; never writes to it. |
 
 For `migrate imap`, `data_dir` and its migration state must be owned by the
 process's effective user, including during `--dry-run`. Run the migration as the
