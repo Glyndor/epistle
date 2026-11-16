@@ -38,7 +38,7 @@ forward). Policy refusals exited `2` before they had their own code.
 | `app-password` | `list`, `create`, `rotate`, `rename`, `revoke` | `app-passwords`, `app-password-create`, `app-password-revoke` |
 | `api-key` | `list`, `create`, `set`, `revoke`, `rotate` | `api-keys`, `api-key-create`, `api-key-revoke` |
 | `suppression` | `list`, `show`, `add`, `remove`, `export`, `import` | `suppression`, `suppression --remove ADDR` |
-| `boot` | the stack would come back after a reboot: ten items, below | a restart policy, the network wait, a mount or an image of a disabled service is not right | linger, the user manager, the boot unit, its file list, Podman's socket, an image of an enabled service or the port floor is not right |
+| `boot` | the stack would come back after a reboot: thirteen items, below | a restart policy, the network wait, a drop-in, a mount, an image of a disabled service or a service that is down while the boot unit has not failed is not right | linger, the user manager, the boot unit, its file list, Podman's socket, an image of an enabled service, the port floor or a service that is down after the boot unit failed is not right |
 | `warmup` | `status`, `plan`, `start`, `enable`, `disable`, `pause`, `resume`, `set`, `reset` | |
 | `domain` | `list`, `show`, `add`, `remove`, `set`, `disable`, `enable`, `alias add\|remove`, `import` | |
 | `db` | `upgrade`, `status` | |
@@ -357,6 +357,9 @@ and the message carries the command that fixes it:
 8. `port floor`: `net.ipv4.ip_unprivileged_port_start` is at or below the lowest port the listeners use, both now (`/proc/sys`) and in the configuration systemd applies at the next boot (`systemd-analyze cat-config sysctl.d` and `/etc/sysctl.conf`) (`fail`; a configuration that cannot be read is `warn`).
 9. `mounts`: `data_dir` and the container storage exist, and no `/etc/fstab` mount that covers them is missing from the mount table (`warn`).
 10. `images`: every image `compose.yaml` names is in the account's container storage, because the unit starts with `--pull never` (`fail` for an enabled service, `warn` for one with `profiles`; `sudo epistle stack update`, the command that pulls).
+11. `retry drop-in`: `podup-epistle.service.d/10-epistle.conf` is beside the unit and holds what epistle writes, so a start that fails is tried again; absent, different, left behind after `[boot] restart_on_failure = false`, or refused by a systemd older than 244, it is `warn` (`sudo epistle stack start`).
+12. `order drop-in`: `/etc/systemd/system/user@<uid>.service.d/glyndor-epistle-boot.conf` holds what epistle writes now, so the user manager starts after the network and the sysctl; absent or different it is `warn`, and only root writes it (`sudo epistle stack start`).
+13. `services`: every enabled service of the stack has a running container. Judged once the boot unit is no longer `activating` (a unit still starting is a `warn` that says so). Each service that is down is named with its state and exit status, the last line the unit's journal has about it, and the command that starts it: `sudo epistle stack start <service>`, or `sudo epistle stack up` when it has no container. `fail` when the unit finished with a result other than `success`, `warn` otherwise (a service stopped on purpose is down too). A service with `profiles`, and a job that exited 0 under the policy `no`, are not expected to run.
 
 Where there is no `compose.yaml` the area is `ok` with no items. The unit
 repairs say `sudo epistle stack start`, which starts the containers that exist
@@ -1280,8 +1283,8 @@ sequence and its exit code becomes epistle's exit code.
 
 | Command | What it does |
 |---|---|
-| `sudo epistle stack up` | Runs `podup up -d --remove-orphans`, then `podup autostart install` to enable and start the project's user service. The orphans go with it: a container the compose file no longer names still holds the DNS credential and the ACME account key. It returns after starting; the service brings the stack back after reboot. On a stack that runs the certificates container it also puts the ACME account key where that container reads it: a key that is nowhere, or two copies that differ, stops `up` with a message naming the paths instead of starting a container that cannot renew. Once the stack is up it waits for `certs` to settle, judged the way `stack certs` judges it (two `podup ps` looks fifteen seconds apart, with the same start in both); a failure says what the two looks saw and exits non-zero. The copy of the account key under `<data_dir>/acme`, which `mail` can read, is removed only once `certs` holds the key. |
-| `sudo epistle stack down` | Runs `podup autostart uninstall`, then `podup down`. Database volumes and bind-mounted data are kept. |
+| `sudo epistle stack up` | Runs `podup up -d --remove-orphans`, then `podup autostart install` to enable and start the project's user service, and writes the [boot drop-ins](#boot-drop-ins). The orphans go with it: a container the compose file no longer names still holds the DNS credential and the ACME account key. It returns after starting; the service brings the stack back after reboot. On a stack that runs the certificates container it also puts the ACME account key where that container reads it: a key that is nowhere, or two copies that differ, stops `up` with a message naming the paths instead of starting a container that cannot renew. Once the stack is up it waits for `certs` to settle, judged the way `stack certs` judges it (two `podup ps` looks fifteen seconds apart, with the same start in both); a failure says what the two looks saw and exits non-zero. The copy of the account key under `<data_dir>/acme`, which `mail` can read, is removed only once `certs` holds the key. |
+| `sudo epistle stack down` | Runs `podup autostart uninstall`, then `podup down`, and removes both [boot drop-ins](#boot-drop-ins). Database volumes and bind-mounted data are kept. |
 | `sudo epistle stack ps [--json]` | Lists running services as a table or JSON. |
 | `sudo epistle stack logs [--tail N \| --all] [--since WHEN] [--until WHEN] [--merge \| --no-merge] [--raw] [--follow] [SERVICE]` | Shows the last 200 lines of every service (or of `SERVICE`), where `podup` alone prints each service from its beginning. `--tail N` changes the number of lines per service and `--all` shows each log whole. `--since` and `--until` take a duration such as `10m` or `1h30m`, or a time such as `2026-11-15T08:00:00`. When more than one service is shown the lines are interleaved in time order, each with its time; `--no-merge` prints one service after the other instead, and `--merge` interleaves even a single service, which adds the time. A message longer than 500 characters is cut and says how many bytes were left out; `--raw` prints it whole. A line is never held whole in memory, so a container that prints megabytes without a newline does not exhaust it. `--follow` streams the services in the order the lines arrive, still cut unless `--raw`. It has no `--json` form. |
 | `sudo epistle stack restart [SERVICE]` | Restarts the stack or one service, then checks the boot unit like `apply`. |
@@ -1307,7 +1310,7 @@ the only command that pulls.
 | `stack up` | Creates what is missing and recreates what changed in `compose.yaml`; containers that exist and match are only started | Always installs it |
 | `stack start` | Starts the existing containers, recreates nothing | Installs it, without starting it, when missing, disabled, not loaded or out of date |
 | `stack apply`, `stack update`, `stack restart`, `stack certs enable\|disable`, `db upgrade`, a service edit that recreates a container | As each documents | Same check as `start`, once the command has succeeded |
-| `stack stop`, `stack down` | Stop (`down` also removes) | `down` removes it; `stop` leaves it; neither checks it afterwards |
+| `stack stop`, `stack down` | Stop (`down` also removes) | `down` removes it and its drop-ins; `stop` leaves them; neither checks it afterwards |
 
 The check reads the unit, compares the compose files it lists with the ones
 the stack runs from now (`compose.yaml` and `compose.override.yaml` when it
@@ -1318,6 +1321,25 @@ at once, which can recreate a container whose definition changed), and its
 only podup call is that install: it never runs `up`, `build`, `pull`,
 `restart` or `down`. A stack taken down with `stack down` has no unit until
 the next `stack up`.
+
+#### Boot drop-ins
+
+Two drop-ins harden the unit. Neither has an `Exec` line, so the unit keeps
+running `up -d --no-build --pull never` and a reboot never builds, pulls or
+recreates anything. Both are idempotent (a file that already holds the text is
+not touched) and both are removed by `stack down`. The retry drop-in is
+written wherever the unit is checked (`stack up`, `start`, `update`, `apply`,
+`restart`, `certs enable|disable`, `db upgrade`); the order drop-in by `sudo
+epistle` for `stack up`, `start`, `update`, `apply`, `restart`, `certs` and
+`init`, and only once the command succeeded and the unit exists.
+
+| Drop-in | Where | What it does | Who writes it |
+|---|---|---|---|
+| Retry | `~glyndor-epistle/.config/systemd/user/podup-epistle.service.d/10-epistle.conf` | `Restart=on-failure`, `RestartSec=30s`, `StartLimitIntervalSec=0` (the retry never gives up) and `TimeoutStartSec=15min`, because a `oneshot` unit otherwise waits for ever. `Restart=` on a `oneshot` unit needs systemd 244; an older one is left alone and `status` says so. | The service account. `[boot] restart_on_failure = false` removes it. |
+| Order | `/etc/systemd/system/user@<uid>.service.d/glyndor-epistle-boot.conf` | The account's user manager `Wants=network-online.target` and starts `After=network-online.target systemd-sysctl.service`, and `RequiresMountsFor=` the `data_dir` when it is on a mount of its own. A user unit cannot be ordered against a system unit, and the manager is one. | Root only: `sudo epistle` writes it from the process that hands over to the account, after the command succeeded. Run as the account it writes nothing and `status` warns. `[boot] order_after_network = false` removes it. |
+
+`apt purge epistle` removes the system drop-in; the user one goes with the
+account's home. The `boot` area of `epistle status` shows both.
 
 Keep container customizations in
 `<data_dir>/compose/compose.override.yaml`. Init preserves this file and its

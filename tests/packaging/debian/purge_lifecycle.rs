@@ -26,6 +26,7 @@ impl Host {
 			"systemd",
 			"etc",
 			"runtime",
+			"etc-systemd",
 		] {
 			fs::create_dir_all(root.join(path)).unwrap();
 		}
@@ -93,6 +94,7 @@ impl Host {
 			("/etc/login.defs", "etc/login.defs"),
 			("/etc/subuid", "etc/subuid"),
 			("/etc/subgid", "etc/subgid"),
+			("/etc/systemd/system", "etc-systemd"),
 			("/run/systemd/system", "systemd"),
 			("/run/user/", "runtime/"),
 			("/proc/", "proc/"),
@@ -301,4 +303,40 @@ fn purge_retry_after_account_removal_does_not_orphan_legacy_configuration() {
 		!host.path("legacy/epistle.toml").exists(),
 		"do not lose the validated legacy owner across a retry"
 	);
+}
+
+#[test]
+fn purge_removes_the_boot_drop_in_of_the_user_manager_and_only_that_file() {
+	let host = Host::new();
+	fs::remove_file(host.path("proc/123/status")).unwrap();
+	let ours = host.path("etc-systemd/user@900.service.d");
+	let shared = host.path("etc-systemd/user@901.service.d");
+	for dir in [&ours, &shared] {
+		fs::create_dir_all(dir).unwrap();
+	}
+	fs::write(ours.join("glyndor-epistle-boot.conf"), "[Unit]\n").unwrap();
+	fs::write(shared.join("glyndor-epistle-boot.conf"), "[Unit]\n").unwrap();
+	fs::write(shared.join("glyndor-epistle-mesh.conf"), "[Unit]\n").unwrap();
+	let out = host.run();
+	assert!(out.status.success(), "{out:?}");
+	assert!(!ours.exists(), "the empty directory goes with its file");
+	assert!(!shared.join("glyndor-epistle-boot.conf").exists());
+	assert!(
+		shared.join("glyndor-epistle-mesh.conf").exists(),
+		"another file of the directory is not ours to remove"
+	);
+	assert!(
+		host.calls().contains("systemctl daemon-reload"),
+		"the manager reads the units again: {}",
+		host.calls()
+	);
+}
+
+#[test]
+fn purge_without_a_boot_drop_in_does_not_reload_systemd() {
+	let host = Host::new();
+	fs::remove_file(host.path("proc/123/status")).unwrap();
+	let out = host.run();
+	assert!(out.status.success(), "{out:?}");
+	assert!(!host.calls().contains("daemon-reload"), "{}", host.calls());
 }

@@ -1551,6 +1551,16 @@ design that drove the first delivery. They are the same numbers
 were added later. Until then they live in `[clock_external]` and
 `Config::validate` enforces the strict-less relation.
 
+### `[boot]`
+Which drop-ins `epistle` writes for the stack's boot unit. Both default to on
+and neither changes what the unit runs: a reboot still only starts the
+containers that exist. See [Boot drop-ins](cli.md#boot-drop-ins).
+
+| Key | Default | Meaning |
+|---|---|---|
+| `restart_on_failure` | `true` | The user drop-in that retries `podup-epistle.service` every 30 seconds when its start fails, without giving up. Needs systemd 244. `false` removes it. |
+| `order_after_network` | `true` | The system drop-in that starts the account's user manager after `network-online.target` and `systemd-sysctl.service`. Needs root, so `sudo epistle` writes it. `false` removes it. |
+
 ### `[privileges]`
 Drop OS privileges after binding ports (run the daemon unprivileged).
 

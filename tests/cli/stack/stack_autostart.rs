@@ -130,6 +130,7 @@ fn systemctl_body(state: &Path) -> String {
 		"#!/bin/sh\n\
 		 printf '%s\\n' \"$*\" >> {s}/systemctl.log\n\
 		 case \"$*\" in\n\
+		 \t--version) echo \"systemd ${{SYSTEMD_FAKE_VERSION:-255}} (255.4)\" ;;\n\
 		 \t*is-enabled*) if [ -e {s}/enabled ]; then echo enabled; else echo disabled; fi ;;\n\
 		 \t*\" enable \"*) : > {s}/enabled ;;\n\
 		 \t*show*) if [ -e {s}/loaded ]; then echo LoadState=loaded; else echo LoadState=not-found; fi ;;\n\
@@ -387,4 +388,131 @@ fn the_repair_never_starts_the_unit_it_installs() {
 		);
 		assert!(world.state.join("enabled").exists(), "{spoil}");
 	}
+}
+
+/// Where the user drop-in of the boot unit lives in this world.
+fn drop_in(world: &World) -> PathBuf {
+	world
+		.unit
+		.with_file_name("podup-epistle.service.d")
+		.join("10-epistle.conf")
+}
+
+fn reloads(world: &World) -> usize {
+	std::fs::read_to_string(world.state.join("systemctl.log"))
+		.unwrap_or_default()
+		.lines()
+		.filter(|line| *line == "--user daemon-reload")
+		.count()
+}
+
+#[test]
+fn stack_up_writes_the_retry_drop_in_and_down_removes_it() {
+	let world = World::new();
+	let out = world.run(&["up"]);
+	assert_eq!(out.status.code(), Some(0));
+	let text = std::fs::read_to_string(drop_in(&world)).expect("the drop-in is written");
+	assert!(text.contains("Restart=on-failure"), "{text}");
+	assert!(text.contains("RestartSec=30s"), "{text}");
+	assert!(text.contains("StartLimitIntervalSec=0"), "{text}");
+	assert!(
+		!text.lines().any(|line| line.starts_with("Exec")),
+		"a reboot must keep running the unit's own `up -d --no-build --pull never`: {text}"
+	);
+	assert_eq!(reloads(&world), 1, "the user manager reads it once");
+	let out = world.run(&["down"]);
+	assert_eq!(out.status.code(), Some(0));
+	assert!(!drop_in(&world).exists(), "down must leave no drop-in");
+	assert!(
+		!drop_in(&world).parent().unwrap().exists(),
+		"and no empty directory"
+	);
+}
+
+#[test]
+fn a_second_run_does_not_write_or_reload_the_drop_in_again() {
+	let world = World::new();
+	world.run(&["apply"]);
+	let first = std::fs::metadata(drop_in(&world))
+		.unwrap()
+		.modified()
+		.unwrap();
+	assert_eq!(reloads(&world), 1);
+	let out = world.run(&["apply"]);
+	assert_eq!(out.status.code(), Some(0));
+	assert_eq!(
+		reloads(&world),
+		1,
+		"a drop-in that is current is not reloaded"
+	);
+	let second = std::fs::metadata(drop_in(&world))
+		.unwrap()
+		.modified()
+		.unwrap();
+	assert_eq!(first, second, "a drop-in that is current is not rewritten");
+}
+
+#[test]
+fn stop_leaves_the_drop_in_and_start_writes_it() {
+	let world = World::new();
+	world.run(&["start"]);
+	assert!(drop_in(&world).exists());
+	let out = world.run(&["stop"]);
+	assert_eq!(out.status.code(), Some(0));
+	assert!(
+		drop_in(&world).exists(),
+		"stop leaves the unit and its drop-in"
+	);
+}
+
+#[test]
+fn the_configuration_turns_the_retry_drop_in_off() {
+	let world = World::new();
+	world.run(&["apply"]);
+	assert!(drop_in(&world).exists());
+	let mut config = std::fs::read_to_string(&world.cfg).unwrap();
+	config.push_str("\n[boot]\nrestart_on_failure = false\n");
+	std::fs::write(&world.cfg, config).unwrap();
+	let out = world.run(&["apply"]);
+	assert_eq!(out.status.code(), Some(0));
+	assert!(
+		!drop_in(&world).exists(),
+		"the switch removes what was written"
+	);
+	world.run(&["apply"]);
+	assert!(!drop_in(&world).exists(), "and nothing writes it again");
+}
+
+#[test]
+fn a_systemd_older_than_244_gets_no_drop_in_and_a_warning() {
+	let world = World::new();
+	let ctl = world.shim.join("systemctl");
+	let body = std::fs::read_to_string(&ctl)
+		.unwrap()
+		.replace("${SYSTEMD_FAKE_VERSION:-255}", "243");
+	std::fs::write(&ctl, body).unwrap();
+	let out = world.run(&["apply"]);
+	assert_eq!(out.status.code(), Some(0));
+	assert!(!drop_in(&world).exists());
+	let stderr = String::from_utf8_lossy(&out.stderr);
+	assert!(stderr.contains("older than 244"), "{stderr}");
+}
+
+#[test]
+fn the_account_never_writes_the_system_drop_in() {
+	// The suite does not run as root, and a process that is not root has no
+	// way to write under /etc/systemd/system: it must not even try.
+	let world = World::new();
+	let out = world.run(&["up"]);
+	assert_eq!(out.status.code(), Some(0));
+	let stderr = String::from_utf8_lossy(&out.stderr);
+	assert!(
+		!stderr.contains("not ordered after the network"),
+		"{stderr}"
+	);
+	let ctl = std::fs::read_to_string(world.state.join("systemctl.log")).unwrap();
+	assert!(
+		!ctl.lines().any(|line| line == "daemon-reload"),
+		"the system manager is reloaded only by a root that wrote a drop-in: {ctl}"
+	);
 }

@@ -55,6 +55,25 @@ pub(super) fn manager(host: &mut impl BootHost, account: &Account) -> Item {
 	)
 }
 
+/// What systemd says of the boot unit: `ActiveState` and `Result`, each
+/// `unknown` when it cannot be read.
+pub(super) fn state(host: &mut impl BootHost) -> (String, String) {
+	let shown = host
+		.systemctl(&["show", UNIT, "-p", "ActiveState", "-p", "Result"])
+		.unwrap_or_default();
+	let property = |key: &str| {
+		shown
+			.lines()
+			.find_map(|line| {
+				line.strip_prefix(key)
+					.and_then(|rest| rest.strip_prefix('='))
+			})
+			.unwrap_or("unknown")
+			.to_string()
+	};
+	(property("ActiveState"), property("Result"))
+}
+
 /// The boot unit is installed, enabled and its last run succeeded.
 pub(super) fn unit(host: &mut impl BootHost, account: &Account) -> Item {
 	let fix = autostart::FIX;
@@ -86,20 +105,7 @@ pub(super) fn unit(host: &mut impl BootHost, account: &Account) -> Item {
 			format!("{UNIT} is {seen}, so the stack does not start at boot; {fix}"),
 		);
 	}
-	let shown = host
-		.systemctl(&["show", UNIT, "-p", "ActiveState", "-p", "Result"])
-		.unwrap_or_default();
-	let property = |key: &str| {
-		shown
-			.lines()
-			.find_map(|line| {
-				line.strip_prefix(key)
-					.and_then(|rest| rest.strip_prefix('='))
-			})
-			.unwrap_or("unknown")
-			.to_string()
-	};
-	let (active, result) = (property("ActiveState"), property("Result"));
+	let (active, result) = state(host);
 	if result != "success" || active == "failed" {
 		return Item::new(
 			"boot unit",

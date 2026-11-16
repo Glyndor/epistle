@@ -19,10 +19,11 @@
 
 use std::path::{Path, PathBuf};
 
+pub(in crate::cli) mod dropins;
 mod live;
 mod unit;
 
-pub(in crate::cli) use live::{run, unit_file};
+pub(in crate::cli) use live::{harden, remove_dropin, run, unit_file};
 pub(in crate::cli) use unit::{compose_files, orders_after, same_files};
 
 /// The user unit `podup autostart install` writes for the `epistle` project.

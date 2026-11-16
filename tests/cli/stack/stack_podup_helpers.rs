@@ -61,7 +61,11 @@ pub(crate) fn write_podup_shim(shim_dir: &Path, body: &str) -> PathBuf {
 	// and enabled. Without this, it would ask the machine that runs the test.
 	let systemctl = shim_dir.join("systemctl");
 	if !systemctl.exists() {
-		executable::write_executable(&systemctl, "#!/bin/sh\nexit 1\n");
+		// It still answers the two things the boot drop-in asks: the version, and a reload.
+		executable::write_executable(
+			&systemctl,
+			"#!/bin/sh\ncase \"$*\" in\n--version) echo 'systemd 255 (255.4)' ;;\n*daemon-reload*) exit 0 ;;\n*) exit 1 ;;\nesac\n",
+		);
 	}
 	path
 }

@@ -18,6 +18,7 @@ mod api;
 mod arc;
 mod attachments;
 mod auth;
+mod boot;
 mod clip;
 mod database;
 mod debug;
@@ -72,6 +73,7 @@ pub use attachments::{
 	normalise_extension, valid_extension,
 };
 pub use auth::Auth;
+pub use boot::Boot;
 pub use database::{Database, DatabaseTls};
 pub use deliverability::{Deliverability, Portal};
 pub use dkim::{DKIM_RSA_REQUIRED_FROM, Dkim, DkimDomain};

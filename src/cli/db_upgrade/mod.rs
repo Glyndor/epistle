@@ -68,6 +68,7 @@ pub(super) fn run(config: &Config, path: &Path, action: DbCli, json: bool) -> Ex
 				super::stack::autostart::run(
 					"podup",
 					&super::stack::compose_path(&config.data_dir),
+					&config.boot,
 				);
 			}
 			match upgraded {
