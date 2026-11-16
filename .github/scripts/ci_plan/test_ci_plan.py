@@ -28,7 +28,7 @@ class SelectionTests(unittest.TestCase):
 
     def test_docs_edits_skip_unaffected_work(self):
         self.assertEqual(self.selected("README.md"), set())
-        self.assertEqual(self.selected("docs/operations/merge-queue.md"), {"tests"})
+        self.assertEqual(self.selected("docs/operations/queue.md"), {"tests"})
 
     def test_new_docs_only_need_folder_count(self):
         self.assertEqual(self.selected("docs/new.md", status="A"), {"tests", "folder"})

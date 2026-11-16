@@ -232,7 +232,7 @@ CI is split by responsibility rather than gathered in one file:
 | `fuzz.yml` | nightly fuzz on the protocol parsers |
 | `rust-audit.yml` | `cargo audit` against current RUSTSEC |
 | `supply-chain.yml` | SBOM and license set |
-| `merge-group-triggers.yml` | a required check that would not report in the merge queue, see `docs/operations/merge-queue.md` |
+| `merge-group-triggers.yml` | a required check that would not report in the merge queue |
 | `container.yml` | the image builds and passes three smoke checks: version, `config-check` with no network, runtime user |
 | `editorconfig.yml` | a file that breaks `.editorconfig` |
 | `folder-limit.yml` | a folder with more files than the ceiling |
@@ -246,8 +246,7 @@ CI is split by responsibility rather than gathered in one file:
 | `release.yml` | the tag, the changelog, the audit and the signing |
 
 The workflows that emit a required check also run on `merge_group`, so the
-repository can use GitHub's merge queue; `docs/operations/merge-queue.md` says how.
-Every Linux job reads its runner from the `CI_RUNNER` variable; `docs/operations/ci-runner.md` says how.
+repository can use GitHub's merge queue.
 
 Every reusable this repository calls lives under `.github/workflows/` as
 a local copy of a named `Glyndor/.github` tag. Nothing is pulled
