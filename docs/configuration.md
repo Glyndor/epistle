@@ -51,7 +51,7 @@ a connection URL.
 | `dnsbl_domain_zones` | list | `[]` | Right-hand-side blocklist zones queried with the envelope sender's domain (RFC 5782 §2.3). Empty disables the sender-domain screen. |
 | `dnsbl_url_zones` | list | `[]` | URI blocklist zones queried with the host of every URL found in the body (RFC 5782 §2.3). Empty disables the URL-host screen. |
 | `first_time_sender_delay_secs` | int | `0` | Delay a first-time (no-reputation) unauthenticated sender before accepting. Requires `[database]`. `0` disables. |
-| `greylist_delay_secs` | int | `0` | Seconds an unseen (client, sender, recipient) triplet is greylisted (451) before a retry is accepted. `0` disables. |
+| `greylist_delay_secs` | int | `0` | Seconds an unseen (client, sender, recipient) triplet is greylisted (451) before a retry is accepted. `0` disables. Every recipient of a message has a triplet of its own, and one that is new defers the message. How clients are grouped and how long a triplet lives are `greylist_mask_v4`, `greylist_mask_v6` and `greylist_lifetime_secs` in [`[antispam]`](#antispam-clamd-scanner-and-bayesian-thresholds); a peer in `[smtp] trusted_networks` is never greylisted. |
 | `srs_secret` | string | unset | Server-wide secret for Sender Rewriting Scheme on forwarded mail (SPF survives the next hop). Signs every domain that has no `[[srs_domain]]` of its own, and keeps verifying the addresses it signed. Absent disables SRS for those domains. See [`[[srs_domain]]`](#srs_domain). |
 | `quota_bytes` | int | 5 GiB | Default per-account mailbox quota (RFC 9208), used when an account has no per-account or per-domain quota. Absent means 5 GiB; `0` means no limit, here and in `domain_quotas` or an account's own `quota_bytes`. IMAP QUOTA, JMAP `Quota/get` and `epistle limits show` report the same limit (none when it is `0`). Enforced on every path, measured as IMAP QUOTA reports it (archived mail included): IMAP APPEND answers `NO [OVERQUOTA]`; SMTP refuses a full mailbox at `RCPT TO` with `452 4.2.2` for that recipient only, and a message that would overfill one is accepted for the other recipients with a DSN to the sender, or refused with `452 4.2.2`, as at `RCPT TO`, when it fits none, so the sender retries; `POST /api/v1/send` answers `507 mailbox_full` and JMAP `EmailSubmission/set` `overQuota`, with nothing queued. |
 | `domain_quotas` | table | `{}` | `domain → bytes`: default mailbox quota for accounts in a domain (overridden by a per-account `quota_bytes`). `0` means no limit. |
@@ -90,7 +90,7 @@ a connection URL.
 | `queue_retry_base_secs` | int | 60 | Wait after a recipient's first failed attempt; each later wait doubles up to `queue_retry_cap_secs`. Every wait is spread by a random ±20% so mail deferred together does not all retry in the same second. At least 60. The default is short on purpose (a first temporary failure such as greylisting clears in minutes), so running on it logs nothing; a value you set below 1800 (the 30 minutes RFC 5321 §4.5.4.1 recommends) logs one warning at start with the value, the floor and the default. |
 | `queue_retry_cap_secs` | int | 3600 | Longest wait between attempts for one recipient. Not below `queue_retry_base_secs`. |
 | `queue_delay_warning_secs` | int | 4 hours | Message age at which the one "delivery delayed" DSN is sent for the recipients still pending. Below `queue_give_up_secs`. |
-| `scanner_hook_url` | string | unset | External HTTP scanner for unauthenticated inbound mail. Mutually exclusive with `antispam.clamd_socket`. |
+| `scanner_hook_url` | string | unset | External HTTP scanner for unauthenticated inbound mail. Mutually exclusive with `antispam.clamd_socket`. What a failed call does and how long it may take are `scanner_hook_on_error` and `scanner_hook_timeout_secs` in [`[antispam]`](#antispam-clamd-scanner-and-bayesian-thresholds). |
 | `antispam` | section | unset | Unix socket clamd scanner. See the settings below. |
 | `ldap` | section | unset | LDAP or Active Directory backend for logins and recipients no local account claims. Absent disables it. See [`[ldap]`](#ldap). |
 | `antispam_llm` | section | unset | LLM-assisted screening for unauthenticated mail whose Bayesian score lands in an uncertain band. Absent disables the hook. |
@@ -166,6 +166,13 @@ enabled = true
 | `bayes_junk_at` | float in `[0.0, 1.0]` | `0.95` | Score at or above which an unauthenticated message is delivered to the recipient's Junk mailbox with `X-Spam-Status: Yes` and the score in `X-Spam-Score`. Authenticated mail is never scored this way. A corpus below `MIN_TRUSTED_MESSAGES` (200) ham AND spam does not decide anything: a threshold acts only on a trained corpus: the account's own, or the shared one for an account with too little of its own, an alias or a list. |
 | `bayes_reject_at` | float in `[0.0, 1.0]` | unset | Score at or above which an unauthenticated message is refused during DATA with `550 5.7.1 message rejected as spam`. Absent disables the rejection path (default). When set, must be at least `bayes_junk_at` so the rejected band is a subset of the junked one. |
 
+| `scanner_hook_on_error` | `accept` or `defer` | `accept` | What a call to `scanner_hook_url` that fails does: the connection breaks, the deadline passes, the answer is over 64 KiB or it is not a JSON verdict. `accept` lets the message through unscanned (what the hook always did); `defer` answers `451 4.7.1 content scan unavailable, try again later`, so nothing passes unscanned while the scanner is down. A verdict the hook does not know (`"action": "maybe"`) is an answer, not an error, and accepts. |
+| `scanner_hook_timeout_secs` | integer | `30` | Deadline of one call to `scanner_hook_url`, from 1 to 120; the sender's connection waits it out. Outside the range the file is refused. |
+| `greylist_mask_v4` | integer | `32` | Leading bits of an IPv4 client address that greylisting tells apart, from 24 to 32. `24` makes the hosts of one /24 share a triplet, so a sender whose retry leaves from another of its outgoing servers is recognised. Below 24 the file is refused: a wider group lets a neighbour's retry release a stranger's message. The default keeps every stored triplet valid. |
+| `greylist_mask_v6` | integer | `128` | The same for IPv6, from 48 to 128. `64` treats a subscriber network as one client. |
+| `greylist_lifetime_secs` | integer | `86400` | How long a triplet is remembered, from 3600 to 2592000 (30 days). It has to be longer than the longest greylist delay of the server or of any scope, or a triplet would be forgotten before it could be accepted: the file is refused. A longer lifetime keeps a sender that mails rarely from being greylisted again each time. |
+| `reputation` | boolean | `true` | The sender-domain reputation screen runs whenever `[database]` exists: it records every accepted unauthenticated message and quarantines a domain that has more rejections than acceptances in the Rejects mailbox. `false` neither records nor consults it. Bayes, greylisting and the other screens are not touched. The reputation is keyed on the envelope domain, so the whole of a large mailbox provider is one counter; a provider operator who has no use for that sets `false`, or raises `reputation_min_observations`. |
+| `reputation_min_observations` | integer | `3` | Observations a domain needs before its reputation is judged, from 3 to 1000. Fewer than 3 is refused: a domain would be quarantined on a single bad message. |
 | `senders` | table | empty | Allow and deny lists of senders and recipients for the whole server, the widest scope of [`[[antispam_scope]]`](#antispam_scope): `allow`, `deny` and `deny_recipients`, with the entry shapes and rules given there. Empty by default: no sender is favoured or refused by name. |
 
 ```toml
@@ -1486,6 +1493,8 @@ temporary are the same at every level.
 |---|---|---|
 | `reject_detail` | `"standard"` | `"terse"`, `"standard"` or `"verbose"`; any other value is refused on load. See the table below. |
 | `reject_reference` | `true` | Put a reference such as `(ref 7f3a9c)` at the end of a final refusal and in the log line of the same refusal. `false` leaves the text as it was and logs no such line. |
+| `trusted_networks` | `[]` | CIDR blocks of the operator's own relays: a secondary MX, an internal gateway. See [trusted networks](#trusted-networks). |
+| `mailbox_full` | `"temporary"` | `"temporary"` answers a full mailbox `452 4.2.2` and the sender retries until room is made, which is what RFC 3463 describes; `"permanent"` answers `552 5.2.2`, a bounce at once. The same answer at `RCPT TO`, at the end of DATA and when the store refuses the copy. When only some recipients of a message are full the others still receive it and the sender gets the failure report, whatever this says. |
 
 The refusals the level applies to are the SPF, DMARC and blocklist refusals,
 the per-client and per-sender limits (`inbound_rate_limit_per_ip_per_min`,
@@ -1516,7 +1525,91 @@ the setting, as in a test, sends no reference.
 [smtp]
 reject_detail = "verbose"
 reject_reference = true
+trusted_networks = ["192.0.2.0/24", "2001:db8:25::/48"]
+mailbox_full = "temporary"
 ```
+
+#### Trusted networks
+
+A secondary MX or an internal gateway delivers mail for other people's
+domains from an address that no sender's SPF record lists, and from an
+address the operator knows. Mail from a peer in `trusted_networks` skips the
+checks that judge the connecting address: the DNS blocklist check of the
+client address, greylisting, the first-time sender delay, and SPF, DKIM and
+DMARC. It also keeps the per-IP connection cap off the peer, as before.
+
+What does not change, whatever the network: nothing the relay says is
+believed (its `Authentication-Results` and other trust fields are stripped as
+for any unauthenticated peer), and the message is never marked as verified,
+so no allow list favours it. The sender deny lists, the blocklists of the
+sender domain and of the links in the body, the virus scanner, the attachment
+policy, the Bayesian thresholds, the size and recipient limits and the
+inbound rate limits all apply. Account sessions are not affected: a peer
+that authenticates is judged as it always was.
+
+The floors are enforced when the file loads, and the error names the key: an
+entry is a network with a prefix length (a bare address is a single host), an
+IPv4 prefix is at least `/8`, an IPv6 prefix at least `/32`, no entry is
+repeated and the list has at most 256 entries. `0.0.0.0/0` is never accepted.
+It is a list of the operator's own relays, so a provider keeps it as short as
+it can: a wide network means every host in it can send as anyone.
+
+### `[forwarding]`
+
+Where the mail an account sends on by itself may go, and how much of it. A
+copy of this kind is a `forward` address of the account, a Sieve `redirect`
+and a vacation reply (the Sieve action and the JMAP `VacationResponse`).
+
+| Key | Default | Meaning |
+|---|---|---|
+| `policy` | `"any"` | `"any"` forwards to any address, as the server always did. `"hosted-only"` forwards only to an address in a domain this server hosts (a domain alias counts). `"none"` forwards nowhere: no `forward` address, no `redirect`, no vacation reply. |
+| `account_per_min` | unset | The most copies one account may forward in a minute. Unset follows the account's submission limit: its domain's entry of `domain_submission_limits`, else `submission_rate_limit_per_min`; with neither there is no limit. At least 1: `0` is refused, because it would read as no limit. |
+| `server_per_min` | unset | The most copies the whole server forwards in a minute, over every account. Unset sets none. |
+
+A `[[antispam_scope]]` sets `forward_policy` and `forward_per_min` for a
+tenant, a domain or an account (see [`[[antispam_scope]]`](#antispam_scope)).
+The most specific scope in reach wins and may relax what a wider one set, so
+a provider can forbid forwarding on its default plan and allow it on one
+customer's domain; the script of the account cannot change it.
+
+- A copy the policy refuses is not queued. A message whose only way out
+  was the copy (a pure forward with `forward_keep_local = false`, or a
+  `redirect`, which cancels the implicit keep) stays in the mailbox, so a
+  refusal never loses mail. The log says so once an hour per account.
+- The limits count a copy as one unit per address, like a submission counts
+  a recipient, and take a whole batch or none of it: a script that
+  redirects to three addresses with two units left sends none of them, and
+  keeps the message. The account window and the server window are fixed
+  windows of a minute. A refused batch charges the side that refused it
+  nothing.
+- A vacation reply goes to the sender of the message, so under
+  `hosted-only` only a sender in a hosted domain is answered, and each reply
+  is one unit. The reply markers are still written, so the same sender is
+  not answered again during the reply period.
+- The limits are counted in memory, one count per process, and start over
+  with it.
+- These stay fixed whatever the settings: a bounce (null sender) is never
+  forwarded, a message that names an address already in `Delivered-To` is
+  refused as a loop (`554 5.4.6` to the sender), a message that has crossed
+  more than 25 `Received` hops is not forwarded by `forward` or by `redirect`,
+  and every copy leaves with SRS and an ARC seal when those are configured.
+
+```toml
+[forwarding]
+policy = "hosted-only"
+account_per_min = 30
+server_per_min = 600
+
+[[antispam_scope]]
+domain = "example.org"          # a customer allowed to forward anywhere
+forward_policy = "any"
+forward_per_min = 10
+```
+
+Not done yet: an admin Sieve script that runs before or after the user's, a
+server rule that rejects, tags or forwards, and the CLI and API to manage
+either. They need a decision on where the script lives and what the user may
+see of it, and are tracked in the issue.
 
 ### `[own_ip_blocklist]`
 A periodic check of the server's own `public_ipv4` and `public_ipv6` against
@@ -2589,6 +2682,7 @@ max_attachment_bytes = 5000000
 | `bayes_junk_at`, `bayes_reject_at` | The junk and reject thresholds of the `[antispam]` section for the mail of this scope. Absent keeps the next wider scope's value. A reject threshold below the junk one in the same entry is refused at load; after resolution it is raised to the junk one, so the rejected band stays inside the junked one. |
 | `greylist_delay_secs` | Greylisting for this scope, in seconds (at most 86400). `0` turns it off here even when the server greylists; a number turns it on here even when the server does not (the greylist store is then built at start). |
 | `first_time_sender_delay_secs` | The wait of a sender never seen before (at most 300, the connection waits it out). Needs `[database]` like the server-wide key. |
+| `forward_policy`, `forward_per_min` | Where this scope's mail may be forwarded (`"any"`, `"hosted-only"`, `"none"`) and how many copies one account may forward in a minute (at least 1); see [`[forwarding]`](#forwarding). Absent keeps the next wider scope's value. |
 | `attachments` | `mode`, `macros`, `encrypted_archives`, `block_extensions`, `block_mime_types` and `max_attachment_bytes`, as in `[attachments]`, and only stronger. |
 | `checks` | `dkim`, `dkim_require_signature`, `arc` and `reverse_dns`: whether the DKIM, ARC and reverse-DNS checks of inbound mail only annotate or refuse. See "Strict checks per scope" below. |
 
@@ -2617,8 +2711,9 @@ scope). A scope in reach adds its entries and never removes another's:
   when every recipient's scopes favour the sender, and the attachment settings
   are the strictest of any recipient's.
 
-**Numbers.** For `bayes_junk_at`, `bayes_reject_at`, `greylist_delay_secs`
-and `first_time_sender_delay_secs` the most specific scope in reach wins:
+**Numbers.** For `bayes_junk_at`, `bayes_reject_at`, `greylist_delay_secs`,
+`first_time_sender_delay_secs`, `forward_policy` and `forward_per_min` the
+most specific scope in reach wins:
 account, then domain, then tenant, then the server. There is no floor: a scope
 may set any valid value, looser or stricter than the server (the issue names
 none; a provider that wants one needs a decision). A message with several
@@ -3051,12 +3146,15 @@ by the script:
   written into an `RCPT TO` line, so a line break in it would have been an
   SMTP command). A redirect that names something that is not an address is a
   run-time error: the message is kept. Redirects past the limit are not
-  forwarded and the log says so. Known gap: the forwards a script
-  makes are not charged to the sending limits of
-  `submission_rate_limit_per_min`, and a message forwarded to another local
-  account is filtered again there. The loop check stops a message that comes
-  back to an address it went through, but a chain across different accounts
-  that each redirect is bounded only by the number of accounts.
+  forwarded and the log says so. The copies a script makes are counted by the
+  forwarding limits (`[forwarding]`: the account's own, else its submission
+  limit, and the server's), and `[forwarding] policy` says where they may go;
+  a copy that is refused or over the limit is not sent and the message is
+  kept. A message that has crossed more than 25 `Received` hops is not
+  redirected. A message forwarded to another local account is filtered again
+  there; the loop check stops a message that comes back to an address it went
+  through, and the hop limit stops a chain across different accounts that each
+  redirect.
 - A filter file over 1 MiB (the store never writes one) is not run, and nor is
   one the parser refuses today (a script stored before a stricter check): mail
   goes to INBOX and the log says so. Every warning a filter causes (a run that
