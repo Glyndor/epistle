@@ -227,6 +227,12 @@ pub fn plan(answers: &Answers) -> Result<Plan, ApplyError> {
 				target: address.clone(),
 			});
 		}
+		if let Some(mailbox) = first.fbl_alias() {
+			steps.push(PlanStep::RoleAlias {
+				address: mailbox,
+				target: address.clone(),
+			});
+		}
 	}
 	Ok(Plan { steps })
 }

@@ -39,6 +39,30 @@ pub(super) fn ingest_for_recipients(
 	}
 }
 
+/// Hand the message to the feedback-loop receiver when an envelope
+/// recipient is the mailbox the operator named for it.
+pub(super) fn process_fbl(
+	fbl: &reports::fbl::Fbl,
+	data_dir: &Path,
+	directory_handle: &crate::directory_store::DirectoryHandle,
+	metrics: &Option<std::sync::Arc<crate::metrics::Metrics>>,
+	message: &AcceptedMessage,
+) {
+	if message
+		.recipients
+		.iter()
+		.any(|recipient| fbl.is_mailbox(recipient))
+	{
+		reports::fbl::process(
+			fbl,
+			data_dir,
+			&directory_handle.current(),
+			message,
+			metrics.as_deref(),
+		);
+	}
+}
+
 /// Whether `local@domain` is a report mailbox: the local part is `postmaster`
 /// or `tlsrpt` and the domain is one the server answers for.
 fn is_report_target(local: &str, domain: &str, domains: &[String]) -> bool {

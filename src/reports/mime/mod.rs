@@ -28,8 +28,12 @@ use thiserror::Error;
 use super::Kind;
 use super::decompress::{Encoding, MAX_COMPRESSED};
 
+mod arf;
 mod types;
 
+#[cfg(test)]
+pub(crate) use arf::MAX_ARF;
+pub(crate) use arf::{field, find_arf_parts};
 pub(crate) use types::content_types;
 
 /// Hard cap on total parts we walk. A real inbound report has two (text

@@ -415,6 +415,10 @@ pub struct Config {
 	/// Absent uses the secure defaults (strict outbound TLS).
 	#[serde(default)]
 	pub queue: Queue,
+	/// The mailbox that receives the providers' spam-complaint reports and
+	/// which senders are believed. Absent leaves the receiver off.
+	#[serde(default)]
+	pub reports: super::Reports,
 	/// Authentication toggles. Absent keeps the historical default of
 	/// `scram = true`. Present with `scram = false` hides the mechanism on
 	/// the wire, refuses an explicit `AUTHENTICATE`/`AUTH` against it,

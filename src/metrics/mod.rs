@@ -11,60 +11,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::dnsbl::own::Listing;
 
+mod fbl;
+mod reject;
+
+use reject::REASONS;
+pub use reject::RejectReason;
+
 pub(crate) const OWN_IP_BLOCKLISTED: &str = "own_ip_blocklisted";
-
-/// Why an inbound message was rejected, for the per-reason counter label.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RejectReason {
-	/// Rejected because the client IP appeared in a configured DNSBL.
-	Dnsbl,
-	/// Rejected because SPF did not pass and the receiver's policy enforces.
-	Spf,
-	/// Rejected because DMARC alignment failed and the record's policy is
-	/// `reject` (or `quarantine`, which the metrics treat as a rejection).
-	Dmarc,
-	/// Rejected because the sender's reputation crossed the suspect
-	/// threshold.
-	Reputation,
-	/// Rejected by an external content scanner (ClamAV/Rspamd).
-	Scanner,
-	/// Rejected because the message was a loop (our own envelope sender on
-	/// a received message, e.g. via SRS / an alias chain).
-	Loop,
-	/// Rejected at `MAIL FROM` because the unauthenticated client tripped
-	/// the configured per-IP or per-sender rate limit. The reply is `450`,
-	/// so the rejection is temporary and the peer is expected to retry.
-	RateLimit,
-	/// Rejected because the message has more header fields than a Sieve
-	/// filter reads (`554 5.6.0`).
-	HeaderFields,
-}
-
-impl RejectReason {
-	fn label(self) -> &'static str {
-		match self {
-			RejectReason::Dnsbl => "dnsbl",
-			RejectReason::Spf => "spf",
-			RejectReason::Dmarc => "dmarc",
-			RejectReason::Reputation => "reputation",
-			RejectReason::Scanner => "scanner",
-			RejectReason::Loop => "loop",
-			RejectReason::RateLimit => "rate_limit",
-			RejectReason::HeaderFields => "header_fields",
-		}
-	}
-}
-
-const REASONS: [RejectReason; 8] = [
-	RejectReason::Dnsbl,
-	RejectReason::Spf,
-	RejectReason::Dmarc,
-	RejectReason::Reputation,
-	RejectReason::Scanner,
-	RejectReason::Loop,
-	RejectReason::RateLimit,
-	RejectReason::HeaderFields,
-];
 
 /// Canonical short names of every counter, paired with the matching field.
 ///
@@ -114,6 +67,7 @@ const COUNTERS: &[(&str, &str)] = &[
 	("tlsrpt_reports_ingested", "tlsrpt_reports_ingested"),
 	("tlsrpt_failed_sessions", "tlsrpt_failed_sessions"),
 	("reports_dropped", "reports_dropped"),
+	("fbl_complaints", "fbl_complaints"),
 	("mta_sts_connections_dropped", "mta_sts_connections_dropped"),
 	("accept_failed", "accept_failed"),
 	("warmup_held", "warmup_held"),
@@ -181,6 +135,8 @@ pub struct Metrics {
 	tlsrpt_reports_ingested: AtomicU64,
 	tlsrpt_failed_sessions: AtomicU64,
 	reports_dropped: AtomicU64,
+	fbl_complaints: AtomicU64,
+	fbl_by_key: Mutex<BTreeMap<(String, String), u64>>,
 	mta_sts_connections_dropped: AtomicU64,
 	llm_consulted: AtomicU64,
 	llm_quarantined: AtomicU64,
@@ -544,6 +500,7 @@ impl Metrics {
 			"tlsrpt_reports_ingested" => &self.tlsrpt_reports_ingested,
 			"tlsrpt_failed_sessions" => &self.tlsrpt_failed_sessions,
 			"reports_dropped" => &self.reports_dropped,
+			"fbl_complaints" => &self.fbl_complaints,
 			"mta_sts_connections_dropped" => &self.mta_sts_connections_dropped,
 			"accept_failed" => &ACCEPT_FAILED,
 			"warmup_held" => &self.warmup_held,

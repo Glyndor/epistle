@@ -108,6 +108,13 @@ impl SplitDelivery {
 		self
 	}
 
+	/// Read the spam complaints delivered to the feedback-loop mailbox and
+	/// suppress the complainant. `None` leaves the mailbox ordinary.
+	pub fn with_fbl(mut self, fbl: Option<crate::reports::fbl::Fbl>) -> Self {
+		self.local = self.local.with_fbl(fbl);
+		self
+	}
+
 	/// Sign outbound messages with this DKIM signer. Per-domain
 	/// overrides are picked at sign time from the same handle.
 	pub fn with_signer(mut self, signer: crate::dkim::PerDomainSigner) -> Self {

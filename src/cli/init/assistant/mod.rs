@@ -379,6 +379,7 @@ fn ask_first_account<R: BufRead>(
 		display_name: None,
 		password_file: None,
 		role_aliases: true,
+		fbl_mailbox: None,
 	};
 	loop {
 		first.address = ask_line(reader, "first account address (empty to skip)> ", out)?;
@@ -417,6 +418,24 @@ fn ask_first_account<R: BufRead>(
 		true,
 		out,
 	)?;
+	loop {
+		let raw = ask_line(
+			reader,
+			"complaint mailbox for the providers' feedback loops (empty to skip)> ",
+			out,
+		)?;
+		if raw.is_empty() {
+			break;
+		}
+		first.fbl_mailbox = Some(raw);
+		match first.check(&domains) {
+			Ok(()) => break,
+			Err(why) => {
+				first.fbl_mailbox = None;
+				let _ = writeln!(out, "  {why}; try again");
+			}
+		}
+	}
 	Ok((Some(first), Some(Password::new(password))))
 }
 

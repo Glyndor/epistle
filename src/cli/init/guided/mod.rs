@@ -158,7 +158,7 @@ fn first_account<R: BufRead, W: Write>(
 ) -> io::Result<()> {
 	let address = ui.validated("address", "Create the first mailbox. Its account name comes from the address, with dots changed to hyphens. Enter skips the mailbox.", "", "alice@example.org", |raw| {
 		if raw.is_empty() { return Ok(None); }
-		let first = FirstAccount { address: raw.to_string(), display_name: None, password_file: None, role_aliases: true };
+		let first = FirstAccount { address: raw.to_string(), display_name: None, password_file: None, role_aliases: true, fbl_mailbox: None };
 		first.check(&answers.domains).map_err(|why| why.replace('"', ""))?;
 		Ok(Some(first))
 	})?;
@@ -180,6 +180,22 @@ fn first_account<R: BufRead, W: Write>(
 			},
 		)?;
 		first.role_aliases = ui.boolean("role aliases", "Deliver postmaster@ and abuse@ for every domain to this mailbox, for delivery problems and abuse reports. Enter creates these aliases.", true)?;
+		let hosted = answers.domains.clone();
+		first.fbl_mailbox = ui.validated(
+			"complaint mailbox",
+			"Providers send the spam complaints of your recipients to a mailbox you enrol. Enter an address in one of your domains to read them here, or press Enter to skip. No default: the address is yours to choose.",
+			"",
+			"fbl@example.org",
+			|raw| {
+				if raw.is_empty() {
+					return Ok(None);
+				}
+				let mut candidate = first.clone();
+				candidate.fbl_mailbox = Some(raw.to_string());
+				candidate.check(&hosted).map_err(|why| why.replace('"', ""))?;
+				Ok(Some(raw.to_string()))
+			},
+		)?;
 	}
 	Ok(())
 }

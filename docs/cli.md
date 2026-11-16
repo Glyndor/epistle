@@ -1854,12 +1854,18 @@ What this build does:
   as a plan step so the operator sees it before confirming;
 - creates the first mail account when one is given (the assistant asks right
   after the domains; an answers file uses an optional `[first_account]` table
-  with `address`, `display_name`, `password_file` and `role_aliases`). The
+  with `address`, `display_name`, `password_file`, `role_aliases` and the
+  optional `fbl_mailbox`). The
   password is typed twice with echo off, or read from the first line of
   `password_file` (`-` reads it from stdin); it is never written in the
   answers file. With `role_aliases` (the default), `postmaster@` and `abuse@`
   of every domain become aliases of that account, so `config-check` no longer
-  warns about the missing `postmaster@` (RFC 5321) address. The alias is
+  warns about the missing `postmaster@` (RFC 5321) address. With `fbl_mailbox`
+  (the assistant asks for it and Enter skips; nothing is assumed), that
+  address in one of the domains also becomes an alias of the account and
+  `[reports] fbl_mailbox` names it, and the end of the run prints the
+  enrolment steps of the providers' complaint feedback loops (see
+  [`[reports]`](configuration.md#reports)). The alias is
   written in the form the server stores, so a domain given with non-ASCII
   letters appears in punycode (`postmaster@xn--...`), and an address that an
   account or a masked address already holds is left alone;
