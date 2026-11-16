@@ -85,7 +85,8 @@ jobs:
     # behaviour is for the daily cadence.
     needs: audit
     if: failure() && github.event_name != 'pull_request'
-    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
+    # Fixed on GitHub's runners, never CI_RUNNER: holds `issues: write`.
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       # `contents: read` for the checkout of the combine script below;
@@ -164,7 +165,8 @@ jobs:
     # required check.
     needs: audit
     if: success() && github.event_name != 'pull_request'
-    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
+    # Fixed on GitHub's runners, never CI_RUNNER: holds `issues: write`.
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       issues: write

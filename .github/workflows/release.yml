@@ -38,7 +38,8 @@ jobs:
   # Gate every release on promoted, version-matched, advisory-free code.
   verify:
     name: Verify tag
-    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
+    # Fixed on GitHub's runners, never CI_RUNNER: release job; holds secrets or write/OIDC permissions.
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: read
@@ -306,7 +307,8 @@ jobs:
     name: Build
     needs: [verify, build-deb]
     if: ${{ !inputs.images-only }}
-    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
+    # Fixed on GitHub's runners, never CI_RUNNER: release job; holds secrets or write/OIDC permissions.
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       contents: read
@@ -387,7 +389,8 @@ jobs:
     name: Sign
     needs: [verify, build]
     if: ${{ !inputs.images-only }}
-    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
+    # Fixed on GitHub's runners, never CI_RUNNER: release job; holds secrets or write/OIDC permissions.
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: read
@@ -477,7 +480,8 @@ jobs:
     needs: [verify, build, sign]
     # A rehearsal stops before this job.
     if: ${{ !inputs.images-only && !inputs.dry-run }}
-    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
+    # Fixed on GitHub's runners, never CI_RUNNER: release job; holds secrets or write/OIDC permissions.
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: write
@@ -620,7 +624,8 @@ jobs:
     name: Publish multi-arch image manifest
     needs: [verify, image-build]
     if: ${{ always() && needs.image-build.result == 'success' }}
-    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
+    # Fixed on GitHub's runners, never CI_RUNNER: release job; holds secrets or write/OIDC permissions.
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: read
