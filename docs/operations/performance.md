@@ -6,9 +6,6 @@ rendering a response, persisting a flag change. This page records the hot paths
 that have been measured, the allocation and write-amplification reductions made
 on them, and how to reproduce the measurements.
 
-A path is only changed when the saving can be named. Several paths audited
-here were already tight and were left untouched (see [What was left alone](#what-was-left-alone)).
-
 ## Hot paths considered
 
 - **Per-command parsing** — SMTP command/address parsing (`src/smtp`), IMAP
@@ -27,13 +24,11 @@ here were already tight and were left untouched (see [What was left alone](#what
 ### `render_flags` — one allocation per call removed
 
 `src/imap/mailbox/flag.rs`. The flag list of a message is rendered on every
-`FETCH FLAGS` and every non-silent `STORE` response. The previous
-implementation collected the flag tokens into a `Vec<&str>` and then `join`ed
-them into a `String` — two heap allocations per call. It now writes directly
-into a single `String` pre-sized to the exact final length (parentheses + token
-bytes + separators), so the intermediate `Vec` is gone and the result buffer
-never reallocates. The function is allocation-bound at this size, so removing
-one of two allocations is a real relative cut.
+`FETCH FLAGS` and every non-silent `STORE` response. It writes the
+tokens directly into a single `String` pre-sized to the exact final length (parentheses + token
+bytes + separators), so there is no intermediate `Vec` and the result buffer
+never reallocates. The function is allocation-bound at this size, so one
+allocation instead of two is a real relative cut.
 
 ## Write-amplification reductions
 
@@ -46,22 +41,17 @@ durability.
 
 `Snapshot::store_flags` in `src/imap/snapshot.rs`. A STORE that sets a message's
 flags to the set it already has is common — clients re-mark `\Seen`, re-apply a
-`+FLAGS` that is already present, or issue a `FLAGS` that matches. The previous
-code unconditionally:
-
-1. rewrote the `<id>.flags` sidecar (temp file + fsync + rename),
-2. advanced the mailbox mod-sequence counter (a counter write), and
-3. wrote the per-message mod-sequence sidecar.
-
-That is three disk operations for a change that changes nothing.
-`store_flags` now compares the requested flag set against the current one
+`+FLAGS` that is already present, or issue a `FLAGS` that matches. A real change
+rewrites the `<id>.flags` sidecar (temp file + fsync + rename), advances the
+mailbox mod-sequence counter and writes the per-message mod-sequence sidecar:
+three disk operations, which a change that changes nothing does not need.
+`store_flags` compares the requested flag set against the current one
 (order- and duplicate-independent) and, when they match, returns the existing
 flags immediately — no disk I/O, no counter advance.
 
 This is not only cheaper but **more correct**: RFC 7162 says a STORE that does
-not change the flags must not advance the mod-sequence. No existing behavior
-relies on a no-op STORE bumping `MODSEQ`; a STORE that genuinely changes flags
-still writes and advances exactly as before.
+not change the flags must not advance the mod-sequence. A STORE that
+genuinely changes flags still writes and advances the mod-sequence.
 
 **Durability is preserved** because the skipped writes only ever applied to a
 state that already equals the requested one — there is nothing to make durable.
@@ -72,26 +62,10 @@ Measured impact (`cargo bench --bench queue -- store_flags`, criterion, release)
 | Case | Time |
 |---|---|
 | `store_flags_change` (real change: sidecar + 2 counter writes) | ~50 µs |
-| `store_flags_noop` (same set re-stored, now skipped) | ~7 ns |
+| `store_flags_noop` (same set re-stored, skipped) | ~7 ns |
 
 The no-op path is roughly four orders of magnitude cheaper because it avoids the
-fsync-class syscalls entirely. Numbers are machine-dependent; reproduce locally.
-
-## What was left alone
-
-Reported honestly, these paths were audited and found already tight; changing
-them would be churn for no measurable gain:
-
-- **SMTP/IMAP/address parsers** borrow with `split_once`/`rsplit_once`/`strip_*`
-  and allocate only the owned fields the parsed command must own. The IMAP
-  search parser produces an owned AST; those allocations are intrinsic.
-- **`FsSpool::store`** clones the envelope's reverse-path/recipients out of the
-  borrowed `AcceptedMessage`, but the path is dominated by two `fsync`s — the
-  small-string clones are noise next to millisecond-scale durability syscalls,
-  so a borrowing serialize-only envelope would add a parallel type for no
-  measurable win.
-- **`append`** already skips the `.flags` sidecar entirely when the flag set is
-  empty (the common delivered-message case).
+fsync-class syscalls entirely. Numbers depend on the machine and the storage; reproduce them locally.
 
 ## Running the benchmarks
 
@@ -178,7 +152,7 @@ numbers across machines — but the shape is consistent:
 - **Parsing is allocation-light.** The parse stage is a thin sliver: the SMTP,
   address and IMAP parsers borrow with `split_once`/`strip_*` and the line
   decoder reuses its buffer, so this stage barely registers next to the
-  delivery fsyncs (consistent with [What was left alone](#what-was-left-alone)).
+  delivery fsyncs.
 - **The snapshot scan grows with the mailbox.** `Snapshot::open` is O(mailbox
   size) — it lists the `new/` directory and sorts the messages. The example
   re-opens a mailbox that grows by one message per iteration, so at large N the
@@ -186,7 +160,7 @@ numbers across machines — but the shape is consistent:
   super-linearly. This is the cost a real session pays once per `SELECT`, not
   per message, but the workload makes it visible. The STORE stage benefits
   directly from the no-op skip and the single-allocation `render_flags` covered
-  above (that `store_flags`/`render_flags` work is already in).
+  above.
 
 Delivery fsyncs dominate at small mailbox sizes; as the mailbox grows, the
 per-iteration `Snapshot::open` scan takes over and throughput falls off. The
@@ -208,33 +182,36 @@ database** and **without adding write amplification**. It lives in
 
 One compact text file per mailbox, `<mailbox_dir>/.index`, holding everything
 `Snapshot::open` gathers per message — UUID, UID, plaintext size, internaldate,
-mod-sequence and flags — one record per line, in the same UUID-sorted order the
-scan produces. It is versioned (`EPISTLE-MAILBOX-INDEX 1`) and carries a
-generation stamp. The `.eml` files and their sidecars remain the **canonical
-source of truth**; the index is a derived cache that can be deleted and rebuilt
-at any time with no loss of correctness. No new dependency: the format is
-hand-rolled line text, not JSON.
+mod-sequence and flags — one record per line, in the UID order the scan
+produces. It is versioned (the first line is `EPISTLE-MAILBOX-INDEX 3`) and the
+second line is a generation stamp. The `.eml` files and their sidecars remain
+the **canonical source of truth**; the index is a derived cache that can be
+deleted and rebuilt at any time with no loss of correctness. No new dependency:
+the format is hand-rolled line text, not JSON.
 
 ### How `open` decides fresh-vs-rebuild
 
-The generation stamp is **the mailbox's highest mod-sequence plus its `.eml`
-count**, both read cheaply: the mod-sequence is the persisted `.modseqctr`
-counter (one small read, the same counter RFC 7162 already maintains and that
-every flag change / append / expunge bumps), and the count is a single
-`read_dir` pass with no per-file work. On open, epistle reads the current
-generation and the index header. If the index exists, parses, has the current
-version, and its stamp matches the current generation, the snapshot is built
-straight from the index — skipping all the per-message sidecar reads. Otherwise
-it falls back to the full filesystem scan (unchanged) and writes a fresh index
-stamped with the generation it just observed.
+The generation stamp is **the mailbox's highest mod-sequence, its `.eml` count
+and a digest of the `.eml` file names**, all read cheaply: the mod-sequence is
+the persisted `.modseqctr` counter (one small read, the same counter RFC 7162
+already maintains and that every flag change / append / expunge bumps), and the
+count and the digest come from a single `read_dir` pass with no per-file work.
+The digest tells a mailbox that lost one message and gained another from the one
+that was indexed, since delivery and POP3 change the files without moving the
+mod-sequence. On open, epistle reads the current generation and the index
+header. If the index exists, parses, has the current version, and its stamp
+matches the current generation, the snapshot is built straight from the index —
+skipping all the per-message sidecar reads. Otherwise it falls back to the full
+filesystem scan (unchanged) and writes a fresh index stamped with the
+generation it just observed.
 
 ### Why it does not add write amplification
 
 The index is written **only on a rebuild**, never per mutation. A flag change
 keeps writing just the `.flags` sidecar and bumps the mod-sequence (as before);
 the index is simply left stale — its stamp no longer matches — and is rebuilt on
-the next open that needs it. Appends and expunges change the `.eml` count, which
-likewise invalidates the stamp. So a burst of `STORE`s costs the same disk
+the next open that needs it. Appends and expunges change the `.eml` count and the names digest, which
+likewise invalidate the stamp. So a burst of `STORE`s costs the same disk
 writes it did before; the index is amortised across the reads that follow, not
 paid on every write.
 

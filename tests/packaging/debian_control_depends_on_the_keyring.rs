@@ -23,8 +23,8 @@
 //! is not enough; the floor must be expressed, and the comparison must be
 //! numeric per component, not lexicographic, so `5.10.10` rejects `5.9.0`.
 //!
-//! `wireguard-tools` is in `Depends` for the optional mesh between nodes
-//! (`docs/operations/mesh.md`). The package only carries the tools: the
+//! `wireguard-tools` is in `Depends` for a deployment that joins nodes over
+//! a private tunnel. The package only carries the tools: the
 //! maintainer scripts must never create an interface, a key or a firewall
 //! rule, because a node that did not ask for a tunnel must not have one.
 //!

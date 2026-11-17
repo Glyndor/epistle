@@ -329,8 +329,8 @@ fn nothing_listed_as_never_added_is_written() {
 }
 
 #[test]
-fn the_page_keeps_its_warning_about_planned_changes() {
+fn the_page_says_no_bimi_header_is_written() {
 	let page = page();
-	assert!(page.contains("## Planned changes"));
-	assert!(page.contains("Do not depend on any of them yet"));
+	assert!(page.contains("## BIMI"));
+	assert!(page.contains("The server writes no BIMI header"));
 }

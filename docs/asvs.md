@@ -33,7 +33,7 @@ function name is the stable reference.
 | 1.4 Access-control architecture (enforced at a trusted layer) | Met | Management API is gated by one middleware over the whole router (`src/api/state/mod.rs::require_bearer_token`, wired in `src/api/mod.rs`); mail-protocol access is account-scoped at the directory/storage layer. |
 | 1.5 Input/output: untrusted input bounded at the boundary | Met | Sans-IO decoders bound every external input (see V5); SMTP decoder is smuggling-immune (`src/smtp/line/mod.rs::LineDecoder`). |
 | 1.6 Cryptographic architecture (keys managed, rotatable) | Met | DKIM auto-rotation under new selectors with an overlap window (`src/dkim/rotate/mod.rs`); ACME issues/renews TLS keys (`src/acme/`). |
-| 1.8 Data protection / classification | Met | Bodies on the filesystem `0600`, never in the DB; secrets only from the environment. See V8. |
+| 1.8 Data protection / classification | Met | Bodies on the filesystem `0600`, never in the DB; secrets come from the environment, a file or, for some settings, the owner-only config file; none is in the code. See V8. |
 | 1.9 Communications encrypted in transit | Met | TLS for all mail protocols. Outbound STARTTLS is strict (webpki + hostname) by default and whenever TLS is mandated (MTA-STS enforce / REQUIRETLS); DANE authenticates via TLSA. Operators may opt a non-mandated, non-DANE hop down to opportunistic TLS (encryption without authentication, the SMTP norm) via `[queue] outbound_tls`. See V9. |
 | 1.11 Business-logic boundaries documented | Met | Per-account confinement, MAIL FROM ownership, quota pool invariant — see V4 / V11. |
 | 1.14 Trust boundaries / segregation | Met | API closed by default (Podman-internal only); CLI runnable only as the isolated user / sudo. |
@@ -101,7 +101,7 @@ function name is the stable reference.
 | 5.1.4 Bounds on attacker-controlled sizes | Met | SMTP data line 998 (`src/smtp/line/mod.rs`), command line 512 (`src/smtp/command.rs`), message 25 MiB and ≤100 recipients (`src/smtp/session/limits.rs`), inbound trace-hop cap (`src/smtp/trace/received.rs`), outbound reply 64 KiB (`src/queue/client/mod.rs`), MTA-STS body 64 KiB (`src/mtasts/policy/mod.rs`), bounce header block 4096 (`src/queue/bounce/mod.rs`). |
 | 5.2.x Sanitize unstructured / hostile content | Met | A remote MTA's reply is sanitized (controls → space, length-capped) before it reaches any DSN header or body (`src/queue/bounce/mod.rs::sanitize_reason`). |
 | 5.3.1 Output encoding / no header (CRLF) injection | Met | Inbound: bare CR/LF/NUL rejected by the decoder (`src/smtp/line/mod.rs`). Outbound: bounce/DSN reason sanitized (above); addresses are validated values. |
-| 5.3.4 Parameterized queries only (SQLi) | Met | Every query is a sqlx **compile-time macro** with bound `$n` params — no string-built SQL anywhere (`src/antispam/corpus/score.rs`, `src/antispam/reputation/mod.rs`). |
+| 5.3.4 Parameterized queries only (SQLi) | Met | Every query binds its values as `$n` parameters (sqlx, with compile-time macros or `sqlx::query(...).bind`); no SQL is built by formatting input into a string (`src/antispam/corpus/score.rs`, `src/antispam/reputation/mod.rs`, `src/antispam/bans/sql/mod.rs`). |
 | 5.3.6 No injection into LDAP/OS command | Met | No shell-out on attacker input. The optional LDAP backend escapes the login per RFC 4515 before it enters `user_filter` (`src/directory_store/ldap/mod.rs`). |
 | 5.3.8 Deserialization is safe | Met | TOML/JSON via serde into typed structs; no arbitrary-type deserialization. |
 | 5.5 SSRF defenses | Met | No per-request attacker-controlled fetch: webhook URLs are operator config validated at startup (`src/config/validate/mod.rs`); MTA-STS fetches a fixed `https://mta-sts.<domain>/.well-known/...` with redirects disabled (`src/mtasts/policy/mod.rs`); autodiscovery only *serves* config. |
@@ -142,10 +142,10 @@ function name is the stable reference.
 
 | Req (L3) | Status | Evidence |
 |---|---|---|
-| 8.1.1 Sensitive data protected at rest | Met | Message bodies are canonical `.eml` on the filesystem, `0600`, on a LUKS-encrypted volume by default; bodies never enter the DB (a DB compromise exposes no mail content). |
+| 8.1.1 Sensitive data protected at rest | Partial | Message bodies are canonical `.eml` on the filesystem, `0600`; bodies never enter the DB (a DB compromise exposes no mail content). Encrypting the files is opt-in (`[storage] encrypt_at_rest`, off by default, `src/config/storage/mod.rs`), and encrypting the data volume is the operator's job. |
 | 8.2.1 Minimal data retention | Met | Retention is opt-in per account, default off (never silently deletes); GDPR erasure hard-purges `.eml` (shredded) + every DB row (see `docs/configuration.md`). |
 | 8.3.1 Sensitive data not in logs/URLs | Met | See V7; no PII/secret in logs or URLs. |
-| 8.3.4 Secrets sourced from env/secret store | Met | `${VAR}` expansion aborts startup on an unset var (`src/config/env.rs`); no secret literal in config or code. |
+| 8.3.4 Secrets sourced from env/secret store | Met | `${VAR}` expansion aborts startup on an unset var (`src/config/env.rs`); a secret can also come from a file, and some settings accept it inline in the `0600` config file (the DNS provider token, for example, takes an inline value, an environment variable or a file). No secret is embedded in the code. |
 
 ---
 
@@ -166,7 +166,7 @@ function name is the stable reference.
 | Req (L3) | Status | Evidence |
 |---|---|---|
 | 10.2.x No malicious/unexpected code paths | Met | MIT source, reviewed; no obfuscation, no phone-home/telemetry. |
-| 10.3.1 App integrity / update authenticity | Met | Distributed as a signed `.deb` via the project's apt archive, signed with the release key `GLYNDOR_RELEASE_ED25519_KEY`; the server does not self-update, so it carries no in-process artifact-verification path. |
+| 10.3.1 App integrity / update authenticity | Met | Distributed as a signed `.deb` via the project's apt archive; the server does not self-update, so it carries no in-process artifact-verification path. |
 | 10.3.2 No remote/dynamic code loading | Met | No `eval`, no plugin download-and-exec; dependencies are pinned and audited. |
 | (mail-specific) Inbound malware scanning | Met | Antivirus (ClamAV) + Bayesian / DNSBL / reputation filtering at delivery (`src/antispam/`, `src/dnsbl/`). |
 
@@ -258,7 +258,7 @@ integration).
 | V5 Validation | 8 | 0 | 0 |
 | V6 Cryptography | 6 | 0 | 0 (1 deferred note) |
 | V7 Error/Logging | 5 | 0 | 0 |
-| V8 Data Protection | 4 | 0 | 0 |
+| V8 Data Protection | 3 | 0 | 1 (partial) |
 | V9 Communications | 5 | 0 | 0 |
 | V10 Malicious Code | 4 | 0 | 0 |
 | V11 Business Logic | 4 | 0 | 0 |

@@ -4,7 +4,7 @@
 //! `h=`, the relaxed canonical form of the fields they select, and the hash
 //! of the canonical body. That block is everything a key holder needs to
 //! sign, and it carries no byte of the body, so the half that holds the
-//! private key never parses the message (`docs/operations/serve-split.md`).
+//! private key never parses the message.
 
 use super::{OVERSIGNED_HEADERS, SIGNED_HEADERS};
 use crate::dkim::canon;
