@@ -118,7 +118,7 @@ fn summarise(
 	days: u32,
 ) -> std::io::Result<(usize, Vec<Aggregate>)> {
 	let bucket = data_dir.join("reports").join(dir_name(kind));
-	let entries = match crate::util::fs_walk::read_dir(&bucket) {
+	let entries = match crate::util::fs_walk::rooted::read_dir(data_dir, &bucket) {
 		Ok(entries) => entries,
 		Err(_) => return Ok((0, Vec::new())),
 	};
@@ -135,7 +135,7 @@ fn summarise(
 		if today.saturating_sub(day_num) > days {
 			continue;
 		}
-		for org_entry in crate::util::fs_walk::read_dir(entry.path())
+		for org_entry in crate::util::fs_walk::rooted::read_dir(data_dir, entry.path())
 			.into_iter()
 			.flatten()
 			.flatten()
@@ -147,12 +147,12 @@ fn summarise(
 			if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
 				continue;
 			}
-			total_lines += crate::util::fs_walk::read_to_string(&path)
+			total_lines += crate::util::fs_walk::rooted::read_to_string(data_dir, &path)
 				.map(|s| s.lines().filter(|l| !l.trim().is_empty()).count())
 				.unwrap_or(0);
 		}
 	}
-	let mut domain_aggregates = read_aggregates(&bucket, today, days)?;
+	let mut domain_aggregates = read_aggregates(data_dir, &bucket, today, days)?;
 	domain_aggregates.sort_by(|a, b| a.domain.cmp(&b.domain));
 	Ok((total_lines, domain_aggregates))
 }
@@ -229,9 +229,14 @@ fn is_dmarc_failing(row: &crate::reports::dmarc::Row) -> bool {
 
 /// Walk the bucket and aggregate every JSONL line under the matching day
 /// directories. Lines that fail to deserialize are counted but skipped.
-fn read_aggregates(bucket: &Path, today: u32, days: u32) -> std::io::Result<Vec<Aggregate>> {
+fn read_aggregates(
+	data_dir: &Path,
+	bucket: &Path,
+	today: u32,
+	days: u32,
+) -> std::io::Result<Vec<Aggregate>> {
 	let mut out: Vec<Aggregate> = Vec::new();
-	let Ok(entries) = crate::util::fs_walk::read_dir(bucket) else {
+	let Ok(entries) = crate::util::fs_walk::rooted::read_dir(data_dir, bucket) else {
 		return Ok(out);
 	};
 	for day_entry in entries.flatten() {
@@ -246,7 +251,7 @@ fn read_aggregates(bucket: &Path, today: u32, days: u32) -> std::io::Result<Vec<
 		if today.saturating_sub(day_num) > days {
 			continue;
 		}
-		for org_entry in crate::util::fs_walk::read_dir(day_entry.path())
+		for org_entry in crate::util::fs_walk::rooted::read_dir(data_dir, day_entry.path())
 			.into_iter()
 			.flatten()
 			.flatten()
@@ -258,7 +263,7 @@ fn read_aggregates(bucket: &Path, today: u32, days: u32) -> std::io::Result<Vec<
 			if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
 				continue;
 			}
-			let text = match crate::util::fs_walk::read_to_string(&path) {
+			let text = match crate::util::fs_walk::rooted::read_to_string(data_dir, &path) {
 				Ok(s) => s,
 				Err(_) => continue,
 			};

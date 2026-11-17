@@ -30,6 +30,9 @@ const DIR_MODE: u32 = 0o700;
 /// A filesystem-backed set of suppressed recipient addresses.
 pub struct SuppressionList {
 	dir: PathBuf,
+	/// The data directory: the trusted root every rooted read starts from, above
+	/// the store's own directory, which is walked and checked as part of the path.
+	data_dir: PathBuf,
 }
 
 /// SHA-256 hex of the stored form of a value (see
@@ -49,7 +52,10 @@ impl SuppressionList {
 	pub fn open(data_dir: &Path) -> std::io::Result<Self> {
 		let dir = data_dir.join("suppression");
 		make_dir(&dir)?;
-		Ok(Self { dir })
+		Ok(Self {
+			dir,
+			data_dir: data_dir.to_path_buf(),
+		})
 	}
 
 	/// The marker path for an address in the global list.
@@ -111,7 +117,7 @@ impl SuppressionList {
 
 	/// Every globally suppressed address with its date and reason, sorted.
 	pub fn entries(&self) -> Vec<Suppressed> {
-		read_entries(&self.dir)
+		read_entries(&self.data_dir, &self.dir)
 	}
 
 	/// Whether an address is suppressed globally.
@@ -126,7 +132,7 @@ impl SuppressionList {
 
 	/// Every globally suppressed address, sorted.
 	pub fn list(&self) -> Vec<String> {
-		read_addresses(&self.dir)
+		read_addresses(&self.data_dir, &self.dir)
 	}
 
 	/// Suppress an address for one sending account only (idempotent).
@@ -194,7 +200,7 @@ impl SuppressionList {
 
 	/// Every address suppressed for `account` with its date and reason, sorted.
 	pub fn entries_for(&self, account: &str) -> Vec<Suppressed> {
-		read_entries(&self.account_dir(account))
+		read_entries(&self.data_dir, &self.account_dir(account))
 	}
 
 	/// Whether an address is suppressed for a specific account.
@@ -250,7 +256,7 @@ impl SuppressionList {
 
 	/// Every address suppressed for a specific account, sorted.
 	pub fn list_for(&self, account: &str) -> Vec<String> {
-		read_addresses(&self.account_dir(account))
+		read_addresses(&self.data_dir, &self.account_dir(account))
 	}
 }
 
@@ -406,9 +412,9 @@ fn parse_marker(content: &str) -> Option<Suppressed> {
 
 /// Read every marker (a regular file) in a directory, sorted by address.
 /// The `accounts/` subdirectory is skipped because it is not a regular file.
-fn read_entries(dir: &Path) -> Vec<Suppressed> {
+fn read_entries(root: &Path, dir: &Path) -> Vec<Suppressed> {
 	let mut found = Vec::new();
-	if let Ok(entries) = crate::util::fs_walk::read_dir(dir) {
+	if let Ok(entries) = crate::util::fs_walk::rooted::read_dir(root, dir) {
 		for entry in entries.flatten() {
 			if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
 				continue;
@@ -427,8 +433,8 @@ fn read_entries(dir: &Path) -> Vec<Suppressed> {
 }
 
 /// Every address in a directory's markers, sorted.
-fn read_addresses(dir: &Path) -> Vec<String> {
-	read_entries(dir)
+fn read_addresses(root: &Path, dir: &Path) -> Vec<String> {
+	read_entries(root, dir)
 		.into_iter()
 		.map(|entry| entry.address)
 		.collect()

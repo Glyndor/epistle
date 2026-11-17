@@ -172,8 +172,8 @@ pub(crate) fn walk(data_dir: &Path) -> Vec<(Uuid, PathBuf)> {
 pub(crate) fn walk_shared(data_dir: &Path) -> Vec<(Uuid, PathBuf)> {
 	let mut out = Vec::new();
 	if let Ok(root) = contained(data_dir, &blob_root(data_dir)) {
-		collect(&root, &mut out);
-		collect_sharded(&root, &mut out);
+		collect(data_dir, &root, &mut out);
+		collect_sharded(data_dir, &root, &mut out);
 	}
 	out
 }
@@ -182,7 +182,7 @@ pub(crate) fn walk_shared(data_dir: &Path) -> Vec<(Uuid, PathBuf)> {
 pub(crate) fn walk_account(data_dir: &Path, account: &BlobAccount) -> Vec<(Uuid, PathBuf)> {
 	let mut out = Vec::new();
 	if let Ok(dir) = account_dir(data_dir, account) {
-		collect_sharded(&dir, &mut out);
+		collect_sharded(data_dir, &dir, &mut out);
 	}
 	out
 }
@@ -191,7 +191,8 @@ pub(crate) fn walk_account(data_dir: &Path, account: &BlobAccount) -> Vec<(Uuid,
 /// only if it would pass [`BlobAccount::new`], and a link is refused by
 /// [`account_dir`] when the partition is opened.
 fn partitions(data_dir: &Path) -> Vec<BlobAccount> {
-	let Ok(entries) = crate::util::fs_walk::read_dir(blob_root(data_dir).join(PARTITIONS_DIR))
+	let Ok(entries) =
+		crate::util::fs_walk::rooted::read_dir(data_dir, blob_root(data_dir).join(PARTITIONS_DIR))
 	else {
 		return Vec::new();
 	};
@@ -203,11 +204,11 @@ fn partitions(data_dir: &Path) -> Vec<BlobAccount> {
 }
 
 /// Append the payloads two shard levels below `dir` to `out`.
-fn collect_sharded(dir: &Path, out: &mut Vec<(Uuid, PathBuf)>) {
-	for outer in shards_in(dir) {
+fn collect_sharded(root: &Path, dir: &Path, out: &mut Vec<(Uuid, PathBuf)>) {
+	for outer in shards_in(root, dir) {
 		let outer_path = dir.join(outer.dir_name());
-		for inner in shards_in(&outer_path) {
-			collect(&outer_path.join(inner.dir_name()), out);
+		for inner in shards_in(root, &outer_path) {
+			collect(root, &outer_path.join(inner.dir_name()), out);
 		}
 	}
 }
@@ -220,8 +221,8 @@ fn collect_sharded(dir: &Path, out: &mut Vec<(Uuid, PathBuf)>) {
 /// operator's `lost+found`, a `tmp`, an uppercase `AB` or a `..`. A symlink
 /// is refused even when its name fits, because what it points at is not
 /// something this module wrote either.
-fn shards_in(dir: &Path) -> Vec<Shard> {
-	let Ok(entries) = crate::util::fs_walk::read_dir(dir) else {
+fn shards_in(root: &Path, dir: &Path) -> Vec<Shard> {
+	let Ok(entries) = crate::util::fs_walk::rooted::read_dir(root, dir) else {
 		return Vec::new();
 	};
 	let mut present = [false; 256];
@@ -248,8 +249,8 @@ fn shards_in(dir: &Path) -> Vec<Shard> {
 /// an uppercase spelling and anything that is not a UUID are all skipped as
 /// not written by us. The path returned is `dir` joined with that
 /// rendering, not the entry's own path.
-fn collect(dir: &Path, out: &mut Vec<(Uuid, PathBuf)>) {
-	let Ok(entries) = crate::util::fs_walk::read_dir(dir) else {
+fn collect(root: &Path, dir: &Path, out: &mut Vec<(Uuid, PathBuf)>) {
+	let Ok(entries) = crate::util::fs_walk::rooted::read_dir(root, dir) else {
 		return;
 	};
 	for entry in entries.flatten() {

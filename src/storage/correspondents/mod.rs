@@ -33,6 +33,9 @@ use crate::util::path_containment::contained;
 #[derive(Debug, Clone)]
 pub struct CorrespondentStore {
 	dir: PathBuf,
+	/// The data directory: the trusted root every rooted read starts from, above
+	/// the store's own directory, which is walked and checked as part of the path.
+	data_dir: PathBuf,
 }
 
 /// Outcome of [`CorrespondentStore::record`].
@@ -73,7 +76,10 @@ impl CorrespondentStore {
 	pub fn open(data_dir: &Path) -> std::io::Result<Self> {
 		let dir = contained(data_dir, &data_dir.join("correspondents"))?;
 		fs::create_dir_all(&dir)?;
-		Ok(Self { dir })
+		Ok(Self {
+			dir,
+			data_dir: data_dir.to_path_buf(),
+		})
 	}
 
 	/// The directory holding one account's correspondent markers.
@@ -161,7 +167,7 @@ impl CorrespondentStore {
 	/// a marker created milliseconds ago counts.
 	pub fn new_in_last_day(&self, account: &str) -> std::io::Result<u32> {
 		let dir = self.account_dir(account)?;
-		let entries = match crate::util::fs_walk::read_dir(&dir) {
+		let entries = match crate::util::fs_walk::rooted::read_dir(&self.data_dir, &dir) {
 			Ok(entries) => entries,
 			Err(error) if error.kind() == ErrorKind::NotFound => return Ok(0),
 			Err(error) => return Err(error),

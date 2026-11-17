@@ -36,7 +36,7 @@ impl MailboxBackend {
 		let Some(dir) = mailbox_dir(&self.data_dir, account, "INBOX") else {
 			return Vec::new();
 		};
-		let Ok(entries) = crate::util::fs_walk::read_dir(&dir) else {
+		let Ok(entries) = crate::util::fs_walk::rooted::read_dir(&self.data_dir, &dir) else {
 			return Vec::new();
 		};
 		// UUIDv7 filenames sort lexically in arrival order; a min-heap of the
@@ -147,7 +147,7 @@ impl MailboxBackend {
 		if size > (cap + envelope) as u64 {
 			return None;
 		}
-		let stored = crate::util::fs_walk::read(&path).ok()?;
+		let stored = crate::util::fs_walk::rooted::read(&self.data_dir, &path).ok()?;
 		// Fail closed: refuse a message that cannot be decrypted rather than
 		// serving ciphertext as if it were the message.
 		self.crypto.decode(&stored).ok()

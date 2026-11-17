@@ -377,7 +377,7 @@ fn start_position(
 
 fn mailbox_message_count(data_dir: &Path, account: &str, mailbox: &str) -> Option<usize> {
 	let directory = crate::imap::mailbox::mailbox_dir(data_dir, account, mailbox)?;
-	match crate::util::fs_walk::read_dir(&directory) {
+	match crate::util::fs_walk::rooted::read_dir(data_dir, &directory) {
 		Ok(entries) => Some(
 			entries
 				.flatten()

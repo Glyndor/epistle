@@ -170,7 +170,9 @@ impl SuppressionList {
 			.iter()
 			.map(|(tenant, _)| digest_name(tenant))
 			.collect();
-		if let Ok(entries) = crate::util::fs_walk::read_dir(self.dir.join("tenants")) {
+		if let Ok(entries) =
+			crate::util::fs_walk::rooted::read_dir(&self.data_dir, self.dir.join("tenants"))
+		{
 			for entry in entries.flatten() {
 				let gone = entry
 					.file_name()
@@ -326,7 +328,9 @@ impl SuppressionList {
 		let mut removed = 0;
 		let mut lists = vec![self.dir.clone()];
 		for parent in ["accounts", "tenants"] {
-			if let Ok(entries) = crate::util::fs_walk::read_dir(self.dir.join(parent)) {
+			if let Ok(entries) =
+				crate::util::fs_walk::rooted::read_dir(&self.data_dir, self.dir.join(parent))
+			{
 				lists.extend(
 					entries
 						.flatten()
@@ -336,7 +340,7 @@ impl SuppressionList {
 			}
 		}
 		for list in lists {
-			let Ok(entries) = crate::util::fs_walk::read_dir(&list) else {
+			let Ok(entries) = crate::util::fs_walk::rooted::read_dir(&self.data_dir, &list) else {
 				continue;
 			};
 			for entry in entries.flatten() {
@@ -357,10 +361,13 @@ impl SuppressionList {
 			}
 		}
 		if rules.window_secs > 0
-			&& let Ok(senders) = crate::util::fs_walk::read_dir(self.dir.join("pending"))
+			&& let Ok(senders) =
+				crate::util::fs_walk::rooted::read_dir(&self.data_dir, self.dir.join("pending"))
 		{
 			for sender in senders.flatten() {
-				let Ok(entries) = crate::util::fs_walk::read_dir(sender.path()) else {
+				let Ok(entries) =
+					crate::util::fs_walk::rooted::read_dir(&self.data_dir, sender.path())
+				else {
 					continue;
 				};
 				for entry in entries.flatten() {
@@ -389,7 +396,10 @@ impl SuppressionList {
 
 	/// Every entry of the tenant `tenant`, with its date, reason and end, sorted.
 	pub fn entries_for_tenant(&self, tenant: &str) -> Vec<Suppressed> {
-		read_entries(&self.tenant_dir(&tenant.to_ascii_lowercase()))
+		read_entries(
+			&self.data_dir,
+			&self.tenant_dir(&tenant.to_ascii_lowercase()),
+		)
 	}
 
 	/// Every suppressed address of the tenant, sorted.

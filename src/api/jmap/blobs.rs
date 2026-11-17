@@ -315,7 +315,7 @@ pub fn backfill_blob_ownership(data_dir: &std::path::Path, accounts: &[String]) 
 				stats.fail(account, None, reason);
 				continue;
 			};
-			let entries = match crate::util::fs_walk::read_dir(&dir) {
+			let entries = match crate::util::fs_walk::rooted::read_dir(data_dir, &dir) {
 				Ok(entries) => entries,
 				Err(error) => {
 					let reason = format!("mailbox {mailbox:?} cannot be read: {error}");

@@ -106,6 +106,9 @@ pub struct ScriptStore {
 /// The two directories of one account's scripts, both vetted by the
 /// containment check.
 struct Dirs {
+	/// The accounts directory: the root the account and its scripts are
+	/// walked from, so a link at `<name>` is refused rather than followed.
+	accounts_root: PathBuf,
 	account_dir: PathBuf,
 	sieve_dir: PathBuf,
 }
@@ -116,6 +119,7 @@ impl Dirs {
 		let account_dir = contained_subdir(&root, AccountName::new(account)?.as_str())?;
 		let sieve_dir = contained_child(&account_dir, "sieve")?;
 		Ok(Self {
+			accounts_root: root,
 			account_dir,
 			sieve_dir,
 		})
@@ -408,8 +412,11 @@ impl ScriptStore {
 	/// The names of the scripts present as files. A file whose name could
 	/// not have been stored (it fails [`is_valid_name`]) is not a script.
 	fn names_on_disk(&self) -> Result<BTreeSet<String>, StoreError> {
-		let entries =
-			crate::util::fs_walk::read_dir(&self.dirs()?.sieve_dir).map_err(|_| StoreError::Io)?;
+		let entries = crate::util::fs_walk::rooted::read_dir(
+			&self.dirs()?.accounts_root,
+			&self.dirs()?.sieve_dir,
+		)
+		.map_err(|_| StoreError::Io)?;
 		let mut names = BTreeSet::new();
 		let active = self.active_name();
 		let mut left_out = 0usize;
