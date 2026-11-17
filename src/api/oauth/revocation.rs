@@ -10,7 +10,7 @@ use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 
 use crate::api::ApiState;
-use crate::util::path_containment::contained_child;
+use crate::util::path_containment::contained;
 
 const FILE: &str = "oauth_revocations.json";
 
@@ -25,9 +25,9 @@ fn id_hash(id: &str) -> String {
 }
 
 pub(super) fn is_live(dir: &Path, id: &str, now: u64) -> bool {
-	// The file is a fixed name under the data dir; the check keeps it a direct
-	// child of that directory, as the other joins under the data dir do.
-	let Ok(path) = contained_child(dir, FILE) else {
+	// The file is a fixed name under the data dir; resolving it keeps it inside
+	// that directory even when a link sits at the name.
+	let Ok(path) = contained(dir, &dir.join(FILE)) else {
 		return false;
 	};
 	match std::fs::read(path) {
