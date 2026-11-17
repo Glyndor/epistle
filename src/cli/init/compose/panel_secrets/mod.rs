@@ -20,6 +20,7 @@
 mod admin_id;
 mod held;
 mod key;
+mod secrets_dir;
 mod session;
 
 use std::path::{Path, PathBuf};
@@ -123,7 +124,7 @@ pub(crate) fn decide(data_dir: &Path, now: u64) -> Result<Decision, ApplyError> 
 /// an admin id file that holds anything but an id.
 pub(crate) fn ensure(data_dir: &Path, now: u64, report: &mut Report) -> Result<(), ApplyError> {
 	let dir = super::super::host_secrets::dir(data_dir);
-	crate::storage::create_private_dir(&dir).map_err(|error| ApplyError::KeyWrite(dir, error))?;
+	secrets_dir::create(&dir, data_dir).map_err(|error| ApplyError::KeyWrite(dir, error))?;
 	let mut store = open_store(data_dir)?;
 	let token_path = api_token_path(data_dir);
 	let session_path = session_secret_path(data_dir);

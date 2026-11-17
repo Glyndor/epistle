@@ -13,6 +13,7 @@ mod delivery;
 pub mod delivery_log;
 pub(crate) mod lock;
 pub(crate) mod locked;
+mod private_dir;
 pub mod rekey;
 mod routing;
 pub(crate) mod save_sent;
@@ -41,6 +42,7 @@ pub use delivery_log::{DEFAULT_DELIVERY_LOG_DAYS, DeliveryLog, DeliveryOutcome, 
 
 #[cfg(test)]
 mod tests;
+pub(crate) use private_dir::create_private_dir;
 pub use routing::{SplitDelivery, SrsSlot};
 pub use save_sent::{
 	Guard as SentGuard, SaveError as SentSaveError, SaveOutcome, SkipReason, first_message_id,
@@ -54,34 +56,6 @@ pub use vacation_store::{
 	MAX_BODY_BYTES, VacationSetting, clear as clear_vacation, read as read_vacation,
 	write as write_vacation,
 };
-
-/// Create `path` and its missing parents with owner-only (`0700`)
-/// permissions.
-///
-/// The mode is pinned at create time (`DirBuilder::mode`), so the
-/// directory is never briefly readable by another user whatever the
-/// umask of the process that made it, and a directory left behind by an
-/// earlier deploy is tightened on the next write. The same shape
-/// `src/storage/spool` uses for the mailbox tree.
-pub(crate) fn create_private_dir(path: &std::path::Path) -> std::io::Result<()> {
-	let mut builder = std::fs::DirBuilder::new();
-	builder.recursive(true);
-	#[cfg(unix)]
-	{
-		use std::os::unix::fs::DirBuilderExt;
-		builder.mode(0o700);
-	}
-	builder.create(path)?;
-	#[cfg(unix)]
-	{
-		use std::os::unix::fs::PermissionsExt;
-		let metadata = std::fs::metadata(path)?;
-		if metadata.permissions().mode() & 0o777 != 0o700 {
-			std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
-		}
-	}
-	Ok(())
-}
 
 /// Atomically write `bytes` to `path` with owner-only (`0600`) permissions.
 ///

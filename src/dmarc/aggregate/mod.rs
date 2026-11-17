@@ -91,7 +91,7 @@ pub struct Sender<'a> {
 /// — losing a few records is preferable to blocking the delivery path.
 pub fn record_delivery(data_dir: &Path, today: &str, record: &DeliveryRecord) {
 	let dir = data_dir.join("dmarc-reports").join(today);
-	if let Err(error) = crate::storage::create_private_dir(&dir) {
+	if let Err(error) = crate::storage::create_private_dir(data_dir, &dir) {
 		tracing::warn!(path = %dir.display(), %error, "cannot create dmarc record directory");
 		return;
 	}

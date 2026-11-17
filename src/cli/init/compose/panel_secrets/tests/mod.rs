@@ -15,6 +15,7 @@ mod prepare;
 mod refuse;
 mod renew;
 mod reuse;
+mod secrets_dir;
 
 /// A fixed "now", so expiry arithmetic does not depend on the clock.
 pub(super) const NOW: u64 = 1_800_000_000;
