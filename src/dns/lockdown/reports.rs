@@ -31,7 +31,7 @@ pub fn recent_dmarc_failures(
 	let root = data_dir.join("reports").join("dmarc");
 	let mut failing: BTreeMap<String, u64> = BTreeMap::new();
 	let mut seen = false;
-	let Ok(days) = crate::util::fs_walk::read_dir(&root) else {
+	let Ok(days) = crate::util::fs_walk::rooted::read_dir(data_dir, &root) else {
 		return (Vec::new(), false);
 	};
 	for day in days.flatten() {
@@ -41,7 +41,7 @@ pub fn recent_dmarc_failures(
 		if name.len() != 8 || !name.bytes().all(|b| b.is_ascii_digit()) || name < oldest {
 			continue;
 		}
-		let Ok(files) = crate::util::fs_walk::read_dir(day.path()) else {
+		let Ok(files) = crate::util::fs_walk::rooted::read_dir(data_dir, day.path()) else {
 			continue;
 		};
 		for file in files.flatten() {
@@ -49,7 +49,7 @@ pub fn recent_dmarc_failures(
 			if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
 				continue;
 			}
-			let Ok(text) = crate::util::fs_walk::read_to_string(&path) else {
+			let Ok(text) = crate::util::fs_walk::rooted::read_to_string(data_dir, &path) else {
 				continue;
 			};
 			for line in text.lines().filter(|l| !l.trim().is_empty()) {
