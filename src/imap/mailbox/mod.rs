@@ -39,10 +39,6 @@ pub struct Snapshot {
 	/// The account root (`<data_dir>/accounts/<name>`); used as the parent of
 	/// the per-account `.archive/` directory when retention is enabled.
 	pub(super) account_root: AccountRoot,
-	/// The data directory: the trusted root every rooted read of this
-	/// snapshot starts from, above `accounts/<name>`, which is walked and
-	/// checked as part of the path.
-	pub(super) data_dir: PathBuf,
 	/// The mailbox this snapshot was opened for, used to stamp the archive
 	/// sidecar so a restored message knows where it came from.
 	pub(super) mailbox: String,

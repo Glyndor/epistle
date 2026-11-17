@@ -58,7 +58,6 @@ impl Snapshot {
 			return Ok(Snapshot {
 				account_dir,
 				account_root,
-				data_dir: data_dir.to_path_buf(),
 				mailbox: mailbox.to_string(),
 				messages: loaded,
 				uid_validity,
@@ -86,7 +85,6 @@ impl Snapshot {
 		Ok(Snapshot {
 			account_dir,
 			account_root,
-			data_dir: data_dir.to_path_buf(),
 			mailbox: mailbox.to_string(),
 			messages: scanned,
 			uid_validity,
@@ -146,7 +144,6 @@ impl Snapshot {
 		Snapshot {
 			account_dir: std::path::PathBuf::new(),
 			account_root: AccountRoot::placeholder(),
-			data_dir: std::path::PathBuf::new(),
 			mailbox: String::new(),
 			messages: Vec::new(),
 			uid_validity: 0,
@@ -195,8 +192,10 @@ impl Snapshot {
 	/// is encrypted. Fails closed on a decryption error rather than returning
 	/// ciphertext.
 	pub fn read(&self, message: &super::mailbox::MessageRef) -> std::io::Result<Vec<u8>> {
-		let stored =
-			crate::util::fs_walk::rooted::read(&self.data_dir, self.message_path(message)?)?;
+		let stored = crate::util::fs_walk::rooted::read(
+			self.account_root.data_dir(),
+			self.message_path(message)?,
+		)?;
 		self.crypto.decode(&stored)
 	}
 
@@ -232,7 +231,7 @@ impl Snapshot {
 		let id = self.messages[index].id;
 		super::flags::write_flags(&self.account_dir, id, &flags)?;
 		// A flag change advances the mailbox mod-sequence and stamps the message.
-		let modseq = super::modseq::next_counter(&self.account_dir)?;
+		let modseq = super::modseq::next_counter(self.account_root.data_dir(), &self.account_dir)?;
 		let _ = super::modseq::write_message(&self.account_dir, id, modseq);
 		self.highest_modseq = self.highest_modseq.max(modseq);
 		let seen = super::mailbox::Flag::Seen;
@@ -264,9 +263,9 @@ impl Snapshot {
 			return false;
 		}
 		self.messages[index].flags =
-			super::flags::read_flags(&self.data_dir, &self.account_dir, id);
+			super::flags::read_flags(self.account_root.data_dir(), &self.account_dir, id);
 		self.messages[index].modseq =
-			super::modseq::read_message(&self.data_dir, &self.account_dir, id);
+			super::modseq::read_message(self.account_root.data_dir(), &self.account_dir, id);
 		true
 	}
 
@@ -296,7 +295,7 @@ impl Snapshot {
 			.ok_or_else(|| std::io::Error::other("no such message"))?;
 		let uid = self.messages[index].uid;
 		self.take_where(|message| message.uid == uid);
-		super::vanished::record_advancing(&self.account_dir, &[uid]);
+		super::vanished::record_advancing(self.account_root.data_dir(), &self.account_dir, &[uid]);
 		Ok(())
 	}
 
@@ -320,7 +319,11 @@ impl Snapshot {
 	pub fn remove_uids(&mut self, uids: &[u32]) -> std::io::Result<Vec<u32>> {
 		let removed = self.take_where(|message| uids.contains(&message.uid));
 		if !removed.is_empty() {
-			super::vanished::record_advancing(&self.account_dir, uids);
+			super::vanished::record_advancing(
+				self.account_root.data_dir(),
+				&self.account_dir,
+				uids,
+			);
 		}
 		Ok(removed.into_iter().map(|(sequence, _)| sequence).collect())
 	}
@@ -332,7 +335,11 @@ impl Snapshot {
 			message.flags.contains(&super::mailbox::Flag::Deleted) && keep(message.uid)
 		});
 		let vanished: Vec<u32> = removed.iter().map(|(_, uid)| *uid).collect();
-		super::vanished::record_advancing(&self.account_dir, &vanished);
+		super::vanished::record_advancing(
+			self.account_root.data_dir(),
+			&self.account_dir,
+			&vanished,
+		);
 		Ok(removed.into_iter().map(|(sequence, _)| sequence).collect())
 	}
 

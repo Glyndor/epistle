@@ -108,7 +108,7 @@ pub fn run(
 
 fn account_names(data_dir: &Path) -> std::io::Result<Vec<String>> {
 	let accounts = contained(data_dir, &data_dir.join("accounts"))?;
-	let entries = match crate::util::fs_walk::read_dir(&accounts) {
+	let entries = match crate::util::fs_walk::rooted::read_dir(data_dir, &accounts) {
 		Ok(entries) => entries,
 		Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
 		Err(error) => return Err(error),

@@ -16,7 +16,7 @@ fn callers_at_the_same_time_each_get_their_own_modseq() {
 				std::thread::spawn(move || {
 					start.wait();
 					(0..10)
-						.map(|_| next_counter(&path).expect("every caller gets a modseq"))
+						.map(|_| next_counter(&path, &path).expect("every caller gets a modseq"))
 						.collect::<Vec<u64>>()
 				})
 			})

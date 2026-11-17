@@ -68,11 +68,11 @@ fn tail(path: &Path, limit: u64) -> std::io::Result<Vec<u8>> {
 }
 
 /// Advance the mailbox mod-sequence and log `uids` as vanished at it.
-pub(super) fn record_advancing(account_dir: &Path, uids: &[u32]) {
+pub(super) fn record_advancing(root: &Path, account_dir: &Path, uids: &[u32]) {
 	if uids.is_empty() {
 		return;
 	}
-	if let Ok(modseq) = super::modseq::next_counter(account_dir) {
+	if let Ok(modseq) = super::modseq::next_counter(root, account_dir) {
 		let _ = record(account_dir, uids, modseq);
 	}
 }

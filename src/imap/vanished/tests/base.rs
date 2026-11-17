@@ -22,10 +22,10 @@ fn records_and_queries_vanished_uids() {
 #[test]
 fn record_advancing_assigns_a_modseq() {
 	let dir = tempfile::tempdir().expect("tempdir");
-	record_advancing(dir.path(), &[7]);
+	record_advancing(dir.path(), dir.path(), &[7]);
 	// The uid is logged at some positive mod-sequence.
 	assert_eq!(since(dir.path(), 0), vec![7]);
 	// An empty set advances nothing.
-	record_advancing(dir.path(), &[]);
+	record_advancing(dir.path(), dir.path(), &[]);
 	assert_eq!(since(dir.path(), 0), vec![7]);
 }
