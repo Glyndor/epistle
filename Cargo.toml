@@ -194,6 +194,10 @@ name = "workflow_coverage_ignore_regex"
 path = "tests/workflows/workflow_coverage_ignore_regex.rs"
 
 [[test]]
+name = "workflow_hash_files_no_glob"
+path = "tests/workflows/workflow_hash_files_no_glob.rs"
+
+[[test]]
 name = "workflow_release_tag_identity"
 path = "tests/workflows/workflow_release_tag_identity.rs"
 
