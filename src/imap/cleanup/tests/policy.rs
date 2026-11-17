@@ -80,7 +80,7 @@ fn the_account_may_shorten_the_operators_retention_and_never_lengthen_it() {
 		assert_eq!(
 			combine(operator, account),
 			expected,
-			"{operator:?} {account:?}"
+			"the period that applies is not the expected one"
 		);
 	}
 }

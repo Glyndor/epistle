@@ -178,10 +178,13 @@ fn stack_down_removes_the_user_drop_in() {
 fn nothing_is_written_to_the_system_without_root() {
 	let mut host = Fake::new(false);
 	let error = ensure_system(&mut host, 996, &Boot::default(), &data_dir()).unwrap_err();
-	assert!(error.contains("only root writes it"), "{error}");
+	assert!(
+		error.contains("only root writes it"),
+		"the refusal must say who may write it"
+	);
 	assert!(
 		error.contains("/etc/systemd/system/user@996.service.d"),
-		"{error}"
+		"the refusal must name the drop-in directory"
 	);
 	assert!(host.untouched(), "something was done without root");
 	assert!(remove_system(&mut host, 996).is_err());
@@ -244,8 +247,14 @@ fn a_manager_that_cannot_reload_is_reported_with_the_file_it_wrote() {
 	let mut host = Fake::new(true);
 	host.fail_reload = true;
 	let error = ensure_system(&mut host, 996, &Boot::default(), &data_dir()).unwrap_err();
-	assert!(error.contains("glyndor-epistle-boot.conf"), "{error}");
-	assert!(error.contains("Failed to connect to bus"), "{error}");
+	assert!(
+		error.contains("glyndor-epistle-boot.conf"),
+		"the error must name the drop-in file"
+	);
+	assert!(
+		error.contains("Failed to connect to bus"),
+		"the error must carry the bus failure"
+	);
 }
 
 #[test]

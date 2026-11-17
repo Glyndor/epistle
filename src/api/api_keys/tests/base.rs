@@ -96,11 +96,12 @@ fn admits_any_against_multi_scope_slice() {
 /// existing operators.
 #[test]
 fn legacy_key_admits_every_scope() {
-	let mut k = key("ci", "supersecret");
+	let secret = crate::test_support::fixtures::fresh_secret();
+	let mut k = key("ci", &secret);
 	k.scopes = Vec::new();
 	let set = [Scope::Read, Scope::Write, Scope::Send];
 	assert!(
-		k.admits_any("supersecret", None, 1000, &set),
+		k.admits_any(&secret, None, 1000, &set),
 		"legacy key must admit any scope"
 	);
 }

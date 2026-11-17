@@ -165,7 +165,10 @@ fn an_unusable_panel_secret_stops_the_plan_and_the_apply_before_the_config_is_wr
 	let error = plan(&install.answers)
 		.expect_err("planning refuses it too")
 		.to_string();
-	assert!(error.contains("path is not a regular file"), "{error}");
+	assert!(
+		error.contains("path is not a regular file"),
+		"the refusal must say the path is not a regular file"
+	);
 	let outcome = apply(&install.answers);
 	let error = outcome.error.expect("apply refuses").to_string();
 	assert!(error.contains("path is not a regular file"), "{error}");

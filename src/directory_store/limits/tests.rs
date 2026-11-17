@@ -34,7 +34,7 @@ fn account(name: &str, addresses: &[&str]) -> DynamicAccount {
 fn capped(result: Result<(), StoreError>) -> String {
 	match result {
 		Err(StoreError::Capped(reached)) => reached.to_string(),
-		other => panic!("expected a cap, got {other:?}"),
+		_ => panic!("expected a cap"),
 	}
 }
 

@@ -49,11 +49,11 @@ fn hashes_of_every_cost_verify_whatever_the_cost_in_force() {
 
 #[test]
 fn a_cost_the_hasher_cannot_use_is_an_error_not_a_weak_hash() {
-	let salt = [7u8; 16];
+	let salt = crate::test_support::fixtures::salt();
 	let broken = Argon2Cost {
 		memory_kib: 1,
 		iterations: 2,
 		parallelism: 1,
 	};
-	assert!(hash_password_with_cost(fixture_password(), broken, &salt).is_err());
+	assert!(hash_password_with_cost(fixture_password(), broken, salt).is_err());
 }

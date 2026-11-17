@@ -127,7 +127,10 @@ fn round() -> (usize, u64) {
 		.sum();
 	assert_eq!(archived(dir.path()), copied);
 	let stored = usage(dir.path());
-	assert!(stored <= limit, "{stored} bytes stored, quota {limit}");
+	assert!(
+		stored <= limit,
+		"the bytes stored must stay within the quota"
+	);
 	(copied, stored)
 }
 

@@ -252,7 +252,7 @@ async fn a_password_change_ends_the_family() {
 	let (app, state) = refreshing_app(dir.path());
 	let body = sign_in(&app, "bob@example.org", "read").await;
 	let token = body["refresh_token"].as_str().expect("refresh").to_string();
-	let new_hash = crate::smtp::auth::hash_password("another example secret").expect("hash");
+	let new_hash = crate::smtp::auth::hash_password(&fixtures::fresh_secret()).expect("hash");
 	state
 		.store()
 		.set_password_hash("bob", new_hash, None)

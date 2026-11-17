@@ -35,7 +35,7 @@ fn nothing_sleeps_the_delay_is_a_time_on_the_held_file() {
 	// The release time is the delay after the acceptance, read back from disk.
 	assert!(
 		(now..=now + 61).contains(&release_at) && release_at >= now + 59,
-		"{release_at} vs {now}"
+		"the release time must be about a minute after the acceptance"
 	);
 }
 

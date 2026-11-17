@@ -96,7 +96,7 @@ pub(super) fn state(dir: &Path, limits: EventLimits) -> ApiState {
 	drop(keys);
 	let spool = FsSpool::open(dir).expect("spool");
 	ApiState::new(
-		&crate::smtp::auth::tests::base::hash("static-token-unused"),
+		&crate::smtp::auth::tests::base::hash(&crate::test_support::fixtures::fresh_secret()),
 		dir.to_path_buf(),
 		vec!["a.example".to_string(), "b.example".to_string()],
 		store.clone(),

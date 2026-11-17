@@ -18,6 +18,7 @@ use uuid::Uuid;
 
 use super::frame::Held;
 use crate::storage::MessageCrypto;
+use crate::util::path_containment::contained_child;
 
 /// How long the record of a released submission is kept: long enough to
 /// answer "already sent" to a late cancel, short enough to hold no history.
@@ -121,9 +122,13 @@ impl UndoStore {
 		self.root.join(dir.name())
 	}
 
-	fn file(&self, dir: Dir, epoch: u64, id: Uuid) -> PathBuf {
-		self.dir(dir)
-			.join(format!("{epoch:020}-{id}.{}", dir.ext()))
+	/// The file of one held submission. The name is built from a number, an
+	/// id and an extension only, and still goes through the containment check
+	/// every join under the data dir uses, so it can only be a direct child of
+	/// its directory.
+	fn file(&self, dir: Dir, epoch: u64, id: Uuid) -> std::io::Result<PathBuf> {
+		let name = format!("{epoch:020}-{id}.{}", dir.ext());
+		contained_child(&self.dir(dir), &name)
 	}
 
 	fn lock(&self) -> std::io::Result<fs::File> {
@@ -170,7 +175,7 @@ impl UndoStore {
 	/// returns, so a crash from here on keeps it.
 	pub fn hold(&self, held: &Held) -> std::io::Result<()> {
 		let sealed = self.seal(held.id, &held.to_bytes()?)?;
-		crate::storage::write_secret(&self.file(Dir::Pending, held.release_at, held.id), &sealed)
+		crate::storage::write_secret(&self.file(Dir::Pending, held.release_at, held.id)?, &sealed)
 	}
 
 	/// The held submission `id`, if it is still pending.
@@ -179,7 +184,7 @@ impl UndoStore {
 	}
 
 	fn load_in(&self, dir: Dir, release_at: u64, id: Uuid) -> std::io::Result<Held> {
-		let stored = crate::util::fs_walk::read(self.file(dir, release_at, id))?;
+		let stored = crate::util::fs_walk::read(self.file(dir, release_at, id)?)?;
 		Held::from_bytes(&self.open_bytes(id, &stored)?)
 	}
 
@@ -214,8 +219,8 @@ impl UndoStore {
 	/// `None` when it is gone: cancelled, or claimed by another releaser.
 	pub fn claim(&self, pending: &Pending) -> std::io::Result<Option<Held>> {
 		let _guard = self.lock()?;
-		let from = self.file(Dir::Pending, pending.release_at, pending.id);
-		let to = self.file(Dir::Inflight, pending.release_at, pending.id);
+		let from = self.file(Dir::Pending, pending.release_at, pending.id)?;
+		let to = self.file(Dir::Inflight, pending.release_at, pending.id)?;
 		match fs::rename(&from, &to) {
 			Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
 			other => other?,
@@ -231,8 +236,8 @@ impl UndoStore {
 	pub fn requeue(&self, held: &Held) -> std::io::Result<()> {
 		let _guard = self.lock()?;
 		fs::rename(
-			self.file(Dir::Inflight, held.release_at, held.id),
-			self.file(Dir::Pending, held.release_at, held.id),
+			self.file(Dir::Inflight, held.release_at, held.id)?,
+			self.file(Dir::Pending, held.release_at, held.id)?,
 		)?;
 		sync_dir(&self.dir(Dir::Pending))
 	}
@@ -246,8 +251,8 @@ impl UndoStore {
 		let mut moved = 0;
 		for (at, id) in self.names(Dir::Inflight)? {
 			fs::rename(
-				self.file(Dir::Inflight, at, id),
-				self.file(Dir::Pending, at, id),
+				self.file(Dir::Inflight, at, id)?,
+				self.file(Dir::Pending, at, id)?,
 			)?;
 			moved += 1;
 		}
@@ -282,7 +287,7 @@ impl UndoStore {
 		else {
 			return Ok(None);
 		};
-		let stored = crate::util::fs_walk::read(self.file(Dir::Released, at, id))?;
+		let stored = crate::util::fs_walk::read(self.file(Dir::Released, at, id)?)?;
 		String::from_utf8(self.open_bytes(id, &stored)?)
 			.map(Some)
 			.map_err(|error| std::io::Error::other(error.to_string()))
@@ -328,7 +333,7 @@ impl UndoStore {
 			if now >= held.release_at {
 				return Err(CancelError::AlreadySent);
 			}
-			fs::remove_file(self.file(Dir::Pending, release_at, id))?;
+			fs::remove_file(self.file(Dir::Pending, release_at, id)?)?;
 			sync_dir(&self.dir(Dir::Pending))?;
 			return Ok(());
 		}
@@ -357,8 +362,8 @@ impl UndoStore {
 	pub fn finish(&self, held: &Held, now: u64) -> std::io::Result<()> {
 		let _guard = self.lock()?;
 		let sealed = self.seal(held.id, held.account.as_bytes())?;
-		crate::storage::write_secret(&self.file(Dir::Released, now, held.id), &sealed)?;
-		match fs::remove_file(self.file(Dir::Inflight, held.release_at, held.id)) {
+		crate::storage::write_secret(&self.file(Dir::Released, now, held.id)?, &sealed)?;
+		match fs::remove_file(self.file(Dir::Inflight, held.release_at, held.id)?) {
 			Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error),
 			_ => {}
 		}
@@ -370,7 +375,7 @@ impl UndoStore {
 	pub fn prune(&self, now: u64) -> std::io::Result<()> {
 		for (at, id) in self.names(Dir::Released)? {
 			if now.saturating_sub(at) > RELEASED_KEPT_SECS {
-				let _ = fs::remove_file(self.file(Dir::Released, at, id));
+				let _ = fs::remove_file(self.file(Dir::Released, at, id)?);
 			}
 		}
 		Ok(())

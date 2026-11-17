@@ -43,8 +43,14 @@ fn names_with_control_characters_are_skipped_and_never_reach_the_report() {
 	let text = "Domains:\n\texample.org:\n\t\tAliases:\n\t\t\tbad\u{1b}[2Jname:\n\t\t\t\tAddresses:\n\t\t\t\t\t- alice@example.org\nAccounts:\n\tev\u{1b}]0;x\u{7}il:\n\t\tDestinations:\n\t\t\tevil@example.org:\n";
 	let dir = directory(text.to_string());
 	let plan = mox::read(dir.path()).expect("plan");
-	assert!(plan.accounts.is_empty(), "{:?}", plan.accounts);
-	assert!(plan.aliases.is_empty(), "{:?}", plan.aliases);
+	assert!(
+		plan.accounts.is_empty(),
+		"the account with control characters must be skipped"
+	);
+	assert!(
+		plan.aliases.is_empty(),
+		"the alias with control characters must be skipped"
+	);
 	let shown = format!("{:?}", plan.skipped);
 	assert!(shown.contains("alias"), "{shown}");
 	assert!(shown.contains("account"), "{shown}");

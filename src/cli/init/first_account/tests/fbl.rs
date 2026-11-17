@@ -33,7 +33,10 @@ fn the_mailbox_must_be_a_plain_address_of_a_configured_domain() {
 		.expect("a hosted address is accepted");
 	for bad in ["fbl", "fbl@elsewhere.example", "Reports <fbl@example.org>"] {
 		let why = account(Some(bad)).check(&domains()).expect_err(bad);
-		assert!(why.contains("fbl_mailbox"), "{bad}: {why}");
+		assert!(
+			why.contains("fbl_mailbox"),
+			"the refusal must name the fbl_mailbox setting"
+		);
 	}
 }
 
