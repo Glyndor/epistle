@@ -120,8 +120,10 @@ mod cases {
 		let (output, calls) = fixture.logs(&[]);
 		assert!(output.status.success(), "{:?}", output.stderr);
 		assert_eq!(calls[0], "ps --all-services");
-		assert_eq!(calls[1], "logs -t -n 200 mail");
-		assert_eq!(calls[2], "logs -t -n 200 db");
+		// The calls start together, so the log records them in either order.
+		let mut logs = vec![calls[1].as_str(), calls[2].as_str()];
+		logs.sort_unstable();
+		assert_eq!(logs, ["logs -t -n 200 db", "logs -t -n 200 mail"]);
 		let text = stdout(&output);
 		assert_eq!(text.lines().count(), 203, "200 from mail and 3 from db");
 		assert!(text.contains("mail-1 | 2026-01-01T10:00:50Z mail line 50\n"));
