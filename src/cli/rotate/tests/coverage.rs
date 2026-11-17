@@ -16,6 +16,14 @@ const NOT_SECRETS: &[(&str, &str)] = &[
 		"the path of the operator's list of refused passwords, which authenticates nothing",
 	),
 	(
+		"Caps.max_api_keys_per_account",
+		"a count of API keys an account may hold, not a key",
+	),
+	(
+		"Caps.max_app_passwords_per_account",
+		"a count of app passwords an account may hold, not a password",
+	),
+	(
 		"S3BlobConfig.access_key_id",
 		"the identifier half of the S3 key pair; the secret half has its own entry",
 	),

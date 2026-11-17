@@ -126,7 +126,17 @@ pub(super) fn create(
 		account: account.map(str::to_string),
 		auto_submitted,
 	};
-	match store.add(key) {
+	let gate = match account {
+		Some(name) => match crate::directory_store::AccountStore::gate_from_config(config, name) {
+			Ok(gate) => Some(gate),
+			Err(error) => {
+				super::style::error(format_args!("account {name}: {error}"));
+				return ExitCode::FAILURE;
+			}
+		},
+		None => None,
+	};
+	match store.add_within(key, gate.as_ref()) {
 		Ok(()) => {
 			// The advisory travels with the result: stderr for a human, and
 			// the `warnings` array of the JSON result for a script. The exit

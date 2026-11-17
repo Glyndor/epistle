@@ -51,6 +51,7 @@ impl AccountStore {
 			ldap_auth: None,
 			masked: Arc::new(RwLock::new(masked)),
 			aliases_disabled: Arc::new(RwLock::new(AliasStore::open(data_dir)?)),
+			limits: Arc::default(),
 			ban_store: None,
 			metrics: None,
 			scram_upgrader: Arc::new(NoopScramUpgrader) as Arc<dyn ScramUpgrader>,

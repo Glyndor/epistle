@@ -403,7 +403,8 @@ The codes the API itself sends:
 | `invalid_input` | 400 | The message says which field |
 | `conflict` | 409 | A limit that waiting will not lift: the tenant is at `max_accounts`, the account at its masked-address cap, a queue entry with evidence still to write |
 | `already_sent` | 409 | `DELETE /api/v1/send/{id}` for a message the send delay already handed on. Nothing can take it back |
-| `message_too_large` | 413 | The built message is over the size limit |
+| `limit_reached` | 409 | A configured cap stopped the request (addresses per account at `POST /api/v1/accounts`). The message says which limit, its value, the scope that set it and how to make room |
+| `message_too_large` | 413 | The built message is over the size limit of the server, or of the sending account (`[[limit_scope]] max_message_size`) |
 | `scan_too_large` | 413 | Too large for the content scan, and the server lets nothing pass unscanned. Retrying cannot help |
 | `virus_detected`, `attachment_refused`, `too_many_header_fields`, `marketing_refused` | 422 | Refused for its content; sending it again unchanged is refused again. Nothing was sent |
 | `rate_limited` | 429 | The authentication limit above, or a sending limit (next section). Always with `Retry-After` in seconds |
@@ -538,7 +539,7 @@ keeps its mail transactional whatever the request says; the response's
 
 | Limit | Value | Answer |
 |---|---|---|
-| Message size | `max_message_size`, 25 MiB by default | A built message over it: `413 message_too_large`. A request body over it: plain-text `413` |
+| Message size | `max_message_size`, 25 MiB by default, and below it the cap of the account, its domain or its tenant (`[[limit_scope]]`) | A built message over it: `413 message_too_large`, naming the cap and the scope that set it. A request body over the server's: plain-text `413` |
 | Recipients | 100 per message (`to`, `cc`, `bcc` together) | `400 invalid_input` |
 | Parts | 100 attachments and inline parts together | `400 invalid_input` |
 | Submission rate | `submission_rate_limit_per_min` recipients per minute per account, shared with SMTP and JMAP; per-domain and per-tenant limits too | `429 rate_limited`, "sending rate limit exceeded; retry later", with `Retry-After: 60`. Nothing was sent |

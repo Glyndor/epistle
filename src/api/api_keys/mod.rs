@@ -315,6 +315,19 @@ impl ApiKeyStore {
 	/// `epistle api-key create` and a server-side rotation/update running
 	/// in parallel both reach disk without losing the other's row.
 	pub fn add(&mut self, key: ApiKey) -> std::io::Result<()> {
+		self.add_within(key, None)
+	}
+
+	/// [`Self::add`] that also refuses an account-bound key when the account
+	/// already holds as many as its cap allows (`QuotaExceeded`, carrying the
+	/// [`crate::limits::LimitReached`]). Keys that name no account are
+	/// administrative and not counted. The count and the insert are one step
+	/// under the file's lock, so racing creations admit exactly the cap.
+	pub fn add_within(
+		&mut self,
+		key: ApiKey,
+		gate: Option<&crate::limits::Gate>,
+	) -> std::io::Result<()> {
 		if let Some(spec) = &key.ip_cidr
 			&& crate::cidr::Cidr::parse(spec).is_none()
 		{
@@ -346,6 +359,22 @@ impl ApiKeyStore {
 						format!("API key \"{}\" already exists", key.label),
 					));
 				}
+				if let (Some(gate), Some(account)) = (gate, key.account.as_deref()) {
+					let held = state
+						.keys
+						.iter()
+						.filter(|other| {
+							other
+								.account
+								.as_deref()
+								.is_some_and(|name| name.eq_ignore_ascii_case(account))
+						})
+						.count();
+					gate.admit(crate::limits::Kind::ApiKeys, held)
+						.map_err(|reached| {
+							std::io::Error::new(std::io::ErrorKind::QuotaExceeded, reached)
+						})?;
+				}
 				// One secret, one key: two keys behind the same secret would
 				// leave the request with the reach of whichever the lookup
 				// meets first.
@@ -362,7 +391,17 @@ impl ApiKeyStore {
 				state.keys.push(key.clone());
 				Ok(())
 			},
-		)?;
+		)
+		// A cap keeps its kind and its text; every other refusal is
+		// reported as it always was.
+		.map_err(|error| match error {
+			crate::storage::locked::EditError::Mutate(inner)
+				if inner.kind() == std::io::ErrorKind::QuotaExceeded =>
+			{
+				inner
+			}
+			other => other.into(),
+		})?;
 		self.keys = new_state.keys;
 		Ok(())
 	}

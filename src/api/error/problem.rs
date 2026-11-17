@@ -123,6 +123,7 @@ fn title(code: &str, status: StatusCode) -> &'static str {
 		"not_found" => "Not found",
 		"conflict" => "Conflict",
 		"already_sent" => "The message was already sent",
+		"limit_reached" => "A limit was reached",
 		_ => status.canonical_reason().unwrap_or("Error"),
 	}
 }

@@ -187,6 +187,7 @@ impl AccountStore {
 				.iter_mut()
 				.find(|account| account.name == name)
 				.ok_or_else(|| StoreError::NotFound(name.to_string()))?;
+			self.admit_addresses(name, &[raw.to_string()], target.addresses.len() + 1)?;
 			target.addresses.push(raw.to_string());
 			Ok(())
 		})?;

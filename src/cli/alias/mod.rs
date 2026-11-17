@@ -22,6 +22,7 @@ use helpers::{document_address, find_alias, normalized};
 use helpers::{validate_alias_address, validate_member_or_sender};
 use writers::{upsert_alias_members, upsert_alias_senders};
 
+mod caps;
 mod dispatch;
 mod helpers;
 mod writers;

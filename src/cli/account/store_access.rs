@@ -13,6 +13,7 @@ pub(super) fn open_store(config: &Config) -> Result<AccountStore, StoreError> {
 		config.domain_aliases.clone(),
 		config.accounts.clone(),
 	)
+	.map(|store| store.with_limits(crate::limits::Limits::shared(config)))
 	.map(|store| store.with_scram_enabled(config.auth.scram))
 	.map(|store| store.with_password_policy(crate::password::Policy::from_config(&config.auth)))
 }

@@ -119,6 +119,8 @@ impl std::fmt::Debug for Config {
 			.field("webhook", &self.webhook)
 			.field("tenants", &self.tenants)
 			.field("antispam_scopes", &self.antispam_scopes)
+			.field("limits", &self.limits)
+			.field("limit_scopes", &self.limit_scopes)
 			.field("privileges", &self.privileges)
 			.field("storage", &self.storage)
 			.field("queue", &self.queue)

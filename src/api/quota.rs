@@ -21,3 +21,28 @@ pub(crate) fn full_recipient(state: &ApiState, recipients: &[String], size: u64)
 		.into_iter()
 		.next()
 }
+
+/// Whether a local account that any of `recipients` delivers to has a
+/// message-size cap below `size`: the same check SMTP runs for every
+/// recipient, so the API and JMAP cannot send what SMTP would refuse. The
+/// cap of the recipient is not told to the sender.
+pub(crate) fn over_recipient_size_cap(state: &ApiState, recipients: &[String], size: u64) -> bool {
+	use crate::smtp::address::Address;
+	use crate::smtp::directory::Resolution;
+	let Some(directory) = state.directory_snapshot() else {
+		return false;
+	};
+	recipients
+		.iter()
+		.filter_map(|recipient| Address::parse(recipient).ok())
+		.any(|address| {
+			let accounts: Vec<String> = match directory.resolve(&address) {
+				Resolution::Account(account) => vec![account],
+				Resolution::Alias(accounts) => accounts,
+				Resolution::NotLocal | Resolution::UnknownUser => return false,
+			};
+			accounts
+				.iter()
+				.any(|account| directory.admit_message(account, size).is_err())
+		})
+}

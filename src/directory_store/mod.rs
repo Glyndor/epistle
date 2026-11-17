@@ -76,6 +76,7 @@ mod credential_fingerprint;
 pub mod credential_reset;
 pub use credential_reset::{CredentialReset, NewPassword, ResetTarget};
 pub mod display_name;
+mod limits;
 mod mutate_store;
 mod normalize;
 pub use normalize::account_name;
@@ -123,6 +124,9 @@ pub struct AccountStore {
 	/// mutate without going through `AccountStore`'s mutators.
 	masked: Arc<RwLock<MaskedAddressStore>>,
 	aliases_disabled: Arc<RwLock<AliasStore>>,
+	/// The caps on addresses, credentials and message sizes. Inert until
+	/// [`AccountStore::with_limits`] attaches the configuration's.
+	limits: Arc<crate::limits::Limits>,
 	/// Shared ban store consulted before any password hashing and updated
 	/// on every authentication outcome. Threaded into every rebuilt
 	/// directory by [`AccountStore::with_ban_store`]. `None` in deployments
@@ -232,6 +236,7 @@ impl AccountStore {
 					return Err(StoreError::Duplicate(raw.to_string()));
 				}
 			}
+			self.admit_addresses(&account.name, &account.addresses, account.addresses.len())?;
 			state.accounts.push(account);
 			Ok(())
 		})?;
@@ -281,6 +286,12 @@ impl AccountStore {
 				if self.address_taken(&state.accounts, Some(name), raw) {
 					return Err(StoreError::Duplicate(raw.to_string()));
 				}
+			}
+			// A replacement that keeps or drops addresses is never refused for
+			// a cap the account is already over; one that claims a new
+			// address must fit.
+			if !claimed.addresses.is_empty() {
+				self.admit_addresses(name, &claimed.addresses, fresh.addresses.len())?;
 			}
 			state.accounts[slot] = fresh;
 			Ok(())
@@ -377,7 +388,8 @@ impl AccountStore {
 			.with_ldap(self.ldap_auth.clone())
 			.with_masked(masked)
 			.with_masked_paused(self.masked.read().expect("masked lock").paused())
-			.with_allowed_protocols(allowed_protocols);
+			.with_allowed_protocols(allowed_protocols)
+			.with_limits(Arc::clone(&self.limits));
 		if let Some(metrics) = self.metrics.clone() {
 			dir = dir.with_metrics(metrics);
 		}

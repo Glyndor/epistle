@@ -320,6 +320,39 @@ impl ApiError {
 		}
 	}
 
+	/// `409` for a configured cap that stopped the request: the message says
+	/// which limit, its value, the scope that set it and how to make room.
+	/// Waiting will not lift it, so it is not a `429`.
+	pub fn limit_reached(reached: &crate::limits::LimitReached) -> Self {
+		ApiError {
+			status: StatusCode::CONFLICT,
+			code: "limit_reached",
+			message: reached.to_string(),
+			..Default::default()
+		}
+	}
+
+	/// `413` for a message over the size cap of the account that sends it.
+	pub fn message_over_cap(reached: &crate::limits::LimitReached) -> Self {
+		ApiError {
+			status: StatusCode::PAYLOAD_TOO_LARGE,
+			code: "message_too_large",
+			message: reached.to_string(),
+			..Default::default()
+		}
+	}
+
+	/// `413` for a message over the size cap of a local recipient. The cap of
+	/// a recipient is not told to the sender.
+	pub fn recipient_over_cap() -> Self {
+		ApiError {
+			status: StatusCode::PAYLOAD_TOO_LARGE,
+			code: "message_too_large",
+			message: "The message is over the size limit of a recipient of this server.".into(),
+			..Default::default()
+		}
+	}
+
 	/// `409` for a limit that waiting will never clear. A `429` here would
 	/// tell the client to retry, which is the one thing that cannot help: the
 	/// cap lifts when the caller deletes something or an admin raises it.

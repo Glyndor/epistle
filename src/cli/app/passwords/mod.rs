@@ -189,7 +189,14 @@ pub(in crate::cli) fn create(
 		ip_cidr,
 		save_sent,
 	};
-	match store.add(account, app) {
+	let gate = match AccountStore::gate_from_config(config, account) {
+		Ok(gate) => gate,
+		Err(error) => {
+			crate::cli::style::error(format_args!("account {account}: {error}"));
+			return ExitCode::FAILURE;
+		}
+	};
+	match store.add_within(account, app, Some(&gate)) {
 		Ok(()) => {
 			let mut report = crate::cli::json_out::Report::new(out, json);
 			report.line(format_args!(

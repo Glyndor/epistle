@@ -37,6 +37,7 @@ mod env;
 mod error;
 mod forwarding;
 mod ldap;
+mod limit_scope;
 mod listener;
 mod load;
 mod log_format;
@@ -96,6 +97,7 @@ pub use dns_publish::{
 pub use error::ConfigError;
 pub use forwarding::{ForwardPolicy, Forwarding};
 pub use ldap::Ldap;
+pub use limit_scope::{Caps, Limit, LimitScope, SessionsWhenFull};
 pub use listener::{Listener, ListenerKind, Protocol};
 pub use log_format::LogFormat;
 pub use mta_sts::{MtaSts, MtaStsMode};

@@ -3038,7 +3038,8 @@ components:
               description: |-
                 Stable, for programs. One of `unauthenticated` (401),
                 `forbidden`, `forbidden_from` and `sending_off` (403), `not_found` (404),
-                `invalid_input` (400), `conflict` and `already_sent` (409), `message_too_large`
+                `invalid_input` (400), `conflict`, `already_sent` and `limit_reached`
+                (409), `message_too_large`
                 and `scan_too_large` (413), `virus_detected`,
                 `attachment_refused`, `too_many_header_fields` and
                 `marketing_refused` (422), `rate_limited` (429), `internal`

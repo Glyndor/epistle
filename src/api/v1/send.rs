@@ -195,6 +195,20 @@ pub async fn send(
 		state.max_message_size(),
 	)?;
 
+	// The size cap of the sending account, its tenant and its domains, below
+	// the server's `max_message_size` that `build` enforced.
+	if let Err(reached) = state
+		.store()
+		.handle()
+		.current()
+		.admit_message(&account, data.len() as u64)
+	{
+		reached.log(&account);
+		return Err(ApiError::message_over_cap(&reached));
+	}
+	if crate::api::quota::over_recipient_size_cap(&state, &recipients, data.len() as u64) {
+		return Err(ApiError::recipient_over_cap());
+	}
 	if let Some(full) = crate::api::quota::full_recipient(&state, &recipients, data.len() as u64) {
 		return Err(ApiError::mailbox_full(&full));
 	}

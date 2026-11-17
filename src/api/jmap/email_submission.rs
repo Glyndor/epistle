@@ -246,6 +246,26 @@ fn submit_email(
 		data: stamped,
 		..
 	} = queued;
+	// The size cap of the sending account, its tenant and its domains, below
+	// the server's `max_message_size`.
+	if let Err(reached) = state
+		.store()
+		.handle()
+		.current()
+		.admit_message(account, stamped.len() as u64)
+	{
+		reached.log(account);
+		return Err(Refusal {
+			kind: "tooLarge",
+			description: Some(reached.to_string()),
+		});
+	}
+	if crate::api::quota::over_recipient_size_cap(state, &recipients, stamped.len() as u64) {
+		return Err(Refusal {
+			kind: "tooLarge",
+			description: Some("the message is over the size limit of a recipient".into()),
+		});
+	}
 	// Submission rate limits: the per-account limit and every tenant of
 	// the account, the same limiters SMTP and `POST /api/v1/send` charge.
 	// Asked here so a sender with no room left is refused before anything

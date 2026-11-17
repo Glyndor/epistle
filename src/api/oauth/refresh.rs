@@ -31,10 +31,43 @@ const FILE: &str = "oauth_refresh.json";
 /// is no token of ours and is refused before it is hashed or the store read.
 pub(super) const MAX_REFRESH_TOKEN_CHARS: usize = 128;
 
-/// Refresh families alive at once for one account. A client keeps one family
-/// for its whole life, so a person with ten apps and a few retired devices is
-/// far below it; the oldest family makes room for a new one beyond it.
-const MAX_FAMILIES_PER_ACCOUNT: usize = 50;
+/// How many refresh families one account may hold and what happens at the
+/// cap. A client keeps one family for its whole life, so a person with ten
+/// apps and a few retired devices is far below the default of 50; by default
+/// the oldest family makes room for a new one beyond it.
+pub(super) struct SessionCap {
+	/// The cap in force and the scope that set it; `None` is no cap.
+	pub(super) cap: Option<crate::limits::Cap>,
+	/// Refuse the new session instead of ending the oldest.
+	pub(super) refuse: bool,
+}
+
+impl SessionCap {
+	/// The cap that applied before it was configurable: 50 families, the
+	/// oldest ended to make room.
+	#[cfg(test)]
+	pub(super) fn legacy() -> Self {
+		Self {
+			cap: Some(crate::limits::Cap {
+				value: crate::limits::DEFAULT_SESSIONS,
+				set_by: "the server".into(),
+			}),
+			refuse: false,
+		}
+	}
+}
+
+/// What starting a family came to.
+pub(super) enum Started {
+	/// The family was stored, the oldest one ended if the account was full.
+	Opened,
+	/// The account is at its cap and the policy refuses a new session: how
+	/// many it holds and the cap.
+	Full {
+		held: usize,
+		cap: crate::limits::Cap,
+	},
+}
 
 #[derive(Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -113,14 +146,17 @@ pub(super) struct FirstToken<'a> {
 }
 
 /// Start a family for `account`: store `token` as its first member. When the
-/// account is already at [`MAX_FAMILIES_PER_ACCOUNT`], the family that expires
-/// first is deleted to make room.
+/// account is already at its cap, the family that expires first is deleted to
+/// make room, or the new one is refused, as `session` says. The count and the
+/// insert are one step under the store's lock, so racing grants admit exactly
+/// the cap.
 pub(super) fn start_family(
 	dir: &Path,
 	first: &FirstToken<'_>,
 	expires_at: u64,
 	now: u64,
-) -> std::io::Result<()> {
+	session: &SessionCap,
+) -> std::io::Result<Started> {
 	let FirstToken {
 		token,
 		family,
@@ -130,18 +166,32 @@ pub(super) fn start_family(
 	} = *first;
 	edit(dir, |store| {
 		sweep(store, now);
-		let mut latest: HashMap<&str, u64> = HashMap::new();
+		let mut latest: HashMap<String, u64> = HashMap::new();
 		for record in store.tokens.values().filter(|r| r.account == account) {
-			let end = latest.entry(record.family.as_str()).or_insert(0);
+			let end = latest.entry(record.family.clone()).or_insert(0);
 			*end = (*end).max(record.expires_at);
 		}
-		if latest.len() >= MAX_FAMILIES_PER_ACCOUNT
-			&& let Some(oldest) = latest
-				.iter()
-				.min_by_key(|(_, end)| **end)
-				.map(|(family, _)| (*family).to_string())
-		{
-			drop_family(store, &oldest);
+		if let Some(cap) = &session.cap {
+			if session.refuse || cap.value == 0 {
+				if latest.len() as u64 >= cap.value {
+					return Started::Full {
+						held: latest.len(),
+						cap: cap.clone(),
+					};
+				}
+			} else {
+				while latest.len() as u64 >= cap.value {
+					let Some(oldest) = latest
+						.iter()
+						.min_by_key(|(_, end)| **end)
+						.map(|(family, _)| family.clone())
+					else {
+						break;
+					};
+					latest.remove(&oldest);
+					drop_family(store, &oldest);
+				}
+			}
 		}
 		store.tokens.insert(
 			hash(token),
@@ -154,6 +204,7 @@ pub(super) fn start_family(
 				rotated: false,
 			},
 		);
+		Started::Opened
 	})
 }
 

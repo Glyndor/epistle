@@ -5,13 +5,14 @@
 use std::collections::HashMap;
 
 use axum::Json;
-use axum::http::header;
+use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 
-use super::refresh::{self, FirstToken, MAX_REFRESH_TOKEN_CHARS, Outcome};
+use super::refresh::{self, FirstToken, MAX_REFRESH_TOKEN_CHARS, Outcome, SessionCap, Started};
 use super::scopes::Scopes;
 use super::{AuthzServer, oauth_error};
 use crate::api::ApiState;
+use crate::config::SessionsWhenFull;
 
 /// The success body of a token response (RFC 6749 section 5.1).
 fn token_response(
@@ -37,6 +38,28 @@ fn token_response(
 		.headers_mut()
 		.insert(header::PRAGMA, "no-cache".parse().unwrap());
 	response
+}
+
+/// The session cap of `account`: the cap in force and what to do at it.
+fn session_cap(state: &ApiState, account: &str) -> SessionCap {
+	use crate::limits::Kind;
+	let store = state.store();
+	let target = store.handle().current().limit_target(account);
+	SessionCap {
+		cap: store.limits().resolve(Kind::Sessions, &target),
+		refuse: store.limits().sessions_when_full(&target) == SessionsWhenFull::Refuse,
+	}
+}
+
+/// `access_denied` with the reason: the account holds as many sessions as its
+/// cap allows and the policy is to refuse a new one (RFC 6749 section 5.2
+/// allows an `error_description`).
+fn access_denied(reached: &crate::limits::LimitReached) -> Response {
+	let body = serde_json::json!({
+		"error": "access_denied",
+		"error_description": reached.to_string(),
+	});
+	(StatusCode::BAD_REQUEST, Json(body)).into_response()
 }
 
 /// Answer a redeemed device or authorization-code grant for `account`: sign the
@@ -72,8 +95,26 @@ pub(super) fn grant_tokens(
 		scope: &scope,
 		credential: &credential,
 	};
-	if refresh::start_family(state.data_dir(), &first, now.saturating_add(ttl), now).is_err() {
-		return super::oauth_temporarily_unavailable(5);
+	let session = session_cap(state, account);
+	match refresh::start_family(
+		state.data_dir(),
+		&first,
+		now.saturating_add(ttl),
+		now,
+		&session,
+	) {
+		Err(_) => return super::oauth_temporarily_unavailable(5),
+		Ok(Started::Full { held, cap }) => {
+			let reached = crate::limits::LimitReached {
+				kind: crate::limits::Kind::Sessions,
+				cap,
+				subject: format!("account {account}"),
+				current: held as u64,
+			};
+			reached.log(account);
+			return access_denied(&reached);
+		}
+		Ok(Started::Opened) => {}
 	}
 	token_response(authz, &access, scopes, Some(&token))
 }

@@ -8,9 +8,9 @@ use serde::Deserialize;
 use super::defaults::{default_bulk_recipients, default_masked_addresses_max, default_yes};
 use super::{
 	Account, Acme, Alert, Alias, Antispam, AntispamScope, Api, Arc, Attachments, Auth, Bans, Boot,
-	Database, Deliverability, Dkim, DnsProviders, DnsPublish, Ldap, Listener, Llm, LogFormat,
-	MtaSts, Oauth, Otel, OwnIpBlocklist, Privileges, Queue, Smtp, SrsDomain, Storage, SubjectPass,
-	Tenant, Tls, Transport, Webhook,
+	Caps, Database, Deliverability, Dkim, DnsProviders, DnsPublish, Ldap, LimitScope, Listener,
+	Llm, LogFormat, MtaSts, Oauth, Otel, OwnIpBlocklist, Privileges, Queue, Smtp, SrsDomain,
+	Storage, SubjectPass, Tenant, Tls, Transport, Webhook,
 };
 
 /// Top-level server configuration.
@@ -415,6 +415,15 @@ pub struct Config {
 	/// server-wide sections. Absent or empty changes nothing.
 	#[serde(default, rename = "antispam_scope")]
 	pub antispam_scopes: Vec<AntispamScope>,
+	/// Caps on what an account, a domain or a message may hold, server-wide.
+	/// Absent sets none, apart from the 50 refresh families per account that
+	/// always applied.
+	#[serde(default)]
+	pub limits: Caps,
+	/// The same caps for one tenant, domain or account; each may only
+	/// tighten what the scope above allows. Absent or empty changes nothing.
+	#[serde(default, rename = "limit_scope")]
+	pub limit_scopes: Vec<LimitScope>,
 	/// Unprivileged user/group to drop to after privileged ports are bound.
 	/// Absent leaves the process running as whoever started it.
 	pub privileges: Option<Privileges>,

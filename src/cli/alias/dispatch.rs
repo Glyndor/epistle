@@ -88,6 +88,9 @@ pub(super) fn execute(path: &Path, action: AliasCli, dry_run: bool, json: bool) 
 				Ok(document) => document,
 				Err(error) => return Outcome::Error(error),
 			};
+			if let Err(error) = super::caps::check_add(&document, &args) {
+				return Outcome::Code(crate::cli::exit::policy(error));
+			}
 			if let Err(error) = add_alias(&config, &mut document, &args) {
 				return Outcome::Error(error);
 			}
@@ -167,6 +170,11 @@ pub(super) fn execute(path: &Path, action: AliasCli, dry_run: bool, json: bool) 
 				MemberSubcommand::Add { .. } => "member added",
 				MemberSubcommand::Remove { .. } => "member removed",
 			};
+			if let MemberSubcommand::Add { .. } = &args.action
+				&& let Err(error) = super::caps::check_member_add(&document, &address)
+			{
+				return Outcome::Code(crate::cli::exit::policy(error));
+			}
 			if let Err(error) = member_edit(&config, &mut document, args) {
 				return Outcome::Error(error);
 			}
