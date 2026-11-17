@@ -143,9 +143,7 @@ fn refuses_a_symlinked_leaf() {
 fn refuses_a_fifo_leaf_without_blocking() {
 	let l = layout();
 	let fifo = l.root.join("pipe");
-	let name = std::ffi::CString::new(fifo.to_str().expect("utf8")).expect("cstring");
-	// SAFETY: `name` is a valid NUL-terminated path.
-	assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+	mkfifo(&fifo);
 	assert_eq!(kind(read(&l.root, &fifo)), ErrorKind::NotFound);
 }
 
@@ -216,17 +214,25 @@ fn the_checked_path_is_in_the_resolved_spelling() {
 	);
 }
 
+fn mkfifo(path: &Path) {
+	let name = std::ffi::CString::new(path.to_str().expect("utf8")).expect("cstring");
+	// SAFETY: `name` is a valid NUL-terminated path.
+	assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+}
+
 #[test]
-fn listing_skips_links_and_special_files() {
+fn listing_skips_links_and_special_files_and_its_entries_can_be_read() {
 	let l = layout();
 	std::fs::write(l.root.join("file"), "x").expect("write");
 	symlink(l.outside.join("note"), l.root.join("link")).expect("symlink");
-	let names: Vec<_> = read_dir(&l.root, &l.root)
+	mkfifo(&l.root.join("pipe"));
+	let entries: Vec<_> = read_dir(&l.root, &l.root)
 		.expect("list")
 		.flatten()
-		.map(|entry| entry.file_name())
 		.collect();
+	let names: Vec<_> = entries.iter().map(|entry| entry.file_name()).collect();
 	assert_eq!(names, vec![std::ffi::OsString::from("file")]);
+	assert_eq!(read(&l.root, entries[0].path()).expect("read"), b"x");
 }
 
 #[test]
@@ -252,4 +258,103 @@ fn an_account_directory_that_is_a_link_is_refused_from_the_data_dir_root() {
 		kind(read(&l.root, to_outside.join("note"))),
 		ErrorKind::InvalidInput
 	);
+}
+
+#[test]
+fn a_link_to_nowhere_is_not_a_missing_entry() {
+	let l = layout();
+	let accounts = l.root.join("accounts");
+	std::fs::create_dir(&accounts).expect("mkdir");
+	symlink(l.outside.join("absent"), accounts.join("evil")).expect("symlink");
+	let below = accounts.join("evil").join("x");
+	assert_eq!(
+		kind(check_directories(&l.root, &below)),
+		ErrorKind::NotFound
+	);
+	assert_eq!(kind(read_dir(&l.root, &below)), ErrorKind::NotFound);
+	assert_eq!(kind(read(&l.root, &below)), ErrorKind::NotFound);
+	assert!(!l.outside.join("absent").exists());
+}
+
+#[test]
+fn a_missing_root_accepts_a_missing_tail_and_reads_nothing() {
+	let l = layout();
+	let root = l.root.join("not-created");
+	let below = root.join("accounts").join("alice");
+	let checked = check_directories(&root, &below).expect("a missing tail is fine");
+	assert_eq!(checked, below);
+	assert_eq!(kind(read_dir(&root, &below)), ErrorKind::NotFound);
+	assert_eq!(kind(read(&root, below.join("m"))), ErrorKind::NotFound);
+	assert_eq!(
+		kind(check_directories(&root, &root.join("..").join("x"))),
+		ErrorKind::InvalidInput
+	);
+}
+
+#[test]
+fn an_ancestor_swapped_for_a_link_after_the_check_is_caught_after_the_open() {
+	let l = layout();
+	let dir = l.root.join("a");
+	std::fs::create_dir(&dir).expect("mkdir");
+	std::fs::write(dir.join("m"), "inside").expect("write");
+	std::fs::write(l.outside.join("m"), "outside").expect("write");
+	let (root, outside) = (l.root.clone(), l.outside.clone());
+	crate::util::fs_walk::rooted::hook::set(move || {
+		std::fs::rename(root.join("a"), root.join("a-moved")).expect("rename");
+		symlink(&outside, root.join("a")).expect("symlink");
+	});
+	assert_eq!(kind(read(&l.root, dir.join("m"))), ErrorKind::InvalidInput);
+}
+
+#[test]
+fn a_root_that_is_a_link_is_resolved_not_refused() {
+	let l = layout();
+	std::fs::write(l.root.join("m"), "disk").expect("write");
+	let alias = l.root.parent().expect("parent").join("mounted");
+	symlink(&l.root, &alias).expect("symlink");
+	assert_eq!(read(&alias, alias.join("m")).expect("read"), b"disk");
+	assert!(read_dir(&alias, &alias).is_ok());
+}
+
+#[test]
+fn text_that_is_not_utf8_is_invalid_data_and_such_a_name_is_refused() {
+	use std::os::unix::ffi::OsStrExt;
+	let l = layout();
+	std::fs::write(l.root.join("bytes"), [0xff, 0xfe]).expect("write");
+	let error = read_to_string(&l.root, l.root.join("bytes")).expect_err("not text");
+	assert_eq!(error.kind(), ErrorKind::InvalidData);
+	let odd = l.root.join(std::ffi::OsStr::from_bytes(b"caf\xe9"));
+	assert_eq!(kind(read(&l.root, odd)), ErrorKind::InvalidInput);
+}
+
+#[test]
+fn each_refused_entry_warns_once() {
+	let l = layout();
+	symlink(l.outside.join("note"), l.root.join("out")).expect("symlink");
+	symlink(l.root.join("nowhere"), l.root.join("dangling")).expect("symlink");
+	symlink(l.root.join("plain"), l.root.join("inside")).expect("symlink");
+	std::fs::write(l.root.join("plain"), "x").expect("write");
+	mkfifo(&l.root.join("pipe"));
+	for name in ["out", "dangling", "inside", "pipe"] {
+		let target = l.root.join(name);
+		let events = crate::cli::trace::capture::run_with_capture(|| {
+			let _scope = crate::util::fs_walk::warning_scope();
+			let _ = read(&l.root, &target);
+			let _ = read(&l.root, &target);
+		});
+		assert_eq!(events.len(), 1, "{name}: one warning for the path");
+	}
+}
+
+#[test]
+fn a_directory_swapped_for_another_after_the_check_is_refused_before_listing() {
+	let l = layout();
+	let dir = l.root.join("box");
+	std::fs::create_dir(&dir).expect("mkdir");
+	let root = l.root.clone();
+	crate::util::fs_walk::rooted::hook::set(move || {
+		std::fs::rename(root.join("box"), root.join("box-moved")).expect("rename");
+		std::fs::create_dir(root.join("box")).expect("mkdir");
+	});
+	assert_eq!(kind(read_dir(&l.root, &dir)), ErrorKind::InvalidInput);
 }

@@ -402,3 +402,13 @@ fn an_account_that_is_a_link_to_another_account_or_outside_is_refused() {
 		);
 	}
 }
+
+#[test]
+fn an_empty_inbox_opens_under_a_data_dir_that_does_not_exist_yet() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let absent = dir.path().join("not-created");
+	let snapshot = Snapshot::open(&absent, "alice", "INBOX", &MessageCrypto::disabled())
+		.expect("an account with no mail yet has an empty INBOX");
+	assert!(snapshot.is_empty());
+	assert!(!absent.exists(), "opening must not create anything");
+}
