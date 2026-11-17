@@ -135,6 +135,50 @@ async fn a_send_over_the_cap_of_the_account_is_a_413_and_nothing_is_queued() {
 	assert_eq!(status, StatusCode::OK, "bob has no cap: {body}");
 }
 
+async fn send_to(
+	app: &axum::Router,
+	from: &str,
+	to: &str,
+	bytes: usize,
+) -> (StatusCode, serde_json::Value) {
+	request_with_body(
+		app,
+		"POST",
+		"/api/v1/send",
+		Some(TOKEN.as_str()),
+		Some(serde_json::json!({
+			"from": from, "to": [to], "subject": "hi", "text": "x".repeat(bytes)
+		})),
+	)
+	.await
+}
+
+#[tokio::test]
+async fn a_send_over_the_cap_of_a_local_recipient_is_refused_without_naming_the_cap() {
+	let dir = tempfile::tempdir().unwrap();
+	let app = router(state(dir.path(), CAPS));
+	// bob has no cap, alice's is 70000: SMTP refuses this message too.
+	let (status, body) = send_to(&app, "bob@example.org", "alice@example.org", 75_000).await;
+	assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE, "{body}");
+	assert_eq!(body["error"]["code"], "message_too_large", "{body}");
+	let message = body["error"]["message"].as_str().unwrap_or_default();
+	assert!(
+		!message.contains("70000") && !message.contains("alice"),
+		"a stranger is not told the cap or the account: {message}"
+	);
+	assert!(
+		FsSpool::open(dir.path())
+			.unwrap()
+			.list()
+			.unwrap()
+			.is_empty()
+	);
+	let (status, body) = send_to(&app, "bob@example.org", "alice@example.org", 1_000).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	let (status, body) = send_to(&app, "alice@example.org", "bob@example.org", 1_000).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+}
+
 async fn upload(
 	app: &axum::Router,
 	account: &str,

@@ -342,6 +342,17 @@ impl ApiError {
 		}
 	}
 
+	/// `413` for a message over the size cap of a local recipient. The cap of
+	/// a recipient is not told to the sender.
+	pub fn recipient_over_cap() -> Self {
+		ApiError {
+			status: StatusCode::PAYLOAD_TOO_LARGE,
+			code: "message_too_large",
+			message: "The message is over the size limit of a recipient of this server.".into(),
+			..Default::default()
+		}
+	}
+
 	/// `409` for a limit that waiting will never clear. A `429` here would
 	/// tell the client to retry, which is the one thing that cannot help: the
 	/// cap lifts when the caller deletes something or an admin raises it.

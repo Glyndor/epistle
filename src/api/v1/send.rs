@@ -206,6 +206,9 @@ pub async fn send(
 		reached.log(&account);
 		return Err(ApiError::message_over_cap(&reached));
 	}
+	if crate::api::quota::over_recipient_size_cap(&state, &recipients, data.len() as u64) {
+		return Err(ApiError::recipient_over_cap());
+	}
 	if let Some(full) = crate::api::quota::full_recipient(&state, &recipients, data.len() as u64) {
 		return Err(ApiError::mailbox_full(&full));
 	}
