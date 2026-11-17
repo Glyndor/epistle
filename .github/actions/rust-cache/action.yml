@@ -44,7 +44,7 @@ runs:
           ~/.cargo/git/db
           ${{ inputs.working-directory }}/target
           ${{ inputs.extra-path }}
-        key: ${{ inputs.prefix }}-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+        key: ${{ inputs.prefix }}-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'fuzz/Cargo.lock') }}
         restore-keys: ${{ inputs.prefix }}-${{ runner.os }}-
 
     - if: >-
@@ -60,4 +60,4 @@ runs:
           ~/.cargo/git/db
           ${{ inputs.working-directory }}/target
           ${{ inputs.extra-path }}
-        key: ${{ inputs.prefix }}-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+        key: ${{ inputs.prefix }}-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'fuzz/Cargo.lock') }}
