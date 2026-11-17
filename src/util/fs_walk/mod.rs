@@ -6,6 +6,8 @@ use std::fs::{DirEntry, FileType, ReadDir};
 use std::io;
 use std::path::{Path, PathBuf};
 
+pub(crate) mod rooted;
+
 thread_local! {
 	static WARNED: RefCell<Option<HashSet<PathBuf>>> = const { RefCell::new(None) };
 }

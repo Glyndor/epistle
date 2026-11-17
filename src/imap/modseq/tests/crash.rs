@@ -17,7 +17,11 @@ fn a_counter_staging_file_a_kill_left_is_not_the_counter() {
 		assert_eq!(next_counter(dir.path()).expect("second"), 3);
 		let tmp = state_tmp_file(dir.path(), StateFile::ModseqCounter).expect("tmp");
 		std::fs::write(tmp, staging).expect("staging");
-		assert_eq!(read_counter(dir.path()), 3, "staging {staging:?} was read");
+		assert_eq!(
+			read_counter(dir.path(), dir.path()),
+			3,
+			"staging {staging:?} was read"
+		);
 		assert_eq!(next_counter(dir.path()).expect("after the kill"), 4);
 	}
 }
@@ -31,11 +35,11 @@ fn a_message_staging_file_a_kill_left_keeps_the_old_modseq() {
 		let tmp = message_tmp_file(dir.path(), id, MessageExt::Modseq).expect("tmp");
 		std::fs::write(tmp, staging).expect("staging");
 		assert_eq!(
-			read_message(dir.path(), id),
+			read_message(dir.path(), dir.path(), id),
 			5,
 			"staging {staging:?} was read"
 		);
 		write_message(dir.path(), id, 6).expect("the retry");
-		assert_eq!(read_message(dir.path(), id), 6);
+		assert_eq!(read_message(dir.path(), dir.path(), id), 6);
 	}
 }

@@ -82,9 +82,9 @@ fn index_path(account_dir: &Path) -> std::io::Result<PathBuf> {
 /// gained another apart from the one that was indexed: delivery and POP3 change
 /// the files without moving the mod-sequence, and the count alone is the same
 /// after a delete and a delivery.
-pub(super) fn current_generation(account_dir: &Path) -> (u64, usize, u64) {
-	let modseq = super::modseq::read_counter(account_dir).max(1);
-	let (count, names) = match crate::util::fs_walk::read_dir(account_dir) {
+pub(super) fn current_generation(root: &Path, account_dir: &Path) -> (u64, usize, u64) {
+	let modseq = super::modseq::read_counter(root, account_dir).max(1);
+	let (count, names) = match crate::util::fs_walk::rooted::read_dir(root, account_dir) {
 		Ok(entries) => entries
 			.flatten()
 			.filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
@@ -115,9 +115,13 @@ fn name_hash(name: &str) -> u64 {
 /// Load the index if it exists, parses cleanly, has the current version, and its
 /// stamp matches `generation`. Any deviation returns `None` so the caller falls
 /// back to the authoritative filesystem scan (fail closed).
-pub(super) fn load(account_dir: &Path, generation: (u64, usize, u64)) -> Option<Vec<MessageRef>> {
+pub(super) fn load(
+	root: &Path,
+	account_dir: &Path,
+	generation: (u64, usize, u64),
+) -> Option<Vec<MessageRef>> {
 	let text = index_path(account_dir)
-		.and_then(crate::util::fs_walk::read_to_string)
+		.and_then(|path| crate::util::fs_walk::rooted::read_to_string(root, path))
 		.ok()?;
 	let mut lines = text.lines();
 

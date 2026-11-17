@@ -286,8 +286,8 @@ fn an_unknown_system_token_still_fails_closed() {
 fn missing_index_is_treated_as_absent() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	std::fs::create_dir_all(inbox(dir.path(), "alice")).expect("mkdir");
-	let generation = current_generation(&inbox(dir.path(), "alice"));
-	assert!(load(&inbox(dir.path(), "alice"), generation).is_none());
+	let generation = current_generation(dir.path(), &inbox(dir.path(), "alice"));
+	assert!(load(dir.path(), &inbox(dir.path(), "alice"), generation).is_none());
 }
 
 /// A non-UTC INTERNALDATE zone rides on the time field as `@<minutes>`.
@@ -317,21 +317,21 @@ fn a_delete_and_a_delivery_with_the_same_count_invalidate_the_index() {
 	let gone = deliver(dir.path(), "alice", b"first\r\n");
 	deliver(dir.path(), "alice", b"second\r\n");
 	let _ = Snapshot::open(dir.path(), "alice", "INBOX", &MessageCrypto::disabled()).expect("open");
-	let before = current_generation(&inbox(dir.path(), "alice"));
+	let before = current_generation(dir.path(), &inbox(dir.path(), "alice"));
 	assert!(
-		load(&inbox(dir.path(), "alice"), before).is_some(),
+		load(dir.path(), &inbox(dir.path(), "alice"), before).is_some(),
 		"the index is fresh before the change"
 	);
 	std::fs::remove_file(inbox(dir.path(), "alice").join(format!("{gone}.eml"))).expect("delete");
 	let arrived = deliver(dir.path(), "alice", b"third\r\n");
-	let after = current_generation(&inbox(dir.path(), "alice"));
+	let after = current_generation(dir.path(), &inbox(dir.path(), "alice"));
 	assert_eq!(
 		(before.0, before.1),
 		(after.0, after.1),
 		"the mod-sequence and the count are the same, as the bug needs"
 	);
 	assert!(
-		load(&inbox(dir.path(), "alice"), after).is_none(),
+		load(dir.path(), &inbox(dir.path(), "alice"), after).is_none(),
 		"the names differ, so the stored index is stale"
 	);
 	let reopened =
