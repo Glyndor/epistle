@@ -113,7 +113,7 @@ impl UndoStore {
 	pub fn open(data_dir: &Path, crypto: MessageCrypto) -> std::io::Result<Self> {
 		let root = data_dir.join("undo");
 		for dir in [Dir::Pending, Dir::Inflight, Dir::Released] {
-			crate::storage::create_private_dir(&root.join(dir.name()))?;
+			crate::storage::create_private_dir(data_dir, &root.join(dir.name()))?;
 		}
 		Ok(Self { root, crypto })
 	}
