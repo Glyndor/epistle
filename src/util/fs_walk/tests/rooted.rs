@@ -228,3 +228,28 @@ fn listing_skips_links_and_special_files() {
 		.collect();
 	assert_eq!(names, vec![std::ffi::OsString::from("file")]);
 }
+
+#[test]
+fn an_account_directory_that_is_a_link_is_refused_from_the_data_dir_root() {
+	let l = layout();
+	let accounts = l.root.join("accounts");
+	std::fs::create_dir_all(accounts.join("bob").join("new")).expect("mkdir");
+	std::fs::write(accounts.join("bob").join("new").join("m.eml"), "bob").expect("write");
+	symlink(accounts.join("bob"), accounts.join("alice")).expect("symlink");
+	symlink(&l.outside, accounts.join("carol")).expect("symlink");
+	let to_sibling = accounts.join("alice").join("new");
+	assert_eq!(kind(read_dir(&l.root, &to_sibling)), ErrorKind::NotFound);
+	assert_eq!(
+		kind(read(&l.root, to_sibling.join("m.eml"))),
+		ErrorKind::NotFound
+	);
+	let to_outside = accounts.join("carol");
+	assert_eq!(
+		kind(read_dir(&l.root, &to_outside)),
+		ErrorKind::InvalidInput
+	);
+	assert_eq!(
+		kind(read(&l.root, to_outside.join("note"))),
+		ErrorKind::InvalidInput
+	);
+}
