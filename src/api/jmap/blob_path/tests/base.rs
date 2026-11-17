@@ -231,3 +231,15 @@ fn a_blob_root_that_is_a_link_out_of_the_data_dir_is_not_walked() {
 		.collect();
 	assert_eq!(found, vec![kept]);
 }
+
+#[cfg(unix)]
+#[test]
+fn a_blob_root_that_is_a_link_inside_the_data_dir_is_not_walked_either() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let data = dir.path().join("data");
+	let moved = data.join("pool-moved");
+	std::fs::create_dir_all(&moved).expect("moved");
+	std::fs::write(moved.join(id("beef").to_string()), b"x").expect("payload");
+	std::os::unix::fs::symlink(&moved, blob_root(&data)).expect("symlink");
+	assert!(walk_shared(&data).is_empty(), "a link at blobs is not read");
+}

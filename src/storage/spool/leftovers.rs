@@ -33,7 +33,7 @@ impl FsSpool {
 	pub fn leftovers(&self, limit: usize) -> std::io::Result<Vec<Leftover>> {
 		let dir = self.path_in(Path::new(SpoolDir::Tmp.name()))?;
 		let mut ids: Vec<Uuid> = Vec::new();
-		for entry in crate::util::fs_walk::rooted::read_dir(&self.data_dir, &dir)? {
+		for entry in crate::util::fs_walk::read_dir(&dir)? {
 			let name = entry?.file_name();
 			let Some(name) = name.to_str() else {
 				continue;
@@ -62,7 +62,7 @@ impl FsSpool {
 
 	fn staged_evidence(&self, id: Uuid) -> Option<bool> {
 		let path = self.entry_file(SpoolDir::Tmp, id, MessageExt::Json).ok()?;
-		let bytes = crate::util::fs_walk::rooted::read(&self.data_dir, path).ok()?;
+		let bytes = crate::util::fs_walk::read(path).ok()?;
 		let (envelope, _) = self.decode_envelope_bytes(id, &bytes).ok()?;
 		Some(envelope.evidence)
 	}
@@ -77,7 +77,7 @@ impl FsSpool {
 	pub fn sweep_envelope_rewrites(&self) -> std::io::Result<usize> {
 		let dir = self.path_in(Path::new(SpoolDir::Tmp.name()))?;
 		let mut removed = 0;
-		for entry in crate::util::fs_walk::rooted::read_dir(&self.data_dir, &dir)? {
+		for entry in crate::util::fs_walk::read_dir(&dir)? {
 			let entry = entry?;
 			let name = entry.file_name();
 			if name.to_str().is_some_and(is_envelope_rewrite) {

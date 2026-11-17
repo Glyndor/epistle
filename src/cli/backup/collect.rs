@@ -162,6 +162,12 @@ pub(super) fn collect_files(root: &Path) -> std::io::Result<Vec<(String, u32, Ve
 			Ok(entries) => entries,
 			// A missing data dir yields an empty backup, not an error.
 			Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+			// A name that is not one plain UTF-8 name is left out, with a
+			// warning, instead of failing the whole backup.
+			Err(error) if error.kind() == std::io::ErrorKind::InvalidInput => {
+				crate::util::fs_walk::warn_skipped(&dir);
+				continue;
+			}
 			Err(error) => return Err(error),
 		};
 		for entry in entries.flatten() {
@@ -182,7 +188,13 @@ pub(super) fn collect_files(root: &Path) -> std::io::Result<Vec<(String, u32, Ve
 				let name = format!("data/{}", relative.to_string_lossy());
 				let metadata = entry.metadata()?;
 				let mode = metadata.permissions().mode();
-				out.push((name, mode, crate::util::fs_walk::rooted::read(root, &path)?));
+				match crate::util::fs_walk::rooted::read(root, &path) {
+					Ok(bytes) => out.push((name, mode, bytes)),
+					Err(error) if error.kind() == std::io::ErrorKind::InvalidInput => {
+						crate::util::fs_walk::warn_skipped(&path);
+					}
+					Err(error) => return Err(error),
+				}
 			}
 		}
 	}

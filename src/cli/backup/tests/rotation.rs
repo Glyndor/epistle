@@ -106,3 +106,26 @@ fn a_data_dir_reached_through_a_link_is_collected_and_its_own_links_are_not_foll
 		.collect();
 	assert_eq!(names, ["data/accounts/m.eml"]);
 }
+
+#[cfg(unix)]
+#[test]
+fn a_name_that_is_not_plain_utf8_is_left_out_without_failing_the_backup() {
+	use std::os::unix::ffi::OsStrExt;
+	let root = tempfile::tempdir().expect("dir");
+	std::fs::write(root.path().join("kept"), b"x").expect("file");
+	std::fs::write(
+		root.path().join(std::ffi::OsStr::from_bytes(b"caf\xe9")),
+		b"y",
+	)
+	.expect("file");
+	std::fs::write(root.path().join("a\\b"), b"z").expect("file");
+	let odd_dir = root.path().join(std::ffi::OsStr::from_bytes(b"d\xff"));
+	std::fs::create_dir(&odd_dir).expect("mkdir");
+	std::fs::write(odd_dir.join("inner"), b"w").expect("file");
+	let names: Vec<String> = collect_files(root.path())
+		.expect("one odd name must not fail the backup")
+		.into_iter()
+		.map(|(name, ..)| name)
+		.collect();
+	assert_eq!(names, ["data/kept"]);
+}

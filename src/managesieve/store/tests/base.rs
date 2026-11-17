@@ -194,3 +194,25 @@ fn an_account_that_is_not_one_plain_name_has_no_store() {
 	);
 	assert_eq!(std::fs::read_dir(&root).expect("read_dir").count(), 0);
 }
+
+#[cfg(unix)]
+#[test]
+fn an_accounts_directory_replaced_by_a_link_after_opening_is_refused() {
+	let data = tempfile::tempdir().expect("tempdir");
+	let outside = tempfile::tempdir().expect("outside");
+	let sieve = outside.path().join("alice").join("sieve");
+	std::fs::create_dir_all(&sieve).expect("mkdir");
+	std::fs::write(sieve.join("theirs.sieve"), SCRIPT).expect("script");
+	let s = ScriptStore::in_data_dir(data.path(), "alice");
+	s.put("mine", SCRIPT).expect("put");
+	std::fs::rename(
+		data.path().join("accounts"),
+		data.path().join("accounts-moved"),
+	)
+	.expect("mv");
+	std::os::unix::fs::symlink(outside.path(), data.path().join("accounts")).expect("link");
+	assert!(
+		s.list().is_err(),
+		"scripts behind a linked accounts dir are not listed"
+	);
+}

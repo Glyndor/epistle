@@ -25,10 +25,8 @@ impl FsSpool {
 	/// envelope is read under encryption-enabled, it is rewritten encrypted in
 	/// place atomically, so subsequent loads go through the AEAD path.
 	pub fn load_envelope(&self, id: Uuid) -> std::io::Result<Envelope> {
-		let bytes = crate::util::fs_walk::rooted::read(
-			&self.data_dir,
-			self.entry_file(SpoolDir::New, id, MessageExt::Json)?,
-		)?;
+		let bytes =
+			crate::util::fs_walk::read(self.entry_file(SpoolDir::New, id, MessageExt::Json)?)?;
 		let (envelope, decrypted) = self.decode_envelope_bytes(id, &bytes)?;
 		if decrypted == DecodedEnvelope::Plaintext {
 			self.maybe_migrate_envelope(id, &bytes)?;
@@ -111,10 +109,8 @@ impl FsSpool {
 	/// lock and rewrites the envelope sealed itself, so a migration here would
 	/// wait on that same lock forever.
 	pub(super) fn read_envelope_unlocked(&self, id: Uuid) -> std::io::Result<Envelope> {
-		let bytes = crate::util::fs_walk::rooted::read(
-			&self.data_dir,
-			self.entry_file(SpoolDir::New, id, MessageExt::Json)?,
-		)?;
+		let bytes =
+			crate::util::fs_walk::read(self.entry_file(SpoolDir::New, id, MessageExt::Json)?)?;
 		let (envelope, _) = self.decode_envelope_bytes(id, &bytes)?;
 		Ok(envelope)
 	}
@@ -131,10 +127,8 @@ impl FsSpool {
 			return Ok(());
 		}
 		let _guard = self.lock()?;
-		let on_disk = crate::util::fs_walk::rooted::read(
-			&self.data_dir,
-			self.entry_file(SpoolDir::New, id, MessageExt::Json)?,
-		)?;
+		let on_disk =
+			crate::util::fs_walk::read(self.entry_file(SpoolDir::New, id, MessageExt::Json)?)?;
 		if crate::storage::is_envelope(&on_disk) {
 			// Another writer migrated it between our decode and our write.
 			return Ok(());
