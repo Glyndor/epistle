@@ -31,7 +31,7 @@ fn mailbox() -> (tempfile::TempDir, Vec<Uuid>) {
 }
 
 fn settled(dir: &std::path::Path, ids: &[Uuid], persisted: &[(Uuid, u32)], note: &str) {
-	let first = resolve_uids(dir, ids);
+	let first = resolve_uids(dir, dir, ids);
 	let distinct: HashSet<u32> = first.iter().copied().collect();
 	assert_eq!(
 		distinct.len(),
@@ -46,7 +46,11 @@ fn settled(dir: &std::path::Path, ids: &[Uuid], persisted: &[(Uuid, u32)], note:
 			.expect("id");
 		assert_eq!(first[at], *uid, "{note}: a UID on disk changed");
 	}
-	assert_eq!(resolve_uids(dir, ids), first, "{note}: the answer moved");
+	assert_eq!(
+		resolve_uids(dir, dir, ids),
+		first,
+		"{note}: the answer moved"
+	);
 }
 
 #[test]
@@ -80,10 +84,10 @@ fn a_counter_staging_file_left_by_a_kill_is_never_read_as_the_counter() {
 	for staging in [b"" as &[u8], b"9", b"999999"] {
 		let (dir, ids) = mailbox();
 		let early = &ids[..2];
-		assert_eq!(resolve_uids(dir.path(), early), vec![1, 2]);
+		assert_eq!(resolve_uids(dir.path(), dir.path(), early), vec![1, 2]);
 		let tmp = state_tmp_file(dir.path(), StateFile::UidNext).expect("tmp");
 		std::fs::write(tmp, staging).expect("staging");
-		let all = resolve_uids(dir.path(), &ids);
+		let all = resolve_uids(dir.path(), dir.path(), &ids);
 		assert_eq!(
 			all,
 			vec![1, 2, 3, 4],

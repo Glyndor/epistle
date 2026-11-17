@@ -39,6 +39,10 @@ pub struct Snapshot {
 	/// The account root (`<data_dir>/accounts/<name>`); used as the parent of
 	/// the per-account `.archive/` directory when retention is enabled.
 	pub(super) account_root: AccountRoot,
+	/// The data directory: the trusted root every rooted read of this
+	/// snapshot starts from, above `accounts/<name>`, which is walked and
+	/// checked as part of the path.
+	pub(super) data_dir: PathBuf,
 	/// The mailbox this snapshot was opened for, used to stamp the archive
 	/// sidecar so a restored message knows where it came from.
 	pub(super) mailbox: String,
@@ -184,7 +188,7 @@ pub fn delete(data_dir: &Path, account: &str, mailbox: &str) -> std::io::Result<
 		));
 	}
 	// The messages go with the mailbox: each one is destroyed for JMAP.
-	let ids = journal::message_ids(&contained_child(&dir, "new")?);
+	let ids = journal::message_ids(data_dir, &contained_child(&dir, "new")?);
 	std::fs::remove_dir_all(dir)?;
 	let mut changes: Vec<Change> = ids
 		.into_iter()
@@ -216,7 +220,8 @@ pub fn list(data_dir: &Path, account: &str) -> Vec<String> {
 	let Ok(account) = AccountName::new(account) else {
 		return names;
 	};
-	let entries = folders_dir(&account, data_dir).and_then(crate::util::fs_walk::read_dir);
+	let entries = folders_dir(&account, data_dir)
+		.and_then(|folders| crate::util::fs_walk::rooted::read_dir(data_dir, folders));
 	if let Ok(entries) = entries {
 		for entry in entries.flatten() {
 			if entry.file_type().is_ok_and(|kind| kind.is_dir())
@@ -370,7 +375,7 @@ pub fn account_usage(data_dir: &Path, account: &str, crypto: &MessageCrypto) -> 
 		let Some(dir) = mailbox_dir(data_dir, account, &mailbox) else {
 			continue;
 		};
-		let Ok(entries) = crate::util::fs_walk::read_dir(&dir) else {
+		let Ok(entries) = crate::util::fs_walk::rooted::read_dir(data_dir, &dir) else {
 			continue;
 		};
 		for entry in entries.flatten() {
@@ -388,7 +393,9 @@ pub fn account_usage(data_dir: &Path, account: &str, crypto: &MessageCrypto) -> 
 	let archive = account_name
 		.root(data_dir)
 		.and_then(|root| root.child(FixedDir::Archive));
-	if let Ok(entries) = archive.and_then(crate::util::fs_walk::read_dir) {
+	if let Ok(entries) =
+		archive.and_then(|archive| crate::util::fs_walk::rooted::read_dir(data_dir, archive))
+	{
 		for entry in entries.flatten() {
 			if entry.file_type().is_ok_and(|kind| kind.is_file())
 				&& entry

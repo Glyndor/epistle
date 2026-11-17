@@ -385,3 +385,30 @@ fn a_mailbox_name_may_hold_the_hierarchy_delimiter_between_levels() {
 	assert!(!valid_name("trailing/"));
 	assert!(valid_name("Archive 2026"));
 }
+
+#[test]
+fn an_account_that_is_a_link_to_another_account_or_outside_is_refused() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	deliver(dir.path(), "bob", b"for bob\r\n");
+	let outside = tempfile::tempdir().expect("outside");
+	let accounts = dir.path().join("accounts");
+	std::os::unix::fs::symlink(accounts.join("bob"), accounts.join("alice")).expect("link");
+	std::os::unix::fs::symlink(outside.path(), accounts.join("carol")).expect("link");
+	for account in ["alice", "carol"] {
+		let opened = Snapshot::open(dir.path(), account, "INBOX", &MessageCrypto::disabled());
+		assert!(
+			opened.is_err(),
+			"{account}: a linked account must be refused"
+		);
+	}
+}
+
+#[test]
+fn an_empty_inbox_opens_under_a_data_dir_that_does_not_exist_yet() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let absent = dir.path().join("not-created");
+	let snapshot = Snapshot::open(&absent, "alice", "INBOX", &MessageCrypto::disabled())
+		.expect("an account with no mail yet has an empty INBOX");
+	assert!(snapshot.is_empty());
+	assert!(!absent.exists(), "opening must not create anything");
+}

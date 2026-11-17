@@ -22,11 +22,12 @@ use crate::util::path_component::{MessageExt, message_file};
 /// highest_modseq, index write-back, archive fields) — this helper returns
 /// only the per-message state.
 pub(super) fn scan_mailbox(
+	root: &Path,
 	account_dir: &Path,
 	crypto: &MessageCrypto,
 ) -> std::io::Result<Vec<MessageRef>> {
 	let mut ids: Vec<Uuid> = Vec::new();
-	match crate::util::fs_walk::read_dir(account_dir) {
+	match crate::util::fs_walk::rooted::read_dir(root, account_dir) {
 		Ok(entries) => {
 			for entry in entries {
 				let entry = entry?;
@@ -49,7 +50,7 @@ pub(super) fn scan_mailbox(
 	ids.sort();
 	// The UIDs of every message, the missing ones assigned under the
 	// mailbox's UID lock.
-	let uids = super::uid::resolve_uids(account_dir, &ids);
+	let uids = super::uid::resolve_uids(root, account_dir, &ids);
 	// A sequence number must grow with the UID (RFC 9051 §2.3.1.1), and the
 	// client numbers a message that arrived while it was away after the ones
 	// it knew. A message whose UUID sorts before the others (the clock went
@@ -77,10 +78,10 @@ pub(super) fn scan_mailbox(
 			uid,
 			id,
 			size,
-			flags: super::flags::read_flags(account_dir, id),
+			flags: super::flags::read_flags(root, account_dir, id),
 			internal_date,
-			internal_zone: super::internal_date::read_zone(account_dir, id),
-			modseq: super::modseq::read_message(account_dir, id),
+			internal_zone: super::internal_date::read_zone(root, account_dir, id),
+			modseq: super::modseq::read_message(root, account_dir, id),
 		});
 	}
 	Ok(messages)

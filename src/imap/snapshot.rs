@@ -43,19 +43,22 @@ impl Snapshot {
 		let account_name = AccountName::new(account)?;
 		let account_dir = super::mailbox::mailbox_dir(data_dir, account_name.as_str(), mailbox)
 			.ok_or_else(|| std::io::Error::other("invalid mailbox name"))?;
-		crate::util::fs_walk::check_directories(&account_dir)?;
 		let account_root = account_name.root(data_dir)?;
+		// An account that never received mail has no directory yet, so the
+		// data directory is the root that has to exist.
+		let account_dir = crate::util::fs_walk::rooted::check_directories(data_dir, &account_dir)?;
 		let uid_validity = super::uidvalidity::read_or_init(&account_dir, &account_root);
 		// Fast path: a fresh metadata index whose stamp matches the current
 		// mailbox generation lets us skip the per-message sidecar reads. Any
 		// doubt (missing, stale, corrupt, wrong version) falls through to the
 		// authoritative scan below — the filesystem is always the truth.
-		let generation = super::index::current_generation(&account_dir);
-		if let Some(loaded) = super::index::load(&account_dir, generation) {
-			let uid_next = super::uid::read_counter(&account_dir) + 1;
+		let generation = super::index::current_generation(data_dir, &account_dir);
+		if let Some(loaded) = super::index::load(data_dir, &account_dir, generation) {
+			let uid_next = super::uid::read_counter(data_dir, &account_dir) + 1;
 			return Ok(Snapshot {
 				account_dir,
 				account_root,
+				data_dir: data_dir.to_path_buf(),
 				mailbox: mailbox.to_string(),
 				messages: loaded,
 				uid_validity,
@@ -68,12 +71,12 @@ impl Snapshot {
 				loaded_from_index: true,
 			});
 		}
-		let scanned = super::scan::scan_mailbox(&account_dir, crypto)?;
+		let scanned = super::scan::scan_mailbox(data_dir, &account_dir, crypto)?;
 		// HIGHESTMODSEQ is the persisted counter, never below any message's.
-		let highest_modseq = super::modseq::read_counter(&account_dir)
+		let highest_modseq = super::modseq::read_counter(data_dir, &account_dir)
 			.max(scanned.iter().map(|m| m.modseq).max().unwrap_or(1))
 			.max(1);
-		let uid_next = super::uid::read_counter(&account_dir) + 1;
+		let uid_next = super::uid::read_counter(data_dir, &account_dir) + 1;
 		// Persist a fresh index stamped with the generation observed before
 		// the scan (the scan only reads the filesystem and assigns UIDs, so
 		// the stamp is unchanged). A failed index write must not fail the
@@ -83,6 +86,7 @@ impl Snapshot {
 		Ok(Snapshot {
 			account_dir,
 			account_root,
+			data_dir: data_dir.to_path_buf(),
 			mailbox: mailbox.to_string(),
 			messages: scanned,
 			uid_validity,
@@ -142,6 +146,7 @@ impl Snapshot {
 		Snapshot {
 			account_dir: std::path::PathBuf::new(),
 			account_root: AccountRoot::placeholder(),
+			data_dir: std::path::PathBuf::new(),
 			mailbox: String::new(),
 			messages: Vec::new(),
 			uid_validity: 0,
@@ -190,7 +195,8 @@ impl Snapshot {
 	/// is encrypted. Fails closed on a decryption error rather than returning
 	/// ciphertext.
 	pub fn read(&self, message: &super::mailbox::MessageRef) -> std::io::Result<Vec<u8>> {
-		let stored = crate::util::fs_walk::read(self.message_path(message)?)?;
+		let stored =
+			crate::util::fs_walk::rooted::read(&self.data_dir, self.message_path(message)?)?;
 		self.crypto.decode(&stored)
 	}
 
@@ -257,8 +263,10 @@ impl Snapshot {
 		if !message_file(&self.account_dir, id, MessageExt::Eml).is_ok_and(|path| path.exists()) {
 			return false;
 		}
-		self.messages[index].flags = super::flags::read_flags(&self.account_dir, id);
-		self.messages[index].modseq = super::modseq::read_message(&self.account_dir, id);
+		self.messages[index].flags =
+			super::flags::read_flags(&self.data_dir, &self.account_dir, id);
+		self.messages[index].modseq =
+			super::modseq::read_message(&self.data_dir, &self.account_dir, id);
 		true
 	}
 

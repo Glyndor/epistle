@@ -122,7 +122,7 @@ pub(super) fn rename_subtree(
 		changes.push(Change::mailbox(Op::Destroyed, old));
 		changes.push(Change::mailbox(Op::Created, new));
 		changes.extend(
-			journal::message_ids(&contained_child(new_dir, "new")?)
+			journal::message_ids(data_dir, &contained_child(new_dir, "new")?)
 				.into_iter()
 				.map(|id| Change::email(Op::Updated, id)),
 		);

@@ -17,9 +17,9 @@ use crate::util::path_component::{
 use uuid::Uuid;
 
 /// The UID persisted for `id`, or `None` if it has not been assigned yet.
-pub(super) fn read_message(account_dir: &Path, id: Uuid) -> Option<u32> {
+pub(super) fn read_message(root: &Path, account_dir: &Path, id: Uuid) -> Option<u32> {
 	message_file(account_dir, id, MessageExt::Uid)
-		.and_then(crate::util::fs_walk::read_to_string)
+		.and_then(|path| crate::util::fs_walk::rooted::read_to_string(root, path))
 		.ok()
 		.and_then(|text| text.trim().parse().ok())
 }
@@ -32,9 +32,9 @@ pub(super) fn write_message(account_dir: &Path, id: Uuid, uid: u32) -> std::io::
 }
 
 /// The mailbox UID counter (`.uidnext`), 0 when absent (no UID assigned yet).
-pub(super) fn read_counter(account_dir: &Path) -> u32 {
+pub(super) fn read_counter(root: &Path, account_dir: &Path) -> u32 {
 	state_file(account_dir, StateFile::UidNext)
-		.and_then(crate::util::fs_walk::read_to_string)
+		.and_then(|path| crate::util::fs_walk::rooted::read_to_string(root, path))
 		.ok()
 		.and_then(|text| text.trim().parse().ok())
 		.unwrap_or(0)
@@ -56,10 +56,10 @@ pub(super) fn write_counter(account_dir: &Path, value: u32) -> std::io::Result<(
 /// and the missing UIDs are read again under it — a sibling scan may have
 /// assigned some of them in the meantime — and the ones still missing are
 /// assigned from that counter, in the order given.
-pub(super) fn resolve_uids(account_dir: &Path, ids: &[Uuid]) -> Vec<u32> {
+pub(super) fn resolve_uids(root: &Path, account_dir: &Path, ids: &[Uuid]) -> Vec<u32> {
 	let mut uids: Vec<Option<u32>> = ids
 		.iter()
-		.map(|id| read_message(account_dir, *id))
+		.map(|id| read_message(root, account_dir, *id))
 		.collect();
 	if uids.iter().all(Option::is_some) {
 		return uids.into_iter().flatten().collect();
@@ -86,16 +86,16 @@ pub(super) fn resolve_uids(account_dir: &Path, ids: &[Uuid]) -> Vec<u32> {
 	// from the largest one these messages hold.
 	let held = ids
 		.iter()
-		.filter_map(|id| read_message(account_dir, *id))
+		.filter_map(|id| read_message(root, account_dir, *id))
 		.max()
 		.unwrap_or(0);
-	let mut counter = read_counter(account_dir).max(held);
+	let mut counter = read_counter(root, account_dir).max(held);
 	let mut assigned = false;
 	for (id, uid) in ids.iter().zip(uids.iter_mut()) {
 		if uid.is_some() {
 			continue;
 		}
-		if let Some(existing) = read_message(account_dir, *id) {
+		if let Some(existing) = read_message(root, account_dir, *id) {
 			*uid = Some(existing);
 			continue;
 		}
