@@ -78,7 +78,7 @@ fn a_sender_is_held_to_its_own_cap_when_it_declares_a_size() {
 		"account alice",
 		"set by account alice",
 	] {
-		assert!(refused.contains(part), "{refused:?} lacks {part:?}");
+		assert!(refused.contains(part), "the refusal lacks a required part");
 	}
 	assert_eq!(
 		reply_code(&session.command_line("MAIL FROM:<alice@example.org> SIZE=70000")),
@@ -92,7 +92,7 @@ fn the_domain_cap_applies_to_an_account_without_its_own_and_the_server_to_others
 	let refused = text(session.command_line("MAIL FROM:<bob@example.org> SIZE=100001"));
 	assert!(
 		refused.contains("552 5.3.4") && refused.contains("set by domain example.org"),
-		"{refused}"
+		"the refusal must carry the code and the domain that set the cap"
 	);
 	assert_eq!(
 		reply_code(&session.command_line("MAIL FROM:<bob@example.org> SIZE=100000")),
@@ -113,10 +113,13 @@ fn a_declared_size_over_a_recipients_cap_refuses_that_recipient_only() {
 		250
 	);
 	let refused = text(session.command_line("RCPT TO:<alice@example.org>"));
-	assert!(refused.starts_with("552 5.3.4"), "{refused}");
+	assert!(
+		refused.starts_with("552 5.3.4"),
+		"the recipient must be refused with the size code"
+	);
 	assert!(
 		!refused.contains("70000"),
-		"a stranger is not told the cap of the recipient: {refused}"
+		"a stranger is not told the cap of the recipient"
 	);
 	assert_eq!(
 		reply_code(&session.command_line("RCPT TO:<bob@example.org>")),
@@ -188,7 +191,10 @@ fn an_alias_is_refused_when_any_member_cannot_take_the_message() {
 	session.command_line("EHLO client.example.org");
 	session.command_line("MAIL FROM:<x@example.com> SIZE=70000");
 	let refused = text(session.command_line("RCPT TO:<team@example.net>"));
-	assert!(refused.starts_with("552 5.3.4"), "{refused}");
+	assert!(
+		refused.starts_with("552 5.3.4"),
+		"the recipient must be refused with the size code"
+	);
 }
 
 #[test]

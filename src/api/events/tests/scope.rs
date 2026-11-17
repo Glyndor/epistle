@@ -181,5 +181,8 @@ fn a_mass_change_is_split_in_a_bounded_number_of_notifications() {
 	let now = Sample::for_test_owned(1, Vec::new(), many);
 	let found = changes(&before, &now);
 	let accounts = found.iter().filter(|(t, _)| *t == Topic::Accounts).count();
-	assert!((1..=16).contains(&accounts), "{accounts} notifications");
+	assert!(
+		(1..=16).contains(&accounts),
+		"the notifications must stay bounded"
+	);
 }

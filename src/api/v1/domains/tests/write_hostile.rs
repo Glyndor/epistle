@@ -261,8 +261,14 @@ async fn a_confined_key_is_not_told_which_other_tenants_use_the_domain() {
 	assert_eq!(status, StatusCode::CONFLICT, "{body}");
 	assert_eq!(body["error"]["message"], "domain is still in use");
 	let text = body.to_string();
-	for secret in ["other.example", "rival-tenant", "bob@a.example"] {
-		assert!(!text.contains(secret), "{secret} leaked: {text}");
+	for (case, foreign) in ["other.example", "rival-tenant", "bob@a.example"]
+		.into_iter()
+		.enumerate()
+	{
+		assert!(
+			!text.contains(foreign),
+			"the refusal leaked a name from another tenant (case {case})"
+		);
 	}
 	let (status, body) = call(&world, "DELETE", "/api/v1/domains/a.example", WRITER, None).await;
 	assert_eq!(status, StatusCode::CONFLICT, "{body}");

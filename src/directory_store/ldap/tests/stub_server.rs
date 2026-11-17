@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 use super::super::limits::Limits;
 use super::super::{LdapAuthenticator, LdapBusy, time_left};
 use crate::config::Ldap;
+use crate::test_support::fixtures;
 
 /// A login budget with the given wait and a generous entry cap.
 fn budget(timeout: Duration) -> Limits {
@@ -103,7 +104,10 @@ fn spawn_empty_directory() -> (u16, Arc<AtomicUsize>) {
 fn an_unknown_login_costs_the_same_connections_as_a_known_one() {
 	let (port, connections) = spawn_empty_directory();
 	let ldap = LdapAuthenticator::new(config(port));
-	assert_eq!(ldap.authenticate("nobody", "wrong"), Ok(None));
+	assert_eq!(
+		ldap.authenticate("nobody", fixtures::wrong_password()),
+		Ok(None)
+	);
 	// One connection for the service bind and search, and one for the
 	// user bind a known login would have made.
 	assert_eq!(connections.load(Ordering::SeqCst), 2);
@@ -133,7 +137,7 @@ fn a_server_that_never_answers_is_busy_and_does_not_hold_the_caller() {
 	let (done_tx, done_rx) = std::sync::mpsc::channel();
 	std::thread::spawn(move || {
 		let started = Instant::now();
-		let outcome = ldap.authenticate("alice", "secret");
+		let outcome = ldap.authenticate("alice", fixtures::password());
 		let _ = done_tx.send((outcome, started.elapsed()));
 	});
 	let (outcome, elapsed) = done_rx
@@ -153,7 +157,10 @@ fn a_server_that_cannot_be_reached_is_busy_not_a_wrong_password() {
 		.expect("addr")
 		.port();
 	let ldap = LdapAuthenticator::new(config(port));
-	assert_eq!(ldap.authenticate("alice", "secret"), Err(LdapBusy::NotSent));
+	assert_eq!(
+		ldap.authenticate("alice", fixtures::password()),
+		Err(LdapBusy::NotSent)
+	);
 }
 
 #[test]
@@ -168,12 +175,15 @@ fn a_full_queue_turns_the_login_away_at_once() {
 	for _ in 0..2 {
 		let ldap = Arc::clone(&ldap);
 		std::thread::spawn(move || {
-			let _ = ldap.authenticate("alice", "secret");
+			let _ = ldap.authenticate("alice", fixtures::password());
 		});
 		std::thread::sleep(Duration::from_millis(150));
 	}
 	let started = Instant::now();
-	assert_eq!(ldap.authenticate("alice", "secret"), Err(LdapBusy::NotSent));
+	assert_eq!(
+		ldap.authenticate("alice", fixtures::password()),
+		Err(LdapBusy::NotSent)
+	);
 	assert!(
 		started.elapsed() < Duration::from_millis(1500),
 		"a full queue made the login wait {:?}",
@@ -234,5 +244,8 @@ fn an_unknown_login_is_classified_like_a_known_one_when_the_user_bind_cannot_be_
 	let ldap = LdapAuthenticator::with_queue(config(port), budget(Duration::from_secs(3)), 4);
 	// A known login whose user bind fails in transport is unavailable; an
 	// unknown one must be too, not a refusal.
-	assert_eq!(ldap.authenticate("nobody", "wrong"), Err(LdapBusy::Reached));
+	assert_eq!(
+		ldap.authenticate("nobody", fixtures::wrong_password()),
+		Err(LdapBusy::Reached)
+	);
 }

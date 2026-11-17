@@ -39,10 +39,10 @@ fn login_with_an_unknown_user_and_a_wrong_password_are_the_same_bytes() {
 fn authenticate_plain_with_bad_credentials_is_the_same_for_user_and_password() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let missing = unauth(dir.path())
-		.command_line(&plain_command("missing", "wrong"))
+		.command_line(&plain_command("missing", fixtures::wrong_password()))
 		.bytes;
 	let wrong = unauth(dir.path())
-		.command_line(&plain_command("alice", "wrong"))
+		.command_line(&plain_command("alice", fixtures::wrong_password()))
 		.bytes;
 	assert_eq!(missing, wrong);
 	assert_eq!(
@@ -98,17 +98,20 @@ fn a_correct_login_is_not_given_a_failure_code() {
 #[test]
 fn login_and_authenticate_over_plain_text_ask_for_starttls_first() {
 	let dir = tempfile::tempdir().expect("tempdir");
-	for command in [
+	for (case, command) in [
 		format!("a LOGIN alice {}", fixtures::password()),
 		"a AUTHENTICATE PLAIN".to_string(),
 		plain_command("alice", fixtures::password()),
-	] {
+	]
+	.into_iter()
+	.enumerate()
+	{
 		let mut session =
 			Session::new("mail.example.org", dir.path().to_path_buf(), directory()).with_starttls();
 		assert_eq!(
 			text(&session.command_line(&command)),
 			"a NO [PRIVACYREQUIRED] STARTTLS first\r\n",
-			"{command}"
+			"plain-text command number {case} was not told to start TLS first"
 		);
 	}
 }
@@ -228,11 +231,11 @@ fn a_busy_password_gate_is_unavailable_not_a_failed_login() {
 	let directory = Arc::new(gate_directory().with_hash_gate(gate));
 	let mut session = Session::new("mail.example.org", dir.path().to_path_buf(), directory);
 	assert_eq!(
-		text(&session.command_line("a LOGIN someone secret")),
+		text(&session.command_line(&format!("a LOGIN someone {}", fixtures::wrong_password()))),
 		"a NO [UNAVAILABLE] Try again later\r\n"
 	);
 	assert_eq!(
-		text(&session.command_line(&plain_command("someone", "secret"))),
+		text(&session.command_line(&plain_command("someone", fixtures::wrong_password()))),
 		"a NO [UNAVAILABLE] Try again later\r\n"
 	);
 }

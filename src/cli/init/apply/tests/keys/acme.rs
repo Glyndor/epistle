@@ -86,8 +86,7 @@ fn build_config_enables_acme_by_default_for_public_hostname() {
 			"autodiscover.example.org".to_string(),
 			"mta-sts.example.org".to_string(),
 		],
-		"acme.domains must cover the hostname and the public names of the hosted domain; got {:?}",
-		acme.domains
+		"acme.domains must cover the hostname and the public names of the hosted domain"
 	);
 	let kinds: Vec<&str> = desired.listeners.iter().map(|l| l.kind.as_str()).collect();
 	assert!(

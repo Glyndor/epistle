@@ -73,7 +73,10 @@ fn near_misses_and_local_recipients_are_accepted() {
 		"bob@example.org",
 	] {
 		let reply = rcpt(&mut session, recipient);
-		assert!(reply.starts_with("250 "), "{recipient}: {reply}");
+		assert!(
+			reply.starts_with("250 "),
+			"a near miss or local recipient must be accepted"
+		);
 	}
 }
 

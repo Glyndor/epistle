@@ -36,9 +36,9 @@ fn settled(dir: &std::path::Path, ids: &[Uuid], persisted: &[(Uuid, u32)], note:
 	assert_eq!(
 		distinct.len(),
 		first.len(),
-		"{note}: a UID twice in {first:?}"
+		"{note}: a UID was handed out twice"
 	);
-	assert!(first.iter().all(|uid| *uid > 0), "{note}: {first:?}");
+	assert!(first.iter().all(|uid| *uid > 0), "{note}: a UID is zero");
 	for (id, uid) in persisted {
 		let at = ids
 			.iter()

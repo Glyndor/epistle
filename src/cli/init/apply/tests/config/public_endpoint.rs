@@ -166,11 +166,11 @@ fn a_domain_with_accents_or_capitals_gets_the_same_names_as_the_rest() {
 	for name in &names[1..] {
 		assert!(
 			name.is_ascii() && *name == name.to_ascii_lowercase(),
-			"{name}"
+			"every public name is lower-case ASCII"
 		);
 	}
 	assert!(
 		names.contains(&"autoconfig.xn--bcher-kva.example".to_string()),
-		"{names:?}"
+		"the internationalised name must be listed in ASCII form"
 	);
 }

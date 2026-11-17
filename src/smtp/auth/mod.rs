@@ -67,12 +67,12 @@ pub fn parse_plain(encoded: &str) -> Result<PlainCredentials, PlainError> {
 /// always the same, and the policy decision lives at one place per call
 /// site.
 pub fn hash_password(password: &str) -> Result<String, String> {
-	use ring::rand::{SecureRandom, SystemRandom};
-
-	let mut salt = [0u8; 16];
-	SystemRandom::new()
-		.fill(&mut salt)
-		.map_err(|_| "cannot gather salt entropy".to_string())?;
+	// The salt comes out of the system generator whole: there is no
+	// placeholder array that is later overwritten, so no fixed value can reach
+	// the hash if the generator fails.
+	let salt = ring::rand::generate::<[u8; 16]>(&ring::rand::SystemRandom::new())
+		.map_err(|_| "cannot gather salt entropy".to_string())?
+		.expose();
 	hash_password_with_cost(password, cost::current(), &salt)
 }
 

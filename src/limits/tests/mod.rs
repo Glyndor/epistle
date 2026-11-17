@@ -282,8 +282,11 @@ fn the_log_line_names_no_account_domain_or_tenant() {
 			line.contains("limit reached") && line.contains("cap=1"),
 			"{line}"
 		);
-		for secret in ["alice", "secret", "acme", "example", "bob", "whoever"] {
-			assert!(!line.contains(secret), "{line:?} leaks {secret:?}");
+		for name in ["alice", "secret", "acme", "example", "bob", "whoever"] {
+			assert!(
+				!line.contains(name),
+				"the log line carries an account or domain name"
+			);
 		}
 		// The text for the person refused still says everything.
 		assert!(refusal.to_string().contains("account whoever"));

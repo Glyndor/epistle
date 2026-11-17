@@ -186,7 +186,7 @@ fn a_full_mailbox_is_the_same_temporary_answer_at_rcpt_and_after_data() {
 			verdict.class,
 			crate::queue::reply::FailureClass::MailboxFull
 		);
-		assert!(!verdict.permanent, "{line}");
+		assert!(!verdict.permanent, "a full mailbox is a temporary failure");
 	}
 }
 
