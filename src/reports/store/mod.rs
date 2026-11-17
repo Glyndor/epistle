@@ -168,7 +168,7 @@ pub fn prune(data_dir: &Path, today: &str, days: u32) {
 		let Ok(root) = contained(data_dir, &data_dir.join("reports").join(bucket)) else {
 			continue;
 		};
-		let Ok(entries) = crate::util::fs_walk::read_dir(&root) else {
+		let Ok(entries) = crate::util::fs_walk::rooted::read_dir(data_dir, &root) else {
 			continue;
 		};
 		for entry in entries.flatten() {

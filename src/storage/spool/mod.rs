@@ -61,6 +61,9 @@ pub struct SpoolEntry {
 #[derive(Debug)]
 pub struct FsSpool {
 	root: PathBuf,
+	/// The data directory: the trusted root every rooted read starts from, above
+	/// the store's own directory, which is walked and checked as part of the path.
+	data_dir: PathBuf,
 	crypto: MessageCrypto,
 	/// Resolves the submitting account to the hosted domain that owns what
 	/// it queues; without it an entry has no owner.
@@ -189,6 +192,7 @@ impl FsSpool {
 		let root = contained(data_dir, &data_dir.join("spool"))?;
 		let spool = FsSpool {
 			root,
+			data_dir: data_dir.to_path_buf(),
 			crypto,
 			owners: None,
 		};
@@ -221,15 +225,19 @@ impl FsSpool {
 	pub fn load(&self, id: Uuid) -> std::io::Result<SpoolEntry> {
 		let envelope = self.load_envelope(id)?;
 		let body = self.entry_file(SpoolDir::New, id, MessageExt::Eml)?;
-		let data = self.crypto.decode(&crate::util::fs_walk::read(body)?)?;
+		let data = self
+			.crypto
+			.decode(&crate::util::fs_walk::rooted::read(&self.data_dir, body)?)?;
 		Ok(SpoolEntry { envelope, data })
 	}
 
 	/// List ids of all complete spooled messages, oldest first.
 	pub fn list(&self) -> std::io::Result<Vec<Uuid>> {
 		let mut ids = Vec::new();
-		for entry in crate::util::fs_walk::read_dir(self.path_in(Path::new(SpoolDir::New.name()))?)?
-		{
+		for entry in crate::util::fs_walk::rooted::read_dir(
+			&self.data_dir,
+			self.path_in(Path::new(SpoolDir::New.name()))?,
+		)? {
 			let entry = entry?;
 			if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
 				continue;

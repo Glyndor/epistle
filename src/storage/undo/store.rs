@@ -62,6 +62,9 @@ pub struct Pending {
 #[derive(Debug, Clone)]
 pub struct UndoStore {
 	root: PathBuf,
+	/// The data directory: the trusted root every rooted read starts from, above
+	/// the store's own directory, which is walked and checked as part of the path.
+	data_dir: PathBuf,
 	crypto: MessageCrypto,
 }
 
@@ -115,7 +118,11 @@ impl UndoStore {
 		for dir in [Dir::Pending, Dir::Inflight, Dir::Released] {
 			crate::storage::create_private_dir(data_dir, &root.join(dir.name()))?;
 		}
-		Ok(Self { root, crypto })
+		Ok(Self {
+			root,
+			data_dir: data_dir.to_path_buf(),
+			crypto,
+		})
 	}
 
 	fn dir(&self, dir: Dir) -> PathBuf {
@@ -144,7 +151,7 @@ impl UndoStore {
 	/// The `(epoch, id)` of every file in `dir`, oldest first.
 	fn names(&self, dir: Dir) -> std::io::Result<Vec<(u64, Uuid)>> {
 		let mut found = Vec::new();
-		for entry in crate::util::fs_walk::read_dir(self.dir(dir))? {
+		for entry in crate::util::fs_walk::rooted::read_dir(&self.data_dir, self.dir(dir))? {
 			let entry = entry?;
 			if let Some(parsed) = entry
 				.file_name()
@@ -184,7 +191,8 @@ impl UndoStore {
 	}
 
 	fn load_in(&self, dir: Dir, release_at: u64, id: Uuid) -> std::io::Result<Held> {
-		let stored = crate::util::fs_walk::read(self.file(dir, release_at, id)?)?;
+		let stored =
+			crate::util::fs_walk::rooted::read(&self.data_dir, self.file(dir, release_at, id)?)?;
 		Held::from_bytes(&self.open_bytes(id, &stored)?)
 	}
 
@@ -287,7 +295,8 @@ impl UndoStore {
 		else {
 			return Ok(None);
 		};
-		let stored = crate::util::fs_walk::read(self.file(Dir::Released, at, id)?)?;
+		let stored =
+			crate::util::fs_walk::rooted::read(&self.data_dir, self.file(Dir::Released, at, id)?)?;
 		String::from_utf8(self.open_bytes(id, &stored)?)
 			.map(Some)
 			.map_err(|error| std::io::Error::other(error.to_string()))

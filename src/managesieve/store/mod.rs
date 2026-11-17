@@ -106,16 +106,22 @@ pub struct ScriptStore {
 /// The two directories of one account's scripts, both vetted by the
 /// containment check.
 struct Dirs {
+	/// The trusted root the account and its scripts are walked from, above
+	/// `accounts/<name>`, so a link at either is refused rather than followed.
+	root: PathBuf,
 	account_dir: PathBuf,
 	sieve_dir: PathBuf,
 }
 
 impl Dirs {
-	fn open(accounts_root: &Path, account: &str) -> std::io::Result<Self> {
-		let root = contained(accounts_root, accounts_root)?;
-		let account_dir = contained_subdir(&root, AccountName::new(account)?.as_str())?;
+	/// `root` is the trusted directory the walks start from: the data
+	/// directory, or the accounts directory itself when that is all there is.
+	fn open(root: Option<&Path>, accounts_root: &Path, account: &str) -> std::io::Result<Self> {
+		let resolved = contained(accounts_root, accounts_root)?;
+		let account_dir = contained_subdir(&resolved, AccountName::new(account)?.as_str())?;
 		let sieve_dir = contained_child(&account_dir, "sieve")?;
 		Ok(Self {
+			root: root.map_or(resolved, Path::to_path_buf),
 			account_dir,
 			sieve_dir,
 		})
@@ -128,10 +134,23 @@ impl ScriptStore {
 	/// An account name that is not one plain directory name, or a path that
 	/// leaves `accounts_root`, gives a store whose every operation reports
 	/// [`StoreError::Io`].
+	///
+	/// With only the accounts directory to go on, that directory is the
+	/// root of the walks; [`Self::in_data_dir`] starts them one level higher.
 	pub fn new(accounts_root: &Path, account: &str) -> Self {
 		Self {
 			account: account.to_string(),
-			dirs: Dirs::open(accounts_root, account).ok(),
+			dirs: Dirs::open(None, accounts_root, account).ok(),
+		}
+	}
+
+	/// Open the store for `account` under `data_dir`. The data directory is
+	/// the root of every walk, so `accounts` and `accounts/<name>` are checked
+	/// as part of the path and a link at either is refused.
+	pub fn in_data_dir(data_dir: &Path, account: &str) -> Self {
+		Self {
+			account: account.to_string(),
+			dirs: Dirs::open(Some(data_dir), &data_dir.join("accounts"), account).ok(),
 		}
 	}
 
@@ -409,7 +428,8 @@ impl ScriptStore {
 	/// not have been stored (it fails [`is_valid_name`]) is not a script.
 	fn names_on_disk(&self) -> Result<BTreeSet<String>, StoreError> {
 		let entries =
-			crate::util::fs_walk::read_dir(&self.dirs()?.sieve_dir).map_err(|_| StoreError::Io)?;
+			crate::util::fs_walk::rooted::read_dir(&self.dirs()?.root, &self.dirs()?.sieve_dir)
+				.map_err(|_| StoreError::Io)?;
 		let mut names = BTreeSet::new();
 		let active = self.active_name();
 		let mut left_out = 0usize;

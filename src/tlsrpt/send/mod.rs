@@ -107,7 +107,9 @@ pub struct Sender<'a> {
 
 /// Send the reports for every completed day before `today` (`YYYYMMDD`).
 pub async fn send_pending(sender: &Sender<'_>, today: &str) {
-	let Ok(days) = crate::util::fs_walk::read_dir(sessions::root(sender.data_dir)) else {
+	let Ok(days) =
+		crate::util::fs_walk::rooted::read_dir(sender.data_dir, sessions::root(sender.data_dir))
+	else {
 		return;
 	};
 	for day in days.flatten() {
@@ -115,7 +117,7 @@ pub async fn send_pending(sender: &Sender<'_>, today: &str) {
 		if name.as_str() >= today || name.len() != 8 || !name.bytes().all(|b| b.is_ascii_digit()) {
 			continue;
 		}
-		let Ok(files) = crate::util::fs_walk::read_dir(day.path()) else {
+		let Ok(files) = crate::util::fs_walk::rooted::read_dir(sender.data_dir, day.path()) else {
 			continue;
 		};
 		for file in files.flatten() {

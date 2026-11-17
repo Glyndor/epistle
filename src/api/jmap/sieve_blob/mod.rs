@@ -19,7 +19,7 @@ pub(super) const MEDIA_TYPE: &str = "application/sieve; charset=utf-8";
 
 /// The store of `account`: the one ManageSieve uses.
 pub(super) fn store(data_dir: &Path, account: &str) -> ScriptStore {
-	ScriptStore::new(&data_dir.join("accounts"), account)
+	ScriptStore::in_data_dir(data_dir, account)
 }
 
 /// The blob id of version `rev` of the script `id`.

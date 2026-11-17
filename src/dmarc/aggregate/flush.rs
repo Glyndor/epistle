@@ -25,7 +25,7 @@ use super::{
 /// that are older (different from `today`).
 pub async fn flush_pending(sender: &Sender<'_>, today: &str) {
 	let reports_root = sender.data_dir.join("dmarc-reports");
-	let Ok(entries) = crate::util::fs_walk::read_dir(&reports_root) else {
+	let Ok(entries) = crate::util::fs_walk::rooted::read_dir(sender.data_dir, &reports_root) else {
 		return;
 	};
 
@@ -36,7 +36,8 @@ pub async fn flush_pending(sender: &Sender<'_>, today: &str) {
 		};
 
 		let day_dir = entry.path();
-		let Ok(domain_files) = crate::util::fs_walk::read_dir(&day_dir) else {
+		let Ok(domain_files) = crate::util::fs_walk::rooted::read_dir(sender.data_dir, &day_dir)
+		else {
 			continue;
 		};
 

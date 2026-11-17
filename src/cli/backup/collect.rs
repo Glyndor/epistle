@@ -146,13 +146,28 @@ fn archived_from_rotation(relative: &Path) -> bool {
 /// DKIM/ACME/TLS private keys.
 pub(super) fn collect_files(root: &Path) -> std::io::Result<Vec<(String, u32, Vec<u8>)>> {
 	let _warnings = crate::util::fs_walk::warning_scope();
+	// Entries come back in the resolved spelling of the root, so the relative
+	// names below are taken against that spelling. A missing data dir yields
+	// an empty backup, not an error.
+	let root = match root.canonicalize() {
+		Ok(resolved) => resolved,
+		Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+		Err(error) => return Err(error),
+	};
+	let root = root.as_path();
 	let mut out = Vec::new();
 	let mut stack = vec![root.to_path_buf()];
 	while let Some(dir) = stack.pop() {
-		let entries = match crate::util::fs_walk::read_dir(&dir) {
+		let entries = match crate::util::fs_walk::rooted::read_dir(root, &dir) {
 			Ok(entries) => entries,
 			// A missing data dir yields an empty backup, not an error.
 			Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+			// A name that is not one plain UTF-8 name is left out, with a
+			// warning, instead of failing the whole backup.
+			Err(error) if error.kind() == std::io::ErrorKind::InvalidInput => {
+				crate::util::fs_walk::warn_skipped(&dir);
+				continue;
+			}
 			Err(error) => return Err(error),
 		};
 		for entry in entries.flatten() {
@@ -173,7 +188,13 @@ pub(super) fn collect_files(root: &Path) -> std::io::Result<Vec<(String, u32, Ve
 				let name = format!("data/{}", relative.to_string_lossy());
 				let metadata = entry.metadata()?;
 				let mode = metadata.permissions().mode();
-				out.push((name, mode, crate::util::fs_walk::read(&path)?));
+				match crate::util::fs_walk::rooted::read(root, &path) {
+					Ok(bytes) => out.push((name, mode, bytes)),
+					Err(error) if error.kind() == std::io::ErrorKind::InvalidInput => {
+						crate::util::fs_walk::warn_skipped(&path);
+					}
+					Err(error) => return Err(error),
+				}
 			}
 		}
 	}

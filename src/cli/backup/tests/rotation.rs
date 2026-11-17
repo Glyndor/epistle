@@ -86,3 +86,46 @@ fn a_backup_of_a_server_that_never_rotated_writes_nothing_into_its_data() {
 	assert_eq!(exit, ExitCode::SUCCESS);
 	assert!(!root.path().join("rotate").exists());
 }
+
+#[test]
+fn a_data_dir_reached_through_a_link_is_collected_and_its_own_links_are_not_followed() {
+	let outer = tempfile::tempdir().expect("dir");
+	let real = outer.path().join("real");
+	let outside = outer.path().join("outside");
+	std::fs::create_dir_all(real.join("accounts")).expect("mkdir");
+	std::fs::create_dir(&outside).expect("mkdir");
+	std::fs::write(real.join("accounts").join("m.eml"), b"x").expect("file");
+	std::fs::write(outside.join("note"), b"y").expect("file");
+	std::os::unix::fs::symlink(&outside, real.join("linked")).expect("link");
+	let alias = outer.path().join("alias");
+	std::os::unix::fs::symlink(&real, &alias).expect("link");
+	let names: Vec<String> = collect_files(&alias)
+		.expect("collect")
+		.into_iter()
+		.map(|(name, ..)| name)
+		.collect();
+	assert_eq!(names, ["data/accounts/m.eml"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_name_that_is_not_plain_utf8_is_left_out_without_failing_the_backup() {
+	use std::os::unix::ffi::OsStrExt;
+	let root = tempfile::tempdir().expect("dir");
+	std::fs::write(root.path().join("kept"), b"x").expect("file");
+	std::fs::write(
+		root.path().join(std::ffi::OsStr::from_bytes(b"caf\xe9")),
+		b"y",
+	)
+	.expect("file");
+	std::fs::write(root.path().join("a\\b"), b"z").expect("file");
+	let odd_dir = root.path().join(std::ffi::OsStr::from_bytes(b"d\xff"));
+	std::fs::create_dir(&odd_dir).expect("mkdir");
+	std::fs::write(odd_dir.join("inner"), b"w").expect("file");
+	let names: Vec<String> = collect_files(root.path())
+		.expect("one odd name must not fail the backup")
+		.into_iter()
+		.map(|(name, ..)| name)
+		.collect();
+	assert_eq!(names, ["data/kept"]);
+}
