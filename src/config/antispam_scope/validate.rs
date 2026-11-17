@@ -63,22 +63,36 @@ impl Config {
 		&self,
 		scope: &'a AntispamScope,
 	) -> Result<(&'static str, &'a str), ConfigError> {
-		let named = [
-			("tenant", scope.tenant.as_deref()),
-			("domain", scope.domain.as_deref()),
-			("account", scope.account.as_deref()),
-		];
+		self.named_scope_target(
+			"[[antispam_scope]]",
+			(
+				scope.tenant.as_deref(),
+				scope.domain.as_deref(),
+				scope.account.as_deref(),
+			),
+		)
+	}
+
+	/// The one target of the `section` entry that names `tenant`, `domain`
+	/// or `account`, checked against what the file declares. Shared by every
+	/// section that is configured per tenant, domain or account.
+	pub(crate) fn named_scope_target<'a>(
+		&self,
+		section: &str,
+		(tenant, domain, account): (Option<&'a str>, Option<&'a str>, Option<&'a str>),
+	) -> Result<(&'static str, &'a str), ConfigError> {
+		let named = [("tenant", tenant), ("domain", domain), ("account", account)];
 		let mut targets = named
 			.iter()
 			.filter_map(|(kind, name)| name.map(|n| (*kind, n)));
 		let (Some((kind, name)), None) = (targets.next(), targets.next()) else {
-			return Err(invalid(
-				"[[antispam_scope]] must name exactly one of tenant, domain or account".into(),
-			));
+			return Err(invalid(format!(
+				"{section} must name exactly one of tenant, domain or account"
+			)));
 		};
 		if name.trim().is_empty() || name.len() > 253 || name.chars().any(char::is_control) {
 			return Err(invalid(format!(
-				"[[antispam_scope]] {kind} must be a name of 1 to 253 characters"
+				"{section} {kind} must be a name of 1 to 253 characters"
 			)));
 		}
 		let known = match kind {
@@ -94,7 +108,7 @@ impl Config {
 		};
 		if !known {
 			return Err(invalid(format!(
-				"[[antispam_scope]] {kind} \"{name}\" is not declared in the {}",
+				"{section} {kind} \"{name}\" is not declared in the {}",
 				if kind == "tenant" {
 					"[[tenant]] list"
 				} else {

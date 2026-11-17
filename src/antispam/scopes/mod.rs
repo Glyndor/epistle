@@ -26,6 +26,7 @@ mod numbers;
 
 use crate::antispam::attachments::policy::Overlay;
 use crate::antispam::sender_lists::Matcher;
+use crate::limits::{Reach, key};
 pub use checks::Checks;
 use forwarding::ForwardOverrides;
 pub use forwarding::ForwardSettings;
@@ -126,15 +127,8 @@ pub struct Scopes {
 	tenants: HashMap<String, Layer>,
 	domains: HashMap<String, Layer>,
 	accounts: HashMap<String, Layer>,
-	/// Hosted domain to the name of the tenant that owns it.
-	tenant_of: HashMap<String, String>,
-	/// Domain alias to the domain it delivers to.
-	domain_aliases: HashMap<String, String>,
-}
-
-/// `domain` as the scopes key it: lower case, no trailing dot.
-fn key(domain: &str) -> String {
-	domain.trim_end_matches('.').to_ascii_lowercase()
+	/// Which tenant owns a domain and where a domain alias delivers.
+	reach: Reach,
 }
 
 impl Scopes {
@@ -142,20 +136,9 @@ impl Scopes {
 	pub fn from_config(config: &Config) -> Self {
 		let mut scopes = Self {
 			server: Layer::from_lists(&config.antispam.senders),
-			domain_aliases: config
-				.domain_aliases
-				.iter()
-				.map(|(alias, target)| (key(alias), key(target)))
-				.collect(),
+			reach: Reach::from_config(config),
 			..Self::default()
 		};
-		for tenant in &config.tenants {
-			if let Some(name) = &tenant.name {
-				for domain in &tenant.domains {
-					scopes.tenant_of.insert(key(domain), name.clone());
-				}
-			}
-		}
 		for scope in &config.antispam_scopes {
 			let layer = Layer::from_scope(scope);
 			if let Some(tenant) = &scope.tenant {
@@ -179,11 +162,10 @@ impl Scopes {
 
 	/// The scopes in reach of `target`, widest first.
 	fn layers<'a>(&'a self, target: &Target) -> impl Iterator<Item = &'a Layer> {
-		let domain = key(&target.domain);
-		let domain = self.domain_aliases.get(&domain).cloned().unwrap_or(domain);
+		let domain = self.reach.hosted(&target.domain);
 		let tenant = self
-			.tenant_of
-			.get(&domain)
+			.reach
+			.tenant(&domain)
 			.and_then(|name| self.tenants.get(name));
 		let account = target
 			.account

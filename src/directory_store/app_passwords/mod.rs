@@ -152,6 +152,18 @@ impl AppPasswordStore {
 	/// Add an app password for an account (the account is lowercased). The hash
 	/// must already be argon2id; the caller generated and showed the secret.
 	pub fn add(&mut self, account: &str, password: AppPassword) -> Result<(), StoreError> {
+		self.add_within(account, password, None)
+	}
+
+	/// [`Self::add`] that also refuses when the account already holds as many
+	/// app passwords as its cap allows. The count and the insert are one step
+	/// under the file's lock, so racing creations admit exactly the cap.
+	pub fn add_within(
+		&mut self,
+		account: &str,
+		password: AppPassword,
+		gate: Option<&crate::limits::Gate>,
+	) -> Result<(), StoreError> {
 		if let Some(spec) = &password.ip_cidr
 			&& crate::cidr::Cidr::parse(spec).is_none()
 		{
@@ -179,6 +191,10 @@ impl AppPasswordStore {
 				let list = &mut state.accounts.entry(account.clone()).or_default().passwords;
 				if list.iter().any(|existing| existing.label == password.label) {
 					return Err(StoreError::Duplicate(password.label.clone()));
+				}
+				if let Some(gate) = gate {
+					gate.admit(crate::limits::Kind::AppPasswords, list.len())
+						.map_err(StoreError::Capped)?;
 				}
 				list.push(password.clone());
 				Ok(())

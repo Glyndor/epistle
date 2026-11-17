@@ -17,6 +17,7 @@ pub(super) mod jmap_email;
 pub(super) mod jmap_state;
 pub(super) mod jmap_ws;
 pub(super) mod keys;
+pub(super) mod limits;
 pub(super) mod problem;
 pub(super) mod routes;
 pub(super) mod send;

@@ -26,7 +26,8 @@ pub(super) fn open_account_store(config: &Config) -> std::io::Result<AccountStor
 	.with_domain_quotas(config.domain_quotas.clone())
 	.with_domain_submission_limits(config.domain_submission_limits.clone())
 	.with_aliases(config.alias.clone())
-	.with_masked_max(config.masked_addresses_max))
+	.with_masked_max(config.masked_addresses_max)
+	.with_limits(crate::limits::Limits::shared(config)))
 }
 
 /// What to tell the operator when `masked_addresses_max` is 0. An older

@@ -370,8 +370,14 @@ fn an_account_keeps_a_bounded_number_of_families() {
 			scope: "read",
 			credential: "",
 		};
-		super::super::refresh::start_family(dir.path(), &first, at + 1000 + index, at)
-			.expect("start");
+		super::super::refresh::start_family(
+			dir.path(),
+			&first,
+			at + 1000 + index,
+			at,
+			&super::super::refresh::SessionCap::legacy(),
+		)
+		.expect("start");
 	}
 	assert_eq!(super::super::refresh::live_records(dir.path()), 50);
 	// The family that would have expired first made room.

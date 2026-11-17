@@ -36,6 +36,7 @@ pub mod forwarding;
 pub mod fuzzing;
 pub mod imap;
 pub mod jwt;
+pub mod limits;
 pub mod log_id;
 pub mod managesieve;
 pub mod metrics;

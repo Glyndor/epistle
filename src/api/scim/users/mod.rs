@@ -140,6 +140,8 @@ fn store_to_scim(error: StoreError) -> ScimError {
 		StoreError::Duplicate(what) => ScimError::conflict(format!("\"{what}\" already exists")),
 		StoreError::NotFound(what) => ScimError::not_found(format!("no such user \"{what}\"")),
 		StoreError::Invalid(what) => ScimError::invalid(what),
+		// A cap that waiting will not lift: the same 409 a duplicate gets.
+		StoreError::Capped(reached) => ScimError::conflict(reached.to_string()),
 		StoreError::LimitReached { .. } => ScimError::internal(),
 		StoreError::Io(_) => ScimError::internal(),
 		StoreError::BayesPurge { .. } => ScimError::internal(),

@@ -307,6 +307,7 @@ pub(super) fn store_error(error: StoreError) -> ApiError {
 		StoreError::Invalid(message) => ApiError::invalid_input(&message),
 		StoreError::Duplicate(what) => ApiError::invalid_input(&format!("{what} already exists.")),
 		StoreError::NotFound(_) => ApiError::not_found("no such dynamic account"),
+		StoreError::Capped(reached) => ApiError::limit_reached(&reached),
 		StoreError::LimitReached { .. } => ApiError::internal(),
 		StoreError::Io(_) => ApiError::internal(),
 		StoreError::BayesPurge { .. } => ApiError::internal(),

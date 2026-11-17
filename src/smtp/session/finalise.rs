@@ -148,6 +148,9 @@ fn inner_finalise(
 	if running_size > session.max_message_size() {
 		return Action::Continue(Reply::single(552, "5.3.4 message exceeds maximum size"));
 	}
+	if let Some(reply) = session.size_refusal(&message.recipients, running_size) {
+		return Action::Continue(reply);
+	}
 	if let Some(reply) = super::author::check(session, &message.data) {
 		return Action::Continue(reply);
 	}

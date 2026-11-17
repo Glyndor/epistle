@@ -27,6 +27,7 @@ mod data;
 mod envelope;
 mod limits;
 mod scope_refusal;
+mod size_caps;
 #[cfg(test)]
 mod test_hooks;
 pub use limits::*;
@@ -47,6 +48,9 @@ pub struct Session {
 	/// [`MAX_MESSAGE_SIZE`]; raised or lowered by
 	/// [`Session::with_max_message_size`].
 	max_message_size: usize,
+	/// The `SIZE` the sender declared at `MAIL FROM`, for the per-recipient
+	/// size caps at `RCPT TO`; `None` when it declared none.
+	declared_size: Option<u64>,
 	/// Recipients one transaction may name, advertised as `LIMITS RCPTMAX`
 	/// and enforced at `RCPT TO`. Default is [`DEFAULT_MAX_RECIPIENTS`];
 	/// changed by [`Session::with_max_recipients`].
@@ -152,6 +156,7 @@ impl Session {
 		Session {
 			hostname: hostname.to_string(),
 			max_message_size: MAX_MESSAGE_SIZE,
+			declared_size: None,
 			max_recipients: DEFAULT_MAX_RECIPIENTS,
 			state: State::Connected,
 			tls_available: false,

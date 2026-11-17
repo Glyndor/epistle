@@ -48,6 +48,18 @@ pub async fn upload(
 		}
 		Err(rejection) => return rejection.into_response(),
 	};
+	// The size cap of this account, its tenant and its domains, below the
+	// server's `maxSizeUpload`.
+	if let Err(reached) = state
+		.store()
+		.handle()
+		.current()
+		.admit_message(&account, body.len() as u64)
+	{
+		reached.log(&account);
+		let problem = limits::upload_over_cap(&reached);
+		return (StatusCode::PAYLOAD_TOO_LARGE, Json(problem)).into_response();
+	}
 	// Enforce the account's storage quota before persisting (RFC 8620 §6.1:
 	// upload may be refused once a limit is reached). A configured limit is the
 	// hard cap; 0 means unlimited. Fail closed — reject when the blob would push

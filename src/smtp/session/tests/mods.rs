@@ -35,6 +35,8 @@ mod tests_recipients;
 mod tests_scope_refusal;
 #[cfg(test)]
 mod tests_single_label;
+#[cfg(test)]
+mod tests_size_caps;
 
 #[cfg(test)]
 mod scram;

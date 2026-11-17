@@ -105,6 +105,16 @@ pub(super) fn upload_too_large() -> serde_json::Value {
 	)
 }
 
+/// The error for an upload over the size cap of the account that makes it,
+/// which is below `maxSizeUpload`: the detail says which cap and whose.
+pub(super) fn upload_over_cap(reached: &crate::limits::LimitReached) -> serde_json::Value {
+	problem(
+		"maxSizeUpload",
+		StatusCode::PAYLOAD_TOO_LARGE,
+		&reached.to_string(),
+	)
+}
+
 /// The `urn:ietf:params:jmap:error:limit` problem (RFC 8620 §3.6.1), whose
 /// `limit` property names the Session limit that was applied.
 pub(super) fn problem(limit: &str, status: StatusCode, detail: &str) -> serde_json::Value {

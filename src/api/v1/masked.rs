@@ -180,6 +180,7 @@ fn map_store_error(error: StoreError) -> ApiError {
 		StoreError::LimitReached { max } => {
 			ApiError::conflict(format!("masked-address limit ({max}) reached for account"))
 		}
+		StoreError::Capped(reached) => ApiError::limit_reached(&reached),
 		StoreError::Io(_) => ApiError::internal(),
 		StoreError::BayesPurge { .. } => ApiError::internal(),
 	}

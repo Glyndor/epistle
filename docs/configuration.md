@@ -97,6 +97,8 @@ a connection URL.
 | `subjectpass` | section | disabled | Signed token for the uncertain Bayesian band: when no LLM verdict decides a message in the band, the server refuses it with `550 5.7.1` and a token the sender can put in the `Subject:`, and accepts the resend that carries it. Requires `[database]`. Disabled by default (changes what remote senders see). See [`[subjectpass]`](#subjectpass). |
 | `log_format` | `text`\|`json` | `text` | Log output format. The level filter is the `RUST_LOG` environment variable (default `info`); with it unset, the resolver's DNSSEC validator (`hickory_net::dnssec`, which logs whole responses for every unsigned zone) is off, and epistle writes one debug line per TLSA lookup instead. A `RUST_LOG` you set is used as written: `RUST_LOG=info,hickory_net::dnssec=warn` brings the library back. |
 | `rules` | array | `[]` | Delivery rules that route or flag locally delivered mail by sender/header. |
+| `limits` | table | `{}` | Caps on addresses, aliases, lists, list members, API keys, app passwords, sessions and message size, for the whole server. See [`[limits]` and `[[limit_scope]]`](#limit_scope). |
+| `limit_scope` | array | `[]` | The same caps for one tenant, domain or account; each may only tighten the scope above it. Empty changes nothing. |
 | `antispam_scope` | array | `[]` | Antispam settings for one tenant, domain or account, on top of the server-wide sections: sender and recipient lists and stronger attachment settings. Empty changes nothing. See [`[[antispam_scope]]`](#antispam_scope). |
 | `alerts` | array | `[]` | Metric alerts: rules that fire a webhook or email when a counter crosses its configured threshold over a sample window. |
 | `tenant` | array | `[]` | Tenant definitions: named groups of domains with optional aggregate caps on accounts, domains, storage and submission rate. Empty means no tenancy is in effect. See [`[[tenant]]`](#tenant). |
@@ -2803,6 +2805,92 @@ Not done yet: editing these lists from the command line, the API and the panel
 with an audit entry for each change, `allow` for outbound recipients,
 attachment `strip`, an allowed-extensions list per scope, and the same lists
 on `POST /api/v1/send` and JMAP `EmailSubmission` (they apply to SMTP).
+
+### `[limits]` and `[[limit_scope]]`
+<a id="limit_scope"></a>
+
+Caps on what an account, a domain or a message may hold. `[limits]` is the
+server scope; a `[[limit_scope]]` entry names exactly one `tenant`, `domain` or
+`account` (the same rules as `[[antispam_scope]]`) and sets the same keys. A
+key is left out (the wider scope's value stands), a whole number, or
+`"unlimited"`.
+
+```toml
+max_message_size = 26214400               # the server's cap, as always
+
+[limits]
+max_addresses_per_account = 20
+max_sessions_per_account = 50
+sessions_when_full = "end_oldest"         # or "refuse"
+
+[[limit_scope]]
+tenant = "acme"                           # or domain = "example.org", or account = "alice"
+max_addresses_per_account = 5
+max_app_passwords_per_account = 10
+max_message_size = 10485760               # below the server's, at least 65536
+```
+
+| Key | Counts | Default |
+|---|---|---|
+| `max_message_size` | Bytes in one message an account of the scope sends or receives. Never above the server's top-level `max_message_size`, never below 65536 (RFC 5321 section 4.5.3.1.7). Not allowed in `[limits]`: the server's cap is the top-level key. | the server's |
+| `max_addresses_per_account` | Addresses one account holds, counted when an account is created, an address is added, or a replacement (SCIM `PUT`) claims a new one. Accounts of the configuration file are not counted. | unlimited |
+| `max_aliases_per_domain` | Aliases, lists included, whose address is in one domain (a domain alias counts as the domain it delivers to). Checked by `epistle alias add`. | unlimited |
+| `max_lists_per_domain` | Aliases with a `list_id` in one domain. Checked by `epistle alias add`. | unlimited |
+| `max_members_per_list` | Members of one alias or list. Checked by `epistle alias add` and `epistle alias member add`. | unlimited |
+| `max_api_keys_per_account` | API keys bound to one account (`--account`). Keys that name no account are administrative and are not counted. Checked by `epistle api-key create`. | unlimited |
+| `max_app_passwords_per_account` | App passwords of one account. Checked by `epistle app-password create`. | unlimited |
+| `max_sessions_per_account` | OAuth refresh-token families of one account, the sessions that survive a restart. | 50 |
+| `sessions_when_full` | `end_oldest` (the family that expires first is ended to make room) or `refuse` (the grant is answered `access_denied` with the reason). The most specific scope that sets it wins. | `end_oldest` |
+
+**Resolution.** The scopes in reach are the server, the tenant that owns the
+domain, the domain and the account, widest first, and the strictest number of
+any of them applies: a narrower scope tightens what a wider one allows and
+never loosens it. `"unlimited"` sets no cap of its own and does not lift the
+cap of a wider scope. The load refuses an entry that tries: a number above the
+scope it sits under, or `"unlimited"` under a number. A domain is compared with
+its tenant's entry and the server's, a tenant and an account with the server's.
+The account-to-domain step cannot be known at load (the addresses of an API
+account are not in the file), so the resolution takes the strictest. An account
+with addresses in several domains gets the strictest of them. `0` is a number:
+it allows none. With nothing configured nothing is capped except the 50 sessions
+that always were.
+
+**Where they apply.** A cap is checked inside the lock that guards the store it
+guards, with the count and the insert as one step, so N writers racing for the
+last place admit exactly the cap: the `accounts.toml` lock for addresses, the
+`app_passwords.toml` and `api_keys.toml` locks for credentials, the refresh
+store's lock for sessions, and for aliases the compare-and-replace of the
+configuration file (a command that finds the file changed writes nothing). A
+cap lowered under what already exists keeps what exists and refuses the next
+one.
+
+**Message size.** A sender that authenticated is held to its own cap at
+`MAIL FROM` (declared `SIZE`) and at the end of the data, on SMTP submission
+and BDAT, in `POST /jmap/upload/{accountId}` (`413`, JMAP `maxSizeUpload`
+problem), JMAP `EmailSubmission/set` (`tooLarge`) and `POST /api/v1/send`
+(`413 message_too_large`). A recipient is held to the cap of the account it
+delivers to: a declared `SIZE` over it refuses that recipient at `RCPT TO`
+(`552 5.3.4 message exceeds the size limit of a recipient of this server`), and
+a message that turns out larger than the cap of any recipient is refused whole
+at the end of the data with the same answer. A multi-target alias counts as all
+its members. The cap of a recipient is not told to the sender; the sender's own
+is, with the scope that set it. EHLO `SIZE` and the JMAP session keep the
+server's value.
+
+**Refusals** name the limit, its value, the scope that set it and how to make
+room, for example `account bob is at the limit of 5 addresses per account (set
+by tenant acme); to make room remove an address, or ask the operator to raise
+max_addresses_per_account`. The API answers `409 limit_reached`, SCIM `409`
+with that detail, the CLI exits `3` (policy) with the same text, and the token
+endpoint `400 access_denied` with `error_description`.
+
+Not done yet: caps per domain or per tenant as a total (accounts, addresses,
+aliases summed over a scope), a frozen state, sign-in and token requests per
+minute per account and per IP, webmail sessions and device-grant counts,
+`epistle status` and `epistle check` showing each account's use against its
+caps, plans that name the values, IMAP `APPEND` and the JMAP `Email/set` builder
+against the per-account message cap, and editing the caps from the CLI, the API
+and the panel.
 
 ### `[[srs_domain]]`
 <a id="srs_domain"></a>

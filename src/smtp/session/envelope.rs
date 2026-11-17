@@ -159,6 +159,12 @@ impl Session {
 						"5.3.4 message exceeds maximum size",
 					));
 				}
+				// The size cap of the authenticated sender's account, scope by
+				// scope, below the server's.
+				if let Some(reply) = self.sender_size_refusal(size) {
+					return Action::Continue(reply);
+				}
+				self.declared_size = size;
 				// Filesystem holding `data_dir` is too full to accept another
 				// message. Reject before `DATA` so the remote retries instead
 				// of receiving `250 OK` for a payload the spool cannot hold.
@@ -223,6 +229,11 @@ impl Session {
 			}
 			// A local account or a multi-target alias is an acceptable recipient.
 			Resolution::Account(_) | Resolution::Alias(_) => {}
+		}
+		// A declared SIZE past the cap of an account this recipient delivers
+		// to refuses this recipient only.
+		if let Some(reply) = self.recipient_size_refusal(&resolution) {
+			return Action::Continue(reply);
 		}
 		let forward_path = address.to_string();
 		// Suppress failure DSNs for NOTIFY=NEVER or a NOTIFY without FAILURE (RFC 3461).

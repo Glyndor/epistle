@@ -135,6 +135,8 @@ pub struct Directory {
 	/// Per-account external forwarding: `(targets, keep_local)`. Mail for the
 	/// account is also queued to each target; `keep_local` keeps the local copy.
 	forwards: HashMap<String, (Vec<String>, bool)>,
+	/// The caps on message sizes, per scope.
+	limits: std::sync::Arc<crate::limits::Limits>,
 	/// Multi-target aliases, keyed by lowercased alias address.
 	aliases: HashMap<String, AliasSpec>,
 	/// Secondary app passwords per account name. Each entry is tried when the
@@ -234,6 +236,7 @@ impl Directory {
 			domain_quotas: HashMap::new(),
 			domain_submission_limits: HashMap::new(),
 			forwards: HashMap::new(),
+			limits: Default::default(),
 			aliases: HashMap::new(),
 			app_passwords: HashMap::new(),
 			max_app_passwords: 0,
