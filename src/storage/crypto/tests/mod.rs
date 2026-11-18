@@ -4,3 +4,4 @@ pub(super) mod base;
 pub(super) mod rotation;
 pub(super) mod tenant_keys;
 pub(super) mod writes;
+pub(super) mod rooted;

@@ -80,7 +80,9 @@ impl MailboxBackend {
 					.ok()
 					.filter(std::fs::Metadata::is_file)?
 					.len();
-				let octets = self.crypto.stored_plaintext_len(&path, stored);
+				let octets = self
+					.crypto
+					.stored_plaintext_len(&self.data_dir, &path, stored);
 				let octets = usize::try_from(octets).unwrap_or(usize::MAX);
 				if octets > MAX_MESSAGE_OCTETS {
 					too_large += 1;

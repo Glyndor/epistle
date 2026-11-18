@@ -148,8 +148,64 @@ pub(crate) fn write_atomic(root: &Path, path: &Path, bytes: &[u8]) -> io::Result
 	moved
 }
 
+/// Move `from` to `to`, both under `root`. Each operand is checked on its
+/// own: its directory must resolve under the root.
+pub(crate) fn rename(root: &Path, from: &Path, to: &Path) -> io::Result<()> {
+	let (_, from) = leaf(root, from)?;
+	let (_, to) = leaf(root, to)?;
+	std::fs::rename(from, to)
+}
+
+/// Remove the file `path` under `root`. A link at the leaf is removed itself,
+/// not what it points at.
+pub(crate) fn remove_file(root: &Path, path: &Path) -> io::Result<()> {
+	let (_, leaf) = leaf(root, path)?;
+	std::fs::remove_file(leaf)
+}
+
 /// The metadata of `path`, which must exist under `root`.
 pub(crate) fn metadata(root: &Path, path: &Path) -> io::Result<Metadata> {
 	let checked = existing(root, path)?;
 	std::fs::metadata(checked)
+}
+
+/// Create the directory `path` and the missing ones above it, all under
+/// `root`. Each name that is created is one plain name joined to a directory
+/// that was resolved and checked, and the created directory is resolved and
+/// checked again before the next name is added.
+pub(crate) fn create_dir_all(root: &Path, path: &Path) -> io::Result<()> {
+	let root = root.canonicalize()?;
+	let mut missing = Vec::new();
+	let mut current = path;
+	let mut checked = loop {
+		match current.canonicalize() {
+			Ok(resolved) => break resolved,
+			Err(error) if error.kind() == io::ErrorKind::NotFound => {
+				missing.push(current.file_name().ok_or_else(escapes_root)?);
+				current = current.parent().ok_or_else(escapes_root)?;
+			}
+			Err(error) => return Err(error),
+		}
+	};
+	if !checked.starts_with(&root) {
+		return Err(escapes_root());
+	}
+	for name in missing.into_iter().rev() {
+		let name = name.to_str().ok_or_else(escapes_root)?;
+		let next = contained_child(&checked, name)?;
+		match std::fs::create_dir(&next) {
+			Ok(()) => {}
+			// Another writer made it first; a link there is not a directory.
+			Err(error)
+				if error.kind() == io::ErrorKind::AlreadyExists
+					&& std::fs::symlink_metadata(&next).is_ok_and(|found| found.is_dir()) => {}
+			Err(error) => return Err(error),
+		}
+		let resolved = next.canonicalize()?;
+		if !resolved.starts_with(&root) {
+			return Err(escapes_root());
+		}
+		checked = resolved;
+	}
+	Ok(())
 }

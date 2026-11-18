@@ -418,7 +418,10 @@ impl Snapshot {
 			MessageExt::Zone,
 		] {
 			if let Ok(path) = message_file(&self.account_dir, id, ext) {
-				let _ = std::fs::remove_file(path);
+				let _ = crate::util::fs_walk::rooted_write::remove_file(
+					self.account_root.data_dir(),
+					&path,
+				);
 			}
 		}
 	}

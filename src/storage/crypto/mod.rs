@@ -437,11 +437,13 @@ impl MessageCrypto {
 	/// returned without touching the file. Otherwise the header is peeked; an
 	/// encrypted file's plaintext length is `file_len` less the overhead of
 	/// its envelope version. A read error or a too-short file gives `file_len`.
-	pub fn stored_plaintext_len(&self, path: &Path, file_len: u64) -> u64 {
+	/// `root` is the trusted data directory `path` lies under; a file outside
+	/// it is not opened.
+	pub fn stored_plaintext_len(&self, root: &Path, path: &Path, file_len: u64) -> u64 {
 		if self.inner.keys.is_empty() {
 			return file_len;
 		}
-		let overhead = match file_header_kind(path) {
+		let overhead = match file_header_kind(root, path) {
 			Some(EnvelopeKind::V1) => OVERHEAD,
 			Some(EnvelopeKind::V2(_)) => OVERHEAD_V2,
 			_ => return file_len,
@@ -450,11 +452,12 @@ impl MessageCrypto {
 	}
 }
 
-/// The envelope kind of the file at `path`, from a peek at its header.
-fn file_header_kind(path: &Path) -> Option<EnvelopeKind> {
+/// The envelope kind of the file at `path` under `root`, from a peek at its
+/// header.
+fn file_header_kind(root: &Path, path: &Path) -> Option<EnvelopeKind> {
 	use std::io::Read;
 	let header_len = MAGIC_V2.len() + keyring::KEY_ID_LEN;
-	let file = std::fs::File::open(path).ok()?;
+	let file = crate::util::fs_walk::rooted_write::open_read(root, path).ok()?;
 	let mut header = Vec::with_capacity(header_len);
 	file.take(header_len as u64).read_to_end(&mut header).ok()?;
 	Some(kind(&header))

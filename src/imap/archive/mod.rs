@@ -21,6 +21,7 @@ use uuid::Uuid;
 
 use crate::imap::mailbox;
 use crate::storage::MessageCrypto;
+use crate::util::fs_walk::rooted_write;
 use crate::util::path_component::{AccountName, AccountRoot, FixedDir, MessageExt, message_file};
 use crate::util::path_containment::contained;
 
@@ -70,15 +71,16 @@ pub fn archive_message(
 	id: Uuid,
 	now: u64,
 ) -> std::io::Result<()> {
+	let root = account_root.data_dir();
 	let archive = archive_dir(account_root)?;
-	std::fs::create_dir_all(&archive)?;
+	rooted_write::create_dir_all(root, &archive)?;
 	// The sidecar is written first and the body moved last, because the body
 	// is what `list` keys on: an `.eml` that reached the archive without its
 	// sidecar is invisible to list, restore and purge alike, so it would sit
 	// there against the account quota forever. In this order a failure at any
 	// step leaves the message in its mailbox, which the caller can retry.
 	let sidecar = message_file(&archive, id, MessageExt::Deleted)?;
-	std::fs::write(sidecar, format!("{now}\n{mailbox}\n"))?;
+	rooted_write::write_atomic(root, &sidecar, format!("{now}\n{mailbox}\n").as_bytes())?;
 	for ext in [
 		MessageExt::Flags,
 		MessageExt::Uid,
@@ -89,7 +91,7 @@ pub fn archive_message(
 		let to = message_file(&archive, id, ext)?;
 		// A missing source file is a no-op (idempotent with concurrent
 		// deletes); anything else is reported so the caller can retry.
-		match std::fs::rename(&from, &to) {
+		match rooted_write::rename(root, &from, &to) {
 			Ok(()) => {}
 			Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
 			Err(error) => return Err(error),

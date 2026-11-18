@@ -212,7 +212,7 @@ fn stored_plaintext_len_accounts_for_overhead() {
 	let stored = crypto.encode(plaintext).expect("encode");
 	let path = dir.path().join("msg.eml");
 	std::fs::write(&path, &stored).expect("write");
-	let len = crypto.stored_plaintext_len(&path, stored.len() as u64);
+	let len = crypto.stored_plaintext_len(dir.path(), &path, stored.len() as u64);
 	assert_eq!(len, plaintext.len() as u64);
 }
 
@@ -223,6 +223,6 @@ fn stored_plaintext_len_passes_through_plaintext_file() {
 	let plaintext = b"legacy on disk, no magic";
 	let path = dir.path().join("legacy.eml");
 	std::fs::write(&path, plaintext).expect("write");
-	let len = crypto.stored_plaintext_len(&path, plaintext.len() as u64);
+	let len = crypto.stored_plaintext_len(dir.path(), &path, plaintext.len() as u64);
 	assert_eq!(len, plaintext.len() as u64);
 }

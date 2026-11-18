@@ -3,7 +3,7 @@ use std::os::unix::fs::symlink;
 use std::path::PathBuf;
 
 use crate::util::fs_walk::rooted_write::{
-	metadata, open_append, open_lock, open_read, write_atomic,
+	create_dir_all, metadata, open_append, open_lock, open_read, remove_file, rename, write_atomic,
 };
 
 /// A `root` directory with a sibling `outside` one the writes must never reach.
@@ -186,6 +186,37 @@ fn open_read_and_append_refuse_a_link_and_a_directory_out_of_the_root() {
 }
 
 #[test]
+fn rename_checks_both_operands() {
+	let l = layout();
+	std::fs::write(l.root.join("from"), "x").expect("write");
+	std::fs::create_dir(l.root.join("sub")).expect("mkdir");
+	rename(
+		&l.root,
+		&l.root.join("from"),
+		&l.root.join("sub").join("to"),
+	)
+	.expect("move");
+	assert!(l.root.join("sub").join("to").exists());
+
+	std::fs::write(l.root.join("again"), "x").expect("write");
+	symlink(&l.outside, l.root.join("account")).expect("symlink");
+	let out = l.root.join("account").join("to");
+	assert_eq!(
+		kind(rename(&l.root, &l.root.join("again"), &out)),
+		ErrorKind::InvalidInput
+	);
+	std::fs::write(l.outside.join("secret"), "x").expect("write");
+	let from_out = l.root.join("account").join("secret");
+	assert_eq!(
+		kind(rename(&l.root, &from_out, &l.root.join("taken"))),
+		ErrorKind::InvalidInput
+	);
+	assert!(l.root.join("again").exists());
+	assert!(l.outside.join("secret").exists());
+	assert_eq!(entries(&l.outside), vec!["secret"]);
+}
+
+#[test]
 fn metadata_reads_inside_the_root_and_refuses_a_directory_out_of_it() {
 	let l = layout();
 	std::fs::write(l.root.join("here"), "x").expect("write");
@@ -202,4 +233,41 @@ fn metadata_reads_inside_the_root_and_refuses_a_directory_out_of_it() {
 	symlink(&l.outside, l.root.join("account")).expect("symlink");
 	let through = l.root.join("account").join("note");
 	assert_eq!(kind(metadata(&l.root, &through)), ErrorKind::InvalidInput);
+}
+
+#[test]
+fn remove_file_removes_inside_the_root_and_refuses_a_directory_out_of_it() {
+	let l = layout();
+	std::fs::write(l.root.join("here"), "x").expect("write");
+	remove_file(&l.root, &l.root.join("here")).expect("remove");
+	assert!(!l.root.join("here").exists());
+
+	std::fs::write(l.outside.join("note"), "reached").expect("write");
+	symlink(&l.outside, l.root.join("account")).expect("symlink");
+	let through = l.root.join("account").join("note");
+	assert_eq!(
+		kind(remove_file(&l.root, &through)),
+		ErrorKind::InvalidInput
+	);
+	assert!(l.outside.join("note").exists());
+}
+
+#[test]
+fn create_dir_all_makes_the_tail_and_refuses_a_link_out_of_the_root() {
+	let l = layout();
+	let deep = l.root.join("a").join("b").join("c");
+	create_dir_all(&l.root, &deep).expect("create");
+	create_dir_all(&l.root, &deep).expect("again");
+	assert!(deep.is_dir());
+
+	symlink(&l.outside, l.root.join("account")).expect("symlink");
+	let through = l.root.join("account").join("archive");
+	assert_eq!(
+		kind(create_dir_all(&l.root, &through)),
+		ErrorKind::InvalidInput
+	);
+	assert!(entries(&l.outside).is_empty());
+	let up = l.root.join("..").join("outside").join("made");
+	assert_eq!(kind(create_dir_all(&l.root, &up)), ErrorKind::InvalidInput);
+	assert!(entries(&l.outside).is_empty());
 }

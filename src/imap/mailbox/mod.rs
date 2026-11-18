@@ -382,7 +382,7 @@ pub fn account_usage(data_dir: &Path, account: &str, crypto: &MessageCrypto) -> 
 					.is_some_and(|name| name.ends_with(".eml"))
 				&& let Ok(meta) = entry.metadata()
 			{
-				total += crypto.stored_plaintext_len(&entry.path(), meta.len());
+				total += crypto.stored_plaintext_len(data_dir, &entry.path(), meta.len());
 			}
 		}
 	}
@@ -400,7 +400,7 @@ pub fn account_usage(data_dir: &Path, account: &str, crypto: &MessageCrypto) -> 
 					.is_some_and(|name| name.ends_with(".eml"))
 				&& let Ok(meta) = entry.metadata()
 			{
-				total += crypto.stored_plaintext_len(&entry.path(), meta.len());
+				total += crypto.stored_plaintext_len(data_dir, &entry.path(), meta.len());
 			}
 		}
 	}
