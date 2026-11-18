@@ -61,13 +61,13 @@ pub(in crate::cli::serve) async fn build_greylist(
 	config: &Config,
 	pool: Option<&sqlx::PgPool>,
 ) -> Option<Arc<dyn crate::antispam::greylist::GreylistStore>> {
-	if config.greylist_delay_secs == 0 {
+	if !config.greylisting_anywhere() {
 		return None;
 	}
-	// Lifetime in seconds for an unseen triplet. Matches the memory store's
-	// historical default (one day); the constant lives here so the
-	// sweep task and the SQL store agree.
-	const LIFETIME_SECS: u64 = 24 * 3600;
+	// How long a triplet is remembered, `[antispam] greylist_lifetime_secs`
+	// (a day unless set); the sweep of the SQL store and of the memory store
+	// both use it.
+	let lifetime_secs = config.antispam.greylist_lifetime_secs;
 	let store: Arc<dyn crate::antispam::greylist::GreylistStore> = match pool {
 		Some(pool) => {
 			tracing::info!("greylist: using PostgreSQL store; triplets survive restarts");
@@ -81,7 +81,7 @@ pub(in crate::cli::serve) async fn build_greylist(
 						.duration_since(std::time::UNIX_EPOCH)
 						.map(|d| d.as_secs())
 						.unwrap_or(0);
-					pg.sweep(now, LIFETIME_SECS).await;
+					pg.sweep(now, lifetime_secs).await;
 				}
 			});
 			store
@@ -101,7 +101,7 @@ pub(in crate::cli::serve) async fn build_greylist(
 						.duration_since(std::time::UNIX_EPOCH)
 						.map(|d| d.as_secs())
 						.unwrap_or(0);
-					prune_store.sweep(now, LIFETIME_SECS).await;
+					prune_store.sweep(now, lifetime_secs).await;
 				}
 			});
 			mem

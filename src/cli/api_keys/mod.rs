@@ -25,6 +25,9 @@ pub(super) struct NewKey {
 	pub(super) account: Option<String>,
 	/// The class granted to mail sent with the key.
 	pub(super) class: Option<crate::evidence::MailClass>,
+	/// Whether mail sent with the key gets `Auto-Submitted: auto-generated`
+	/// when the request omits the header.
+	pub(super) auto_submitted: bool,
 }
 
 /// Generate a strong random key, hash it (SHA-256) and store it under
@@ -50,6 +53,7 @@ pub(super) fn create(
 		domains,
 		account,
 		class,
+		auto_submitted,
 	} = key;
 	let (label, account) = (label.as_str(), account.as_deref());
 	if let Some(problem) = crate::util::label_rule::problem(label) {
@@ -88,10 +92,13 @@ pub(super) fn create(
 			return ExitCode::FAILURE;
 		}
 	};
-	let fields = serde_json::json!({
+	let mut fields = serde_json::json!({
 		"label": label, "key": secret, "scopes": scopes, "domains": domains,
 		"account": account, "expires_at": expires_at, "ip_cidr": ip_cidr,
 	});
+	if auto_submitted {
+		fields["auto_submitted"] = true.into();
+	}
 	let hash = crate::api::api_keys::sha256_hash(&secret);
 	if let Some(class) = class {
 		let binding = crate::evidence::bindings::api_key_key(&hash);
@@ -117,8 +124,19 @@ pub(super) fn create(
 		scopes,
 		domains,
 		account: account.map(str::to_string),
+		auto_submitted,
 	};
-	match store.add(key) {
+	let gate = match account {
+		Some(name) => match crate::directory_store::AccountStore::gate_from_config(config, name) {
+			Ok(gate) => Some(gate),
+			Err(error) => {
+				super::style::error(format_args!("account {name}: {error}"));
+				return ExitCode::FAILURE;
+			}
+		},
+		None => None,
+	};
+	match store.add_within(key, gate.as_ref()) {
 		Ok(()) => {
 			// The advisory travels with the result: stderr for a human, and
 			// the `warnings` array of the JSON result for a script. The exit
@@ -167,9 +185,10 @@ fn account_known(config: &Config, name: &str) -> Result<bool, ExitCode> {
 	})
 }
 
-/// Replace the secret of an API key, keeping its scopes, domains, expiry and
-/// CIDR. The new key is printed once; the old one stops authenticating when
-/// the running server's file watcher picks the change up.
+/// Replace the secret of an API key, keeping its scopes, domains, expiry,
+/// CIDR and `auto_submitted` setting. The new key is printed once; the old one
+/// stops authenticating when the running server's file watcher picks the
+/// change up.
 pub(super) fn rotate(
 	config: &Config,
 	label: &str,
@@ -219,6 +238,44 @@ pub(super) fn rotate(
 			report.line(format_args!("key (shown once): {secret}"));
 			let fields = serde_json::json!({ "label": label, "key": secret });
 			report.change("rotate", true, fields, None)
+		}
+		Err(error) => {
+			let code = super::exit::for_io_error(&error);
+			super::style::error(error);
+			code
+		}
+	}
+}
+
+/// Change whether mail sent with `label` gets `Auto-Submitted:
+/// auto-generated` when the request omits the header.
+fn set_auto_submitted(
+	config: &Config,
+	label: &str,
+	auto_submitted: bool,
+	json: bool,
+	out: &mut impl std::io::Write,
+) -> ExitCode {
+	let mut store = match ApiKeyStore::open(&config.data_dir) {
+		Ok(store) => store,
+		Err(error) => {
+			super::style::error(format_args!("opening API key store: {error}"));
+			return ExitCode::FAILURE;
+		}
+	};
+	match store.set_auto_submitted(label, auto_submitted) {
+		Ok(()) => {
+			let state = if auto_submitted { "on" } else { "off" };
+			let mut report = super::json_out::Report::new(out, json);
+			report.line(format_args!(
+				"set Auto-Submitted={state} for API key \"{label}\""
+			));
+			report.change(
+				"set",
+				true,
+				serde_json::json!({ "label": label, "auto_submitted": auto_submitted }),
+				None,
+			)
 		}
 		Err(error) => {
 			let code = super::exit::for_io_error(&error);
@@ -278,8 +335,9 @@ pub enum ApiKeyCli {
 		/// Confine this key to a domain (repeat for more).
 		#[arg(long = "domain", value_name = "DOMAIN")]
 		domains: Vec<String>,
-		/// Bind the key to one account (then it reaches only JMAP and
-		/// `/api/v1/send`). An account-bound key has no domain-wide reach,
+		/// Bind the key to one account (then it reaches only JMAP,
+		/// `/api/v1/send`, `/api/v1/deliveries` and that account's
+		/// suppression list). An account-bound key has no domain-wide reach,
 		/// so `--domain` cannot be combined with it.
 		#[arg(long, value_name = "ACCOUNT", conflicts_with = "domains", value_parser = crate::cli::account::name::parse)]
 		account: Option<String>,
@@ -287,6 +345,23 @@ pub enum ApiKeyCli {
 		/// when the request names none.
 		#[arg(long, value_name = "CLASS", value_parser = crate::evidence::class::parse_arg)]
 		class: Option<crate::evidence::MailClass>,
+		/// Add `Auto-Submitted: auto-generated` when the request omits it.
+		#[arg(long)]
+		auto_submitted: bool,
+	},
+	/// Change whether mail sent with a key gets `Auto-Submitted`.
+	Set {
+		/// The label of the API key to change.
+		label: String,
+		/// Add `Auto-Submitted: auto-generated` when the request omits it.
+		#[arg(
+			long,
+			value_name = "STATE",
+			value_parser = crate::cli::account::parse_on_off,
+			action = clap::ArgAction::Set,
+			required = true
+		)]
+		auto_submitted: bool,
 	},
 	/// Revoke an API key by label.
 	///
@@ -331,6 +406,7 @@ pub(super) fn run(
 			domains,
 			account,
 			class,
+			auto_submitted,
 		} => {
 			let mut err = super::style::stderr();
 			create(
@@ -343,12 +419,17 @@ pub(super) fn run(
 					domains,
 					account,
 					class,
+					auto_submitted,
 				},
 				json,
 				out,
 				&mut err,
 			)
 		}
+		ApiKeyCli::Set {
+			label,
+			auto_submitted,
+		} => set_auto_submitted(config, &label, auto_submitted, json, out),
 		ApiKeyCli::Revoke { label, yes } => revoke(config, &label, yes, json, out),
 		ApiKeyCli::Rotate { label } => rotate(config, &label, json, out),
 	}
@@ -389,14 +470,18 @@ pub(super) fn list(
 			.list()
 			.into_iter()
 			.map(|row| {
-				serde_json::json!({
+				let mut object = serde_json::json!({
 					"label": row.label,
 					"expires_at": row.expires_at,
 					"ip_cidr": row.ip_cidr,
 					"scopes": row.scopes,
 					"domains": row.domains,
 					"account": row.account,
-				})
+				});
+				if row.auto_submitted {
+					object["auto_submitted"] = true.into();
+				}
+				object
 			})
 			.collect();
 		return super::json_out::print(out, &serde_json::Value::Array(rows));
@@ -419,9 +504,10 @@ pub(super) fn list(
 			.account
 			.map(|account| format!("\taccount={account}"))
 			.unwrap_or_default();
+		let auto_submitted = if row.auto_submitted { "on" } else { "off" };
 		if writeln!(
 			out,
-			"{label}\texpires={expiry}\tip={cidr}\tscopes={scopes_repr}{bound}",
+			"{label}\texpires={expiry}\tip={cidr}\tscopes={scopes_repr}\tauto_submitted={auto_submitted}{bound}",
 			label = row.label,
 		)
 		.is_err()

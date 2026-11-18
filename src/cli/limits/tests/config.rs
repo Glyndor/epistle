@@ -322,7 +322,7 @@ fn limits_set_with_json_records_domain_and_tenant_scope() {
 	let mut original = std::fs::read_to_string(file.path()).unwrap();
 	original.push_str("\n[domain_submission_limits]\n'example.org' = 5 # rate\n");
 	std::fs::write(file.path(), &original).unwrap();
-	super::run_with_restart(
+	let _ = super::run_with_restart(
 		file.path(),
 		super::Action::Set {
 			key: Key::SubmissionRate,

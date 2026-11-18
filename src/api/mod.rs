@@ -10,6 +10,7 @@ pub mod api_keys;
 mod audit;
 mod authorization;
 mod error;
+pub mod events;
 pub(crate) mod jmap;
 mod mail_from;
 pub mod oauth;
@@ -21,8 +22,11 @@ pub mod tenant_limits;
 pub mod v1;
 
 pub use api_keys::{ApiKey, ApiKeySet, ApiKeySetSnapshot, ApiKeyStore};
-pub use audit::{AuditEvent, log_auth_attempt, log_privilege_change, log_send_limited};
+pub use audit::{
+	AuditEvent, log_auth_attempt, log_auth_busy, log_privilege_change, log_send_limited,
+};
 pub use authorization::{Credential, Principal};
+pub use events::EventLimits;
 pub use jmap::reclaim_blobs;
 pub use state::{ApiState, ClientIp};
 pub use tenant_limits::TenantLimits;
@@ -86,7 +90,11 @@ pub fn router(state: ApiState) -> Router {
 		.layer(middleware::from_fn_with_state(
 			state.clone(),
 			state::require_bearer_token,
-		));
+		))
+		// Outermost, so the answers of the bearer check (`401`, `429`) are
+		// negotiated too: an `ApiError` is a problem for the client that
+		// asks for `application/problem+json`.
+		.layer(middleware::from_fn(error::negotiate));
 	// Unauthenticated liveness probe (reveals nothing) for load balancers and
 	// orchestrators; merged outside the auth layer.
 	let mut public = Router::new()

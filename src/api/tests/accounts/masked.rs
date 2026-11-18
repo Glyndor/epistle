@@ -208,3 +208,58 @@ async fn a_mask_lands_on_the_account_own_domain_not_the_first_configured() {
 		"mask landed off the account's own domain: {address}"
 	);
 }
+
+#[tokio::test]
+async fn create_refuses_a_mask_on_a_disabled_domain_without_storing_it() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let state =
+		two_domain_state(dir.path()).with_disabled_domains(vec!["SECOND.EXAMPLE".to_string()]);
+	let app = router(state);
+	let (status, body) = request_with_body(
+		&app,
+		"POST",
+		"/api/v1/accounts/bob/masked",
+		Some(TOKEN.as_str()),
+		Some(serde_json::json!({ "label": "shopping" })),
+	)
+	.await;
+	assert_eq!(status, StatusCode::CONFLICT);
+	assert_eq!(body["error"]["code"], "conflict");
+	assert!(
+		body["error"]["message"]
+			.as_str()
+			.unwrap()
+			.contains("second.example")
+	);
+	let (status, body) = request(
+		&app,
+		"GET",
+		"/api/v1/accounts/bob/masked",
+		Some(TOKEN.as_str()),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["addresses"].as_array().expect("array").len(), 0);
+}
+
+#[tokio::test]
+async fn create_still_mints_a_mask_when_only_another_domain_is_disabled() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let state =
+		two_domain_state(dir.path()).with_disabled_domains(vec!["first.example".to_string()]);
+	let app = router(state);
+	let (status, body) = request_with_body(
+		&app,
+		"POST",
+		"/api/v1/accounts/bob/masked",
+		Some(TOKEN.as_str()),
+		Some(serde_json::json!({ "label": "shopping" })),
+	)
+	.await;
+	assert_eq!(status, StatusCode::CREATED, "{body}");
+	let address = body["address"].as_str().expect("address");
+	assert!(
+		address.ends_with("@second.example"),
+		"unexpected address: {address}"
+	);
+}

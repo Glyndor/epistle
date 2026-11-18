@@ -9,7 +9,9 @@
 //! known; SMTP has no per-recipient reply there (that is LMTP), so when
 //! other recipients can take it the message is accepted for them and the
 //! sender gets a DSN for the full mailbox, and only when every recipient
-//! is full is the whole message refused with `552 5.2.2`. The API refuses
+//! is full is the whole message refused, with the same temporary
+//! `452 4.2.2` as at `RCPT TO`: a full mailbox is never a permanent
+//! failure (RFC 3463), so the sender retries. The API refuses
 //! the request instead.
 
 use std::collections::HashMap;
@@ -18,7 +20,19 @@ use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use super::address::Address;
 use super::directory::{Directory, Resolution};
+use super::reply::Reply;
 use crate::storage::MessageCrypto;
+
+/// The reply for a recipient whose mailbox is full: `452 4.2.2`, which has
+/// the sender retry until room is made, or `552 5.2.2` for an operator who
+/// made a full mailbox a permanent failure. Used at `RCPT TO`, at the end of
+/// DATA and for a delivery the store refuses, so the stages always agree.
+pub fn full_reply(how: crate::config::MailboxFull) -> Reply {
+	match how {
+		crate::config::MailboxFull::Temporary => Reply::single(452, "4.2.2 mailbox full"),
+		crate::config::MailboxFull::Permanent => Reply::single(552, "5.2.2 mailbox full"),
+	}
+}
 
 /// The quota in force for `account`: its own, else its domain's, else
 /// `default` (the server's `quota_bytes`, 5 GiB when unset). A quota of 0

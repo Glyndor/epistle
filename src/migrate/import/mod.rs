@@ -32,6 +32,9 @@ pub(crate) struct Plan {
 	pub(crate) skipped: Vec<Note>,
 	/// What has to be moved another way.
 	pub(crate) manual: Vec<String>,
+	/// The names in `domains`, so adding one does not scan the list.
+	#[serde(skip)]
+	pub(crate) known_domains: std::collections::HashSet<String>,
 }
 
 /// One account.
@@ -102,7 +105,7 @@ impl Plan {
 
 	/// Add `domain` once.
 	pub(crate) fn add_domain(&mut self, domain: &str) {
-		if !self.domains.iter().any(|known| known == domain) {
+		if self.known_domains.insert(domain.to_string()) {
 			self.domains.push(domain.to_string());
 		}
 	}

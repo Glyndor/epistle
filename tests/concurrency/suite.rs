@@ -10,6 +10,7 @@ mod crash;
 mod crash_trace;
 mod credentials;
 mod dkim_rotation;
+mod domain_removal;
 mod quota;
 mod removal;
 mod submissions;

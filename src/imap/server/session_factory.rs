@@ -18,6 +18,7 @@ impl Server {
 		.with_crypto(self.crypto.clone())
 		.with_oauth(self.oauth.clone())
 		.with_retention_days(self.retention_days)
+		.with_folders(Arc::clone(&self.folders))
 		.with_auth_protocol(self.auth_protocol)
 		.with_scram_enabled(self.scram_enabled)
 		.with_append_limit(self.append_limit);

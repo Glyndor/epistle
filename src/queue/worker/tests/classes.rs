@@ -151,6 +151,73 @@ async fn a_policy_rejection_is_counted_as_a_reputation_problem() {
 	);
 }
 
+/// Run one pass against `remote` and return the `warn` events it logged
+/// and the metrics text.
+async fn warned_pass(
+	recipient: &str,
+	remote: &FakeRemote,
+) -> (Vec<crate::cli::trace::capture::CapturedEvent>, String) {
+	use tracing_subscriber::layer::SubscriberExt;
+	let dir = tempfile::tempdir().expect("tempdir");
+	let spool = spool_to(dir.path(), &[recipient]);
+	let (worker, _bounces, metrics) = worker(dir.path(), spool, remote);
+	crate::cli::trace::capture::keep_callsites_live();
+	let capture = crate::cli::trace::capture::Capture::default();
+	let events = capture.events.clone();
+	let guard =
+		tracing::subscriber::set_default(tracing_subscriber::registry().with(capture.clone()));
+	worker.pass().await.expect("pass");
+	drop(guard);
+	let warned = events
+		.lock()
+		.expect("capture")
+		.iter()
+		.filter(|event| event.level == tracing::Level::WARN)
+		.cloned()
+		.collect();
+	(warned, metrics.render())
+}
+
+fn advice(events: &[crate::cli::trace::capture::CapturedEvent]) -> String {
+	events
+		.iter()
+		.filter_map(|event| event.fields.get("message"))
+		.find(|message| message.contains("refus"))
+		.expect("a line about the refusal")
+		.clone()
+}
+
+#[tokio::test]
+async fn a_relaying_denied_from_a_remote_blames_the_hosting_not_the_reputation() {
+	let remote = FakeRemote::default();
+	remote.script(
+		"remote.example",
+		Script::rcpt("carol@remote.example", "550 5.7.1 relaying denied"),
+	);
+	let (warned, metrics) = warned_pass("carol@remote.example", &remote).await;
+	let line = advice(&warned);
+	assert!(line.contains("not one the receiver hosts"), "{line}");
+	assert!(!line.contains("reputation"), "{line}");
+	assert!(
+		metrics.contains("mail_outbound_policy_rejected_total 0\n"),
+		"a hosting refusal is not a reputation problem"
+	);
+}
+
+#[tokio::test]
+async fn a_relaying_denied_from_this_server_says_it_is_its_own_message() {
+	let remote = FakeRemote::default();
+	remote.hosted(
+		"sender.example",
+		"mail.sender.example",
+		Script::rcpt("postmaster@sender.example", "550 5.7.1 relaying denied"),
+	);
+	let (warned, _) = warned_pass("postmaster@sender.example", &remote).await;
+	let line = advice(&warned);
+	assert!(line.contains("its own message"), "{line}");
+	assert!(!line.contains("reputation"), "{line}");
+}
+
 #[tokio::test]
 async fn a_message_too_big_bounces_every_accepted_recipient_without_suppressing() {
 	let dir = tempfile::tempdir().expect("tempdir");
@@ -212,7 +279,7 @@ async fn a_bad_address_is_suppressed_for_its_sender_too() {
 	worker.pass().await.expect("pass");
 
 	let list = SuppressionList::open(dir.path()).expect("suppression");
-	assert!(list.is_suppressed("carol@remote.example"));
+	assert!(!list.is_suppressed("carol@remote.example"));
 	assert!(list.is_suppressed_for(SENDER, "carol@remote.example"));
 }
 

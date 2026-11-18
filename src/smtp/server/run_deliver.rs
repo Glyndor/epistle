@@ -11,7 +11,7 @@ use crate::smtp::trace::{
 	RECEIVED_HOP_LIMIT, received_header, received_hop_count, refuse_padded_headers,
 };
 
-use super::{Connection, Server, send};
+use super::{Connection, Server, refusal_text};
 
 impl Server {
 	/// Screen, stamp and hand on one received message, then send the reply
@@ -40,7 +40,8 @@ impl Server {
 		if received_hop_count(&message.data) >= RECEIVED_HOP_LIMIT {
 			tracing::warn!("rejecting message: too many Received hops (mail loop)");
 			self.metrics.rejected(crate::metrics::RejectReason::Loop);
-			send(
+			self.refuse(
+				peer,
 				stream,
 				&Reply::single(554, "5.4.6 too many hops, this message is looping"),
 			)
@@ -51,7 +52,7 @@ impl Server {
 		// Sieve filter would not read: refused, so none can be
 		// hidden from the filters by padding.
 		if let Err(refused) = refuse_padded_headers(&message.data, Some(&self.metrics)) {
-			send(stream, &refused.smtp_reply()).await?;
+			self.refuse(peer, stream, &refused.smtp_reply()).await?;
 			return Ok(());
 		}
 		// DNSBL screening: reject an unauthenticated client whose
@@ -59,7 +60,8 @@ impl Server {
 		// listed. All three lists fail open on `Unavailable`, so a
 		// misconfigured resolver does not block delivery.
 		if let Some(rejection) = self.screen_dnsbl(peer, &message, session).await {
-			send(stream, &rejection.reply()).await?;
+			self.refuse(peer, stream, &rejection.reply(self.refusal_detail))
+				.await?;
 			return Ok(());
 		}
 		// Trusted-reply fast path (plan 4.6): when the envelope
@@ -72,32 +74,52 @@ impl Server {
 		// domain alias or a multi-target alias applies
 		// identically to how the recipient was admitted.
 		let known_correspondent = self.known_correspondent(&message);
+		let numbers = self.spam_numbers(&message);
 		// Greylisting: defer an unseen triplet's first attempt. A real
 		// MTA retries and is then accepted. The store is the
 		// in-memory one by default and the PostgreSQL-backed one
 		// when `[database]` is configured, so a restart does not
 		// re-defer legitimate senders when persistence is enabled.
+		// Every recipient has a triplet of its own and all of them are
+		// recorded on the first attempt, so one retry releases the
+		// message however many recipients it names. A relay of the
+		// operator's is never greylisted.
 		if known_correspondent.is_none()
-			&& let (Some((store, delay)), Some(ip), None) =
+			&& numbers.greylist_delay_secs > 0
+			&& !self.inbound.trusts(peer)
+			&& let (Some((store, _)), Some(ip), None) =
 				(&self.greylist, peer, session.authenticated())
-			&& let Some(recipient) = message.recipients.first()
 		{
 			let now = std::time::SystemTime::now()
 				.duration_since(std::time::UNIX_EPOCH)
 				.map(|d| d.as_secs())
 				.unwrap_or(0);
-			let triplet = crate::antispam::greylist::Triplet {
-				client_ip: ip,
-				sender: &message.reverse_path,
-				recipient,
-			};
-			if crate::antispam::greylist::decide(store.as_ref(), &triplet, now, *delay).await
-				== crate::antispam::greylist::Decision::Defer
-			{
+			let mut deferred = false;
+			for recipient in &message.recipients {
+				let triplet = crate::antispam::greylist::Triplet {
+					client_ip: ip,
+					sender: &message.reverse_path,
+					recipient,
+				};
+				deferred |= crate::antispam::greylist::decide_masked(
+					store.as_ref(),
+					&triplet,
+					self.inbound.greylist_mask,
+					now,
+					numbers.greylist_delay_secs,
+				)
+				.await
+					== crate::antispam::greylist::Decision::Defer;
+			}
+			if deferred {
 				tracing::info!(%ip, "greylisting: deferring first attempt");
-				send(
+				self.refuse(
+					peer,
 					stream,
-					&Reply::single(451, "4.7.1 greylisted, please retry shortly"),
+					&refusal_text::greylisted(
+						self.refusal_detail,
+						now.saturating_add(numbers.greylist_delay_secs),
+					),
 				)
 				.await?;
 				return Ok(());
@@ -109,13 +131,16 @@ impl Server {
 			match self.authenticate_inbound(&message, session, peer).await {
 				Ok(outcome) => outcome,
 				Err(reply) => {
-					send(stream, &reply).await?;
+					self.refuse(peer, stream, &reply).await?;
 					return Ok(());
 				}
 			};
 		// Who the server itself verified: a logged-in session, or
 		// this hop's SPF or DKIM pass. Never read from the headers.
 		message.sender_verified = session.authenticated().is_some() || sender_passed;
+		// A sender a list favours, once this server verified it: skips the
+		// score-based screens below and nothing else.
+		let favoured = self.sender_favoured(&message);
 		if let Some(dns) = &self.spf
 			&& message.recipients.iter().any(|recipient| {
 				recipient
@@ -143,7 +168,8 @@ impl Server {
 					name = %leak,
 					"refusing inbound: trust field survived strip"
 				);
-				send(
+				self.refuse(
+					peer,
 					stream,
 					&Reply::single(
 						550,
@@ -196,13 +222,15 @@ impl Server {
 		// hard `Reject` branch is still honoured; a poor
 		// reputation is independent of whether the sender is
 		// known to a local account.
-		if let (Some(pool), Some(domain), None) = (
+		if let (Some(pool), Some(domain), None, false) = (
 			&self.reputation,
 			rep_domain.as_deref(),
 			session.authenticated(),
+			favoured,
 		) {
-			use crate::antispam::reputation::{Scope, Screen, screen};
-			match screen(pool, Scope::Domain, domain).await {
+			use crate::antispam::reputation::{Scope, Screen, screen_with};
+			let min = self.inbound.reputation_min_observations;
+			match screen_with(pool, Scope::Domain, domain, min).await {
 				Screen::Reject => {
 					// Quarantine rather than hard-reject: poor reputation
 					// is a heuristic, so keep the mail recoverable in the
@@ -213,9 +241,14 @@ impl Server {
 					message.mailbox = Some("Rejects".to_string());
 				}
 				Screen::FirstTime
-					if !self.first_time_delay.is_zero() && known_correspondent.is_none() =>
+					if numbers.first_time_delay_secs > 0
+						&& known_correspondent.is_none()
+						&& !self.inbound.trusts(peer) =>
 				{
-					tokio::time::sleep(self.first_time_delay).await;
+					tokio::time::sleep(std::time::Duration::from_secs(
+						numbers.first_time_delay_secs,
+					))
+					.await;
 				}
 				_ => {}
 			}
@@ -226,7 +259,12 @@ impl Server {
 				crate::antispam::hook::HookVerdict::Reject => {
 					self.metrics.rejected(crate::metrics::RejectReason::Scanner);
 					self.train_corpus(&message, peer, true);
-					send(stream, &Reply::single(550, "5.7.1 rejected by scanner")).await?;
+					self.refuse(
+						peer,
+						stream,
+						&Reply::single(550, "5.7.1 rejected by scanner"),
+					)
+					.await?;
 					return Ok(());
 				}
 				crate::antispam::hook::HookVerdict::Quarantine => {
@@ -235,7 +273,8 @@ impl Server {
 					message.mailbox = Some("Rejects".to_string());
 				}
 				crate::antispam::hook::HookVerdict::Defer => {
-					send(
+					self.refuse(
+						peer,
 						stream,
 						&Reply::single(451, "4.7.1 content scan unavailable, try again later"),
 					)
@@ -243,7 +282,8 @@ impl Server {
 					return Ok(());
 				}
 				crate::antispam::hook::HookVerdict::Refuse => {
-					send(
+					self.refuse(
+						peer,
 						stream,
 						&crate::smtp::sink::SinkError::ScanTooLarge.smtp_reply(),
 					)
@@ -265,13 +305,17 @@ impl Server {
 		// `bayes_reject_at` (when configured) refuses the DATA
 		// phase with `550 5.7.1`. Runs before the uncertain band
 		// so a high-confidence verdict never burns an LLM call.
-		match self
-			.handle_bayes_thresholds(&mut message, session.authenticated().is_some(), stream)
-			.await?
-		{
-			super::run_band::BayesOutcome::Rejected => return Ok(()),
-			super::run_band::BayesOutcome::SendToJunk | super::run_band::BayesOutcome::Continue => {
-			}
+		if !favoured
+			&& matches!(
+				self.handle_bayes_thresholds(
+					&mut message,
+					session.authenticated().is_some(),
+					stream
+				)
+				.await?,
+				super::run_band::BayesOutcome::Rejected
+			) {
+			return Ok(());
 		}
 		// Uncertain-band logic: SubjectPass (if enabled) accepts
 		// the retry that carries a valid token in the subject,
@@ -283,16 +327,17 @@ impl Server {
 		// Bayes path has already set the message's mailbox when
 		// it decided, so the band's "stay out of an upstream
 		// decision" guard skips it naturally.
-		if matches!(
-			self.handle_uncertain_band(
-				&mut message,
-				peer,
-				session.authenticated().is_some(),
-				stream
-			)
-			.await?,
-			super::run_band::BandOutcome::Challenged
-		) {
+		if !favoured
+			&& matches!(
+				self.handle_uncertain_band(
+					&mut message,
+					peer,
+					session.authenticated().is_some(),
+					stream
+				)
+				.await?,
+				super::run_band::BandOutcome::Challenged
+			) {
 			return Ok(());
 		}
 
@@ -317,14 +362,15 @@ impl Server {
 				let prepared = match self.prepare_submission(session, account, &mut message) {
 					Ok(prepared) => prepared,
 					Err(refused) => {
-						send(stream, &refused).await?;
+						self.refuse(peer, stream, &refused).await?;
 						return Ok(());
 					}
 				};
 				// Marketing mail to suppressed addresses only has
 				// nowhere to go: say so, as the API does.
 				if message.recipients.is_empty() {
-					send(
+					self.refuse(
+						peer,
 						stream,
 						&Reply::single(550, "5.7.1 every recipient is on the suppression list"),
 					)
@@ -403,10 +449,10 @@ impl Server {
 				if error.is_storage_fault() {
 					tracing::warn!(%error, "delivery failed");
 				}
-				error.smtp_reply()
+				error.smtp_reply_with(self.inbound.mailbox_full)
 			}
 		};
-		send(stream, &reply).await?;
+		self.refuse(peer, stream, &reply).await?;
 		Ok(())
 	}
 }

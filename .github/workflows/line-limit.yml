@@ -4,8 +4,9 @@ name: Line limit
 # standard groups the two together and says both examine a pull request's
 # diff, which is true of `dco` and not of this one: the reusable ends in
 # `git ls-files -z` and counts the lines of every tracked file by extension.
-# It reads no base ref and computes no diff, so it answers the same question
-# on a push as on a pull request.
+# The reusable reads no base ref and computes no diff, so it answers the same
+# question on a push as on a pull request. The plan only skips it when the
+# changed paths cannot affect any of the extensions it scans.
 #
 # That makes it a statement about the state of the tree rather than about a
 # pull request, and the standard's own taxonomy puts those on
@@ -20,7 +21,7 @@ on:
   pull_request:
   # Required check `line-limit / line limit`.
   # `paths:` and `branches:` filters do not apply to merge_group, so the
-  # trigger sits at the top level. See docs/operations/merge-queue.md.
+  # trigger sits at the top level.
   merge_group:
     types: [checks_requested]
 
@@ -34,5 +35,12 @@ permissions:
   contents: read
 
 jobs:
+  plan:
+    uses: ./.github/workflows/reusable-ci-plan.yml
+
   line-limit:
+    needs: plan
+    if: ${{ !cancelled() }}
     uses: ./.github/workflows/reusable-line-limit.yml
+    with:
+      run-check: ${{ needs.plan.outputs.lines != 'false' }}

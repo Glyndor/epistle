@@ -1,82 +1,7 @@
 //! Tests for the database upgrade, against a fake stack.
 
-use std::path::PathBuf;
-
-use super::{Stack, upgrade};
-
-const OLD: &str = "docker.io/library/postgres:18@sha256:aaaa";
-const NEW: &str = "docker.io/library/postgres:19@sha256:bbbb";
-
-#[derive(Default)]
-struct Fake {
-	compose: String,
-	calls: Vec<String>,
-	fail: Option<&'static str>,
-	/// Counts after the restore differ from before.
-	lossy: bool,
-	loaded: bool,
-	/// The lines reported to the operator, in order.
-	logged: Vec<String>,
-}
-
-impl Fake {
-	fn new() -> Self {
-		Self {
-			compose: format!("{{\"services\": {{\"db\": {{\"image\": \"{OLD}\"}}}}}}"),
-			..Self::default()
-		}
-	}
-	fn call(&mut self, name: &'static str, detail: String) -> Result<(), String> {
-		self.calls.push(format!("{name}{detail}"));
-		if self.fail == Some(name) {
-			self.fail = None;
-			return Err(format!("{name} failed"));
-		}
-		Ok(())
-	}
-}
-
-impl Stack for Fake {
-	fn compose(&mut self) -> Result<String, String> {
-		Ok(self.compose.clone())
-	}
-	fn write_compose(&mut self, text: &str) -> Result<(), String> {
-		let image = if text.contains(NEW) { "19" } else { "18" };
-		self.call("write", format!(" {image}"))?;
-		self.compose = text.to_string();
-		Ok(())
-	}
-	fn podup(&mut self, args: &[&str]) -> Result<(), String> {
-		self.call("podup", format!(" {}", args.join(" ")))
-	}
-	fn wait_healthy(&mut self, service: &str) -> Result<(), String> {
-		self.call("healthy", format!(" {service}"))
-	}
-	fn counts(&mut self) -> Result<String, String> {
-		self.call("counts", String::new())?;
-		Ok(if self.loaded && self.lossy {
-			"public.accounts=1".into()
-		} else {
-			"public.accounts=2".into()
-		})
-	}
-	fn dump(&mut self) -> Result<Vec<u8>, String> {
-		self.call("dump", String::new())?;
-		Ok(b"-- dump".to_vec())
-	}
-	fn keep_dump(&mut self, name: &str, _: &[u8]) -> Result<PathBuf, String> {
-		self.call("keep", format!(" {name}"))?;
-		Ok(PathBuf::from(format!("/data/backups/{name}.sql.gz")))
-	}
-	fn load(&mut self, _: &[u8]) -> Result<(), String> {
-		self.call("load", String::new())?;
-		self.loaded = true;
-		Ok(())
-	}
-	fn log(&mut self, line: &str) {
-		self.logged.push(line.to_string());
-	}
-}
+use super::fake::{Fake, NEW, OLD};
+use super::upgrade;
 
 #[test]
 fn the_data_moves_to_the_new_major_and_the_counts_are_compared() {
@@ -86,6 +11,7 @@ fn the_data_moves_to_the_new_major_and_the_counts_are_compared() {
 		stack.calls,
 		[
 			"counts",
+			"datadir",
 			"podup stop mail",
 			"dump",
 			"keep pre-db-upgrade-18-to-19",
@@ -96,14 +22,16 @@ fn the_data_moves_to_the_new_major_and_the_counts_are_compared() {
 			"load",
 			"counts",
 			"podup up -d",
+			"healthy mail",
+			"checks",
+			"datadir",
+			"rm /var/lib/postgresql/18/docker",
+			"rmdir /var/lib/postgresql/18",
+			"rmdump /data/backups/pre-db-upgrade-18-to-19.sql.gz",
+			&format!("images {OLD}"),
 		]
 	);
 	assert!(stack.compose.contains(NEW));
-	let summary = stack.logged.last().map(String::as_str).unwrap_or_default();
-	assert!(
-		summary.contains("/var/lib/postgresql/18"),
-		"the operator is told where the old cluster stays: {summary}"
-	);
 }
 
 #[test]
@@ -142,6 +70,11 @@ fn fails_back_to_the_old_major(step: &'static str, lossy: bool) {
 		stack.calls.last().map(String::as_str),
 		Some("podup up -d"),
 		"{step}: the stack, mail included, is started again: {:?}",
+		stack.calls
+	);
+	assert!(
+		!stack.removed_anything(),
+		"{step}: a failed move keeps the old cluster, the dump and the image: {:?}",
 		stack.calls
 	);
 }

@@ -55,6 +55,9 @@ fn build_config_writes_exactly_one_listener_when_every_optional_service_is_off()
 	answers.hostname = "mail.example.local".to_string();
 	answers.services = Services {
 		antivirus: None,
+		panel: None,
+		panel_image: None,
+		freshclam_checks: None,
 		imap: false,
 		submission: false,
 		pop3: false,
@@ -70,8 +73,8 @@ fn build_config_writes_exactly_one_listener_when_every_optional_service_is_off()
 		.expect("build_config with everything off");
 	assert_eq!(
 		desired.listeners.len(),
-		1,
-		"exactly one listener when every optional service is off, got {:?}",
+		2,
+		"the smtp listener and the public endpoint when every optional service is off, got {:?}",
 		desired.listeners
 	);
 	let listener = &desired.listeners[0];
@@ -79,6 +82,10 @@ fn build_config_writes_exactly_one_listener_when_every_optional_service_is_off()
 	assert_eq!(
 		listener.addr, mail_addr,
 		"smtp listener must carry the mail bind address"
+	);
+	assert_eq!(
+		desired.listeners[1].kind, "autoconfigs",
+		"the public endpoint is written for every installation"
 	);
 }
 
@@ -92,6 +99,9 @@ fn build_config_with_every_service_on_uses_mail_addr_for_every_mail_listener_and
 	let mut answers = answers_minimal();
 	answers.services = Services {
 		antivirus: None,
+		panel: None,
+		panel_image: None,
+		freshclam_checks: None,
 		imap: true,
 		submission: true,
 		pop3: true,
@@ -247,6 +257,9 @@ fn build_config_with_api_writes_api_listener_on_loopback() {
 	let mut answers = answers_minimal();
 	answers.services = Services {
 		antivirus: None,
+		panel: None,
+		panel_image: None,
+		freshclam_checks: None,
 		imap: false,
 		submission: false,
 		pop3: false,

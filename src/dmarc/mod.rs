@@ -7,4 +7,4 @@ pub(crate) mod record;
 pub mod report;
 
 pub(crate) use evaluate::organizational_domain;
-pub use evaluate::{DmarcOutcome, evaluate, from_domain};
+pub use evaluate::{DmarcOutcome, PublishedPolicy, evaluate, evaluate_with_policy, from_domain};

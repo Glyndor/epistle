@@ -53,7 +53,10 @@ fn setmetadata_rejects_bad_entry_and_missing_mailbox() {
 	let response = text(&session.command_line("a2 SETMETADATA INBOX (badentry \"v\")"));
 	assert!(response.contains("a2 BAD"), "{response}");
 	let response = text(&session.command_line("a3 GETMETADATA Nope /private/x"));
-	assert!(response.contains("a3 NO no such mailbox"), "{response}");
+	assert!(
+		response.contains("a3 NO [NONEXISTENT] no such mailbox"),
+		"{response}"
+	);
 }
 
 #[test]

@@ -102,7 +102,7 @@ fn account_add_creates_and_validates() {
 		ExitCode::SUCCESS
 	);
 	let mut out = Vec::new();
-	accounts::list(&config, &mut out);
+	let _ = accounts::list(&config, &mut out);
 	assert!(String::from_utf8_lossy(&out).contains("bob\tdynamic\tbob@example.org"));
 	assert_eq!(
 		accounts::add(

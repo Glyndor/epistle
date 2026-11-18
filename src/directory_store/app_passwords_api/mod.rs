@@ -33,7 +33,8 @@ impl AccountStore {
 			StoreError::Invalid("account store path has no parent directory".to_string())
 		})?;
 		let mut disk_store = AppPasswordStore::open(data_dir)?;
-		disk_store.add(account, app)?;
+		let gate = self.gate_of(account);
+		disk_store.add_within(account, app, Some(&gate))?;
 		// The in-memory mirror now reflects the post-write state
 		// (everything that was on disk, plus the new entry, plus
 		// anything a sibling writer committed between the

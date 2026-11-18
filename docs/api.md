@@ -17,13 +17,13 @@ guide is the prose around it. How the headers of the mail come out is in
 | Prefix | What it is | Needs |
 |---|---|---|
 | `/api/v1` | Management, mail submission, delivery log | A bearer key with `read`, `write` or `send` |
-| `/jmap` and `/.well-known/jmap` | JMAP mail (RFC 8620, 8621, 8887) | A bearer key with `read`, `write` or `send` |
+| `/jmap` and `/.well-known/jmap` | JMAP mail (RFC 8620, 8621, 8887) | A bearer key or local OAuth access token with `read`, `write` or `send` |
 | `/scim/v2` | SCIM 2.0 account provisioning | A bearer key with `scim` |
 | `/oauth` | Device and PKCE grants for mail clients | The account's own credentials |
 | `/healthz` | Liveness | Nothing |
 
 Not in the API, because they exist only in the CLI: DKIM keys, TLS, evidence,
-warm-up, limits, domains (listing excepted), aliases, relays, backups.
+warm-up, global limits, address aliases and lists, relays, backups.
 
 The other protocols the server speaks (SMTP, IMAP, POP3, ManageSieve) and the
 WebDAV, CardDAV and CalDAV listener are not described here. The mail client
@@ -45,8 +45,9 @@ port = 8025
 # token_hash = "sha256:<64 hex digits>"
 ```
 
-Without `token_hash`, only labelled keys in `api_keys.toml` authenticate on
-bearer-protected routes. Create one with `epistle api-key create app --account
+Without `token_hash`, labelled keys in `api_keys.toml` authenticate on
+bearer-protected routes; local OAuth access tokens also authenticate JMAP.
+Create a key with `epistle api-key create app --account
 ACCOUNT --scope send --expires-in 365d`. `epistle init` with `services.api = true`
 and `epistle service enable api` create the section without a static token;
 `epistle status` reports "no static token configured" as a good state.
@@ -54,7 +55,8 @@ and `epistle service enable api` create the section without a static token;
 No routes become unreachable in this release: every bearer-protected route has
 a per-key scope, including SCIM discovery, Users and Groups (`scim`). OAuth's
 `POST /oauth/device_authorization`, `/oauth/device/approve`, `/oauth/authorize`
-and `/oauth/token` use grant codes or account credentials, independently of the
+and `/oauth/token` use grant codes or account credentials; `/oauth/revoke` uses
+possession of the token to revoke. These work independently of the
 static token (and still require an OAuth signing key). A key with every scope
 remains a labelled key; it never becomes the configured static identity.
 A route reserved to the static token with no per-key scope must refuse keys
@@ -95,18 +97,22 @@ two forms are not equivalent:
 0.0.0.0:8025:8025     # the API answers on every address the host has
 ```
 
-Today `epistle init` derives the `ports:` array of the `mail` service from the
-listeners: every non-loopback listener is published as `<port>:<port>`, and a
-loopback listener gets no `ports:` entry at all. An `api` listener on
-`10.0.0.1` is published as `8025:8025`, which the engine publishes on every
-host address, so binding the listener to a private address does not by itself
-keep the API off the public interfaces. Both files are regenerated, by `init`
-on a rerun and by `stack update`, which takes the published ports from the
-listeners in the config, so an edit to `compose.yaml` does not survive. The supported place for the pinned form is
+`epistle init` derives the `ports:` array of the `mail` service from the
+listeners: every non-loopback listener is published as `<port>:<port>`, which
+the engine publishes on every host address, and a loopback listener gets no
+`ports:` entry at all. The three listeners that carry plain HTTP (`api`,
+`web-dav` and `autoconfig`) are the exception: the generated map publishes them
+on `127.0.0.1` unless it names another address, so `api` arrives as
+`127.0.0.1:8025:8025` and not as `8025:8025` on every host address. A private
+bind address does not by itself publish the API anywhere, and a wider
+publication is the operator's decision, written in the override. The map is
+regenerated, by `init` on a rerun and by `stack update`, which takes the
+published ports from the listeners in the config, so an edit to `compose.yaml`
+does not survive. The supported place for the pinned form is
 `<data_dir>/compose/compose.override.yaml`, the file every stack invocation
 passes after `compose.yaml`. Its lists are merged with the generated ones, so a
-plain `ports:` entry there is added to `8025:8025`, not put in its place, and
-the engine refuses to bind both. Replace the list with the `!override` tag and
+plain `ports:` entry there is added to the generated one, not put in its
+place, and the engine refuses to bind both. Replace the list with the `!override` tag and
 repeat every port the stack publishes:
 
 ```yaml
@@ -134,10 +140,9 @@ Two things stay true whichever way the port is published:
   `autoconfig` and `metrics` (and `submission`) bind outside loopback with no
   `[tls]` section without being rejected: validation logs `no-TLS listener
   bound externally; configure [tls] or front with a TLS proxy` and the server
-  starts. Nothing refuses the configuration. Hardening follows (an opt-in flag,
-  then a rejection), so until then a private network is carrying the bearer key
-  in clear: put a TLS proxy in front, or accept the exposure only inside the
-  tunnel. [Listeners](configuration.md#listeners) has the whole list.
+  starts. Nothing refuses the configuration, so a private network carries the
+  bearer key in clear: put a TLS proxy in front, or accept the exposure only
+  inside the tunnel. [Listeners](configuration.md#listeners) has the whole list.
 - **The key, not the address, is what an attacker needs.** Pin every key with
   `--ip-cidr` and `--expires-at`, and give each program its own key with only
   the scopes it uses. The allowlist is a second gate, not a replacement for
@@ -186,14 +191,41 @@ without a restart.
 | `--expires-in DURATION` | A number and a unit from now: `s`, `m`, `h`, `d` or `w`, for example `90d`. `m` is minutes, not months: count months in days. Not combined with `--expires-at` |
 | `--ip-cidr CIDR` | One network the client must come from. A request from elsewhere is `401` |
 | `--domain NAME` | Confine the key to a domain (repeat for more). Without it the key reaches every domain |
-| `--account NAME` | Bind the key to one account. It then reaches only JMAP, `POST /api/v1/send` and `GET /api/v1/deliveries`, acting as that account, and cannot hold `scim` or `--domain` |
+| `--account NAME` | Bind the key to one account. It then reaches only JMAP, `POST /api/v1/send`, `GET /api/v1/deliveries` and that account's suppression list, acting as that account, and cannot hold `scim` or `--domain` |
 | `--class CLASS` | The mail class `POST /api/v1/send` gives mail sent with the key when the request names none (see [Class and evidence](#class-and-evidence)) |
+| `--auto-submitted` | Add `Auto-Submitted: auto-generated` to mail sent with this key through `POST /api/v1/send` when the request omits the header. Off by default. A value in the request always wins. Other send paths and server-generated mail, including bounces, are not changed |
 
 `epistle api-key rotate LABEL` replaces the secret and keeps everything else,
-the class included; `epistle api-key revoke LABEL` removes the key;
-`epistle api-key list` shows the label, expiry, network, scopes, domains and
-account, never the key. The expiry is printed as an RFC 3339 instant, with
-`(expired)` after one that has passed; `--json` keeps the epoch.
+the class included; `epistle api-key set LABEL --auto-submitted on|off`
+changes the `Auto-Submitted` setting; `epistle api-key revoke LABEL` removes
+the key; `epistle api-key list` shows the label, expiry, network, scopes,
+domains, account and `auto_submitted` setting, never the key. The expiry is
+printed as an RFC 3339 instant, with `(expired)` after one that has passed;
+`--json` keeps the epoch and adds `"auto_submitted": true` only when the
+setting is enabled, so disabled keys keep their existing JSON shape.
+
+### The panel's key
+
+When the stack runs the web panel, `epistle init` and `epistle stack update`
+create a key labelled `panel` for it, with the scopes `read` and `write` only,
+no `--domain` and no `--account`, and a 365-day expiry. It is an
+administrator-grade key: the panel acts for every domain. The secret is written
+to `secrets/panel_api_token` beside the data directory with mode `0600` and is
+never printed. `stack update` creates the key when it is absent, replaces the
+secret when the file was lost, and renews the secret and the expiry when fewer
+than 30 days remain. A key labelled `panel` with any other scopes, domains or
+account is refused, not rewritten: revoke it and run the command again.
+
+The panel's admin area is served at `/app/{id}`, where `{id}` is a UUID v4 of
+this installation. `init` and `stack update` generate it once from the system's
+random source and keep it in `secrets/panel_admin_id` beside the data directory
+with mode `0600`; the panel reads it through `EPISTLE_PANEL_ADMIN_ID_FILE`. A
+later run keeps it, narrows a wider mode to `0600`, and refuses a file that
+holds anything but a lower-case UUID v4 (it never overwrites one: a new id
+moves the admin area). It is not a cryptographic secret, since the session and
+the admin role are the barrier, but it is not public: it appears in no plan, no
+report, no `--json` output and no `epistle status`. `epistle panel admin-id`
+prints it.
 
 ### Expiry is opt-in
 
@@ -244,12 +276,12 @@ curl -s -H "Authorization: Bearer $KEY" "$API/api/v1/status"
 
 | Answer | Cause |
 |---|---|
-| `401` `unauthenticated` | No header, an unknown or expired key, or a key pinned to another network. The three look the same |
+| `401` `unauthenticated` | No header, an unknown or expired key, or a key pinned to another network. The three look the same. Every `401` carries `WWW-Authenticate: Bearer` |
 | `403` `forbidden` | A valid key whose scopes do not cover the route. It does not count towards the authentication failure limit |
-| `403` `forbidden` | The key is bound to one account and the route is administrative, or the bound account is disabled or gone |
+| `403` `forbidden` | The key is bound to one account and the route is administrative outside its suppression list, or the bound account is disabled or gone |
 | `403` `forbidden_from` | `POST /api/v1/send` from an address the credential may not act for |
 | `403` `sending_off` | `POST /api/v1/send` for an account whose sending is switched off (`epistle account set NAME --send off`) |
-| `429` `rate_limited` | The client address made 20 requests with credentials that did not hold in the last 60 seconds. Every request from it is refused, valid or not, until the window passes. The `Retry-After` header gives the remaining window in seconds, rounded up |
+| `429` `rate_limited` | The client address made 20 requests with credentials that did not hold in the last 60 seconds. Every request from it is refused, valid or not, until the window passes. The `Retry-After` header gives the remaining window in seconds, rounded up. When too many credential checks are already waiting, the answer is the same `429` with `Retry-After: 1` and the request is not counted as a failure. The same code answers a stream refused by the caps of [Live updates](#live-updates) |
 
 A valid call does not use up the budget, and it does not clear failures already
 counted. The limit is per client address (an IPv6 client counts as its /64, and
@@ -267,8 +299,9 @@ OAuth `429 slow_down` responses carry `Retry-After` for grant expiry or polling;
 password bans keep the same response as an incorrect password.
 
 Checks of a password (`POST /api/v1/auth/verify`, and the `/oauth` endpoints)
-are counted apart, in the shared ban table: 5 failures in 15 minutes ban the
-client or the account for 15 minutes, doubling up to 24 hours, with the same
+are counted apart, in the shared ban table: by default 5 failures in 15 minutes
+ban the client or the account for 15 minutes, doubling up to 24 hours (`[bans]`
+changes the numbers within its floors), with the same
 answer as a wrong password. That table needs `[database]`; see
 [Security](security.md).
 
@@ -316,7 +349,51 @@ its answer is **plain text**, with no `error` object:
 | `405` | A route with another method | Empty, with an `allow` header |
 
 Handle both shapes: read `error.code` when the body is JSON, and fall back to
-the status. The codes the API itself sends:
+the status.
+
+### Problem details
+
+A client that sends `Accept: application/problem+json` gets every error the
+API decides as an [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem.
+Any other `Accept` (none, `application/json`, `*/*`, or the problem type with
+`q=0`) gets the `error` object above, unchanged. The problem form is only for
+errors the API itself decides; the plain-text rejections of the HTTP layer
+stay as they are.
+
+```json
+{
+  "type": "urn:epistle:problem:field_missing",
+  "title": "A required field is missing",
+  "status": 400,
+  "detail": "At least one recipient is required.",
+  "code": "field_missing",
+  "instance": "urn:uuid:019e5c3a-7a40-7c10-9d6e-3f1b8f6a2c11",
+  "request_id": "019e5c3a-7a40-7c10-9d6e-3f1b8f6a2c11",
+  "errors": [{"field": "to", "detail": "At least one recipient is required."}]
+}
+```
+
+`type` is `urn:epistle:problem:` followed by `code`, so it is stable and names
+no host. `title` is the same for every occurrence of a type; `detail` is for
+people and its wording can change. `request_id` is a fresh identifier for the
+answer, and the server logs it (level `info`) with the status, the code, the
+method and the path, so an operator given the id finds the line. `errors`
+appears for an input error whose field is known.
+
+In the problem, an `invalid_input` carries its cause as `code`:
+
+| `code` | Meaning |
+|---|---|
+| `field_missing` | A field the request needs is absent or empty |
+| `field_out_of_range` | A length or a count over or under what the field accepts |
+| `value_not_allowed` | A value the field does not accept |
+| `invalid_input` | Anything else; the field is not named |
+
+The `error` object keeps `invalid_input` for all of them, so nothing that
+reads it breaks. A `401` carries `WWW-Authenticate: Bearer` and a `429` carries
+`Retry-After` in both forms.
+
+The codes the API itself sends:
 
 | Code | Status | Meaning |
 |---|---|---|
@@ -325,10 +402,12 @@ the status. The codes the API itself sends:
 | `not_found` | 404 | The thing is not there, or is outside the key's reach |
 | `invalid_input` | 400 | The message says which field |
 | `conflict` | 409 | A limit that waiting will not lift: the tenant is at `max_accounts`, the account at its masked-address cap, a queue entry with evidence still to write |
-| `message_too_large` | 413 | The built message is over the size limit |
+| `already_sent` | 409 | `DELETE /api/v1/send/{id}` for a message the send delay already handed on. Nothing can take it back |
+| `limit_reached` | 409 | A configured cap stopped the request (addresses per account at `POST /api/v1/accounts`). The message says which limit, its value, the scope that set it and how to make room |
+| `message_too_large` | 413 | The built message is over the size limit of the server, or of the sending account (`[[limit_scope]] max_message_size`) |
 | `scan_too_large` | 413 | Too large for the content scan, and the server lets nothing pass unscanned. Retrying cannot help |
 | `virus_detected`, `attachment_refused`, `too_many_header_fields`, `marketing_refused` | 422 | Refused for its content; sending it again unchanged is refused again. Nothing was sent |
-| `rate_limited` | 429 | The authentication limit above, or a sending limit (next section) |
+| `rate_limited` | 429 | The authentication limit above, or a sending limit (next section). Always with `Retry-After` in seconds |
 | `internal` | 500 | The server failed. The message never carries details |
 | `scan_unavailable`, `evidence_unavailable` | 503 | Nothing was sent; retrying later works |
 | `mailbox_full` | 507 | A local recipient's mailbox is full. Nothing was queued for anyone |
@@ -377,8 +456,9 @@ only is delivered at once and also gets an id.
 | `importance` (or `priority`) | `high`, `normal`, `low` | Writes `Importance` and `X-Priority` |
 | `list_unsubscribe` | array of strings | Up to 4 `mailto:` or `https://` URLs |
 | `list_unsubscribe_post` | boolean | Adds the RFC 8058 one-click header. Needs an `https://` URL in `list_unsubscribe` |
-| `auto_submitted`, `feedback_id` | string | `Auto-Submitted` (`no`, `auto-generated`, `auto-replied`, `auto-notified`) and `Feedback-ID` (printable ASCII, no spaces) |
-| `headers` | object | Custom headers: up to 32, name `X-` plus letters, digits and hyphens (at most 76 characters), not `X-Priority` |
+| `auto_submitted`, `feedback_id` | string | `Auto-Submitted` (`no`, `auto-generated`, `auto-replied`, `auto-notified`) and `Feedback-ID` (printable ASCII, no spaces). A value in the request always wins. When `auto_submitted` is absent and the API key has the per-key setting enabled, the server writes `Auto-Submitted: auto-generated` |
+| `auto_response_suppress` | boolean | Default `false`: writes `X-Auto-Response-Suppress: DR, NDR, RN, NRN, OOF, AutoReply` when true, independently of the server mail setting and `auto_submitted`. |
+| `headers` | object | Custom headers: up to 32, name `X-` plus letters, digits and hyphens (at most 76 characters), neither `X-Priority` nor `X-Auto-Response-Suppress` |
 | `save_sent` | boolean | Whether a copy goes to the account's Sent folder. Absent follows the account setting. Transactional mail is never copied |
 | `extra` | object of strings | Correlation data, up to 10 keys (printable ASCII, no spaces, at most 64 bytes) with values of at most 256 bytes. It comes back on `/api/v1/deliveries` and in the webhook events of the message and is never written into the message |
 | `class` | `transactional`, `marketing`, `personal` | See below |
@@ -405,6 +485,37 @@ refusal names the account's own state and tells nothing about other addresses.
 Signing in and reading mail are not affected. The same switch is what SMTP
 submission, JMAP and the account's own forwarding and auto-replies follow.
 
+### Taking a send back
+
+When the server holds what accounts send for a few seconds (`[queue.undo_send]`
+in the [configuration](configuration.md#queueundo_send), off by default), the
+answer to `POST /api/v1/send` also carries `cancel_until`, an RFC 3339 instant:
+
+```json
+{"queued": "01a15026-ff4b-7411-a7e9-9292a7662720", "class": "personal", "cancel_until": "2026-11-16T10:00:30Z"}
+```
+
+Until then, and before anything of the message is delivered or queued,
+`DELETE /api/v1/send/{id}` (the `queued` id) takes it back:
+
+```json
+{"canceled": "01a15026-ff4b-7411-a7e9-9292a7662720"}
+```
+
+It needs the `send` or the `write` scope. A key bound to one account cancels
+that account's messages; a key confined to some domains cancels those of the
+accounts it reaches; an unconfined key cancels any. An id that is unknown,
+that belongs to an account the key does not reach, or that was never held
+(the delay is off, or the message is not one the account sent) answers the
+same `404 not_found`, so the answer says nothing about other accounts'
+messages. A message the delay already handed on answers `409 already_sent`
+to the account that sent it: from that moment it is in the queue or in
+mailboxes and cannot be taken back (an operator can still remove the queue
+entry). The id is a UUID and is not a secret: the answer depends on who asks,
+not on knowing it. The same cancel is `EmailSubmission/set` with
+`undoStatus: "canceled"` over JMAP and `epistle queue undo cancel ID` for the
+operator.
+
 ### Class and evidence
 
 Every message has a class, decided by the server and never by the message.
@@ -428,11 +539,11 @@ keeps its mail transactional whatever the request says; the response's
 
 | Limit | Value | Answer |
 |---|---|---|
-| Message size | `max_message_size`, 25 MiB by default | A built message over it: `413 message_too_large`. A request body over it: plain-text `413` |
+| Message size | `max_message_size`, 25 MiB by default, and below it the cap of the account, its domain or its tenant (`[[limit_scope]]`) | A built message over it: `413 message_too_large`, naming the cap and the scope that set it. A request body over the server's: plain-text `413` |
 | Recipients | 100 per message (`to`, `cc`, `bcc` together) | `400 invalid_input` |
 | Parts | 100 attachments and inline parts together | `400 invalid_input` |
-| Submission rate | `submission_rate_limit_per_min` recipients per minute per account, shared with SMTP and JMAP; per-domain and per-tenant limits too | `429 rate_limited`, "sending rate limit exceeded; retry later". Nothing was sent |
-| New recipients | `new_recipients_per_day` first-time recipients per account per rolling 24 hours | `429 rate_limited`, "too many new recipients today; retry tomorrow" |
+| Submission rate | `submission_rate_limit_per_min` recipients per minute per account, shared with SMTP and JMAP; per-domain and per-tenant limits too | `429 rate_limited`, "sending rate limit exceeded; retry later", with `Retry-After: 60`. Nothing was sent |
+| New recipients | `new_recipients_per_day` first-time recipients per account per rolling 24 hours | `429 rate_limited`, "too many new recipients today; retry tomorrow", with `Retry-After: 86400` |
 | Mailbox quota | `quota_bytes` | `507 mailbox_full` |
 
 The message of a `429` tells the sending limits from the authentication one.
@@ -482,9 +593,84 @@ from `next_cursor`), `DELETE /api/v1/queue/{id}` removes an entry and records
 each pending recipient as `canceled` in the delivery log, then posts a
 `canceled` webhook event when the delivery log is enabled and a webhook is
 configured.
-`GET /api/v1/suppression` and `DELETE /api/v1/suppression/{address}`
-list and clear suppressed recipients, globally or for one sending account with
-`?account=`. Pages end when `next_cursor` is absent.
+`GET /api/v1/suppression` lists suppressed recipients,
+`POST /api/v1/suppression` adds one and `DELETE /api/v1/suppression/{address}`
+clears one. The POST body is `{"address": "recipient@example.net"}` with an
+optional `reason` (at most 512 characters, no control or invisible formatting
+characters). The reason is stored with the entry; the suppression listing
+returns addresses only. The address is validated by the server, and adding an
+address already on the list succeeds without replacing its first reason or
+timestamp.
+`?account=` selects one account name or sending address's list instead of the
+global one. `?tenant=NAME` selects a tenant's list (`GET` and `DELETE`, not both with
+`account`); like the global list it is refused to a confined key. A key confined to an account or domain may use only the list of an
+account it can act for; the global list needs an unconfined key.
+Pages end when `next_cursor` is absent.
+
+## Live updates
+
+`GET /api/v1/events` (scope `read`) is a `text/event-stream` for dashboards
+that would otherwise poll. It carries notifications, not data: each event
+names a topic that changed and nothing more, so the client fetches the detail
+from the route it already uses and every authorization check stays where it is.
+
+```sh
+curl -sN -H "Authorization: Bearer $KEY" "$API/api/v1/events"
+```
+
+```text
+id: 1792346437.12
+event: queue
+data: {"topic":"queue"}
+```
+
+| Topic | Something changed in |
+|---|---|
+| `queue` | The outbound queue: a message entered or left it |
+| `deliveries` | The delivery log (only while `delivery_log_days` is above `0`) |
+| `suppression` | A suppression list, the shared one or an account's |
+| `status` | What `GET /api/v1/status` counts |
+| `accounts` | An account was added, removed or changed |
+| `domains` | A hosted domain was added, removed, switched or changed |
+
+No address, subject, message content or credential is ever in an event. The
+`data` is `{"topic": "<name>"}` and the `id` is opaque: keep it, and send it
+back as `Last-Event-ID` when you reconnect.
+
+- **Coalescing.** Changes are looked for once a second, so a burst of queue
+  activity is one `queue` event, and a reader that was slow gets one event per
+  topic with the id of the last change.
+- **Resuming.** The last 256 notifications are kept in memory. A reconnect with
+  `Last-Event-ID` is sent what came after that id. If the server cannot replay
+  from it (the ring moved past it, the server restarted, or nobody was
+  connected for a while, because nothing is watched without a stream) it sends
+  one event for each topic the key may be told about, which means "fetch
+  everything again". A new connection without the header is told only what
+  happens from then on.
+- **What a key sees.** An unconfined key gets every topic. A key confined to
+  some domains gets only `status`, `accounts` and `domains`, and only when the
+  change touched a domain or an account it reaches (an account that moves
+  between tenants is told to both). It gets no `queue`, `deliveries` or
+  `suppression` event, because the data behind them is shared and cannot be
+  filtered without reading every entry. A key bound to one account is refused
+  with `403`, as on every administrative route. A missing, unknown or expired
+  key is `401`, a key without `read` is `403`, and both are problem details like
+  every other refusal.
+- **Limits.** A key may hold 4 streams and the server 64; the next is refused
+  with `429` and `Retry-After` (`[api] event_streams_per_key`,
+  `event_streams_per_server`). A comment line (`:heartbeat`) is sent every 15
+  seconds so a proxy does not close an idle stream. A stream lives one hour
+  (`event_stream_max_secs`) and is closed, and the client reconnects. The key
+  is checked again twice a second: a stream whose key was revoked, expired,
+  narrowed or lost `read` is closed. A client that stops reading is closed when
+  the ring moves past it; nothing is queued for it.
+- **Cost.** One task samples the server while at least one stream is open, and
+  none runs otherwise. It lists the queue directory once a second, so a very
+  large queue makes that listing the cost of each open server, not of each
+  stream.
+
+Behind a reverse proxy, turn response buffering off for this path; the answer
+carries `X-Accel-Buffering: no` for nginx.
 
 ## Accounts and the rest of the management API
 
@@ -506,7 +692,15 @@ curl -s -X DELETE -H "Authorization: Bearer $KEY" "$API/api/v1/accounts/ana?queu
 | Route | What it does |
 |---|---|
 | `GET /api/v1/status` | `version`, `domains`, `accounts` and `queue_size` (left out for a confined key) |
-| `GET /api/v1/domains` | The hosted domains in the key's reach and which are `disabled` |
+| `GET /api/v1/domains` | The hosted domains in the key's reach, which are `disabled`, and under `details` the rows `epistle domain list --json` prints |
+| `GET /api/v1/domains/{domain}` | What `epistle domain show <domain> --json` prints. A domain outside a confined key's reach is `404` like an unknown one |
+| `POST /api/v1/domains` | Host a new domain; unconfined `write` key only; answers `201` |
+| `DELETE /api/v1/domains/{domain}` | Stop hosting an unused domain; `write`, confined to the path domain. The `409` names what still uses it for an unconfined key; a confined key gets only `domain is still in use`. An account created through the API at the same moment can still land on the domain being removed (the in-use check reads `accounts.toml` while account creation checks the running snapshot), as with `epistle domain remove` |
+| `PUT /api/v1/domains/{domain}` | Set `role`, `quota` (bytes), `submission_rate` (recipients/minute) atomically; `write`; `quota` and `submission_rate` need an unconfined key (`403` for a confined one) |
+| `POST /api/v1/domains/{domain}/enable` | Enable, keeping the stored role; `write` |
+| `POST /api/v1/domains/{domain}/disable` | Disable, keeping the stored role; `write`; refuses the last enabled domain with listeners |
+| `POST /api/v1/domains/{domain}/aliases` | Add `{"alias":"example.net"}` targeting the path domain; `write`; answers `201` |
+| `DELETE /api/v1/domains/{domain}/aliases/{alias}` | Remove an alias currently pointing to the path domain; `write` |
 | `GET`, `POST /api/v1/accounts` | List (not paged), create. A duplicate name or address is `400 invalid_input` |
 | `DELETE /api/v1/accounts/{name}` | Removes the account and its data. Only accounts made through the API; one declared in the configuration file is `404 no such dynamic account` |
 | `PUT /api/v1/accounts/{name}/password` | New password |
@@ -521,6 +715,60 @@ curl -s -X DELETE -H "Authorization: Bearer $KEY" "$API/api/v1/accounts/ana?queu
 Reading and writing the `Created`, `Removed` and other bodies is in the
 OpenAPI document, which also has every response code per route.
 
+### Changing hosted domains
+
+Domain writes share the commit and refusal rules of `epistle domain`. They
+write `<data_dir>/domains.toml` under its cross-process lock, with an atomic
+owner-only rename. Adding a domain also makes its SRS secret and, when DKIM
+is configured, a key under `<data_dir>/keys/dkim/`. The API container needs
+write access to data_dir; `/etc/epistle` can remain read-only. The running
+server applies changes through its file watcher, asynchronously. A successful
+write does not mean every listener has already observed it.
+
+`POST /api/v1/domains` takes `{"domain":"example.net","role":"full"}`;
+`role` defaults to `full`, and also accepts `send-only` or `receive-only`.
+`shared_dkim_key: true` opts into the configured shared DKIM key. The default
+makes a key of its own, like the CLI. Secrets are never returned.
+
+All mutations need `write`. A new hosted domain requires an unconfined key,
+even when its name appears in a confined key's allowed domains. Other domain
+writes require the path domain in the key's reach. Alias writes additionally
+require the alias name in that reach: a tenant cannot claim or remove another
+tenant's name. A foreign domain or alias answers `404 no such domain`, before
+looking up whether it exists. An unconfined key gets the CLI's precise
+unknown-domain or unknown-alias message.
+
+Names are validated on the server with the CLI's ASCII DNS-name rules,
+trimmed and lowercased. Unicode names must be supplied as ASCII A-labels.
+A trailing dot, empty label, control character or path component is refused.
+Unknown fields and mistyped JSON fields are rejected by the HTTP extractor.
+
+`PUT /api/v1/domains/example.net` takes any subset of `role`, `quota` and
+`submission_rate`. Omitted fields stay unchanged. A null quota or rate clears
+the domain override (the server default then applies); quota 0 is explicitly
+unlimited, and rate must be 1 through 4294967295. Quota is an integer byte
+count, at most 9223372036854775807. CLI unit strings such as `1G` are not JSON
+numbers. Role null also leaves it unchanged. Role and limits commit together,
+so an invalid limit cannot leave a changed role behind. Limits are the
+operator's: a key confined to some domains may change the `role` of its
+domains but any request naming `quota` or `submission_rate`, even a null that
+clears one, is `403 forbidden`; an empty body is `400 invalid_input`.
+
+Every successful mutation returns `{"changed":true,"domain":"example.net",
+"reload":"watcher"}` (the target domain for alias routes). A no-op returns
+`changed: false` and `reload: "none"`, succeeds with `200`, and does not create
+or replace the state file. Already-hosted domains and existing aliases are
+CLI refusals, `409 conflict`, rather than no-ops. Domain-in-use and
+last-enabled-domain refusals are also `409`, preserving the CLI message;
+malformed names or invalid limits are `400 invalid_input`, unknown names
+are `404 not_found`, and storage failures are `500 internal`.
+
+Each durable change emits one structured event on `epistle::api::audit`:
+`domain.added`, `domain.removed`, `domain.enabled`, `domain.disabled`,
+`domain.updated`, `domain.alias_added` or `domain.alias_removed`, with `domain`
+(the alias name for alias events) and `client_ip`. Refusals and no-ops emit no
+change event. Bearer tokens, private keys and SRS secrets are never logged.
+
 ## Webhooks
 
 The server posts events to the URL in `[webhook]` (`epistle webhook set URL
@@ -534,7 +782,7 @@ The server posts events to the URL in `[webhook]` (`epistle webhook set URL
 | `suppressed` | The recipient was on a suppression list | `spool_id`, `recipient`, `extra` |
 | `canceled` | An operator removed the entry through the API or `epistle queue remove` | `spool_id`, `recipient`, `extra` |
 | `message_received` | A message was delivered to a local recipient | `account` (the recipient address), `from` (the envelope sender, empty for a bounce), `subject`, `message_id` (the last two may be `null`) |
-| `metric_alert`, `dkim_rotation_failed`, `outbound_virus`, `warmup.ok`, `warmup.held`, `warmup.backoff` | Operator events | See [configuration](configuration.md#webhook) and [warm-up](operations/warmup.md) |
+| `metric_alert`, `dkim_rotation_failed`, `own_ip_blocklisted`, `outbound_virus`, `warmup.ok`, `warmup.held`, `warmup.backoff` | Operator events | See [configuration](configuration.md#webhook) and [warm-up](operations/warmup.md) |
 | `test` | Only `epistle webhook test` | `message` |
 
 `extra` is left out when empty; `spool_id` is the `queued` id the send
@@ -576,7 +824,7 @@ posts a `test` event and reports the status the endpoint answered.
 
 ## JMAP
 
-JMAP uses the same keys. `GET /jmap/session` (or `/.well-known/jmap`) returns
+JMAP accepts the same keys and local OAuth access tokens (see [OAuth](#oauth)). `GET /jmap/session` (or `/.well-known/jmap`) returns
 the Session resource: the accounts the key reaches (the JMAP account id is the
 account name), the capabilities and the limits; its URLs are relative.
 `POST /jmap/api` runs method calls. The scope is checked per call: a call the
@@ -589,7 +837,13 @@ key does not cover answers a `forbidden` method error inside a `200`.
   `SieveScript/get`, `query`, `set`, `validate`. Anything else is
   `unknownMethod`.
 - `EmailSubmission/set` accepts `epistle:class`, with the same rule as the
-  REST `class`.
+  REST `class`. A created submission says `undoStatus`: `pending` with `sendAt`
+  (when the send delay will release it) while `[queue.undo_send]` holds it,
+  `final` with `sendAt: null` otherwise. An `update` of `undoStatus:
+  "canceled"` takes a pending one back (`updated`), and answers `cannotUnsend`
+  in `notUpdated` once it was handed on, `notFound` for a submission of
+  another account. No other update is allowed. `maxDelayedSend` stays `0`:
+  the client does not choose the delay (`sendAt` on create is not read).
 - For an account whose `send` switch is off, `EmailSubmission/set` answers
   `forbiddenToSend` ("sending is turned off for this account") in
   `notCreated`, and `VacationResponse/set` and `SieveScript/set` refuse, with
@@ -638,10 +892,12 @@ cannot be bound to an account.
 
 Present only when `[oauth] signing_key` is set; otherwise every `/oauth/*`
 path answers `401` to a request with no bearer (which counts as a failed
-authentication for the 20 per minute limit) and `404` to one with a valid
-bearer. It issues ES256 access tokens, valid for one hour, for
-OAUTHBEARER on IMAP and SMTP submission. The REST API does not accept them as
-a bearer. `POST /oauth/device_authorization` starts a device flow,
+authentication for the failure limit, 20 per minute by default, `[api.limiter]`) and `404` to one with a valid
+bearer. It issues ES256 access tokens, valid for one hour unless
+`[oauth] access_token_ttl_secs` says otherwise, for
+OAUTHBEARER on IMAP and SMTP submission, and bearer authentication on JMAP.
+On JMAP the signed `sub` confines the token to its own live account. The token
+never authenticates `/api/v1` or SCIM. `POST /oauth/device_authorization` starts a device flow,
 `POST /oauth/device/approve` approves it with the account's `login` and
 `password` (or HTTP Basic), and `POST /oauth/token` polls (no faster than every
 5 seconds) or redeems a PKCE code from `POST /oauth/authorize` (`S256` only; a `code_verifier` is
@@ -653,6 +909,35 @@ request is the digest of the verifier, so it is exactly 43 characters of
 `400 invalid_request`. At most 100 codes may be alive for one account, 50 for
 one client address and 10,000 in all; past them the answer is
 `429 temporarily_unavailable` with `Retry-After`, and nothing is stored.
+Both grant requests accept a space-separated `scope` drawn from `read write send`.
+Omitting it grants `read`; an explicit empty or unknown scope is `400 invalid_scope`.
+The grant stores the scopes, and the signed access token and token response carry
+them. Approval and redemption cannot widen them. `write` and `send` do not imply
+`read`. `EmailSubmission/set` requires `send` even on an otherwise writable account.
+Tokens without explicit scopes must be reissued. Token responses disable caching.
+
+With `[oauth] refresh_token_ttl_secs` set, every grant also returns a
+`refresh_token`, and `POST /oauth/token` accepts `grant_type=refresh_token`
+with `refresh_token` and an optional narrower `scope` (a wider one is
+`400 invalid_scope` and spends nothing). The answer carries a new access token
+and a new refresh token, and the one presented is retired. Presenting a retired
+token again, or one of an account that was disabled, locked, removed or had its
+password changed or reset since the grant, is `400 invalid_grant`, and for a
+retired token the whole family issued from that grant is revoked too. Without
+the setting the grant type is `400 unsupported_grant_type`, as before.
+
+`POST /oauth/revoke` takes `token` as form or JSON. Possession permits revoking
+that token's signed identifier for JMAP; given a refresh token it revokes the
+whole family it belongs to. Invalid, expired and already revoked
+tokens get the same empty `200`. Revocations persist in `oauth_revocations.json`
+under the data directory, containing identifier hashes and expiries, and survive
+restart. Expired entries are pruned on revocation. A write failure gives `503`;
+unreadable or corrupt revocations fail closed during OAuth authentication.
+Every JMAP request checks signature against the local signing key, issuer,
+audience, expiry, revocation and account availability. Failed authentication
+uses the same bearer limiter and generic `401` as other bearers. WebSockets
+recheck on each frame, and event sources on each poll.
+
 Bodies are form-encoded or JSON; errors are `{"error": "<code>"}` as in
 RFC 6749 and 8628. Wrong credentials and a wrong code give the same answer.
 
@@ -692,6 +977,7 @@ RFC 6749 and 8628. Wrong credentials and a wrong code give the same answer.
 | Authenticated request rate | No limit of its own; sending has its own limits |
 | JMAP | See [JMAP](#jmap) |
 | Webhook | 15 seconds, one try |
+| Event streams (`/api/v1/events`) | 4 per key and 64 per server by default, one hour each; see [Live updates](#live-updates) |
 | Open connections | Not limited by the HTTP layer |
 
 ## Versioning and stability
@@ -712,5 +998,4 @@ unknown error code by its status.
 
 `/jmap`, `/scim/v2` and `/oauth` follow their RFCs and are as stable as the
 parts of them this server implements; the OpenAPI document lists what it
-implements. The mail headers are covered in [Message headers](headers.md),
-which marks what is planned to change.
+implements. The mail headers are covered in [Message headers](headers.md).

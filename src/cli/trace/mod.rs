@@ -3,6 +3,8 @@
 
 use crate::config::{Config, Otel};
 
+mod filter;
+
 /// A type-erased tracing layer attached at the registry root.
 type BoxedLayer = Box<dyn tracing_subscriber::Layer<tracing_subscriber::Registry> + Send + Sync>;
 
@@ -14,8 +16,7 @@ pub(super) fn init_tracing(config: &Config) -> Option<opentelemetry_sdk::trace::
 	use tracing_subscriber::layer::SubscriberExt;
 	use tracing_subscriber::util::SubscriberInitExt;
 
-	let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-		.unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+	let filter = filter::log_filter(std::env::var("RUST_LOG").ok().as_deref());
 	let mut layers: Vec<BoxedLayer> = vec![match config.log_format {
 		crate::config::LogFormat::Json => tracing_subscriber::fmt::layer()
 			.json()

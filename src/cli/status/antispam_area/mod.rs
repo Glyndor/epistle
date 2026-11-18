@@ -29,7 +29,7 @@ pub(super) async fn check(ctx: &Ctx) -> AreaReport {
 	// `greylist_delay_secs` is independent of `[database]`: the in-memory
 	// store still defers triplets when no database is configured. The
 	// feature is just ephemeral.
-	if config.greylist_delay_secs > 0 {
+	if config.greylisting_anywhere() {
 		items.push(Item::new("greylist", Level::Ok, "deferring first attempts"));
 		on_count += 1;
 	}

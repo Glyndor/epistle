@@ -70,17 +70,16 @@ pub(crate) fn claim(data_dir: &Path, account: &str, sender: &str, days: u64) -> 
 		.unwrap_or_else(PoisonError::into_inner);
 	let known = match fs::symlink_metadata(&marker) {
 		Ok(meta) if !meta.is_file() => return false,
-		Ok(meta) => {
+		Ok(meta)
 			if meta
 				.modified()
 				.ok()
 				.and_then(|at| at.elapsed().ok())
-				.is_none_or(|age| age < period)
-			{
-				return false;
-			}
-			true
+				.is_none_or(|age| age < period) =>
+		{
+			return false;
 		}
+		Ok(_) => true,
 		Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
 		Err(_) => return false,
 	};

@@ -49,6 +49,12 @@ pub struct FirstAccount {
 	/// account. Defaults to true.
 	#[serde(default = "default_true")]
 	pub role_aliases: bool,
+	/// The address the providers' spam-complaint reports are sent to, in one
+	/// of the configured domains, for example `fbl@example.org`. `init`
+	/// points it at this account and writes `[reports] fbl_mailbox`. Absent
+	/// leaves the receiver off: the address is never assumed.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub fbl_mailbox: Option<String>,
 }
 
 const fn default_true() -> bool {
@@ -173,7 +179,42 @@ impl FirstAccount {
 			crate::directory_store::display_name::validate(raw)
 				.map_err(|why| format!("display_name: {why}"))?;
 		}
+		if let Some(mailbox) = &self.fbl_mailbox {
+			self.check_fbl_mailbox(mailbox, domains)?;
+		}
 		Ok(())
+	}
+
+	/// The complaint mailbox must be a plain address of a configured domain.
+	fn check_fbl_mailbox(&self, mailbox: &str, domains: &[String]) -> Result<(), String> {
+		let stored = normalize(mailbox);
+		let hosted = crate::util::address::plain_mailbox(&stored)
+			.and_then(|(_, domain)| crate::domain::normalize(domain).ok())
+			.is_some_and(|served| {
+				domains.iter().any(|configured| {
+					crate::domain::normalize(configured).is_ok_and(|one| one == served)
+				})
+			});
+		if hosted {
+			Ok(())
+		} else {
+			Err(format!(
+				"fbl_mailbox {mailbox:?} is not a plain address in one of the configured domains ({})",
+				domains.join(", ")
+			))
+		}
+	}
+
+	/// The complaint mailbox as stored, when one was asked for.
+	pub fn fbl_address(&self) -> Option<String> {
+		self.fbl_mailbox.as_deref().map(normalize)
+	}
+
+	/// The complaint mailbox that becomes an alias of the account: none when
+	/// it is the account's own address.
+	pub fn fbl_alias(&self) -> Option<String> {
+		self.fbl_address()
+			.filter(|address| *address != self.stored_address())
 	}
 
 	/// The role addresses that become aliases of this account: none when
@@ -277,7 +318,63 @@ pub(super) fn create(
 			address: address.clone(),
 		});
 	}
-	add_role_aliases(first, &config, config_path, &address, &store, report)
+	add_role_aliases(first, &config, config_path, &address, &store, report)?;
+	add_fbl_mailbox(first, config_path, &address, report)
+}
+
+/// Make the complaint mailbox an alias of the account and name it in
+/// `[reports] fbl_mailbox`, in one validated edit. An address something else
+/// already holds is left as it is, and still named: it receives mail already.
+fn add_fbl_mailbox(
+	first: &FirstAccount,
+	config_path: &Path,
+	target: &str,
+	report: &mut Report,
+) -> Result<(), ApplyError> {
+	let fail = |why: String| ApplyError::FirstAccount(why);
+	let Some(mailbox) = first.fbl_address() else {
+		return Ok(());
+	};
+	let config = Config::load(config_path).map_err(|error| fail(error.to_string()))?;
+	let store = AccountStore::open(
+		&config.data_dir,
+		config.domains.clone(),
+		config.domain_aliases.clone(),
+		config.accounts.clone(),
+	)
+	.map_err(|error| fail(format!("opening the account store: {error}")))?;
+	let aliases: Vec<String> = config
+		.alias
+		.iter()
+		.map(|alias| alias.address.clone())
+		.collect();
+	let free = first.fbl_alias().is_some_and(|alias| {
+		address_is_free_or_ours(None, &alias, &store, &static_pairs(&config), &aliases).is_ok()
+	});
+	let mut document = ConfigDocument::open(config_path).map_err(fail)?;
+	if free {
+		let mut members = toml_edit::Array::new();
+		members.push(target);
+		document
+			.upsert_element(
+				"alias",
+				"address",
+				&mailbox,
+				&[("members", toml_edit::Value::Array(members))],
+			)
+			.map_err(fail)?;
+	}
+	document
+		.set_table_key(&["reports"], "fbl_mailbox", mailbox.as_str())
+		.map_err(fail)?;
+	document.commit().map_err(fail)?;
+	if free {
+		report.steps.push(ReportStep::AliasAdded {
+			address: mailbox,
+			target: target.to_string(),
+		});
+	}
+	Ok(())
 }
 
 /// Add each role address as an `[[alias]]` table delivering to `target`,

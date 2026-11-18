@@ -251,6 +251,21 @@ pub(crate) fn find(args: &[OsString], table: &[Staged]) -> Vec<Found> {
 /// reports the unreadable file.
 const MAX_PROBES: usize = 64;
 
+#[cfg(test)]
+thread_local! {
+	static POSITIONAL_PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn reset_positional_probes() {
+	POSITIONAL_PROBES.with(|probes| probes.set(0));
+}
+
+#[cfg(test)]
+fn positional_probes() -> usize {
+	POSITIONAL_PROBES.with(std::cell::Cell::get)
+}
+
 /// Push the values of the positional argument `entry` names, each at the
 /// token clap read it from. Matching the text is not enough, the same text
 /// can also be the value of another flag. So each token with that text is
@@ -269,6 +284,8 @@ fn positional(
 	for value in values {
 		let marker = OsString::from("\u{1}epistle-positional-probe");
 		let probe = |index: usize| {
+			#[cfg(test)]
+			POSITIONAL_PROBES.with(|probes| probes.set(probes.get() + 1));
 			let mut line = args.to_vec();
 			line[index] = marker.clone();
 			let argv = std::iter::once(OsString::from("epistle")).chain(line);

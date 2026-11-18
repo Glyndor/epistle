@@ -21,8 +21,24 @@ on:
       - "tests/fixtures/imaptest.mbox"
       - ".github/scripts/imaptest.sh"
       - ".github/workflows/imaptest.yml"
+      - ".github/actions/rust-cache/**"
       - "Cargo.toml"
       - "Cargo.lock"
+      # Same exclusions as the pull_request filter below, and for the same
+      # reason: these files only exist under #[cfg(test)].
+      - "!src/**/tests/**"
+      - "!src/**/*_tests*.rs"
+      - "!src/**/tests_*.rs"
+      - "!src/**/test_support.rs"
+      - "!src/**/tests.rs"
+      - "!src/**/*_test_support.rs"
+      - "!src/test_support/**"
+      - "!src/smtp/directory/fixtures/**"
+      - "!src/smtp/session/test_hooks.rs"
+      - "!src/dns/txt_fixtures.rs"
+      - "!src/hostile_public_http/**"
+      - "!src/**/testdata/**"
+      - "!src/dkim/test_*.pem"
   pull_request:
     paths:
       - "src/imap/**"
@@ -31,17 +47,30 @@ on:
       - "tests/fixtures/imaptest.mbox"
       - ".github/scripts/imaptest.sh"
       - ".github/workflows/imaptest.yml"
+      - ".github/actions/rust-cache/**"
       - "Cargo.toml"
       - "Cargo.lock"
       # Files that only exist under #[cfg(test)] cannot change what this job
       # builds or runs, so a pull request that touches only them does not pay
       # for it. Same exclusions as db.yml. The module that declares them
-      # (`mod tests;` in a mod.rs) is not matched, and the push above still
-      # runs everything.
+      # (`mod tests;` in a mod.rs) is not matched. The push above skips the
+      # same files: they cannot change the binary on develop either.
       - "!src/**/tests/**"
       - "!src/**/*_tests*.rs"
       - "!src/**/tests_*.rs"
       - "!src/**/test_support.rs"
+      # More names that only exist under #[cfg(test)]: the tests.rs leaves, the
+      # helper modules, the hostile HTTP harness and the keys and captures the
+      # tests read with include_bytes!.
+      - "!src/**/tests.rs"
+      - "!src/**/*_test_support.rs"
+      - "!src/test_support/**"
+      - "!src/smtp/directory/fixtures/**"
+      - "!src/smtp/session/test_hooks.rs"
+      - "!src/dns/txt_fixtures.rs"
+      - "!src/hostile_public_http/**"
+      - "!src/**/testdata/**"
+      - "!src/dkim/test_*.pem"
 
 # A newer push to a pull request supersedes the run in flight. Queue and
 # branch runs are never cancelled: only a pull_request event is.
@@ -62,10 +91,10 @@ jobs:
     needs: decide
     if: ${{ !cancelled() && needs.decide.outputs.run != 'false' }}
     name: imaptest scripted
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
     timeout-minutes: 30
     env:
-      IMAPTEST_IMAGE: docker.io/dovecot/imaptest@sha256:8e10d66bf5008a0f5d22425357fb653502f39dc83bc08367fb249edc69da546c
+      IMAPTEST_IMAGE: docker.io/dovecot/imaptest@sha256:db2b7de2f7bdd5d331fbdc12463828e3e35f1571c40999df47a0ff2359d399d7
       CONTAINER: docker
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -83,8 +112,13 @@ jobs:
 
       - name: Install toolchain
         run: |
-          rustup toolchain install 1.99.1 --profile minimal
-          rustup default 1.99.1
+          rustup toolchain install 1.100.0 --profile minimal
+          rustup default 1.100.0
+
+      - id: cargo-cache
+        uses: ./.github/actions/rust-cache
+        with:
+          prefix: rust-imaptest
 
       - name: Build
         run: cargo build --locked
@@ -94,3 +128,11 @@ jobs:
 
       - name: Run imaptest
         run: .github/scripts/imaptest.sh target/debug/epistle imaptest-source
+
+      - name: Save the cargo cache
+        if: ${{ success() }}
+        uses: ./.github/actions/rust-cache
+        with:
+          mode: save
+          cache-hit: ${{ steps.cargo-cache.outputs.cache-hit }}
+          prefix: rust-imaptest

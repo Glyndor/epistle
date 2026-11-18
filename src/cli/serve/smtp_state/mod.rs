@@ -152,7 +152,12 @@ pub(super) fn build_smtp_shared_state_with(
 	});
 	let scanner_hook: Option<Arc<dyn MailHook>> = match &config.scanner_hook_url {
 		Some(url) => Some(Arc::new(
-			crate::antispam::hook::HttpHook::new(url).map_err(std::io::Error::other)?,
+			crate::antispam::hook::HttpHook::with_options(
+				url,
+				Duration::from_secs(config.antispam.scanner_hook_timeout_secs),
+				config.antispam.scanner_hook_on_error,
+			)
+			.map_err(std::io::Error::other)?,
 		)),
 		None => clamd.clone().map(|clamd| clamd as Arc<dyn MailHook>),
 	};

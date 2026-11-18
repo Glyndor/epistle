@@ -140,6 +140,20 @@ pub(super) fn build_provider(config: &Config) -> Result<Arc<dyn DnsProvider>, St
 	}
 }
 
+/// `provider`, built again from `config` with [`build_provider`] at the start
+/// of every cycle of the task that writes through it, so a credential that
+/// changed is picked up without a restart.
+pub(in crate::cli::serve) fn live_provider(
+	config: &Config,
+	provider: Arc<dyn DnsProvider>,
+) -> Arc<crate::dns::provider::live::LiveProvider> {
+	let config = config.clone();
+	Arc::new(crate::dns::provider::live::LiveProvider::from_source(
+		provider,
+		Arc::new(move || build_provider(&config)),
+	))
+}
+
 /// Why no provider could be built from the configuration: the entries that
 /// cannot publish, and why.
 ///
@@ -194,16 +208,21 @@ where
 			}
 		};
 		match provider.as_ref() {
-			Some(provider) => match tick(config, provider.as_ref()).await {
-				// A run that went through resets the wait: the next one is
-				// the configured interval again.
-				Tick::Clean => failures = 0,
-				// A provider that fails is asked less often.
-				Tick::Failed => failures = failures.saturating_add(1),
-				// Another publish holds the ledger: the provider was
-				// never asked, so the wait does not change.
-				Tick::Skipped => {}
-			},
+			// The hosted domains are read again on every run, so a domain
+			// added or removed while the server runs is published or
+			// retired without a restart.
+			Some(provider) => {
+				match tick(&config.with_current_domains_file(), provider.as_ref()).await {
+					// A run that went through resets the wait: the next one is
+					// the configured interval again.
+					Tick::Clean => failures = 0,
+					// A provider that fails is asked less often.
+					Tick::Failed => failures = failures.saturating_add(1),
+					// Another publish holds the ledger: the provider was
+					// never asked, so the wait does not change.
+					Tick::Skipped => {}
+				}
+			}
 			// No provider at all: the run did not happen.
 			None => failures = failures.saturating_add(1),
 		}

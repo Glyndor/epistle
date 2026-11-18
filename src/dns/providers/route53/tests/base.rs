@@ -263,15 +263,6 @@ async fn mx_upsert_uses_verbatim_value_in_value_element() {
 }
 
 #[tokio::test]
-async fn list_is_unsupported() {
-	let (provider, _state) = mock().await;
-	assert_eq!(
-		provider.list("example.org").await,
-		Err(ProviderError::Unsupported)
-	);
-}
-
-#[tokio::test]
 async fn srv_upsert_uses_verbatim_value_in_value_element() {
 	let (provider, state) = mock().await;
 	let srv = DnsRecord {

@@ -1,5 +1,5 @@
-//! The bearer middleware: every API request must carry the configured token or
-//! an API key, subject to the per-client failure limits and the argon2 gate
+//! The bearer middleware: API requests carry the configured token or an API
+//! key; JMAP also accepts a local OAuth token. All share the failure limits and argon2 gate
 //! described in `auth.rs` and `limiter.rs`.
 
 use axum::extract::{Request, State};
@@ -25,6 +25,10 @@ pub(in crate::api) fn acceptable_scopes_for(method: &axum::http::Method, path: &
 	if method == axum::http::Method::POST && path == "/api/v1/send" {
 		return vec![Scope::Send];
 	}
+	// Taking a send back is for the key that sent it, or one that may write.
+	if method == axum::http::Method::DELETE && path.starts_with("/api/v1/send/") {
+		return vec![Scope::Send, Scope::Write];
+	}
 	if path.starts_with("/scim/v2") {
 		return vec![Scope::Scim];
 	}
@@ -43,6 +47,11 @@ pub(in crate::api) fn acceptable_scopes_for(method: &axum::http::Method, path: &
 		_ => vec![Scope::Write],
 	}
 }
+
+/// What a client turned away because too many credential checks are already
+/// waiting is told to wait: a check takes well under a second, so the queue
+/// is short-lived.
+const ARGON_BUSY_RETRY_SECS: u64 = 1;
 
 /// Longest bearer token considered at all.
 const MAX_BEARER_LEN: usize = 1024;
@@ -94,15 +103,38 @@ pub async fn require_bearer_token(
 	// dispatcher decide per method call.
 	let acceptable_scopes = acceptable_scopes_for(request.method(), request.uri().path());
 	let token_ref = token.as_deref();
+	// A verified local OAuth identity is confined to JMAP even when the
+	// account is an administrator. It never falls through to API-key or
+	// configured-token privileges while it authenticates as OAuth.
+	let oauth = token_ref.and_then(|t| state.oauth_principal(t, client_ip));
+	let oauth_ok = oauth.is_some() && super::super::oauth::is_jmap_path(request.uri().path());
+	if let Some(principal) = &oauth
+		&& oauth_ok
+		&& !acceptable_scopes
+			.iter()
+			.any(|scope| principal.admits_scope(*scope))
+	{
+		state
+			.inner
+			.auth_limiter
+			.lock()
+			.unwrap_or_else(|p| p.into_inner())
+			.refund(client_ip);
+		return ApiError::forbidden("The credential does not have the scope this route needs.")
+			.into_response();
+	}
 	// The configured token has every scope; a leaked configured token is
 	// admin-equivalent regardless.
-	// API keys first: a SHA-256 lookup, so a key never pays for the configured
+	// API keys use a SHA-256 lookup, so a key never pays for the configured
 	// token's (possibly argon2) hash.
-	let key_ok = token_ref.is_some_and(|t| state.key_authorizes(t, client_ip, &acceptable_scopes));
+	let key_ok = oauth.is_none()
+		&& token_ref.is_some_and(|t| state.key_authorizes(t, client_ip, &acceptable_scopes));
 	// A key that is valid but does not cover this route is not a failed
 	// credential: answer 403 and give back the failure this request
 	// reserved. Nothing else is checked, so it costs no argon2.
-	if !key_ok && token_ref.is_some_and(|t| state.key_lacks_scope(t, client_ip, &acceptable_scopes))
+	if oauth.is_none()
+		&& !key_ok
+		&& token_ref.is_some_and(|t| state.key_lacks_scope(t, client_ip, &acceptable_scopes))
 	{
 		state
 			.inner
@@ -114,26 +146,28 @@ pub async fn require_bearer_token(
 			.into_response();
 	}
 	let configured = match token_ref {
-		Some(t) if !key_ok => match state.bearer_is_configured_async(t, client_ip).await {
-			Ok(answer) => answer,
-			// Too many guesses are already waiting for an argon2: tell this
-			// one to come back. Nothing was checked, so it was no failed
-			// credential and the failure it reserved is given back: otherwise
-			// a flood that fills the queue would run good clients into
-			// their limit.
-			Err(auth::ArgonBusy) => {
-				state
-					.inner
-					.auth_limiter
-					.lock()
-					.unwrap_or_else(|p| p.into_inner())
-					.refund(client_ip);
-				return ApiError::rate_limited().into_response();
+		Some(t) if !key_ok && oauth.is_none() => {
+			match state.bearer_is_configured_async(t, client_ip).await {
+				Ok(answer) => answer,
+				// Too many guesses are already waiting for an argon2: tell this
+				// one to come back. Nothing was checked, so it was no failed
+				// credential and the failure it reserved is given back: otherwise
+				// a flood that fills the queue would run good clients into
+				// their limit.
+				Err(auth::ArgonBusy) => {
+					state
+						.inner
+						.auth_limiter
+						.lock()
+						.unwrap_or_else(|p| p.into_inner())
+						.refund(client_ip);
+					return ApiError::rate_limited(ARGON_BUSY_RETRY_SECS).into_response();
+				}
 			}
-		},
+		}
 		_ => false,
 	};
-	let authorized = configured || key_ok;
+	let authorized = configured || key_ok || oauth_ok;
 
 	{
 		let mut limiter = state
@@ -172,9 +206,5 @@ pub async fn require_bearer_token(
 }
 
 fn rate_limited(seconds: u64) -> Response {
-	let mut response = ApiError::rate_limited().into_response();
-	response
-		.headers_mut()
-		.insert(axum::http::header::RETRY_AFTER, seconds.into());
-	response
+	ApiError::rate_limited(seconds).into_response()
 }

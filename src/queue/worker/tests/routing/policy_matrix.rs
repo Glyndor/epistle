@@ -111,7 +111,7 @@ fn certs() -> &'static Certs {
 
 /// DANE-EE SPKI SHA-256 record for a leaf.
 fn tlsa_for(leaf: &CertificateDer<'_>) -> TlsaRecord {
-	let spki = crate::dane::verify::spki_of(leaf).expect("spki");
+	let spki = crate::dane::cert::spki_of(leaf).expect("spki");
 	let hash = ring::digest::digest(&ring::digest::SHA256, &spki);
 	TlsaRecord::from_parts(3, 1, 1, hash.as_ref().to_vec()).expect("record")
 }
@@ -297,6 +297,40 @@ async fn attempt_message(
 	mx_dns: MxDns,
 	message: &AcceptedMessage,
 ) -> Seen {
+	let (seen, _) = attempt_traced(dns, fetcher, mx, mode, mx_dns, message).await;
+	seen
+}
+
+/// One delivery attempt for the cell, as [`attempt`] does, and the reason
+/// the spool kept for a message that was deferred.
+pub(in super::super) async fn attempt_reason(
+	(sts, tlsa, mx, mode): (Sts, Tlsa, Mx, OutboundTls),
+) -> Option<String> {
+	let dns: Arc<dyn DnsLookup> = Arc::new(Dns { sts, tlsa });
+	let message = AcceptedMessage {
+		reverse_path: "alice@sender.example".into(),
+		recipients: vec!["bob@remote.example".to_string()],
+		data: b"From: alice@sender.example\r\nSubject: hi\r\n\r\nbody\r\n".to_vec(),
+		require_tls: false,
+		mailbox: None,
+		tlsrpt_verified: false,
+		sender_verified: false,
+		no_dsn: Vec::new(),
+	};
+	let fetcher = Box::new(Fetcher(sts));
+	let (_, reason) = attempt_traced(dns, fetcher, mx, mode, MxDns::Secure, &message).await;
+	reason
+}
+
+/// [`attempt_message`] with the reason the attempt left in the spool.
+async fn attempt_traced(
+	dns: Arc<dyn DnsLookup>,
+	fetcher: Box<dyn crate::mtasts::PolicyFetcher>,
+	mx: Mx,
+	mode: OutboundTls,
+	mx_dns: MxDns,
+	message: &AcceptedMessage,
+) -> (Seen, Option<String>) {
 	crate::queue::client::TEST_ROOTS.with(|roots| *roots.borrow_mut() = vec![certs().ca.clone()]);
 	let dir = tempfile::tempdir().expect("tempdir");
 	let spool = FsSpool::open(dir.path()).expect("spool");
@@ -316,8 +350,12 @@ async fn attempt_message(
 	.with_mta_sts(store, dns)
 	.with_outbound_tls(mode);
 	let delivered = worker.pass().await.expect("pass");
-	let left = worker.spool.list().expect("list").len();
-	match (delivered, left) {
+	let left = worker.spool.list().expect("list");
+	let reason = left
+		.first()
+		.and_then(|id| worker.spool.load_envelope(*id).ok())
+		.and_then(|envelope| envelope.last_error);
+	let seen = match (delivered, left.len()) {
 		(1, 0) => {
 			let data = String::from_utf8(sink.messages()[0].data.clone()).expect("ascii");
 			if data.contains("with ESMTPS;") {
@@ -328,7 +366,8 @@ async fn attempt_message(
 		}
 		(0, 1) => Seen::Deferred,
 		_ => Seen::Dropped,
-	}
+	};
+	(seen, reason)
 }
 
 /// One delivery attempt with TLS-RPT enabled. Returns the journal lines

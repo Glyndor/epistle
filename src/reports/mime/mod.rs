@@ -1,15 +1,18 @@
 //! Find the report part inside an inbound message and base64-decode it.
 //!
 //! The DMARC and TLS-RPT receivers ship their reports as one attachment
-//! inside a multipart message. The shape is fixed:
+//! inside a multipart message. The shape is fixed, and it is the attachment
+//! that says which kind of report the message carries, never the mailbox it
+//! was sent to:
 //!
 //! - DMARC: `multipart/mixed` (or `multipart/related`) at the top level,
 //!   with the report inside as `application/gzip` / `application/zip` /
-//!   `application/x-gzip` / `application/x-zip-compressed`, or with a
-//!   filename ending `.xml.gz` / `.zip`.
+//!   `application/x-gzip` / `application/x-zip-compressed`, as bare XML
+//!   (`application/xml`, `text/xml`) whose root is `<feedback>`, or with a
+//!   filename ending `.xml.gz` / `.zip` / `.xml`.
 //! - TLS-RPT: `multipart/report` or `multipart/mixed` with a part of
 //!   `application/tlsrpt+gzip` (or `application/tlsrpt+json` for
-//!   uncompressed).
+//!   uncompressed), or a filename ending `.json.gz` / `.json`.
 //!
 //! We do not pull a MIME-walker dependency: RFC 2046 boundaries are
 //! simple enough to split by hand, and a real MIME library would do more
@@ -22,7 +25,16 @@
 use base64::Engine;
 use thiserror::Error;
 
+use super::Kind;
 use super::decompress::{Encoding, MAX_COMPRESSED};
+
+mod arf;
+mod types;
+
+#[cfg(test)]
+pub(crate) use arf::MAX_ARF;
+pub(crate) use arf::{field, find_arf_parts};
+pub(crate) use types::content_types;
 
 /// Hard cap on total parts we walk. A real inbound report has two (text
 /// part + attachment); a forwarded message might double that. Anything
@@ -60,6 +72,9 @@ fn reset_scan_steps() -> u64 {
 /// What we found after walking the message.
 #[derive(Debug)]
 pub struct FoundPart {
+	/// The kind of report the part declares. A generic `application/gzip`
+	/// is read as DMARC here; the caller may correct it from the content.
+	pub kind: Kind,
 	/// Encoding the bytes inside the part are compressed with.
 	pub encoding: Encoding,
 	/// The base64-decoded bytes of the attachment.
@@ -83,26 +98,28 @@ pub enum WalkError {
 	TooLarge,
 }
 
-/// Find the report attachment inside `raw` for the given `kind`. Returns
-/// `None` (not an error) when the message is a regular non-report
-/// message; the deliverer calls this for every postmaster@/tlsrpt@
+/// Find the report attachment inside `raw` and say which kind it is.
+/// `Err(NoReportPart)` (not a failure) when the message is a regular
+/// non-report message; the deliverer calls this for every postmaster@/tlsrpt@
 /// recipient, and a clean "no report here" is the right answer for the
 /// operator's own outbound mail.
-pub fn find_report_part(raw: &[u8], kind: Kind) -> Result<FoundPart, WalkError> {
+pub fn find_report_part(raw: &[u8]) -> Result<FoundPart, WalkError> {
 	let parts = split_top_level(raw)?;
-	match walk_parts(&parts, kind, 1)? {
+	match walk_parts(&parts, 1)? {
 		FoundPartWalk::Found(found) => Ok(found),
 		FoundPartWalk::Continue => Err(WalkError::NoReportPart),
 	}
 }
 
-fn walk_parts(parts: &[ParsedPart], kind: Kind, depth: u8) -> Result<FoundPartWalk, WalkError> {
+fn walk_parts(parts: &[ParsedPart], depth: u8) -> Result<FoundPartWalk, WalkError> {
 	for part in parts {
 		if let Some(ct) = part.content_type.as_deref()
-			&& let Some(encoding) = encoding_for(ct)
+			&& let Some((kind, encoding)) = classify(ct)
 			&& let Some(payload) = part.body_decoded()?
+			&& is_report_payload(kind, encoding, &payload)
 		{
 			return Ok(FoundPartWalk::Found(FoundPart {
+				kind,
 				encoding,
 				bytes: payload,
 			}));
@@ -117,7 +134,7 @@ fn walk_parts(parts: &[ParsedPart], kind: Kind, depth: u8) -> Result<FoundPartWa
 			&& depth < MAX_NESTING_DEPTH
 		{
 			let inner = split_with_boundary(&part.body, inner_boundary)?;
-			if let FoundPartWalk::Found(found) = walk_parts(&inner, kind, depth + 1)? {
+			if let FoundPartWalk::Found(found) = walk_parts(&inner, depth + 1)? {
 				return Ok(FoundPartWalk::Found(found));
 			}
 		}
@@ -126,7 +143,7 @@ fn walk_parts(parts: &[ParsedPart], kind: Kind, depth: u8) -> Result<FoundPartWa
 	// `application/octet-stream` but whose `Content-Disposition` says
 	// `report.xml.gz` still counts.
 	for part in parts {
-		if let Some(found) = part_match(part, kind)? {
+		if let Some(found) = part_match(part)? {
 			return Ok(FoundPartWalk::Found(found));
 		}
 	}
@@ -142,53 +159,63 @@ enum FoundPartWalk {
 	Continue,
 }
 
-fn part_match(part: &ParsedPart, kind: Kind) -> Result<Option<FoundPart>, WalkError> {
-	// Filename match: any part ending in `.xml.gz` / `.zip` is DMARC; any
-	// part ending in `.json.gz` / `.json` is TLS-RPT. The actual encoding
-	// is what the filename implies.
-	if let Some(filename) = part.filename.as_deref() {
-		let lower = filename.to_ascii_lowercase();
-		if kind == Kind::Dmarc && (lower.ends_with(".xml.gz") || lower.ends_with(".zip")) {
-			let encoding = if lower.ends_with(".zip") {
-				Encoding::Zip
-			} else {
-				Encoding::Gzip
-			};
-			if let Some(payload) = part.body_decoded()? {
-				return Ok(Some(FoundPart {
-					encoding,
-					bytes: payload,
-				}));
-			}
-		}
-		if kind == Kind::TlsRpt && (lower.ends_with(".json.gz") || lower.ends_with(".json")) {
-			let encoding = if lower.ends_with(".gz") {
-				Encoding::Gzip
-			} else {
-				Encoding::Uncompressed
-			};
-			if let Some(payload) = part.body_decoded()? {
-				return Ok(Some(FoundPart {
-					encoding,
-					bytes: payload,
-				}));
-			}
-		}
-	}
-	Ok(None)
+fn part_match(part: &ParsedPart) -> Result<Option<FoundPart>, WalkError> {
+	// Filename match: `.xml.gz` / `.zip` / `.xml` is DMARC, `.json.gz` /
+	// `.json` is TLS-RPT. The actual encoding is what the filename implies.
+	let Some(filename) = part.filename.as_deref() else {
+		return Ok(None);
+	};
+	let Some((kind, encoding)) = classify_filename(&filename.to_ascii_lowercase()) else {
+		return Ok(None);
+	};
+	Ok(part
+		.body_decoded()?
+		.filter(|payload| is_report_payload(kind, encoding, payload))
+		.map(|bytes| FoundPart {
+			kind,
+			encoding,
+			bytes,
+		}))
 }
 
-fn encoding_for(content_type: &str) -> Option<Encoding> {
+fn classify_filename(lower: &str) -> Option<(Kind, Encoding)> {
+	if lower.ends_with(".zip") {
+		Some((Kind::Dmarc, Encoding::Zip))
+	} else if lower.ends_with(".xml.gz") {
+		Some((Kind::Dmarc, Encoding::Gzip))
+	} else if lower.ends_with(".xml") {
+		Some((Kind::Dmarc, Encoding::Uncompressed))
+	} else if lower.ends_with(".json.gz") {
+		Some((Kind::TlsRpt, Encoding::Gzip))
+	} else if lower.ends_with(".json") {
+		Some((Kind::TlsRpt, Encoding::Uncompressed))
+	} else {
+		None
+	}
+}
+
+fn classify(content_type: &str) -> Option<(Kind, Encoding)> {
 	let lower = content_type.to_ascii_lowercase();
 	// Trim parameters (`; charset=utf-8` etc.) before matching.
 	let base = lower.split(';').next().unwrap_or("").trim();
 	match base {
-		"application/gzip" | "application/x-gzip" => Some(Encoding::Gzip),
-		"application/zip" | "application/x-zip-compressed" => Some(Encoding::Zip),
-		"application/tlsrpt+gzip" => Some(Encoding::Gzip),
-		"application/tlsrpt+json" => Some(Encoding::Uncompressed),
+		"application/gzip" | "application/x-gzip" => Some((Kind::Dmarc, Encoding::Gzip)),
+		"application/zip" | "application/x-zip-compressed" => Some((Kind::Dmarc, Encoding::Zip)),
+		"application/xml" | "text/xml" => Some((Kind::Dmarc, Encoding::Uncompressed)),
+		"application/tlsrpt+gzip" => Some((Kind::TlsRpt, Encoding::Gzip)),
+		"application/tlsrpt+json" => Some((Kind::TlsRpt, Encoding::Uncompressed)),
 		_ => None,
 	}
+}
+
+/// Bare XML is only a DMARC report when its root is `<feedback>`: any other
+/// XML part is an ordinary attachment, not something to fail on.
+fn is_report_payload(kind: Kind, encoding: Encoding, payload: &[u8]) -> bool {
+	if kind != Kind::Dmarc || encoding != Encoding::Uncompressed {
+		return true;
+	}
+	let head = &payload[..payload.len().min(1024)];
+	String::from_utf8_lossy(head).contains("<feedback")
 }
 
 /// One parsed MIME part with the headers we care about.
@@ -254,8 +281,8 @@ fn split_top_level(raw: &[u8]) -> Result<Vec<ParsedPart>, WalkError> {
 		find_headers_end(raw).ok_or(WalkError::Malformed("no header end"))?;
 	let headers = &raw[..headers_end];
 	let body = &raw[headers_end + separator_len..];
-	let ct = header_value(headers, "content-type")
-		.ok_or(WalkError::Malformed("missing content-type"))?;
+	// RFC 2045 section 5.2: a message without a `Content-Type` is plain text.
+	let ct = header_value(headers, "content-type").unwrap_or_else(|| "text/plain".to_string());
 	let base = ct
 		.split(';')
 		.next()
@@ -511,8 +538,6 @@ fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 	}
 	None
 }
-
-use super::Kind;
 
 #[cfg(test)]
 mod tests;

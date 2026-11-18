@@ -4,6 +4,8 @@
 mod abuse;
 #[path = "hostile_pop3/auth_tls.rs"]
 mod auth_tls;
+#[path = "hostile_pop3/concurrent_quit.rs"]
+mod concurrent_quit;
 #[path = "hostile_pop3/framing.rs"]
 mod framing;
 #[path = "hostile_pop3/harness.rs"]
@@ -12,5 +14,7 @@ mod harness;
 mod messages;
 #[path = "hostile_pop3/overlap.rs"]
 mod overlap;
+#[path = "hostile_pop3/stateful.rs"]
+mod stateful;
 #[path = "hostile_pop3/wire.rs"]
 mod wire;

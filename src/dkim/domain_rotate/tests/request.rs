@@ -58,3 +58,16 @@ fn a_request_for_a_name_that_cannot_be_a_directory_is_refused() {
 	assert!(request_rotation(dir.path(), "../escape", 0).is_err());
 	assert!(!dir.path().join("keys").exists());
 }
+
+/// Every cycle asks the publisher to build its provider again, whether or
+/// not it writes anything, so a credential that changed is picked up.
+#[tokio::test]
+async fn every_cycle_builds_the_provider_again() {
+	let dir = tempfile::tempdir().expect("dir");
+	let zone = Arc::new(Zone::default());
+	let d = domain(dir.path(), "b.example", &zone);
+	let rotator = d.rotator(&zone);
+	rotator.cycle(d.made_at + 60, false).await.expect("cycle");
+	rotator.cycle(d.made_at + 120, false).await.expect("cycle");
+	assert_eq!(zone.refreshes.load(std::sync::atomic::Ordering::Relaxed), 2);
+}

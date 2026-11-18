@@ -28,7 +28,7 @@ pub(super) const CHALLENGE: &str = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
 /// An ES256 key pair: the base64 PKCS#8 private key for the signer and the
 /// base64 public point for the verifier (they are a matching pair).
 pub(in super::super) struct Keys {
-	private_b64: String,
+	pub(in super::super) private_b64: String,
 	public_b64: String,
 }
 
@@ -46,6 +46,36 @@ pub(in super::super) fn keys() -> Keys {
 /// Build an API state with one known account (`alice`, password known) and the
 /// authorization server wired to `keys`.
 pub(in super::super) fn state_with_authz(dir: &std::path::Path, keys: &Keys) -> ApiState {
+	let authz = super::AuthzServer::new(&keys.private_b64, ISSUER, AUDIENCE).expect("authz");
+	state_with_server(dir, authz)
+}
+
+/// [`state_with_authz`] with token lifetimes, and a second account `bob`
+/// that lives in the dynamic store, so a test can change his password or
+/// disable him.
+pub(in super::super) fn state_with_lifetimes(
+	dir: &std::path::Path,
+	keys: &Keys,
+	access_ttl: u64,
+	refresh_ttl: Option<u64>,
+) -> ApiState {
+	let authz = super::AuthzServer::new(&keys.private_b64, ISSUER, AUDIENCE)
+		.expect("authz")
+		.with_lifetimes(access_ttl, refresh_ttl);
+	let state = state_with_server(dir, authz);
+	state
+		.store()
+		.add(crate::directory_store::DynamicAccount {
+			name: "bob".to_string(),
+			addresses: vec!["bob@example.org".to_string()],
+			password_hash: crate::smtp::auth::hash_password(fixtures::password()).expect("hash"),
+			..crate::directory_store::DynamicAccount::default()
+		})
+		.expect("add bob");
+	state
+}
+
+fn state_with_server(dir: &std::path::Path, authz: super::AuthzServer) -> ApiState {
 	let spool = crate::storage::FsSpool::open(dir).expect("spool");
 	let accounts = vec![crate::config::Account {
 		send: None,
@@ -69,7 +99,6 @@ pub(in super::super) fn state_with_authz(dir: &std::path::Path, keys: &Keys) -> 
 		)
 		.expect("store"),
 	);
-	let authz = super::AuthzServer::new(&keys.private_b64, ISSUER, AUDIENCE).expect("authz");
 	ApiState::new_with_optional_token(
 		None,
 		dir.to_path_buf(),

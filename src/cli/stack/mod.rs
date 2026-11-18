@@ -13,8 +13,6 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 
-use clap::Subcommand;
-
 use crate::config::Config;
 
 /// Path of the compose file `epistle init` writes, relative to
@@ -23,211 +21,16 @@ use crate::config::Config;
 const COMPOSE_SUBDIR: &str = "compose";
 const COMPOSE_FILE: &str = "compose.yaml";
 
-/// The clap subcommand enum the dispatcher hands to [`run`]. The
-/// shape mirrors the operator-facing verbs on the wire and is
-/// translated one-to-one into the inner [`StackAction`] (kept
-/// separate so the tests can build the action without clap).
-#[derive(Debug, Subcommand)]
-pub enum StackCli {
-	/// Render compose.yaml again with this release, then recreate what changed.
-	Update,
-	/// Start the stack in the background.
-	Up,
-	/// Apply what `--no-restart` left waiting.
-	///
-	/// Recreates what changed, then restarts mail once.
-	Apply,
-	/// Stop the stack.
-	///
-	/// The compose volumes are not removed: the database lives in one of them.
-	Down,
-	/// List the running services (table by default, JSON with
-	/// `--json`).
-	Ps {
-		/// Re-serialise the parsed list as JSON instead of a table.
-		#[arg(long)]
-		json: bool,
-	},
-	/// Stream the service logs.
-	Logs {
-		/// Follow the log output as it is produced.
-		#[arg(long)]
-		follow: bool,
-		/// Optional service name to filter on.
-		#[arg(value_name = "SERVICE")]
-		service: Option<String>,
-	},
-	/// Restart the whole stack, or a single service.
-	Restart {
-		/// Optional service name to restart.
-		#[arg(value_name = "SERVICE")]
-		service: Option<String>,
-	},
-	/// Stop the whole stack, or one service, without removing containers.
-	///
-	/// Stop the whole stack, or a single service (for example `mail` before a
-	/// restore, keeping `db` up), without removing containers.
-	Stop {
-		/// Optional service name to stop.
-		#[arg(value_name = "SERVICE")]
-		service: Option<String>,
-	},
-	/// Start what `stop` stopped.
-	Start {
-		/// Optional service name to start.
-		#[arg(value_name = "SERVICE")]
-		service: Option<String>,
-	},
-	/// Go back to the binary the last upgrade replaced; run as root.
-	///
-	/// When the new release already migrated the schema, the database dump
-	/// `stack update` took before the restart is restored too. dpkg still
-	/// records the newer version; see docs/cli.md for the limits.
-	Rollback {
-		/// The kept version to go back to; the newest one below this release
-		/// by default.
-		#[arg(long, value_name = "VERSION")]
-		to: Option<String>,
-		/// Do not ask for confirmation.
-		#[arg(long, short = 'y')]
-		yes: bool,
-	},
-	/// The database half of `rollback`, run as the service account.
-	#[command(hide = true)]
-	RollbackDb,
-	/// Move certificate renewal and the DNS credential to a certs container.
-	///
-	/// `disable` puts them back in mail. `enable` needs `[acme] challenge = "dns-01"` and a `[dns]` provider. See
-	/// docs/operations/container-split.md.
-	Certs {
-		/// `enable` or `disable`.
-		#[command(subcommand)]
-		action: CertsCli,
-	},
-	/// List each service's memory and process limits, or change one with `set`.
-	Resources {
-		/// Print JSON instead of a table.
-		#[arg(long, global = true)]
-		json: bool,
-		/// `set <SERVICE> --memory <SIZE>`; without it the limits are listed.
-		#[command(subcommand)]
-		action: Option<resources::ResourcesCli>,
-	},
-}
+mod action;
+pub(crate) use action::StackAction;
+pub use action::StackCli;
 
-pub use certs::CertsCli;
-
-impl From<StackCli> for StackAction {
-	fn from(value: StackCli) -> Self {
-		match value {
-			StackCli::Update => StackAction::Update,
-			StackCli::Up => StackAction::Up,
-			StackCli::Apply => StackAction::Apply,
-			StackCli::Down => StackAction::Down,
-			StackCli::Ps { json } => StackAction::Ps { as_json: json },
-			StackCli::Logs { follow, service } => StackAction::Logs { follow, service },
-			StackCli::Restart { service } => StackAction::Restart { service },
-			StackCli::Stop { service } => StackAction::Passthrough {
-				verb: "stop",
-				service,
-			},
-			StackCli::Start { service } => StackAction::Passthrough {
-				verb: "start",
-				service,
-			},
-			StackCli::Rollback { .. } => StackAction::Rollback,
-			StackCli::RollbackDb => StackAction::RollbackDb,
-			StackCli::Certs { action } => action.action(),
-			StackCli::Resources { json, action } => StackAction::Resources { action, json },
-		}
-	}
-}
-
-/// The stack subcommand the operator picked, with the operator's
-/// `epistle` arguments already extracted by clap. The body here is a
-/// straight `podup` wrapper, so each variant holds the trailing
-/// arguments verbatim.
-#[derive(Debug)]
-pub(crate) enum StackAction {
-	/// Render the compose file again, then recreate changed services and restart mail.
-	Update,
-	/// `podup -f <compose> up -d`, start the stack in the background.
-	Up,
-	/// `podup -f <compose> up -d`, then `restart mail`: what a run of
-	/// commands with `--no-restart` left waiting, applied once.
-	Apply,
-	/// `podup -f <compose> down`, stop the stack. Volumes are never
-	/// removed (`-v`/`--volumes` are deliberately not exposed): the
-	/// PostgreSQL data lives in a named volume and the operator must
-	/// not lose it.
-	Down,
-	/// `podup -f <compose> ps --format json`, print the running
-	/// services as a small table, or as JSON with `--json`.
-	Ps {
-		/// Re-serialise the parsed list as JSON instead of the table.
-		as_json: bool,
-	},
-	/// `podup -f <compose> logs [--follow] [<service>]`, stream the
-	/// logs, optionally following and optionally filtered to one
-	/// service.
-	Logs {
-		/// Pass `--follow` to podup.
-		follow: bool,
-		/// Optional service name to filter on; passed as a positional.
-		service: Option<String>,
-	},
-	/// `podup -f <compose> restart [<service>]`, restart the whole
-	/// stack or one service.
-	Restart {
-		/// Optional service name to restart; passed as a positional.
-		service: Option<String>,
-	},
-	/// `podup -f <compose> <verb> [<service>]` for `stop` and `start`.
-	Passthrough {
-		/// The podup subcommand.
-		verb: &'static str,
-		/// Optional service name; passed as a positional.
-		service: Option<String>,
-	},
-	/// Dispatched as root before the stack is reached; here only to keep
-	/// the conversion total.
-	Rollback,
-	/// Stop mail and restore the pre-update dump if the schema moved.
-	RollbackDb,
-	/// Turn the certificates container on or off.
-	Certs {
-		/// `true` to run it.
-		on: bool,
-		/// Skip the confirmation.
-		yes: bool,
-	},
-	/// Show or change the limits in the compose file; podup is not run.
-	Resources {
-		/// `set`, or `None` to list.
-		action: Option<resources::ResourcesCli>,
-		/// Print JSON.
-		json: bool,
-	},
-	/// `podup -f <compose> up -d <service>`, recreate one service from
-	/// the current compose file. A restart keeps the container as it was
-	/// created, so a change to its published ports needs this.
-	Recreate {
-		/// The service to recreate.
-		service: String,
-	},
-	/// `podup -f <compose> up -d <service>`, once for each service: a
-	/// change that touches more than one of them has to reach both, and a
-	/// container that keeps the mount it had still has the credential.
-	RecreateServices {
-		/// The services to recreate, in the order they are recreated.
-		services: Vec<String>,
-	},
-}
-
+pub(super) mod autostart;
 pub(super) mod certs;
 pub(super) mod dumps;
 pub(super) mod health;
-mod images;
+pub(super) mod images;
+mod logs;
 pub(super) mod port_warnings;
 pub(super) mod resources;
 mod retry;
@@ -255,7 +58,7 @@ use table::{Publisher, format_ports};
 /// so it refuses `--json`.
 pub(super) fn run_reporting(config: &Config, cli: StackCli, json: bool) -> ExitCode {
 	let (verb, service) = match &cli {
-		StackCli::Logs { .. } if json => {
+		StackCli::Logs(_) if json => {
 			return super::exit::refused(
 				"stack logs streams the services' raw log lines; it has no --json form",
 			);
@@ -272,7 +75,7 @@ pub(super) fn run_reporting(config: &Config, cli: StackCli, json: bool) -> ExitC
 		StackCli::Stop { service } => ("stop", service.clone()),
 		StackCli::Start { service } => ("start", service.clone()),
 		// These print their own output (or none), so no object follows.
-		StackCli::Logs { .. }
+		StackCli::Logs(_)
 		| StackCli::Resources { .. }
 		| StackCli::Rollback { .. }
 		| StackCli::RollbackDb
@@ -328,31 +131,56 @@ pub(super) fn run(config: &Config, action: StackAction) -> ExitCode {
 		Ok(()) => "podup",
 		Err(code) => return code,
 	};
+	// `up` installs the unit itself, so only the drop-in that hardens it
+	// follows; the other paths check the unit as well.
+	let installs = action.leaves_running();
+	let hardens = matches!(action, StackAction::Up);
+	let removes = matches!(action, StackAction::Down);
+	let summarises = matches!(action, StackAction::Up | StackAction::Update);
+	let code = dispatch(config, &compose, podup, action);
+	if code == ExitCode::SUCCESS && installs {
+		autostart::run(podup, &compose, &config.boot);
+	}
+	if code == ExitCode::SUCCESS && hardens {
+		autostart::harden(&config.boot);
+	}
+	if code == ExitCode::SUCCESS && removes {
+		autostart::remove_dropin();
+	}
+	if code == ExitCode::SUCCESS && summarises {
+		super::status::print_boot_summary(config, &mut super::style::stderr());
+	}
+	code
+}
+
+/// Run `action` against the stack at `compose`, with `podup` already known
+/// to be new enough and the Podman socket up.
+fn dispatch(config: &Config, compose: &Path, podup: &str, action: StackAction) -> ExitCode {
 	match action {
-		StackAction::Update => update::run(config, &compose, podup),
+		StackAction::Update => update::run(config, compose, podup),
 		StackAction::Rollback => {
 			super::style::error("run it as root: sudo epistle stack rollback");
 			ExitCode::FAILURE
 		}
-		StackAction::RollbackDb => rollback::restore_db(config, &compose, podup),
-		StackAction::Certs { on, yes } => certs::run(config, &compose, podup, on, yes),
+		StackAction::RollbackDb => rollback::restore_db(config, compose, podup),
+		StackAction::Certs { on, yes } => certs::run(config, compose, podup, on, yes),
 		StackAction::Up => {
 			// The ports the stack publishes on every interface on purpose
 			// are the ones podup warns about on every run; the warning is
 			// replaced by one note, and the warning about a port nobody
 			// asked to publish stays as podup printed it.
 			let mut published = port_warnings::Published::new(config);
-			let code = certs::up(&config.data_dir, &compose, podup, &mut published);
+			let code = certs::up(&config.data_dir, compose, podup, &mut published);
 			let mut out = std::io::stderr().lock();
 			published.note(&mut out);
 			code
 		}
-		StackAction::Apply => run_sequence(podup, &compose, &[&["up", "-d"], &["restart", "mail"]]),
+		StackAction::Apply => run_sequence(podup, compose, &[&["up", "-d"], &["restart", "mail"]]),
 		StackAction::Down => {
-			run_sequence(podup, &compose, &[&["autostart", "uninstall"], &["down"]])
+			run_sequence(podup, compose, &[&["autostart", "uninstall"], &["down"]])
 		}
 		StackAction::Ps { as_json } => {
-			let json = match capture_podup(podup, &compose, &["ps", "--format", "json"]) {
+			let json = match capture_podup(podup, compose, &["ps", "--format", "json"]) {
 				Ok(out) => out,
 				Err(code) => return code,
 			};
@@ -391,18 +219,7 @@ pub(super) fn run(config: &Config, action: StackAction) -> ExitCode {
 				}
 			}
 		}
-		StackAction::Logs { follow, service } => {
-			let mut extra: Vec<String> = Vec::new();
-			extra.push("logs".to_string());
-			if follow {
-				extra.push("--follow".to_string());
-			}
-			if let Some(name) = service {
-				extra.push(name);
-			}
-			let extra_ref: Vec<&str> = extra.iter().map(String::as_str).collect();
-			run_inherited(podup, &compose, &extra_ref)
-		}
+		StackAction::Logs(args) => logs::run(podup, compose, &args),
 		StackAction::Restart { service } => {
 			let mut extra: Vec<String> = Vec::new();
 			extra.push("restart".to_string());
@@ -410,25 +227,23 @@ pub(super) fn run(config: &Config, action: StackAction) -> ExitCode {
 				extra.push(name);
 			}
 			let extra_ref: Vec<&str> = extra.iter().map(String::as_str).collect();
-			run_inherited(podup, &compose, &extra_ref)
+			run_inherited(podup, compose, &extra_ref)
 		}
 		StackAction::Passthrough { verb, service } => {
 			let mut extra: Vec<&str> = vec![verb];
 			if let Some(name) = service.as_deref() {
 				extra.push(name);
 			}
-			run_inherited(podup, &compose, &extra)
+			run_inherited(podup, compose, &extra)
 		}
-		StackAction::Recreate { service } => {
-			run_inherited(podup, &compose, &["up", "-d", &service])
-		}
+		StackAction::Recreate { service } => run_inherited(podup, compose, &["up", "-d", &service]),
 		StackAction::RecreateServices { services } => {
 			// One `podup up -d <service>` for each: every one of them
 			// recreates exactly its own container, and the first that
 			// fails stops the rest.
 			let mut code = ExitCode::SUCCESS;
 			for service in &services {
-				code = run_inherited(podup, &compose, &["up", "-d", service]);
+				code = run_inherited(podup, compose, &["up", "-d", service]);
 				if code != ExitCode::SUCCESS {
 					break;
 				}
@@ -436,7 +251,7 @@ pub(super) fn run(config: &Config, action: StackAction) -> ExitCode {
 			code
 		}
 		StackAction::Resources { action, json } => resources::run(
-			&compose,
+			compose,
 			crate::smtp::memory_fit::largest_message(config.max_message_size),
 			action,
 			json,
@@ -555,7 +370,7 @@ fn exit_code_from_status(status: &std::process::ExitStatus) -> ExitCode {
 /// The argv every subcommand starts from. Kept in one place so a
 /// future change to the compose-file flag (today `-f`) is a single
 /// edit, and the tests that pin the argv can rebuild it.
-pub(super) fn build_command(podup: &str, compose: &Path, extra: &[&str]) -> Command {
+pub(in crate::cli) fn build_command(podup: &str, compose: &Path, extra: &[&str]) -> Command {
 	let mut command = Command::new(podup);
 	command.arg("-f").arg(compose);
 	let override_path = compose.with_file_name("compose.override.yaml");

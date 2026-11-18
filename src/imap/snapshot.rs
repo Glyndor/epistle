@@ -43,16 +43,18 @@ impl Snapshot {
 		let account_name = AccountName::new(account)?;
 		let account_dir = super::mailbox::mailbox_dir(data_dir, account_name.as_str(), mailbox)
 			.ok_or_else(|| std::io::Error::other("invalid mailbox name"))?;
-		crate::util::fs_walk::check_directories(&account_dir)?;
 		let account_root = account_name.root(data_dir)?;
+		// An account that never received mail has no directory yet, so the
+		// data directory is the root that has to exist.
+		let account_dir = crate::util::fs_walk::rooted::check_directories(data_dir, &account_dir)?;
 		let uid_validity = super::uidvalidity::read_or_init(&account_dir, &account_root);
 		// Fast path: a fresh metadata index whose stamp matches the current
 		// mailbox generation lets us skip the per-message sidecar reads. Any
 		// doubt (missing, stale, corrupt, wrong version) falls through to the
 		// authoritative scan below — the filesystem is always the truth.
-		let generation = super::index::current_generation(&account_dir);
-		if let Some(loaded) = super::index::load(&account_dir, generation) {
-			let uid_next = super::uid::read_counter(&account_dir) + 1;
+		let generation = super::index::current_generation(data_dir, &account_dir);
+		if let Some(loaded) = super::index::load(data_dir, &account_dir, generation) {
+			let uid_next = super::uid::read_counter(data_dir, &account_dir) + 1;
 			return Ok(Snapshot {
 				account_dir,
 				account_root,
@@ -68,18 +70,18 @@ impl Snapshot {
 				loaded_from_index: true,
 			});
 		}
-		let scanned = super::scan::scan_mailbox(&account_dir, crypto)?;
+		let scanned = super::scan::scan_mailbox(data_dir, &account_dir, crypto)?;
 		// HIGHESTMODSEQ is the persisted counter, never below any message's.
-		let highest_modseq = super::modseq::read_counter(&account_dir)
+		let highest_modseq = super::modseq::read_counter(data_dir, &account_dir)
 			.max(scanned.iter().map(|m| m.modseq).max().unwrap_or(1))
 			.max(1);
-		let uid_next = super::uid::read_counter(&account_dir) + 1;
+		let uid_next = super::uid::read_counter(data_dir, &account_dir) + 1;
 		// Persist a fresh index stamped with the generation observed before
 		// the scan (the scan only reads the filesystem and assigns UIDs, so
 		// the stamp is unchanged). A failed index write must not fail the
 		// open — the snapshot already succeeded from the scan, which is
 		// canonical.
-		let _ = super::index::write(&account_dir, generation, &scanned);
+		let _ = super::index::write(data_dir, &account_dir, generation, &scanned);
 		Ok(Snapshot {
 			account_dir,
 			account_root,
@@ -110,7 +112,7 @@ impl Snapshot {
 
 	/// UIDs expunged after `modseq` (QRESYNC `VANISHED (EARLIER)`, RFC 7162).
 	pub fn vanished_since(&self, modseq: u64) -> Vec<u32> {
-		super::vanished::since(&self.account_dir, modseq)
+		super::vanished::since(self.account_root.data_dir(), &self.account_dir, modseq)
 	}
 
 	/// Number of messages in the snapshot (the highest sequence number plus
@@ -190,7 +192,10 @@ impl Snapshot {
 	/// is encrypted. Fails closed on a decryption error rather than returning
 	/// ciphertext.
 	pub fn read(&self, message: &super::mailbox::MessageRef) -> std::io::Result<Vec<u8>> {
-		let stored = crate::util::fs_walk::read(self.message_path(message)?)?;
+		let stored = crate::util::fs_walk::rooted::read(
+			self.account_root.data_dir(),
+			self.message_path(message)?,
+		)?;
 		self.crypto.decode(&stored)
 	}
 
@@ -226,8 +231,13 @@ impl Snapshot {
 		let id = self.messages[index].id;
 		super::flags::write_flags(&self.account_dir, id, &flags)?;
 		// A flag change advances the mailbox mod-sequence and stamps the message.
-		let modseq = super::modseq::next_counter(&self.account_dir)?;
-		let _ = super::modseq::write_message(&self.account_dir, id, modseq);
+		let modseq = super::modseq::next_counter(self.account_root.data_dir(), &self.account_dir)?;
+		let _ = super::modseq::write_message(
+			self.account_root.data_dir(),
+			&self.account_dir,
+			id,
+			modseq,
+		);
 		self.highest_modseq = self.highest_modseq.max(modseq);
 		let seen = super::mailbox::Flag::Seen;
 		let unread_changed = self.messages[index].flags.contains(&seen) != flags.contains(&seen);
@@ -257,8 +267,10 @@ impl Snapshot {
 		if !message_file(&self.account_dir, id, MessageExt::Eml).is_ok_and(|path| path.exists()) {
 			return false;
 		}
-		self.messages[index].flags = super::flags::read_flags(&self.account_dir, id);
-		self.messages[index].modseq = super::modseq::read_message(&self.account_dir, id);
+		self.messages[index].flags =
+			super::flags::read_flags(self.account_root.data_dir(), &self.account_dir, id);
+		self.messages[index].modseq =
+			super::modseq::read_message(self.account_root.data_dir(), &self.account_dir, id);
 		true
 	}
 
@@ -288,7 +300,7 @@ impl Snapshot {
 			.ok_or_else(|| std::io::Error::other("no such message"))?;
 		let uid = self.messages[index].uid;
 		self.take_where(|message| message.uid == uid);
-		super::vanished::record_advancing(&self.account_dir, &[uid]);
+		super::vanished::record_advancing(self.account_root.data_dir(), &self.account_dir, &[uid]);
 		Ok(())
 	}
 
@@ -312,7 +324,11 @@ impl Snapshot {
 	pub fn remove_uids(&mut self, uids: &[u32]) -> std::io::Result<Vec<u32>> {
 		let removed = self.take_where(|message| uids.contains(&message.uid));
 		if !removed.is_empty() {
-			super::vanished::record_advancing(&self.account_dir, uids);
+			super::vanished::record_advancing(
+				self.account_root.data_dir(),
+				&self.account_dir,
+				uids,
+			);
 		}
 		Ok(removed.into_iter().map(|(sequence, _)| sequence).collect())
 	}
@@ -324,7 +340,11 @@ impl Snapshot {
 			message.flags.contains(&super::mailbox::Flag::Deleted) && keep(message.uid)
 		});
 		let vanished: Vec<u32> = removed.iter().map(|(_, uid)| *uid).collect();
-		super::vanished::record_advancing(&self.account_dir, &vanished);
+		super::vanished::record_advancing(
+			self.account_root.data_dir(),
+			&self.account_dir,
+			&vanished,
+		);
 		Ok(removed.into_iter().map(|(sequence, _)| sequence).collect())
 	}
 
@@ -398,7 +418,10 @@ impl Snapshot {
 			MessageExt::Zone,
 		] {
 			if let Ok(path) = message_file(&self.account_dir, id, ext) {
-				let _ = std::fs::remove_file(path);
+				let _ = crate::util::fs_walk::rooted_write::remove_file(
+					self.account_root.data_dir(),
+					&path,
+				);
 			}
 		}
 	}

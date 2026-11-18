@@ -106,7 +106,9 @@ pub fn spawn_domain_rotations(
 				);
 				return;
 			};
-			Some(provider)
+			// Built again at the start of every cycle of a rotation, so a
+			// token file that changed is read again.
+			Some(super::dns_reconcile::live_provider(config, provider))
 		}
 		DnsWrite::Handoff(_) => None,
 	};
@@ -140,7 +142,7 @@ pub fn spawn_domain_rotations(
 		let publisher: Arc<dyn crate::dkim::domain_rotate::KeyPublisher> =
 			match (write, provider.as_ref()) {
 				(DnsWrite::Direct, Some(provider)) => Arc::new(
-					crate::dkim::domain_rotate::ProviderPublisher::new(
+					crate::dkim::domain_rotate::ProviderPublisher::live(
 						Arc::clone(provider),
 						config.dns.zones(),
 					)

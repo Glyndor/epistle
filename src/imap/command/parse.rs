@@ -1,5 +1,21 @@
+//! Parsing of one client line: its tag, its verb and its arguments, and the
+//! values the line carries.
+
+use super::Command;
+use super::error::ParseError;
 use super::fetch::parse_fetch;
-use super::*;
+use super::select_params;
+use super::sequence_set::parse_sequence_set;
+use super::syntax::Tagged;
+
+/// Maximum command line length accepted, excluding CRLF and literals.
+///
+/// RFC 7162 §4 asks servers to take at least 8000 octets, but an RFC 2971
+/// ID command at its own maximum (30 pairs of 30 and 1024 octet strings)
+/// is 31.8 KB, so 32 KiB is the smallest round bound that holds it. The
+/// line decoder scans each byte once and the recursive parsers cap their
+/// nesting, so the bound limits memory and work per line, not stack depth.
+pub const MAX_COMMAND_LINE: usize = 32 * 1024;
 
 /// Default per-listener APPENDLIMIT (RFC 7889) when no
 /// `max_message_size` is configured: the SMTP `MAX_MESSAGE_SIZE` it shares.
@@ -105,14 +121,14 @@ pub fn parse(line: &str, append_limit: usize) -> Result<Tagged, ParseError> {
 		"APPEND" => super::literal::parse_append(&tag, args, append_limit)?,
 		"REPLACE" => super::literal::parse_replace(&tag, args, false, append_limit)?,
 		"FETCH" => parse_fetch(&tag, args, false)?,
-		"STORE" => parse_store(&tag, args, false)?,
+		"STORE" => super::store::parse_store(&tag, args, false)?,
 		"COPY" => parse_copy(&tag, args, false, false)?,
 		"MOVE" => parse_copy(&tag, args, false, true)?,
 		"SEARCH" => super::search::parse_search(&tag, args, false)?,
 		"ESEARCH" => super::search::parse_esearch(&tag, args)?,
 		"SORT" => super::search::parse_sort(&tag, args, false)?,
 		"THREAD" => super::search::parse_thread(&tag, args, false)?,
-		"STATUS" => parse_status(&tag, args)?,
+		"STATUS" => super::status::parse_status(&tag, args)?,
 		"GETACL" | "SETACL" | "DELETEACL" | "LISTRIGHTS" | "MYRIGHTS" => {
 			super::acl::parse(verb.to_ascii_uppercase().as_str(), &tag, args)?
 		}
@@ -142,7 +158,7 @@ pub fn parse(line: &str, append_limit: usize) -> Result<Tagged, ParseError> {
 			if sub.eq_ignore_ascii_case("FETCH") {
 				parse_fetch(&tag, sub_args, true)?
 			} else if sub.eq_ignore_ascii_case("STORE") {
-				parse_store(&tag, sub_args, true)?
+				super::store::parse_store(&tag, sub_args, true)?
 			} else if sub.eq_ignore_ascii_case("COPY") {
 				parse_copy(&tag, sub_args, true, false)?
 			} else if sub.eq_ignore_ascii_case("MOVE") {
@@ -230,92 +246,4 @@ fn parse_copy(
 		uid,
 		remove_source,
 	})
-}
-
-fn parse_store(tag: &str, args: &str, uid: bool) -> Result<Command, ParseError> {
-	let bad = || ParseError::BadArguments(tag.to_string());
-	let (sequence_text, rest) = args.split_once(' ').ok_or_else(bad)?;
-	let sequence = parse_sequence_set(sequence_text).ok_or_else(bad)?;
-
-	// Optional leading `(UNCHANGEDSINCE n)` modifier (RFC 7162).
-	let rest = rest.trim();
-	let (unchanged_since, rest) = if rest.starts_with('(') {
-		let close = rest.find(')').ok_or_else(bad)?;
-		let mut parts = rest[1..close].split_whitespace();
-		let value = match (parts.next(), parts.next(), parts.next()) {
-			(Some(key), Some(value), None) if key.eq_ignore_ascii_case("UNCHANGEDSINCE") => {
-				value.parse().map_err(|_| bad())?
-			}
-			_ => return Err(bad()),
-		};
-		(Some(value), rest[close + 1..].trim())
-	} else {
-		(None, rest)
-	};
-
-	let (item, flags_text) = rest.split_once(' ').ok_or_else(bad)?;
-	let item = item.to_ascii_uppercase();
-	let (mode, silent) = match item.as_str() {
-		"FLAGS" => (StoreMode::Set, false),
-		"FLAGS.SILENT" => (StoreMode::Set, true),
-		"+FLAGS" => (StoreMode::Add, false),
-		"+FLAGS.SILENT" => (StoreMode::Add, true),
-		"-FLAGS" => (StoreMode::Remove, false),
-		"-FLAGS.SILENT" => (StoreMode::Remove, true),
-		_ => return Err(bad()),
-	};
-
-	let flags_text = flags_text.trim();
-	let inner = flags_text
-		.strip_prefix('(')
-		.and_then(|t| t.strip_suffix(')'))
-		.unwrap_or(flags_text);
-	let flags: Vec<String> = inner
-		.split_whitespace()
-		.map(|token| token.to_string())
-		.collect();
-	Ok(Command::Store {
-		sequence,
-		mode,
-		flags,
-		silent,
-		uid,
-		unchanged_since,
-	})
-}
-
-fn parse_status(tag: &str, args: &str) -> Result<Command, ParseError> {
-	let bad = || ParseError::BadArguments(tag.to_string());
-	let (mailbox, rest) = parse_astring(args).ok_or_else(bad)?;
-	if mailbox.is_empty() {
-		return Err(bad());
-	}
-	let rest = rest.trim();
-	let inner = rest
-		.strip_prefix('(')
-		.and_then(|t| t.strip_suffix(')'))
-		.ok_or_else(bad)?;
-	let items = parse_status_items(inner).ok_or_else(bad)?;
-	Ok(Command::Status { mailbox, items })
-}
-
-/// Parse a non-empty space-separated STATUS item list (without parentheses).
-pub(super) fn parse_status_items(inner: &str) -> Option<Vec<StatusItem>> {
-	let mut items = Vec::new();
-	for word in inner.split_whitespace() {
-		items.push(match word.to_ascii_uppercase().as_str() {
-			"MESSAGES" => StatusItem::Messages,
-			"RECENT" => StatusItem::Recent,
-			"UIDNEXT" => StatusItem::Uidnext,
-			"UIDVALIDITY" => StatusItem::Uidvalidity,
-			"UNSEEN" => StatusItem::Unseen,
-			"SIZE" => StatusItem::Size,
-			"DELETED" => StatusItem::Deleted,
-			"MAILBOXID" => StatusItem::MailboxId,
-			"HIGHESTMODSEQ" => StatusItem::HighestModseq,
-			"APPENDLIMIT" => StatusItem::AppendLimit,
-			_ => return None,
-		});
-	}
-	(!items.is_empty()).then_some(items)
 }

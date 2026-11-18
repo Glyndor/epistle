@@ -81,6 +81,7 @@ fn spawn(
 				reloadable: Some(reloadable),
 				renew_before_days: 30,
 				tlsa: None,
+				dns: None,
 			},
 			stop,
 		)
@@ -213,4 +214,51 @@ async fn the_loop_withdraws_what_an_earlier_run_left_before_it_is_stopped() {
 	assert_eq!(deletes.len(), 1, "calls: {:?}", provider.calls());
 	assert!(renewal.stop(Duration::from_secs(10)).await);
 	assert_eq!(provider.deletes().len(), 1, "removed once");
+}
+
+/// Every pass of the loop builds the DNS provider again before it does
+/// anything with it, so a credential that changed is picked up without a
+/// restart.
+#[tokio::test]
+async fn every_pass_of_the_loop_builds_the_provider_again() {
+	use crate::dns::provider::DnsProvider;
+	use crate::dns::provider::live::LiveProvider;
+	let (dir, reloadable) = data_dir();
+	let provider = FakeZone::new(&["example.org"]);
+	let builds = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+	let source = {
+		let (builds, provider) = (Arc::clone(&builds), Arc::clone(&provider));
+		Arc::new(move || {
+			builds.fetch_add(1, Ordering::SeqCst);
+			Ok(Arc::clone(&provider) as Arc<dyn DnsProvider>)
+		})
+	};
+	let live = Arc::new(LiveProvider::from_source(
+		Arc::clone(&provider) as Arc<dyn DnsProvider>,
+		source,
+	));
+	let path = dir.path().to_path_buf();
+	let renewal = Renewal::spawn(|stop| {
+		run(
+			RenewalJob {
+				directory_url: "https://acme.invalid/directory".into(),
+				contacts: Vec::new(),
+				domains: vec![DOMAIN.into()],
+				responder: Arc::new(dns01(&provider)),
+				account_key: account_key_path(&path),
+				data_dir: path,
+				reloadable: Some(reloadable),
+				renew_before_days: 30,
+				tlsa: None,
+				dns: Some(live),
+			},
+			stop,
+		)
+	});
+	let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+	while builds.load(Ordering::SeqCst) == 0 && tokio::time::Instant::now() < deadline {
+		tokio::time::sleep(Duration::from_millis(10)).await;
+	}
+	assert_eq!(builds.load(Ordering::SeqCst), 1, "the first pass built it");
+	assert!(renewal.stop(Duration::from_secs(10)).await);
 }

@@ -205,8 +205,17 @@ impl Server {
 			return Outcome::failed(&request.id, "the request was taken back or has expired");
 		}
 		let result = match request.operation {
-			super::Operation::Publish => self.provider.upsert(&zone, record).await,
-			super::Operation::Withdraw => self.provider.delete(&zone, record).await,
+			super::Operation::Publish => {
+				crate::dkim::domain_rotate::publish_key(self.provider.as_ref(), &zone, record).await
+			}
+			super::Operation::Withdraw => {
+				crate::dkim::domain_rotate::withdraw_key(
+					self.provider.as_ref(),
+					&zone,
+					&record.name,
+				)
+				.await
+			}
 		};
 		match result {
 			Ok(()) => Outcome::ok(&request.id),
@@ -214,10 +223,7 @@ impl Server {
 				// The provider's own text can carry what its API answered:
 				// the log keeps it, the answer carries the category only.
 				tracing::warn!(%error, name = %request.name, "a DNS hand-off write failed");
-				Outcome::failed(
-					&request.id,
-					crate::dns::providers::check::failure_cause(&error),
-				)
+				Outcome::failed(&request.id, category(&error))
 			}
 		}
 	}
@@ -289,4 +295,17 @@ fn read_request(path: &Path) -> Result<Request, String> {
 /// Whether `path` is a symbolic link, which is never followed here.
 fn is_link(path: &std::path::Path) -> bool {
 	std::fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink())
+}
+
+/// What the answer to a failed write says: the category of the failure, never
+/// the text the provider answered.
+fn category(error: &crate::dns::publish::write::WriteError) -> String {
+	use crate::dns::publish::write::WriteError;
+	match error {
+		WriteError::Provider(error) => {
+			crate::dns::providers::check::failure_cause(error).to_string()
+		}
+		WriteError::Rejected(_) => "the provider refused the change".to_string(),
+		other => other.to_string(),
+	}
 }

@@ -2,12 +2,17 @@
 //!
 //! Given the TLSA records published for a service and the certificate chain it
 //! presented, decide whether any record authenticates the peer. End-entity
-//! usages (DANE-EE/PKIX-EE) match the leaf certificate; trust-anchor usages
-//! (DANE-TA/PKIX-TA) match any certificate in the presented chain. PKIX-based
-//! usages additionally require ordinary PKIX validation, which the TLS stack
-//! performs; this layer only checks the TLSA association.
+//! usages (DANE-EE/PKIX-EE) match the leaf certificate. Trust-anchor usages
+//! (DANE-TA/PKIX-TA) name the trust anchor the chain has to end at: the
+//! chain must validate from the leaf up to that anchor and the leaf must be
+//! valid for the name of the service (RFC 7672 §3.1.2, §3.2.2, §3.2.3).
+//! The trust-anchor validation lives in the [`anchor`] module of this one.
+
+use rustls_pki_types::UnixTime;
 
 use super::tlsa::{CertUsage, TlsaRecord};
+
+pub mod anchor;
 
 /// A presented certificate: its full DER and its SubjectPublicKeyInfo DER.
 pub struct CertView<'a> {
@@ -30,16 +35,26 @@ impl<'a> CertView<'a> {
 /// Whether any TLSA record authenticates the presented chain.
 ///
 /// `leaf` is the server certificate; `chain` are the remaining certificates it
-/// presented (intermediates and root) used for trust-anchor assertions. With no
-/// records, DANE does not apply and this returns `false`.
-pub fn authenticate(records: &[TlsaRecord], leaf: &CertView, chain: &[CertView]) -> bool {
+/// presented (intermediates and root) used for trust-anchor assertions.
+/// `server_name` is the name the leaf is checked against: the MX host of the
+/// TLSA base domain. With no records, DANE does not apply and this returns
+/// `false`.
+pub fn authenticate(
+	records: &[TlsaRecord],
+	leaf: &CertView,
+	chain: &[CertView],
+	server_name: &str,
+) -> bool {
+	let now = UnixTime::now();
 	records.iter().any(|record| match record.usage {
 		// End-entity: the leaf certificate itself must match.
 		CertUsage::DaneEe | CertUsage::PkixEe => record.matches_cert(leaf.der, leaf.spki),
-		// Trust anchor: some certificate in the presented chain must match.
-		CertUsage::DaneTa | CertUsage::PkixTa => std::iter::once(leaf)
-			.chain(chain)
-			.any(|cert| record.matches_cert(cert.der, cert.spki)),
+		// Trust anchor: the chain must validate up to the anchor the record
+		// names, and the leaf must be valid for the name of the service.
+		CertUsage::DaneTa | CertUsage::PkixTa => {
+			let chain_der: Vec<&[u8]> = chain.iter().map(|cert| cert.der).collect();
+			anchor::authenticates(record, leaf.der, &chain_der, server_name, now)
+		}
 	})
 }
 
@@ -50,7 +65,7 @@ pub fn authenticate(records: &[TlsaRecord], leaf: &CertView, chain: &[CertView])
 /// authenticated and delivery must not proceed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DaneOutcome {
-	/// At least one DNSSEC-validated TLSA record matched the chain.
+	/// At least one DNSSEC-validated TLSA record authenticated the chain.
 	Authenticated,
 	/// No (validated) TLSA records exist: DANE does not apply, proceed
 	/// opportunistically.
@@ -66,10 +81,15 @@ pub enum DaneOutcome {
 /// this returns [`DaneOutcome::NoRecords`]. With records present, the peer is
 /// authenticated only when one matches; otherwise the outcome is
 /// [`DaneOutcome::Mismatch`] and the caller must refuse delivery (fail closed).
-pub fn dane_outcome(records: &[TlsaRecord], leaf: &CertView, chain: &[CertView]) -> DaneOutcome {
+pub fn dane_outcome(
+	records: &[TlsaRecord],
+	leaf: &CertView,
+	chain: &[CertView],
+	server_name: &str,
+) -> DaneOutcome {
 	if records.is_empty() {
 		DaneOutcome::NoRecords
-	} else if authenticate(records, leaf, chain) {
+	} else if authenticate(records, leaf, chain, server_name) {
 		DaneOutcome::Authenticated
 	} else {
 		DaneOutcome::Mismatch

@@ -29,11 +29,14 @@ mod ptr;
 mod regenerate;
 pub(crate) mod resources;
 mod review;
+mod turned_on;
 
 pub use answers::Answers;
 pub(crate) use apply::prepare_keys_for_update;
 pub(crate) use compose::MAIL_STOP_GRACE_SECS;
 pub use compose::compose_file_path;
+pub(crate) use compose::panel_package::MANIFEST as PANEL_MANIFEST;
+pub(crate) use compose::panel_secrets::read_admin_id as panel_admin_id;
 pub(crate) use compose::{DATABASE_NAME, DATABASE_PASSWORD_FILE, DATABASE_USER, HOST_EPISTLE_PATH};
 pub(crate) use compose_publish::{
 	CONTAINER_BIND, CONTAINER_BIND_DUAL, Narrowed, OverrideEntry, OverridePorts,
@@ -42,8 +45,10 @@ pub(crate) use compose_publish::{
 	prepare as prepare_published_ports, preview as preview_published_ports,
 };
 #[cfg(test)]
+pub(crate) use regenerate::regenerate;
+#[cfg(test)]
 pub(crate) use regenerate::rendered_for_tests;
-pub(crate) use regenerate::{regenerate, regenerate_with};
+pub(crate) use regenerate::{regenerate_in, regenerate_with};
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -85,7 +90,9 @@ pub fn run(args: Args) -> ExitCode {
 		detector: &detect::LiveDetector,
 		resolver: &ptr::system_resolver,
 		meminfo: std::path::Path::new("/proc/meminfo"),
+		panel_manifest: std::path::Path::new(compose::panel_package::MANIFEST),
 		clock: &crate::clock::sync::probe,
+		boot: &|path, out| crate::cli::status::print_boot_summary_at(path, out),
 	};
 	run_with(args, &probes, &mut crate::cli::style::stderr())
 }
@@ -99,8 +106,12 @@ struct Probes<'a> {
 	resolver: &'a dyn Fn() -> Option<Box<dyn crate::spf::DnsLookup>>,
 	/// The host's `/proc/meminfo`, which sizes the containers.
 	meminfo: &'a std::path::Path,
+	/// The pin file the `epistle-panel` package installs.
+	panel_manifest: &'a std::path::Path,
 	/// Whether the host keeps its clock synchronised.
 	clock: &'a dyn Fn() -> crate::clock::sync::HostClock,
+	/// Prints whether the stack would come back after a reboot.
+	boot: &'a dyn Fn(&std::path::Path, &mut dyn Write),
 }
 
 /// [`run`] with the probes and the stream for the detection notices and
@@ -140,8 +151,25 @@ fn run_with(args: Args, probes: &Probes, out: &mut dyn Write) -> ExitCode {
 			Err(()) => return ExitCode::from(EXIT_INVALID),
 		},
 	};
+	// Only a `true` the answers file itself gave is a demand `init` refuses to
+	// leave unmet. One copied from an existing stack's compose file below is
+	// an earlier choice, and the package may have been removed since.
+	let demanded = answers.services.panel == Some(true);
 	for note in host_sizing::fill(&mut answers, probes.meminfo) {
 		let _ = writeln!(out, "{note}");
+	}
+	// After the sizing, which keeps the panel choice an existing stack recorded.
+	let api = answers.services.api;
+	match compose::panel_package::resolve(&mut answers, probes.panel_manifest, api, demanded) {
+		Ok(notes) => {
+			for note in notes {
+				let _ = writeln!(out, "{note}");
+			}
+		}
+		Err(error) => {
+			crate::cli::style::error(error);
+			return ExitCode::from(EXIT_INVALID);
+		}
 	}
 	warn_unsynced_clock(&(probes.clock)(), out);
 	compose::warn_low_nofile(compose::host_hard_nofile(), out);
@@ -239,6 +267,8 @@ fn run_with(args: Args, probes: &Probes, out: &mut dyn Write) -> ExitCode {
 			}
 			report_ptr(&answers, probes, out);
 			offer_warmup(&answers.data_dir, out);
+			turned_on::render(&answers, out);
+			(probes.boot)(&answers.config_path, out);
 			let mut report = lines(|text| outcome.report.write_to(text).is_ok());
 			if answers.mode == answers::Mode::Automatic && answers.dns.is_some() {
 				let published = dns_step::publish(

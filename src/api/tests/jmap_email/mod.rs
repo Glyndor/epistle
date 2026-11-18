@@ -1,5 +1,6 @@
 pub use super::*;
 
+pub(super) mod email_query;
 pub(super) mod jmap;
 pub(super) mod jmap_author;
 pub(super) mod jmap_copy_and_chain;

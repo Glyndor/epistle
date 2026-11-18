@@ -44,6 +44,8 @@ pub struct PartReport {
 	pub real_type: RealType,
 	/// What the rules found, sorted.
 	pub reasons: Vec<Reason>,
+	/// The decoded size of the part, in bytes.
+	pub size: usize,
 }
 
 /// The inspection of one message.
@@ -143,6 +145,7 @@ fn judge_leaf(leaf: &Leaf, extensions: &Extensions) -> PartReport {
 			declared_types: leaf.declared_types.clone(),
 			real_type,
 			reasons: limits_only(leaf),
+			size: leaf.content.len(),
 		};
 	}
 	let listing = opens_as_zip.then(|| archive::list_zip(&leaf.content));
@@ -174,6 +177,7 @@ fn judge_leaf(leaf: &Leaf, extensions: &Extensions) -> PartReport {
 		declared_types: leaf.declared_types.clone(),
 		real_type,
 		reasons,
+		size: leaf.content.len(),
 	}
 }
 

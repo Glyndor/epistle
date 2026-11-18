@@ -26,6 +26,8 @@ const SALT_LEN: usize = 16;
 /// time the account authenticates with a cleartext password mechanism.
 pub const SCRAM_ITERATIONS: u32 = 600_000;
 
+pub mod iterations;
+
 /// The per-account SCRAM credentials, derived from the password at set time.
 #[derive(Debug, Clone)]
 pub struct ScramCredentials {
@@ -90,7 +92,7 @@ impl ScramStored {
 	}
 
 	/// Derive stored SCRAM-SHA-256 credentials for `password` under a fresh
-	/// random salt at [`SCRAM_ITERATIONS`]. `None` when the CSPRNG
+	/// random salt at the count in force ([`iterations::current`]). `None` when the CSPRNG
 	/// cannot produce one, so the caller fails closed rather than storing
 	/// credentials under a predictable salt.
 	///
@@ -105,7 +107,7 @@ impl ScramStored {
 		Some(Self::from_credentials(&ScramCredentials::derive(
 			password,
 			&salt,
-			SCRAM_ITERATIONS,
+			iterations::current(),
 		)))
 	}
 

@@ -91,7 +91,7 @@ fn a_rejected_non_synchronizing_append_discards_its_payload() {
 	let mut session = logged_in(dir.path());
 	// An unclosed flag list: BAD, and the 5 octets already sent go.
 	let output = session.command_line("p APPEND INBOX (\\Seen {5+}");
-	assert_eq!(text(&output), "p BAD invalid arguments\r\n");
+	assert_eq!(text(&output), "p BAD [CLIENTBUG] invalid arguments\r\n");
 	assert_eq!(output.discard_literal, Some(5));
 	let output = session.command_line("p UID REPLACE x INBOX {7+}");
 	assert!(text(&output).starts_with("p BAD"), "{}", text(&output));

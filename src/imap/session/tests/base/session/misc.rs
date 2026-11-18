@@ -43,7 +43,7 @@ fn namespace_before_auth_returns_bad_with_no_listing() {
 	let output = session.command_line("a1 NAMESPACE");
 	let response = text(&output);
 	assert_eq!(
-		response, "a1 NO not authenticated\r\n",
+		response, "a1 BAD not authenticated\r\n",
 		"pre-auth NAMESPACE must NOT list anything and MUST refuse the command"
 	);
 }
@@ -134,7 +134,7 @@ fn quota_reports_storage_usage() {
 
 	// GETQUOTA requires authentication.
 	let mut anon = Session::new("mail.example.org", dir.path().to_path_buf(), directory());
-	assert!(text(&anon.command_line("b1 GETQUOTA \"\"")).contains("b1 NO"));
+	assert!(text(&anon.command_line("b1 GETQUOTA \"\"")).contains("b1 BAD not authenticated"));
 }
 
 #[test]

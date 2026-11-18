@@ -227,3 +227,37 @@ async fn removing_an_account_drops_its_masked_addresses_app_passwords_and_suppre
 			.is_empty()
 	);
 }
+
+#[tokio::test]
+async fn removing_an_account_drops_the_pending_bounce_counts_of_its_name_and_addresses() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let (store, spool) = store_and_spool(dir.path());
+	seed(dir.path(), &store, &spool, "dora");
+	let text = format!(
+		"hostname = 'mail.example.org'\ndata_dir = {:?}\ndomains = ['{DOMAIN}']\n[queue]\nsuppression_threshold = 3\n",
+		dir.path()
+	);
+	let rules = crate::queue::SuppressionRules::from_config(
+		&crate::config::Config::parse_text(&text, Path::new("mail.toml")).expect("config"),
+	);
+	let suppression = SuppressionList::open(dir.path()).expect("suppression");
+	let address = format!("dora@{DOMAIN}");
+	for sender in ["dora", address.as_str()] {
+		assert!(
+			!suppression
+				.record_bounce(&rules, sender, "gone@elsewhere.example", "550", 1)
+				.expect("record")
+		);
+	}
+	let pending = dir.path().join("suppression/pending");
+	assert_eq!(std::fs::read_dir(&pending).expect("pending").count(), 2);
+
+	remove_account(&store, &spool, dir.path(), "dora", QueuePolicy::Drain, None)
+		.await
+		.expect("remove");
+
+	assert!(
+		std::fs::read_dir(&pending).map_or(true, |mut left| left.next().is_none()),
+		"a new account with the same name starts with no bounce counts"
+	);
+}

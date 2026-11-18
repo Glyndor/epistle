@@ -25,7 +25,7 @@ fn a_listener_without_tls_is_enabled_on_loopback_and_keeps_a_port_move() {
 	std::fs::write(&compose, r#"{"services":{"mail":{"ports":["25:25"]}}}"#).unwrap();
 	let mut out = Vec::new();
 	let mut status = Vec::new();
-	execute_with(
+	let _ = execute_with(
 		file.path(),
 		ServiceCli::Enable {
 			name: ServiceName::Webdav,
@@ -58,7 +58,7 @@ fn a_listener_without_tls_is_enabled_on_loopback_and_keeps_a_port_move() {
 		bind: None,
 		port: Some(9000),
 	};
-	super::super::super::service::set::run(
+	let _ = super::super::super::service::set::run(
 		file.path(),
 		request,
 		false,
@@ -88,7 +88,7 @@ fn a_wide_publication_of_a_listener_without_tls_is_narrowed_out_loud() {
 	let mut text = std::fs::read_to_string(file.path()).unwrap();
 	text.push_str("[tls]\ncert_file = '/cert.pem'\nkey_file = '/key.pem'\n");
 	std::fs::write(file.path(), text).unwrap();
-	execute_with(
+	let _ = execute_with(
 		file.path(),
 		ServiceCli::Enable {
 			name: ServiceName::Webdav,
@@ -120,7 +120,7 @@ fn a_wide_publication_of_a_listener_without_tls_is_narrowed_out_loud() {
 	);
 	std::fs::write(file.path(), wide).unwrap();
 	let mut status = Vec::new();
-	execute_with(
+	let _ = execute_with(
 		file.path(),
 		ServiceCli::Enable {
 			name: ServiceName::Pop3,
@@ -171,7 +171,7 @@ fn a_generated_file_that_is_a_symlink_is_read_through_it_and_replaced_by_a_regul
 	)
 	.unwrap();
 	std::os::unix::fs::symlink("../generated/compose.yaml", &compose).unwrap();
-	execute_with(
+	let _ = execute_with(
 		file.path(),
 		ServiceCli::Enable {
 			name: ServiceName::Imap,
@@ -227,7 +227,7 @@ fn a_generated_map_that_contradicts_the_config_is_reported_and_reconciled() {
 	std::fs::write(file.path(), text).unwrap();
 	let mut out = Vec::new();
 	let mut status = Vec::new();
-	execute_with(
+	let _ = execute_with(
 		file.path(),
 		ServiceCli::Enable {
 			name: ServiceName::Imap,

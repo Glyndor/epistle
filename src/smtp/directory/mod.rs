@@ -90,6 +90,10 @@ pub struct Directory {
 	/// Hosted domains switched off: mail for them is rejected like mail for
 	/// an unknown user and nobody may send as an address in them.
 	disabled_domains: HashSet<String>,
+	/// The name this server gives itself (lowercased), which need not be a
+	/// hosted domain. Mail to `postmaster` at it is accepted all the same
+	/// (RFC 5321 section 4.5.1).
+	server_name: Option<String>,
 	/// Hosted domains that only receive (`receive_only_domains`): nobody may
 	/// send as an address in them (lowercased).
 	send_off_domains: HashSet<String>,
@@ -106,6 +110,10 @@ pub struct Directory {
 	/// Account names administratively disabled (kept on disk, cannot
 	/// authenticate). SCIM `active: false` lands here.
 	disabled: HashSet<String>,
+	/// Account names whose credentials were reset after a compromise
+	/// (`epistle rotate`): they sign in nowhere until an administrator gives
+	/// them a new password and, where they had one, a new second factor.
+	credential_reset: HashSet<String>,
 	/// Storage quota (bytes) per account name; absent falls back to the domain
 	/// quota, then the server default.
 	account_quotas: HashMap<String, u64>,
@@ -127,6 +135,8 @@ pub struct Directory {
 	/// Per-account external forwarding: `(targets, keep_local)`. Mail for the
 	/// account is also queued to each target; `keep_local` keeps the local copy.
 	forwards: HashMap<String, (Vec<String>, bool)>,
+	/// The caps on message sizes, per scope.
+	limits: std::sync::Arc<crate::limits::Limits>,
 	/// Multi-target aliases, keyed by lowercased alias address.
 	aliases: HashMap<String, AliasSpec>,
 	/// Secondary app passwords per account name. Each entry is tried when the
@@ -214,16 +224,19 @@ impl Directory {
 			catch_all: HashMap::new(),
 			domain_aliases: HashMap::new(),
 			disabled_domains: HashSet::new(),
+			server_name: None,
 			send_off_domains: HashSet::new(),
 			send_off: HashSet::new(),
 			receive_off: HashSet::new(),
 			scram: HashMap::new(),
 			totp: HashMap::new(),
 			disabled: HashSet::new(),
+			credential_reset: HashSet::new(),
 			account_quotas: HashMap::new(),
 			domain_quotas: HashMap::new(),
 			domain_submission_limits: HashMap::new(),
 			forwards: HashMap::new(),
+			limits: Default::default(),
 			aliases: HashMap::new(),
 			app_passwords: HashMap::new(),
 			max_app_passwords: 0,
@@ -264,6 +277,14 @@ impl Directory {
 	/// `tlsrpt@<domain>` recipients against the served domain set.
 	pub fn domains(&self) -> Vec<String> {
 		self.domains.iter().cloned().collect()
+	}
+
+	/// The domains whose `postmaster@` and `tlsrpt@` mail may be a report:
+	/// the hosted ones and the server's own name, lowercased.
+	pub fn report_domains(&self) -> Vec<String> {
+		let mut domains = self.domains();
+		domains.extend(self.server_name.clone());
+		domains
 	}
 
 	/// Whether `domain` is hosted here, directly or as an alias domain:

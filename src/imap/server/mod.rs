@@ -96,6 +96,8 @@ pub struct Server {
 	/// expunge deletes the on-disk files immediately. The sweep itself runs
 	/// in [`crate::cli::serve::tasks::sweeps::spawn_archive_sweep`].
 	retention_days: u64,
+	/// The operator's folder policy, handed to every session.
+	folders: Arc<super::special_use::FolderPolicy>,
 	/// The authentication protocol this listener serves (`Imap` or
 	/// `Imaps`); tagged on every password attempt through this server so a
 	/// per-account `allowed_protocols` set can admit or reject it. Default
@@ -142,6 +144,7 @@ impl Server {
 			preauth_timeout: DEFAULT_PREAUTH_TIMEOUT,
 			drain: None,
 			retention_days: 0,
+			folders: Arc::default(),
 			auth_protocol: crate::config::Protocol::Imaps,
 			training: None,
 			append_limit: super::command::DEFAULT_APPEND_LIMIT,
@@ -270,7 +273,7 @@ impl Server {
 			let Ok(line) = String::from_utf8(line) else {
 				response_writer::write_response(
 					&mut *stream,
-					b"* BAD non-ASCII command\r\n",
+					b"* BAD [CLIENTBUG] non-ASCII command\r\n",
 					&clock,
 					session.is_authenticated(),
 				)
@@ -300,6 +303,9 @@ impl Server {
 				return Ok(());
 			}
 
+			if self.end_if_withdrawn(&mut *stream, &clock, &session).await {
+				return Ok(());
+			}
 			let mut output = session.command_line(&line);
 			// Abuse guard: drop a client that only produces BAD responses.
 			if is_bad_response(&output.bytes) {
@@ -495,3 +501,5 @@ mod read;
 use read::read_auth_line;
 
 mod session_factory;
+
+mod withdrawn;

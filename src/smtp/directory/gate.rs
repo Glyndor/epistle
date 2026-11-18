@@ -12,7 +12,7 @@ use ring::hmac;
 
 use super::bans::BanOutcome;
 use super::*;
-use crate::smtp::scram::{SCRAM_ITERATIONS, ScramCredentials};
+use crate::smtp::scram::{ScramCredentials, iterations};
 
 /// What proved the identity that asks to be admitted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,6 +75,9 @@ impl Directory {
 	/// has identified it. The rules, in one place for every mechanism:
 	///
 	/// - an administratively disabled account never signs in;
+	/// - nor does an account whose credentials were reset after a
+	///   compromise, until an administrator has replaced them: the stolen
+	///   password, its app passwords and any token for it are refused alike;
 	/// - the account's protocol allowlist must include `protocol`;
 	/// - SCRAM and a bearer token not backed by a provider-side second factor
 	///   are refused for an account with a second factor, because the proof
@@ -89,7 +92,7 @@ impl Directory {
 		proof: Proof,
 	) -> bool {
 		let account = account.to_ascii_lowercase();
-		if self.disabled.contains(&account) {
+		if !self.account_is_live(&account) {
 			return false;
 		}
 		if !self.is_protocol_allowed(&account, protocol) {
@@ -176,7 +179,8 @@ impl Directory {
 		let tag = hmac::sign(key, username.to_ascii_lowercase().as_bytes());
 		ScramCredentials {
 			salt: tag.as_ref()[..16].to_vec(),
-			iterations: SCRAM_ITERATIONS,
+			// The decoy of an unknown name costs what a real verifier costs.
+			iterations: iterations::current(),
 			stored_key: [0u8; 32],
 			server_key: [0u8; 32],
 		}

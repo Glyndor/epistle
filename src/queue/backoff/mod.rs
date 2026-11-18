@@ -20,12 +20,15 @@
 //! recipients and asks for the rest in another transaction. Those are not
 //! failures and are retried at once, not held off.
 
-use crate::queue::reply::parse_enhanced;
+use crate::queue::reply::{parse_enhanced, provider_cause};
+use crate::queue::warmup::Group;
 use std::collections::HashMap;
 
 use super::destination::Destination;
 use crate::storage::{Envelope, RecipientStatus};
 
+/// The default minimum provider pause: ten minutes.
+pub const DEFAULT_PROVIDER_PAUSE_SECS: u64 = 600;
 /// The default backoff, in seconds: 1, 5, 15 and 60 minutes.
 pub const DEFAULT_STEPS: [u64; 4] = [60, 300, 900, 3600];
 /// The most steps the configuration accepts.
@@ -69,6 +72,9 @@ pub fn too_many_recipients(reason: &str) -> bool {
 /// Whether `reason` asks the sender to slow down: any 421, any 4.7.x, or a
 /// 451 or 452 whose text speaks of a rate or a limit.
 pub fn throttled(reason: &str) -> bool {
+	if provider_cause(reason).is_some_and(|cause| cause.pauses()) {
+		return true;
+	}
 	if too_many_recipients(reason) {
 		return false;
 	}
@@ -111,7 +117,10 @@ pub struct Hold {
 /// read from the spool. It keeps nothing of its own: dropping it and
 /// reading it again from the spool gives the same holds.
 #[derive(Debug, Clone, Default)]
-pub struct Holds(HashMap<Destination, Hold>);
+pub struct Holds {
+	destinations: HashMap<Destination, Hold>,
+	providers: HashMap<Group, Hold>,
+}
 
 impl Holds {
 	/// Add what `envelope` says: each pending recipient deferred by a
@@ -144,11 +153,33 @@ impl Holds {
 	/// Count `destination` as held until `until` after `deferrals` in a
 	/// row, keeping the longest wait and the most deferrals seen.
 	pub fn note(&mut self, destination: Destination, until: u64, deferrals: u32, reason: &str) {
-		let hold = self.0.entry(destination).or_insert_with(|| Hold {
-			until,
-			deferrals,
-			reason: reason.to_string(),
-		});
+		if destination.kind() == super::destination::Kind::Exchanger
+			&& provider_cause(reason).is_some_and(|cause| cause.pauses())
+		{
+			let group = Group::of_exchanger(destination.as_str());
+			if group.is_provider() {
+				let hold = self.providers.entry(group).or_insert_with(|| Hold {
+					until,
+					deferrals,
+					reason: reason.to_string(),
+				});
+				if until >= hold.until {
+					*hold = Hold {
+						until,
+						deferrals,
+						reason: reason.to_string(),
+					};
+				}
+			}
+		}
+		let hold = self
+			.destinations
+			.entry(destination)
+			.or_insert_with(|| Hold {
+				until,
+				deferrals,
+				reason: reason.to_string(),
+			});
 		if until > hold.until {
 			hold.until = until;
 			hold.reason = reason.to_string();
@@ -170,18 +201,39 @@ impl Holds {
 
 	/// The hold of `destination` when it is in force at `now`.
 	pub fn held(&self, destination: &Destination, now: u64) -> Option<&Hold> {
-		self.0.get(destination).filter(|hold| hold.until > now)
+		self.destinations
+			.get(destination)
+			.filter(|hold| hold.until > now)
 	}
 
 	/// The slow-down deferrals in a row `destination` has behind it, in
 	/// force or not.
 	pub fn deferrals(&self, destination: &Destination) -> u32 {
-		self.0.get(destination).map_or(0, |hold| hold.deferrals)
+		self.destinations
+			.get(destination)
+			.map_or(0, |hold| hold.deferrals)
+	}
+
+	/// The provider-wide pause, across all of its exchanger hosts.
+	pub fn provider_held(&self, host: &str, now: u64) -> Option<&Hold> {
+		self.providers
+			.get(&Group::of_exchanger(host))
+			.filter(|hold| hold.until > now)
+	}
+
+	/// Keep a throttled provider at one connection while its pending rate-limit
+	/// replies remain in the spool, even after their pauses have elapsed.
+	pub fn provider_limited(&self, group: Group) -> bool {
+		self.providers.contains_key(&group)
 	}
 
 	/// The holds in force at `now`, by destination.
 	pub fn in_force(&self, now: u64) -> Vec<(&Destination, &Hold)> {
-		let mut held: Vec<_> = self.0.iter().filter(|(_, hold)| hold.until > now).collect();
+		let mut held: Vec<_> = self
+			.destinations
+			.iter()
+			.filter(|(_, hold)| hold.until > now)
+			.collect();
 		held.sort_by(|a, b| a.0.cmp(b.0));
 		held
 	}

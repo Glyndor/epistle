@@ -125,6 +125,24 @@ purge)
 		echo "epistle: the glyndor-epistle account does not exist, so there was nothing to stop" >&2
 	fi
 
+	# The drop-in that ordered the account's user manager after the network.
+	# Its name is this package's and its directory is named for the account's
+	# uid, so the glob finds it even on a retry after the account is gone, and
+	# every other file in that directory stays. The user drop-in lives in the
+	# account's home and goes with it below.
+	removed_dropin=false
+	for dropin in /etc/systemd/system/user@*.service.d/glyndor-epistle-boot.conf; do
+		[ -f "$dropin" ] || continue
+		rm -f -- "$dropin"
+		rmdir -- "${dropin%/*}" 2>/dev/null || true
+		removed_dropin=true
+	done
+	if [ "$removed_dropin" = true ] && [ -d /run/systemd/system ]; then
+		if ! timeout -k 5 20 systemctl daemon-reload; then
+			echo "epistle: systemctl daemon-reload failed after removing the boot drop-in" >&2
+		fi
+	fi
+
 	# 2. The postinst picks a free block per host, so the ranges to remove are
 	# the ones listed for the account, not a fixed pair. A missing table
 	# simply contributes nothing.

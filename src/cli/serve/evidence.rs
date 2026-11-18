@@ -38,6 +38,9 @@ pub(super) fn open(config: &Config, crypto: &MessageCrypto) -> std::io::Result<E
 	if reconciled > 0 {
 		tracing::warn!(reconciled, "discarded submissions a stop left half-queued");
 	}
+	// A stop the last run recorded has done its work in the clock check just
+	// made; a crash from here on must not be explained by it.
+	crate::evidence::timeref::stop::clear(service.root());
 	// Transactional mail waits for the first verification: the service
 	// opens with its gate closed, and only a clean tick opens it.
 	let tasks = Some(crate::evidence::tasks::Tasks::new(Arc::clone(&service))?);
@@ -46,6 +49,11 @@ pub(super) fn open(config: &Config, crypto: &MessageCrypto) -> std::io::Result<E
 		bindings,
 		tasks,
 	})
+}
+
+/// Record the time of a clean shutdown, for the next start's clock check.
+pub(super) fn record_stop(evidence: &Evidence) {
+	evidence.service.record_clean_stop();
 }
 
 /// Run the evidence tasks every [`crate::evidence::tasks::TICK`], the first

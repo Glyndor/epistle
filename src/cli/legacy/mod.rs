@@ -327,6 +327,7 @@ impl Legacy {
 					domains,
 					account,
 					class: None,
+					auto_submitted: false,
 				}),
 			),
 			Legacy::ApiKeys { config, json } => {

@@ -22,7 +22,7 @@ pub struct SplitDelivery {
 	signer: Option<crate::dkim::PerDomainSigner>,
 	rules: Vec<crate::rules::Rule>,
 	/// SRS rewriter and our domain, for forwarded (redirected) mail.
-	srs: Option<(crate::queue::srs::SrsKeys, String)>,
+	srs: SrsSlot,
 	/// ARC sealer for forwarded mail, so the next hop can trust our assessment
 	/// even when forwarding breaks SPF/DKIM (RFC 8617). Optional and our domain,
 	/// used to skip re-sealing a chain we already sealed at inbound accept.
@@ -59,13 +59,19 @@ impl SplitDelivery {
 			directory,
 			signer: None,
 			rules: Vec::new(),
-			srs: None,
+			srs: SrsSlot::default(),
 			arc: None,
 			metrics: None,
 			webhook: None,
 			evidence: None,
 			identification: crate::smtp::identification::Policy::default(),
 		})
+	}
+
+	/// Deliver by the operator's folder policy.
+	pub fn with_folders(mut self, folders: Arc<crate::imap::special_use::FolderPolicy>) -> Self {
+		self.local = self.local.with_folders(folders);
+		self
 	}
 
 	/// Apply the server default quota to local copies from every ingress path.
@@ -108,6 +114,13 @@ impl SplitDelivery {
 		self
 	}
 
+	/// Read the spam complaints delivered to the feedback-loop mailbox and
+	/// suppress the complainant. `None` leaves the mailbox ordinary.
+	pub fn with_fbl(mut self, fbl: Option<crate::reports::fbl::Fbl>) -> Self {
+		self.local = self.local.with_fbl(fbl);
+		self
+	}
+
 	/// Sign outbound messages with this DKIM signer. Per-domain
 	/// overrides are picked at sign time from the same handle.
 	pub fn with_signer(mut self, signer: crate::dkim::PerDomainSigner) -> Self {
@@ -124,12 +137,18 @@ impl SplitDelivery {
 	/// [`with_srs`](Self::with_srs) with a secret per hosted domain next to
 	/// (or instead of) the server-wide one.
 	pub fn with_srs_keys(
-		mut self,
+		self,
 		keys: crate::queue::srs::SrsKeys,
 		our_domain: impl Into<String>,
 	) -> Self {
-		self.srs = Some((keys, our_domain.into()));
+		self.srs.replace(Some((keys, our_domain.into())));
 		self
+	}
+
+	/// The slot the SRS keys are read from, to replace them while the sink
+	/// runs.
+	pub fn srs_slot(&self) -> SrsSlot {
+		self.srs.clone()
 	}
 
 	/// Seal forwarded mail into our ARC chain at `our_domain`, so the next hop
@@ -138,6 +157,12 @@ impl SplitDelivery {
 	pub fn with_arc_sealer(mut self, sealer: Arc<crate::arc::sealer::ArcSealer>) -> Self {
 		let domain = sealer.domain().to_string();
 		self.arc = Some((sealer, domain));
+		self
+	}
+
+	/// Hold forwards, Sieve redirects and vacation replies to `guard`.
+	pub fn with_forwarding(mut self, guard: Arc<crate::forwarding::Guard>) -> Self {
+		self.local = self.local.with_forwarding(guard);
 		self
 	}
 
@@ -192,6 +217,8 @@ mod outbound;
 mod route;
 mod seal;
 mod sink;
+mod srs_slot;
+pub use srs_slot::SrsSlot;
 
 #[cfg(test)]
 mod tests;

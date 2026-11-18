@@ -120,7 +120,7 @@ pub(super) fn add_with_display_name(
 		config.domain_aliases.clone(),
 		config.accounts.clone(),
 	) {
-		Ok(store) => store,
+		Ok(store) => store.with_limits(crate::limits::Limits::shared(config)),
 		Err(error) => {
 			super::style::error(format_args!("opening account store: {error}"));
 			return ExitCode::FAILURE;

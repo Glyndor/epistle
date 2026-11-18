@@ -56,7 +56,8 @@ impl Anchors {
 		if anchors
 			.iter()
 			.filter(|anchor| anchor.until.is_none())
-			.count() > 1
+			.count()
+			> 1
 		{
 			return Err("give the period of every key but the current one (KEY@YYYY-MM-DD)".into());
 		}

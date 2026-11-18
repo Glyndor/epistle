@@ -157,7 +157,8 @@ fn target(config: &Config, account: &str) -> Result<Target, ExitCode> {
 		usage,
 		max_message_size: config
 			.max_message_size
-			.unwrap_or(crate::smtp::session::MAX_MESSAGE_SIZE as u64) as usize,
+			.unwrap_or(crate::smtp::session::MAX_MESSAGE_SIZE as u64)
+			as usize,
 	})
 }
 

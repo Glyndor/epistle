@@ -23,6 +23,10 @@ pub enum StoreError {
 		/// The configured cap.
 		max: usize,
 	},
+	/// A configured cap stopped the write: the text says which one, its
+	/// value, the scope that set it and how to make room.
+	#[error("{0}")]
+	Capped(crate::limits::LimitReached),
 	/// Reading or writing the `accounts.toml` / `app_passwords.toml` /
 	/// `masked.json` sidecar files failed. The wrapped `std::io::Error`
 	/// carries the cause.

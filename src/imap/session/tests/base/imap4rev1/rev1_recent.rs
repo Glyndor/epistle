@@ -65,7 +65,7 @@ fn rev1_recent_search_keys_follow_zero_policy() {
 	for criteria in ["RECENT", "NEW", "OLD", "NOT RECENT", "OR NEW ALL"] {
 		assert_eq!(
 			text(&session.command_line(&format!("q SEARCH {criteria}"))),
-			"q BAD invalid arguments\r\n"
+			"q BAD [CLIENTBUG] invalid arguments\r\n"
 		);
 	}
 }

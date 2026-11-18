@@ -15,6 +15,7 @@ fn builds_bounce_to_the_sender() {
 		original(),
 		UNIX_EPOCH + Duration::from_secs(1_780_662_896),
 		true,
+		true,
 	)
 	.expect("bounce built");
 
@@ -39,6 +40,7 @@ fn produces_rfc3464_delivery_status() {
 		"550 5.1.1 no such user",
 		original(),
 		UNIX_EPOCH + Duration::from_secs(1_780_662_896),
+		true,
 		true,
 	)
 	.expect("bounce built");
@@ -85,6 +87,7 @@ fn defaults_status_when_reason_has_no_code() {
 		original(),
 		UNIX_EPOCH,
 		true,
+		true,
 	)
 	.expect("bounce built");
 	let body = String::from_utf8(bounce.data).expect("ascii");
@@ -100,6 +103,7 @@ fn reports_each_failed_recipient() {
 		"550 5.2.1 mailbox disabled",
 		original(),
 		UNIX_EPOCH,
+		true,
 		true,
 	)
 	.expect("bounce built");
@@ -123,6 +127,7 @@ fn delay_warning_is_transient_and_keeps_retrying() {
 		original(),
 		UNIX_EPOCH,
 		true,
+		true,
 	)
 	.expect("warning built");
 	assert_eq!(warning.reverse_path, "");
@@ -143,6 +148,7 @@ fn delay_warning_is_transient_and_keeps_retrying() {
 			original(),
 			UNIX_EPOCH,
 			true,
+			true,
 		)
 		.is_none()
 	);
@@ -160,6 +166,7 @@ fn sanitizes_crlf_in_reason_to_prevent_header_injection() {
 		"550 rejected\r\nBcc: attacker@evil.example\r\nX-Injected: yes",
 		original(),
 		UNIX_EPOCH,
+		true,
 		true,
 	)
 	.expect("bounce built");
@@ -185,6 +192,7 @@ fn caps_reason_length() {
 		original(),
 		UNIX_EPOCH,
 		true,
+		true,
 	)
 	.expect("bounce built");
 	let body = String::from_utf8(bounce.data).expect("ascii");
@@ -203,6 +211,7 @@ fn never_bounces_a_bounce() {
 			original(),
 			UNIX_EPOCH,
 			true,
+			true,
 		)
 		.is_none()
 	);
@@ -220,7 +229,49 @@ fn caps_quoted_headers() {
 		&huge,
 		UNIX_EPOCH,
 		true,
+		true,
 	)
 	.expect("bounce built");
 	assert!(bounce.data.len() < 10_000);
+}
+
+/// The `Auto-Submitted` fields of the bounce's own header block, not of the
+/// original headers it quotes further down.
+fn own_auto_submitted(data: &[u8]) -> Vec<String> {
+	let text = String::from_utf8(data.to_vec()).expect("ascii");
+	let (head, _) = text.split_once("\r\n\r\n").expect("header block");
+	head.lines()
+		.filter(|line| line.to_ascii_lowercase().starts_with("auto-submitted:"))
+		.map(str::to_string)
+		.collect()
+}
+
+/// A message an API key marked `Auto-Submitted: auto-generated` bounces with
+/// the bounce's own setting, never with what the sender's key wrote.
+#[test]
+fn bounce_keeps_its_own_auto_submitted_value() {
+	let sent =
+		b"From: alice@example.org\r\nSubject: hi\r\nAuto-Submitted: auto-generated\r\n\r\nbody\r\n";
+	let build_with = |system_auto_submitted| {
+		build(
+			"mail.example.org",
+			"alice@example.org",
+			&["bob@elsewhere.example".to_string()],
+			"550 5.1.1 no such user",
+			sent,
+			UNIX_EPOCH + Duration::from_secs(1_780_662_896),
+			system_auto_submitted,
+			true,
+		)
+		.expect("bounce built")
+	};
+	assert_eq!(
+		own_auto_submitted(&build_with(false).data),
+		Vec::<String>::new(),
+		"the original's header must not become the bounce's"
+	);
+	assert_eq!(
+		own_auto_submitted(&build_with(true).data),
+		vec!["Auto-Submitted: auto-generated".to_string()]
+	);
 }

@@ -96,7 +96,8 @@ fn admit(
 				&& devices
 					.values()
 					.filter(|g| net48_of(g.client) == net)
-					.count() >= MAX_GRANTS_PER_NET)
+					.count()
+					>= MAX_GRANTS_PER_NET)
 	};
 	if devices.len() >= MAX_DEVICE_GRANTS || over_cap(&devices) {
 		// Expired grants nobody polled for would otherwise count forever.
@@ -121,7 +122,8 @@ fn admit(
 			&& devices
 				.values()
 				.filter(|g| net48_of(g.client) == net)
-				.count() >= MAX_GRANTS_PER_NET;
+				.count()
+				>= MAX_GRANTS_PER_NET;
 		return Err(
 			(if client_full { client_wait } else { 0 }).max(if net_full { net_wait } else { 0 }),
 		);
@@ -179,6 +181,10 @@ pub async fn device_authorization(
 		return oauth_error("invalid_request");
 	};
 	let fields = parse_fields(&headers, &body);
+	let Some(scopes) = super::scopes::Scopes::requested(fields.get("scope").map(String::as_str))
+	else {
+		return oauth_error("invalid_scope");
+	};
 	// RFC 8628 requires client_id; reject its absence rather than mint a code.
 	if fields
 		.get("client_id")
@@ -200,7 +206,9 @@ pub async fn device_authorization(
 			&headers,
 		)
 		.map(client_bucket);
+	let scope_text = scopes.as_string();
 	let grant = DeviceGrant {
+		scopes,
 		user_code: user_code.clone(),
 		approved_account: None,
 		expires_at: now + CODE_TTL_SECS,
@@ -220,6 +228,7 @@ pub async fn device_authorization(
 		"verification_uri_complete": format!("{verification_uri}?user_code={user_code}"),
 		"expires_in": CODE_TTL_SECS,
 		"interval": POLL_INTERVAL_SECS,
+		"scope": scope_text,
 	}))
 	.into_response()
 }
@@ -266,6 +275,18 @@ pub async fn device_approve(
 	});
 	match (grant, account) {
 		(Some(grant), Some(account)) => {
+			// The device chose the scopes, the user approves them: anything
+			// beyond the default `read` is granted only when the approval
+			// names exactly those scopes, so a device cannot get `send` or
+			// `write` out of an approval that never showed them.
+			let confirmed = fields
+				.get("scope")
+				.and_then(|value| super::scopes::Scopes::parse(value));
+			if !grant.scopes.is_default()
+				&& !confirmed.is_some_and(|confirmed| confirmed.same_set(&grant.scopes))
+			{
+				return oauth_error("invalid_grant");
+			}
 			grant.approved_account = Some(account);
 			Json(serde_json::json!({ "status": "approved" })).into_response()
 		}
@@ -311,34 +332,35 @@ fn basic_auth(headers: &HeaderMap) -> Option<(String, String)> {
 }
 
 /// Redeem a `device_code` at the token endpoint (RFC 8628 §3.4–3.5). Returns the
-/// signed access-token JSON once approved, or the appropriate pending/error
-/// response. Enforces the minimum poll interval (`slow_down`), expiry
+/// approved account and scopes to issue tokens for, or the appropriate
+/// pending/error response. Enforces the minimum poll interval (`slow_down`), expiry
 /// (`expired_token`), and one-time consumption of the code on success.
-pub fn redeem_device_code(authz: &AuthzServer, device_code: &str) -> Response {
+pub fn redeem_device_code(
+	authz: &AuthzServer,
+	device_code: &str,
+) -> Result<(String, super::scopes::Scopes), super::Refusal> {
 	let now = now_secs();
 	let mut devices = authz.devices.lock().unwrap_or_else(|p| p.into_inner());
 	let Some(grant) = devices.get_mut(device_code) else {
 		// Unknown or already-consumed code.
-		return oauth_error("invalid_grant");
+		return Err(super::Refusal::Error("invalid_grant"));
 	};
 	if grant.expires_at <= now {
 		devices.remove(device_code);
-		return oauth_error("expired_token");
+		return Err(super::Refusal::Error("expired_token"));
 	}
 	if now < grant.next_poll_at {
 		// Polling too fast: tell the client to back off (RFC 8628 §3.5).
 		grant.next_poll_at = now + POLL_INTERVAL_SECS;
-		return super::oauth_rate_limited(grant.next_poll_at - now);
+		return Err(super::Refusal::SlowDown(grant.next_poll_at - now));
 	}
 	grant.next_poll_at = now + POLL_INTERVAL_SECS;
 	let Some(account) = grant.approved_account.clone() else {
-		return oauth_error("authorization_pending");
+		return Err(super::Refusal::Error("authorization_pending"));
 	};
+	let scopes = grant.scopes.clone();
 	// Approved: consume the code (one-time) and issue the token.
 	devices.remove(device_code);
 	drop(devices);
-	match authz.issue_token(&account, now) {
-		Some(token) => super::pkce::token_response(&token).into_response(),
-		None => oauth_error("server_error"),
-	}
+	Ok((account, scopes))
 }

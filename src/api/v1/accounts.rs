@@ -278,11 +278,8 @@ pub async fn enroll_totp(
 		.store()
 		.set_totp(&name, Some(secret.clone()))
 		.map_err(store_error)?;
-	let issuer = state
-		.domains()
-		.first()
-		.map(String::as_str)
-		.unwrap_or("mail");
+	let hosted = state.domains();
+	let issuer = hosted.first().map(String::as_str).unwrap_or("mail");
 	let otpauth_uri = format!("otpauth://totp/{issuer}:{name}?secret={secret}&issuer={issuer}");
 	audit::log_privilege_change(AuditEvent::TotpEnrolled, &name, client_ip.0);
 	Ok(Json(TotpEnrolled {
@@ -310,6 +307,7 @@ pub(super) fn store_error(error: StoreError) -> ApiError {
 		StoreError::Invalid(message) => ApiError::invalid_input(&message),
 		StoreError::Duplicate(what) => ApiError::invalid_input(&format!("{what} already exists.")),
 		StoreError::NotFound(_) => ApiError::not_found("no such dynamic account"),
+		StoreError::Capped(reached) => ApiError::limit_reached(&reached),
 		StoreError::LimitReached { .. } => ApiError::internal(),
 		StoreError::Io(_) => ApiError::internal(),
 		StoreError::BayesPurge { .. } => ApiError::internal(),

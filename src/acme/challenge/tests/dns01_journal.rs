@@ -64,7 +64,7 @@ async fn a_record_a_stopped_run_left_is_withdrawn_at_the_next_start() {
 
 	// The next run has a fresh process and a provider whose lookup fails:
 	// the record is removed from the zone the journal names, with the value
-	// the first run published, and nothing is asked of the provider first.
+	// the first run published, and the zone is not looked up again.
 	let second = FakeZone::new(&["example.org"]);
 	second.lookup_fails.store(true, Ordering::Relaxed);
 	let restarted = dns01(&second).with_journal(path.clone());

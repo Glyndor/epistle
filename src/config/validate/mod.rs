@@ -34,7 +34,8 @@ impl Config {
 		self.validate_send_only_domains()?;
 		self.validate_receive_only_domains()?;
 		self.dns.validate()?;
-		self.dns_publish.validate()?;
+		self.dns_publish.validate(&self.domains)?;
+		self.own_ip_blocklist.validate(&self.dnsbl_zones)?;
 		self.validate_dns_senders()?;
 		self.validate_accounts()?;
 		self.validate_srs()?;
@@ -44,14 +45,22 @@ impl Config {
 		self.validate_webhook()?;
 		self.validate_tenant_webhooks()?;
 		self.validate_retry_schedule()?;
+		self.validate_suppression()?;
+		self.validate_dmarc_report_from()?;
+		self.validate_reports()?;
 		self.validate_privileges()?;
 		self.validate_transport()?;
 		self.validate_oauth()?;
+		self.bans.validate().map_err(ConfigError::Invalid)?;
+		self.validate_auth()?;
 		self.validate_ldap()?;
 		self.validate_antispam_llm()?;
 		self.validate_scanner()?;
 		self.validate_alerts()?;
 		self.validate_tenants()?;
+		self.validate_antispam_scopes()?;
+		self.validate_forwarding()?;
+		self.validate_limit_scopes()?;
 		self.validate_database()?;
 		self.validate_subjectpass()?;
 		self.validate_dkim()?;
@@ -176,6 +185,14 @@ impl Config {
 		// very connections the server exposes, so excluding it
 		// here would reject every config that names a separate
 		// `hostname` and `domains` (the documented shape).
+		//
+		// The public names of a hosted domain (`autoconfig.`,
+		// `autodiscover.` and `mta-sts.` over it) are names this
+		// server is responsible for too: the public endpoint serves
+		// the client setup documents and the MTA-STS policy under
+		// them, and a client verifies the certificate against the
+		// name it asked for, not against the name the CNAME points
+		// at.
 		let mut configured: HashSet<String> = self
 			.domains
 			.iter()
@@ -185,7 +202,9 @@ impl Config {
 		configured.insert(self.hostname.to_ascii_lowercase());
 		for domain in &acme.domains {
 			validate_dns_name("acme domain", domain)?;
-			if !configured.contains(&domain.to_ascii_lowercase()) {
+			if !configured.contains(&domain.to_ascii_lowercase())
+				&& !crate::dns::names::is_public_name(domain, &self.domains)
+			{
 				return Err(ConfigError::Invalid(format!(
 					"[acme] domain \"{domain}\" is not a configured domain"
 				)));

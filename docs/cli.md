@@ -36,11 +36,13 @@ forward). Policy refusals exited `2` before they had their own code.
 | `account catch-all` | `list`, `add`, `remove` | |
 | `account 2fa` | `show`, `disable` | |
 | `app-password` | `list`, `create`, `rotate`, `rename`, `revoke` | `app-passwords`, `app-password-create`, `app-password-revoke` |
-| `api-key` | `list`, `create`, `revoke`, `rotate` | `api-keys`, `api-key-create`, `api-key-revoke` |
-| `suppression` | `list`, `show`, `add`, `remove`, `export`, `import` | `suppression`, `suppression --remove ADDR` |
+| `api-key` | `list`, `create`, `set`, `revoke`, `rotate` | `api-keys`, `api-key-create`, `api-key-revoke` |
+| `suppression` | `list`, `show`, `add`, `remove`, `tenant list\|remove`, `export`, `import` | `suppression`, `suppression --remove ADDR` |
+| `boot` | the stack would come back after a reboot: thirteen items, below | a restart policy, the network wait, a drop-in, a mount, an image of a disabled service or a service that is down while the boot unit has not failed is not right | linger, the user manager, the boot unit, its file list, Podman's socket, an image of an enabled service, the port floor or a service that is down after the boot unit failed is not right |
 | `warmup` | `status`, `plan`, `start`, `enable`, `disable`, `pause`, `resume`, `set`, `reset` | |
-| `domain` | `list`, `show`, `add`, `remove`, `set`, `disable`, `enable`, `alias add\|remove` | |
+| `domain` | `list`, `show`, `add`, `remove`, `set`, `disable`, `enable`, `alias add\|remove`, `import` | |
 | `db` | `upgrade`, `status` | |
+| `panel` | `admin-id` | |
 | `evidence` | `verify`, `export`, `check`, `key show\|rotate`, `policy show\|set`, `timestamp show\|enable\|disable`, `clock accept`, `acknowledge`, `abandon` | |
 | `learning` | `status`, `enable`, `disable`, `reset` | |
 | `masked`, `ban`, `queue`, `alias`, `limits`, `relay`, `service`, `dkim`, `tls` | see each section below | |
@@ -86,6 +88,7 @@ that never restart accept the option and ignore it.
 | [Bans and the IP allow list](#authentication-bans) | `epistle ban …` |
 | [Outbound queue: retry, hold, release](#outbound-queue) | `epistle queue …` |
 | [IP warm-up for a new sending address](operations/warmup.md) | `epistle warmup …` |
+| [Enrol in the sender panels](operations/providers.md) | `epistle check deliverability` |
 | [Evidence of sending: verify, export, check](evidence.md) | `epistle evidence …` |
 | [Antispam: DNSBL, greylisting, ClamAV](#antispam-epistle-antispam) | `epistle antispam …` |
 | [Attachment policy and checking a message](#attachments-epistle-attachments) | `epistle attachments policy\|check` |
@@ -93,8 +96,9 @@ that never restart accept the option and ignore it.
 | [DNS provider for DKIM and TLSA](#dns-provider-epistle-dns-provider) | `epistle dns provider …` |
 | [Webhook and alerts](#webhook-epistle-webhook) | `epistle webhook …`, `epistle alert …` |
 | [SRS secret of each domain](#srs-epistle-srs) | `epistle srs show\|split\|rotate` |
-| [Every secret and how it is rotated](#secrets-and-credentials-epistle-rotate) | `epistle rotate --all --dry-run` |
+| [Every secret and how it is rotated, and rotating them](#secrets-and-credentials-epistle-rotate) | `epistle rotate --all --dry-run`, `epistle rotate --all`, `epistle rotate --accounts-only` |
 | [Blob storage (filesystem or S3)](#blob-storage-epistle-storage-blobs) | `epistle storage blobs …` |
+| [Listing what the cleanup would remove](#cleanup-epistle-storage-cleanup) | `epistle storage cleanup [--json]` |
 | [Keys per tenant and key rotation](#tenant-keys-epistle-storage-tenant-keys) | `epistle storage tenant-keys migrate` |
 | [Rotate DKIM, renew TLS, rotate an API key](#rotations-epistle-dkim-epistle-tls-epistle-api-key) | `epistle dkim rotate`, `epistle dkim cleanup`, `epistle tls renew`, `epistle api-key rotate` |
 | [Containers: up, logs, update](#stack-epistle-stack) | `epistle stack …` |
@@ -158,7 +162,7 @@ a terminal. Echo comes back when the read ends, Ctrl-C included.
 `alias remove`, `masked remove`, `queue remove`, `dns publish`, `dns publish --undo`,
 `dns lockdown`, `dns lockdown --undo`, `dkim cleanup`, `learning reset`,
 `warmup start`, `webhook disable`, `stack rollback`, `evidence acknowledge`,
-`evidence abandon`, `evidence key rotate`, `evidence timestamp disable`,
+`evidence abandon`, `evidence key rotate`, `evidence timestamp disable`, `rotate --all`, `rotate --accounts-only`,
 `evidence clock accept` and `restore` ask before they
 change anything, and the question names what goes: the account with its masked
 addresses and app passwords, the API key's scopes, the queued message's sender
@@ -237,7 +241,7 @@ of `--port 70000` is a usage error. Enabling the API creates `[api]` if absent, 
 a static token. Labelled keys work independently of `token_hash`. API, WebDAV and
 plain HTTP autoconfig have no TLS transport, so `set` refuses an address outside
 loopback for these listeners, even when mail certificates are configured in
-`[tls]`. I keep them behind a TLS reverse proxy on loopback.
+`[tls]`. Keep them behind a TLS reverse proxy on loopback.
 
 Without a container stack the bind in `mail.toml` is the address the server
 binds, so `set` writes the requested one there. With
@@ -256,8 +260,11 @@ with no explicit address stays `PORT:PORT`, and the
 host address one `set` wrote survives a later `enable`, `disable`, `init` rerun
 or `stack update`, since every writer of the map reads it back first. If
 `compose.override.yaml` already publishes a port for the same service, `set`
-leaves it alone and says that the override merges with the generated map, or
-replaces it where it carries `!override`. That notice is read out of the file
+leaves it alone and says that the override merges with the generated map. An
+override that replaces the list with `!override` and carries the port of that
+listener decides where the port is published, so `set` refuses, names the file,
+the line and the entry to change, and leaves the configuration and the
+generated map alone. That notice is read out of the file
 rather than parsed, so it sees the block form, the flow form (`mail: {ports:
 [...]}`) and ranges of ports, in block or inline; it does not see a `ports` key
 behind an anchor, an alias or a value a template fills in at run time, and a
@@ -324,7 +331,7 @@ after 5 s. `--config` defaults to `/etc/epistle/mail.toml`.
 | `config` | file loads | restart pending: `mail.toml` is newer than the `mail` container's start (needs the compose stack; skipped with a note otherwise) | does not load |
 | `ports` | the same check as `epistle probe`: every enabled listener answers on loopback with its greeting (SMTP `220`, IMAP `* OK`, POP3 `+OK`, ManageSieve `OK`, HTTP status line), and TLS listeners present the configured certificate | no listeners | a listener refuses, is silent, greets wrongly or presents another certificate, or `podup ps` does not list a running `mail` container (during a restart, for example) |
 | `tls` | 21 days or more left, hostname in the certificate, the TLSA record (when DNSSEC publishes one) matches it | under 21 days, under 14 days with nothing renewing it (no `[acme]`), the certificates container is down or does not settle (a split stack renews in it), a certificates container the compose file does not name is still running, the TLSA lookup failed | under 7 days, expired, or hostname not in the certificate; unreadable file; a TLSA record that does not match the certificate in use |
-| `dns` | published records match | a lookup was inconclusive, or `dkim-rotation.json` is unreadable and the server signs with the last good state in `dkim-rotation.json.bak` | a record is missing, or the published DKIM `p=` is not the public key of the key actually signing (the rotation state in `<data_dir>/dkim-rotation.json` when present, else `[dkim] key_file`) |
+| `dns` | published records match | a lookup was inconclusive, a public address is listed in a DNS blocklist or its blocklist lookup failed (`[own_ip_blocklist]`), or `dkim-rotation.json` is unreadable and the server signs with the last good state in `dkim-rotation.json.bak` | a record is missing, or the published DKIM `p=` is not the public key of the key actually signing (the rotation state in `<data_dir>/dkim-rotation.json` when present, else `[dkim] key_file`) |
 | `db` | `[database]` connects and answers `SELECT 1` (or is not configured) | | cannot connect within 5 s |
 | `api_keys` | every key has a distant expiry and a narrow reach, and each `scim` key has an associated domain | a key has no expiry, expires within 14 days or has expired, holds every scope (a legacy key), holds `write` or `send` with no domain, account or usable `--ip-cidr`, or is a `scim` key with no domain; findings identify the label and scopes. The store has no creation or last-use timestamps | |
 | `antivirus` | clamd answers `PING` with `PONG` and reports its signature age (or is not configured) | `VERSION` fails | no `PONG` |
@@ -338,6 +345,31 @@ after 5 s. `--config` defaults to `/etc/epistle/mail.toml`.
 | `evidence` | the last verification of the evidence is under an hour old and found nothing to flag | the server has not verified yet, timestamp tokens are pending or failing, timestamps are disabled, a task reported an error, the last verification took half of the time it is given or more, or it is older than an hour | transactional mail is held (clear it with `epistle evidence acknowledge` once understood), or the status cannot be read |
 | `subid` | the ranges `glyndor-epistle` holds in `/etc/subuid` and `/etc/subgid` overlap no other account's | `glyndor-epistle` has no range in a table | a range overlaps another account's; the finding names that account and the shared interval (see [Moving an overlapping range](#moving-an-overlapping-subordinate-id-range)) |
 | `warmup` | one finding per receiver group (cap, sent today, deferred and bounced share, verdict, next cap, waiting); also `off` when the warm-up is not running | a group's verdict is `very_bad`; the warm-up is off while the address looks new and 200 or more recipients went out today or are queued (see [warm-up](operations/warmup.md)); the warm-up files cannot be read | |
+| `deliverability` | every sender panel is enrolled (the list in `[deliverability] enrolled`) | one finding per panel the operator has not enrolled in, for a provider the server has delivered mail to (`[deliverability] remind = false` turns it off): the panel, what it is and where it lives (see [sender panels](operations/providers.md)) | |
+
+The `boot` area reads, without starting or changing anything, what the next
+reboot depends on, as `glyndor-epistle`. Each item is `ok`, `warn` or `fail`
+and the message carries the command that fixes it:
+
+1. `linger`: `/var/lib/systemd/linger/glyndor-epistle` exists (`fail`; `sudo loginctl enable-linger glyndor-epistle`).
+2. `user manager`: `user@<uid>.service` is active and `/run/user/<uid>` exists (`fail`).
+3. `boot unit`: `podup-epistle.service` is installed, enabled and its last result is `success` (`fail`).
+4. `unit files`: the `-f` list inside the unit equals the files the stack runs from now (`fail`).
+5. `podman socket`: `podman.socket` is enabled and active (`fail`).
+6. `restart policy`: no enabled service has the policy `no` (`warn`).
+7. `network wait`: the unit orders itself after `podman-user-wait-network-online.service`, systemd loads it and `network-online.target` is active (`warn`).
+8. `port floor`: `net.ipv4.ip_unprivileged_port_start` is at or below the lowest port the listeners use, both now (`/proc/sys`) and in the configuration systemd applies at the next boot (`systemd-analyze cat-config sysctl.d` and `/etc/sysctl.conf`) (`fail`; a configuration that cannot be read is `warn`).
+9. `mounts`: `data_dir` and the container storage exist, and no `/etc/fstab` mount that covers them is missing from the mount table (`warn`).
+10. `images`: every image `compose.yaml` names is in the account's container storage, because the unit starts with `--pull never` (`fail` for an enabled service, `warn` for one with `profiles`; `sudo epistle stack update`, the command that pulls).
+11. `retry drop-in`: `podup-epistle.service.d/10-epistle.conf` is beside the unit and holds what epistle writes, so a start that fails is tried again; absent, different, left behind after `[boot] restart_on_failure = false`, or refused by a systemd older than 244, it is `warn` (`sudo epistle stack start`).
+12. `order drop-in`: `/etc/systemd/system/user@<uid>.service.d/glyndor-epistle-boot.conf` holds what epistle writes now, so the user manager starts after the network and the sysctl; absent or different it is `warn`, and only root writes it (`sudo epistle stack start`).
+13. `services`: every enabled service of the stack has a running container. Judged once the boot unit is no longer `activating` (a unit still starting is a `warn` that says so). Each service that is down is named with its state and exit status, the last line the unit's journal has about it, and the command that starts it: `sudo epistle stack start <service>`, or `sudo epistle stack up` when it has no container. `fail` when the unit finished with a result other than `success`, `warn` otherwise (a service stopped on purpose is down too). A service with `profiles`, and a job that exited 0 under the policy `no`, are not expected to run.
+
+Where there is no `compose.yaml` the area is `ok` with no items. The unit
+repairs say `sudo epistle stack start`, which starts the containers that exist
+without recreating them and installs the unit. `epistle init`, `stack up` and
+`stack update` print this summary at their end, and `status --json` carries it
+under `boot`.
 
 The `clock` area adds two read-only probes. The host probe asks the
 kernel via `adjtimex`, with `timedatectl show -p NTPSynchronized` when
@@ -360,12 +392,8 @@ The three defaults, `nts.netnod.se`, `nts.time.nl` and `ptbtime2.ptb.de`
 (all NTS), are three operators in three countries, so every offset of a
 default run is authenticated, with a diagnostic median that is insensitive
 to one drifting source. This median does not exclude that source from the
-verdict. Each answered the whole NTS exchange inside the budget when the
-list was chosen. `time.cloudflare.com` answers plain NTPv4 but its key
-exchange returns cookies and the authenticated poll then goes unanswered
-on the networks measured, and `time.google.com` publishes no NTS-KE
-endpoint, so neither is in the default list; either can replace a source
-as a plain `ntp` entry. Replace them when the chosen peers change; the
+verdict. `time.cloudflare.com` and `time.google.com` are not in the default
+list; either can be added as a plain `ntp` entry. The
 list and the protocol per source are both yours to set, and a host that
 answers NTS on your network can be configured as `nts`. The two ports the probes
 dial are `4460/tcp` (NTS-KE, RFC 8915) for the `nts` sources and
@@ -731,6 +759,21 @@ changes. Moving from `fs` to `s3` is refused while `<data_dir>/blobs/` holds any
 file, unless you pass `--force`. Leaving S3 cannot be checked from here, so it is
 never refused. Supports `--dry-run` and `--config FILE`.
 
+## Cleanup (`epistle storage cleanup`)
+
+```sh
+epistle storage cleanup [--json]
+```
+
+Lists what the hourly cleanup of Trash, Junk and Rejects would remove now: one
+line per account and folder with mail past its retention, tab separated
+(account, folder, days, messages), and the total on the error stream. It never
+removes anything. The server does, once an hour, on a clock its time reference
+believes; this command has no such reference, so it judges by the clock of the
+machine it runs on and says so. Without `[storage.cleanup]` nothing is removed
+and it says that. The retention rules are in
+[`[storage.cleanup]`](configuration.md#storagecleanup).
+
 ## Tenant keys (`epistle storage tenant-keys`)
 
 ```sh
@@ -855,15 +898,57 @@ Each hosted domain signs the sender of the mail it forwards with a secret of its
 
 ```sh
 epistle rotate --all --dry-run [--json]
+epistle rotate --all [--yes|-y] [--json]
+epistle rotate --accounts-only [--dry-run] [--yes|-y] [--json]
 ```
 
-Lists every kind of secret and credential the server holds, so that nobody has to read ten pages to know which ones exist after a compromise. For each one it says where it is stored, how it is rotated and how it is revoked, and who does it:
+`--dry-run` lists every kind of secret and credential the server holds, so that nobody has to read ten pages to know which ones exist after a compromise. For each one it says where it is stored, how it is rotated and how it is revoked, and who does it:
 
 - `epistle`: one command of `epistle` does it on this server, and the row names it.
 - `operator`: the operator does it, by hand or at the provider (a DNS token, the database password, the relay password). `epistle` cannot mint or revoke those.
-- `not supported yet`: `epistle` cannot do it yet. The row links the issue and says what to do meanwhile. Today that is the storage key (re-encrypting the existing mail under a new key), the mass reset of account passwords and second factors, and the TOTP seeds, which `accounts.toml` keeps in the clear while `[storage]` encryption is off.
+- `not supported yet`: `epistle` cannot do it yet. The row links the issue and says what to do meanwhile. Today that is the storage key (re-encrypting the existing mail under a new key).
 
-The list is a registry in the code, and a test fails the build when a secret field is added to the configuration without an entry in it, so a new secret cannot be left out of the procedure. `--dry-run` changes nothing and reads no configuration, so it works on a server whose configuration does not load. It is the only mode so far; without it the command refuses and exits 3. `--all` is required. `--json` prints one object with an `entries` array.
+The list is a registry in the code, and a test fails the build when a secret field is added to the configuration without an entry in it, so a new secret cannot be left out of the procedure. `--dry-run` changes nothing and reads no configuration, so it works on a server whose configuration does not load. `--all` is required. `--json` prints one object with an `entries` array.
+
+Without `--dry-run` the command rotates what this server can rotate by itself, in this order:
+
+1. every API key in `api_keys.toml` gets a new secret (scopes, domains, expiry and range stay; an evidence class follows the key to its new secret);
+2. every app password gets a new secret;
+3. the secret of the server's `[webhook]` is replaced;
+4. every `[[srs_domain]]` gets a new secret, the old one kept as `previous_secret` so the return addresses already out keep verifying for 14 days;
+5. every account in `accounts.toml` that holds a password or a TOTP secret is reset (below);
+6. the server is asked to rotate the `[dkim]` key and every `[[dkim.domain]]` key a `[dns]` entry publishes at, as `dkim rotate` and `dkim rotate --domain` do; it makes the keys and publishes their records within a minute;
+7. the mail service is restarted when the configuration changed or accounts were reset (`The server must be restarted.` without a stack, and `--no-restart` leaves it for `epistle stack apply`).
+
+**The reset of the accounts.** Each account's password is replaced by the hash of a random secret nobody is given, and its SCRAM verifier and TOTP secret are deleted. From then on it signs in nowhere: IMAP, POP3, SMTP AUTH, JMAP, ManageSieve, WebDAV, the API and the panel refuse it as they refuse a wrong password, whatever the proof (password, app password, SCRAM, OAuth token, client certificate), and an API key bound to it gets `403`. It keeps its mail and keeps receiving. An administrator unlocks it by setting a new password (`epistle account password N`, the panel or the API); an account that had a second factor also needs a new one, enrolled from the panel or the API (`POST /api/v1/accounts/N/totp`), or removed on purpose with `epistle account 2fa disable N`. A static `[[accounts]]` password, the SQL directory and `[ldap]` are not reset; the notes name them. `epistle rotate --accounts-only` runs this step and the restart alone, with the same journal; with `--dry-run` it lists the accounts it would reset and writes nothing. A cut run of one form is finished by the same form before the other starts.
+
+Before it changes anything it checks what each step will check, so a refusal (a DKIM rotation state that cannot be read, a store that cannot be read) stops the command with nothing changed. A DKIM key the server would not rotate yet is not a refusal: the `[dkim]` key when it already rotated today, and a domain's key while the selector its last rotation replaced is still published. The command leaves that key alone and says so in the notes, with the date after which `dkim rotate --domain` works again, and rotates everything else. Then it asks once, naming what stops working: every client of an old API key or app password, and the webhook receiver until it has the new secret. Without a terminal it is refused with exit code 2 unless `--yes` is given. At the end it prints the new API key, app password and webhook secrets once (the SRS secrets never leave the server), what was queued, and what is left to the operator: the notes about what this server could not rotate (a `[dkim]` key no `[dns]` entry publishes, a webhook secret read from the environment, a tenant's `[tenant.webhook] secret`, domains on the shared `srs_secret`, the static `[api] token_hash`), and every registry row the command does not carry out, with how to do it. `--json` prints one object: `steps` (each `kind`, `item`, `owner` and `result`: `rotated`, `queued`, `reset` or the restart's `reload`), `secrets`, `reload`, `accounts_reset`, `notes`, `then` and `remaining`.
+
+**A run cut short is continued, not repeated.** Each step first writes to a journal, `<data_dir>/rotate/journal.json`, the value it will leave (the hash of the new secret, or the DKIM selector in service), then makes the change, then marks itself done. A new secret is written to `<data_dir>/rotate/secrets.json` before the store or the file that will hold its hash changes. Both files are owner-only, and until the run finishes the new secrets stay in `secrets.json`, so finish an interrupted run soon. Of `<data_dir>/rotate/` a backup archives only `journal.json` and `last-run.json`, never the secrets or their staging copies, and while a rotation runs a backup is refused (and, on a server that has run a rotation before, a rotation is refused while a backup reads the data directory). If the command is killed, or a step fails, the next `epistle rotate --all` asks to continue the same run: a step whose value is already on disk is marked done without being applied again, so no secret is rotated twice and none is left with a hash whose secret nobody was given. The run stops at the first failure and names the step. When every step is done and the secrets are printed, the journal is kept as `last-run.json` and the secrets file is deleted, so the next `rotate --all` is a new rotation. A journal this version cannot read stops the command; it is not replaced. Two runs at once are refused.
+
+## Web panel (`epistle panel`)
+
+```sh
+epistle panel admin-id [--json]
+```
+
+Shows the admin id of the web panel: the `{id}` of its admin area, served at
+`/app/{id}`. `init` and `stack update` generate it once, when the stack runs the
+panel, and keep it from then on (see "The panel's key" in `docs/api.md`). The id
+is alone on stdout; the path `/app/<id>`, to append to the address the panel is
+served at, and a reminder go to stderr. With `--json` stdout is one object with
+`admin_id` and `path`, and stderr stays empty.
+
+The id is not a cryptographic secret, since the session and the admin role are
+the barrier, but it is not public either: this is the one command that prints
+it. It is absent from every plan, report and `--json` output of the other
+commands, from `epistle status` and from the logs. Do not post it, link it from
+a public page or paste it into a ticket.
+
+With no id yet (the panel is not installed or the stack was not updated since),
+the command exits 2 and says how to get one. A file at the id's place that holds
+anything but a lower-case UUID v4 is an error that names the file and not its
+content.
 
 ## Domains (`epistle domain`)
 
@@ -882,7 +967,22 @@ epistle domain enable example.net [--dry-run]
 epistle domain set example.org [--quota 10G | --no-quota] [--submission-rate 50 | --no-submission-rate] [--send-only | --receive-only | --full] [--dry-run]
 epistle domain alias add alias.example.org example.org
 epistle domain alias remove alias.example.org [--yes|-y]
+epistle domain import [--yes|-y] [--dry-run]
 ```
+
+The hosted domains, their roles, their switches and the domain aliases live
+in `<data_dir>/domains.toml` (see
+[configuration](configuration.md#the-domain-state-file)), not in the
+configuration file. Every command below that changes them writes that file
+and nothing else; the running server reloads it within a few seconds, so no
+command restarts `mail`. The command waits for the reload the way `account`
+commands do, and the JSON result's `reload` is `loaded`, `no-server` or
+`timed-out`. The first change, or the first start of `serve`, writes the file
+from `domains`, `domain_aliases` and the role lists of the configuration file;
+after that, edits to those lists in the configuration file are ignored, the
+server says so in its log, and `domain import` copies them in again. Only
+`set --quota` and `set --submission-rate` still edit the configuration file
+and restart `mail`, since the per-domain limits live there.
 
 `list` writes every configured domain with the domains that target it
 (`ALIASES TO`) and the domains it targets (`ALIASES FROM`). `show` writes
@@ -892,8 +992,8 @@ it. Both name the domain's role (`ROLE`; `full`, `send-only`, `receive-only` or 
 contain `domain`, `enabled`, `role`, `aliases_to`, `aliases_from`, `accounts`
 and `aliases`.
 
-`disable` switches a domain off without removing it: the name goes into
-`disabled_domains`, and after the restart mail for it is rejected at RCPT
+`disable` switches a domain off without removing it: the domain's `enabled`
+becomes `false`, and once the server reloads the file mail for it is rejected at RCPT
 exactly like mail for an unknown user (a permanent 550, so senders get a
 bounce, not a retry), and no account may send as an address in it (SMTP
 submission, the API and JMAP all refuse). Accounts, mailboxes, aliases and DKIM
@@ -912,14 +1012,16 @@ there with a warning on stderr that it receives and sends nothing until the
 domain is enabled. `disable` asks first (see
 [Prompts and `--yes`](#prompts-and---yes)), refuses an unknown domain with
 exit 2, and refuses to switch off the last enabled domain of a server that
-has listeners (exit 3, a rule of the server). `enable` takes the name out of
-`disabled_domains` again. Both report `result` `unchanged` when the domain is
+has listeners (exit 3, a rule of the server). `enable` switches it back on,
+with the role it had. Both report `result` `unchanged` when the domain is
 already in that state, and the JSON result carries `domain` and `enabled`.
 
 `set` writes the per-domain default storage quota (`domain_quotas`) and the
 per-domain submission rate in messages per minute
-(`domain_submission_limits`), the same overrides `limits set quota --domain`
-and `limits set submission-rate --domain` write and `limits show` lists. Name
+(`domain_submission_limits`). It commits both limits and the role together
+in `<data_dir>/domains.toml`, also used by the management API; the configuration
+file stays read-only and the file watcher applies the change. `limits show`
+reads these effective overrides. Name
 at least one of `--quota`, `--no-quota`, `--submission-rate`,
 `--no-submission-rate`, `--send-only`, `--receive-only` or `--full`; a flag left
 out keeps its value, and `--no-…` removes the override. `--send-only`,
@@ -930,8 +1032,7 @@ given together. A zero rate is refused (it would lift the limit; use
 removed; `role`). `show` prints both overrides.
 
 A domain has a role, `full` by default. `add --send-only` and `set
---send-only` write the name into `send_only_domains`; `set --full` takes it
-out. A send-only domain only sends mail, so its DNS is SPF, DKIM, DMARC
+--send-only` give it the `send-only` role; `set --full` takes it back. A send-only domain only sends mail, so its DNS is SPF, DKIM, DMARC
 (without `rua=`) and MX: no MTA-STS, TLS-RPT, SRV, `autoconfig` or
 `autodiscover` record. `dns-records`, `domain add`, `srv-records`,
 `verify-dns`, `status` and the automatic publisher all read the same set, so
@@ -940,40 +1041,45 @@ omitted records as `skipped`. Changing the role changes what is expected, and
 the publisher retires only the records its ledger says it wrote. `domain
 remove` drops the role with the domain. See [`dns.md`](dns.md#domain-roles).
 
-`add --receive-only` and `set --receive-only` write the name into
-`receive_only_domains` and take it out of `send_only_domains`, and the other
-way round: a domain has one role. A receive-only domain only receives mail, so
+`add --receive-only` and `set --receive-only` give the domain the
+`receive-only` role: a domain has one role. A receive-only domain only receives mail, so
 its DNS carries the null SPF (`v=spf1 -all`), a `reject` DMARC policy and no
 DKIM key, and nobody may send as an address in it: SMTP submission, the API and
 JMAP refuse, and a forward, a Sieve redirect or a vacation reply for mail to it
 is dropped. A domain that neither sends nor receives is not a role: use
 `disable`, which wins over both lists and also gives it the null MX.
 
-`add` validates the name (`validate_dns_name`, same rules the loader
-uses), appends it to `[domains]` and prints the DNS records the operator
-must publish for the new domain (filtered to that domain only). It
-refuses when the domain is already configured, when it collides with
-a `domain_aliases` source or target, or when the loader rejects the
-final document.
+`add` validates the name with the loader's rule for a domain name (a name
+with a trailing dot, a space or a look-alike script is refused, and a Unicode
+name is refused with the ASCII form to write instead), stores it lowercase and
+prints the DNS records the operator must publish for the new domain. It
+refuses when the domain is already configured, when it is a domain alias or
+the target of one, or when the server would refuse the result. The new domain
+also gets an SRS secret of its own, kept in the state file.
 
 With `[dkim]` configured, `add` also gives the new domain a DKIM key of its
 own: the Ed25519 key (and the RSA key, when `[dkim]` signs with one) is written
-`0600` under `<data_dir>/keys/dkim/<domain>/`, and a `[[dkim.domain]]` entry
-names it with the selectors `own<day>` and `ownrsa<day>`, which are not the
+`0600` under `<data_dir>/keys/dkim/<domain>/`, and the domain's entry in the
+state file names it with the selectors `own<day>` and `ownrsa<day>`, which are not the
 ones `[dkim]` publishes, so the new record never replaces the one the default
 key is still published under. The records `add` prints are that key's. A key
 of the domain's own means a leaked key signs only as that domain.
 `--shared-dkim-key` keeps the old behaviour (the domain signs with the
-`[dkim]` key, which `config-check` and `status` then report). `--dry-run`
-shows the entry and writes no key. `remove` and `alias remove` take the
-domain's `[[dkim.domain]]` entry out with it and leave the key files, which are
-yours to delete once the record is gone from DNS.
+`[dkim]` key, which `config-check` and `status` then report). A domain the
+configuration file already names in `[[dkim.domain]]` keeps that key.
+`--dry-run` shows the entry and writes no key. The running server loads the
+new key and the new secret when it reloads the file, and signs the domain's
+mail with them from then on. `remove` leaves the key files, which are yours to
+delete once the record is gone from DNS; an entry of the configuration file for
+a domain that is no longer hosted is ignored. The records are published by the
+DNS reconcile loop on its next run, which reads the hosted domains again each
+time; the key's rotation is scheduled at the next start of `serve`.
 
 `remove` walks every account (static `[accounts]` plus `<data_dir>/accounts.toml`),
-every `[alias]` and its members and senders, every `domain_aliases`
-entry and every masked address on disk. If any of those still uses the
-domain, the command fails with a message that lists each offender by
-category (`account alice@example.org`, `alias team@example.org`,
+every `[alias]` and its members and senders, every domain alias, every
+masked address on disk, `[acme] domains` and every `[[tenant]]`. If any of
+those still uses the domain, the command fails with a message that lists each
+offender by category (`account alice@example.org`, `alias team@example.org`,
 `domain_aliases maps alias.example.org to example.org`,
 `masked address ...`). The file is only written after every offender
 has been cleaned up.
@@ -981,15 +1087,24 @@ has been cleaned up.
 `domain alias remove` drops a single key. Both removals ask first (see
 [Prompts and `--yes`](#prompts-and---yes)).
 
-`domain alias add` writes an entry under `[domain_aliases]`. The target
-must already be a configured domain; the alias name must not collide
-with another `domain_aliases` key or with any configured domain.
+`domain alias add` adds a domain alias. The target must already be a
+configured domain; the alias name must not be another alias or a configured
+domain.
 
-Edits preserve every other TOML value, validate through the normal
-loader before atomic replacement, and follow the same restart policy
-as `service` and `limits` (compose restart or a manual restart message).
-Secrets never appear in `show`/`list` output. `--dry-run` on `add` and
-`remove` prints the validated unified diff without writing.
+`import` replaces the hosted domains, roles, switches and aliases of the state
+file with what the configuration file declares, after asking (see
+[Prompts and `--yes`](#prompts-and---yes)). A domain that stays keeps the key
+and the secret it was given; a domain that would go is refused while something
+still uses it, as `remove` is. A state file that does not parse, which stops
+the server and every command from loading, is moved aside to
+`domains.toml.bad` and replaced.
+
+Every change runs under the same lock as the other data-directory stores,
+checks that the server would load the result, and replaces the file
+atomically, owner-only. A change that changes nothing writes nothing and
+reports `unchanged`. Secrets never appear in `show`/`list` output, and
+`--dry-run` prints the unified diff of the state file, with the SRS secret
+hidden, without writing.
 
 ## Aliases (`epistle alias`)
 
@@ -1178,23 +1293,68 @@ than 5% free. An output that is a link, a hard link, or not owned by
 for the server to read, so those files must be readable by the account where
 they are.
 
-Stack requires podup 5.15.4 or newer. A failed podup command stops the
+Stack requires podup 5.19.0 or newer. A failed podup command stops the
 sequence and its exit code becomes epistle's exit code.
 
 | Command | What it does |
 |---|---|
-| `sudo epistle stack up` | Runs `podup up -d --remove-orphans`, then `podup autostart install` to enable and start the project's user service. The orphans go with it: a container the compose file no longer names still holds the DNS credential and the ACME account key. It returns after starting; the service brings the stack back after reboot. On a stack that runs the certificates container it also puts the ACME account key where that container reads it: a key that is nowhere, or two copies that differ, stops `up` with a message naming the paths instead of starting a container that cannot renew. Once the stack is up it waits for `certs` to settle, judged the way `stack certs` judges it (two `podup ps` looks fifteen seconds apart, with the same start in both); a failure says what the two looks saw and exits non-zero. The copy of the account key under `<data_dir>/acme`, which `mail` can read, is removed only once `certs` holds the key. |
-| `sudo epistle stack down` | Runs `podup autostart uninstall`, then `podup down`. Database volumes and bind-mounted data are kept. |
+| `sudo epistle stack up` | Runs `podup up -d --remove-orphans`, then `podup autostart install` to enable and start the project's user service, and writes the [boot drop-ins](#boot-drop-ins). The orphans go with it: a container the compose file no longer names still holds the DNS credential and the ACME account key. It returns after starting; the service brings the stack back after reboot. On a stack that runs the certificates container it also puts the ACME account key where that container reads it: a key that is nowhere, or two copies that differ, stops `up` with a message naming the paths instead of starting a container that cannot renew. Once the stack is up it waits for `certs` to settle, judged the way `stack certs` judges it (two `podup ps` looks fifteen seconds apart, with the same start in both); a failure says what the two looks saw and exits non-zero. The copy of the account key under `<data_dir>/acme`, which `mail` can read, is removed only once `certs` holds the key. |
+| `sudo epistle stack down` | Runs `podup autostart uninstall`, then `podup down`, and removes both [boot drop-ins](#boot-drop-ins). Database volumes and bind-mounted data are kept. |
 | `sudo epistle stack ps [--json]` | Lists running services as a table or JSON. |
-| `sudo epistle stack logs [--follow] [SERVICE]` | Streams service logs. |
-| `sudo epistle stack restart [SERVICE]` | Restarts the stack or one service. |
+| `sudo epistle stack logs [--tail N \| --all] [--since WHEN] [--until WHEN] [--merge \| --no-merge] [--raw] [--follow] [SERVICE]` | Shows the last 200 lines of every service (or of `SERVICE`), where `podup` alone prints each service from its beginning. `--tail N` changes the number of lines per service and `--all` shows each log whole. `--since` and `--until` take a duration such as `10m` or `1h30m`, or a time such as `2026-11-15T08:00:00`. When more than one service is shown the lines are interleaved in time order, each with its time; `--no-merge` prints one service after the other instead, and `--merge` interleaves even a single service, which adds the time. A message longer than 500 characters is cut and says how many bytes were left out; `--raw` prints it whole. A line is never held whole in memory, so a container that prints megabytes without a newline does not exhaust it. `--follow` streams the services in the order the lines arrive, still cut unless `--raw`. It has no `--json` form. |
+| `sudo epistle stack restart [SERVICE]` | Restarts the stack or one service, then checks the boot unit like `apply`. |
 | `sudo epistle stack apply` | Applies what commands run with `--no-restart` left waiting: `podup up -d` to recreate what changed, then one restart of `mail`. |
-| `sudo epistle stack stop [SERVICE]` / `sudo epistle stack start [SERVICE]` | Stop or start the whole stack, or one service, without removing containers or the autostart unit. `stack stop mail` is how to take the mail server down for `epistle restore` while the database stays up to receive the dump. |
+| `sudo epistle stack stop [SERVICE]` / `sudo epistle stack start [SERVICE]` | Stop or start the whole stack, or one service, without removing containers. `stop` leaves the autostart unit as it is. `start` starts the containers that exist and never recreates, builds or pulls, and then installs the boot unit if it is missing, disabled or out of date. `stack stop mail` is how to take the mail server down for `epistle restore` while the database stays up to receive the dump. |
 | `sudo epistle stack update` | Renders `compose.yaml` again with this release's code, shows what changed and replaces it, then runs `podup up -d` so only changed services are recreated. In default mode it also restarts `mail` when its definition did not change, so it runs the host binary the new .deb installed; in custom image mode it runs `podup pull` first. Before any of that it dumps the stack's database to `<data_dir>/backups/pre-<version>-<timestamp>.sql.gz` (mode 0600, the newest three `pre-*` dumps kept while the update runs), because the new server migrates the schema when it starts; a failed dump stops the update before anything changes. Afterwards it waits up to five minutes for `mail` to report healthy and runs the `config`, `ports` and `db` checks of `epistle status`; on a stack that runs the certificates container it also waits for `certs` to settle, judged the way `stack certs` judges it (two `podup ps` looks fifteen seconds apart, with the same start in both), and runs the `tls` check as well, since that is the check that reports the container; a failure names the area and exits non-zero, and the apt upgrade prints it framed with the rollback command. When all of that passes, it deletes the `pre-<version>-*` dumps it took (a dump `db upgrade` took stays) and the images the previous compose file named and the new one does not, such as an older ClamAV digest or the version-tagged epistle image of a stack created by an earlier release. An image is removed only when no container of the service account uses it, so one that is still in use, or that carries another name, stays and the update says so; a failed update keeps the dumps and the images. Data and volumes are kept. Before it writes the new file it moves the storage and OAuth signing keys out of data_dir (when the configuration is a symlink, the file it points to is the one that is updated and the link stays), and once `db` runs it takes SUPERUSER away from an `epistle` role an older release created (see [the container stack](operations/container.md#the-database-roles)). |
 | `sudo epistle stack resources [--json]` | Lists each service's `mem_limit` and `pids_limit` from `compose.yaml`, and their sum. Does not run `podup`. |
 | `sudo epistle stack resources set SERVICE [--memory SIZE] [--pids N] [--json]` | Changes the limit of `mail`, `db`, `clamav` or `freshclam` (`SIZE` is a whole number with `k`, `m` or `g`) in `compose.yaml`; `mail` is refused less than five messages of `max_message_size` and 256 MiB (381 MiB at the default 25 MiB), so the budget derived from its limit holds one message, where `init` records answered limits, so `stack update` keeps it. The running container keeps its old limit until `sudo epistle stack update` recreates it. `set` and `stack update` take the same lock on `compose.yaml` (`.compose.yaml.lock` beside it), so one waits for the other and neither loses the other's change. |
 | `sudo epistle stack certs enable\|disable [--yes]` | Asks before it changes anything (`--yes` skips the question). `enable` moves the ACME renewal, the TLSA refresh and the DNS credential into a `certs` container and recreates `mail` without the credential or the ACME account key; it refuses a configuration without `[acme] challenge = "dns-01"` and a `[dns]` provider, and it refuses a DNS credential it cannot read and an install with no ACME account key anywhere, before it touches the stack. The account key is copied to `secrets/acme_account.key` beside data_dir and the copy under `<data_dir>/acme` is removed only once `mail` and `certs` are up; a failure puts the previous `compose.yaml` back. No command creates an account key: a key that is nowhere is refused, because a new key is a new account with the authority. The compose file is rewritten under the lock beside it (`.compose.yaml.lock`), the same one `stack update`, `stack resources set` and `dns provider set` take, so one waits for the other and none loses the other's change. `disable` copies the key back and returns to one `mail` that renews. See [the split plan](operations/container-split.md). |
 | `sudo epistle stack rollback [--to VERSION] [--yes]` | Asks before it changes anything (`--yes` skips the question; without a terminal and without `--yes` it exits 2). Puts back the binary the last upgrade replaced (the preinst keeps the two newest under `/var/lib/epistle-rollback`, root:root mode 0700) and, when the new release already migrated the schema, restores the dump `stack update` took before the restart. A stack running the certificates container is first returned to one `mail` with `stack certs disable`, since an older binary may not know `serve --role`. See [Rolling back an upgrade](#rolling-back-an-upgrade). |
+
+### Boot unit: what starts the stack, and what each command does
+
+A reboot only starts the containers that exist. The user unit
+`podup-epistle.service` (installed by `podup autostart install`) runs
+`podup up -d --no-build --pull never`, so nothing is built, pulled or
+recreated at boot, and an image that is not in the account's container
+storage makes the start fail. A version change is `sudo epistle stack update`,
+the only command that pulls.
+
+| Command | Containers | Boot unit |
+|---|---|---|
+| `stack up` | Creates what is missing and recreates what changed in `compose.yaml`; containers that exist and match are only started | Always installs it |
+| `stack start` | Starts the existing containers, recreates nothing | Installs it, without starting it, when missing, disabled, not loaded or out of date |
+| `stack apply`, `stack update`, `stack restart`, `stack certs enable\|disable`, `db upgrade`, a service edit that recreates a container | As each documents | Same check as `start`, once the command has succeeded |
+| `stack stop`, `stack down` | Stop (`down` also removes) | `down` removes it and its drop-ins; `stop` leaves them; neither checks it afterwards |
+
+The check reads the unit, compares the compose files it lists with the ones
+the stack runs from now (`compose.yaml` and `compose.override.yaml` when it
+exists), and installs the unit only when it differs, with `podup autostart
+install --no-start` followed by `systemctl --user enable`. It never starts the
+unit (the `enable --now` of a plain `autostart install` would run its `up -d`
+at once, which can recreate a container whose definition changed), and its
+only podup call is that install: it never runs `up`, `build`, `pull`,
+`restart` or `down`. A stack taken down with `stack down` has no unit until
+the next `stack up`.
+
+#### Boot drop-ins
+
+Two drop-ins harden the unit. Neither has an `Exec` line, so the unit keeps
+running `up -d --no-build --pull never` and a reboot never builds, pulls or
+recreates anything. Both are idempotent (a file that already holds the text is
+not touched) and both are removed by `stack down`. The retry drop-in is
+written wherever the unit is checked (`stack up`, `start`, `update`, `apply`,
+`restart`, `certs enable|disable`, `db upgrade`); the order drop-in by `sudo
+epistle` for `stack up`, `start`, `update`, `apply`, `restart`, `certs` and
+`init`, and only once the command succeeded and the unit exists.
+
+| Drop-in | Where | What it does | Who writes it |
+|---|---|---|---|
+| Retry | `~glyndor-epistle/.config/systemd/user/podup-epistle.service.d/10-epistle.conf` | `Restart=on-failure`, `RestartSec=30s`, `StartLimitIntervalSec=0` (the retry never gives up) and `TimeoutStartSec=15min`, because a `oneshot` unit otherwise waits for ever. `Restart=` on a `oneshot` unit needs systemd 244; an older one is left alone and `status` says so. | The service account. `[boot] restart_on_failure = false` removes it. |
+| Order | `/etc/systemd/system/user@<uid>.service.d/glyndor-epistle-boot.conf` | The account's user manager `Wants=network-online.target` and starts `After=network-online.target systemd-sysctl.service`, and `RequiresMountsFor=` the `data_dir` when it is on a mount of its own. A user unit cannot be ordered against a system unit, and the manager is one. | Root only: `sudo epistle` writes it from the process that hands over to the account, after the command succeeded. Run as the account it writes nothing and `status` warns. `[boot] order_after_network = false` removes it. |
+
+`apt purge epistle` removes the system drop-in; the user one goes with the
+account's home. The `boot` area of `epistle status` shows both.
 
 Keep container customizations in
 `<data_dir>/compose/compose.override.yaml`. Init preserves this file and its
@@ -1204,8 +1364,8 @@ Init regenerates the base file on reruns, and so does `stack update`: it
 takes the database choice, a custom mail image, the DNS token forwarding and
 the config path from the existing `compose.yaml`, and the published ports
 from the listeners in the config. Anything else edited in `compose.yaml` is
-replaced, so keep it in the override. Run stack up again after adding or
-removing an override so the autostart unit records the current file list.
+replaced, so keep it in the override. Add or remove an override and the next `stack start`, `apply`, `update` or
+`up` records the current file list in the autostart unit.
 
 The default compose file runs the host's `/usr/bin/epistle`
 (provided by the `.deb`, a statically linked musl binary) bind-mounted
@@ -1214,6 +1374,47 @@ base. An explicit `image` in the init answers lets the operator select a
 custom mail image instead (the host binary is then not mounted). The
 generated base records which mode the file is in via `x-epistle-managed-image`:
 true for the default host-binary shape, false for a custom image.
+
+The optional web panel comes from the `epistle-panel` package, which installs
+one file, `/usr/share/glyndor/epistle-panel/image`, holding the image
+reference `ghcr.io/glyndor/epistle-panel:<version>` (a tag, no digest). `init`
+and `stack update` read that file: it must hold exactly that repository and a
+plain tag on one line, and anything else stops the run with an error naming the
+file. `services.panel` in the answers file overrides the package: `false` keeps
+the panel out of a stack that has the package, `true` makes `init` fail when the
+package is missing, and a missing key leaves the package to decide. The choice
+is kept in `x-epistle-panel` in `compose.yaml`, so `stack update` keeps it.
+The panel needs the management API: with the package installed and
+`services.api` off, `init` and `stack update` say so and add no panel.
+
+With the package installed and the API on, the stack runs a `panel` service
+beside `mail`. It is the panel's own image, hardened like the others: a
+read-only root file system, every capability dropped, `no-new-privileges`, the
+uid 65532 the image declares, a tmpfs `/tmp`, and the limits
+`[resources.panel]` sets (512 MiB and 128 processes by default). Its three
+files — the API key, the session secret and the admin id — reach it as
+read-only compose secrets under `/run/secrets`, and it reads them through
+`EPISTLE_API_TOKEN_FILE`, `EPISTLE_PANEL_SESSION_SECRET_FILE` and
+`EPISTLE_PANEL_ADMIN_ID_FILE`, so no secret is ever in the environment. Its
+healthcheck asks the runtime for its own sign-in page
+(`http://127.0.0.1:7587/`), because the image carries no shell and no curl.
+
+**The panel shares the mail container's network namespace**
+(`network_mode: "service:mail"`), and that is what lets it reach the API: the
+management API binds `127.0.0.1` inside the mail container, where it is closed
+to the network by design, and no container in a network of its own reaches the
+host's loopback. So the panel talks to the API on `127.0.0.1` of that
+namespace, and to nothing else of the host's own services. The API sees every
+panel request from one address, `127.0.0.1`.
+
+The panel's own port is published by the mail container, which owns that
+namespace: a container that shares another container's namespace cannot
+publish a port of its own, so `compose.yaml` carries
+`127.0.0.1:7587:7587` in the `ports:` array of `mail` while the panel runs.
+The port is on the host's loopback because the panel serves plain HTTP: TLS is
+the operator's reverse proxy, the same reason the API and WebDAV are published
+on loopback. The panel's address is therefore `http://127.0.0.1:7587`, and
+its admin area is at `/app/<id>` (see `epistle panel admin-id`).
 
 Apt upgrades refresh the stack only when `podup-epistle.service` exists
 and is enabled for `glyndor-epistle`. Failures print a warning and leave
@@ -1265,14 +1466,16 @@ Apt shows these lines at the end of the upgrade:
 | `/run/user/<uid> does not exist` or `the user manager of glyndor-epistle did not answer` | The manager had not started when the wait ended, so the socket was not enabled or the stack was not updated. | `sudo systemctl start user@$(id -u glyndor-epistle).service`, then `sudo epistle stack update` |
 | `could not enable the Podman API socket` | The manager answered but refused the unit. | `systemctl --user enable --now podman.socket` as `glyndor-epistle` |
 | `the stack did not come back healthy after this upgrade` | `epistle stack update` failed; the error above the frame says which check. | `sudo epistle stack update`, or `sudo epistle stack rollback` |
+| `podup-epistle.service exists but is not enabled` | The upgrade did not update the stack, and the stack does not start at boot. | `sudo epistle stack start`, then `sudo epistle stack update` |
 | `could not look up the uid of glyndor-epistle` | The account is missing or the name service did not answer. | `getent passwd glyndor-epistle`, then `sudo dpkg-reconfigure epistle` |
 
 To diagnose an upgrade that printed one of these, read the lines above it in
 the apt output, then `systemctl status user@$(id -u glyndor-epistle).service`
 and `journalctl -u user@$(id -u glyndor-epistle).service -b` for the manager,
-and `sudo epistle status` for the stack. `epistle init` checks the account,
-the ranges, linger and the port floor again and refuses to continue when one
-is still missing.
+and `sudo epistle status` for the stack. `epistle init` does not repeat those steps: it ends with the `boot`
+summary, which reports linger, the user manager, the unit and the port floor
+with the command that fixes each one, and it does not refuse to continue.
+The same report is `sudo epistle check boot`.
 
 ### Rolling back an upgrade
 
@@ -1357,12 +1560,28 @@ It counts the rows of every table, stops `mail`, dumps the database into
 `<data_dir>/backups/pre-db-upgrade-<old>-to-<new>-<timestamp>.sql.gz`, stops
 `db`, switches its image, starts it, loads the dump in one transaction and
 counts again. The images from PostgreSQL 18 on keep each major's cluster in
-its own directory of the `epistle-pgdata` volume, so the new major starts
-empty beside the old cluster rather than over it. When the counts match, the
+its own directory of the `epistle-pgdata` volume. When the counts match, the
 whole stack starts on the new major; on any failure the old image and its
-untouched cluster come back and `mail` starts again. The old cluster stays
-in the volume at `/var/lib/postgresql/<old>` until it is removed by hand
-after mail is verified.
+untouched cluster come back and `mail` starts again.
+
+The stock images refuse to initialise a new major while the old major's
+cluster is in the volume: `postgres:19rc2` stopped with `Error: in 18+, these
+Docker images are configured to store database data in a format which is
+compatible with "pg_ctlcluster"` beside an 18 cluster. With them the move
+fails at the `db` health check and PostgreSQL 18 comes back on its own data,
+leaving the dump, the pulled image and an empty `/var/lib/postgresql/19/docker`.
+
+Then it waits up to five minutes for `mail` to report healthy and runs the
+`config`, `ports` and `db` checks of `epistle status`, as `stack update` does.
+When they pass, it removes what only the way back needed: the old cluster (the
+data directory the old server reported before the move, with its emptied major
+directory, such as `/var/lib/postgresql/18/docker` and
+`/var/lib/postgresql/18`), the dump it took, and the old PostgreSQL image when
+no container uses it. A directory outside the volume, or one the new cluster
+overlaps, is kept and the command says so; so is anything a removal fails on,
+without failing the upgrade. When `mail` or a check fails, the command exits
+non-zero with the database already on the new major, and keeps the old
+cluster, the dump and the image, naming where they are.
 
 ### Looking at the database
 
@@ -1658,17 +1877,32 @@ What this build does:
   that does not validate never reaches its destination;
 - generates a self-signed certificate under `<data_dir>/keys/cert.pem` and
   `keys/key.pem` so the produced config validates out of the box;
+- writes the public endpoint (the `autoconfigs` listener on port 443) into the
+  configuration, so the `autoconfig.<domain>` and `autodiscover.<domain>` names
+  the DNS records point at answer, and writes the `[mta_sts] policy_dir`
+  (`<data_dir>/mta-sts`) the public MTA-STS policy is written to and served
+  from. With `[acme]` on, the certificate asked for covers the mail hostname
+  and the `autoconfig.`, `autodiscover.` and `mta-sts.` names of every hosted
+  domain, because a client verifies the certificate against the name it asked
+  for and not against the name the CNAME points at. The end of the run lists
+  what was turned on and the one edit that turns each thing off;
 - creates the parent directory of `config_path` with mode `0750` when it
   does not exist (a fresh install has no `/etc/epistle/`), and prints it
   as a plan step so the operator sees it before confirming;
 - creates the first mail account when one is given (the assistant asks right
   after the domains; an answers file uses an optional `[first_account]` table
-  with `address`, `display_name`, `password_file` and `role_aliases`). The
+  with `address`, `display_name`, `password_file`, `role_aliases` and the
+  optional `fbl_mailbox`). The
   password is typed twice with echo off, or read from the first line of
   `password_file` (`-` reads it from stdin); it is never written in the
   answers file. With `role_aliases` (the default), `postmaster@` and `abuse@`
   of every domain become aliases of that account, so `config-check` no longer
-  warns about the missing `postmaster@` (RFC 5321) address. The alias is
+  warns about the missing `postmaster@` (RFC 5321) address. With `fbl_mailbox`
+  (the assistant asks for it and Enter skips; nothing is assumed), that
+  address in one of the domains also becomes an alias of the account and
+  `[reports] fbl_mailbox` names it, and the end of the run prints the
+  enrolment steps of the providers' complaint feedback loops (see
+  [`[reports]`](configuration.md#reports)). The alias is
   written in the form the server stores, so a domain given with non-ASCII
   letters appears in punycode (`postmaster@xn--...`), and an address that an
   account or a masked address already holds is left alone;
@@ -1852,10 +2086,11 @@ Only `epistle init` turns one into the other: it derives the name from the addre
 | `epistle app-password rotate N LABEL [--yes\|-y] [--dry-run]` | Replace the secret and print the new one once. The label, expiry, address range and `save-sent` setting stay; the old secret stops working in the same write, and the running server picks the change up from the file within a few seconds (`reload` says `loaded`, `no-server` or `timed-out`). Asks first, because every client using the old secret stops working. `--dry-run` checks that the credential exists and prints no secret. |
 | `epistle app-password rename N LABEL NEW_LABEL [--dry-run]` | Give the credential a new label; the secret and the settings stay, so clients keep working. Refuses a label that is taken (exit 2). `previous_label` in the JSON result holds the old one. |
 | `epistle app-password revoke N LABEL [--yes\|-y]` | Revoke it. Asks first. |
-| `epistle api-key list [--json]` | API keys: label, expiry (RFC 3339, `--json` keeps the epoch), CIDR, scopes, domains, bound account. Never the key. |
-| `epistle api-key create LABEL --scope S [--scope …] [--domain D] [--account N] [--expires-at WHEN \| --expires-in 90d] [--ip-cidr CIDR] [--class CLASS]` | Create a key; prints it once. `--ip-cidr` is an allowlist of one CIDR for the client address. `--class` (`transactional`, `marketing` or `personal`) is the [mail class](evidence.md) `/api/v1/send` grants to mail the request gives none. `WHEN` is an epoch, a date, an RFC 3339 instant or a duration; no key expires unless one is given, and `status` warns about the ones that do not (see [Expiry is opt-in](api.md#expiry-is-opt-in)). Scopes: `read`, `write`, `send`, `scim`. `--domain` confines it to domains. `--account` binds it to one account (static or dynamic): it then reaches only JMAP and `/api/v1/send`, cannot hold `scim`, and takes no `--domain`. |
+| `epistle api-key list [--json]` | API keys: label, expiry (RFC 3339, `--json` keeps the epoch), CIDR, scopes, domains, bound account and `auto_submitted` setting. Never the key. JSON adds `"auto_submitted": true` only for enabled keys, preserving the existing object shape for disabled keys. |
+| `epistle api-key create LABEL --scope S [--scope …] [--domain D] [--account N] [--expires-at WHEN \| --expires-in 90d] [--ip-cidr CIDR] [--class CLASS] [--auto-submitted]` | Create a key; prints it once. `--ip-cidr` is an allowlist of one CIDR for the client address. `--class` (`transactional`, `marketing` or `personal`) is the [mail class](evidence.md) `/api/v1/send` grants to mail the request gives none. `--auto-submitted` makes `/api/v1/send` add `Auto-Submitted: auto-generated` when the request omits that header; it is off by default and a request value always wins. `WHEN` is an epoch, a date, an RFC 3339 instant or a duration; no key expires unless one is given, and `status` warns about the ones that do not (see [Expiry is opt-in](api.md#expiry-is-opt-in)). Scopes: `read`, `write`, `send`, `scim`. `--domain` confines it to domains. `--account` binds it to one account (static or dynamic): it then reaches only JMAP, `/api/v1/send`, `/api/v1/deliveries` and that account's suppression list, cannot hold `scim`, and takes no `--domain`. |
+| `epistle api-key set LABEL --auto-submitted on\|off` | Change whether `/api/v1/send` adds `Auto-Submitted: auto-generated` when the request omits that header. Other settings and the secret stay unchanged. |
 | `epistle api-key revoke LABEL [--yes\|-y]` | Revoke a key. Asks first. |
-| `epistle api-key rotate LABEL` | New secret, same scopes; prints it once. |
+| `epistle api-key rotate LABEL` | New secret, same scopes and settings; prints it once. |
 
 `account list --aliases` hangs under each account the `[[alias]]` entries (the
 ones `epistle alias list` shows) that have one of the account's addresses as a
@@ -1881,14 +2116,16 @@ without the flag the output, text or JSON, is exactly what it was.
 | `epistle delivery list [--recipient ADDR] [--account NAME] [--since WHEN] [--until WHEN] [--status S] [--limit N] [--json]` | Read the per-recipient delivery log: one record per delivered, failed, suppressed or canceled recipient, and one per deferred recipient for each distinct reply, at most eight per recipient (a retry deferred for the same reason adds none), newest day first, at most `N` records (default 100, at most 100000; a larger value is a usage error). The log is read a line at a time, so memory does not grow with the size of a day's file, and days outside `--since`/`--until` are not opened. `--since` and `--until` take an RFC 3339 time or a duration such as `24h` or `7d` counted back from now; `--since` after `--until` is refused, and so is a filter given empty (`--account ""`): it is a usage error (exit 2), never "no filter". `--status` (also `--outcome`) is `delivered`, `deferred`, `failed`, `suppressed` or `canceled`. Metadata only, never a subject or body. The time of each record is an RFC 3339 UTC instant; `--json` keeps the epoch second. `epistle delivery` alone is `delivery list`. Needs `[storage] delivery_log_days` above 0. |
 | `epistle delivery show ID [--json]` | Every record of one message, oldest first. `ID` is the spool id of the `SPOOL` column of `delivery list`. The time of each record is an RFC 3339 UTC instant; `--json` keeps the epoch second. The remote host and its reply are escaped for the terminal. Exits 2 for an id that is not a UUID or that has no record. |
 | `epistle delivery export [filters] [--limit N] [--json]` | The records that pass the same filters as `list` as CSV: `time,outcome,spool_id,account,from,recipient,remote,reply,attempt`, time as RFC 3339 UTC, newest day first, at most `N` records (default 10000, at most 100000). A field a spreadsheet would run as a formula (the reply of a remote server can begin with `=`) is written with a leading apostrophe. With `--json` the records are the objects `list --json` prints, `extra` included. |
-| `epistle suppression list [--account SENDER] [--json]` | List suppressed (hard-bounced) recipients. A recipient suppressed by a bounce also shows, tab separated, when and the remote reply that proved the address bad. |
-| `epistle suppression add ADDR [--account SENDER] [--reason TEXT]` | Suppress a recipient by hand. Mail queued for it is dropped without a bounce on the next delivery pass. With `--account` it applies to that sender only. `--reason` is kept with the entry and shown by `list`, `show` and `export` (at most 512 characters, no control characters; the default says it was added by hand). Exits 1, printing nothing, when the entry could not be written. |
+| `epistle suppression list [--account SENDER] [--json]` | List suppressed (hard-bounced) recipients. A recipient suppressed by a bounce also shows, tab separated, when and the remote reply that proved the address bad, and, when `[queue] suppression_days` gave it a lifetime, `until` and when it ends (`--json` adds an `until` key to those rows only). |
+| `epistle suppression add ADDR [--account SENDER] [--reason TEXT]` | Suppress a recipient by hand. Mail queued for it is dropped without a bounce on the next delivery pass. With `--account` it applies to that sender only. `--reason` is kept with the entry and shown by `list`, `show` and `export` (at most 512 characters, no control characters; the default says it was added by hand). Adding an address already present succeeds without replacing its stored reason or time; JSON output reports `unchanged`. Exits 1, printing nothing, when the entry could not be written. |
 | `epistle suppression remove ADDR [--account SENDER]` | Deliver to the recipient again. |
 | `epistle suppression show ADDR [--account SENDER] [--json]` | One entry: the address, the list it is in, when and why. Exits 2 when the address is not suppressed in that list. |
+| `epistle suppression tenant list TENANT [--json]` | The addresses suppressed for a tenant (`[queue] suppression_scopes` with `tenant`), with the end of each entry that has one. |
+| `epistle suppression tenant remove TENANT ADDRESS [--json]` | Deliver to the address again for that tenant. |
 | `epistle suppression export [--account SENDER] [--json]` | Write the list as CSV on stdout: a header `address,since,reason`, then one entry per line with the time as RFC 3339 UTC. A field that begins with `=`, `+`, `-` or `@` (after any apostrophes) is written with one more leading apostrophe so a spreadsheet does not run it as a formula, and `import` takes exactly one off, so a value that really starts with an apostrophe survives the round trip. With `--json`, one array of `{address, since, reason}`. |
 | `epistle suppression import FILE [--account SENDER] [--reason TEXT] [--dry-run] [--json]` | Suppress every address of a file in the form `export` writes, or a plain list with one address per line. UTF-8 text of at most 16 MiB and 100000 entries; blank lines and lines starting with `#` are skipped. The whole file is checked first: one bad line refuses it with exit 2, naming the first ten bad lines, and nothing is written. An address that is already suppressed keeps its entry. The time must be a real RFC 3339 time (`2026-02-30T00:00:00Z` is refused); the file must be a regular file, a named pipe or a device is refused. `--reason` is the reason for lines that give none. The result counts `added`, `already` and `duplicates` (an address repeated in the file); `--dry-run` counts and writes nothing. If a write fails part way the error says how many entries were written; running the import again skips them. Run as root, the file is read through a private copy like the other input files. |
 | `epistle report-abuse` | Read an offending message on stdin, print an RFC 5965 ARF report to send to the sender's abuse address. |
-| `epistle reports [--days N]` | Summarise the DMARC aggregate and TLS-RPT reports that arrived for our domains over the last `N` days (default 7). Per policy domain: reporters seen, total rows, and failing rows by `source_ip` (DMARC) or failing sessions by `result_type` and `sending_mta_ip` (TLS-RPT). Reads the JSONL store under `data_dir/reports/`; never writes to it. |
+| `epistle reports [--days N]` | Summarise the DMARC aggregate and TLS-RPT reports that arrived for the hosted domains over the last `N` days (default 7). Per policy domain: reporters seen, total rows, and failing rows by `source_ip` (DMARC) or failing sessions by `result_type` and `sending_mta_ip` (TLS-RPT). Reads the JSONL store under `data_dir/reports/`; never writes to it. |
 
 For `migrate imap`, `data_dir` and its migration state must be owned by the
 process's effective user, including during `--dry-run`. Run the migration as the
@@ -1965,6 +2202,8 @@ decides whether to attempt it.
 | `epistle queue release <id>\|--all` | Let a held entry be attempted again. |
 | `epistle queue destinations [--json]` | The recipient domains and exchanger hosts on hold because they asked to slow down, as the spool shows them: until when (an RFC 3339 UTC instant), after how many deferrals in a row, and the reply. `epistle queue list` names them too. |
 | `epistle queue release-destination <domain>\|<host>\|--all` | Make every recipient waiting for that hold due at once, its run of deferrals forgotten; the running worker picks it up at its next scan. |
+| `epistle queue undo list [--json]` | The messages the send delay (`[queue.undo_send]`) still holds, before anything is delivered: id, sending account and seconds left. Never prints the message. |
+| `epistle queue undo cancel <id>` | Cancel a held message so nothing of it is ever delivered. A message already handed on is refused; use `queue remove` on its queue entry. |
 | `epistle queue remove <id> [--yes\|-y]` | Delete an entry without delivering or bouncing it (same as `DELETE /api/v1/queue/{id}`). Asks first; `--yes` skips the question. |
 
 A held entry is not attempted and its time on hold does not count toward the

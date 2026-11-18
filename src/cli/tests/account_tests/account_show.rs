@@ -66,14 +66,14 @@ fn show_refuses_unknown_account() {
 fn show_handles_set_quota_and_protocols() {
 	let harness = build();
 	let store = reload_store(&harness);
-	account::quota_with_store(
+	let _ = account::quota_with_store(
 		&store,
 		DYNAMIC_NAME,
 		Some(500 * 1024 * 1024),
 		&mut std::io::sink(),
 		false,
 	);
-	account::protocols_with_store(
+	let _ = account::protocols_with_store(
 		&store,
 		DYNAMIC_NAME,
 		Some(vec![crate::config::Protocol::Api]),

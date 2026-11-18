@@ -1,6 +1,7 @@
 use super::*;
 
 mod base;
+mod dmarc;
 mod dns_reconcile;
 mod domain_rotation;
 mod handoff;

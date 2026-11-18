@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use super::registry::{Entry, Handling, TRACKING_ISSUE, entries, issue_url};
 
 /// How a handling reads in the text output.
-fn describe(handling: &Handling) -> String {
+pub(super) fn describe(handling: &Handling) -> String {
 	match handling {
 		Handling::Epistle(how) => format!("epistle: {how}"),
 		Handling::Operator(how) => format!("operator: {how}"),
@@ -18,7 +18,7 @@ fn describe(handling: &Handling) -> String {
 	}
 }
 
-fn handling_json(handling: &Handling) -> Value {
+pub(super) fn handling_json(handling: &Handling) -> Value {
 	match handling {
 		Handling::Epistle(how) | Handling::Operator(how) => {
 			json!({ "by": handling.actor(), "how": how })

@@ -43,6 +43,7 @@ fn show_dynamic_reports_forwards_catch_all_and_two_factor() {
 	let store = store(dir.path(), &config);
 	store
 		.add(DynamicAccount {
+			reset: None,
 			send: None,
 			receive: None,
 			name: "alice".to_string(),
@@ -90,6 +91,7 @@ fn show_dynamic_two_factor_yes_when_totp_enrolled() {
 	let store = store(dir.path(), &config);
 	store
 		.add(DynamicAccount {
+			reset: None,
 			send: None,
 			receive: None,
 			name: "alice".to_string(),

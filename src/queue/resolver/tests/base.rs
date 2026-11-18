@@ -170,6 +170,22 @@ async fn a_connect_that_times_out_moves_on_to_the_next_exchanger() {
 	assert_eq!(started.elapsed(), timeouts::CONNECT);
 }
 
+#[tokio::test]
+async fn a_refused_connection_names_the_host_and_keeps_the_error_for_the_log() {
+	let hosts = vec!["mx1.example.net".to_string()];
+	let reached: Result<(String, String), DeliveryError> =
+		first_reachable("example.net", &hosts, |_host: &str| async {
+			Err::<String, _>(std::io::Error::from(std::io::ErrorKind::ConnectionRefused))
+		})
+		.await;
+	assert_eq!(
+		reached,
+		Err(DeliveryError::Transient(
+			"4.4.1 the mail server mx1.example.net could not be reached".into()
+		))
+	);
+}
+
 #[tokio::test(start_paused = true)]
 async fn every_exchanger_timing_out_is_a_transient_failure() {
 	let hosts = vec!["mx1.example.net".to_string(), "mx2.example.net".to_string()];
@@ -183,7 +199,7 @@ async fn every_exchanger_timing_out_is_a_transient_failure() {
 	assert_eq!(
 		reached,
 		Err(DeliveryError::Transient(
-			"connect to mx2.example.net:25 timed out after 30s".into()
+			"4.4.1 the mail server mx2.example.net could not be reached".into()
 		))
 	);
 	assert_eq!(started.elapsed(), timeouts::CONNECT * 2);
@@ -251,7 +267,7 @@ fn the_next_exchanger_is_still_one_the_policy_permits() {
 	assert_eq!(
 		candidates("example.net", all, Some(&unlisted), &[]),
 		Err(DeliveryError::Transient(
-			"no MTA-STS-permitted MX for example.net".into()
+			"4.7.5 the MTA-STS policy of example.net allows none of its mail servers".into()
 		))
 	);
 }

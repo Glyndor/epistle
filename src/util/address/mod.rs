@@ -42,5 +42,29 @@ pub fn normalize_domain(raw: &str) -> String {
 	crate::domain::normalize(raw).unwrap_or_else(|_| raw.to_lowercase())
 }
 
+/// The local part and the domain of a mailbox that can go into a message
+/// header as it is: printable ASCII, without the characters that would end
+/// the header line or start another address.
+///
+/// This is the gate for every address the server writes into a header of a
+/// message it signs — the `To:` of a report taken from a `rua=` a stranger
+/// published, the `From:` of an aggregate report an operator configured — so
+/// a value that passes can be written into the header without escaping it.
+/// A value that does not pass is refused rather than escaped: the caller
+/// decides what to do with it.
+///
+/// The rule is deliberately narrow. A quoted local part, an address literal
+/// and a display name are all valid RFC 5322 mailboxes that this refuses.
+pub fn plain_mailbox(mailbox: &str) -> Option<(&str, &str)> {
+	let (local, domain) = mailbox.split_once('@')?;
+	let plain = |part: &str| {
+		!part.is_empty()
+			&& part
+				.bytes()
+				.all(|byte| byte.is_ascii_graphic() && !b"@<>,;:\\\"()[]".contains(&byte))
+	};
+	(plain(local) && plain(domain) && mailbox.len() <= 254).then_some((local, domain))
+}
+
 #[cfg(test)]
 mod tests;

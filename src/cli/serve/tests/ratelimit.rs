@@ -392,9 +392,8 @@ async fn per_domain_limit_set_in_config_refuses_a_second_submission() {
 #[tokio::test]
 async fn no_limit_means_no_deferral() {
 	// Symmetric: with neither `submission_rate_limit_per_min` nor any
-	// per-domain entry set, the listener loop must not start a limiter
-	// at all. A future commit that wires the limiter against an
-	// accidentally-stale default would regress the unconfigured path.
+	// per-domain entry set, the prepared limiter must charge nothing.
+	// It stays ready for a domain cap installed by the file watcher.
 	let dir = tempfile::tempdir().expect("tempdir");
 	let mut config = ratelimit_config(dir.path(), 1);
 	config.submission_rate_limit_per_min = None;

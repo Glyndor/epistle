@@ -15,10 +15,10 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use super::answers::{DnsAnswers, Mode, Services};
-use super::compose::{ComposeFile, render_document};
+use super::compose::{ComposeFile, panel_package, render_document};
 use super::compose_publish::{hosts, narrowed, ports, published};
 use crate::cli::init::Answers;
-use crate::config::Listener;
+use crate::config::{Listener, ListenerKind};
 
 /// A re-rendered compose file.
 #[derive(Debug)]
@@ -29,11 +29,16 @@ pub(crate) struct Regenerated {
 	pub(crate) notes: Vec<String>,
 	/// The config path the `mail` service serves.
 	pub(crate) config_path: PathBuf,
+	/// Whether the stack runs the panel: the package is installed, the
+	/// operator did not decline it and the API is on. `stack update` creates
+	/// the panel's secrets before it writes this compose file.
+	pub(crate) panel: bool,
 }
 
 /// Re-render `existing` for an install whose config has `data_dir` and
 /// `listeners`. Fails when the existing file is not one `epistle init`
 /// wrote, rather than guessing.
+#[cfg(test)]
 pub(crate) fn regenerate(
 	data_dir: &Path,
 	listeners: &[Listener],
@@ -49,6 +54,23 @@ pub(crate) fn regenerate_with(
 	listeners: &[Listener],
 	existing: &str,
 	certs: Option<bool>,
+) -> Result<Regenerated, String> {
+	regenerate_in(
+		data_dir,
+		listeners,
+		existing,
+		certs,
+		Path::new(panel_package::MANIFEST),
+	)
+}
+
+/// [`regenerate_with`], reading the panel package's pin file at `manifest`.
+pub(crate) fn regenerate_in(
+	data_dir: &Path,
+	listeners: &[Listener],
+	existing: &str,
+	certs: Option<bool>,
+	manifest: &Path,
 ) -> Result<Regenerated, String> {
 	let document: Value = serde_json::from_str(existing)
 		.map_err(|error| format!("compose.yaml is not the JSON epistle init writes: {error}"))?;
@@ -84,7 +106,7 @@ pub(crate) fn regenerate_with(
 		.get("certs")
 		.filter(|certs| certs.is_object());
 	let forwarding = dns_forwarding(running_certs.unwrap_or(mail), &config_dir, data_dir);
-	let answers = Answers {
+	let mut answers = Answers {
 		mode: Mode::Manual,
 		hostname: String::new(),
 		domains: Vec::new(),
@@ -108,11 +130,23 @@ pub(crate) fn regenerate_with(
 				.get("x-epistle-antivirus")
 				.and_then(Value::as_bool)
 				.filter(|on| !on),
+			freshclam_checks: document
+				.get("x-epistle-freshclam-checks")
+				.and_then(Value::as_u64)
+				.and_then(|checks| u8::try_from(checks).ok()),
+			// The operator's choice survives the update; whether the panel runs
+			// is decided below from the package and the listeners.
+			panel: document.get("x-epistle-panel").and_then(Value::as_bool),
+			panel_image: None,
 		},
 		image,
 		first_account: None,
 		resources,
 	};
+	let serves_api = listeners
+		.iter()
+		.any(|listener| listener.kind == ListenerKind::Api);
+	let panel_notes = panel_package::resolve(&mut answers, manifest, serves_api, false)?;
 	// The host address `epistle service set` narrowed one mapping to is the
 	// operator's decision, not a function of the listeners, so the existing
 	// file is the only place it lives. Regenerating without it would put
@@ -124,10 +158,15 @@ pub(crate) fn regenerate_with(
 	// publish it. The file is the one the apply phase wrote, so it already
 	// carries the section init adds.
 	let challenge = super::compose::challenge::in_config(&answers.config_path);
-	let published_ports = published(listeners, &narrow, None, challenge);
-	let composed = ComposeFile::build(&answers, published_ports.clone(), database);
+	let panel_port = answers
+		.services
+		.panel_image
+		.as_ref()
+		.map(|_| super::compose::PANEL_PORT);
+	let published_ports = published(listeners, &narrow, None, challenge, panel_port);
+	let composed = ComposeFile::build(&answers, published_ports.clone(), database, listeners);
 	let mut text = render_document(&composed).map_err(|error| error.to_string())?;
-	let mut notes = Vec::new();
+	let mut notes = panel_notes;
 	// A publication this release takes off every address of the host is named
 	// in the notes: the operator loses reachability on this upgrade and the
 	// note is where they read which port went.
@@ -160,6 +199,7 @@ pub(crate) fn regenerate_with(
 		text,
 		notes,
 		config_path: answers.config_path,
+		panel: answers.services.panel_image.is_some(),
 	})
 }
 
@@ -208,7 +248,8 @@ fn dns_forwarding(service: &Value, config_dir: &Path, data_dir: &Path) -> Option
 			let relabelled = volume.get("bind").is_some();
 			let read_only = volume["read_only"].as_bool() == Some(true);
 			(relabelled
-				&& read_only && volume["target"].as_str() == Some(source)
+				&& read_only
+				&& volume["target"].as_str() == Some(source)
 				&& Path::new(source) != config_dir
 				&& !shared.iter().any(|dir| dir == Path::new(source)))
 			.then(|| PathBuf::from(source))

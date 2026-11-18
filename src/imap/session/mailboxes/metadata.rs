@@ -16,10 +16,10 @@ impl Session {
 		entries: &[String],
 	) -> Output {
 		let Some(account) = self.account().map(str::to_string) else {
-			return Output::text(format!("{tag} NO not authenticated\r\n"));
+			return Output::text(format!("{tag} BAD not authenticated\r\n"));
 		};
 		if !mailbox.is_empty() && !mailbox::exists(&self.data_dir, &account, mailbox) {
-			return Output::text(format!("{tag} NO no such mailbox\r\n"));
+			return Output::text(format!("{tag} NO [NONEXISTENT] no such mailbox\r\n"));
 		}
 		let mut pairs = String::new();
 		for entry in entries {
@@ -54,19 +54,19 @@ impl Session {
 		items: &[(String, Option<String>)],
 	) -> Output {
 		let Some(account) = self.account().map(str::to_string) else {
-			return Output::text(format!("{tag} NO not authenticated\r\n"));
+			return Output::text(format!("{tag} BAD not authenticated\r\n"));
 		};
 		if !mailbox.is_empty() && !mailbox::exists(&self.data_dir, &account, mailbox) {
-			return Output::text(format!("{tag} NO no such mailbox\r\n"));
+			return Output::text(format!("{tag} NO [NONEXISTENT] no such mailbox\r\n"));
 		}
 		for (entry, _) in items {
 			if !metadata::valid_entry(entry) {
-				return Output::text(format!("{tag} BAD invalid entry name\r\n"));
+				return Output::text(format!("{tag} BAD [CLIENTBUG] invalid entry name\r\n"));
 			}
 		}
 		for (entry, value) in items {
 			if metadata::set(&self.data_dir, &account, mailbox, entry, value.as_deref()).is_err() {
-				return Output::text(format!("{tag} NO SETMETADATA failed\r\n"));
+				return Output::text(format!("{tag} NO [SERVERBUG] SETMETADATA failed\r\n"));
 			}
 		}
 		Output::text(format!("{tag} OK SETMETADATA completed\r\n"))

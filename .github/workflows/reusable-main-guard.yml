@@ -10,12 +10,13 @@ permissions: {}
 
 concurrency:
   group: main-guard-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   develop-only:
     name: develop-only
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
+    timeout-minutes: 10
     if: github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'main'
     steps:
       - name: Require develop as source branch

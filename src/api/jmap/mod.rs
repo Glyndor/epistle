@@ -32,9 +32,11 @@ mod dispatcher;
 mod download;
 mod email;
 mod email_build;
+mod email_query;
 pub mod event_source;
 pub use download::download;
 mod email_submission;
+mod email_submission_undo;
 mod upload_api;
 use scope::{jmap_scope_error, required_scope};
 pub use upload_api::upload;
@@ -68,6 +70,8 @@ pub(crate) mod state;
 pub(crate) use dispatcher::MAX_REQUEST_LIMITS;
 use dispatcher::{ResolveError, Resolver};
 
+#[cfg(test)]
+pub(crate) use blobs::LISTED_FAILURES;
 pub use blobs::{account_usage_bytes, backfill_blob_ownership, reclaim_blobs};
 
 #[cfg(test)]
@@ -94,6 +98,23 @@ pub async fn session(
 ) -> Json<Value> {
 	let principal = Principal::for_token(&state, &auth);
 	let views = state.accounts();
+	let max_message_size = state.max_message_size();
+	let max_size_attachments_per_email =
+		max_message_size.saturating_sub(limits::ATTACHMENT_HEADROOM) / 78 * 76 / 4 * 3;
+	let mail_capability = json!({
+		"maxMailboxesPerEmail": null,
+		"maxMailboxDepth": null,
+		"maxSizeMailboxName": 128u32,
+		"maxSizeAttachmentsPerEmail": max_size_attachments_per_email as u64,
+		"emailQuerySortOptions": ["receivedAt"],
+		"maxEmailQueryLimit": email_query::MAX_QUERY_LIMIT,
+		"maxEmailQueryResults": email_query::MAX_QUERY_RESULTS,
+		"maxEmailQueryMailboxes": email_query::MAX_QUERY_MAILBOXES,
+		"maxEmailQuerySearchMessages": email_query::MAX_SEARCH_MESSAGES,
+		"maxEmailQuerySearchBytes": email_query::MAX_SEARCH_BYTES,
+		"maxEmailQuerySearchHeaderBytes": email_query::MAX_SEARCH_HEADER_BYTES,
+		"mayCreateTopLevelMailbox": true,
+	});
 	let accounts: serde_json::Map<String, Value> = principal
 		.admissible_accounts(&views)
 		.into_iter()
@@ -105,7 +126,7 @@ pub async fn session(
 					"isPersonal": true,
 					"isReadOnly": false,
 					"accountCapabilities": {
-						CORE_CAPABILITY: {}, MAIL_CAPABILITY: {},
+						CORE_CAPABILITY: {}, MAIL_CAPABILITY: mail_capability.clone(),
 						SUBMISSION_CAPABILITY: {}, QUOTA_CAPABILITY: {},
 						VACATION_CAPABILITY: {},
 						SIEVE_CAPABILITY: sieve_capability::account_value(),
@@ -130,9 +151,6 @@ pub async fn session(
 	// body limit applies (configured `max_message_size`), and the
 	// per-attachment bound is the same base minus the headroom that the
 	// rest of the message needs for headers and the body itself.
-	let max_message_size = state.max_message_size();
-	let max_size_attachments_per_email =
-		max_message_size.saturating_sub(limits::ATTACHMENT_HEADROOM) / 78 * 76 / 4 * 3;
 	Json(json!({
 		"capabilities": {
 			CORE_CAPABILITY: {
@@ -145,14 +163,7 @@ pub async fn session(
 				"maxObjectsInSet": MAX_OBJECTS_IN_SET as u32,
 				"collationAlgorithms": [],
 			},
-			MAIL_CAPABILITY: {
-				"maxMailboxesPerEmail": null,
-				"maxMailboxDepth": null,
-				"maxSizeMailboxName": 128u32,
-				"maxSizeAttachmentsPerEmail": max_size_attachments_per_email as u64,
-				"emailQuerySortOptions": [],
-				"mayCreateTopLevelMailbox": true,
-			},
+			MAIL_CAPABILITY: mail_capability.clone(),
 			SUBMISSION_CAPABILITY: {
 				"maxDelayedSend": 0u32,
 				"submissionExtensions": {},
@@ -325,7 +336,15 @@ pub fn dispatch_request(
 			"PushSubscription/set" => push_subscription::set(state, principal, &args, &call_id),
 			"Mailbox/get" => methods::mailbox_get(state, principal, &args, &call_id),
 			"Mailbox/query" => methods::mailbox_query(state, principal, &args, &call_id),
-			"Email/query" => methods::email_query(state, principal, &args, &call_id),
+			"Email/query" => match methods::email_query(state, principal, &args, &call_id) {
+				Ok(response) => response,
+				Err(email_query::Failure::Method(response)) => response,
+				Err(email_query::Failure::Limit(limit, detail)) => json!([
+					"error",
+					{ "type": "requestTooLarge", "limit": limit, "description": detail },
+					call_id
+				]),
+			},
 			"Email/get" => methods::email_get(state, principal, &args, &call_id),
 			"Thread/get" => methods::thread_get(state, principal, &args, &call_id),
 			// `/changes` answers against the per-type change log

@@ -16,8 +16,12 @@ control, its test and the residual risks, see the [threat model](threat-model.md
   implicit-TLS only (no plaintext port 110), and ManageSieve requires a
   STARTTLS upgrade before authentication.
 - **TLS for the mail protocols** is the server's own job (built-in ACME, or
-  manual PEM). Outbound delivery is opportunistic TLS, upgraded to *mandatory
-  verified* TLS when MTA-STS enforce, DANE, or a sender's REQUIRETLS applies.
+  manual PEM). Outbound delivery uses STARTTLS and verifies the MX certificate
+  against the public trust anchors by default (`[queue] outbound_tls = "strict"`):
+  a remote with a self-signed or expired certificate and no DANE or MTA-STS
+  policy is deferred. `opportunistic`, which accepts any certificate, is an
+  opt-in; MTA-STS enforce, DANE, or a sender's REQUIRETLS authenticate the
+  certificate under either setting.
 - **`TLS-Required: No`** (RFC 8689) lets one of your own senders deliver a
   message where MTA-STS or DANE would refuse an unverified connection, for
   instance to tell a domain its certificate expired. The queue still uses
@@ -45,7 +49,7 @@ control, its test and the residual risks, see the [threat model](threat-model.md
   case-folded form) and only runs on inputs that have already cleared the
   12-to-64-character printable-ASCII gate, so a strong random credential
   is unaffected.
-- **Password character set**: length 12-64 printable ASCII by default.
+- **Password character set**: length 12-64 printable ASCII by default; `[auth] min_password_length` and `max_password_length` move the length within the floors of the configuration reference (8, and 64 as the lowest maximum), and `forbidden_passwords_file` adds the operator's own refused passwords.
   Operators that need non-ASCII passwords can opt in with
   `[auth] unicode_passwords = true`. With the flag on the policy accepts
   any non-control Unicode scalar, normalises with NFKC on both set and
@@ -75,7 +79,8 @@ control, its test and the residual risks, see the [threat model](threat-model.md
   `OK` that closes the `AUTHENTICATE` — so an IMAP client sees one message
   fewer than an SMTP one.
 - **SCRAM verifiers** stored next to the argon2id hash are derived with
-  600000 PBKDF2-HMAC-SHA256 iterations (the OWASP 2023 figure), so the
+  600000 PBKDF2-HMAC-SHA256 iterations by default (the OWASP 2023 figure, and
+  the floor of `[auth] scram_iterations`, which can only raise it), so the
   verifier is not a cheaper target than the hash for someone who reads
   `accounts.toml`. A verifier from an older version keeps the iteration
   count it was derived with, which the server announces in the exchange,
@@ -157,10 +162,22 @@ control, its test and the residual risks, see the [threat model](threat-model.md
     client hanging up, and it grows with the largest number of app passwords
     any account holds, because every refusal does that much work.
   - The memory held live is bounded by the places (about 19 MiB each). The
-    published builds use musl, where a busy server measured 210 MB at eight
-    places and 87 MB at two. A build from source against glibc may keep the
+    published builds use musl. A build from source against glibc may keep the
     memory of freed hashes (glibc raises its mmap threshold after the first
-    one), so its resident size stays well above that.
+    one), so its resident size stays higher.
+- **POP3 and ManageSieve say whether a failure can pass.** The text after the
+  code stays, so a client that ignores codes keeps working. POP3 answers a
+  refused login `-ERR [AUTH] authentication failed` (RFC 3206), the same line
+  whether the user, the password or a ban was the cause, and a connection over
+  a cap `-ERR [SYS/TEMP] too many connections ...`. The sign-in that finds the
+  password gate full gets `-ERR [SYS/TEMP] try again later`. `[LOGIN-DELAY]` is
+  never sent: the server enforces no minimum interval between logins, and a
+  code on a ban would tell a banned account from a wrong password.
+  ManageSieve answers a storage error that can pass (`NO (TRYLATER) "Storage
+  error."`, RFC 5804 section 1.3) and `AUTHENTICATE` before TLS `NO
+  (ENCRYPT-NEEDED)`. `(AUTH-TOO-WEAK)` and `(WARNINGS)` are never sent: only
+  PLAIN over TLS is offered, with no policy that calls it too weak, and the
+  script check accepts or refuses a script, with no warning in between.
 
 ## Authorization
 
@@ -322,7 +339,8 @@ instead of being read as whichever primitive the verifier happened to use.
   listener (SMTP submission, IMAP, POP3, ManageSieve, the API, OAuth
   device and PKCE grants) records every password-authentication outcome
   into the `auth_failure` table and consults the `auth_ban` table
-  before doing any password hashing. The product context's defaults:
+  before doing any password hashing. The defaults, each one a setting in
+  `[bans]` with a floor the loader enforces:
   5 failed authentications within 15 minutes fire a ban; the first ban
   lasts 15 minutes, the next on the same subject doubles (30 minutes,
   then an hour, ...), capped at 24 hours. Failures are counted on three
@@ -344,20 +362,13 @@ instead of being read as whichever primitive the verifier happened to use.
   but its failures still count on the account (not on the pair, so typos
   behind a shared proxy cannot lock one account's owner out of it), or a
   trusted network could guess without limit. A route that has no client address
-  (WebDAV now passes one) counts every attempt on an account as one client,
-  `unknown`, so the pair still stops guessing at five. Residual risk,
-  left to the owner: counting is per /64, so a client with a whole IPv6
+  (WebDAV passes one) counts every attempt on an account as one client,
+  `unknown`, so the pair still stops guessing at five. Residual risk: counting is per /64, so a client with a whole IPv6
   allocation can spread guesses over its /64s (300 /64s of one /48 with four
-  failures each never reach a ban); the account ceiling above is what stops it
-  for one account, and spraying across many accounts is not banned. The owner
-  decides between two readings of the same trade-off: (a) no ban on the /48,
-  today's choice, which lets one attacker with an allocation rotate through its
-  /64s; (b) a /48 counter at a high factor, which bans every user of a shared
-  /48 (hosting, ISP, office, campus) because of one attacker. A middle point,
-  not built: a /48 counter at a high factor that applies only to /64s that have
-  already failed themselves, so a /64 without failures of its own is never
-  blocked for its neighbours, at the price of a more intricate rule and of
-  not stopping a rotation that spends one failure per /64. The owner of an
+  failures each never reach a ban); there is no ban on the /48, because a /48
+  counter would ban every user of a shared /48 (hosting, ISP, office, campus)
+  because of one attacker. The account ceiling above is what stops it for one
+  account, and spraying across many accounts is not banned. The user of an
   account that many clients are guessing at is locked out for the length of the
   account ban as well. A credential stuffing wave from one client trips
   that client's counters. The wire response to a banned subject is identical to a wrong password (no
@@ -452,24 +463,22 @@ instead of being read as whichever primitive the verifier happened to use.
   disappears. Two consequences of the places per origin, both only before the
   first successful use of an argon2 `token_hash` since start-up: an operator
   who shares an IPv6 /48 with an attacker is told `429` for as long as the
-  flood lasts (measured: from another /48 the real token got in within 38 ms,
-  from the same /48 1250 answers in a row were `429` over 20 seconds), and a
+  flood lasts, and a
   panel that opens three or more requests in parallel on its first use gets
   `429` on the surplus ones, because one client holds two places, until the
   first of them verifies the token.
 
-  Known limits, measured by the second review and not changed: a ban on a real
+  Known limits: a ban on a real
   account answers in under a millisecond where an unknown login pays for its
   hashing, which tells that the name exists to someone who first spends twenty
-  failures from five clients on it (not verified against the fix); the device
+  failures from five clients on it; the device
   grant pool scans its entries under one lock, about 0.45 ms a request when
-  full; each attempt on an unknown login writes three rows to the ban tables
-  where it used to write one, and they expire with the 24-hour sweep; every
+  full; each attempt on an unknown login writes three rows to the ban tables,
+  and they expire with the 24-hour sweep; every
   refusal costs one hash plus as many as the account with the most app
   passwords has, and nothing caps the app passwords an account can hold; the
-  HTTP clients of the antispam hook and the LLM scanner, and the ACME and S3
-  clients, still follow redirects. The /48 question above is also still open,
-  and was not re-measured after the revert. Residual risk: guesses spread over
+  HTTP clients of the antispam hook and the LLM scanner still follow redirects
+  (the ACME and S3 clients do not). Residual risk: guesses spread over
   many clients are not capped as a whole, so the defence is the entropy of the
   token (use a long random one, or a `sha256:` hash of one).
 - **Device authorization grants are bounded** (`POST /oauth/device_authorization`
@@ -597,16 +606,18 @@ instead of being read as whichever primitive the verifier happened to use.
 
 ## Data at rest
 
-The default is **full-disk encryption (LUKS)** on the data volume, which
-protects against stolen-disk/offline access while keeping search and Bayes
-working. Message and config files are written `0600` under the isolated user.
+epistle does not encrypt the data volume itself, and its own message
+encryption (below) is off by default. Message and config files are written
+`0600` under the isolated user. Full-disk encryption of the data volume (LUKS,
+for example) is a choice of the operator: it protects against stolen-disk and
+offline access while keeping search and Bayes working.
 
 ### Optional at-rest message encryption (`[storage]`)
 
 For defence in depth against **offline disk/backup theft**, the stored message
 files (`.eml` bodies, the outbound spool, JMAP blobs) can be transparently
 encrypted with ChaCha20-Poly1305. Enable it with `encrypt_at_rest = true` in
-`[storage]` and supply a 32-byte key. This **complements, not replaces**, LUKS:
+`[storage]` and supply a 32-byte key. This **complements, not replaces**, full-disk encryption:
 the server holds the key in memory and decrypts on every read, so it cannot
 defend against a live-server compromise — its value is that a stolen disk or
 backup, on its own, yields only ciphertext.
@@ -752,7 +763,7 @@ pseudonyms and nothing else:
 
 Please report security issues privately via GitHub Security Advisories on this
 repository rather than opening a public issue. Include reproduction steps and
-the affected version; we will acknowledge and coordinate a fix and disclosure.
+the affected version; the maintainers will acknowledge and coordinate a fix and disclosure.
 
 ## Stored secrets and upgrade compatibility
 
@@ -764,8 +775,7 @@ installed credential. An unavoidable invalidation must be announced in release
 notes and by `epistle status` before the upgrade. Preserve format prefixes and
 parameters so readers can distinguish versions; do not guess from new defaults.
 The frozen [v0.12.5 contract fixtures](../tests/contracts/testdata/credentials-v0.12.5/README.md)
-exercise this promise with current authentication code; do not regenerate them
-with the current release.
+exercise this promise with current authentication code.
 
 Paths below are relative to `data_dir` unless configured otherwise. Files use
 restricted permissions; encoding a secret as base64 does not encrypt it. Update
@@ -774,6 +784,9 @@ clients when replacing a credential, and retain decryption keys for old backups.
 | Secret and location | Stored form | Replacement |
 | --- | --- | --- |
 | API keys: `api_keys.toml` | `sha256:<hex>` digest; plaintext shown once | `epistle api-key rotate LABEL`; distribute the new key |
+| Panel API key: the `panel` row of `api_keys.toml`, and its secret in `secrets/panel_api_token` beside data_dir (`0600`) | The row holds the digest; the file holds the plaintext the panel container reads | `epistle stack update` replaces it when fewer than 30 days remain, or when the file is lost; the panel reads the file when it starts |
+| Panel session secret: `secrets/panel_session_secret` beside data_dir (`0600`) | 48 random bytes as hex, plaintext | Delete the file and run `epistle stack update`; every panel user is signed out |
+| Panel admin id: `secrets/panel_admin_id` beside data_dir (`0600`) | A lower-case UUID v4, plaintext; not a cryptographic secret, the session and the admin role are the barrier, but kept out of reports, logs, `--json` output and `epistle status` | Delete the file and run `epistle stack update`; the admin area moves to the new address. `epistle panel admin-id` shows it |
 | Static API token: `[api] token_hash` in `mail.toml` | `sha256:<hex>`; legacy argon2id PHC also accepted | Generate a new token, run `epistle token-hash`, replace the hash and restart; update clients |
 | Dynamic account password: `accounts.toml` | Salted argon2id PHC with parameters | `epistle account password N` |
 | Static account password: `[[accounts]] password_hash` in `mail.toml`; SQL directory `password_hash` | Argon2id PHC | Replace the configured argon2id PHC hash and restart; update SQL at its source (the account CLI manages dynamic accounts only) |
@@ -791,7 +804,7 @@ clients when replacing a credential, and retain decryption keys for old backups.
 | DNS: `[dns]` token/access secrets/consumer key, provider files or named environment variables (including service-account credentials and TSIG) | Plaintext provider credentials, provider-specific JSON or base64 key | Rotate at the provider, update the configured source and restart |
 | S3 blobs: `[storage.blobs] secret_access_key_file` or `secret_access_key_env` | Plaintext access secret | Rotate at the S3 provider, update file/environment and restart |
 | Webhook: `[webhook] secret`, and `[tenant.webhook] secret` of each tenant that has one | Plaintext HMAC signing secrets, one per webhook; no two may be equal | Replace at both sender configuration and receiver, restart; a tenant's secret signs only that tenant's events |
-| LLM scanner: `[antispam.llm] api_key_env` | Plaintext provider key in process environment | Rotate at provider, update service environment and restart |
+| LLM scanner: `[antispam_llm] api_key_env` | Plaintext provider key in process environment | Rotate at provider, update service environment and restart |
 | SubjectPass: `subjectpass.key`; log pseudonyms: `log-pseudonym.key` | Raw per-server HMAC keys | Stop the server, securely retire the relevant file and restart to generate a new one; outstanding retry tokens or historical log mappings cease to work |
 | SRS: `[[srs_domain]] secret` per hosted domain, and `srs_secret` in `mail.toml` for the domains without one | Plaintext HMAC secrets | `epistle srs rotate DOMAIN` moves the old secret to `previous_secret`, which keeps verifying the return addresses already out; remove it after 14 days. Replacing `srs_secret` alone stops the older addresses from verifying; `epistle srs split` first, and keep it until they expire |
 | Bayesian corpus: `bayes-corpus.key` | Raw HMAC key for token pseudonyms | Preserve with the corpus; to replace, reset/retrain the corpus under a new key while stopped, then restart |

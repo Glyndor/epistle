@@ -210,6 +210,74 @@ const NOT_A_ROW: &[(&str, &str)] = &[
 		"internal: how deep a stored message is parsed",
 	),
 	(
+		"api::jmap::email_query::filter::MAX_FILTER_DEPTH",
+		"internal: how deep Email/query filter operators nest",
+	),
+	(
+		"api::jmap::email_query::filter::MAX_FILTER_NODES",
+		"internal: how many conditions one Email/query filter holds",
+	),
+	(
+		"api::jmap::email_query::filter::MAX_FILTER_TEXT_BYTES",
+		"internal: the bytes of one text condition of an Email/query filter",
+	),
+	(
+		"api::jmap::email_query::filter::MAX_TEXT_TERMS_TOTAL",
+		"internal: the text terms one Email/query filter searches for",
+	),
+	(
+		"api::jmap::email_query::filter::MAX_KEYWORD_BYTES",
+		"internal: the bytes of a keyword in an Email/query filter",
+	),
+	(
+		"api::jmap::email_query::filter::MAX_MAILBOX_BYTES",
+		"internal: the bytes of a mailbox id in an Email/query filter",
+	),
+	(
+		"api::jmap::email_query::page::MAX_SAFE_INTEGER",
+		"internal: the largest integer a JMAP position or limit may carry",
+	),
+	(
+		"api::jmap::email_query::page::MAX_ID_BYTES",
+		"internal: the bytes of an anchor id in Email/query",
+	),
+	(
+		"api::jmap::email_query::page::MAX_QUERY_LIMIT",
+		"internal: the ids one Email/query page returns",
+	),
+	(
+		"api::jmap::email_query::MAX_QUERY_RESULTS",
+		"internal: the messages one Email/query may examine",
+	),
+	(
+		"api::jmap::email_query::MAX_QUERY_MAILBOXES",
+		"internal: the mailboxes one Email/query may read",
+	),
+	(
+		"api::jmap::email_query::MAX_SEARCH_MESSAGES",
+		"internal: the messages a text search of Email/query may open",
+	),
+	(
+		"api::jmap::email_query::MAX_SEARCH_BYTES",
+		"internal: the bytes a text search of Email/query may read",
+	),
+	(
+		"api::jmap::email_query::MAX_SEARCH_HEADER_BYTES",
+		"internal: the header bytes a text search of Email/query reads per message",
+	),
+	(
+		"api::jmap::email_query::sort::MAX_COMPARATORS",
+		"internal: the sort comparators of one Email/query",
+	),
+	(
+		"api::jmap::email_query::content::MAX_TEXT_QUERY_BYTES",
+		"internal: the bytes of the text searched by Email/query",
+	),
+	(
+		"api::jmap::email_query::content::MAX_TEXT_TERMS",
+		"internal: the terms of one text condition of Email/query",
+	),
+	(
 		"api::jmap::uploads::MAX_BLOBS",
 		"internal: the blob ids read ahead for one request",
 	),

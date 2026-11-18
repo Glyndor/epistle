@@ -275,3 +275,38 @@ fn a_live_server_that_does_not_believe_the_clock_does_not_confirm_it_to_a_comman
 		"a command believed a clock the running server does not"
 	);
 }
+
+#[test]
+fn a_start_after_a_recorded_clean_stop_believes_a_clock_hours_past_the_newest_record() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let today = at(DAY + 3, 1);
+	{
+		let chain = Chain::open(dir.path()).expect("chain");
+		chain.append_at(today, accepted(1)).expect("first record");
+	}
+	let wall = today + 7 * 3600;
+	let judged = || {
+		Chain::open_at(dir.path(), wall)
+			.expect("chain")
+			.time()
+			.read_at(wall, std::time::Instant::now())
+	};
+	let stop = crate::evidence::timeref::stop::record;
+	assert!(!judged().sound, "no stop was recorded");
+	stop(dir.path(), today + 60, Some("a boot that is not this one")).expect("record");
+	assert!(judged().sound, "a stop in an earlier boot explains the gap");
+	if let Some(boot) = crate::evidence::timeref::stop::current_boot_id() {
+		stop(dir.path(), today + 60, Some(&boot)).expect("record");
+		assert!(!judged().sound, "a gap inside this boot is not a stop");
+	}
+	stop(dir.path(), today + 60, None).expect("record");
+	assert!(
+		!judged().sound,
+		"a boot that was not recorded explains nothing"
+	);
+	crate::evidence::timeref::stop::clear(dir.path());
+	assert!(
+		!judged().sound,
+		"a server that started since took the explanation away"
+	);
+}

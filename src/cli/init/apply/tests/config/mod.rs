@@ -5,4 +5,5 @@ pub use super::*;
 pub(super) mod errors;
 pub(super) mod merge;
 pub(super) mod paths;
+pub(super) mod public_endpoint;
 pub(super) mod staging;

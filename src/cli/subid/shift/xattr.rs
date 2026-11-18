@@ -1,27 +1,30 @@
-//! The two extended attribute calls the ownership shift needs, on the link
-//! itself rather than its target.
+//! The two extended attribute calls the ownership shift needs, on the inode
+//! an open descriptor holds.
 
 use std::ffi::CString;
 use std::io;
+use std::os::fd::BorrowedFd;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
+
+use super::entry::proc_path;
 
 fn c_path(path: &Path) -> io::Result<CString> {
 	CString::new(path.as_os_str().as_bytes())
 		.map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))
 }
 
-/// The value of attribute `name`, or `None` when the file has none or the
+/// The value of attribute `name` on the inode behind `fd`, or `None` when the file has none or the
 /// filesystem keeps no extended attributes.
-pub(super) fn get(path: &Path, name: &str) -> io::Result<Option<Vec<u8>>> {
-	let c_path = c_path(path)?;
+pub(super) fn get(fd: BorrowedFd<'_>, name: &str) -> io::Result<Option<Vec<u8>>> {
+	let c_path = c_path(&proc_path(fd))?;
 	let c_name = CString::new(name).map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
 	let mut buffer = vec![0u8; 256];
 	loop {
 		// SAFETY: both names are NUL-terminated and the buffer outlives the call
 		// with its length passed alongside.
 		let length = unsafe {
-			libc::lgetxattr(
+			libc::getxattr(
 				c_path.as_ptr(),
 				c_name.as_ptr(),
 				buffer.as_mut_ptr().cast(),
@@ -42,12 +45,12 @@ pub(super) fn get(path: &Path, name: &str) -> io::Result<Option<Vec<u8>>> {
 }
 
 /// Set attribute `name` to `value`.
-pub(super) fn set(path: &Path, name: &str, value: &[u8]) -> io::Result<()> {
-	let c_path = c_path(path)?;
+pub(super) fn set(fd: BorrowedFd<'_>, name: &str, value: &[u8]) -> io::Result<()> {
+	let c_path = c_path(&proc_path(fd))?;
 	let c_name = CString::new(name).map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
 	// SAFETY: both names are NUL-terminated and `value` is valid for its length.
 	let rc = unsafe {
-		libc::lsetxattr(
+		libc::setxattr(
 			c_path.as_ptr(),
 			c_name.as_ptr(),
 			value.as_ptr().cast(),

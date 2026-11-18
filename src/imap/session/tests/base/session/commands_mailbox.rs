@@ -117,7 +117,11 @@ fn replace_rejects_unknown_source_and_no_selection() {
 
 	// No mailbox selected yet.
 	let output = session.command_line("a2 REPLACE 1 INBOX {5}");
-	assert!(text(&output).contains("a2 NO"), "{}", text(&output));
+	assert!(
+		text(&output).contains("a2 BAD no mailbox selected"),
+		"{}",
+		text(&output)
+	);
 	assert_eq!(output.collect_literal, None);
 
 	session.command_line("a3 SELECT INBOX");

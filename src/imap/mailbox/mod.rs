@@ -12,7 +12,7 @@ mod flag;
 mod hierarchy;
 pub(crate) mod journal;
 
-pub(crate) use defaults::ensure_defaults;
+pub(crate) use defaults::{ensure_defaults, ensure_defaults_with};
 
 pub use flag::{
 	Flag, count_keywords, dedup_flags, flag_key, flag_set_contains, keywords_in, render_flags,
@@ -141,10 +141,13 @@ pub fn create(data_dir: &Path, account: &str, mailbox: &str) -> std::io::Result<
 	let account = AccountName::new(account)?;
 	let mailbox = mailbox_path::canonical(mailbox.strip_suffix('/').unwrap_or(mailbox));
 	let dir = MailboxName::folder(&mailbox)
-		.map_err(|_| std::io::Error::other("invalid mailbox name"))?
+		.map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid mailbox name"))?
 		.messages_dir(&account, data_dir)?;
 	if dir.is_dir() {
-		return Err(std::io::Error::other("mailbox already exists"));
+		return Err(std::io::Error::new(
+			std::io::ErrorKind::AlreadyExists,
+			"mailbox already exists",
+		));
 	}
 	let mut changes = hierarchy::create_superiors(data_dir, &account, &mailbox)?;
 	hierarchy::make_mailbox(data_dir, &account, &dir)?;
@@ -162,17 +165,26 @@ pub fn delete(data_dir: &Path, account: &str, mailbox: &str) -> std::io::Result<
 	let dir = MailboxName::folder(&mailbox)
 		.ok()
 		.and_then(|folder| folder.folder_dir(&account_name, data_dir).ok().flatten())
-		.ok_or_else(|| std::io::Error::other("cannot delete this mailbox"))?;
+		.ok_or_else(|| {
+			std::io::Error::new(
+				std::io::ErrorKind::InvalidInput,
+				"cannot delete this mailbox",
+			)
+		})?;
 	if !dir.is_dir() {
-		return Err(std::io::Error::other("no such mailbox"));
+		return Err(std::io::Error::new(
+			std::io::ErrorKind::NotFound,
+			"no such mailbox",
+		));
 	}
 	if hierarchy::has_children(data_dir, account, &mailbox) {
-		return Err(std::io::Error::other(
+		return Err(std::io::Error::new(
+			std::io::ErrorKind::InvalidInput,
 			"[HASCHILDREN] delete the mailboxes under it first",
 		));
 	}
 	// The messages go with the mailbox: each one is destroyed for JMAP.
-	let ids = journal::message_ids(&contained_child(&dir, "new")?);
+	let ids = journal::message_ids(data_dir, &contained_child(&dir, "new")?);
 	std::fs::remove_dir_all(dir)?;
 	let mut changes: Vec<Change> = ids
 		.into_iter()
@@ -180,6 +192,7 @@ pub fn delete(data_dir: &Path, account: &str, mailbox: &str) -> std::io::Result<
 		.collect();
 	changes.push(Change::mailbox(Op::Destroyed, &mailbox));
 	journal::note(data_dir, &account_name, &changes);
+	super::special_use::roles::forget(data_dir, account_name.as_str(), &mailbox);
 	Ok(())
 }
 
@@ -189,7 +202,9 @@ pub fn rename(data_dir: &Path, account: &str, from: &str, to: &str) -> std::io::
 	let account = AccountName::new(account)?;
 	let from = mailbox_path::canonical(from);
 	let to = mailbox_path::canonical(to);
-	hierarchy::rename_subtree(data_dir, &account, &from, &to)
+	hierarchy::rename_subtree(data_dir, &account, &from, &to)?;
+	super::special_use::roles::moved(data_dir, account.as_str(), &from, &to);
+	Ok(())
 }
 
 /// Existing mailbox names: INBOX plus folders, sorted. Folder directories are
@@ -201,7 +216,8 @@ pub fn list(data_dir: &Path, account: &str) -> Vec<String> {
 	let Ok(account) = AccountName::new(account) else {
 		return names;
 	};
-	let entries = folders_dir(&account, data_dir).and_then(crate::util::fs_walk::read_dir);
+	let entries = folders_dir(&account, data_dir)
+		.and_then(|folders| crate::util::fs_walk::rooted::read_dir(data_dir, folders));
 	if let Ok(entries) = entries {
 		for entry in entries.flatten() {
 			if entry.file_type().is_ok_and(|kind| kind.is_dir())
@@ -268,9 +284,16 @@ pub fn append_dated(
 			.set_modified(date.time)?;
 		super::internal_date::write_zone(&account_dir, id, date.zone)?;
 	}
-	std::fs::rename(&tmp, message_file(&account_dir, id, MessageExt::Eml)?)?;
+	// The flags file goes in first: the rename below is what makes the
+	// message visible, and a reader that sees it finds its flags in place.
 	if !flags.is_empty() {
 		super::flags::write_flags(&account_dir, id, flags)?;
+	}
+	if let Err(error) = std::fs::rename(&tmp, message_file(&account_dir, id, MessageExt::Eml)?) {
+		if !flags.is_empty() {
+			let _ = std::fs::remove_file(message_file(&account_dir, id, MessageExt::Flags)?);
+		}
+		return Err(error);
 	}
 	if new_mailbox {
 		changes.push(Change::mailbox(Op::Created, mailbox));
@@ -289,6 +312,27 @@ pub fn appenduid(data_dir: &Path, account: &str, mailbox: &str, id: Uuid) -> Opt
 	let snapshot = Snapshot::open(data_dir, account, mailbox, &MessageCrypto::disabled()).ok()?;
 	let uid = snapshot.messages().find(|message| message.id == id)?.uid;
 	Some((snapshot.uid_validity(), uid))
+}
+
+/// Take back messages [`append`] stored in `mailbox`, by id: a multi-message
+/// write that stops half way calls this so the mailbox keeps none of the
+/// copies it had written. Ids that are no longer there are ignored.
+pub fn remove_appended(data_dir: &Path, account: &str, mailbox: &str, ids: &[Uuid]) {
+	if ids.is_empty() {
+		return;
+	}
+	let Ok(mut snapshot) = Snapshot::open(data_dir, account, mailbox, &MessageCrypto::disabled())
+	else {
+		return;
+	};
+	let uids: Vec<u32> = snapshot
+		.messages()
+		.filter(|message| ids.contains(&message.id))
+		.map(|message| message.uid)
+		.collect();
+	if let Err(error) = snapshot.remove_uids(&uids) {
+		tracing::warn!(%error, "cannot take back the copies of a failed multi-message write");
+	}
 }
 
 /// The `(UIDVALIDITY, UID)` for the message in `mailbox` whose
@@ -327,7 +371,7 @@ pub fn account_usage(data_dir: &Path, account: &str, crypto: &MessageCrypto) -> 
 		let Some(dir) = mailbox_dir(data_dir, account, &mailbox) else {
 			continue;
 		};
-		let Ok(entries) = crate::util::fs_walk::read_dir(&dir) else {
+		let Ok(entries) = crate::util::fs_walk::rooted::read_dir(data_dir, &dir) else {
 			continue;
 		};
 		for entry in entries.flatten() {
@@ -338,14 +382,16 @@ pub fn account_usage(data_dir: &Path, account: &str, crypto: &MessageCrypto) -> 
 					.is_some_and(|name| name.ends_with(".eml"))
 				&& let Ok(meta) = entry.metadata()
 			{
-				total += crypto.stored_plaintext_len(&entry.path(), meta.len());
+				total += crypto.stored_plaintext_len(data_dir, &entry.path(), meta.len());
 			}
 		}
 	}
 	let archive = account_name
 		.root(data_dir)
 		.and_then(|root| root.child(FixedDir::Archive));
-	if let Ok(entries) = archive.and_then(crate::util::fs_walk::read_dir) {
+	if let Ok(entries) =
+		archive.and_then(|archive| crate::util::fs_walk::rooted::read_dir(data_dir, archive))
+	{
 		for entry in entries.flatten() {
 			if entry.file_type().is_ok_and(|kind| kind.is_file())
 				&& entry
@@ -354,7 +400,7 @@ pub fn account_usage(data_dir: &Path, account: &str, crypto: &MessageCrypto) -> 
 					.is_some_and(|name| name.ends_with(".eml"))
 				&& let Ok(meta) = entry.metadata()
 			{
-				total += crypto.stored_plaintext_len(&entry.path(), meta.len());
+				total += crypto.stored_plaintext_len(data_dir, &entry.path(), meta.len());
 			}
 		}
 	}
@@ -420,7 +466,8 @@ pub fn lookup_message_id_in_sent(
 	account: &str,
 	message_id: &str,
 ) -> std::io::Result<Option<u32>> {
-	lookup_message_id_in_mailbox(data_dir, account, "Sent", message_id)
+	let sent = super::special_use::sent_folder(data_dir, account);
+	lookup_message_id_in_mailbox(data_dir, account, &sent, message_id)
 }
 
 /// Whether `data` carries `Message-ID: <message_id>` in its header

@@ -45,7 +45,12 @@ impl Cli {
 		crate::cli::config_edit::defer_restarts(self.no_restart);
 		if self.command.requires_service_user() {
 			match super::rootless::reexecute() {
-				Ok(Some(code)) => return code,
+				Ok(Some(code)) => {
+					// Only the root process can write what lives under
+					// /etc/systemd/system, and it ends here once the account's
+					// process has finished.
+					return stack::autostart::dropins::after_delegation(&self.command, code);
+				}
 				Ok(None) => {}
 				Err(error) => {
 					style::error(error);
@@ -251,9 +256,19 @@ impl Cli {
 				dry_run,
 				json,
 			} => crate::cli::srs::run(&config, action, dry_run, json),
+			Command::Panel {
+				config,
+				action,
+				json,
+			} => crate::cli::panel::run(&config, action, json),
 			Command::Rotate {
-				all, dry_run, json, ..
-			} => crate::cli::rotate::run(all, dry_run, json),
+				config,
+				all,
+				accounts_only,
+				dry_run,
+				yes,
+				json,
+			} => crate::cli::rotate::run(&config, (all, accounts_only), (dry_run, yes), json),
 			Command::Webhook {
 				config,
 				action,

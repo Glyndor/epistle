@@ -112,9 +112,12 @@ impl RealType {
 		matches!(
 			self,
 			Self::Png
-				| Self::Jpeg | Self::Gif
-				| Self::Webp | Self::Bmp
-				| Self::Tiff | Self::Ico
+				| Self::Jpeg
+				| Self::Gif
+				| Self::Webp
+				| Self::Bmp
+				| Self::Tiff
+				| Self::Ico
 				| Self::Heif
 		)
 	}

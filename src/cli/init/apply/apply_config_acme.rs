@@ -68,7 +68,29 @@ pub(super) fn build_acme_block(answers: &Answers) -> Option<DesiredAcme> {
 	Some(DesiredAcme {
 		directory_url: LETS_ENCRYPT_PRODUCTION_DIRECTORY.to_string(),
 		contacts: vec![acme_contact(answers)],
-		domains: vec![answers.hostname.clone()],
+		domains: certificate_domains(answers),
 		renew_before_days: 30,
 	})
+}
+
+/// The names the certificate has to cover: the mail hostname, and the
+/// names the public endpoint answers for every hosted domain.
+///
+/// A client fetches `https://autoconfig.<domain>/mail/config-v1.1.xml` and
+/// verifies the certificate against `autoconfig.<domain>`, not against the
+/// mail hostname the CNAME points at; the same holds for the Autodiscover
+/// document and for the MTA-STS policy a sender fetches from
+/// `mta-sts.<domain>`. A certificate that covers only the mail hostname
+/// therefore fails every one of those fetches, and the DNS records are
+/// already published.
+///
+/// The order keeps the mail hostname first: it is the name every TLS
+/// client connects to, and the authority refuses an order whose list is
+/// empty.
+pub(super) fn certificate_domains(answers: &Answers) -> Vec<String> {
+	let mut domains = vec![answers.hostname.clone()];
+	for domain in &answers.domains {
+		domains.extend(crate::dns::names::public_names(domain));
+	}
+	domains
 }

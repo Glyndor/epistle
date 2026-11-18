@@ -7,7 +7,8 @@
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
-use crate::util::path_component::{StateFile, state_file, state_tmp_file};
+use crate::util::fs_walk::rooted_write;
+use crate::util::path_component::{StateFile, state_file};
 
 /// Octets the expunge log of one mailbox may hold. When an append takes the
 /// log past it, the oldest entries are dropped until about half of it is
@@ -17,40 +18,40 @@ use crate::util::path_component::{StateFile, state_file, state_tmp_file};
 pub(crate) const MAX_LOG_OCTETS: u64 = 4 * 1024 * 1024;
 
 /// Record that `uids` vanished at `modseq`.
-pub(super) fn record(account_dir: &Path, uids: &[u32], modseq: u64) -> std::io::Result<()> {
+pub(super) fn record(
+	root: &Path,
+	account_dir: &Path,
+	uids: &[u32],
+	modseq: u64,
+) -> std::io::Result<()> {
 	if uids.is_empty() {
 		return Ok(());
 	}
 	// Appends and the trimming of the log share the mailbox's mod-sequence
 	// lock, so a trim never drops a line another session is appending.
-	let _guard = super::modseq::lock(account_dir)?;
+	let _guard = super::modseq::lock(root, account_dir)?;
 	let path = state_file(account_dir, StateFile::Vanished)?;
-	let mut file = std::fs::OpenOptions::new()
-		.create(true)
-		.append(true)
-		.open(&path)?;
+	let mut file = rooted_write::open_append(root, &path)?;
 	let mut text = String::with_capacity(uids.len() * 12);
 	for uid in uids {
 		text.push_str(&format!("{uid} {modseq}\n"));
 	}
 	file.write_all(text.as_bytes())?;
 	if file.metadata()?.len() > MAX_LOG_OCTETS {
-		trim(account_dir, &path)?;
+		trim(root, &path)?;
 	}
 	Ok(())
 }
 
 /// Rewrite the log with only its newest entries, about half the cap.
-fn trim(account_dir: &Path, path: &Path) -> std::io::Result<()> {
-	let kept = tail(path, MAX_LOG_OCTETS / 2)?;
-	let tmp = state_tmp_file(account_dir, StateFile::Vanished)?;
-	std::fs::write(&tmp, kept)?;
-	std::fs::rename(&tmp, path)
+fn trim(root: &Path, path: &Path) -> std::io::Result<()> {
+	let kept = tail(root, path, MAX_LOG_OCTETS / 2)?;
+	rooted_write::write_atomic(root, path, &kept)
 }
 
 /// The last `limit` octets of the file, starting at a line boundary.
-fn tail(path: &Path, limit: u64) -> std::io::Result<Vec<u8>> {
-	let mut file = std::fs::File::open(path)?;
+fn tail(root: &Path, path: &Path, limit: u64) -> std::io::Result<Vec<u8>> {
+	let mut file = rooted_write::open_read(root, path)?;
 	let length = file.metadata()?.len();
 	let start = length.saturating_sub(limit);
 	file.seek(SeekFrom::Start(start))?;
@@ -68,19 +69,19 @@ fn tail(path: &Path, limit: u64) -> std::io::Result<Vec<u8>> {
 }
 
 /// Advance the mailbox mod-sequence and log `uids` as vanished at it.
-pub(super) fn record_advancing(account_dir: &Path, uids: &[u32]) {
+pub(super) fn record_advancing(root: &Path, account_dir: &Path, uids: &[u32]) {
 	if uids.is_empty() {
 		return;
 	}
-	if let Ok(modseq) = super::modseq::next_counter(account_dir) {
-		let _ = record(account_dir, uids, modseq);
+	if let Ok(modseq) = super::modseq::next_counter(root, account_dir) {
+		let _ = record(root, account_dir, uids, modseq);
 	}
 }
 
 /// UIDs that vanished after `modseq` (for `VANISHED (EARLIER)`), in log order.
-pub(super) fn since(account_dir: &Path, modseq: u64) -> Vec<u32> {
-	let Ok(bytes) =
-		state_file(account_dir, StateFile::Vanished).and_then(|path| tail(&path, MAX_LOG_OCTETS))
+pub(super) fn since(root: &Path, account_dir: &Path, modseq: u64) -> Vec<u32> {
+	let Ok(bytes) = state_file(account_dir, StateFile::Vanished)
+		.and_then(|path| tail(root, &path, MAX_LOG_OCTETS))
 	else {
 		return Vec::new();
 	};

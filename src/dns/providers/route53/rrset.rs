@@ -12,10 +12,7 @@ impl Route53Provider {
 	/// or the list ends, so a zone bigger than one page does not hide it.
 	/// The XML is read with a small hand-rolled reader; the response is
 	/// well-formed by API contract.
-	pub(super) async fn fetch_txt_rrset(
-		&self,
-		name: &str,
-	) -> Result<Option<TxtRrset>, ProviderError> {
+	pub(super) async fn fetch_txt_rrset(&self, name: &str) -> Result<Option<Rrset>, ProviderError> {
 		self.fetch_rrset(name, "TXT").await
 	}
 
@@ -24,8 +21,8 @@ impl Route53Provider {
 		&self,
 		name: &str,
 		kind: &str,
-	) -> Result<Option<TxtRrset>, ProviderError> {
-		let mut start: Option<(String, String)> = None;
+	) -> Result<Option<Rrset>, ProviderError> {
+		let mut start: Option<list::Start> = None;
 		loop {
 			let text = self.list_page(start.as_ref()).await?;
 			if let Some(rrset) = parse_rrset(&text, name, kind) {
@@ -38,15 +35,30 @@ impl Route53Provider {
 		}
 	}
 
-	/// One signed `GET .../rrset` page, starting at `(name, type)` when
-	/// given.
+	/// One signed `GET .../rrset` page, starting at `(name, type,
+	/// identifier)` when given.
 	pub(super) async fn list_page(
 		&self,
-		start: Option<&(String, String)>,
+		start: Option<&list::Start>,
+	) -> Result<String, ProviderError> {
+		self.list_page_sized(start, None).await
+	}
+
+	/// [`Self::list_page`] with at most `max` record sets in the answer.
+	pub(super) async fn list_page_sized(
+		&self,
+		start: Option<&list::Start>,
+		max: Option<u32>,
 	) -> Result<String, ProviderError> {
 		let mut url = self.rrset_url()?;
-		if let Some((name, kind)) = start {
+		if let Some((name, kind, identifier)) = start {
 			url = url.with_query("name", name).with_query("type", kind);
+			if let Some(identifier) = identifier {
+				url = url.with_query("identifier", identifier);
+			}
+		}
+		if let Some(max) = max {
+			url = url.with_query("maxitems", &max.to_string());
 		}
 		let path = url.as_url().path().to_string();
 		let query = canonical_query(url.as_url());

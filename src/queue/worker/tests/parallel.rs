@@ -13,7 +13,7 @@ use crate::storage::RecipientStatus;
 const SENDER: &str = "alice@sender.example";
 
 /// Spool one message per recipient, oldest first.
-fn spool_each(dir: &std::path::Path, recipients: &[&str]) -> FsSpool {
+pub(super) fn spool_each(dir: &std::path::Path, recipients: &[&str]) -> FsSpool {
 	let spool = FsSpool::open(dir).expect("open spool");
 	for recipient in recipients {
 		spool
@@ -37,7 +37,7 @@ fn spool_each(dir: &std::path::Path, recipients: &[&str]) -> FsSpool {
 }
 
 /// An exchanger that takes `secs` to answer each message.
-fn slow(secs: u64) -> Script {
+pub(super) fn slow(secs: u64) -> Script {
 	Script {
 		delay: Some(Duration::from_secs(secs)),
 		..Script::default()

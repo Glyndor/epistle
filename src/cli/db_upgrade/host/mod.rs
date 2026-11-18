@@ -1,7 +1,7 @@
 //! The real [`Stack`] for `epistle db upgrade`: podup against the generated
 //! compose file, and the backup code's dump and load.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, SystemTime};
 
@@ -20,14 +20,28 @@ const COUNTS: &str = "SELECT coalesce(string_agg(format($f$%I.%I=%s$f$, table_sc
 /// How long the new major may take to report healthy.
 const DB_HEALTH: Duration = Duration::from_secs(180);
 
+/// How long `mail` may take to report healthy on the new major; the same
+/// room `stack update` gives it, several failed probes of its healthcheck.
+const MAIL_HEALTH: Duration = Duration::from_secs(300);
+
+/// The status areas that judge the stack on the new major, as they judge a
+/// `stack update` restart.
+const CHECKS: [crate::cli::status::CheckArea; 3] = [
+	crate::cli::status::CheckArea::Config,
+	crate::cli::status::CheckArea::Ports,
+	crate::cli::status::CheckArea::Db,
+];
+
 pub(super) struct Podup {
 	compose: PathBuf,
 	data_dir: PathBuf,
 	database: Database,
+	/// The configuration file the status checks read.
+	config_path: PathBuf,
 }
 
 impl Podup {
-	pub(super) fn new(config: &Config) -> Result<Self, String> {
+	pub(super) fn new(config: &Config, config_path: &Path) -> Result<Self, String> {
 		let compose = super::super::stack::compose_path(&config.data_dir);
 		if !compose.exists() {
 			return Err(format!(
@@ -43,11 +57,34 @@ impl Podup {
 			compose,
 			data_dir: config.data_dir.clone(),
 			database,
+			config_path: config_path.to_path_buf(),
 		})
 	}
 
 	fn command(&self, args: &[&str]) -> std::process::Command {
 		super::super::stack::build_command("podup", &self.compose, args)
+	}
+
+	/// Run `args` in the `db` container with `podup exec -T`; `Err` carries
+	/// the first line it printed on stderr, or its exit status.
+	fn exec_in_db(&self, args: &[&str]) -> Result<(), String> {
+		let mut full = vec!["exec", "-T", "db"];
+		full.extend_from_slice(args);
+		let output = self
+			.command(&full)
+			.stdin(Stdio::null())
+			.output()
+			.map_err(|error| format!("cannot run podup exec: {error}"))?;
+		if output.status.success() {
+			return Ok(());
+		}
+		let stderr = String::from_utf8_lossy(&output.stderr);
+		let line = stderr.lines().next().unwrap_or("").trim();
+		Err(if line.is_empty() {
+			format!("podup exec exited with {}", output.status)
+		} else {
+			line.to_string()
+		})
 	}
 }
 
@@ -220,7 +257,12 @@ impl Stack for Podup {
 	}
 
 	fn wait_healthy(&mut self, service: &str) -> Result<(), String> {
-		super::super::stack::health::wait_healthy("podup", &self.compose, service, DB_HEALTH)
+		let limit = if service == "mail" {
+			MAIL_HEALTH
+		} else {
+			DB_HEALTH
+		};
+		super::super::stack::health::wait_healthy("podup", &self.compose, service, limit)
 	}
 
 	fn counts(&mut self) -> Result<String, String> {
@@ -240,6 +282,39 @@ impl Stack for Podup {
 	fn load(&mut self, sql: &[u8]) -> Result<(), String> {
 		super::super::backup::load_dump(&self.database, &self.data_dir, sql)
 			.map_err(|error| error.to_string())
+	}
+
+	fn data_directory(&mut self) -> Result<String, String> {
+		query(&self.compose, "SHOW data_directory")
+	}
+
+	fn failing_checks(&mut self) -> Vec<(String, String)> {
+		crate::cli::status::failing(&self.config_path, &CHECKS)
+			.unwrap_or_else(|error| vec![("status".to_string(), error)])
+	}
+
+	fn remove_in_db(&mut self, path: &str, tree: bool) -> Result<(), String> {
+		// `rm -rf` exits 0 on a path that is not there (measured in the `db`
+		// container), which would report a cluster as removed that never was.
+		if tree {
+			self.exec_in_db(&["test", "-d", path])
+				.map_err(|_| format!("{path} is not a directory in the db container"))?;
+		}
+		let removal: &[&str] = if tree { &["rm", "-rf"] } else { &["rmdir"] };
+		let mut args = removal.to_vec();
+		args.extend_from_slice(&["--", path]);
+		self.exec_in_db(&args)
+	}
+
+	fn remove_dump(&mut self, path: &Path) -> Result<(), String> {
+		std::fs::remove_file(path).map_err(|error| error.to_string())
+	}
+
+	fn discard_images(
+		&mut self,
+		change: &crate::cli::stack::images::Change,
+	) -> Result<crate::cli::stack::images::Outcome, String> {
+		crate::cli::stack::images::discard(&mut crate::cli::stack::images::Podman, change)
 	}
 
 	fn log(&mut self, line: &str) {

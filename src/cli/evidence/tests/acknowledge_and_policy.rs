@@ -245,7 +245,7 @@ fn an_accepted_break_is_not_reported_as_verified() {
 		"an accepted break was called verified"
 	);
 	let mut out = Vec::new();
-	crate::cli::evidence::verify::verify(server.root(), None, None, now(), false, &mut out);
+	let _ = crate::cli::evidence::verify::verify(server.root(), None, None, now(), false, &mut out);
 	assert!(
 		text(&out).contains("verifies except for 1 acknowledged break"),
 		"{}",

@@ -30,13 +30,19 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  # Several callers use this reusable on the same ref; github.workflow keeps
+  # their judges independent. Branch/queue runs must never cancel each other.
+  group: version-bump-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   judge:
     name: version bump
     # Only a pull request can be a version bump. On a push the job does not
     # take a runner at all: its output is then empty, and the caller runs.
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
     # A checkout and two git commands, the same shape as fuzz.yml's plan job,
     # whose slowest of four green runs took 1 min (2026-10-30) and which took
     # 14 s on run 41423331341 (2026-11-02).

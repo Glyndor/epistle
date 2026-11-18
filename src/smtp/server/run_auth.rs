@@ -10,7 +10,7 @@ use crate::smtp::reply::Reply;
 use crate::smtp::session::{AcceptedMessage, Session};
 use crate::smtp::trace::{format_auth_results, spf_domain};
 
-use super::Server;
+use super::{Server, refusal_text};
 
 impl Server {
 	/// Authenticate `message` from `peer` when the session did not log in
@@ -26,6 +26,12 @@ impl Server {
 	) -> Result<(String, bool), Reply> {
 		let mut auth_headers = String::new();
 		let mut passed = false;
+		// A relay the operator listed in `[smtp] trusted_networks` hands over
+		// mail for other senders' domains, which its own address never
+		// passes. Nothing is verified for it, so nothing is claimed.
+		if self.inbound.trusts(peer) {
+			return Ok((auth_headers, passed));
+		}
 		if let (Some(dns), Some(ip), None) = (&self.spf, peer, session.authenticated()) {
 			let domain = spf_domain(&message.reverse_path, session.helo_domain());
 			let outcome = match &domain {
@@ -39,10 +45,18 @@ impl Server {
 			match outcome {
 				crate::spf::SpfOutcome::Fail => {
 					self.metrics.rejected(crate::metrics::RejectReason::Spf);
-					return Err(Reply::single(550, "5.7.23 SPF validation failed"));
+					return Err(refusal_text::spf_failed(
+						self.refusal_detail,
+						ip,
+						domain.as_deref().unwrap_or("unknown"),
+					));
 				}
 				crate::spf::SpfOutcome::TempError => {
-					return Err(Reply::single(451, "4.4.3 SPF check temporarily failed"));
+					return Err(refusal_text::spf_unavailable(
+						self.refusal_detail,
+						ip,
+						domain.as_deref().unwrap_or("unknown"),
+					));
 				}
 				outcome => {
 					auth_headers.push_str(&format!(
@@ -65,9 +79,9 @@ impl Server {
 						.rsplit_once('@')
 						.map(|(_, domain)| domain.to_ascii_lowercase());
 					passed = sender_passed(outcome, envelope.as_deref(), &dkim_results);
-					let dmarc = match &author {
+					let (dmarc, published) = match &author {
 						crate::dmarc::author::AuthorDomain::One(from) => {
-							crate::dmarc::evaluate(
+							crate::dmarc::evaluate_with_policy(
 								dns.as_ref(),
 								from,
 								(outcome, domain.as_deref()),
@@ -80,11 +94,11 @@ impl Server {
 						// owner to authenticate; RFC 5322 forbids the
 						// first outright. It fails rather than errs.
 						crate::dmarc::author::AuthorDomain::Multiple => {
-							crate::dmarc::DmarcOutcome::Fail
+							(crate::dmarc::DmarcOutcome::Fail, None)
 						}
 						// No usable From header: nothing to align.
 						crate::dmarc::author::AuthorDomain::Missing => {
-							crate::dmarc::DmarcOutcome::PermError
+							(crate::dmarc::DmarcOutcome::PermError, None)
 						}
 					};
 					// Record DMARC result for aggregate reporting.
@@ -114,8 +128,16 @@ impl Server {
 							dmarc: dmarc.as_str().to_owned(),
 							disposition: disposition.to_owned(),
 							policy_domain: from_domain.clone(),
-							published_policy: String::new(),
-							pct: 100,
+							// What the evaluated record published, for
+							// the report's `<policy_published>`; empty
+							// when no record applied.
+							published_policy: published
+								.map(|policy| policy.policy.to_owned())
+								.unwrap_or_default(),
+							published_subdomain_policy: published
+								.map(|policy| policy.subdomain_policy.to_owned())
+								.unwrap_or_default(),
+							pct: published.map_or(100, |policy| policy.pct),
 						};
 						let today = crate::dmarc::aggregate::unix_to_day(record.timestamp);
 						crate::dmarc::aggregate::record_delivery(report_data_dir, &today, &record);
@@ -125,13 +147,33 @@ impl Server {
 						crate::dmarc::DmarcOutcome::Reject => {
 							self.metrics.rejected(crate::metrics::RejectReason::Dmarc);
 							self.train_corpus(message, peer, true);
-							return Err(Reply::single(550, "5.7.1 rejected by DMARC policy"));
+							return Err(refusal_text::dmarc_rejected(
+								self.refusal_detail,
+								from.as_deref().unwrap_or("the From domain"),
+								published,
+							));
 						}
 						crate::dmarc::DmarcOutcome::TempError => {
-							return Err(Reply::single(451, "4.4.3 DMARC check temporarily failed"));
+							return Err(refusal_text::dmarc_unavailable(
+								self.refusal_detail,
+								from.as_deref(),
+							));
 						}
 						_ => {}
 					}
+
+					// DKIM, ARC and reverse DNS, as the recipients' scopes ask:
+					// a refusal here, or entries for the header below.
+					let strict = self
+						.strict_checks(
+							dns.as_ref(),
+							&message.data,
+							ip,
+							from.as_deref(),
+							&dkim_results,
+							self.checks(message),
+						)
+						.await?;
 
 					let mut methods: Vec<String> = Vec::new();
 
@@ -158,6 +200,7 @@ impl Server {
 						dmarc_result.push_str(&format!(" header.from={from}"));
 					}
 					methods.push(dmarc_result);
+					methods.extend(strict);
 
 					auth_headers.push_str(&format_auth_results(&self.hostname, &methods));
 

@@ -224,6 +224,19 @@ pub fn apply(answers: &Answers) -> ApplyOutcome {
 			error: Some(error),
 		};
 	}
+	// The panel's API key goes in `data_dir/api_keys.toml` and its session
+	// secret beside data_dir, both before the compose file that mounts them.
+	if answers.services.panel_image.is_some()
+		&& let Err(error) = super::compose::panel_secrets::ensure(
+			&answers.data_dir,
+			super::compose::panel_secrets::now(),
+			&mut report,
+		) {
+		return ApplyOutcome {
+			report,
+			error: Some(error),
+		};
+	}
 	// `build_config` cannot fail from any caller: the apply phase always
 	// supplies Some for `dkim_ed25519_path`, and the (None, _) arm in
 	// `build_config` is now `unreachable!()`. The `.expect` documents
@@ -345,6 +358,11 @@ pub use apply_plan::plan;
 /// the config-write step wrote, without taking a second pass
 /// at the apply-internal `apply_config` module.
 pub(crate) use apply_config::listeners_to_write;
+
+/// The directory the public MTA-STS policy lives in. Re-exported for the
+/// same reason: the end-of-run summary names the directory the policy is
+/// written to, and it has to be the one the config carries.
+pub(crate) use apply_config::mta_sts_policy_dir;
 
 #[cfg(test)]
 mod tests;

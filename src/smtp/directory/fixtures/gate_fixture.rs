@@ -29,6 +29,41 @@ pub(crate) const DISABLED: &str = "bob";
 pub(crate) const TWO_FACTOR: &str = "carol";
 /// Its only address lives in a switched-off domain.
 pub(crate) const OFF_DOMAIN_ACCOUNT: &str = "frank";
+/// Its credentials were reset after a compromise and not replaced yet. It
+/// keeps the password every other account has, so only the reset refuses it.
+pub(crate) const RESET: &str = "dave";
+
+/// Every protocol that authenticates. The match makes a new variant a compile
+/// error here, so the parity checks cannot skip it.
+pub(crate) fn every_protocol() -> [crate::config::Protocol; 9] {
+	use crate::config::Protocol;
+	fn complete(protocol: Protocol) {
+		match protocol {
+			Protocol::Smtp
+			| Protocol::Submission
+			| Protocol::Submissions
+			| Protocol::Api
+			| Protocol::Imaps
+			| Protocol::Imap
+			| Protocol::Pop3s
+			| Protocol::ManageSieve
+			| Protocol::WebDav => {}
+		}
+	}
+	let all = [
+		Protocol::Smtp,
+		Protocol::Submission,
+		Protocol::Submissions,
+		Protocol::Api,
+		Protocol::Imaps,
+		Protocol::Imap,
+		Protocol::Pop3s,
+		Protocol::ManageSieve,
+		Protocol::WebDav,
+	];
+	all.into_iter().for_each(complete);
+	all
+}
 
 /// The TOTP secret of [`TWO_FACTOR`], raw bytes, fixed for the process.
 pub(crate) fn totp_secret() -> [u8; 16] {
@@ -43,7 +78,7 @@ pub(crate) fn gate_directory() -> Directory {
 		fixtures::salt(),
 		4096,
 	));
-	let names = [OPEN, DISABLED, TWO_FACTOR, OFF_DOMAIN_ACCOUNT];
+	let names = [OPEN, DISABLED, TWO_FACTOR, OFF_DOMAIN_ACCOUNT, RESET];
 	let hash = crate::smtp::auth::tests::base::hash(fixtures::password());
 	Directory::new(
 		["example.org".to_string(), OFF_DOMAIN.to_string()],
@@ -51,6 +86,7 @@ pub(crate) fn gate_directory() -> Directory {
 			("alice@example.org".to_string(), OPEN.to_string()),
 			("bob@example.org".to_string(), DISABLED.to_string()),
 			("carol@example.org".to_string(), TWO_FACTOR.to_string()),
+			("dave@example.org".to_string(), RESET.to_string()),
 			(
 				format!("frank@{OFF_DOMAIN}"),
 				OFF_DOMAIN_ACCOUNT.to_string(),
@@ -64,6 +100,7 @@ pub(crate) fn gate_directory() -> Directory {
 		crate::totp::encode_base32(&totp_secret()),
 	)])
 	.with_disabled([DISABLED.to_string()])
+	.with_credential_reset([RESET.to_string()])
 	.with_disabled_domains([OFF_DOMAIN.to_string()])
 }
 

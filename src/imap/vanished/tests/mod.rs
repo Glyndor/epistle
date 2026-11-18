@@ -4,3 +4,4 @@ pub use super::*;
 pub(super) mod base;
 
 mod bounded;
+mod rooted;

@@ -10,6 +10,7 @@ on:
     branches: [develop, main]
     paths:
       - ".github/workflows/db.yml"
+      - ".github/actions/rust-cache/**"
       - "src/**"
       - "tests/**"
       - "migrations/**"
@@ -22,6 +23,7 @@ on:
       # list omits itself does not run on the pull request that changes
       # it, so a broken edit merges without ever having been executed.
       - ".github/workflows/db.yml"
+      - ".github/actions/rust-cache/**"
       - "src/**"
       - "tests/**"
       - "migrations/**"
@@ -84,7 +86,7 @@ jobs:
     # five others and this is not one of them, so renaming the visible job
     # name to carry the major is safe.
     name: database integration (PostgreSQL ${{ matrix.postgres }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
     # Measured 2026-10-30: the slowest of four green runs took 36 min.
     timeout-minutes: 75
     strategy:
@@ -95,7 +97,7 @@ jobs:
       matrix:
         include:
           - postgres: 18
-            image: postgres:18@sha256:74935e72241653ca55e0414067e6d8763aceb8a810eb51b452253ec3dcfc4336
+            image: postgres:18@sha256:b9f6b8ff03b62f3cfd9d9ba3fe56226a9991c79d3fb46fd46536263bf02be553
     services:
       postgres:
         # Digest-pinned: a major tag is a moving target, so a retag would
@@ -132,8 +134,14 @@ jobs:
           # macros against a live Postgres, and `stable` here would mean the
           # queries compiled for the SBOM are not the ones the database
           # tests ran against the same schema.
-          rustup toolchain install 1.99.1 --profile minimal
-          rustup default 1.99.1
+          rustup toolchain install 1.100.0 --profile minimal
+          rustup default 1.100.0
+
+      - id: cargo-cache
+        uses: ./.github/actions/rust-cache
+        with:
+          prefix: rust-db
+          extra-path: ~/.cargo/bin
 
       - name: Install cargo-llvm-cov
         env:
@@ -141,7 +149,7 @@ jobs:
           # reusable-rust-ci.yml. Two coverage jobs on two different
           # instrumentation versions produce two numbers that are not
           # comparable, so bump both together or neither.
-          LLVM_COV_VERSION: "0.8.7"
+          LLVM_COV_VERSION: "0.9.1"
         run: command -v cargo-llvm-cov >/dev/null || cargo install cargo-llvm-cov --locked --version "$LLVM_COV_VERSION"
 
       - name: Coverage gate
@@ -154,7 +162,7 @@ jobs:
         # The assertion is per file, not a global percentage. The combined run
         # instruments the whole tree from `--tests` (every lib test plus every
         # integration target), so the global figure lands near 2.5% and says
-        # nothing about anything; the four files below are what this job
+        # nothing about anything; the files below are what this job
         # exists to cover, so they are what it asserts.
         #
         # src/antispam/hook/mod.rs is deliberately NOT in this list even though
@@ -185,6 +193,9 @@ jobs:
           #   src/db/mod.rs                  88.79%
           #   src/directory_store/sql/mod.rs 96.88%
           #   src/antispam/corpus/mod.rs         73.15%
+          # src/antispam/corpus/mod.rs was split by responsibility afterwards;
+          # its files are listed one by one below, and mod.rs, which now only
+          # declares the constants and the submodules, is not.
           #   src/antispam/reputation/mod.rs     79.75%
           # The floor is today's worst file rounded down to the ten, not 90. A
           # threshold above what the tree actually has would make this gate red
@@ -195,7 +206,9 @@ jobs:
           COVERAGE_FILES: |
             src/db/mod.rs
             src/antispam/reputation/mod.rs
-            src/antispam/corpus/mod.rs
+            src/antispam/corpus/store.rs
+            src/antispam/corpus/score.rs
+            src/antispam/corpus/training.rs
             src/directory_store/sql/mod.rs
         run: |
           # `--tests` instruments every test target (lib tests plus every
@@ -260,3 +273,12 @@ jobs:
               )
           sys.exit(1 if missing or below else 0)
           EOF
+
+      - name: Save the cargo cache
+        if: ${{ success() }}
+        uses: ./.github/actions/rust-cache
+        with:
+          mode: save
+          cache-hit: ${{ steps.cargo-cache.outputs.cache-hit }}
+          prefix: rust-db
+          extra-path: ~/.cargo/bin

@@ -1,5 +1,6 @@
 //! An API key bound to one account (`account = "<name>"` in `api_keys.toml`)
-//! reaches only the account-scoped surface: JMAP and `/api/v1/send`, where the
+//! reaches only the account-scoped surface: JMAP, `/api/v1/send`,
+//! `/api/v1/deliveries` and that account's suppression list, where the
 //! handlers derive the acting account from the key. Every other route is
 //! administrative (accounts, domains, queue, SCIM, ...) and has no notion of
 //! "the key's own account", so such a key is refused there with a 403 before
@@ -28,19 +29,23 @@ use super::state::MatchedAuth;
 /// Whether `path` belongs to the surface an account-bound key may use.
 pub(crate) fn path_is_account_scoped(path: &str) -> bool {
 	path == "/api/v1/send"
+		|| path.strip_prefix("/api/v1/send/").is_some()
 		|| path == "/api/v1/deliveries"
+		|| path == "/api/v1/suppression"
+		|| path.strip_prefix("/api/v1/suppression/").is_some()
 		|| path == "/.well-known/jmap"
 		|| path.starts_with("/jmap/")
 }
 
 /// Whether the account `principal` is bound to can still be acted on: it
-/// exists and is not disabled. A principal not bound to one account is not
-/// affected. A disabled account keeps its mail, so without this its keys would
-/// go on reading and sending as if nothing happened.
+/// exists, is not disabled and does not wait for a credential reset to be
+/// completed. A principal not bound to one account is not affected. Such an
+/// account keeps its mail, so without this its keys would go on reading and
+/// sending as if nothing happened.
 pub(crate) fn bound_account_is_live(state: &ApiState, principal: &Principal) -> bool {
 	match principal.bound_account() {
 		Some(name) => {
-			!state.store().is_disabled(name)
+			!state.store().is_locked(name)
 				&& state.accounts().iter().any(|account| account.name == name)
 		}
 		None => true,

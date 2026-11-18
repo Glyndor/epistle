@@ -9,10 +9,12 @@
 mod antispam_area;
 mod api_keys_area;
 mod av_area;
+mod boot_area;
 mod clock;
 mod clock_area;
 mod config_area;
 mod db_area;
+mod deliverability_area;
 mod disk_area;
 mod dns_area;
 mod dns_dkim;
@@ -33,6 +35,7 @@ mod tls_area;
 mod tls_tlsa;
 mod warmup_area;
 
+pub(in crate::cli) use boot_area::print_summary as print_boot_summary;
 pub(crate) use dns_area::TimeoutDns;
 
 use std::io::Write;
@@ -84,6 +87,9 @@ pub enum CheckArea {
 	StorageKeys,
 	/// The service account's subordinate id ranges overlap no other account's.
 	Subid,
+	/// The stack would come back after a reboot: linger, the boot unit, the
+	/// port floor, the images the unit starts from.
+	Boot,
 	/// The IP warm-up: each receiver group's cap, use, health and verdict.
 	Warmup,
 	/// The containers' memory limits fit the host, and the message memory
@@ -93,6 +99,8 @@ pub enum CheckArea {
 	Clock,
 	/// The evidence verifies; transactional mail is not held.
 	Evidence,
+	/// The sender panels the operator has not enrolled in. Only warns.
+	Deliverability,
 }
 
 impl CheckArea {
@@ -111,10 +119,12 @@ impl CheckArea {
 		CheckArea::Spool,
 		CheckArea::StorageKeys,
 		CheckArea::Subid,
+		CheckArea::Boot,
 		CheckArea::Warmup,
 		CheckArea::Resources,
 		CheckArea::Clock,
 		CheckArea::Evidence,
+		CheckArea::Deliverability,
 	];
 
 	/// The name used on the command line and as the JSON key.
@@ -133,10 +143,12 @@ impl CheckArea {
 			CheckArea::Spool => "spool",
 			CheckArea::StorageKeys => "storage_keys",
 			CheckArea::Subid => "subid",
+			CheckArea::Boot => "boot",
 			CheckArea::Warmup => "warmup",
 			CheckArea::Resources => "resources",
 			CheckArea::Clock => "clock",
 			CheckArea::Evidence => "evidence",
+			CheckArea::Deliverability => "deliverability",
 		}
 	}
 }
@@ -175,6 +187,14 @@ impl Ctx {
 			meminfo: PathBuf::from("/proc/meminfo"),
 			steady: crate::cli::stack::certs::STEADY,
 		}
+	}
+}
+
+/// What `init` prints at its end: the `boot` summary for the configuration at
+/// `path`. A configuration that does not load prints nothing.
+pub(in crate::cli) fn print_boot_summary_at(path: &Path, out: &mut dyn Write) {
+	if let Ok(config) = Config::load_lenient(path) {
+		print_boot_summary(&config, out);
 	}
 }
 
@@ -303,10 +323,12 @@ async fn check_area(area: CheckArea, ctx: &Ctx) -> AreaReport {
 		CheckArea::Spool => spool_area::check(ctx).await,
 		CheckArea::StorageKeys => storage_keys_area::check(ctx).await,
 		CheckArea::Subid => subid_area::check(ctx).await,
+		CheckArea::Boot => boot_area::check(ctx).await,
 		CheckArea::Warmup => warmup_area::check(ctx).await,
 		CheckArea::Resources => resources_area::check(ctx).await,
 		CheckArea::Clock => clock_area::check(ctx).await,
 		CheckArea::Evidence => evidence_area::check(ctx).await,
+		CheckArea::Deliverability => deliverability_area::check(ctx).await,
 	}
 }
 

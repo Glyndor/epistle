@@ -126,7 +126,7 @@ async fn utf8_append_without_enable_is_refused_and_drained() {
 	tls.write_all(b"n1 NOOP\r\n").await.expect("noop");
 	let reply = read_until(&mut tls, "n1 OK").await;
 	assert!(
-		reply.starts_with("a2 BAD UTF8 APPEND requires ENABLE UTF8=ACCEPT\r\n"),
+		reply.starts_with("a2 BAD [CLIENTBUG] UTF8 APPEND requires ENABLE UTF8=ACCEPT\r\n"),
 		"{reply}"
 	);
 	// The payload and its `)` were drained, not run as a command.

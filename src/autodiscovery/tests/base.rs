@@ -13,7 +13,10 @@ async fn body(response: Response) -> (StatusCode, String) {
 fn state() -> Discovery {
 	Discovery {
 		hostname: "mail.example.org".to_string(),
-		domains: vec!["example.org".to_string()].into(),
+		domains: std::sync::Arc::new(std::sync::RwLock::new(
+			vec!["example.org".to_string()].into(),
+		)),
+		policy: None,
 	}
 }
 

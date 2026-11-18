@@ -21,6 +21,18 @@ impl Command {
 				action: super::evidence::EvidenceCli::Check { .. },
 				..
 			} => false,
+			// The rotation writes the stores and the configuration; the
+			// listing (`--dry-run`) writes nothing.
+			Command::Rotate {
+				all: true,
+				dry_run: false,
+				..
+			}
+			| Command::Rotate {
+				accounts_only: true,
+				dry_run: false,
+				..
+			} => true,
 			Command::Init { .. }
 			| Command::Stack { .. }
 			| Command::Db { .. }
@@ -32,6 +44,9 @@ impl Command {
 			| Command::Dns { .. }
 			| Command::Storage { .. }
 			| Command::Srs { .. }
+			// Reads the panel's files in the secrets directory, which only the
+			// service account can open.
+			| Command::Panel { .. }
 			| Command::Webhook { .. }
 			| Command::Alert { .. }
 			| Command::Antispam { .. }

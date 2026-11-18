@@ -52,6 +52,7 @@ ALL = [
     "sender_auth_records",
     "sasl_exchange",
     "config_parse",
+    "signer_frame",
 ]
 
 # Folder of the source -> the targets that exercise it and nothing else.
@@ -81,7 +82,10 @@ FOLDERS = {
     "src/sieve/": ["sieve_message", "sieve_script", "sieve_run", "sieve_validate"],
     "src/pop3/": ["pop3_command", "pop3_session"],
     "src/managesieve/": ["managesieve_command", "sieve_validate"],
-    "src/dkim/": ["dkim_signature", "mime", "sender_auth_records"],
+    # Before "src/dkim/": the signer's socket code feeds only its own target,
+    # while the rest of the DKIM folder (the header block check) reaches it.
+    "src/dkim/remote/": ["signer_frame"],
+    "src/dkim/": ["dkim_signature", "mime", "sender_auth_records", "signer_frame"],
     "src/dmarc/": ["mime", "sender_auth_records"],
     "src/api/jmap/": ["mime"],
     "src/antispam/attachments/": ["attachment_inspect", "attachment_walk"],

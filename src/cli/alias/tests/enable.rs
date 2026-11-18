@@ -32,7 +32,7 @@ fn set_enabled_persists_the_disabled_flag_and_does_not_touch_the_config() {
 	let before = std::fs::read_to_string(file.path()).unwrap();
 	let mut out: Vec<u8> = Vec::new();
 	let mut status: Vec<u8> = Vec::new();
-	set_enabled(&config, "team@example.org", false, &mut out, &mut status)
+	let _ = set_enabled(&config, "team@example.org", false, &mut out, &mut status)
 		.expect("disable must succeed");
 	assert!(
 		String::from_utf8(status.clone())
@@ -61,11 +61,11 @@ fn set_enabled_is_idempotent() {
 	let config = load(file.path());
 	let mut out: Vec<u8> = Vec::new();
 	let mut status: Vec<u8> = Vec::new();
-	set_enabled(&config, "team@example.org", false, &mut out, &mut status)
+	let _ = set_enabled(&config, "team@example.org", false, &mut out, &mut status)
 		.expect("first disable must succeed");
 	out.clear();
 	status.clear();
-	set_enabled(&config, "team@example.org", false, &mut out, &mut status)
+	let _ = set_enabled(&config, "team@example.org", false, &mut out, &mut status)
 		.expect("second disable must succeed");
 	assert!(
 		String::from_utf8(status).unwrap().contains("already"),
@@ -79,11 +79,11 @@ fn enable_restores_a_disabled_alias() {
 	let config = load(file.path());
 	let mut out: Vec<u8> = Vec::new();
 	let mut status: Vec<u8> = Vec::new();
-	set_enabled(&config, "team@example.org", false, &mut out, &mut status)
+	let _ = set_enabled(&config, "team@example.org", false, &mut out, &mut status)
 		.expect("disable must succeed");
 	out.clear();
 	status.clear();
-	set_enabled(&config, "team@example.org", true, &mut out, &mut status)
+	let _ = set_enabled(&config, "team@example.org", true, &mut out, &mut status)
 		.expect("enable must succeed");
 	let aliases_path = config.data_dir.join("aliases.json");
 	let json = std::fs::read_to_string(&aliases_path).unwrap();
@@ -97,7 +97,7 @@ fn enable_restores_a_disabled_alias() {
 fn list_reflects_the_disabled_flag() {
 	let (_dir, file) = fixture_with_alias("");
 	let config = load(file.path());
-	set_enabled(
+	let _ = set_enabled(
 		&config,
 		"team@example.org",
 		false,
@@ -159,7 +159,7 @@ fn a_disabled_alias_stops_resolving_for_the_server_and_enable_restores_it() {
 		)
 	};
 	assert!(resolves_as_alias(), "an enabled alias must resolve");
-	set_enabled(
+	let _ = set_enabled(
 		&config,
 		"team@example.org",
 		false,
@@ -168,7 +168,7 @@ fn a_disabled_alias_stops_resolving_for_the_server_and_enable_restores_it() {
 	)
 	.expect("disable");
 	assert!(!resolves_as_alias(), "a disabled alias must not resolve");
-	set_enabled(
+	let _ = set_enabled(
 		&config,
 		"team@example.org",
 		true,

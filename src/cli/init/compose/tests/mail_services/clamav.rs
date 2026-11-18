@@ -32,7 +32,11 @@ fn mandatory_clamav_stack_and_socket_config() {
 	let fresh = &value["services"]["freshclam"];
 	assert_eq!(fresh["image"], super::super::super::super::images::clamav());
 	assert_eq!(fresh["network_mode"], "pasta");
-	assert_eq!(fresh["entrypoint"][2], "freshclam");
+	assert!(
+		fresh["entrypoint"][4]
+			.as_str()
+			.is_some_and(|script| script.contains("exec freshclam --config-file="))
+	);
 	assert!(fresh.get("ports").is_none());
 	for service in [clamd, fresh] {
 		assert!(
@@ -73,5 +77,10 @@ fn clamd_config_controls_shared_socket_permissions() {
 	assert_eq!(fields.get("LocalSocket"), Some(&"/run/clamav/clamd.sock"));
 	assert_eq!(fields.get("DatabaseDirectory"), Some(&"/var/lib/clamav"));
 	assert_eq!(fields.get("User"), Some(&"clamav"));
+	assert_eq!(
+		fields.get("SelfCheck"),
+		Some(&"600"),
+		"clamd picks up a database freshclam changed, since freshclam cannot notify it"
+	);
 	assert!(!fields.contains_key("TCPSocket"));
 }

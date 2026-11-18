@@ -40,6 +40,9 @@ fn plan_renders_kept_listeners_when_existing_config_has_them() {
 	answers.config_path = config_path.clone();
 	answers.services = Services {
 		antivirus: None,
+		panel: None,
+		panel_image: None,
+		freshclam_checks: None,
 		imap: true,
 		submission: true,
 		pop3: false,

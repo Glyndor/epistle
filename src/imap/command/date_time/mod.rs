@@ -1,6 +1,8 @@
-//! The quoted `date-time` of APPEND and REPLACE (RFC 9051 §9):
-//! `"dd-Mon-yyyy hh:mm:ss +zzzz"`, where a one-digit day may be padded
-//! with a space. It becomes the message's INTERNALDATE, shown in its zone.
+//! The dates an IMAP command carries: the quoted `date-time` of APPEND and
+//! REPLACE (RFC 9051 §9), `"dd-Mon-yyyy hh:mm:ss +zzzz"`, where a one-digit
+//! day may be padded with a space. It becomes the message's INTERNALDATE,
+//! shown in its zone. And the `date-text` a SEARCH criterion names
+//! (`1-Jan-2023`), which the SEARCH keys compare against.
 
 use crate::imap::internal_date::{InternalDate, MAX_ZONE};
 use std::time::{Duration, UNIX_EPOCH};
@@ -107,6 +109,33 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
 	let doy = (153 * (if month > 2 { month - 3 } else { month + 9 }) + 2) / 5 + day - 1;
 	let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
 	era * 146_097 + doe - 719_468
+}
+
+/// Parse an IMAP date-text (`1-Jan-2023` or `01-Jan-2023`).
+/// Returns `(year, month, day)` on success.
+pub(super) fn parse_imap_date(s: &str) -> Option<(u32, u8, u8)> {
+	let mut parts = s.splitn(3, '-');
+	let day: u8 = parts.next()?.parse().ok()?;
+	let month: u8 = match parts.next()?.to_ascii_uppercase().as_str() {
+		"JAN" => 1,
+		"FEB" => 2,
+		"MAR" => 3,
+		"APR" => 4,
+		"MAY" => 5,
+		"JUN" => 6,
+		"JUL" => 7,
+		"AUG" => 8,
+		"SEP" => 9,
+		"OCT" => 10,
+		"NOV" => 11,
+		"DEC" => 12,
+		_ => return None,
+	};
+	let year: u32 = parts.next()?.parse().ok()?;
+	if day == 0 || day > 31 || month == 0 || month > 12 {
+		return None;
+	}
+	Some((year, month, day))
 }
 
 #[cfg(test)]

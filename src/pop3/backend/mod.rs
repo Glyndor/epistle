@@ -36,7 +36,7 @@ impl MailboxBackend {
 		let Some(dir) = mailbox_dir(&self.data_dir, account, "INBOX") else {
 			return Vec::new();
 		};
-		let Ok(entries) = crate::util::fs_walk::read_dir(&dir) else {
+		let Ok(entries) = crate::util::fs_walk::rooted::read_dir(&self.data_dir, &dir) else {
 			return Vec::new();
 		};
 		// UUIDv7 filenames sort lexically in arrival order; a min-heap of the
@@ -80,7 +80,9 @@ impl MailboxBackend {
 					.ok()
 					.filter(std::fs::Metadata::is_file)?
 					.len();
-				let octets = self.crypto.stored_plaintext_len(&path, stored);
+				let octets = self
+					.crypto
+					.stored_plaintext_len(&self.data_dir, &path, stored);
 				let octets = usize::try_from(octets).unwrap_or(usize::MAX);
 				if octets > MAX_MESSAGE_OCTETS {
 					too_large += 1;
@@ -147,7 +149,7 @@ impl MailboxBackend {
 		if size > (cap + envelope) as u64 {
 			return None;
 		}
-		let stored = crate::util::fs_walk::read(&path).ok()?;
+		let stored = crate::util::fs_walk::rooted::read(&self.data_dir, &path).ok()?;
 		// Fail closed: refuse a message that cannot be decrypted rather than
 		// serving ciphertext as if it were the message.
 		self.crypto.decode(&stored).ok()
@@ -175,6 +177,10 @@ impl Backend for MailboxBackend {
 			peer_ip,
 			crate::config::Protocol::Pop3s,
 		)
+	}
+
+	fn account_is_live(&self, account: &str) -> bool {
+		self.directory.account_is_live(account)
 	}
 
 	fn list(&self, account: &str) -> Vec<(String, usize)> {

@@ -24,26 +24,57 @@ on:
       - "src/directory_store/**"
       - "tests/system/ldap.rs"
       - "tests/fixtures/ldap/**"
+      # tests/system/ldap.rs includes this file with #[path].
+      - "src/test_support/fixtures.rs"
       - ".github/workflows/ldap.yml"
+      - ".github/actions/rust-cache/**"
       - "Cargo.toml"
       - "Cargo.lock"
+      # Same exclusions as the pull_request filter below, and for the same
+      # reason: these files only exist under #[cfg(test)].
+      - "!src/**/tests/**"
+      - "!src/**/*_tests*.rs"
+      - "!src/**/tests_*.rs"
+      - "!src/**/test_support.rs"
+      - "!src/**/tests.rs"
+      - "!src/**/*_test_support.rs"
+      - "!src/smtp/directory/fixtures/**"
+      - "!src/smtp/session/test_hooks.rs"
+      - "!src/dns/txt_fixtures.rs"
+      - "!src/hostile_public_http/**"
+      - "!src/**/testdata/**"
+      - "!src/dkim/test_*.pem"
   pull_request:
     paths:
       - "src/directory_store/**"
       - "tests/system/ldap.rs"
       - "tests/fixtures/ldap/**"
+      # tests/system/ldap.rs includes this file with #[path].
+      - "src/test_support/fixtures.rs"
       - ".github/workflows/ldap.yml"
+      - ".github/actions/rust-cache/**"
       - "Cargo.toml"
       - "Cargo.lock"
       # Files that only exist under #[cfg(test)] cannot change what this job
       # builds or runs, so a pull request that touches only them does not pay
       # for it. Same exclusions as db.yml. The module that declares them
-      # (`mod tests;` in a mod.rs) is not matched, and the push above still
-      # runs everything.
+      # (`mod tests;` in a mod.rs) is not matched. The push above skips the
+      # same files: they cannot change the binary on develop either.
       - "!src/**/tests/**"
       - "!src/**/*_tests*.rs"
       - "!src/**/tests_*.rs"
       - "!src/**/test_support.rs"
+      # More names that only exist under #[cfg(test)]: the tests.rs leaves, the
+      # helper modules, the hostile HTTP harness and the keys and captures the
+      # tests read with include_bytes!.
+      - "!src/**/tests.rs"
+      - "!src/**/*_test_support.rs"
+      - "!src/smtp/directory/fixtures/**"
+      - "!src/smtp/session/test_hooks.rs"
+      - "!src/dns/txt_fixtures.rs"
+      - "!src/hostile_public_http/**"
+      - "!src/**/testdata/**"
+      - "!src/dkim/test_*.pem"
 
 # A newer push to a pull request supersedes the run in flight. Queue and
 # branch runs are never cancelled: only a pull_request event is.
@@ -70,7 +101,7 @@ jobs:
     # requiring it. interop.yml avoids the same collision by calling itself
     # `protocol interop`.
     name: LDAP directory
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
     # Measured 2026-10-30: the slowest of four green runs took 3 min.
     timeout-minutes: 10
     env:
@@ -138,10 +169,15 @@ jobs:
       - name: Install toolchain
         run: |
           # Pinned to match ci.yml. Same compiler that the gate tests
-          # run on, so a clippy lint widening on 1.99 does not break
+          # run on, so a clippy lint widening on 1.100 does not break
           # LDAP auth coverage here while the gate stays green.
-          rustup toolchain install 1.99.1 --profile minimal
-          rustup default 1.99.1
+          rustup toolchain install 1.100.0 --profile minimal
+          rustup default 1.100.0
+
+      - id: cargo-cache
+        uses: ./.github/actions/rust-cache
+        with:
+          prefix: rust-ldap
 
       - name: Run LDAP integration tests
         # If this command prints "skipping", the env block above is
@@ -153,3 +189,11 @@ jobs:
       - name: Stop OpenLDAP
         if: always()
         run: docker rm -f epistle-ldap || true
+
+      - name: Save the cargo cache
+        if: ${{ success() }}
+        uses: ./.github/actions/rust-cache
+        with:
+          mode: save
+          cache-hit: ${{ steps.cargo-cache.outputs.cache-hit }}
+          prefix: rust-ldap

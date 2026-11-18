@@ -43,7 +43,7 @@ pub(crate) fn policy(message: impl std::fmt::Display) -> ExitCode {
 /// failure.
 pub(crate) fn for_store_error(error: &StoreError) -> ExitCode {
 	match error {
-		StoreError::LimitReached { .. } => ExitCode::from(POLICY),
+		StoreError::LimitReached { .. } | StoreError::Capped(_) => ExitCode::from(POLICY),
 		StoreError::NotFound(_) | StoreError::Duplicate(_) | StoreError::Invalid(_) => {
 			ExitCode::from(REFUSED)
 		}
@@ -59,6 +59,7 @@ pub(crate) fn for_io_error(error: &std::io::Error) -> ExitCode {
 		std::io::ErrorKind::NotFound
 		| std::io::ErrorKind::AlreadyExists
 		| std::io::ErrorKind::InvalidInput => ExitCode::from(REFUSED),
+		std::io::ErrorKind::QuotaExceeded => ExitCode::from(POLICY),
 		_ => ExitCode::FAILURE,
 	}
 }

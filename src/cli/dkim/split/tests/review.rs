@@ -86,7 +86,7 @@ fn running_it_again_repeats_the_restart_instead_of_saying_nothing_to_split() {
 	without_stack(&install);
 	let zone = Zone::default();
 	let (provider, resolver) = services(&zone);
-	run(&install, &SPLIT, Some(provider), &resolver);
+	let _ = run(&install, &SPLIT, Some(provider), &resolver);
 	super::harness::with_stack(&install);
 	let (provider, resolver) = services(&zone);
 	let (code, out, _, restarts) = run(&install, &SPLIT, Some(provider), &resolver);
@@ -135,7 +135,7 @@ fn recording_a_restart_done_by_hand_lets_the_overlap_start() {
 	without_stack(&install);
 	let zone = Zone::default();
 	let (provider, resolver) = services(&zone);
-	run(&install, &SPLIT, Some(provider), &resolver);
+	let _ = run(&install, &SPLIT, Some(provider), &resolver);
 	let options = Options {
 		restarted: true,
 		..SPLIT
@@ -290,13 +290,13 @@ fn a_restart_confirmation_never_seals_a_move_whose_entry_is_not_in_the_file() {
 	without_stack(&install);
 	let zone = Zone::default();
 	let (provider, resolver) = services(&zone);
-	run(&install, &SPLIT, Some(provider), &resolver);
+	let _ = run(&install, &SPLIT, Some(provider), &resolver);
 	split_state::record_written(&install.data(), "ghost.example.org", 5, vec![]).unwrap();
 	let options = Options {
 		restarted: true,
 		..SPLIT
 	};
-	run(&install, &options, None, &Resolver { zone, blind: false });
+	let _ = run(&install, &options, None, &Resolver { zone, blind: false });
 	let state = split_state::read(&install.data()).unwrap();
 	assert!(state["b.example.org"].restarted.is_some());
 	assert_eq!(state["ghost.example.org"].restarted, None);
@@ -310,7 +310,7 @@ fn a_dry_run_with_a_split_waiting_for_its_restart_restarts_and_records_nothing()
 	without_stack(&install);
 	let zone = Zone::default();
 	let (provider, resolver) = services(&zone);
-	run(&install, &SPLIT, Some(provider), &resolver);
+	let _ = run(&install, &SPLIT, Some(provider), &resolver);
 	// The server can be restarted now; a dry run must not do it.
 	with_stack(&install);
 	let state = std::fs::read(install.data().join("dkim-split.json")).unwrap();

@@ -28,12 +28,18 @@ pub struct ServiceResources {
 ///   1.99 GB while it reloaded it, because it loads the new set before it
 ///   frees the old one.
 /// - freshclam: 860 MB while it tested a downloaded database.
-const DEFAULTS: [(&str, &str, u32); 5] = [
+///
+/// The panel's own figures are not measured: no release of the panel image
+/// exists yet, so there is nothing to run. The figures are a ceiling for a
+/// Next.js standalone server that serves an admin UI and holds no mail, with
+/// room for the runtime's threads and its buffers.
+const DEFAULTS: [(&str, &str, u32); 6] = [
 	("mail", "1g", 1024),
 	("db", "1g", 256),
 	("clamav", "3g", 128),
 	("freshclam", "2g", 32),
 	("certs", "256m", 256),
+	("panel", "512m", 128),
 ];
 
 /// The `mem_limit` and `pids_limit` of `service`: its answered override,

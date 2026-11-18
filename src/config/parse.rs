@@ -27,6 +27,12 @@ impl Config {
 	/// Parse the text and apply what loading changes, without validating:
 	/// the step `parse_text` and `parse_text_lenient` share.
 	fn parse_unvalidated(raw: &str, path: &Path) -> Result<Self, ConfigError> {
+		Self::parse_unvalidated_with(raw, path, true)
+	}
+
+	/// [`Self::parse_unvalidated`], laying the domain state file over the
+	/// configuration file only when `overlay` is set.
+	fn parse_unvalidated_with(raw: &str, path: &Path, overlay: bool) -> Result<Self, ConfigError> {
 		let expanded = expand_env(raw)?;
 		let mut config: Config =
 			toml::from_str(&expanded).map_err(|source| ConfigError::Parse {
@@ -37,6 +43,24 @@ impl Config {
 		config.adjusted = config.raise_to_floors();
 		let ignored = config.ignore_legacy_values();
 		config.adjusted.extend(ignored);
+		if overlay {
+			config
+				.overlay_domains_file()
+				.map_err(ConfigError::Invalid)?;
+		} else {
+			config.domain_seed = crate::domain::state::DomainSeed::capture(&config);
+		}
+		Ok(config)
+	}
+
+	/// Load and validate the configuration file alone, without the domain
+	/// state file of its data directory: what `epistle domain import` reads,
+	/// so it can replace a state file that does not parse.
+	pub(crate) fn load_ignoring_domains_file(path: &Path) -> Result<Self, ConfigError> {
+		super::permissions::check_permissions(path, "config file")?;
+		let raw = super::read::text(path)?;
+		let config = Self::parse_unvalidated_with(&raw, path, false)?;
+		config.validate()?;
 		Ok(config)
 	}
 
@@ -44,6 +68,7 @@ impl Config {
 	pub(crate) fn parse_text(raw: &str, path: &Path) -> Result<Self, ConfigError> {
 		let config = Self::parse_unvalidated(raw, path)?;
 		config.validate()?;
+		config.install_process_settings();
 		Ok(config)
 	}
 
@@ -54,6 +79,9 @@ impl Config {
 	pub(crate) fn parse_text_lenient(raw: &str, path: &Path) -> Result<Self, ConfigError> {
 		let mut config = Self::parse_unvalidated(raw, path)?;
 		config.validation_error = config.validate().err().map(|error| error.to_string());
+		if config.validation_error.is_none() {
+			config.install_process_settings();
+		}
 		Ok(config)
 	}
 }

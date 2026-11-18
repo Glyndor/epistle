@@ -39,9 +39,10 @@ A new address that needs 1,000 a day reaches it after 8 good days.
 
 - **Groups** are read from the receiving exchanger, not the recipient
   domain: a Google Workspace domain is `gmail`, a Microsoft 365 domain is
-  `outlook`. The groups are `gmail`, `outlook`, `yahoo`, `icloud` and
-  `other`. A host only counts as a provider when the provider's name ends
-  it on a label boundary.
+  `outlook`. The groups are `gmail`, `outlook`, `yahoo`, `icloud`,
+  `gmx`, `mailru` and `other` (see [receiver groups](queue.md)). A host
+  only counts as a provider when the provider's name ends it on a label
+  boundary.
 - **The cap** is recipients a day per group. It is spread across the day
   (one every 24 h divided by the cap, after a burst of an hour's share),
   so 50 a day is not 50 at midnight. An account sending alone may use
@@ -135,7 +136,9 @@ not leave such an account out of the verdict.
 The warm-up only paces volume. Receivers still check SPF, DKIM, DMARC
 and the PTR record (`epistle check dns`), and their own tools show what
 they think of you: Google Postmaster Tools and Microsoft SNDS. Register
-the address there before you start.
+the address there before you start. The enrolment of every sender panel,
+what it shows and the limits it asks you to stay inside are in
+[sender panels](providers.md).
 
 ## Files
 

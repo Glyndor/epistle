@@ -109,10 +109,10 @@ pub struct DeliveryRecord {
 	/// no server answered (a local reason, suppression, or a queue cancel).
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub remote: Option<String>,
-	/// The first 200 bytes of the remote reply, when there is one. Never
-	/// the message body or the subject; just the SMTP reply line the
-	/// remote answered with, useful for an integrator that does not have
-	/// the spool open.
+	/// Up to 200 bytes of the remote reply, when there is one, with a fixed
+	/// cause and diagnostic command appended for recognized provider codes.
+	/// The SMTP code stays at the head; prose is shortened to fit the cause.
+	/// Never the message body or subject.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub reply: Option<String>,
 	/// Which attempt this record corresponds to, counting from one. `0`

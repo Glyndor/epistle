@@ -2,7 +2,7 @@
 //!
 //! The bearer middleware authenticates a *credential*, not an account: it
 //! tells us the request came from the configured token, from a labeled API
-//! key, or (in the future) from a user OAuth token. What it does not tell us
+//! key, or from a user OAuth token. What it does not tell us
 //! is what that credential may act on. This module fills that gap. It
 //! resolves the credential into a [`Principal`] once per request and answers
 //! every question the routes ask about it.
@@ -27,13 +27,20 @@ use super::state::{AccountView, ApiState, MatchedAuth};
 /// The bearer that authenticated a request and the peer it came from, kept
 /// so a handler can re-check a scope against the same key, under the same
 /// `ip_cidr` pin, that the middleware matched.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, Eq)]
 pub struct Credential {
 	/// The bearer as presented.
 	pub token: String,
 	/// The peer IP the middleware saw, `None` when the listener does not
 	/// report it (an IP-pinned key then never matches, fail-closed).
 	pub client_ip: Option<std::net::IpAddr>,
+}
+
+impl PartialEq for Credential {
+	fn eq(&self, other: &Self) -> bool {
+		crate::util::constant_time::eq(self.token.as_bytes(), other.token.as_bytes())
+			&& self.client_ip == other.client_ip
+	}
 }
 
 impl std::fmt::Debug for Credential {
@@ -48,7 +55,7 @@ impl std::fmt::Debug for Credential {
 }
 
 /// What a credential is allowed to act on.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Principal {
 	/// The scopes the key holds. `None` means it holds every scope: the
 	/// configured static token, and the legacy key that declares none. An
@@ -63,9 +70,37 @@ pub struct Principal {
 	/// key. `None` for the configured static token, which admits every scope
 	/// by design.
 	credential: Option<Credential>,
+	auto_submitted: bool,
+}
+
+impl std::fmt::Debug for Principal {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		// OAuth account and scope values originate in claims. Keep them out
+		// of diagnostics, just as Credential keeps the bearer out.
+		f.debug_struct("Principal")
+			.field("scopes", &"<redacted>")
+			.field("account", &"<redacted>")
+			.field("domains", &"<redacted>")
+			.field("credential", &self.credential)
+			.finish()
+	}
 }
 
 impl Principal {
+	/// An OAuth token always has explicit scopes and exactly one account.
+	pub(in crate::api) fn of_oauth(
+		account: String,
+		scopes: Vec<Scope>,
+		credential: Credential,
+	) -> Self {
+		Self {
+			scopes: Some(scopes),
+			account: Some(account),
+			domains: None,
+			credential: Some(credential),
+			auto_submitted: false,
+		}
+	}
 	/// The reach of the configured static token: every scope, every account,
 	/// every domain.
 	pub fn unrestricted() -> Self {
@@ -74,6 +109,7 @@ impl Principal {
 			account: None,
 			domains: None,
 			credential: None,
+			auto_submitted: false,
 		}
 	}
 
@@ -85,6 +121,7 @@ impl Principal {
 			account: None,
 			domains: Some(Vec::new()),
 			credential,
+			auto_submitted: false,
 		}
 	}
 
@@ -123,11 +160,13 @@ impl Principal {
 			account: key.account.clone(),
 			domains,
 			credential,
+			auto_submitted: key.auto_submitted,
 		}
 	}
 
 	/// Resolve the principal carried by `auth`. The configured static token
-	/// is unrestricted; an API key carries whatever it declared.
+	/// is unrestricted; a local OAuth token is confined to its subject and
+	/// explicit scopes, and an API key carries whatever it declared.
 	///
 	/// Fail-closed: a token that matched the middleware but matches no key
 	/// here (a reload removed the key between the middleware and the
@@ -145,6 +184,9 @@ impl Principal {
 		// configured hash once for the whole request.
 		if auth.configured {
 			return Principal::unrestricted();
+		}
+		if let Some(principal) = state.oauth_principal(token, auth.client_ip) {
+			return principal;
 		}
 		let now = std::time::SystemTime::now()
 			.duration_since(std::time::UNIX_EPOCH)
@@ -181,6 +223,12 @@ impl Principal {
 	/// key up again, from the same peer, when the caller identity needs it.
 	pub fn credential(&self) -> Option<&Credential> {
 		self.credential.as_ref()
+	}
+
+	/// Whether mail sent with this credential gets `Auto-Submitted:
+	/// auto-generated` when the request omits the header.
+	pub fn auto_submitted(&self) -> bool {
+		self.auto_submitted
 	}
 
 	/// Whether the credential holds `scope`.

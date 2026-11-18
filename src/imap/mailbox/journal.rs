@@ -16,8 +16,8 @@ pub(crate) fn note(data_dir: &Path, account: &AccountName<'_>, changes: &[Change
 }
 
 /// The ids of the messages in a mailbox's `new/` directory.
-pub(crate) fn message_ids(messages_dir: &Path) -> Vec<Uuid> {
-	let Ok(entries) = crate::util::fs_walk::read_dir(messages_dir) else {
+pub(crate) fn message_ids(root: &Path, messages_dir: &Path) -> Vec<Uuid> {
+	let Ok(entries) = crate::util::fs_walk::rooted::read_dir(root, messages_dir) else {
 		return Vec::new();
 	};
 	entries

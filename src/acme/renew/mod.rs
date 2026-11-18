@@ -213,6 +213,10 @@ pub struct RenewalJob {
 	pub renew_before_days: u64,
 	/// Where the TLSA record of a new certificate is published.
 	pub tlsa: Option<TlsaPublisher>,
+	/// The DNS provider the challenge and the TLSA record write through,
+	/// built again at the start of every pass of the loop, when there is
+	/// one.
+	pub dns: Option<std::sync::Arc<crate::dns::provider::live::LiveProvider>>,
 }
 
 /// Run one issuance: register, obtain a certificate through the configured
@@ -295,6 +299,11 @@ pub async fn run(renewal: RenewalJob, mut stop: StopSignal) {
 		responder.withdraw_pending().await;
 		let mut backoff = Backoff::default();
 		loop {
+			// The provider is built once per pass, so a credential that
+			// changed is picked up without a restart.
+			if let Some(dns) = &renewal.dns {
+				dns.refresh_or_keep("ACME renewal");
+			}
 			retry_tlsa(&renewal).await;
 			if let Outcome::Failed(error) = cycle(
 				&renewal,

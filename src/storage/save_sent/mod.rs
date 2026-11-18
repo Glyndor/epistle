@@ -413,21 +413,21 @@ pub fn store_copy(
 	// `ensure_defaults` creates the standard five (Sent, Drafts, ...)
 	// when the account directory is first opened.
 	mailbox::ensure_defaults(data_dir, account).map_err(|e| SaveError::Account(e.to_string()))?;
-	if !mailbox::exists(data_dir, account, "Sent") {
-		mailbox::create(data_dir, account, "Sent")
-			.map_err(|e| SaveError::Account(e.to_string()))?;
+	let sent = crate::imap::special_use::sent_folder(data_dir, account);
+	if !mailbox::exists(data_dir, account, &sent) {
+		mailbox::create(data_dir, account, &sent).map_err(|e| SaveError::Account(e.to_string()))?;
 	}
 	let id = mailbox::append_dated(
 		data_dir,
 		account,
-		"Sent",
+		&sent,
 		std::slice::from_ref(&flag),
 		None,
 		data,
 		crypto,
 	)
 	.map_err(|e| SaveError::Io(e.to_string()))?;
-	let (_validity, uid) = mailbox::appenduid(data_dir, account, "Sent", id)
+	let (_validity, uid) = mailbox::appenduid(data_dir, account, &sent, id)
 		.ok_or_else(|| SaveError::Io("mailbox vanished after append".into()))?;
 	// Record only after the file is on disk: a failed record keeps the
 	// copy and triggers a second attempt next submission, which then

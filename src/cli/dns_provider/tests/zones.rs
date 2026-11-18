@@ -42,7 +42,7 @@ fn one_zone(file: &str) -> String {
 #[test]
 fn a_second_zone_turns_the_table_into_a_list_and_keeps_the_first() {
 	let (_dir, path, _compose) = stack_with(&one_zone(TOKEN), &[(TOKEN, TOKEN)]);
-	run_on(
+	let _ = run_on(
 		&path,
 		&[
 			"set",
@@ -86,8 +86,8 @@ fn setting_a_zone_that_exists_replaces_only_that_entry() {
 		"--token-file",
 		OTHER,
 	];
-	run_on(&path, &add).unwrap();
-	run_on(
+	let _ = run_on(&path, &add).unwrap();
+	let _ = run_on(
 		&path,
 		&[
 			"set",
@@ -118,7 +118,7 @@ fn setting_a_zone_that_exists_replaces_only_that_entry() {
 #[test]
 fn each_zone_credential_is_mounted_and_replacing_one_keeps_the_others() {
 	let (_dir, path, compose) = stack_with(&one_zone(TOKEN), &[(TOKEN, TOKEN)]);
-	run_on(
+	let _ = run_on(
 		&path,
 		&[
 			"set",
@@ -133,7 +133,7 @@ fn each_zone_credential_is_mounted_and_replacing_one_keeps_the_others() {
 	assert!(mounted(&compose, TOKEN) && mounted(&compose, OTHER));
 	// The second zone moves to another file: its old mount goes, the first
 	// zone's stays.
-	run_on(
+	let _ = run_on(
 		&path,
 		&[
 			"set",
@@ -154,7 +154,7 @@ fn each_zone_credential_is_mounted_and_replacing_one_keeps_the_others() {
 fn a_token_file_that_two_zones_read_stays_mounted_once() {
 	let (_dir, path, compose) = stack_with(&one_zone(TOKEN), &[(TOKEN, TOKEN)]);
 	// The second zone reads the same file as the first.
-	run_on(
+	let _ = run_on(
 		&path,
 		&[
 			"set",
@@ -175,7 +175,7 @@ fn a_token_file_that_two_zones_read_stays_mounted_once() {
 		"one file must be mounted once"
 	);
 	// The first zone moves away; the second still needs the file.
-	run_on(
+	let _ = run_on(
 		&path,
 		&[
 			"set",
@@ -197,7 +197,7 @@ fn a_token_file_that_two_zones_read_stays_mounted_once() {
 #[test]
 fn unset_with_a_zone_removes_only_that_entry() {
 	let (_dir, path, _compose) = stack_with(&one_zone(TOKEN), &[(TOKEN, TOKEN)]);
-	run_on(
+	let _ = run_on(
 		&path,
 		&[
 			"set",
@@ -209,7 +209,7 @@ fn unset_with_a_zone_removes_only_that_entry() {
 		],
 	)
 	.unwrap();
-	run_on(&path, &["unset", "--zone", "example.org"]).unwrap();
+	let _ = run_on(&path, &["unset", "--zone", "example.org"]).unwrap();
 	let config = Config::load(&path).unwrap();
 	assert_eq!(config.dns.zones(), vec!["example.net"]);
 }
@@ -228,7 +228,7 @@ fn unset_with_a_zone_nobody_configured_changes_nothing() {
 #[test]
 fn unset_without_a_zone_removes_every_entry() {
 	let (_dir, path, _compose) = stack_with(&one_zone(TOKEN), &[(TOKEN, TOKEN)]);
-	run_on(
+	let _ = run_on(
 		&path,
 		&[
 			"set",
@@ -240,14 +240,14 @@ fn unset_without_a_zone_removes_every_entry() {
 		],
 	)
 	.unwrap();
-	run_on(&path, &["unset"]).unwrap();
+	let _ = run_on(&path, &["unset"]).unwrap();
 	assert!(Config::load(&path).unwrap().dns.is_empty());
 }
 
 #[test]
 fn show_lists_every_entry_and_no_secret() {
 	let (_dir, path, _compose) = stack_with(&one_zone(TOKEN), &[(TOKEN, TOKEN)]);
-	run_on(
+	let _ = run_on(
 		&path,
 		&[
 			"set",
@@ -261,7 +261,7 @@ fn show_lists_every_entry_and_no_secret() {
 	.unwrap();
 	let mut out = Vec::new();
 	let mut status = Vec::new();
-	execute_with(
+	let _ = execute_with(
 		&path,
 		command(&["show", "--json"]),
 		false,
@@ -301,7 +301,7 @@ fn stored_tokens_get_a_file_each_once_there_is_a_second_zone() {
 #[test]
 fn unset_with_a_zone_unmounts_its_token_and_keeps_the_others() {
 	let (_dir, path, compose) = stack_with(&one_zone(TOKEN), &[(TOKEN, TOKEN)]);
-	run_on(
+	let _ = run_on(
 		&path,
 		&[
 			"set",
@@ -313,7 +313,7 @@ fn unset_with_a_zone_unmounts_its_token_and_keeps_the_others() {
 		],
 	)
 	.unwrap();
-	run_on(&path, &["unset", "--zone", "example.org"]).unwrap();
+	let _ = run_on(&path, &["unset", "--zone", "example.org"]).unwrap();
 	assert!(
 		!mounted(&compose, TOKEN),
 		"the token of the removed zone stayed mounted"
@@ -324,7 +324,7 @@ fn unset_with_a_zone_unmounts_its_token_and_keeps_the_others() {
 #[test]
 fn unset_with_a_zone_keeps_a_token_file_another_zone_still_reads() {
 	let (_dir, path, compose) = stack_with(&one_zone(TOKEN), &[(TOKEN, TOKEN)]);
-	run_on(
+	let _ = run_on(
 		&path,
 		&[
 			"set",
@@ -336,7 +336,7 @@ fn unset_with_a_zone_keeps_a_token_file_another_zone_still_reads() {
 		],
 	)
 	.unwrap();
-	run_on(&path, &["unset", "--zone", "example.org"]).unwrap();
+	let _ = run_on(&path, &["unset", "--zone", "example.org"]).unwrap();
 	assert!(mounted(&compose, TOKEN), "a token still read was unmounted");
 }
 
@@ -344,7 +344,7 @@ fn unset_with_a_zone_keeps_a_token_file_another_zone_still_reads() {
 fn unset_with_a_zone_stops_forwarding_its_variable() {
 	let body = "hostname = 'mail.example.org'\ndata_dir = {data:?}\n[dns]\nprovider = 'cloudflare'\nzone = 'example.org'\ntoken_env = 'ORG_TOKEN'\n";
 	let (_dir, path, compose) = stack_with(body, &[]);
-	run_on(
+	let _ = run_on(
 		&path,
 		&[
 			"set",
@@ -361,7 +361,7 @@ fn unset_with_a_zone_stops_forwarding_its_variable() {
 		serde_json::from_str(&std::fs::read_to_string(&compose).unwrap()).unwrap();
 	document["services"]["mail"]["environment"]["ORG_TOKEN"] = "${ORG_TOKEN}".into();
 	std::fs::write(&compose, document.to_string()).unwrap();
-	run_on(&path, &["unset", "--zone", "example.org"]).unwrap();
+	let _ = run_on(&path, &["unset", "--zone", "example.org"]).unwrap();
 	let after: serde_json::Value =
 		serde_json::from_str(&std::fs::read_to_string(&compose).unwrap()).unwrap();
 	assert!(after["services"]["mail"]["environment"]["ORG_TOKEN"].is_null());

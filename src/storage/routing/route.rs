@@ -148,6 +148,7 @@ impl SplitDelivery {
 							&message.data,
 							std::time::SystemTime::now(),
 							self.identification.system_auto_submitted,
+							self.identification.system_auto_response_suppress,
 						)
 					})
 					.flatten()
@@ -200,6 +201,7 @@ impl SplitDelivery {
 					&message.data,
 					std::time::SystemTime::now(),
 					self.identification.system_auto_submitted,
+					self.identification.system_auto_response_suppress,
 				) {
 				// A report failure does not repeat copies already delivered.
 				if let Err(error) = self.store_outbound(&report, local_owner.as_deref()) {

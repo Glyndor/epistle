@@ -38,7 +38,7 @@ pub(super) fn require_unconfined(principal: &Principal, what: &str) -> Result<()
 		Ok(())
 	} else {
 		Err(ApiError::forbidden(&format!(
-			"{what} is shared by every tenant and is not available to a key confined to some domains."
+			"{what} is shared by every tenant and is not available to a key confined to an account or some domains."
 		)))
 	}
 }

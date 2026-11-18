@@ -5,6 +5,9 @@ use std::io::Write;
 use flate2::Compression;
 use flate2::write::GzEncoder;
 
+mod email;
+pub use email::build_email;
+
 /// One per-message DMARC delivery record.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DeliveryRecord {
@@ -28,9 +31,15 @@ pub struct DeliveryRecord {
 	pub disposition: String,
 	/// Domain whose DMARC record was consulted.
 	pub policy_domain: String,
-	/// Published p= policy.
+	/// The `p=` value of the record that was evaluated: `none`,
+	/// `quarantine` or `reject`. Empty when no record applied.
 	pub published_policy: String,
-	/// Published pct= value.
+	/// The `sp=` value of that record, or its `p=` value when it carries
+	/// no `sp=`. Empty when no record applied, and in records written
+	/// before the field existed.
+	#[serde(default)]
+	pub published_subdomain_policy: String,
+	/// The `pct=` value of that record; 100 when no record applied.
 	pub pct: u8,
 }
 
@@ -92,16 +101,27 @@ fn generate_xml(
 	out.push_str("    </date_range>\n");
 	out.push_str("  </report_metadata>\n");
 
-	// Published policy — use the first record that has policy info.
-	let published = records
-		.first()
-		.map(|r| (r.published_policy.as_str(), r.pct))
-		.unwrap_or(("none", 100));
+	// Published policy, as the evaluated record stated it. The first
+	// record that carries one is quoted: a message no record applied to
+	// says nothing about a published policy. When no message of the
+	// period had one, RFC 7489's defaults stand (`p=none`, `pct=100`).
+	let (policy, subdomain_policy, pct) = records
+		.iter()
+		.find(|record| !record.published_policy.is_empty())
+		.map(|record| {
+			let policy = record.published_policy.as_str();
+			let subdomain_policy = match record.published_subdomain_policy.as_str() {
+				"" => policy,
+				subdomain_policy => subdomain_policy,
+			};
+			(policy, subdomain_policy, record.pct)
+		})
+		.unwrap_or(("none", "none", 100));
 	out.push_str("  <policy_published>\n");
 	out.push_str(&format!("    <domain>{}</domain>\n", xml_escape(domain)));
-	out.push_str(&format!("    <p>{}</p>\n", xml_escape(published.0)));
-	out.push_str(&format!("    <sp>{}</sp>\n", xml_escape(published.0)));
-	out.push_str(&format!("    <pct>{}</pct>\n", published.1));
+	out.push_str(&format!("    <p>{}</p>\n", xml_escape(policy)));
+	out.push_str(&format!("    <sp>{}</sp>\n", xml_escape(subdomain_policy)));
+	out.push_str(&format!("    <pct>{pct}</pct>\n"));
 	out.push_str("  </policy_published>\n");
 
 	// Aggregate: group by (source_ip, disposition, spf, dkim).
@@ -192,74 +212,6 @@ fn xml_escape(s: &str) -> String {
 			c => vec![c],
 		})
 		.collect()
-}
-
-/// Build the MIME email carrying the report as a gzip attachment.
-/// Returns raw RFC 5322 bytes ready for [`crate::smtp::sink::MessageSink`].
-/// `reporting_hostname` is the host part of the `Message-ID:` (RFC 7489
-/// §7.2.1.1 wants a unique `Message-ID` in the reporting hostname), and
-/// `now` is the `Date:` value. `auto_submitted` writes
-/// `Auto-Submitted: auto-generated`, as RFC 3834 section 5 asks of a
-/// machine-generated report; `false` leaves the field out (the
-/// `system_auto_submitted` switch).
-#[allow(clippy::too_many_arguments)]
-pub fn build_email(
-	from_domain: &str,
-	to_address: &str,
-	report_id: &str,
-	period_start: u64,
-	period_end: u64,
-	reporting_domain: &str,
-	reporting_hostname: &str,
-	now: std::time::SystemTime,
-	attachment: &[u8],
-	auto_submitted: bool,
-) -> Vec<u8> {
-	use base64::Engine;
-	let b64 = base64::engine::general_purpose::STANDARD.encode(attachment);
-	let filename = format!("{reporting_domain}!{from_domain}!{period_start}!{period_end}.xml.gz");
-	let boundary = format!("report-boundary-{report_id}");
-	let mut email = String::with_capacity(512 + b64.len());
-
-	email.push_str(&format!("Date: {}\r\n", crate::clock::rfc5322(now)));
-	email.push_str(&format!(
-		"Message-ID: <{report_id}@{reporting_hostname}>\r\n"
-	));
-	email.push_str(&format!("From: postmaster@{reporting_domain}\r\n"));
-	email.push_str(&format!("To: {to_address}\r\n"));
-	email.push_str(&format!(
-		"Subject: Report Domain: {from_domain} Submitter: {reporting_domain} Report-ID: <{report_id}>\r\n"
-	));
-	if auto_submitted {
-		email.push_str("Auto-Submitted: auto-generated\r\n");
-	}
-	email.push_str("MIME-Version: 1.0\r\n");
-	email.push_str(&format!(
-		"Content-Type: multipart/mixed; boundary=\"{boundary}\"\r\n"
-	));
-	email.push_str("\r\n");
-	email.push_str(&format!("--{boundary}\r\n"));
-	email.push_str("Content-Type: text/plain\r\n\r\n");
-	email.push_str(&format!(
-		"This is a DMARC aggregate report for {from_domain}.\r\n"
-	));
-	email.push_str("\r\n");
-	email.push_str(&format!("--{boundary}\r\n"));
-	email.push_str(&format!(
-		"Content-Type: application/gzip; name=\"{filename}\"\r\n"
-	));
-	email.push_str("Content-Transfer-Encoding: base64\r\n");
-	email.push_str(&format!(
-		"Content-Disposition: attachment; filename=\"{filename}\"\r\n"
-	));
-	email.push_str("\r\n");
-	// Fold base64 at 76 chars per RFC 2045.
-	for chunk in b64.as_bytes().chunks(76) {
-		email.push_str(std::str::from_utf8(chunk).unwrap_or(""));
-		email.push_str("\r\n");
-	}
-	email.push_str(&format!("\r\n--{boundary}--\r\n"));
-	email.into_bytes()
 }
 
 #[cfg(test)]

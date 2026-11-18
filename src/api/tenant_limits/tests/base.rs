@@ -7,7 +7,7 @@ use super::*;
 use crate::config::{Account, Tenant};
 use crate::directory_store::AccountStore;
 
-fn store_with(domains: &[&str], accounts: &[(&str, &[&str])]) -> AccountStore {
+pub(super) fn store_with(domains: &[&str], accounts: &[(&str, &[&str])]) -> AccountStore {
 	let list: Vec<Account> = accounts
 		.iter()
 		.map(|(name, addresses)| Account {

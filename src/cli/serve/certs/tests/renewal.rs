@@ -13,7 +13,8 @@ fn job(dir: &std::path::Path) -> RenewalJob {
 		&config,
 		&acme,
 		Arc::new(crate::acme::http01::ChallengeStore::new()),
-		(provider, config.hostname.clone()),
+		(provider.clone(), config.hostname.clone()),
+		Arc::new(crate::dns::provider::live::LiveProvider::fixed(provider)),
 	)
 }
 

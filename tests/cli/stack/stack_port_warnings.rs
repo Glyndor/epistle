@@ -161,7 +161,7 @@ fn failing_shim(argv_log: &std::path::Path, code: i32) -> String {
 		"#!/bin/sh\n\
 		 printf '%s\\n' \"$@\" >> {argv_log}\n\
 		 if [ \"$1\" = \"--version\" ]; then\n\
-		 \tprintf '\\npodup version v5.15.4\\n\\n'\n\
+		 \tprintf '\\npodup version v5.19.0\\n\\n'\n\
 		 \texit 0\n\
 		 fi\n\
 		 exit {code}\n",

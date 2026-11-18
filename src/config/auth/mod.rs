@@ -51,6 +51,34 @@ pub struct Auth {
 	/// without further config.
 	#[serde(default = "default_unicode_passwords")]
 	pub unicode_passwords: bool,
+	/// Fewest characters a password may have. Absent keeps 12. The loader
+	/// refuses a value below 8.
+	#[serde(default)]
+	pub min_password_length: Option<usize>,
+	/// Most characters a password may have. Absent keeps 64. The loader
+	/// refuses a value below 64 (NIST SP 800-63B asks that 64 be accepted)
+	/// or above 1024.
+	#[serde(default)]
+	pub max_password_length: Option<usize>,
+	/// A file of passwords this server refuses, one per line (`#` starts a
+	/// comment, case is ignored), checked next to the bundled breach list.
+	/// A file that cannot be read stops the server.
+	#[serde(default)]
+	pub forbidden_passwords_file: Option<std::path::PathBuf>,
+	/// Memory in KiB of a new argon2id password hash. Absent keeps 19456
+	/// (19 MiB), which is also the lowest the loader accepts.
+	#[serde(default)]
+	pub argon2_memory_kib: Option<u32>,
+	/// Iterations of a new argon2id hash. Absent keeps 2, the lowest accepted.
+	#[serde(default)]
+	pub argon2_iterations: Option<u32>,
+	/// Lanes of a new argon2id hash. Absent keeps 1, the lowest accepted.
+	#[serde(default)]
+	pub argon2_parallelism: Option<u32>,
+	/// PBKDF2 iterations of a new SCRAM verifier. Absent keeps 600000, which
+	/// is also the lowest the loader accepts.
+	#[serde(default)]
+	pub scram_iterations: Option<u32>,
 }
 
 fn default_scram() -> bool {
@@ -69,6 +97,13 @@ impl Default for Auth {
 		Auth {
 			scram: default_scram(),
 			unicode_passwords: default_unicode_passwords(),
+			min_password_length: None,
+			max_password_length: None,
+			forbidden_passwords_file: None,
+			argon2_memory_kib: None,
+			argon2_iterations: None,
+			argon2_parallelism: None,
+			scram_iterations: None,
 		}
 	}
 }

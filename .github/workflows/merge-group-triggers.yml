@@ -1,7 +1,7 @@
 name: Merge group triggers
 
 # Keeps every check required on develop reachable from a merge queue: see
-# .github/scripts/check_merge_group_triggers.py and docs/operations/merge-queue.md.
+# .github/scripts/check_merge_group_triggers.py.
 #
 # Not a required check, and it must not carry `merge_group` itself: the script
 # refuses any workflow that does without emitting a required check.
@@ -21,12 +21,13 @@ permissions:
 
 concurrency:
   group: merge-group-triggers-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   merge-group-triggers:
     name: merge group triggers
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

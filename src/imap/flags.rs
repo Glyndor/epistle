@@ -19,9 +19,9 @@ use crate::util::path_component::{MessageExt, message_file, message_tmp_file};
 /// missing or unparseable file is treated as no flags set; a present but
 /// malformed sidecar is also treated as empty rather than crashing the
 /// snapshot open.
-pub(super) fn read_flags(account_dir: &Path, id: Uuid) -> Vec<Flag> {
+pub(super) fn read_flags(root: &Path, account_dir: &Path, id: Uuid) -> Vec<Flag> {
 	message_file(account_dir, id, MessageExt::Flags)
-		.and_then(crate::util::fs_walk::read)
+		.and_then(|path| crate::util::fs_walk::rooted::read(root, path))
 		.ok()
 		.and_then(|bytes| serde_json::from_slice(&bytes).ok())
 		.unwrap_or_default()

@@ -30,6 +30,17 @@ impl ConfigDocument {
 			.map(str::to_string)
 	}
 
+	/// The string value of `key` in the table at `path`, exactly as the file
+	/// spells it: a `${VAR}` reference stays a reference. `None` when the
+	/// table or the key is absent or the value is not a string.
+	pub fn table_string(&self, path: &[&str], key: &str) -> Option<String> {
+		let mut table: &dyn toml_edit::TableLike = self.document.as_table();
+		for segment in path {
+			table = table.get(segment)?.as_table_like()?;
+		}
+		table.get(key)?.as_str().map(str::to_string)
+	}
+
 	/// The key of the first `[map]` entry `matches` accepts, exactly as the
 	/// file spells it.
 	pub fn map_key(&self, map: &str, matches: impl Fn(&str) -> bool) -> Option<String> {

@@ -52,7 +52,7 @@ async fn parallel_deliveries_preserve_quota_and_every_250() {
 				.expect("DATA reply")
 				.expect("open");
 			assert!(
-				reply == wire::OK || reply == "552 5.2.2 mailbox full\r\n",
+				reply == wire::OK || reply == "452 4.2.2 mailbox full\r\n",
 				"seed={SEED:#x} id={id} unexpected rejection {reply:?}"
 			);
 			(id, reply == wire::OK)
@@ -386,7 +386,7 @@ async fn incoming_submission_and_rest_share_final_copy_admission() {
 			.expect("incoming reply")
 			.expect("open");
 		assert!(
-			reply == wire::OK || reply == "552 5.2.2 mailbox full\r\n",
+			reply == wire::OK || reply == "452 4.2.2 mailbox full\r\n",
 			"{reply:?}"
 		);
 		("incoming", reply == wire::OK)
@@ -398,7 +398,7 @@ async fn incoming_submission_and_rest_share_final_copy_admission() {
 			.expect("submission reply")
 			.expect("open");
 		assert!(
-			reply == wire::OK || reply == "552 5.2.2 mailbox full\r\n",
+			reply == wire::OK || reply == "452 4.2.2 mailbox full\r\n",
 			"{reply:?}"
 		);
 		("submission", reply == wire::OK)

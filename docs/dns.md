@@ -269,8 +269,8 @@ JSON), asks, and publishes:
   delegation) gets no DMARC rewrite, no names and no wildcard. The NS
   records at the zone apex name the servers of the zone itself and are
   not a delegation. The lockdown reads the whole zone first: a provider
-  that cannot list it (`route53`, `rfc2136`) makes the command stop
-  before it writes anything.
+  that cannot list it (`rfc2136`) makes the command stop before it writes
+  anything.
 
 With `[dns_publish] null_records = true`, automatic mode keeps the null SPF,
 the null MX and the wildcard true with the same decision, as records of the
@@ -301,8 +301,8 @@ Requires inbound senders to use verified TLS. Two parts:
 
 1. TXT at `_mta-sts.example.org`: `v=STSv1; id=<changes when the policy changes>`.
 2. A policy file served over HTTPS at
-   `https://mta-sts.example.org/.well-known/mta-sts.txt` (your web/proxy serves
-   this — the mail server does not):
+   `https://mta-sts.example.org/.well-known/mta-sts.txt` (the public endpoint
+   of the server serves it, or your own web/proxy does):
 
    ```
    version: STSv1
@@ -329,6 +329,18 @@ envelope target, the JSONL store lives at
 If the zone is DNSSEC-signed, publish a `TLSA` record for `mail.example.org:25`
 so senders authenticate your TLS certificate without relying on a public CA.
 
+The record is published only when the configuration says so:
+`[dns_publish] dane = true`. While it is off the record is left out of the
+wanted set and the certificate refresh publishes none either, so a zone that
+is not signed never carries a record that the resolvers that do not validate
+would apply (RFC 7672 §2.1).
+
+The record names the certificate in service, and only that one: with
+`[acme]` on, the pair in service is the bootstrap pair until the authority
+answers, and the renewal loop replaces it. A record that named the bootstrap
+would make every sender that honours DANE refuse the mail, so the record
+waits for the issued certificate.
+
 With a `[dns]` provider, epistle refreshes that record after every certificate
 change (ACME renewal or a replaced `[tls]` pair):
 
@@ -350,8 +362,8 @@ change (ACME renewal or a replaced `[tls]` pair):
   into one that is kept for good.
 - **Zone.** The zone the credential sees is not assumed to serve the name. If
   the zone lists an NS delegation at or above `_25._tcp.<hostname>` the write
-  is refused. Providers that cannot list their zone (`route53`, `rfc2136`)
-  cannot be checked and keep writing into the zone you configured.
+  is refused. A provider that cannot list its zone (`rfc2136`) cannot be
+  checked and keeps writing into the zone you configured.
 
 ## Client autodiscovery
 
@@ -361,13 +373,16 @@ So users configure a client from just their address and password:
   implicit TLS and STARTTLS, IMAP over implicit TLS and STARTTLS, POP3S, and
   the `_pop3` "unavailable" marker). The ManageSieve, JMAP and CalDAV/CardDAV
   locators come from `epistle dns-records`, which follows the listeners you
-  enabled; there is no autodiscover SRV, `autoconfig` and `autodiscover` are
-  CNAMEs.
+  enabled; the client setup locator `_autoconfig._tcp` (RFC 6186 §3.1) comes
+  from the `autoconfigs` listener. There is no autodiscover SRV:
+  `autoconfig` and `autodiscover` are CNAMEs.
 - Point `autoconfig.example.org` and `autodiscover.example.org` at the host and
   add an `autoconfigs` listener (port 443). It serves the documents over HTTPS
   with the server certificate, so no TLS proxy is needed; the certificate must
   cover both names (add them to `[acme] domains`). Keep the plain `autoconfig`
   listener only if a proxy already terminates TLS for those names.
+  `epistle init` writes the listener and asks the authority for a certificate
+  that covers those names and `mta-sts.<domain>` for every hosted domain.
 - Apple devices have no autodiscovery of their own: send users to
   `https://autoconfig.example.org/mobileconfig?email=<address>` (or hand them
   the file from `epistle mobileconfig`). The profile carries no password.
@@ -440,6 +455,20 @@ set at all: `[dns_publish] skip` names the group (see
 through the ledger like a record the configuration no longer needs. A record
 that is in the zone and was never in the ledger is left alone.
 
+A TXT record epistle cannot derive from the configuration is supplied by the
+operator: `[dns_publish] extra_txt` takes the name and the value, and the
+record joins the set like the ones epistle derives. The verification token
+Google Postmaster Tools asks for is one of them:
+
+```toml
+[dns_publish]
+extra_txt = [{ name = "example.org", value = "google-site-verification=..." }]
+```
+
+`epistle dns-records` prints it, `epistle dns publish` writes it, and it
+stays published while it is in the list. The sender panels and what each
+one asks for are in [sender panels](operations/providers.md).
+
 What epistle wrote is kept in a ledger, one file per zone under
 `<data_dir>/dns-publish/<zone>.json`: the name, type, value, the release that
 wrote it and when. Own versus foreign comes from the ledger alone, never from
@@ -472,7 +501,16 @@ values the certificate refresh published count as epistle's own too. So:
   change by another account in the moment between the read and the write is
   detected too (the status code of that refusal is not documented, so epistle
   treats 412 and 409 as a failed precondition and any other refusal as a
-  refusal of the change). deSEC, GoDaddy and Namecheap take no precondition at
+  refusal of the change). Route 53 works the same way: a change batch is
+  applied whole or not at all, and a `DELETE` in it must name the record set
+  with its TTL and every value, so epistle sends one batch that deletes the
+  set as it read it and creates the new one (a `CREATE` alone where it saw no
+  set, which Route 53 refuses when one appeared). An `InvalidChangeBatch` that
+  says the set does not match, was not found or already exists is a failed
+  precondition; any other refusal is a refusal of the change, and a server
+  error leaves the outcome unknown. A set that is an alias or has a routing
+  policy is never written. The zone is the hosted zone of `hosted_zone_id`,
+  and its name is the one that holds the SOA record. deSEC, GoDaddy and Namecheap take no precondition at
   all: their APIs document no ETag, revision or conditional request, and none
   removes one value by itself (deSEC and GoDaddy replace the whole record set
   with the list they are sent, Namecheap rewrites the whole host list of the
@@ -482,18 +520,26 @@ values the certificate refresh published count as epistle's own too. So:
   provider takes no precondition on a write...`, and the zone in `unguarded`
   with `--json`), and after a real `--undo` it says how many records went that way (`N of
   them went without a precondition`; `without_precondition` marks each one in
-  the `--json` report). RFC 2136 and Route 53 cannot list a zone (Route 53's API can, but the
-  provider does not parse its XML yet), so the command does not run against
-  them at all; both remove one value exactly (an UPDATE that names the RDATA,
-  and one batch that deletes the record set as read and creates it again
-  without the value). Nothing here has been run against a real provider account.
+  the `--json` report). RFC 2136 cannot list a zone, so the command does not
+  run against it at all; it removes one value exactly (an UPDATE that names the
+  RDATA), as Route 53 does (one batch that deletes the record set as read and
+  creates it again without the value). Nothing here has been run against a
+  real provider account.
+- The other writers use the same guarded write, one record set at a time:
+  the TLSA refresh after a certificate changed, the `dns-01` challenge of an
+  ACME order (added next to the TXT records at `_acme-challenge.<name>`, and
+  withdrawn by its value) and the per-domain DKIM rotation, whether this
+  process writes or the certificates container writes for it (the DKIM record
+  at the selector name is replaced or taken away, and a TXT of another purpose
+  there stays). With a provider that takes no precondition they fall back to
+  the ordinary write they used before.
 - A DMARC record is never replaced by a weaker one: `p=`, `sp=`, `np=` and
   the `adkim=s` / `aspf=s` alignment are compared tag by tag.
 - A record that differs only in TTL or description is not rewritten.
 - Names below a delegation (NS records under the zone apex) are left alone,
   as `dns lockdown` does.
-- A provider that cannot list a zone (`route53`, `rfc2136`) stops the command
-  before it writes anything. A zone whose `[[dns]]` entry is `manual` is
+- A provider that cannot list a zone (`rfc2136`) stops the command before it
+  writes anything. A zone whose `[[dns]]` entry is `manual` is
   listed under "By hand".
 
 Every record enters the ledger before it is written, so a write whose answer
@@ -559,10 +605,10 @@ can still report activity, expiration, zones and record reading. Do not add
 token-management permissions merely to make every finding verifiable.
 
 For Bunny, deSEC, DigitalOcean, DNSimple, Google Cloud DNS, GoDaddy,
-Namecheap, OVH, Porkbun and Spaceship, the existing zone listing can verify
-record reading in the configured zone. It does not enumerate every zone
-accessible to the credential. Other findings stay unknown. Route 53,
-RFC 2136 and manual mode currently expose no inspection metadata.
+Namecheap, OVH, Porkbun, Route 53 and Spaceship, the existing zone listing can
+verify record reading in the configured zone. It does not enumerate every zone
+accessible to the credential. Other findings stay unknown. RFC 2136 and manual
+mode currently expose no inspection metadata.
 Read-only operations at Porkbun and Namecheap use POST; Google may exchange
 a service-account assertion for an access token. None writes DNS records.
 Tokens, token identifiers and remote error bodies are never printed. Zone names
@@ -594,7 +640,7 @@ controls must be checked in that provider's documentation. A local
 | Namecheap | Enable only the account access needed for `namecheap.domains.dns.getHosts` and `namecheap.domains.dns.setHosts` through form POST `/xml.response`. Supply the permitted egress IPv4 address. Verify key restrictions in the provider documentation; `setHosts` replaces the zone's host list. |
 | OVH | Create application and consumer credentials for GET `/domain/zone/{zone}/record[/{id}]`, POST on `/record` and `/refresh`, and PUT and DELETE on `/record/{id}`. Verify access-rule syntax for those paths. |
 | Porkbun | Use an API key and secret for POST `/api/json/v3/dns/retrieve/{zone}`, `/dns/create/{zone}`, `/dns/edit/{zone}/{id}`, and `/dns/delete/{zone}/{id}` under the same API base. Verify domain API access and key restrictions. |
-| Route 53 | Use credentials for `ListResourceRecordSets` (GET `/2013-04-01/hostedzone/{id}/rrset`) and `ChangeResourceRecordSets` (POST at that path). Restrict to the hosted zone where IAM permits it; verify the IAM action and resource syntax. |
+| Route 53 | Use credentials for `ListResourceRecordSets` (GET `/2013-04-01/hostedzone/{id}/rrset`, which also finds the name of the zone from its SOA record) and `ChangeResourceRecordSets` (POST at that path). Restrict to the hosted zone where IAM permits it; verify the IAM action and resource syntax. |
 | RFC 2136 | Create a TSIG key on the authoritative nameserver with an update policy limited to the zone and record names/types epistle publishes. There is no HTTP endpoint or token inspection. Verify update-policy syntax in the nameserver documentation. |
 | Spaceship | Use an API key and secret for GET, PUT and DELETE `/api/v1/dns/records/{zone}`. Verify DNS-only permissions and domain restrictions in the API manager documentation. |
 | Manual | No token is needed; records are published by hand. |
@@ -640,8 +686,8 @@ another host: a redirect is an error. The error of a failed call carries no
 URL, and what the provider answered is shown with control characters
 escaped.
 
-`route53` and `rfc2136` cannot list a zone at all, so a command that has to
-read it stops with an error before it writes anything.
+`rfc2136` cannot list a zone at all, so a command that has to read it stops
+with an error before it writes anything.
 
 ### Record descriptions
 
@@ -750,7 +796,7 @@ record you add, and `epistle dns` does not manage BIMI records.
 
 ## DNS provider token storage
 
-I keep the provider token in an owner-only file outside `data_dir`, beside the
+Keep the provider token in an owner-only file outside `data_dir`, beside the
 storage and OAuth keys. To move the current inline or environment token:
 
 ```sh
@@ -768,13 +814,16 @@ instead. A different existing destination is refused.
 
 ### Rotating the credential
 
-The reconcile loop and the DKIM rotation build the provider again on every run,
-so a token I replace in the `token_file` is the one the next run writes with,
-with no restart. A `token_env` is a variable of the server process: replacing
-it in the environment, or in the compose file, changes nothing until the server
-restarts. The same holds for the TLSA publication and the `dns-01` challenge,
-which build their provider once at start. A `token_file` is the way to rotate a
-credential without a restart.
+The reconcile loop, the DKIM rotations (the `[dkim]` key and every
+`[[dkim.domain]]` key), the ACME renewal with its `dns-01` challenge and the
+TLSA record, and the TLSA refresh of a `[tls]` pair build the provider again on
+every pass, so a token replaced in the `token_file` is the one the next pass
+writes with, with no restart. When that build fails (a token file the process
+can no longer read, say), the provider built before keeps writing and the log
+says why once; the `[dkim]` rotation instead waits until the build works. A
+`token_env` is a variable of the server process: replacing it in the
+environment, or in the compose file, changes nothing until the server restarts.
+A `token_file` is the way to rotate a credential without a restart.
 
 For a generated stack, the command removes the old token environment entry and
 the read-only mount of a token file the configuration no longer names, adds the

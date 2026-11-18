@@ -246,22 +246,68 @@ impl Directory {
 		// the same way one found by the first question is: a success must
 		// not lift it for the other clients.
 		let bypassed = bypassed || bypassed_now;
-		let verified = local
-			.or_else(|| {
-				// Local/SQL credentials did not match: try the live LDAP bind, if any.
-				self.ldap
-					.as_ref()
-					.and_then(|ldap| ldap.authenticate(login, password))
-					.map(|account| (account, None))
-			})
-			.and_then(|(account, label)| {
-				// The account rules run after the local/LDAP credential
-				// check resolves an account, on whichever one answered: an
-				// account the rules refuse returns None exactly like a wrong
-				// password, so the wire response says nothing about why.
-				self.admit_login(&account, protocol, Proof::Password)
-					.then_some((account, label))
-			});
+		let local_or_ldap = match local {
+			Some(found) => Some(found),
+			// Local/SQL credentials did not match: try the live LDAP bind, if any.
+			None => match self.ldap.as_ref().map(|ldap| {
+				// A bind is network I/O: give the worker up while it waits.
+				crate::util::blocking::may_block(|| ldap.authenticate(login, password))
+			}) {
+				None | Some(Ok(None)) => None,
+				Some(Ok(Some(account))) => Some((account, None)),
+				// The directory could not be asked in time. The answer is the
+				// same for every login, local credential or not, so it says
+				// nothing about which logins exist. It is no verdict on the
+				// credential, but an attempt that reached the directory cost
+				// it a connection, so it counts against the client: a client
+				// that keeps the directory slow cannot guess for free. One
+				// that never left the queue cost nothing and counts for
+				// nothing.
+				Some(Err(busy)) => {
+					// The password check above ran and refused, and the
+					// directory could not decide. What counts depends on what
+					// was decided:
+					// - A local credential was checked and refused: a failed
+					//   login like any other, against the account and the
+					//   client, so downing or saturating the directory is no
+					//   way to guess its password for free.
+					// - Nothing else was decided (a login only the directory
+					//   holds, or nobody): it counts against the client alone,
+					//   never the account, or an outage would lock out people
+					//   whose passwords are right, and only when the attempt
+					//   used a directory connection. One that never left the
+					//   queue, or found no directory to reach, counts for
+					//   nothing: otherwise saturating or downing the
+					//   directory would lock out every client behind it.
+					// `auth.busy` is written for every login, with the same
+					// fields.
+					let reached = busy == crate::directory_store::LdapBusy::Reached;
+					crate::api::log_auth_busy(login, ip, protocol, reached);
+					if self.credentials(login).is_some() {
+						self.record_auth_outcome(login, None, ip, protocol);
+						self.record_ban_outcome(
+							login,
+							resolved_account.as_deref(),
+							false,
+							bypassed,
+							ip,
+							protocol,
+						);
+					} else if reached {
+						self.record_client_failure(ip, protocol);
+					}
+					return hash_gate::Verdict::Busy;
+				}
+			},
+		};
+		let verified = local_or_ldap.and_then(|(account, label)| {
+			// The account rules run after the local/LDAP credential
+			// check resolves an account, on whichever one answered: an
+			// account the rules refuse returns None exactly like a wrong
+			// password, so the wire response says nothing about why.
+			self.admit_login(&account, protocol, Proof::Password)
+				.then_some((account, label))
+		});
 		let verified_account = verified.as_ref().map(|(account, _)| account.as_str());
 		self.record_auth_outcome(login, verified_account, ip, protocol);
 		// Key the account-side strike on the account the credential check
@@ -401,11 +447,12 @@ impl Directory {
 				let bypassed = bypassable
 					&& kind == "account"
 					&& account.is_some()
-					&& ip.is_some() && block_on_async(store.is_known_network(
-					subject_account,
-					ip.expect("ip present"),
-					now_secs,
-				));
+					&& ip.is_some()
+					&& block_on_async(store.is_known_network(
+						subject_account,
+						ip.expect("ip present"),
+						now_secs,
+					));
 				if bypassed {
 					// The ban row is still in force for any other
 					// client; what we record is that this single
@@ -488,6 +535,27 @@ impl Directory {
 			protocol = protocol.as_str(),
 			"authentication admitted by the known-network bypass"
 		);
+	}
+
+	/// Count one failure against the client's address alone, for an attempt
+	/// that cost the server a password check but decided nothing about any
+	/// account. See [`Self::record_ban_outcome`] for the full record.
+	pub fn record_client_failure(
+		&self,
+		ip: Option<std::net::IpAddr>,
+		protocol: crate::config::Protocol,
+	) {
+		let (Some(store), Some(ip)) = (self.ban_store.as_ref(), ip) else {
+			return;
+		};
+		if block_on_async(store.is_allow_listed(ip)) {
+			return;
+		}
+		block_on_async(store.record_failure(
+			&bans::subject_client(ip),
+			protocol.as_str(),
+			unix_now_secs(),
+		));
 	}
 
 	/// After the authentication outcome is known, write it back to the

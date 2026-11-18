@@ -21,6 +21,7 @@ use uuid::Uuid;
 
 use crate::imap::mailbox;
 use crate::storage::MessageCrypto;
+use crate::util::fs_walk::rooted_write;
 use crate::util::path_component::{AccountName, AccountRoot, FixedDir, MessageExt, message_file};
 use crate::util::path_containment::contained;
 
@@ -70,15 +71,16 @@ pub fn archive_message(
 	id: Uuid,
 	now: u64,
 ) -> std::io::Result<()> {
+	let root = account_root.data_dir();
 	let archive = archive_dir(account_root)?;
-	std::fs::create_dir_all(&archive)?;
+	rooted_write::create_dir_all(root, &archive)?;
 	// The sidecar is written first and the body moved last, because the body
 	// is what `list` keys on: an `.eml` that reached the archive without its
 	// sidecar is invisible to list, restore and purge alike, so it would sit
 	// there against the account quota forever. In this order a failure at any
 	// step leaves the message in its mailbox, which the caller can retry.
 	let sidecar = message_file(&archive, id, MessageExt::Deleted)?;
-	std::fs::write(sidecar, format!("{now}\n{mailbox}\n"))?;
+	rooted_write::write_atomic(root, &sidecar, format!("{now}\n{mailbox}\n").as_bytes())?;
 	for ext in [
 		MessageExt::Flags,
 		MessageExt::Uid,
@@ -89,7 +91,7 @@ pub fn archive_message(
 		let to = message_file(&archive, id, ext)?;
 		// A missing source file is a no-op (idempotent with concurrent
 		// deletes); anything else is reported so the caller can retry.
-		match std::fs::rename(&from, &to) {
+		match rooted_write::rename(root, &from, &to) {
 			Ok(()) => {}
 			Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
 			Err(error) => return Err(error),
@@ -118,7 +120,7 @@ pub fn list(account_root: &AccountRoot) -> std::io::Result<Vec<ArchivedMessage>>
 /// behind by a half-finished archive is reclaimed by nothing else.
 fn sidecars(account_root: &AccountRoot) -> std::io::Result<Vec<(ArchivedMessage, bool)>> {
 	let archive = archive_dir(account_root)?;
-	let entries = match crate::util::fs_walk::read_dir(&archive) {
+	let entries = match crate::util::fs_walk::rooted::read_dir(account_root.data_dir(), &archive) {
 		Ok(entries) => entries,
 		Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
 		Err(error) => return Err(error),
@@ -138,7 +140,9 @@ fn sidecars(account_root: &AccountRoot) -> std::io::Result<Vec<(ArchivedMessage,
 		let Ok(id) = Uuid::parse_str(stem) else {
 			continue;
 		};
-		let Ok(raw) = crate::util::fs_walk::read_to_string(entry.path()) else {
+		let Ok(raw) =
+			crate::util::fs_walk::rooted::read_to_string(account_root.data_dir(), entry.path())
+		else {
 			continue;
 		};
 		let mut lines = raw.lines();
@@ -174,7 +178,7 @@ fn read_archived(
 ) -> std::io::Result<(String, Vec<u8>)> {
 	let archive = archive_dir(account_root)?;
 	let sidecar = message_file(&archive, id, MessageExt::Deleted)?;
-	let raw = crate::util::fs_walk::read_to_string(&sidecar)
+	let raw = crate::util::fs_walk::rooted::read_to_string(account_root.data_dir(), &sidecar)
 		.map_err(|error| std::io::Error::other(format!("no such archived message: {error}")))?;
 	let mut lines = raw.lines();
 	let _ts = lines
@@ -183,7 +187,10 @@ fn read_archived(
 	let mailbox = lines
 		.next()
 		.ok_or_else(|| std::io::Error::other("archived message sidecar missing mailbox"))?;
-	let stored = crate::util::fs_walk::read(message_file(&archive, id, MessageExt::Eml)?)?;
+	let stored = crate::util::fs_walk::rooted::read(
+		account_root.data_dir(),
+		message_file(&archive, id, MessageExt::Eml)?,
+	)?;
 	let plaintext = crypto.decode(&stored)?;
 	Ok((mailbox.to_string(), plaintext))
 }
@@ -264,7 +271,7 @@ pub fn sweep(data_dir: &Path, retention_days: u64, now: u64) -> std::io::Result<
 		return Ok(0);
 	}
 	let accounts_root = contained(data_dir, &data_dir.join("accounts"))?;
-	let entries = match crate::util::fs_walk::read_dir(&accounts_root) {
+	let entries = match crate::util::fs_walk::rooted::read_dir(data_dir, &accounts_root) {
 		Ok(entries) => entries,
 		Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
 		Err(error) => return Err(error),

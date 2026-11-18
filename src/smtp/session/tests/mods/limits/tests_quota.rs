@@ -111,7 +111,8 @@ fn a_message_that_overfills_every_mailbox_is_refused() {
 		&[b'x'; 40],
 	);
 
-	assert_eq!(reply_line(&action), "552 5.2.2 mailbox full\r\n");
+	// Temporary like the answer at RCPT, so the sender retries (RFC 3463).
+	assert_eq!(reply_line(&action), "452 4.2.2 mailbox full\r\n");
 	assert!(session.take_quota_reports().is_empty());
 }
 
@@ -159,4 +160,38 @@ fn a_zero_default_quota_is_unlimited() {
 	session.command_line("MAIL FROM:<alice@sender.example>");
 	let carol = session.command_line("RCPT TO:<carol@example.org>");
 	assert_eq!(reply_line(&carol), "250 2.0.0 ok\r\n");
+}
+
+#[test]
+fn a_full_mailbox_is_the_same_temporary_answer_at_rcpt_and_after_data() {
+	// Bob is already full at RCPT; Carol has room until DATA brings the
+	// message. The sender sees one answer for both, and the classifier of
+	// the outbound queue reads it as a mailbox that is retried, not bounced.
+	let mut full = session(HashMap::from([("bob", 100)]));
+	full.command_line("MAIL FROM:<alice@sender.example>");
+	let at_rcpt = reply_line(&full.command_line("RCPT TO:<bob@example.org>"));
+
+	let mut filling = session(HashMap::from([("carol", 90)]));
+	let after_data = reply_line(&transaction(
+		&mut filling,
+		&["carol@example.org"],
+		&[b'x'; 40],
+	));
+
+	assert_eq!(at_rcpt, "452 4.2.2 mailbox full\r\n");
+	assert_eq!(after_data, at_rcpt);
+	for line in [&at_rcpt, &after_data] {
+		let verdict = crate::queue::reply::classify(452, line.get(4..).expect("text").trim());
+		assert_eq!(
+			verdict.class,
+			crate::queue::reply::FailureClass::MailboxFull
+		);
+		assert!(!verdict.permanent, "a full mailbox is a temporary failure");
+	}
+}
+
+#[test]
+fn the_sink_answers_a_full_mailbox_as_the_session_does() {
+	let reply = crate::smtp::sink::SinkError::MailboxFull("bob@example.org".into()).smtp_reply();
+	assert_eq!(reply.to_string(), "452 4.2.2 mailbox full\r\n");
 }

@@ -19,7 +19,7 @@ pub(super) fn run(
 ) -> ExitCode {
 	let _warnings = crate::util::fs_walk::warning_scope();
 	let accounts_dir = data_dir.join("accounts");
-	let Ok(entries) = crate::util::fs_walk::read_dir(&accounts_dir) else {
+	let Ok(entries) = crate::util::fs_walk::rooted::read_dir(data_dir, &accounts_dir) else {
 		if json {
 			let result = serde_json::json!({ "accounts": 0, "messages": 0, "problems": [] });
 			return super::json_out::print(out, &result);
@@ -47,6 +47,7 @@ pub(super) fn run(
 				continue;
 			};
 			check_mailbox(
+				data_dir,
 				&dir,
 				account,
 				&mailbox_name,
@@ -82,6 +83,7 @@ pub(super) fn run(
 
 /// Validate every `.eml` and `.flags` file in one mailbox directory.
 fn check_mailbox(
+	data_dir: &Path,
 	dir: &Path,
 	account: &str,
 	mailbox: &str,
@@ -89,7 +91,7 @@ fn check_mailbox(
 	messages: &mut u64,
 	problems: &mut Vec<String>,
 ) {
-	let Ok(entries) = crate::util::fs_walk::read_dir(dir) else {
+	let Ok(entries) = crate::util::fs_walk::rooted::read_dir(data_dir, dir) else {
 		return;
 	};
 	let mut ids = std::collections::HashSet::new();
@@ -108,7 +110,9 @@ fn check_mailbox(
 			}
 			ids.insert(stem.to_string());
 			*messages += 1;
-			match crate::util::fs_walk::read(&path).and_then(|stored| crypto.decode(&stored)) {
+			match crate::util::fs_walk::rooted::read(data_dir, &path)
+				.and_then(|stored| crypto.decode(&stored))
+			{
 				Ok(data) if data.is_empty() => problems.push(format!("{here}: empty message")),
 				Ok(data) if !has_header_separator(&data) => {
 					problems.push(format!("{here}: no header/body separator"));
@@ -126,7 +130,7 @@ fn check_mailbox(
 			problems.push(format!("{here}: orphaned flags (no matching message)"));
 			continue;
 		}
-		match crate::util::fs_walk::read(&path) {
+		match crate::util::fs_walk::rooted::read(data_dir, &path) {
 			Ok(bytes) => {
 				if serde_json::from_slice::<Vec<Flag>>(&bytes).is_err() {
 					problems.push(format!("{here}: malformed flags file"));

@@ -35,17 +35,34 @@ impl ApiState {
 
 	/// Name the hosted domains that are switched off. Must be set before the
 	/// state is shared.
-	pub fn with_disabled_domains(mut self, domains: Vec<String>) -> Self {
-		if let Some(inner) = Arc::get_mut(&mut self.inner) {
-			inner.disabled_domains = domains;
-		}
+	pub fn with_disabled_domains(self, domains: Vec<String>) -> Self {
+		let hosted = self.hosted();
+		self.set_hosted(hosted::HostedView::hosting(hosted.domains.clone(), domains));
 		self
+	}
+
+	/// Describe the hosted domains from the configuration file the server
+	/// started with, so the domain routes answer what `epistle domain show`
+	/// prints. Without it they know only the domains and which are switched
+	/// off. Must be set before the state is shared.
+	pub fn with_domain_catalog(self, catalog: crate::domain::catalog::Catalog) -> Self {
+		let hosted = self.hosted();
+		self.set_hosted(hosted::HostedView {
+			catalog,
+			..(*hosted).clone()
+		});
+		self
+	}
+
+	/// What each hosted domain is.
+	pub fn domain_catalog(&self) -> crate::domain::catalog::Catalog {
+		self.hosted().catalog.clone()
 	}
 
 	/// The hosted domains that are switched off: they stay in
 	/// [`ApiState::domains`] but take no mail.
-	pub fn disabled_domains(&self) -> &[String] {
-		&self.inner.disabled_domains
+	pub fn disabled_domains(&self) -> Vec<String> {
+		self.hosted().disabled.clone()
 	}
 
 	/// The per-instance message-size cap. Defaults to
@@ -81,6 +98,18 @@ impl ApiState {
 			&& count > 0
 		{
 			inner.max_recipients = count;
+		}
+		self
+	}
+
+	/// Apply `[api.limiter]`: the failure budgets of the bearer limiter and
+	/// the size of the argon2 gate. Must be set before the state is shared.
+	pub fn with_auth_limits(mut self, limits: &crate::config::ApiLimiter) -> Self {
+		if let Some(inner) = Arc::get_mut(&mut self.inner) {
+			inner.auth_limiter = std::sync::Mutex::new(ClientLimiters::from_config(limits));
+			inner.argon2_gate =
+				Arc::new(tokio::sync::Semaphore::new(limits.max_concurrent_hashes()));
+			inner.argon2_queue_max = limits.hash_queue();
 		}
 		self
 	}

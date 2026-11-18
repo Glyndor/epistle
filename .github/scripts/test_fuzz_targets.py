@@ -126,7 +126,15 @@ class SelectTests(unittest.TestCase):
 
     def test_two_protocols_run_both(self):
         got = ft.select("pull_request", ["src/pop3/a.rs", "src/dkim/b.rs"])
-        self.assertEqual(got, ["pop3_command", "pop3_session", "dkim_signature", "mime", "sender_auth_records"])
+        self.assertEqual(
+            got,
+            ["pop3_command", "pop3_session", "dkim_signature", "mime", "sender_auth_records", "signer_frame"],
+        )
+
+    def test_the_signer_socket_runs_only_its_frame_target(self):
+        got = ft.select("pull_request", ["src/dkim/remote/frame/mod.rs"])
+        self.assertEqual(got, ["signer_frame"])
+        self.assertIn("signer_frame", ft.select("pull_request", ["src/dkim/sign/block.rs"]))
 
     def test_the_pop3_session_target_runs_with_the_pop3_source(self):
         self.assertEqual(

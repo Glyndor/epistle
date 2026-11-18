@@ -75,7 +75,7 @@ async fn deliver(reply: Reply) -> Delivery {
 
 fn assert_deferred(delivery: &Delivery) {
 	assert!(
-		delivery.answer.starts_with("451 4.4.3"),
+		delivery.answer.starts_with("451 4.7.24"),
 		"{:?}",
 		delivery.answer
 	);

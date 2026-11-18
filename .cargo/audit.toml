@@ -8,5 +8,11 @@
 # only because `sqlx` and `sqlx-macros-core` list `sqlx-sqlite` as an optional
 # dependency, and `sqlx-sqlite` 0.9.0 (the latest sqlx) caps it below 0.38
 # while the fix is 0.39.
+#
+# Reviewed 2026-11-15: sqlx 0.9.0 is still the latest release on crates.io
+# and `libsqlite3-sys` is at 0.40.0. The `sqlx-sqlite` of the sqlx `main`
+# branch already allows `<0.40.0`, but it is not released, so the ignore
+# stays until the next sqlx release. Review it again when that release
+# appears or by 2026-12-15, whichever comes first.
 [advisories]
 ignore = ["RUSTSEC-2026-0459"]

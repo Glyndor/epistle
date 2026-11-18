@@ -23,6 +23,7 @@ fn bound_key(dir: &std::path::Path, class: MailClass) -> String {
 			scopes: vec!["send".to_string(), "read".to_string(), "write".to_string()],
 			domains: Vec::new(),
 			account: Some("alice".to_string()),
+			auto_submitted: false,
 		})
 		.expect("add key");
 	drop(store);

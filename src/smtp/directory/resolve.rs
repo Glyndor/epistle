@@ -8,6 +8,14 @@ use crate::smtp::address::Address;
 use crate::util::address::normalize;
 
 impl Directory {
+	/// Name the server (lowercased), so mail to `postmaster` at it is
+	/// accepted although it is not a hosted domain.
+	pub fn with_server_name(mut self, name: impl Into<String>) -> Self {
+		let name = name.into().to_ascii_lowercase();
+		self.server_name = (!name.is_empty()).then_some(name);
+		self
+	}
+
 	/// Switch off hosted domains (lowercased to match resolution).
 	pub fn with_disabled_domains(mut self, domains: impl IntoIterator<Item = String>) -> Self {
 		self.disabled_domains = domains
@@ -78,7 +86,8 @@ impl Directory {
 	///
 	/// A login by address is not a recipient: see `Directory::resolve_identity`.
 	pub fn resolve(&self, address: &Address) -> Resolution {
-		match self.resolve_identity(address) {
+		let address = self.routed(address);
+		match self.resolve_identity(&address) {
 			Resolution::Account(account) if !self.receives(&account) => Resolution::UnknownUser,
 			Resolution::Alias(accounts) => {
 				let kept: Vec<String> = accounts
@@ -94,6 +103,49 @@ impl Directory {
 			}
 			other => other,
 		}
+	}
+
+	/// The address a recipient is resolved as. RFC 5321 section 4.5.1 makes
+	/// `postmaster` mandatory at every domain the server answers for: at the
+	/// server's own name and at a hosted domain that has no `postmaster`
+	/// address of its own, the mail goes where the first hosted domain's
+	/// `postmaster` goes (domains in alphabetical order, switched-off ones
+	/// skipped). Any other address resolves as itself. A login is not a
+	/// recipient and never takes this route.
+	fn routed(&self, address: &Address) -> Address {
+		let unchanged = || address.clone();
+		if !address.local_part().eq_ignore_ascii_case("postmaster") {
+			return unchanged();
+		}
+		let domain = self
+			.domain_aliases
+			.get(address.domain())
+			.map(String::as_str)
+			.unwrap_or(address.domain());
+		let named = self.server_name.as_deref() == Some(domain);
+		if !named && !self.domains.contains(domain) {
+			return unchanged();
+		}
+		if !matches!(
+			self.resolve_identity(address),
+			Resolution::NotLocal | Resolution::UnknownUser
+		) || self.disabled_domains.contains(domain)
+		{
+			return unchanged();
+		}
+		let mut domains: Vec<&String> = self.domains.iter().collect();
+		domains.sort();
+		domains
+			.into_iter()
+			.filter(|candidate| !self.disabled_domains.contains(*candidate))
+			.filter_map(|candidate| Address::parse(&format!("postmaster@{candidate}")).ok())
+			.find(|candidate| {
+				!matches!(
+					self.resolve_identity(candidate),
+					Resolution::NotLocal | Resolution::UnknownUser
+				)
+			})
+			.unwrap_or_else(unchanged)
 	}
 
 	/// Resolve a validated address to what it names, whatever the receiving
@@ -169,6 +221,7 @@ impl Directory {
 	/// an account. `None` when the address is not local or names no one; an
 	/// alias whose members all left yields an empty list.
 	pub fn final_recipients(&self, address: &Address) -> Option<Vec<(String, String)>> {
+		let address = &self.routed(address);
 		match self.resolve(address) {
 			Resolution::Account(account) => Some(vec![(account, normalize(&address.to_string()))]),
 			Resolution::Alias(_) => {

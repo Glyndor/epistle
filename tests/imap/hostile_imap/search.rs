@@ -72,7 +72,7 @@ async fn search_depth_over_64_is_bad_while_shallow_search_still_works() {
 	] {
 		// Under 512 bytes: the 32 KiB line cap cannot mask the depth guard.
 		send(&mut client, format!("F SEARCH {key}\r\n").as_bytes()).await;
-		expect(&mut client, "F BAD invalid arguments\r\n").await;
+		expect(&mut client, "F BAD [CLIENTBUG] invalid arguments\r\n").await;
 		send(&mut client, b"F SEARCH (OR ALL (NOT ALL))\r\n").await;
 		expect(&mut client, "* SEARCH\r\n").await;
 		expect(&mut client, "F OK SEARCH completed\r\n").await;

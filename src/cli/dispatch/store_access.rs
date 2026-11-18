@@ -25,7 +25,22 @@ pub(super) fn guard(command: &Command) -> Result<Option<FileLock>, String> {
 		| Command::ReportAbuse { config, .. } => config,
 		Command::Storage {
 			config,
-			action: crate::cli::storage::blobs::StorageCli::Blobs { .. },
+			action:
+				crate::cli::storage::blobs::StorageCli::Blobs { .. }
+				| crate::cli::storage::blobs::StorageCli::Cleanup,
+			..
+		} => config,
+		// The rotation rewrites the API key, app password and account stores.
+		Command::Rotate {
+			config,
+			all: true,
+			dry_run: false,
+			..
+		}
+		| Command::Rotate {
+			config,
+			accounts_only: true,
+			dry_run: false,
 			..
 		} => config,
 		Command::Migrate(args) => &args.config,
@@ -66,6 +81,7 @@ pub(super) fn guard(command: &Command) -> Result<Option<FileLock>, String> {
 		| Command::Autoconfig { .. }
 		| Command::Autodiscover { .. }
 		| Command::Delivery { .. }
+		| Command::Panel { .. }
 		| Command::Evidence { .. }
 		| Command::Ban { .. }
 		| Command::TokenHash { .. }

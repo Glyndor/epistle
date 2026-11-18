@@ -48,6 +48,18 @@ pub async fn upload(
 		}
 		Err(rejection) => return rejection.into_response(),
 	};
+	// The size cap of this account, its tenant and its domains, below the
+	// server's `maxSizeUpload`.
+	if let Err(reached) = state
+		.store()
+		.handle()
+		.current()
+		.admit_message(&account, body.len() as u64)
+	{
+		reached.log(&account);
+		let problem = limits::upload_over_cap(&reached);
+		return (StatusCode::PAYLOAD_TOO_LARGE, Json(problem)).into_response();
+	}
 	// Enforce the account's storage quota before persisting (RFC 8620 §6.1:
 	// upload may be refused once a limit is reached). A configured limit is the
 	// hard cap; 0 means unlimited. Fail closed — reject when the blob would push
@@ -97,24 +109,29 @@ pub async fn upload(
 		.find(|view| view.name == account)
 		.map(|view| view.addresses)
 		.unwrap_or_default();
-	if let Err(message) = state.tenant_limits().check_aggregate_quota(
+	// The size is reserved against the tenant before its usage is read and
+	// stays reserved until the blob is stored, like the account's own.
+	let tenant_reservation = match state.tenant_limits().reserve_aggregate_quota(
 		state.store(),
 		state.data_dir(),
 		state.crypto(),
 		&account_addresses,
 		size,
 	) {
-		return (
-			StatusCode::INSUFFICIENT_STORAGE,
-			Json(json!({
-				"type": "urn:ietf:params:jmap:error:limit",
-				"limit": "tenant_storage",
-				"status": 507,
-				"detail": message,
-			})),
-		)
-			.into_response();
-	}
+		Ok(reservation) => reservation,
+		Err(message) => {
+			return (
+				StatusCode::INSUFFICIENT_STORAGE,
+				Json(json!({
+					"type": "urn:ietf:params:jmap:error:limit",
+					"limit": "tenant_storage",
+					"status": 507,
+					"detail": message,
+				})),
+			)
+				.into_response();
+		}
+	};
 	// The blob's media type is the request Content-Type, echoed back and
 	// persisted so downloads serve it (RFC 8620 §6.1).
 	let content_type = headers
@@ -167,6 +184,7 @@ pub async fn upload(
 	// The blob is stored: the bytes it took are the account's now, and the
 	// reservation is no longer needed.
 	drop(reservation);
+	drop(tenant_reservation);
 	(
 		StatusCode::OK,
 		Json(json!({

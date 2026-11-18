@@ -15,6 +15,10 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
+mod auto;
+
+pub use auto::{Origin, Rules};
+
 /// Mode of a marker file, as the spool's files: owner read and write.
 #[cfg(unix)]
 const FILE_MODE: u32 = 0o600;
@@ -26,6 +30,9 @@ const DIR_MODE: u32 = 0o700;
 /// A filesystem-backed set of suppressed recipient addresses.
 pub struct SuppressionList {
 	dir: PathBuf,
+	/// The data directory: the trusted root every rooted read starts from, above
+	/// the store's own directory, which is walked and checked as part of the path.
+	data_dir: PathBuf,
 }
 
 /// SHA-256 hex of the stored form of a value (see
@@ -45,7 +52,10 @@ impl SuppressionList {
 	pub fn open(data_dir: &Path) -> std::io::Result<Self> {
 		let dir = data_dir.join("suppression");
 		make_dir(&dir)?;
-		Ok(Self { dir })
+		Ok(Self {
+			dir,
+			data_dir: data_dir.to_path_buf(),
+		})
 	}
 
 	/// The marker path for an address in the global list.
@@ -84,6 +94,19 @@ impl SuppressionList {
 		write_marker(&self.path(address), marker(address, reason, now))
 	}
 
+	pub(crate) fn try_suppress_because_once(
+		&self,
+		address: &str,
+		reason: &str,
+		now: u64,
+	) -> std::io::Result<bool> {
+		write_marker_once(
+			&self.path(address),
+			&self.dir.join(".tmp"),
+			marker(address, reason, now),
+		)
+	}
+
 	/// The global entry for `address`, if it is suppressed.
 	pub fn entry(&self, address: &str) -> Option<Suppressed> {
 		fs::read_to_string(self.path(address))
@@ -94,7 +117,7 @@ impl SuppressionList {
 
 	/// Every globally suppressed address with its date and reason, sorted.
 	pub fn entries(&self) -> Vec<Suppressed> {
-		read_entries(&self.dir)
+		read_entries(&self.data_dir, &self.dir)
 	}
 
 	/// Whether an address is suppressed globally.
@@ -109,7 +132,7 @@ impl SuppressionList {
 
 	/// Every globally suppressed address, sorted.
 	pub fn list(&self) -> Vec<String> {
-		read_addresses(&self.dir)
+		read_addresses(&self.data_dir, &self.dir)
 	}
 
 	/// Suppress an address for one sending account only (idempotent).
@@ -151,6 +174,22 @@ impl SuppressionList {
 		)
 	}
 
+	pub(crate) fn try_suppress_for_because_once(
+		&self,
+		account: &str,
+		address: &str,
+		reason: &str,
+		now: u64,
+	) -> std::io::Result<bool> {
+		let dir = self.account_dir(account);
+		make_dir(&dir)?;
+		write_marker_once(
+			&dir.join(digest_name(address)),
+			&self.dir.join(".tmp"),
+			marker(address, reason, now),
+		)
+	}
+
 	/// The entry for `address` in `account`'s list, if it is suppressed there.
 	pub fn entry_for(&self, account: &str, address: &str) -> Option<Suppressed> {
 		fs::read_to_string(self.account_dir(account).join(digest_name(address)))
@@ -161,7 +200,7 @@ impl SuppressionList {
 
 	/// Every address suppressed for `account` with its date and reason, sorted.
 	pub fn entries_for(&self, account: &str) -> Vec<Suppressed> {
-		read_entries(&self.account_dir(account))
+		read_entries(&self.data_dir, &self.account_dir(account))
 	}
 
 	/// Whether an address is suppressed for a specific account.
@@ -184,6 +223,8 @@ impl SuppressionList {
 	/// Used by [`crate::directory_store::removal::remove_account`] to clear
 	/// the account's whole footprint in one pass.
 	pub fn remove_all_for(&self, account: &str) -> std::io::Result<u32> {
+		// The bounce counts of the account go with it.
+		let _ = fs::remove_dir_all(self.dir.join("pending").join(digest_name(account)));
 		let dir = self.account_dir(account);
 		let entries = match std::fs::read_dir(&dir) {
 			Ok(entries) => entries,
@@ -215,7 +256,7 @@ impl SuppressionList {
 
 	/// Every address suppressed for a specific account, sorted.
 	pub fn list_for(&self, account: &str) -> Vec<String> {
-		read_addresses(&self.account_dir(account))
+		read_addresses(&self.data_dir, &self.account_dir(account))
 	}
 }
 
@@ -240,6 +281,67 @@ fn write_marker(path: &Path, content: impl AsRef<[u8]>) -> std::io::Result<()> {
 	options.open(path)?.write_all(content.as_ref())
 }
 
+fn write_marker_once(
+	path: &Path,
+	temp_dir: &Path,
+	content: impl AsRef<[u8]>,
+) -> std::io::Result<bool> {
+	use std::fmt::Write as _;
+	use std::io::Write as _;
+	make_dir(temp_dir)?;
+	let random = ring::rand::generate::<[u8; 16]>(&ring::rand::SystemRandom::new())
+		.map_err(|_| std::io::Error::other("cannot generate a suppression marker name"))?
+		.expose();
+	let mut name = String::from("marker-");
+	for byte in random {
+		let _ = write!(name, "{byte:02x}");
+	}
+	let temp_path = temp_dir.join(name);
+	let mut options = fs::OpenOptions::new();
+	options.write(true).create_new(true);
+	#[cfg(unix)]
+	std::os::unix::fs::OpenOptionsExt::mode(&mut options, FILE_MODE);
+	let mut file = options.open(&temp_path)?;
+	if let Err(error) = file
+		.write_all(content.as_ref())
+		.and_then(|_| file.sync_all())
+	{
+		let _ = fs::remove_file(&temp_path);
+		return Err(error);
+	}
+	drop(file);
+	match fs::hard_link(&temp_path, path) {
+		Ok(()) => {
+			let _ = fs::remove_file(&temp_path);
+			Ok(true)
+		}
+		Err(error) if error.kind() == ErrorKind::AlreadyExists => {
+			let _ = fs::remove_file(&temp_path);
+			if valid_marker(path) {
+				Ok(false)
+			} else {
+				Err(std::io::Error::new(
+					ErrorKind::InvalidData,
+					"the suppression marker is not a readable entry",
+				))
+			}
+		}
+		Err(error) => {
+			let _ = fs::remove_file(&temp_path);
+			Err(error)
+		}
+	}
+}
+
+fn valid_marker(path: &Path) -> bool {
+	fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_file())
+		&& fs::read_to_string(path)
+			.ok()
+			.as_deref()
+			.and_then(parse_marker)
+			.is_some()
+}
+
 /// Remove a marker file, treating "not found" as success.
 fn remove_marker(path: &Path) -> std::io::Result<()> {
 	match fs::remove_file(path) {
@@ -258,6 +360,12 @@ pub struct Suppressed {
 	pub since: Option<u64>,
 	/// Why: the remote reply that proved the address bad, when recorded.
 	pub reason: Option<String>,
+	/// Whether a bounce put it there. An entry added by hand is not
+	/// automatic, never ends, and a bounce never replaces it.
+	pub automatic: bool,
+	/// Epoch seconds the entry stops blocking at, for an automatic one the
+	/// operator gave a lifetime. `None` is for ever.
+	pub until: Option<u64>,
 }
 
 /// The content of a marker: the address on the first line, then the epoch
@@ -288,18 +396,25 @@ fn parse_marker(content: &str) -> Option<Suppressed> {
 		Some((since, reason)) => (since.trim().parse().ok(), Some(reason.trim().to_string())),
 		None => (None, None),
 	};
+	// A third line `auto<TAB>until` says a bounce wrote the entry. A release
+	// that does not know it stops at the second line and reads the same entry.
+	let auto = lines.next().and_then(|line| line.strip_prefix("auto\t"));
 	Some(Suppressed {
 		address,
 		since,
 		reason: reason.filter(|reason| !reason.is_empty()),
+		automatic: auto.is_some(),
+		until: auto
+			.and_then(|until| until.trim().parse::<u64>().ok())
+			.filter(|until| *until > 0),
 	})
 }
 
 /// Read every marker (a regular file) in a directory, sorted by address.
 /// The `accounts/` subdirectory is skipped because it is not a regular file.
-fn read_entries(dir: &Path) -> Vec<Suppressed> {
+fn read_entries(root: &Path, dir: &Path) -> Vec<Suppressed> {
 	let mut found = Vec::new();
-	if let Ok(entries) = crate::util::fs_walk::read_dir(dir) {
+	if let Ok(entries) = crate::util::fs_walk::rooted::read_dir(root, dir) {
 		for entry in entries.flatten() {
 			if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
 				continue;
@@ -318,8 +433,8 @@ fn read_entries(dir: &Path) -> Vec<Suppressed> {
 }
 
 /// Every address in a directory's markers, sorted.
-fn read_addresses(dir: &Path) -> Vec<String> {
-	read_entries(dir)
+fn read_addresses(root: &Path, dir: &Path) -> Vec<String> {
+	read_entries(root, dir)
 		.into_iter()
 		.map(|entry| entry.address)
 		.collect()

@@ -338,7 +338,8 @@ async fn what_the_worker_cannot_teach_is_counted_by_reason() {
 			_a: &'a str,
 			_t: Vec<u8>,
 			_s: bool,
-		) -> crate::antispam::trainer::TrainerFuture<'a, crate::antispam::learning::Lesson> {
+		) -> crate::antispam::trainer::TrainerFuture<'a, crate::antispam::learning::Lesson>
+		{
 			let outcome = self.0;
 			Box::pin(async move { outcome.into() })
 		}

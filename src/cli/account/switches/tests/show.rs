@@ -13,7 +13,7 @@ fn show_prints_the_switches_of_a_dynamic_account() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let store = store_with_app(&dir);
 	let mut sink = Vec::new();
-	set(&store, "app", Some(false), None, &mut sink, false);
+	let _ = set(&store, "app", Some(false), None, &mut sink, false);
 	let mut out = Vec::new();
 	assert_eq!(show_with_store(&store, "app", &mut out), ExitCode::SUCCESS);
 	let text = String::from_utf8(out).expect("utf8");
@@ -26,7 +26,7 @@ fn show_json_carries_the_switches_of_a_dynamic_account() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let store = store_with_app(&dir);
 	let mut sink = Vec::new();
-	set(&store, "app", None, Some(false), &mut sink, false);
+	let _ = set(&store, "app", None, Some(false), &mut sink, false);
 	let mut out = Vec::new();
 	assert_eq!(
 		account_json::show(&store, "app", &mut out),
@@ -88,7 +88,7 @@ fn list_json_carries_the_switches_of_every_account() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let store = store_with_app(&dir);
 	let mut sink = Vec::new();
-	set(&store, "app", Some(false), Some(false), &mut sink, false);
+	let _ = set(&store, "app", Some(false), Some(false), &mut sink, false);
 	let config = config(dir.path(), "");
 	let mut out = Vec::new();
 	assert_eq!(

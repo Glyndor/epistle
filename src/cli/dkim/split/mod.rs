@@ -23,24 +23,25 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::cli::config_edit::ConfigDocument;
-use crate::cli::domain::own_key::add_entry;
 use crate::cli::json_out::Report;
 use crate::config::Config;
 use crate::dkim::domain_keys::{self, DomainKeys};
 use crate::dkim::split_state;
-use crate::dkim::stale::{self, Stale};
 use crate::dns::authoritative::{AuthorityLookup, SystemAuthority};
 use crate::dns::provider::DnsProvider;
 use crate::spf::DnsLookup;
 
+use moves::{describe, keys_of, make_keys, report_stale, stale_of};
 use restart::{confirm_restart, nothing_to_split, restart_onto, restart_pending};
+use switch::switch;
 
 mod diagnosis;
 mod finish;
+mod moves;
 mod plan;
 mod publish;
 mod restart;
+mod switch;
 
 /// How the command is asked to run.
 pub(super) struct Options {
@@ -187,86 +188,6 @@ pub(super) async fn run_locked<'a>(
 	};
 	let services = make_services(&config);
 	split(path, &config, options, &services, (json, out, err), restart).await
-}
-
-/// The keys a domain moves to, with the records they are published as.
-struct Move {
-	domain: String,
-	keys: DomainKeys,
-	records: Vec<publish::Record>,
-}
-
-/// Make the keys of the domains that move, reusing the ones a run that
-/// stopped left. A key that exists must load; one that does not is an error.
-fn make_keys(config: &Config, plan: &plan::Plan, now: u64) -> Result<Vec<Move>, String> {
-	// A new key never takes a selector the shared key is published under:
-	// the record would replace the one the server still signs with.
-	let reserved = domain_keys::reserved_selectors(config)?;
-	plan.moves
-		.iter()
-		.map(|domain| {
-			let (keys, _) =
-				domain_keys::ensure(&config.data_dir, domain, plan.dual_signing, now, &reserved)?;
-			let records = publish::records(domain, &keys)?;
-			Ok(Move {
-				domain: domain.clone(),
-				keys,
-				records,
-			})
-		})
-		.collect()
-}
-
-/// The keys a domain moves to, ed25519 first: the selector each is
-/// published under and the file it is written to. A domain that signs with
-/// two keys gets two, and the dry run says so.
-fn keys_of(keys: &DomainKeys) -> Vec<(&str, &Path)> {
-	let mut all = vec![(keys.selector.as_str(), keys.key_file.as_path())];
-	if let Some((selector, file)) = &keys.rsa {
-		all.push((selector.as_str(), file.as_path()));
-	}
-	all
-}
-
-/// The plan as lines and as a JSON object.
-fn describe(plan: &plan::Plan, moves: &[(String, DomainKeys)]) -> serde_json::Value {
-	serde_json::json!({
-		"keeps": plan.keeps,
-		"moves": moves.iter().map(|(domain, keys)| serde_json::json!({
-			"domain": domain,
-			"selector": keys.selector,
-			"rsa_selector": keys.rsa.as_ref().map(|(selector, _)| selector),
-			"key_file": keys.key_file,
-		})).collect::<Vec<_>>(),
-	})
-}
-
-/// The records of the shared key that are still published at the domains
-/// in `moves`, with the grace the operator has before removing them.
-fn stale_of(config: &Config, moves: &[(String, DomainKeys)]) -> Result<Vec<Stale>, String> {
-	let mut all = Vec::new();
-	for (domain, keys) in moves {
-		let mut own = vec![keys.selector.clone()];
-		own.extend(keys.rsa.iter().map(|(selector, _)| selector.clone()));
-		all.extend(stale::names_for(config, domain, &own)?);
-	}
-	Ok(all)
-}
-
-/// Add the stale records to a result object and say them in the text report.
-fn report_stale(report: &mut Report<'_>, result: &mut serde_json::Value, stale: &[Stale]) {
-	for record in stale {
-		report.line(format_args!(
-			"stale after the switch: {} still publishes the shared key; retire it with `epistle dkim split --finish` once the overlap of {} days has passed",
-			record.name,
-			crate::dkim::ROTATE_OVERLAP_DAYS
-		));
-	}
-	result["stale_records"] = stale
-		.iter()
-		.map(|record| record.name.clone())
-		.collect::<Vec<_>>()
-		.into();
 }
 
 /// The command, with its services supplied.
@@ -438,101 +359,6 @@ pub(super) async fn split(
 		err,
 		restart,
 	)
-}
-
-/// Write the entries and restart: the one step that changes what signs.
-fn switch(
-	path: &Path,
-	config: &Config,
-	(plan, moves, stale): (&plan::Plan, &[Move], &[Stale]),
-	report: &mut Report<'_>,
-	err: &mut impl Write,
-	restart: impl FnOnce(&Config, crate::cli::stack::StackAction) -> ExitCode,
-) -> ExitCode {
-	// What a later run needs is written first: the moved domains and the shared
-	// key's selectors they leave behind. A run that dies after this and before
-	// the entries are saved leaves a record of a move that did not happen,
-	// which a retry settles; the other order could leave entries nobody
-	// remembers.
-	for m in moves {
-		let selectors = stale
-			.iter()
-			.filter(|record| record.domain == m.domain)
-			.map(|record| split_state::StaleSelector {
-				selector: record.selector.clone(),
-				expected: record.expected.clone(),
-			})
-			.collect();
-		if let Err(why) =
-			split_state::record_written(&config.data_dir, &m.domain, super::now_epoch(), selectors)
-		{
-			crate::cli::style::error_to(err, format_args!("dkim split refused: {why}"));
-			return ExitCode::FAILURE;
-		}
-	}
-	let mut document = match ConfigDocument::open(path) {
-		Ok(document) => document,
-		Err(error) => {
-			crate::cli::style::error_to(err, error);
-			return ExitCode::FAILURE;
-		}
-	};
-	for m in moves {
-		if let Err(error) = add_entry(&mut document, &m.domain, &m.keys) {
-			crate::cli::style::error_to(err, error);
-			return ExitCode::FAILURE;
-		}
-	}
-	let edited = match document.config() {
-		Ok(edited) => edited,
-		Err(error) => {
-			crate::cli::style::error_to(err, error);
-			return ExitCode::FAILURE;
-		}
-	};
-	let outcome = match document.commit() {
-		Ok(outcome) => outcome,
-		Err(error) => {
-			crate::cli::style::error_to(err, error);
-			return ExitCode::FAILURE;
-		}
-	};
-	for m in moves {
-		report.line(format_args!(
-			"{} signs with {} from the next start",
-			m.domain, m.keys.selector
-		));
-	}
-	// Only a restart that is confirmed makes the new keys the ones signing;
-	// until then the domains are pending and `--finish` retires nothing.
-	let (confirmed, reload) = match restart_onto(&edited, outcome, err, restart) {
-		Ok(done) => done,
-		Err(code) => return code,
-	};
-	report.line(format_args!(
-		"{} keeps the [dkim] key; the shared key is still published at the domains that left it",
-		plan.keeps
-	));
-	let pending_code = (!confirmed).then(|| restart_pending(report));
-	let shown: Vec<_> = moves
-		.iter()
-		.map(|m| (m.domain.clone(), m.keys.clone()))
-		.collect();
-	let mut result = describe(plan, &shown);
-	report_stale(report, &mut result, stale);
-	result["result"] = if confirmed {
-		"split"
-	} else {
-		"restart-pending"
-	}
-	.into();
-	result["action"] = "split".into();
-	result["reload"] = reload.name().into();
-	let code = report.object(result);
-	match pending_code {
-		Some(pending) if code == ExitCode::SUCCESS => pending,
-		_ => code,
-	}
 }
 
 #[cfg(test)]

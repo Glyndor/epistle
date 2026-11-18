@@ -25,7 +25,8 @@ fn init_rerun_keeps_operator_override_bytes_and_mode() {
 			std::fs::metadata(&override_path)
 				.unwrap()
 				.permissions()
-				.mode() & 0o777,
+				.mode()
+				& 0o777,
 			0o640,
 			"init must preserve operator override permissions"
 		);

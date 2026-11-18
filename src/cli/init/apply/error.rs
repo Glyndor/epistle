@@ -99,12 +99,18 @@ pub enum ApplyError {
 	/// The `--answers` file is a symlink, is not a regular file, or holds a
 	/// credential while group or others can read it.
 	AnswersFile(PathBuf, String),
+	/// An API key labelled `panel` exists with a reach other than the
+	/// panel's, so its secret is not replaced. Carries the operator-facing
+	/// message, which names the settings and never a secret.
+	PanelKey(String),
 }
 
 impl std::fmt::Display for ApplyError {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		match self {
-			ApplyError::DatabaseVolume(message) => f.write_str(message),
+			ApplyError::DatabaseVolume(message) | ApplyError::PanelKey(message) => {
+				f.write_str(message)
+			}
 			ApplyError::FirstAccount(why) => write!(f, "first account: {why}"),
 			ApplyError::KeysDir(path, error) => write!(
 				f,

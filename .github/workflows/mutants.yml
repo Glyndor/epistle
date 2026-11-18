@@ -17,7 +17,8 @@ permissions:
 jobs:
   mutants:
     name: cargo mutants
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -25,12 +26,12 @@ jobs:
 
       - name: Install toolchain
         run: |
-          # Pinned to 1.99. This job is weekly and advisory, but it runs
+          # Pinned to 1.100. This job is weekly and advisory, but it runs
           # cargo-mutants with the same dependency floor and build flags the
           # gate uses, so its surviving-mutant report has to come from the
           # compiler the gate compiles.
-          rustup toolchain install 1.99.1 --profile minimal
-          rustup default 1.99.1
+          rustup toolchain install 1.100.0 --profile minimal
+          rustup default 1.100.0
 
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:

@@ -43,6 +43,15 @@ fn the_dns_token_forwarding_survives() {
 }
 
 #[test]
+fn an_updated_stack_keeps_the_checks_per_day_it_was_given() {
+	let mut answers = stack_answers();
+	answers.services.freshclam_checks = Some(30);
+	let (written, again) = round_trip(&answers);
+	assert!(written.contains("--checks=30"), "{written}");
+	assert_eq!(again, written, "stack update renders the same file");
+}
+
+#[test]
 fn an_older_compose_file_gets_the_current_images_and_services() {
 	let answers = stack_answers();
 	let current = render_for(&answers, true).expect("render");

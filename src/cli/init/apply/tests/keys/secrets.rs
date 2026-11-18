@@ -94,7 +94,7 @@ fn stack_update_moves_the_keys_creates_missing_ones_and_repoints_the_config() {
 	);
 	std::fs::write(&config, &text).unwrap();
 	std::fs::set_permissions(&config, std::os::unix::fs::PermissionsExt::from_mode(0o600)).unwrap();
-	let lines = super::prepare_keys_for_update(&data_dir, &config, true, false).unwrap();
+	let lines = super::prepare_keys_for_update(&data_dir, &config, true, false, false).unwrap();
 	let secrets = root.path().join("secrets");
 	assert_eq!(
 		std::fs::read(secrets.join("storage.key")).unwrap(),
@@ -114,7 +114,7 @@ fn stack_update_moves_the_keys_creates_missing_ones_and_repoints_the_config() {
 	assert!(secrets.join("epistle_db_admin_password").is_file());
 	assert_eq!(lines.len(), 5, "one line per key moved or created");
 	assert_eq!(
-		super::prepare_keys_for_update(&data_dir, &config, true, false).unwrap(),
+		super::prepare_keys_for_update(&data_dir, &config, true, false, false).unwrap(),
 		Vec::<String>::new(),
 		"a second update changes nothing"
 	);
@@ -146,7 +146,7 @@ fn stack_update_keeps_a_linked_configuration_a_link() {
 	std::fs::set_permissions(&real, std::fs::Permissions::from_mode(0o600)).unwrap();
 	let link = root.path().join("mail.toml");
 	std::os::unix::fs::symlink(&real, &link).unwrap();
-	super::prepare_keys_for_update(&data_dir, &link, false, false).unwrap();
+	super::prepare_keys_for_update(&data_dir, &link, false, false, false).unwrap();
 	assert!(
 		std::fs::symlink_metadata(&link)
 			.unwrap()
@@ -177,7 +177,7 @@ fn an_update_places_the_account_key_only_for_the_split_and_never_back() {
 	let in_secrets = crate::cli::init::host_secrets::acme_account_key(&data_dir);
 	let key = std::fs::read(&in_data_dir).unwrap();
 
-	super::prepare_keys_for_update(&data_dir, &config, false, true).unwrap();
+	super::prepare_keys_for_update(&data_dir, &config, false, true, false).unwrap();
 	assert!(
 		std::fs::read(&in_secrets).unwrap() == key,
 		"the key in secrets/"
@@ -187,7 +187,7 @@ fn an_update_places_the_account_key_only_for_the_split_and_never_back() {
 		"a copy mail can read is not left behind"
 	);
 
-	super::prepare_keys_for_update(&data_dir, &config, false, false).unwrap();
+	super::prepare_keys_for_update(&data_dir, &config, false, false, false).unwrap();
 	assert!(
 		!in_data_dir.exists(),
 		"an update does not copy the key back"
@@ -240,7 +240,7 @@ fn stack_update_creates_the_keys_directory_when_an_install_has_none() {
 	let config = root.path().join("mail.toml");
 	std::fs::write(&config, "hostname = \"h\"\n").unwrap();
 	std::fs::set_permissions(&config, std::os::unix::fs::PermissionsExt::from_mode(0o600)).unwrap();
-	super::prepare_keys_for_update(&data_dir, &config, false, false).unwrap();
+	super::prepare_keys_for_update(&data_dir, &config, false, false, false).unwrap();
 	assert!(data_dir.join("keys/oauth_public.key").is_file());
 }
 
@@ -270,7 +270,9 @@ fn a_fifo_at_the_served_configuration_is_refused_instead_of_waited_on() {
 		let (data, served) = (data_dir.clone(), config.clone());
 		let preparing = std::thread::spawn(move || {
 			sender
-				.send(super::prepare_keys_for_update(&data, &served, false, false))
+				.send(super::prepare_keys_for_update(
+					&data, &served, false, false, false,
+				))
 				.ok();
 		});
 		let value = receiver.recv_timeout(Duration::from_secs(5));

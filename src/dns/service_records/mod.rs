@@ -38,11 +38,14 @@ pub enum SrvService {
 	Caldav,
 	/// CardDAV (port 443), served by the `webdav` listener.
 	Carddav,
+	/// Client autoconfiguration (RFC 6186 section 3.1), served by the
+	/// `autoconfigs` listener.
+	Autoconfig,
 }
 
 impl SrvService {
 	/// Every locator epistle knows, in the order the records are published.
-	pub const ALL: [SrvService; 9] = [
+	pub const ALL: [SrvService; 10] = [
 		SrvService::Submissions,
 		SrvService::Submission,
 		SrvService::Imaps,
@@ -52,6 +55,7 @@ impl SrvService {
 		SrvService::Sieve,
 		SrvService::Caldav,
 		SrvService::Carddav,
+		SrvService::Autoconfig,
 	];
 
 	/// The SRV owner label, without the `_tcp` part.
@@ -66,6 +70,7 @@ impl SrvService {
 			SrvService::Sieve => "_sieve",
 			SrvService::Caldav => "_caldavs",
 			SrvService::Carddav => "_carddavs",
+			SrvService::Autoconfig => "_autoconfig",
 		}
 	}
 
@@ -81,6 +86,7 @@ impl SrvService {
 			SrvService::Sieve => 4190,
 			SrvService::Caldav => 443,
 			SrvService::Carddav => 443,
+			SrvService::Autoconfig => 443,
 		}
 	}
 
@@ -99,11 +105,16 @@ impl SrvService {
 			// Both DAV services share the listener; there is no flag that
 			// turns one of them off.
 			ListenerKind::WebDav => &[SrvService::Caldav, SrvService::Carddav],
+			// The client setup locator (RFC 6186 section 3.1). Only the
+			// implicit-TLS listener carries it: the plain one is behind
+			// the operator's own TLS proxy, and a locator that names the
+			// proxy's port would point a client at a port that does not
+			// speak the protocol the client expects.
+			ListenerKind::Autoconfigs => &[SrvService::Autoconfig],
 			ListenerKind::Smtp
 			| ListenerKind::Metrics
 			| ListenerKind::Acme
-			| ListenerKind::Autoconfig
-			| ListenerKind::Autoconfigs => &[],
+			| ListenerKind::Autoconfig => &[],
 		}
 	}
 
@@ -115,7 +126,8 @@ impl SrvService {
 	/// and the DAV services do not: they are served over internal HTTP and
 	/// reached through the public HTTPS endpoint of the deployment, so their
 	/// locator names port 443 whatever the listener binds (8025 and 8090 by
-	/// default).
+	/// default). The client setup locator names the port of the public
+	/// endpoint, which is the listener that serves it.
 	fn port_for(self, listener: &Listener) -> u16 {
 		match self {
 			SrvService::Jmap | SrvService::Caldav | SrvService::Carddav => self.port(),
@@ -124,7 +136,8 @@ impl SrvService {
 			| SrvService::Imaps
 			| SrvService::Imap
 			| SrvService::Pop3
-			| SrvService::Sieve => listener.socket_addr().port(),
+			| SrvService::Sieve
+			| SrvService::Autoconfig => listener.socket_addr().port(),
 		}
 	}
 }

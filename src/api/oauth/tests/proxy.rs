@@ -173,6 +173,7 @@ async fn oauth_retry_after_matches_poll_deadline_and_grant_expiry() {
 			devices.insert(
 				format!("grant-{n}"),
 				DeviceGrant {
+					scopes: crate::api::oauth::scopes::Scopes::requested(None).unwrap(),
 					user_code: format!("USER-{n}"),
 					approved_account: None,
 					expires_at: now + 47 + n,
@@ -236,6 +237,7 @@ async fn oauth_password_checks_use_the_forwarded_client_address() {
 	state.authz().unwrap().devices.lock().unwrap().insert(
 		"approval-grant".into(),
 		DeviceGrant {
+			scopes: crate::api::oauth::scopes::Scopes::requested(None).unwrap(),
 			user_code: "USER-CODE".into(),
 			approved_account: None,
 			expires_at: now + 600,

@@ -4,8 +4,8 @@
 //! The generic `upsert` replaces the whole `(name, type)` set, so it is used
 //! only when the set holds nothing that is not epistle's own. When the set
 //! holds records of somebody else, or when the new value should sit next to
-//! the old one, the change goes through the guarded contract of
-//! [`crate::dns::publish::provider`]: the provider applies the exact set
+//! the old one, the change goes through the guarded writer of
+//! [`crate::dns::publish::write`]: the provider applies the exact set
 //! this module planned, only if the zone still holds what was read. A
 //! provider that applies no guarded change never gets a write that could
 //! remove a foreign record: the refresh fails closed and says why.
@@ -16,9 +16,7 @@
 //! one published here.
 
 use crate::dns::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind};
-use crate::dns::publish::provider::{
-	Change, Guard, ObservedRecord, OperationOutcome, Precondition, Receipt,
-};
+use crate::dns::publish::provider::{Guard, ObservedRecord};
 
 use super::plan::{Decision, decide, normal};
 
@@ -98,48 +96,16 @@ pub(super) async fn publish(
 	let mut after = foreign;
 	after.push(record);
 	after.extend(overlap);
-	let change = Change {
+	let set = crate::dns::publish::write::SetChange {
 		name,
 		kind: RecordKind::Tlsa,
 		before: observed,
 		after,
-		precondition: match snapshot.revision {
-			Some(revision) => Precondition::Revision(revision),
-			None => Precondition::Identity,
-		},
-		operation_id: format!("epistle-tlsa-{}", normal(value).replace(' ', "-")),
 	};
-	let operation_id = change.operation_id.clone();
-	let receipt = provider.apply_guarded(&zone, change).await;
-	let applied = match receipt {
-		Receipt::Applied { .. } => true,
-		Receipt::Unknown => matches!(
-			provider.lookup_operation(&operation_id).await?,
-			OperationOutcome::Applied
-		),
-		Receipt::PreconditionFailed => {
-			return Err(Refused::Failed(
-				"the zone changed while the TLSA record was planned; nothing was written".into(),
-			));
-		}
-		Receipt::Unsupported => {
-			return Err(Refused::Failed(
-				"the provider applies no guarded change; nothing was written".into(),
-			));
-		}
-		Receipt::Rejected(reason) => {
-			return Err(Refused::Failed(format!(
-				"the provider refused the change: {}",
-				crate::cli::term::sanitize(&reason)
-			)));
-		}
-	};
-	if !applied {
-		return Err(Refused::Failed(
-			"the provider did not confirm the change; nothing else was written until it is resolved"
-				.into(),
-		));
-	}
+	let operation = format!("epistle-tlsa-{}", normal(value).replace(' ', "-"));
+	crate::dns::publish::write::apply(provider, &zone, set, snapshot.revision, operation)
+		.await
+		.map_err(|e| Refused::Failed(e.to_string()))?;
 	Ok(left)
 }
 

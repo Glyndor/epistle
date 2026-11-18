@@ -37,6 +37,80 @@ impl LocalDelivery {
 		(targets.to_vec(), keep_local)
 	}
 
+	/// The `targets` the forwarding policy of `account` lets a copy go to,
+	/// and whether it refused any. Without a guard every target is allowed.
+	/// A refusal is logged once an hour per account.
+	pub(super) fn permitted_forwards(
+		&self,
+		account: &str,
+		delivered_to: &str,
+		targets: Vec<String>,
+	) -> (Vec<String>, bool) {
+		let Some(guard) = &self.forwarding else {
+			return (targets, false);
+		};
+		let directory = self.directory.current();
+		let domain = delivered_to.rsplit_once('@').map_or("", |(_, d)| d);
+		let (allowed, refused) = guard.permitted((account, domain), targets, |domain| {
+			directory.hosts_domain(domain)
+		});
+		if refused > 0 && self.may_say("forward-policy", account) {
+			tracing::warn!(
+				account,
+				refused,
+				"the forwarding policy does not let this account forward to some addresses; they were not forwarded and the message was kept"
+			);
+		}
+		(allowed, refused > 0)
+	}
+
+	/// Charge the copies `targets` make to the forwarding limits of
+	/// `account`. Returns the targets to queue, none when a limit refuses
+	/// the batch, and whether one did. A refusal is logged once an hour.
+	pub(super) fn within_forward_limits(
+		&self,
+		account: &str,
+		delivered_to: &str,
+		targets: Vec<String>,
+	) -> (Vec<String>, bool) {
+		let Some(guard) = &self.forwarding else {
+			return (targets, false);
+		};
+		let domain = delivered_to.rsplit_once('@').map_or("", |(_, d)| d);
+		let submission_limit = self.directory.current().submission_limit_for(account);
+		if guard.charge(
+			(account, domain),
+			targets.len(),
+			submission_limit,
+			now_secs(),
+		) {
+			return (targets, false);
+		}
+		if self.may_say("forward-limit", account) {
+			tracing::warn!(
+				account,
+				"the account's forwarding limit is spent; the copies were not forwarded and the message was kept"
+			);
+		}
+		(Vec::new(), true)
+	}
+
+	/// The vacation `reply`, when the forwarding policy and limits let the
+	/// account answer its sender; `None` otherwise.
+	pub(super) fn permitted_reply(
+		&self,
+		account: &str,
+		delivered_to: &str,
+		reply: AcceptedMessage,
+	) -> Option<AcceptedMessage> {
+		if self.forwarding.is_none() {
+			return Some(reply);
+		}
+		let (allowed, _) = self.permitted_forwards(account, delivered_to, reply.recipients.clone());
+		let (allowed, _) = self.within_forward_limits(account, delivered_to, allowed);
+		(!allowed.is_empty() && allowed.len() == reply.recipients.len()).then_some(reply)
+	}
+
 	/// Evaluate the account's Sieve filter, if present and valid. Any read,
 	/// lex or parse failure yields `None` so delivery falls back to INBOX
 	/// rather than dropping mail.
@@ -138,4 +212,11 @@ impl LocalDelivery {
 		}
 		Some(outcome)
 	}
+}
+
+/// The time as epoch seconds, for the limits' windows.
+fn now_secs() -> u64 {
+	std::time::SystemTime::now()
+		.duration_since(std::time::UNIX_EPOCH)
+		.map_or(0, |d| d.as_secs())
 }

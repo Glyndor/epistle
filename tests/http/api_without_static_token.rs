@@ -48,6 +48,7 @@ async fn send_key_posts_mail_without_a_static_token_and_anonymous_send_is_refuse
 			expires_at: None,
 			ip_cidr: None,
 			domains: Vec::new(),
+			auto_submitted: false,
 		})
 		.unwrap();
 	let store = Arc::new(

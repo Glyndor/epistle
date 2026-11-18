@@ -7,6 +7,7 @@ mod connection_limits;
 pub(super) mod dkim;
 mod evidence;
 mod listeners;
+mod live_domains;
 mod metrics;
 mod queue;
 mod ratelimit;
@@ -16,6 +17,7 @@ mod store;
 pub(super) mod tasks;
 mod tasks_delivery;
 mod tls;
+mod undo;
 mod webdav;
 use dkim::SplitCompanions;
 use ratelimit::RateLimiters;
@@ -90,16 +92,27 @@ async fn serve(config: Config, role: ServeRole) -> std::io::Result<()> {
 		.with_crypto(crypto.clone())
 		.into_shared();
 	let directory = account_store.handle();
+	let live = live_domains::start(&config);
 	// A write picks its tenant key from the account's addresses.
 	crypto.attach_accounts(Arc::new(directory.clone()));
 	let SplitCompanions {
 		split,
 		dkim_signer,
 		domain_signers,
+		per_domain,
+		srs,
 		webhook,
 		arc_sealer,
 		mut evidence,
 	} = dkim::build_split_with_companions(&config, &metrics, directory.clone(), crypto.clone())?;
+	live_domains::follow(
+		&live,
+		live_domains::Followers {
+			account_store: Arc::clone(&account_store),
+			signer: per_domain,
+			srs,
+		},
+	);
 	let greylist = tasks::build_greylist(&config, reputation_pool.as_ref()).await;
 	let oauth_verifier = crate::cli::oauth::advice::build_and_say(&config).await?;
 	let challenge_store = crate::acme::http01::ChallengeStore::new();
@@ -126,11 +139,12 @@ async fn serve(config: Config, role: ServeRole) -> std::io::Result<()> {
 		llm_hook,
 		attachment_policy,
 	} = smtp_state::build_smtp_shared_state(&config, &metrics)?;
+	let scopes = Arc::new(crate::antispam::scopes::Scopes::from_config(&config));
 	let mailbox_limits = connection_limits::MailboxLimits::from_config(&config);
 	let http_limits = connection_limits::http_limits(&config);
 	let sink = crate::antispam::submission_scan::ScanningSink::wrap_resolving(
 		config.antispam.scan_authenticated,
-		Arc::new(split),
+		undo::wrap(&config, &crypto, &directory, Arc::new(split))?,
 		clamd,
 		attachment_policy.clone(),
 		(
@@ -149,6 +163,9 @@ async fn serve(config: Config, role: ServeRole) -> std::io::Result<()> {
 			as Arc<dyn crate::directory_store::file_watcher::ApiKeyReloader>)
 		.with_warmup(
 			Arc::clone(&warmup) as Arc<dyn crate::directory_store::file_watcher::WarmupReloader>
+		)
+		.with_state(
+			Arc::clone(&live) as Arc<dyn crate::directory_store::file_watcher::StateReloader>
 		)
 		.spawn(crate::directory_store::reload_status::POLL_INTERVAL);
 	evidence::spawn(evidence.tasks.take());
@@ -195,7 +212,10 @@ async fn serve(config: Config, role: ServeRole) -> std::io::Result<()> {
 			crypto.clone(),
 		)?),
 	);
-	tasks::spawn_storage_maintenance(&config);
+	if role != ServeRole::Certs {
+		tasks::spawn_own_ip_blocklist(&config, Arc::clone(&metrics));
+	}
+	tasks::spawn_storage_maintenance(&config, evidence.service.time());
 	tasks::spawn_ban_sweep(reputation_pool.clone(), policy.known_network_window_secs);
 	let TlsStack {
 		tls_acceptor,
@@ -230,6 +250,7 @@ async fn serve(config: Config, role: ServeRole) -> std::io::Result<()> {
 						send_limiter: &send_limiter,
 						tenant_limits: &tenant_limits,
 						bayes: &bayes,
+						live: &live,
 					},
 				)?;
 				let listener = tasks::bind(listener_config, &ipv4_any_ports).await?;
@@ -265,7 +286,10 @@ async fn serve(config: Config, role: ServeRole) -> std::io::Result<()> {
 					mode,
 				)
 				.with_crypto(crypto.clone())
-				.with_retention_days(tasks::retention_days(&config));
+				.with_retention_days(tasks::retention_days(&config))
+				.with_folders(Arc::new(
+					crate::imap::special_use::FolderPolicy::from_config(&config),
+				));
 				if let Some((_, queue)) = &bayes {
 					imap_server = imap_server.with_training(queue.clone());
 				}
@@ -313,7 +337,7 @@ async fn serve(config: Config, role: ServeRole) -> std::io::Result<()> {
 					}
 				};
 				let listener = tasks::bind(listener_config, &ipv4_any_ports).await?;
-				let router = crate::autodiscovery::router_for(&config);
+				let router = crate::autodiscovery::router_live(&live);
 				let serve =
 					crate::autodiscovery::serve(listener, router, tls, max_conn, http_limits);
 				tasks.push(Box::pin(serve));
@@ -355,6 +379,7 @@ async fn serve(config: Config, role: ServeRole) -> std::io::Result<()> {
 							.with_url_zones(config.dnsbl_url_zones.clone()),
 					)
 					.with_first_time_delay(config.first_time_sender_delay_secs)
+					.with_inbound_policy(crate::smtp::server::InboundPolicy::from_config(&config))
 					.with_max_connections(max_conn)
 					.with_max_connections_per_ip(max_connections_per_ip)
 					.with_max_message_size(max_message_size)
@@ -362,11 +387,15 @@ async fn serve(config: Config, role: ServeRole) -> std::io::Result<()> {
 					.with_identification(crate::smtp::identification::Policy::from_config(&config))
 					.with_data_rate(data_rate)
 					.with_session_limits(session_limits)
-					.with_report_dir(config.data_dir.clone())
 					.with_data_dir(config.data_dir.clone())
 					.with_crypto(Arc::new(crypto.clone()));
+				if let Some(dir) = tasks::dmarc_journal_dir(&config) {
+					server = server.with_report_dir(dir);
+				}
 				if let Some(pool) = &reputation_pool {
-					server = server.with_reputation_pool(pool.clone());
+					if config.antispam.reputation {
+						server = server.with_reputation_pool(pool.clone());
+					}
 					if let Some((store, _)) = &bayes {
 						server = server.with_bayes(Arc::new(store.clone()));
 					}
@@ -375,6 +404,9 @@ async fn serve(config: Config, role: ServeRole) -> std::io::Result<()> {
 					server = server.with_hook(Arc::clone(hook));
 				}
 				server = server.with_attachment_policy(attachment_policy.clone());
+				if !scopes.is_inert() {
+					server = server.with_scopes(Arc::clone(&scopes));
+				}
 				if let (Some(llm_hook), Some(_)) = (&llm_hook, &reputation_pool) {
 					server = server.with_llm(crate::antispam::llm::LlmHook {
 						classifier: Arc::clone(&llm_hook.classifier),
@@ -386,6 +418,8 @@ async fn serve(config: Config, role: ServeRole) -> std::io::Result<()> {
 					server = server.with_subjectpass(pass);
 				}
 				server = server.with_metrics(Arc::clone(&metrics));
+				server =
+					server.with_refusal(config.smtp.reject_detail, config.smtp.reject_reference);
 				if let Some(sealer) = &arc_sealer {
 					server = server.with_arc_sealer(Arc::clone(sealer));
 				}
@@ -443,6 +477,10 @@ async fn serve(config: Config, role: ServeRole) -> std::io::Result<()> {
 					server = server.with_channel_binding(cbind.clone());
 				}
 				server = server.with_scram_enabled(config.auth.scram);
+				server = server.with_submission_listener(matches!(
+					listener_config.kind,
+					ListenerKind::Submission | ListenerKind::Submissions
+				));
 				server = server.with_drain(Arc::clone(&drain));
 				if let Some(budget) = memory_budget.as_ref() {
 					server = server.with_memory_budget(Arc::clone(budget));
@@ -459,6 +497,9 @@ async fn serve(config: Config, role: ServeRole) -> std::io::Result<()> {
 	let handles: Vec<tokio::task::JoinHandle<std::io::Result<()>>> =
 		tasks.into_iter().map(tokio::spawn).collect();
 	let stopped = wait::until_stopped(handles, &drain, acme_renewal).await;
+	if stopped.is_ok() {
+		evidence::record_stop(&evidence);
+	}
 	watcher.abort();
 	let _ = watcher.await;
 	crate::directory_store::remove_reload_status(&config.data_dir);

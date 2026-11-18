@@ -323,6 +323,7 @@ pub(crate) fn prepare_keys_for_update(
 	config_path: &Path,
 	database: bool,
 	certs: bool,
+	panel: bool,
 ) -> Result<Vec<String>, String> {
 	use super::super::host_secrets;
 	let mut lines: Vec<String> = host_secrets::move_legacy_keys(data_dir)?
@@ -351,8 +352,23 @@ pub(crate) fn prepare_keys_for_update(
 		lines.extend(host_secrets::acme::place(data_dir, true)?);
 		lines.extend(host_secrets::acme::retire_data_dir_copy(data_dir)?);
 	}
+	// The first update after `apt install epistle-panel` creates the panel's
+	// key and secret; a later one reuses them, and renews the key when fewer
+	// than 30 days remain. The file is written before the key changes, and the
+	// panel reads it when it starts.
+	if panel {
+		super::super::compose::panel_secrets::ensure(
+			data_dir,
+			super::super::compose::panel_secrets::now(),
+			&mut report,
+		)
+		.map_err(|error| error.to_string())?;
+	}
 	lines.extend(report.steps.iter().filter_map(|step| match step {
 		ReportStep::Wrote(path) => Some(format!("created {}", path.display())),
+		ReportStep::Updated(path) if panel_secret(data_dir, path) => {
+			Some(format!("replaced {}", path.display()))
+		}
 		_ => None,
 	}));
 	// The update holds the common lock and the generated file's lock while it
@@ -376,4 +392,12 @@ pub(crate) fn prepare_keys_for_update(
 		));
 	}
 	Ok(lines)
+}
+
+/// Whether `path` is one of the panel's secret files, whose replacement the
+/// operator is told about: the panel reads them when it starts.
+fn panel_secret(data_dir: &Path, path: &Path) -> bool {
+	super::super::compose::panel_secrets::paths(data_dir)
+		.iter()
+		.any(|own| own == path)
 }

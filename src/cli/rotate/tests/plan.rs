@@ -48,13 +48,6 @@ fn the_json_plan_lists_every_row_with_who_does_what() {
 }
 
 #[test]
-fn without_dry_run_nothing_is_printed_and_nothing_runs() {
-	let (code, out) = run(true, false, false);
-	assert_eq!(code, ExitCode::from(3));
-	assert!(out.is_empty());
-}
-
-#[test]
 fn without_all_it_is_a_usage_error() {
 	let (code, out) = run(false, true, false);
 	assert_eq!(code, ExitCode::from(2));

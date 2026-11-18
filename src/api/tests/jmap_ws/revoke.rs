@@ -34,6 +34,7 @@ pub(super) fn ws_state(
 				scopes: vec!["read".to_string(), "write".to_string()],
 				domains: Vec::new(),
 				account: Some(account.to_string()),
+				auto_submitted: false,
 			})
 			.expect("add key");
 	}
@@ -62,6 +63,7 @@ pub(super) fn ws_state(
 	);
 	store
 		.add(crate::directory_store::DynamicAccount {
+			reset: None,
 			send: None,
 			receive: None,
 			display_name: None,

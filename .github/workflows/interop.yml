@@ -16,9 +16,26 @@ on:
       - "src/storage/**"
       - "src/tls/**"
       - "tests/system/interop.rs"
+      # tests/system/interop.rs includes this file with #[path].
+      - "src/test_support/fixtures.rs"
       - ".github/workflows/interop.yml"
+      - ".github/actions/rust-cache/**"
       - "Cargo.toml"
       - "Cargo.lock"
+      # Same exclusions as the pull_request filter below, and for the same
+      # reason: these files only exist under #[cfg(test)].
+      - "!src/**/tests/**"
+      - "!src/**/*_tests*.rs"
+      - "!src/**/tests_*.rs"
+      - "!src/**/test_support.rs"
+      - "!src/**/tests.rs"
+      - "!src/**/*_test_support.rs"
+      - "!src/smtp/directory/fixtures/**"
+      - "!src/smtp/session/test_hooks.rs"
+      - "!src/dns/txt_fixtures.rs"
+      - "!src/hostile_public_http/**"
+      - "!src/**/testdata/**"
+      - "!src/dkim/test_*.pem"
   pull_request:
     paths:
       - "src/smtp/**"
@@ -27,18 +44,32 @@ on:
       - "src/storage/**"
       - "src/tls/**"
       - "tests/system/interop.rs"
+      # tests/system/interop.rs includes this file with #[path].
+      - "src/test_support/fixtures.rs"
       - ".github/workflows/interop.yml"
+      - ".github/actions/rust-cache/**"
       - "Cargo.toml"
       - "Cargo.lock"
       # Files that only exist under #[cfg(test)] cannot change what this job
       # builds or runs, so a pull request that touches only them does not pay
       # for it. Same exclusions as db.yml. The module that declares them
-      # (`mod tests;` in a mod.rs) is not matched, and the push above still
-      # runs everything.
+      # (`mod tests;` in a mod.rs) is not matched. The push above skips the
+      # same files: they cannot change the binary on develop either.
       - "!src/**/tests/**"
       - "!src/**/*_tests*.rs"
       - "!src/**/tests_*.rs"
       - "!src/**/test_support.rs"
+      # More names that only exist under #[cfg(test)]: the tests.rs leaves, the
+      # helper modules, the hostile HTTP harness and the keys and captures the
+      # tests read with include_bytes!.
+      - "!src/**/tests.rs"
+      - "!src/**/*_test_support.rs"
+      - "!src/smtp/directory/fixtures/**"
+      - "!src/smtp/session/test_hooks.rs"
+      - "!src/dns/txt_fixtures.rs"
+      - "!src/hostile_public_http/**"
+      - "!src/**/testdata/**"
+      - "!src/dkim/test_*.pem"
 
 # A newer push to a pull request supersedes the run in flight. Queue and
 # branch runs are never cancelled: only a pull_request event is.
@@ -59,7 +90,7 @@ jobs:
     needs: decide
     if: ${{ !cancelled() && needs.decide.outputs.run != 'false' }}
     name: protocol interop
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
     # Measured 2026-10-30: the slowest of four green runs took 3 min.
     timeout-minutes: 10
     services:
@@ -71,7 +102,7 @@ jobs:
         # Digest-pinned: `latest` is the worst case of a moving tag - the
         # reference MTA the interop tests measure against could change between
         # two runs of the same commit.
-        image: boky/postfix:latest@sha256:aafc772384232497bed875e1eb66b4d3e54ba1ebc86e2e185a6dc1dbc48182ef
+        image: boky/postfix:latest@sha256:0632783c64183446c4edeae9092a2e015fdc0c4e8a3976bdf8878a7fc2146361
         env:
           ALLOWED_SENDER_DOMAINS: epistle.interop.test localhost
         ports:
@@ -97,9 +128,22 @@ jobs:
           # Pinned to match ci.yml. This job exercises epistle against a
           # reference MTA (Postfix) and writes no SBOM of its own, but
           # `stable` here would still let protocol interop drift away from
-          # what the gate tests on a 1.99 compiler.
-          rustup toolchain install 1.99.1 --profile minimal
-          rustup default 1.99.1
+          # what the gate tests on a 1.100 compiler.
+          rustup toolchain install 1.100.0 --profile minimal
+          rustup default 1.100.0
+
+      - id: cargo-cache
+        uses: ./.github/actions/rust-cache
+        with:
+          prefix: rust-interop
 
       - name: Run protocol interop tests
         run: cargo test --locked --test interop
+
+      - name: Save the cargo cache
+        if: ${{ success() }}
+        uses: ./.github/actions/rust-cache
+        with:
+          mode: save
+          cache-hit: ${{ steps.cargo-cache.outputs.cache-hit }}
+          prefix: rust-interop

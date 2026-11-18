@@ -19,6 +19,9 @@ pub(super) enum Domain {
 	/// The `{name}` account of the path must be covered, or the answer is the
 	/// same `404` as for an account that does not exist.
 	AccountParam,
+	/// The `{domain}` of the path must be one of the key's domains, or the
+	/// answer is the same `404` as for a domain the server does not host.
+	HostedParam,
 	/// Data shared by every tenant: refused to a confined key.
 	Unconfined,
 	/// The caller proves an account with its own credentials; no key is used.
@@ -103,6 +106,12 @@ pub(super) const RULES: &[Rule] = &[
 		"confined_key_cannot_send_from_a_foreign_or_unowned_address",
 	),
 	rule(
+		"/api/v1/send/{id}",
+		"send/write",
+		Domain::Principal,
+		"another_accounts_key_gets_the_answer_for_an_id_that_does_not_exist",
+	),
+	rule(
 		"/api/v1/deliveries",
 		"read",
 		Domain::Principal,
@@ -123,9 +132,39 @@ pub(super) const RULES: &[Rule] = &[
 	),
 	rule(
 		"/api/v1/domains",
-		"read",
+		"read/write",
 		Domain::Filtered,
-		"a_scoped_key_lists_only_its_own_domains",
+		"domain_creation_requires_an_unconfined_writer",
+	),
+	rule(
+		"/api/v1/domains/{domain}",
+		"read/write",
+		Domain::HostedParam,
+		"domain_writes_are_confined_to_the_keys_domains",
+	),
+	rule(
+		"/api/v1/domains/{domain}/enable",
+		"write",
+		Domain::HostedParam,
+		"domain_writes_are_confined_to_the_keys_domains",
+	),
+	rule(
+		"/api/v1/domains/{domain}/disable",
+		"write",
+		Domain::HostedParam,
+		"domain_writes_are_confined_to_the_keys_domains",
+	),
+	rule(
+		"/api/v1/domains/{domain}/aliases",
+		"write",
+		Domain::HostedParam,
+		"domain_aliases_require_both_names_in_scope",
+	),
+	rule(
+		"/api/v1/domains/{domain}/aliases/{alias}",
+		"write",
+		Domain::HostedParam,
+		"domain_aliases_require_both_names_in_scope",
 	),
 	rule(
 		"/api/v1/accounts",
@@ -188,6 +227,12 @@ pub(super) const RULES: &[Rule] = &[
 		"the_archive_of_another_tenants_account_is_out_of_reach",
 	),
 	rule(
+		"/api/v1/events",
+		"read",
+		Domain::Filtered,
+		"an_account_change_reaches_its_own_tenant_only",
+	),
+	rule(
 		"/api/v1/queue",
 		"read",
 		Domain::Filtered,
@@ -201,7 +246,7 @@ pub(super) const RULES: &[Rule] = &[
 	),
 	rule(
 		"/api/v1/suppression",
-		"read",
+		"read/write",
 		Domain::Unconfined,
 		"the_shared_suppression_list_is_not_for_a_confined_key",
 	),
@@ -247,6 +292,12 @@ pub(super) const RULES: &[Rule] = &[
 		"none",
 		Domain::Credentials,
 		"device_approve_rejects_bad_credentials_and_unknown_code",
+	),
+	rule(
+		"/oauth/revoke",
+		"none",
+		Domain::Credentials,
+		"revocation_is_per_token_id_idempotent_and_survives_restart",
 	),
 	rule(
 		"/oauth/authorize",

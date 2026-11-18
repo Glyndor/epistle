@@ -20,6 +20,7 @@ pub(super) struct Envelope<'a> {
 pub(super) fn build(
 	request: &SendRequest,
 	envelope: &Envelope<'_>,
+	auto_submitted: bool,
 	max_message_size: usize,
 ) -> Result<Vec<u8>, ApiError> {
 	let mut headers = vec![format!("From: {}\r\n", envelope.from)];
@@ -44,10 +45,13 @@ pub(super) fn build(
 	headers.push(line(compose::unstructured("Subject", &request.subject))?);
 	headers.push(format!("Date: {}\r\n", envelope.date));
 	headers.push(format!("Message-ID: {}\r\n", envelope.message_id));
-	headers.extend(request.extra_headers()?);
+	headers.extend(request.extra_headers(auto_submitted)?);
 
 	if request.attachments.len() + request.inline.len() > MAX_PARTS {
-		return Err(ApiError::invalid_input("Too many attachments."));
+		return Err(ApiError::field_out_of_range(
+			"attachments",
+			"Too many attachments.",
+		));
 	}
 	let mut bodies = Bodies {
 		text: request
@@ -64,7 +68,8 @@ pub(super) fn build(
 	}
 	for part in &request.inline {
 		if part.content_id.is_none() {
-			return Err(ApiError::invalid_input(
+			return Err(ApiError::field_missing(
+				"inline",
 				"Every inline part needs a content_id.",
 			));
 		}
@@ -81,7 +86,9 @@ pub(super) fn build(
 fn leaf(part: &PartRequest, disposition: Disposition) -> Result<Leaf, ApiError> {
 	let data = base64::engine::general_purpose::STANDARD
 		.decode(part.data.as_bytes())
-		.map_err(|_| ApiError::invalid_input("Attachment data must be base64."))?;
+		.map_err(|_| {
+			ApiError::value_not_allowed("attachments", "Attachment data must be base64.")
+		})?;
 	let content_type = match part.content_type.trim() {
 		"" => compose::content_type_for(part.name.as_deref(), &data).to_string(),
 		given => given.to_string(),

@@ -64,7 +64,7 @@ async fn store(client: &mut Tls, command: &str) -> String {
 async fn store_over_the_keyword_cap_is_refused_and_the_message_is_untouched() {
 	let (server, mut client) = with_message().await;
 	let over = store(&mut client, &format!("F STORE 1 FLAGS ({})", keywords(33))).await;
-	assert_eq!(over, "F BAD too many keywords (max 32)\r\n");
+	assert_eq!(over, "F BAD [LIMIT] too many keywords (max 32)\r\n");
 	assert_eq!(
 		flags_of_message(&mut client).await,
 		"* 1 FETCH (FLAGS ())\r\n"
@@ -107,7 +107,7 @@ async fn a_keyword_longer_than_64_bytes_is_refused_over_the_wire() {
 	let over = "a".repeat(65);
 	assert_eq!(
 		store(&mut client, &format!("F STORE 1 FLAGS ({over})")).await,
-		"F BAD unsupported flag\r\n"
+		"F BAD [CLIENTBUG] unsupported flag\r\n"
 	);
 	assert_eq!(
 		flags_of_message(&mut client).await,
@@ -127,11 +127,11 @@ async fn append_over_either_keyword_limit_is_refused_and_stores_no_message() {
 	for (flags, refusal) in [
 		(
 			format!("({}) ", keywords(33)),
-			"A BAD too many keywords (max 32)\r\n",
+			"A BAD [LIMIT] too many keywords (max 32)\r\n",
 		),
 		(
 			format!("({}) ", "a".repeat(65)),
-			"A BAD unsupported flag\r\n",
+			"A BAD [CLIENTBUG] unsupported flag\r\n",
 		),
 	] {
 		let reply = append(&mut client, &flags).await;

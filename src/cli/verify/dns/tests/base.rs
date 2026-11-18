@@ -364,7 +364,7 @@ fn on_a_terminal_each_record_carries_its_symbol_inside_the_width() {
 	)
 	.expect("config");
 	let runtime = tokio::runtime::Runtime::new().expect("runtime");
-	fake::with_stdout(Decor::coloured(40), || {
+	let _ = fake::with_stdout(Decor::coloured(40), || {
 		runtime.block_on(report(
 			&["example.org".to_string()],
 			"mail.example.org",

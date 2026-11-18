@@ -85,7 +85,9 @@ jobs:
     # behaviour is for the daily cadence.
     needs: audit
     if: failure() && github.event_name != 'pull_request'
+    # Fixed on GitHub's runners, never CI_RUNNER: holds `issues: write`.
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       # `contents: read` for the checkout of the combine script below;
       # `issues: write` to open or comment on the issue.
@@ -163,7 +165,9 @@ jobs:
     # required check.
     needs: audit
     if: success() && github.event_name != 'pull_request'
+    # Fixed on GitHub's runners, never CI_RUNNER: holds `issues: write`.
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       issues: write
     steps:

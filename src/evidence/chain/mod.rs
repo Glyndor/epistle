@@ -137,10 +137,11 @@ impl Chain {
 	fn start_reference(&self, evidence_root: &Path) -> TimeRef {
 		let head = super::head::load(evidence_root).map(|head| head.map(|head| head.time));
 		let newest = self.newest_time();
+		let stop = super::timeref::stop::note(evidence_root);
 		match (head, newest) {
-			(Ok(head), Ok(newest)) => TimeRef::new(head.max(newest).unwrap_or(0)),
-			(Err(_), Ok(Some(newest))) => TimeRef::new(newest),
-			(Ok(Some(head)), Err(_)) => TimeRef::new(head),
+			(Ok(head), Ok(newest)) => TimeRef::new(head.max(newest).unwrap_or(0)).after_stop(stop),
+			(Err(_), Ok(Some(newest))) => TimeRef::new(newest).after_stop(stop),
+			(Ok(Some(head)), Err(_)) => TimeRef::new(head).after_stop(stop),
 			(head, newest) => {
 				tracing::error!(
 					head = ?head.err().map(|error| error.kind()),

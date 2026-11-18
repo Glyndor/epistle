@@ -85,7 +85,8 @@ fn set_keeps_every_key_it_does_not_change() {
 		std::fs::metadata(&compose)
 			.expect("stat")
 			.permissions()
-			.mode() & 0o777,
+			.mode()
+			& 0o777,
 		0o600
 	);
 }

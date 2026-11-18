@@ -4,7 +4,7 @@ A self-hosted mail server for your own domains. epistle runs SMTP, IMAP, POP3
 and JMAP with modern email security, on rootless Podman, driven from one CLI.
 It has no web interface: you run it through the CLI and its API.
 
-[![CI](https://github.com/Glyndor/epistle/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/Glyndor/epistle/actions/workflows/ci.yml)
+[![CI](https://github.com/Glyndor/epistle/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Glyndor/epistle/actions/workflows/ci.yml)
 
 ## Features
 
@@ -27,7 +27,7 @@ sudo epistle stack up
 ```
 
 The installer adds the signed Glyndor apt repository and runs
-`sudo apt install epistle`, which brings Podman and podup. `init` writes the
+`sudo apt install epistle`, which brings Podman, podup and `wireguard-tools`. The tools are only installed: epistle configures no WireGuard interface. `init` writes the
 configuration, and `stack up` starts the containers and brings them back after
 a reboot. `apt upgrade` keeps the server current.
 
@@ -73,11 +73,15 @@ network at all and are reached only through Unix sockets.
 | [Storage](docs/storage.md) | On-disk layout, at-rest encryption, the spool hardening |
 | [DNS setup](docs/dns.md) | The records to publish and the supported DNS providers |
 | [IP warm-up](docs/operations/warmup.md) | Ramping a new sending address up per receiver group |
+| [Receiver groups](docs/operations/queue.md) | The provider behind a recipient domain, the queue they share, and the limits each group has |
+| [Sender panels](docs/operations/providers.md) | Enrolling in the provider portals (Postmaster Tools, SNDS, the Yahoo complaint loop), what each shows and the limits it asks the sender to stay inside |
 | [Attachments](docs/attachments.md) | What the attachment policy detects, its defaults and limits |
 | [Evidence of sending](docs/evidence.md) | Mail classes, the signed and timestamped evidence log, bundles a third party can check |
 | [Recovery after a compromise](docs/operations/recovery.md) | What rotating keys fixes and does not, the order to work in, what to tell users |
 | [Migration](docs/operations/migration.md) | Moving from Mox, Stalwart or any IMAP server |
+| [Reboot test](docs/operations/reboot-test.md) | A script that reboots a throwaway machine and proves the stack came back with nothing recreated, pulled or built |
 | [Container stack](docs/operations/container.md) | What `epistle stack` runs and how it is built |
+| [Certificates container](docs/operations/container-split.md) | The optional `certs` container that holds the DNS credential and the ACME account key |
 | [Security](docs/security.md) and [threat model](docs/threat-model.md) | The controls, what they protect and what they assume |
 | [ASVS mapping](docs/asvs.md) | The controls mapped to OWASP ASVS |
 | [Performance](docs/operations/performance.md) | The measured hot paths and how to reproduce them |

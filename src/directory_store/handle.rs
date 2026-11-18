@@ -29,6 +29,16 @@ impl DirectoryHandle {
 		Arc::clone(&self.inner.read().expect("directory lock"))
 	}
 
+	/// [`Directory::account_is_live`] on the current directory, without
+	/// taking a snapshot: the check a signed-in session runs before each
+	/// command.
+	pub fn account_is_live(&self, account: &str) -> bool {
+		self.inner
+			.read()
+			.expect("directory lock")
+			.account_is_live(account)
+	}
+
 	/// Replace the directory.
 	pub fn replace(&self, directory: Directory) {
 		*self.inner.write().expect("directory lock") = Arc::new(directory);

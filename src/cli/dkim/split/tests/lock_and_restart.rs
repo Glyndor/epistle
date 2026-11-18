@@ -67,7 +67,7 @@ fn a_dry_run_after_a_real_run_still_waits_for_the_lock() {
 	let install = Install::new(&["a.example.org", "b.example.org"], "");
 	let zone = Zone::default();
 	let (provider, resolver) = services(&zone);
-	run(&install, &SPLIT, Some(provider), &resolver);
+	let _ = run(&install, &SPLIT, Some(provider), &resolver);
 	assert!(install.data().join("dkim-split.lock").exists());
 	let _first = split_state::lock(&install.data(), Duration::from_millis(100)).unwrap();
 	let (provider, resolver) = services(&zone);
@@ -113,7 +113,7 @@ fn repeating_a_pending_restart_that_fails_again_exits_4() {
 	without_stack(&install);
 	let zone = Zone::default();
 	let (provider, resolver) = services(&zone);
-	run(&install, &SPLIT, Some(provider), &resolver);
+	let _ = run(&install, &SPLIT, Some(provider), &resolver);
 	with_stack(&install);
 	let (provider, resolver) = services(&zone);
 	let (code, out, _, restarts) =

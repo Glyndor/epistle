@@ -91,11 +91,7 @@ fn copy_email(
 		.map(|(name, _)| name.clone())
 		.unwrap_or_else(|| "INBOX".to_string());
 	let raw = objects::find_email_raw(data_dir, source, id, crypto).ok_or("notFound")?;
-	if over_quota(data_dir, account, crypto, quota, raw.len()) {
-		return Err("overQuota");
-	}
-	let new_id = crate::imap::mailbox::append(data_dir, account, &target, &[], &raw, crypto)
-		.map_err(|_| "serverFail")?;
+	let new_id = append_within_quota(data_dir, account, &target, &[], &raw, crypto, quota)?;
 	Ok(json!({
 		"id": new_id.to_string(),
 		"blobId": new_id.to_string(),
@@ -194,12 +190,9 @@ pub(super) fn email_set(
 	])
 }
 
-/// Create a message from a JMAP Email object (Email/set create): build the
-/// RFC 5322 message (RFC 8621 section 4.6) and store it in the target
-/// mailbox. The error is the SetError to answer with.
 /// Whether storing `bytes` more would take `account` past its storage quota,
-/// counted as the upload and IMAP count it. `None` means the account has no
-/// limit.
+/// counted as the upload and IMAP count it, with the bytes that uploads in
+/// flight have reserved. `None` means the account has no limit.
 fn over_quota(
 	data_dir: &std::path::Path,
 	account: &str,
@@ -208,11 +201,38 @@ fn over_quota(
 	bytes: usize,
 ) -> bool {
 	quota.is_some_and(|limit| {
-		super::blobs::account_usage_bytes(data_dir, account, crypto).saturating_add(bytes as u64)
+		super::blobs::account_usage_bytes(data_dir, account, crypto)
+			.saturating_add(crate::smtp::quota::reserved_bytes(data_dir, account))
+			.saturating_add(bytes as u64)
 			> limit
 	})
 }
 
+/// Store `raw` in `mailbox` when the account stays within its quota. The
+/// check and the write run under the account's admission lock, the one IMAP
+/// APPEND and delivery take, so parallel requests of one account share a
+/// single admission. The error is the JMAP SetError type to answer with.
+fn append_within_quota(
+	data_dir: &std::path::Path,
+	account: &str,
+	mailbox: &str,
+	flags: &[crate::imap::mailbox::Flag],
+	raw: &[u8],
+	crypto: &crate::storage::MessageCrypto,
+	quota: Option<u64>,
+) -> Result<uuid::Uuid, &'static str> {
+	let lock = crate::smtp::quota::delivery_lock_for(data_dir, account);
+	let _admission = lock.lock().unwrap_or_else(|e| e.into_inner());
+	if over_quota(data_dir, account, crypto, quota, raw.len()) {
+		return Err("overQuota");
+	}
+	crate::imap::mailbox::append(data_dir, account, mailbox, flags, raw, crypto)
+		.map_err(|_| "serverFail")
+}
+
+/// Create a message from a JMAP Email object (Email/set create): build the
+/// RFC 5322 message (RFC 8621 section 4.6) and store it in the target
+/// mailbox. The error is the SetError to answer with.
 fn create_email(
 	spec: &Value,
 	sources: &super::email_build::Sources<'_>,
@@ -239,11 +259,8 @@ fn create_email(
 		out
 	};
 	let raw = super::email_build::build(spec, sources, max_message_size)?;
-	if over_quota(data_dir, account, crypto, quota, raw.len()) {
-		return Err(json!({ "type": "overQuota" }));
-	}
-	let id = crate::imap::mailbox::append(data_dir, account, &mailbox, &flags, &raw, crypto)
-		.map_err(|_| json!({ "type": "serverFail" }))?;
+	let id = append_within_quota(data_dir, account, &mailbox, &flags, &raw, crypto, quota)
+		.map_err(|reason| json!({ "type": reason }))?;
 	Ok(json!({
 		"id": id.to_string(),
 		"blobId": id.to_string(),
@@ -356,7 +373,12 @@ fn apply_email_update(
 				let keyword = patch
 					.get("keywords")
 					.and_then(|_| crate::imap::junk_trainer::junk_signal(&current_flags, &flags));
-				let moved = crate::imap::junk_moves::move_signal(&source, target, true);
+				let moved = crate::imap::junk_moves::move_signal_for(
+					&crate::imap::special_use::Roles::load(data_dir, account),
+					&source,
+					target,
+					true,
+				);
 				// One message teaches one verdict: the move wins when the
 				// two disagree, and nothing is queued twice when they agree.
 				if let Some(signal) = moved.or(keyword)

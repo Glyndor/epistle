@@ -45,7 +45,7 @@ fn failed_select_when_nothing_was_selected_lacks_closed() {
 	let mut session = logged_in(dir.path());
 	let response = text(&session.command_line("a1 SELECT StillMissing"));
 	assert_eq!(
-		response, "a1 NO no such mailbox\r\n",
+		response, "a1 NO [NONEXISTENT] no such mailbox\r\n",
 		"first failing SELECT must not carry [CLOSED] when nothing was selected"
 	);
 

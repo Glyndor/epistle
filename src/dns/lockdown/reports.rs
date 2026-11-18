@@ -31,7 +31,7 @@ pub fn recent_dmarc_failures(
 	let root = data_dir.join("reports").join("dmarc");
 	let mut failing: BTreeMap<String, u64> = BTreeMap::new();
 	let mut seen = false;
-	let Ok(days) = crate::util::fs_walk::read_dir(&root) else {
+	let Ok(days) = crate::util::fs_walk::rooted::read_dir(data_dir, &root) else {
 		return (Vec::new(), false);
 	};
 	for day in days.flatten() {
@@ -41,7 +41,7 @@ pub fn recent_dmarc_failures(
 		if name.len() != 8 || !name.bytes().all(|b| b.is_ascii_digit()) || name < oldest {
 			continue;
 		}
-		let Ok(files) = crate::util::fs_walk::read_dir(day.path()) else {
+		let Ok(files) = crate::util::fs_walk::rooted::read_dir(data_dir, day.path()) else {
 			continue;
 		};
 		for file in files.flatten() {
@@ -49,8 +49,16 @@ pub fn recent_dmarc_failures(
 			if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
 				continue;
 			}
-			let Ok(text) = crate::util::fs_walk::read_to_string(&path) else {
-				continue;
+			let text = match crate::util::fs_walk::rooted::read_to_string(data_dir, &path) {
+				Ok(text) => text,
+				Err(error) => {
+					// A name that is not plain UTF-8 cannot be read; say so
+					// instead of dropping a report that counts for the warning.
+					if error.kind() == std::io::ErrorKind::InvalidInput {
+						crate::util::fs_walk::warn_skipped(&path);
+					}
+					continue;
+				}
 			};
 			for line in text.lines().filter(|l| !l.trim().is_empty()) {
 				let Ok(report) = serde_json::from_str::<DmarcReport>(line) else {

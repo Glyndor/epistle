@@ -48,13 +48,7 @@ fn ids_are_unique_and_every_entry_is_filled_in() {
 
 #[test]
 fn the_kinds_the_procedure_cannot_do_yet_point_at_the_tracking_issue() {
-	for id in [
-		"storage-encryption-key",
-		"tenant-storage-key",
-		"account-password",
-		"account-totp-secret",
-		"totp-seed-in-clear",
-	] {
+	for id in ["storage-encryption-key", "tenant-storage-key"] {
 		let entry = entry(id);
 		for handling in [&entry.rotate, &entry.revoke] {
 			assert!(

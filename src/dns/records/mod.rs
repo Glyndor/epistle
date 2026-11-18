@@ -105,6 +105,42 @@ fn host_zone(hostname: &str, domains: &[String]) -> String {
 /// selectors that actually sign each domain.
 pub type DomainDkim = std::collections::HashMap<String, Vec<(String, String)>>;
 
+/// The TXT records the operator supplies: one per entry of
+/// `[dns_publish] extra_txt`, in the zone of the hosted domain that holds
+/// the name. A name no hosted domain holds is left out: epistle has no zone
+/// to publish it in, and the configuration refuses such an entry anyway.
+pub fn extra_txt_records(
+	domains: &[String],
+	extras: &[crate::config::ExtraTxt],
+) -> Vec<PublishRecord> {
+	extras
+		.iter()
+		.filter_map(|extra| {
+			let name = crate::dns::names::canonical_name(&extra.name);
+			let zone = hosting_domain(&name, domains)?;
+			Some(PublishRecord {
+				zone,
+				record: DnsRecord {
+					name,
+					kind: RecordKind::Txt,
+					value: extra.value.clone(),
+					ttl: TTL,
+					proxied: None,
+				},
+			})
+		})
+		.collect()
+}
+
+/// The hosted domain that holds `name`, the longest one that does.
+fn hosting_domain(name: &str, domains: &[String]) -> Option<String> {
+	domains
+		.iter()
+		.map(|domain| crate::dns::names::canonical_name(domain))
+		.filter(|domain| crate::dns::names::in_domain(name, domain))
+		.max_by_key(|domain| domain.len())
+}
+
 /// The records to publish for the given domains and mail hostname.
 ///
 /// `dkim_default` lists every `<selector>._domainkey` value to emit (one per

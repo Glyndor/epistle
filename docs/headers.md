@@ -2,9 +2,7 @@
 
 What epistle writes into a message, what it takes out, and what it leaves
 alone, for each way a message enters or leaves the server. It describes the
-code as it is today, not as it is meant to become. If you build on it, read
-[Planned changes](#planned-changes) first: some of what this page says will
-move.
+code as it is.
 
 The tests read this page. `tests/contracts/headers_documented.rs` fails when the source
 writes or removes a header this page does not name, and
@@ -18,9 +16,9 @@ DKIM table below to the signed names and their repetition counts in CI.
 | Path | Added by epistle | Removed or rewritten | Passed through unchanged |
 |---|---|---|---|
 | **SMTP submission** (587, 465, after AUTH) | `Received`; `Message-ID` and `Date` only when the client left them out; `DKIM-Signature` on the copy that leaves the server; `Precedence: bulk` for marketing mail; the [identification headers](#identification-headers) | `Bcc` and `Resent-Bcc`; `Epistle-Class`; any `Received` the client wrote (the server writes its own); `Authentication-Results`; every `X-Epistle-*`; any `Precedence` the client wrote, for marketing mail | Everything else, including a `Return-Path` or `Delivered-To` the client wrote |
-| **REST API** (`POST /api/v1/send`) | `From`, `Subject`, `Date`, `Message-ID`, `MIME-Version`, `Content-Type` always; `To`, `Sender`, `Cc`, `Reply-To`, `In-Reply-To`, `References`, `Importance` with `X-Priority`, `List-Unsubscribe` with `List-Unsubscribe-Post`, `Auto-Submitted`, `Feedback-ID` and your `X-` headers when the request has the field; `Content-Transfer-Encoding`, `Content-Disposition`, `Content-ID` for bodies and attachments; `DKIM-Signature` on the copy that leaves the server; `Precedence: bulk` for marketing mail; the [identification headers](#identification-headers) | `x-priority`, the one custom name a request may not send, because `importance` writes it. Every other `X-` name is accepted: `X-Epistle` and every name under it with a hyphen reach the message and are removed by the submission exactly as on SMTP, while `X-Epistlefoo` is the sender's and survives. No `Received` or `Authentication-Results` can be sent at all: a custom header has to be named `X-` | Nothing: the request names every header, and only the fields listed in the [API guide](api.md) turn into one |
+| **REST API** (`POST /api/v1/send`) | `From`, `Subject`, `Date`, `Message-ID`, `MIME-Version`, `Content-Type` always; `To`, `Sender`, `Cc`, `Reply-To`, `In-Reply-To`, `References`, `Importance` with `X-Priority`, `List-Unsubscribe` with `List-Unsubscribe-Post`, `Auto-Submitted`, `X-Auto-Response-Suppress`, `Feedback-ID` and your `X-` headers when the request has the field; `Content-Transfer-Encoding`, `Content-Disposition`, `Content-ID` for bodies and attachments; `DKIM-Signature` on the copy that leaves the server; `Precedence: bulk` for marketing mail; the [identification headers](#identification-headers) | `X-Priority` and `X-Auto-Response-Suppress`, reserved for the named request fields. Every other `X-` name is accepted: `X-Epistle` and every name under it with a hyphen reach the message and are removed by the submission exactly as on SMTP, while `X-Epistlefoo` is the sender's and survives. No `Received` or `Authentication-Results` can be sent at all: a custom header has to be named `X-` | Nothing: the request names every header, and only the fields listed in the [API guide](api.md) turn into one |
 | **JMAP** (`Email/set` then `EmailSubmission/set`) | The headers of the Email object (`From`, `Sender`, `To`, `Cc`, `Bcc`, `Reply-To`, `Subject`, `In-Reply-To`, `References`, `MIME-Version`, `Content-*`); `Message-ID` and `Date` when missing; `DKIM-Signature` on the copy that leaves the server; `Precedence: bulk` for marketing mail; the [identification headers](#identification-headers) | `Bcc` and `Resent-Bcc` at submission; `Epistle-Class`; any `Received` the draft carries; `Authentication-Results`; every `X-Epistle-*`; any `Precedence` the draft had, for marketing mail | Nothing the draft carries besides the above. Custom `header:` properties on `Email/set` create are ignored |
-| **SMTP inbound** (25, then local delivery) | `Received`; `Received-SPF`, `Authentication-Results` and the ARC set when the sender is checked; `X-Spam-Status` and `X-Spam-Score` for a junk score; `X-Epistle-Attachment-Warning` when the attachment policy flags the message; `Return-Path` and `Delivered-To` on the stored copy; `List-Id`, `List-Post`, `List-Unsubscribe` for a list address | `Authentication-Results` with our authserv-id or an unparseable authserv-id; `Received-SPF`; `X-Spam-*`; `X-Epistle-*`; `Delivered-To`; `Return-Path`; `Epistle-Class`, before adding local fields; `TLS-Required` at delivery | Other `Authentication-Results` with a parseable foreign authserv-id, as untrusted information; `DKIM-Signature`; `ARC-*`; earlier `Received`; `Bcc`; other fields not listed as removed |
+| **SMTP inbound** (25, then local delivery) | `Received`; `Received-SPF`, `Authentication-Results` and the ARC set when the sender is checked; `X-Spam-Status` and `X-Spam-Score` for a junk score; `X-Epistle-Attachment-Warning` when the attachment policy flags the message; `Return-Path` and `Delivered-To` on the stored copy; `List-Id`, `List-Post`, `List-Unsubscribe` for a list address | `Authentication-Results` with the server's own authserv-id or an unparseable authserv-id; `Received-SPF`; `X-Spam-*`; `X-Epistle-*`; `Delivered-To`; `Return-Path`; `Epistle-Class`, before adding local fields; `TLS-Required` at delivery | Other `Authentication-Results` with a parseable foreign authserv-id, as untrusted information; `DKIM-Signature`; `ARC-*`; earlier `Received`; `Bcc`; other fields not listed as removed |
 | **Forwarding** (account forward, Sieve `redirect`) | `Delivered-To` naming the forwarding address; the ARC set when an ARC key is configured | Nothing in the message; the envelope sender is rewritten with SRS when it is enabled | The original message, headers and body. No `Resent-*` and no `X-Forwarded-*` is added |
 | **Lists** (an alias with a list id) | `List-Id`, `List-Post`, `List-Unsubscribe` on each delivered copy | The `List-Id`, the `List-Post` and the `List-Unsubscribe` the copy already carried: the list claims what it is, and adds its `mailto` unsubscribe only where the copy has none | The rest of the message |
 | **Relay to the next MTA** (the queue worker) | Nothing | Nothing | The queued bytes, as signed at submission |
@@ -42,7 +40,7 @@ without regard to case.
 | Header | Where it comes from | Notes |
 |---|---|---|
 | `ARC-Authentication-Results`, `ARC-Message-Signature`, `ARC-Seal` | Inbound mail checked by SPF, and forwarded copies, when an ARC key is configured | One set per hop, written as `ARC-Seal`, `ARC-Message-Signature` and `ARC-Authentication-Results` right after `Authentication-Results`. `cv` is `none` for a message without a chain and carries the status of an inbound chain otherwise. A forward does not seal a message whose newest instance is already ours |
-| `Action`, `Diagnostic-Code`, `Final-Recipient`, `Remote-MTA`, `Reporting-MTA`, `Status` | Inside the `message/delivery-status` part of a failure or delay notice | RFC 3464 fields, not top-level headers. One block per recipient |
+| `Action`, `Diagnostic-Code`, `Final-Recipient`, `Remote-MTA`, `Reporting-MTA`, `Status` | Inside the `message/delivery-status` part of a failure or delay notice | RFC 3464 fields, not top-level headers. One block per recipient. `Diagnostic-Code: smtp; <reply>` quotes a remote's reply. A failure on this side of the conversation has no reply to quote, so it is `Diagnostic-Code: X-epistle; <sentence>` with a `Status` of its own: `X.7.10` when TLS is required (MTA-STS enforce, DANE, `REQUIRETLS`) and the server offers no STARTTLS, `X.7.5` for a failed TLS handshake, a certificate that matches no TLSA record, a TLSA lookup that fails, an MTA-STS policy that allows none of the mail servers, or a DNSSEC failure on the mail server records, `X.4.1` when the mail server cannot be reached and `X.4.3` when the mail servers cannot be looked up. All of them are retried, so a delay notice says `4.x.y` and the failure notice sent when the message is given up says `5.x.y`. The sentence is fixed and names the host or the domain; the delivery log keeps the same text as its reason |
 | `Arrival-Date`, `Feedback-Type`, `Original-Mail-From`, `Reported-Domain`, `Source-IP`, `User-Agent`, `Version` | Inside the `message/feedback-report` part of an abuse report | RFC 5965 fields, not top-level headers. `User-Agent` is the mail hostname in the report epistle sends on its own, and `epistle/<version>` in the report `epistle report-abuse` prints |
 | `Authentication-Results` | Inbound mail from a peer that did not log in, when a resolver is configured and the peer address is known. Never on a submission: no check of ours happens on one, so a field naming one would be a claim about a hop that did not take place, and the client's is dropped on all three paths | Authserv-id is the mail hostname. Lists `spf`, one `dkim` entry per signature (`dkim=none` without one) and `dmarc`. On unauthenticated SMTP, fields naming our hostname (case-insensitively) or with an unparseable authserv-id are removed before ours is added. Parseable foreign ids are kept below ours as untrusted information. The preamble reader accepts MIME tokens and quoted values, comments, folding and an optional numeric version |
 | `Auto-Submitted` | REST `auto_submitted` field; every system message (`auto-generated`) except the vacation reply (`auto-replied (vacation)`) and the report `epistle report-abuse` prints, which carries none | The REST field accepts `no`, `auto-generated`, `auto-replied`, `auto-notified` (RFC 3834). The server writes `auto-generated` on the mail it generates itself, bounces included, whatever the original sender asked for; `system_auto_submitted` (`true`) turns that off on every builder that reads it: the failure notice, the delay warning, alert emails, and the DMARC and TLS-RPT reports. With it off none of those leaves with the field, so nothing stops a bounce loop by that field alone and the null return path is what prevents it. The abuse report builder does not read the switch and always writes `auto-generated`, and the report `epistle report-abuse` prints carries no `Auto-Submitted` at all. A vacation reply stays `auto-replied (vacation)`: it is an answer, not a generated message |
@@ -69,7 +67,8 @@ without regard to case.
 | `TLS-Report-Domain`, `TLS-Report-Submitter` | TLS-RPT report emails | RFC 8460 |
 | `TLS-Required` | Read on submitted mail, removed from inbound mail | `TLS-Required: No` from a local sender makes the MTA-STS and DANE policies advisory for that message. Left in place when the message goes out |
 | `To` | REST (empty `to` is allowed when `cc` or `bcc` has someone); JMAP; system messages | |
-| `X-` custom headers | REST `headers` object | Up to 32, name `X-` plus letters, digits and hyphens, at most 76 characters, not `X-Priority`. Written after the other optional headers, before `MIME-Version`. The name keeps the case you gave it |
+| `X-` custom headers | REST `headers` object | Up to 32, name `X-` plus letters, digits and hyphens, at most 76 characters, neither `X-Priority` nor `X-Auto-Response-Suppress`. Written after the other optional headers, before `MIME-Version`. The name keeps the case you gave it |
+| `X-Auto-Response-Suppress` | Server-built failure/delay notices, alerts, DMARC and TLS-RPT reports; REST opt-in | `DR, NDR, RN, NRN, OOF, AutoReply`. The sibling `system_auto_response_suppress` setting defaults to `true` and controls server mail independently of `system_auto_submitted`. Abuse reports and vacation replies do not carry it. REST writes it only with `auto_response_suppress: true` |
 | `X-Epistle` | Every submission, unless `x_epistle_header` is turned off | The fixed value `1`. No version rides in it and no version field sits beside it, and a client cannot write or change it |
 | `X-Epistle-*` | Reserved for local verdicts | `X-Epistle` and every name under it with a hyphen are removed on every submission, and `X-Epistle-*` on unauthenticated SMTP ingress, before the server writes any of its own. The namespace is the name and the names under it, not a text prefix, so `X-Epistlefoo` is the sender's and survives |
 | `X-Epistle-Attachment-Warning` | Inbound mail the `[attachments]` policy flags or quarantines | Comma-separated reason codes only, never text from the message. Removed first from inbound and from every submission, so only the server's own verdict is ever in it |
@@ -165,20 +164,21 @@ each one and compares.
 
 | Message | Top-level headers |
 |---|---|
-| Failure notice | `From`, `To`, `Subject`, `Date`, `Auto-Submitted`, `MIME-Version`, `Content-Type` |
-| Delay warning | `From`, `To`, `Subject`, `Date`, `Auto-Submitted`, `MIME-Version`, `Content-Type` |
+| Failure notice | `From`, `To`, `Subject`, `Date`, `Auto-Submitted`, `X-Auto-Response-Suppress`, `MIME-Version`, `Content-Type` |
+| Delay warning | `From`, `To`, `Subject`, `Date`, `Auto-Submitted`, `X-Auto-Response-Suppress`, `MIME-Version`, `Content-Type` |
 | Vacation reply | `From`, `To`, `Subject`, `Date`, `Auto-Submitted`, `In-Reply-To`, `References`, `MIME-Version`, `Content-Type`, `Content-Transfer-Encoding` |
 | Abuse report | `From`, `To`, `Subject`, `Date`, `Auto-Submitted`, `MIME-Version`, `Content-Type` |
-| DMARC aggregate report | `Date`, `Message-ID`, `From`, `To`, `Subject`, `Auto-Submitted`, `MIME-Version`, `Content-Type` |
-| TLS-RPT report | `Date`, `Message-ID`, `From`, `To`, `Subject`, `Auto-Submitted`, `MIME-Version`, `Content-Type`, `TLS-Report-Domain`, `TLS-Report-Submitter` |
+| DMARC aggregate report | `Date`, `Message-ID`, `From`, `To`, `Subject`, `Auto-Submitted`, `X-Auto-Response-Suppress`, `MIME-Version`, `Content-Type` |
+| TLS-RPT report | `Date`, `Message-ID`, `From`, `To`, `Subject`, `Auto-Submitted`, `X-Auto-Response-Suppress`, `MIME-Version`, `Content-Type`, `TLS-Report-Domain`, `TLS-Report-Submitter` |
 
 Notes:
 
+- `X-Auto-Response-Suppress` uses the explicit list `DR, NDR, RN, NRN, OOF, AutoReply`, never `All`. `system_auto_response_suppress = false` omits it from failure/delay notices, alerts and DMARC/TLS-RPT reports independently of `Auto-Submitted`. Abuse reports and vacation replies do not carry it. REST requests omit it unless `auto_response_suppress` is true.
 - The envelope sender of a failure notice, a delay warning and a vacation reply
   is empty, so the stored copy carries `Return-Path: <>`.
 - The TLS-RPT sender adds `Date` and `Message-ID` in front of the report, and
   the alert emails carry `From`, `To`, `Subject`, `Date`, `Message-ID`,
-  `Auto-Submitted`, `MIME-Version` and `Content-Type`; those two are covered by
+  `Auto-Submitted`, `X-Auto-Response-Suppress`, `MIME-Version` and `Content-Type`; those two are covered by
   the source scan and not by the builder test.
 - A vacation reply is DKIM-signed for the domain of its `From`. A failure or
   delay notice has an empty envelope sender, so it is signed only when the mail
@@ -230,8 +230,8 @@ or to inbound mail.
   absent): a later hop can neither add one to request a read receipt or
   redirect it, nor change one that is there.
 - `Received`, `Return-Path`, `Authentication-Results`, a client's own `X-*` and
-  other fields outside the table are excluded. `X-Epistle` is the one `X-`
-  field signed: it is one of ours. Existing `Resent-*` fields are signed,
+  other fields outside the table are excluded. `X-Epistle` and
+  `X-Auto-Response-Suppress` are signed; the latter is also oversigned. Existing `Resent-*` fields are signed,
   without oversigning, so a later resending hop can prepend a new block.
 - `d=` is the domain of the single `From` when the server hosts it, and the
   domain of the envelope sender otherwise (then DMARC does not align). With no
@@ -264,6 +264,7 @@ or to inbound mail.
 | `Disposition-Notification-To` | Yes |
 | `Return-Receipt-To` | Yes |
 | `Auto-Submitted` | Yes |
+| `X-Auto-Response-Suppress` | Yes |
 | `Organization` | No |
 | `X-Epistle` | No |
 | `Resent-*` | No |
@@ -310,14 +311,7 @@ their interpretations is what the safety net covers. A reserved field the
 second pass flags turns into a permanent `550 5.7.1` and never reaches a
 mailbox.
 
-## Planned changes
+## BIMI
 
-These are not done. Do not depend on any of them yet.
-
-- BIMI. Which headers it will add or read is not decided. What the DNS side
-  needs is in the [DNS guide](dns.md#bimi-optional); the server writes no BIMI
-  header today.
-
-Until BIMI lands, the `Feedback-ID`, `List-Id`, `List-Unsubscribe`,
-`Auto-Submitted`, `Organization`, `X-Epistle` and `DKIM-Signature` rows above
-are what the server does.
+The server writes no BIMI header. What the DNS side needs is in the
+[DNS guide](dns.md#bimi-optional).

@@ -36,6 +36,8 @@ use crate::config::AcmeChallenge;
 pub(super) mod challenge;
 mod dns_credentials;
 mod host_binary;
+pub(super) mod panel_package;
+pub(super) mod panel_secrets;
 
 #[cfg(not(test))]
 pub(super) use host_binary::validate_host_binary_for;
@@ -191,9 +193,14 @@ pub(super) fn ensure_compose_file(
 	let listeners = listeners_to_write(answers)?;
 	let narrow = compose_publish::hosts_in_file(&path)
 		.map_err(|error| compose_publish::apply_read(&path, error))?;
-	let published_ports =
-		compose_publish::published(&listeners, &narrow, None, challenge_in_effect(answers));
-	let composed = ComposeFile::build(answers, published_ports.clone(), database);
+	let published_ports = compose_publish::published(
+		&listeners,
+		&narrow,
+		None,
+		challenge_in_effect(answers),
+		panel_port(answers),
+	);
+	let composed = ComposeFile::build(answers, published_ports.clone(), database, &listeners);
 	// `serde_json::to_string_pretty` is the stable pretty-printer
 	// the tests pin on: the rendered file carries a trailing
 	// newline, two-space indentation, and the field order of the
@@ -221,7 +228,7 @@ pub(super) fn ensure_compose_file(
 		report.steps.push(ReportStep::Wrote(path.clone()));
 	}
 	let clamd_config = dir.join("clamd.conf");
-	let content = "LocalSocket /run/clamav/clamd.sock\nLocalSocketMode 666\nFixStaleSocket yes\nDatabaseDirectory /var/lib/clamav\nUser clamav\nForeground yes\n";
+	let content = "LocalSocket /run/clamav/clamd.sock\nLocalSocketMode 666\nFixStaleSocket yes\nDatabaseDirectory /var/lib/clamav\nSelfCheck 600\nUser clamav\nForeground yes\n";
 	// Socket mode permits mail uid 65532 across distinct rootless user namespaces.
 	if fs::read_to_string(&clamd_config).ok().as_deref() != Some(content) {
 		crate::storage::write_secret(&clamd_config, content.as_bytes())
@@ -246,9 +253,14 @@ pub(super) fn render_for(answers: &Answers, database: bool) -> Result<String, Ap
 	let path = compose_file_path(&answers.data_dir);
 	let narrow = compose_publish::hosts_in_file(&path)
 		.map_err(|error| compose_publish::apply_read(&path, error))?;
-	let published_ports =
-		compose_publish::published(&listeners, &narrow, None, challenge_in_effect(answers));
-	let composed = ComposeFile::build(answers, published_ports, database);
+	let published_ports = compose_publish::published(
+		&listeners,
+		&narrow,
+		None,
+		challenge_in_effect(answers),
+		panel_port(answers),
+	);
+	let composed = ComposeFile::build(answers, published_ports, database, &listeners);
 	render_document(&composed)
 }
 
@@ -283,6 +295,13 @@ pub(super) fn render_for_with_host_binary(
 /// certificate authority ever connecting to the host.
 fn challenge_in_effect(answers: &Answers) -> Option<AcmeChallenge> {
 	challenge::in_config(&answers.config_path)
+}
+
+/// The panel's port, when the stack runs the panel. The mail container owns
+/// the network namespace the panel joins, so the mail service's `ports:`
+/// array carries the panel's port.
+fn panel_port(answers: &Answers) -> Option<u16> {
+	answers.services.panel_image.as_ref().map(|_| PANEL_PORT)
 }
 
 fn write_readme(dir: &Path, report: &mut Report) -> Result<(), ApplyError> {
@@ -342,6 +361,7 @@ mod file;
 mod services;
 pub(in crate::cli::init) use file::ComposeFile;
 pub(crate) use services::MAIL_STOP_GRACE_SECS;
+pub(in crate::cli::init) use services::{MAX_FRESHCLAM_CHECKS, PANEL_PORT};
 pub(super) use services::{host_hard_nofile, warn_low_nofile};
 
 #[cfg(test)]
@@ -363,6 +383,9 @@ pub(super) fn minimal_answers() -> crate::cli::init::Answers {
 		dns: None,
 		services: crate::cli::init::answers::Services {
 			antivirus: None,
+			panel: None,
+			panel_image: None,
+			freshclam_checks: None,
 			imap: true,
 			submission: true,
 			pop3: false,

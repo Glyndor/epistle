@@ -92,6 +92,7 @@ fn a_failure_notice_has_the_documented_headers() {
 		ORIGINAL,
 		now(),
 		true,
+		true,
 	)
 	.expect("a notice");
 	assert!(message.reverse_path.is_empty());
@@ -111,6 +112,7 @@ fn a_delay_warning_has_the_documented_headers() {
 		&recipients,
 		ORIGINAL,
 		now(),
+		true,
 		true,
 	)
 	.expect("a warning");
@@ -155,6 +157,7 @@ fn an_abuse_report_has_the_documented_headers() {
 #[test]
 fn a_dmarc_report_has_the_documented_headers() {
 	let email = epistle::dmarc::report::build_email(
+		"postmaster@example.org",
 		"example.net",
 		"rua@example.net",
 		"report-1",
@@ -164,6 +167,7 @@ fn a_dmarc_report_has_the_documented_headers() {
 		"mail.example.org",
 		now(),
 		b"gz",
+		true,
 		true,
 	);
 	expect("DMARC aggregate report", &email, &[]);
@@ -181,8 +185,88 @@ fn a_tls_rpt_report_has_the_documented_headers() {
 		"example.org",
 		b"gz",
 		true,
+		true,
 	);
 	// The sender puts Date and Message-ID in front of this (tlsrpt/send/mod.rs).
 	expect("TLS-RPT report", &email, &["Date", "Message-ID"]);
 	expect_auto_generated(&email);
+}
+
+#[test]
+fn system_auto_response_suppress_is_independent_of_auto_submitted() {
+	for auto_submitted in [false, true] {
+		for suppress in [false, true] {
+			let config: epistle::config::Config = toml::from_str(&format!(
+				"hostname = \"mail.example.org\"\ndata_dir = \"/tmp/epistle\"\nsystem_auto_submitted = {auto_submitted}\nsystem_auto_response_suppress = {suppress}\n"
+			)).expect("config");
+			let bounce = bounce::build(
+				"mail.example.org",
+				"sender@example.net",
+				&["rcpt@example.org".into()],
+				"550 refused",
+				ORIGINAL,
+				now(),
+				config.system_auto_submitted,
+				config.system_auto_response_suppress,
+			)
+			.expect("bounce");
+			let delay = bounce::build_delay_warning(
+				"mail.example.org",
+				"sender@example.net",
+				&[ReportRecipient::new("rcpt@example.org", "451 later")],
+				ORIGINAL,
+				now(),
+				config.system_auto_submitted,
+				config.system_auto_response_suppress,
+			)
+			.expect("delay");
+			let dmarc = epistle::dmarc::report::build_email(
+				"postmaster@example.org",
+				"example.net",
+				"rua@example.net",
+				"id",
+				0,
+				86400,
+				"example.org",
+				"mail.example.org",
+				now(),
+				b"gz",
+				config.system_auto_submitted,
+				config.system_auto_response_suppress,
+			);
+			let tls = epistle::tlsrpt::report::build_email(
+				"example.net",
+				"tlsrpt@example.net",
+				"id",
+				0,
+				86400,
+				"example.org",
+				b"gz",
+				config.system_auto_submitted,
+				config.system_auto_response_suppress,
+			);
+			for data in [&bounce.data, &delay.data, &dmarc, &tls] {
+				let text = String::from_utf8_lossy(data);
+				let headers = text.split_once("\r\n\r\n").expect("headers").0;
+				let lines: Vec<_> = headers.lines().collect();
+				assert_eq!(
+					lines.contains(&"Auto-Submitted: auto-generated"),
+					auto_submitted
+				);
+				let suppression: Vec<_> = lines
+					.iter()
+					.filter(|line| line.starts_with("X-Auto-Response-Suppress:"))
+					.copied()
+					.collect();
+				assert_eq!(
+					suppression,
+					if suppress {
+						vec!["X-Auto-Response-Suppress: DR, NDR, RN, NRN, OOF, AutoReply"]
+					} else {
+						vec![]
+					}
+				);
+			}
+		}
+	}
 }

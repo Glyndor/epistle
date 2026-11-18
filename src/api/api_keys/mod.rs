@@ -111,11 +111,16 @@ pub struct ApiKey {
 	/// The single account this key may act on, if it is not a tenant- or
 	/// server-wide administrator. An `Account(name)` principal: the key can
 	/// only read or mutate the named account, regardless of the domain
-	/// configuration. Such a key reaches only JMAP and `/api/v1/send`; every
+	/// configuration. Such a key reaches only JMAP, `/api/v1/send`,
+	/// `/api/v1/deliveries` and the named account's suppression list; every
 	/// other route refuses it with a 403 (`account_bound::confine`). `None`
 	/// (the default) leaves the key at the previous behaviour.
 	#[serde(default)]
 	pub account: Option<String>,
+	/// Whether mail sent with this key gets `Auto-Submitted: auto-generated`
+	/// when the request omits the header.
+	#[serde(default)]
+	pub auto_submitted: bool,
 }
 
 impl ApiKey {
@@ -230,6 +235,9 @@ pub struct ApiKeySummary {
 	pub domains: Vec<String>,
 	/// The account the key is bound to, if any.
 	pub account: Option<String>,
+	/// Whether mail sent with this key gets `Auto-Submitted: auto-generated`
+	/// when the request omits the header.
+	pub auto_submitted: bool,
 }
 
 /// Filesystem-backed store of management API keys.
@@ -307,6 +315,19 @@ impl ApiKeyStore {
 	/// `epistle api-key create` and a server-side rotation/update running
 	/// in parallel both reach disk without losing the other's row.
 	pub fn add(&mut self, key: ApiKey) -> std::io::Result<()> {
+		self.add_within(key, None)
+	}
+
+	/// [`Self::add`] that also refuses an account-bound key when the account
+	/// already holds as many as its cap allows (`QuotaExceeded`, carrying the
+	/// [`crate::limits::LimitReached`]). Keys that name no account are
+	/// administrative and not counted. The count and the insert are one step
+	/// under the file's lock, so racing creations admit exactly the cap.
+	pub fn add_within(
+		&mut self,
+		key: ApiKey,
+		gate: Option<&crate::limits::Gate>,
+	) -> std::io::Result<()> {
 		if let Some(spec) = &key.ip_cidr
 			&& crate::cidr::Cidr::parse(spec).is_none()
 		{
@@ -338,6 +359,22 @@ impl ApiKeyStore {
 						format!("API key \"{}\" already exists", key.label),
 					));
 				}
+				if let (Some(gate), Some(account)) = (gate, key.account.as_deref()) {
+					let held = state
+						.keys
+						.iter()
+						.filter(|other| {
+							other
+								.account
+								.as_deref()
+								.is_some_and(|name| name.eq_ignore_ascii_case(account))
+						})
+						.count();
+					gate.admit(crate::limits::Kind::ApiKeys, held)
+						.map_err(|reached| {
+							std::io::Error::new(std::io::ErrorKind::QuotaExceeded, reached)
+						})?;
+				}
 				// One secret, one key: two keys behind the same secret would
 				// leave the request with the reach of whichever the lookup
 				// meets first.
@@ -354,7 +391,17 @@ impl ApiKeyStore {
 				state.keys.push(key.clone());
 				Ok(())
 			},
-		)?;
+		)
+		// A cap keeps its kind and its text; every other refusal is
+		// reported as it always was.
+		.map_err(|error| match error {
+			crate::storage::locked::EditError::Mutate(inner)
+				if inner.kind() == std::io::ErrorKind::QuotaExceeded =>
+			{
+				inner
+			}
+			other => other.into(),
+		})?;
 		self.keys = new_state.keys;
 		Ok(())
 	}
@@ -389,13 +436,62 @@ impl ApiKeyStore {
 		Ok(())
 	}
 
+	/// Set whether mail sent with `label` gets `Auto-Submitted:
+	/// auto-generated` when the request omits the header. `NotFound` if the
+	/// label is absent.
+	pub fn set_auto_submitted(&mut self, label: &str, auto_submitted: bool) -> std::io::Result<()> {
+		let label_owned = label.to_string();
+		let new_state = crate::storage::locked::edit(
+			&self.path,
+			|text| {
+				toml::from_str::<ApiKeyFile>(text)
+					.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+			},
+			|state| {
+				toml::to_string_pretty(state)
+					.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+			},
+			ApiKeyFile::default,
+			|state: &mut ApiKeyFile| -> std::io::Result<()> {
+				let key = state
+					.keys
+					.iter_mut()
+					.find(|existing| existing.label == label_owned)
+					.ok_or_else(|| {
+						std::io::Error::new(
+							std::io::ErrorKind::NotFound,
+							format!("no such API key \"{label}\""),
+						)
+					})?;
+				key.auto_submitted = auto_submitted;
+				Ok(())
+			},
+		)
+		// Keep the closure's own error kind (`NotFound`), which the
+		// blanket conversion would turn into `Other`.
+		.map_err(|error| match error {
+			crate::storage::locked::EditError::Io(error)
+			| crate::storage::locked::EditError::Mutate(error) => error,
+		})?;
+		self.keys = new_state.keys;
+		Ok(())
+	}
+
 	/// Replace the secret of `label` with the one hashing to `hash`, keeping
-	/// its scopes, domains, expiry and CIDR. One atomic rewrite of the file:
+	/// its scopes, domains, expiry, CIDR and `auto_submitted` setting. One
+	/// atomic rewrite of the file:
 	/// the file watcher swaps the old secret for the new one in a single step,
 	/// so there is no moment with both or neither accepted. `NotFound` if the
 	/// label is absent.
 	pub fn rotate(&mut self, label: &str, hash: String) -> std::io::Result<()> {
-		self.rotate_inner(label, hash)
+		self.rotate_inner(label, hash, None)
+	}
+
+	/// [`Self::rotate`] that also sets the expiry to `expires_at`, in the same
+	/// atomic rewrite, so a renewed key never has a moment with the new secret
+	/// and the old deadline. Scopes, domains and CIDR stay as they are.
+	pub fn renew(&mut self, label: &str, hash: String, expires_at: u64) -> std::io::Result<()> {
+		self.rotate_inner(label, hash, Some(expires_at))
 	}
 
 	/// The stored digest of the key labelled `label`, which names it for the
@@ -407,7 +503,12 @@ impl ApiKeyStore {
 			.map(|key| key.hash.clone())
 	}
 
-	fn rotate_inner(&mut self, label: &str, hash: String) -> std::io::Result<()> {
+	fn rotate_inner(
+		&mut self,
+		label: &str,
+		hash: String,
+		expires_at: Option<u64>,
+	) -> std::io::Result<()> {
 		let label_owned = label.to_string();
 		let new_state = crate::storage::locked::edit(
 			&self.path,
@@ -432,6 +533,9 @@ impl ApiKeyStore {
 						)
 					})?;
 				key.hash = hash.clone();
+				if let Some(expires_at) = expires_at {
+					key.expires_at = Some(expires_at);
+				}
 				Ok(())
 			},
 		)?;
@@ -452,6 +556,7 @@ impl ApiKeyStore {
 				scopes: key.scopes.clone(),
 				domains: key.domains.clone(),
 				account: key.account.clone(),
+				auto_submitted: key.auto_submitted,
 			})
 			.collect();
 		rows.sort_by(|a, b| a.label.cmp(&b.label));

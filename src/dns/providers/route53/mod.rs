@@ -1,16 +1,21 @@
 //! An AWS Route 53 DNS provider implementing [`DnsProvider`], signed with AWS
-//! Signature Version 4 (no SDK dependency). Record changes go through
-//! `ChangeResourceRecordSets` (UPSERT/DELETE) against a configured hosted zone;
-//! `list` is not implemented (Route 53 returns XML we do not parse).
+//! Signature Version 4 (no SDK dependency), for one configured hosted zone.
+//! The zone is read with `ListResourceRecordSets` (see `list`) and written
+//! with `ChangeResourceRecordSets`; the guarded write of `publish` replaces a
+//! record set in one atomic change batch (see `guarded`).
 
 use std::pin::Pin;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::net::HttpsUrl;
 
-use crate::dns::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind, same_txt_purpose};
+use crate::dns::provider::{
+	DnsProvider, DnsRecord, ProviderError, RecordKind, ZoneOp, same_txt_purpose,
+};
 use crate::dns::providers::transport;
+use crate::dns::publish::provider::{Change, ReceiptOp, SnapshotOp};
 use crate::dns::txt::{TxtForm, same_txt_value, txt_decode, txt_encode};
+use list::{Rrset, next_page, parse_rrset};
 
 /// How Route 53 wants a TXT value written and returns it; see `change`.
 const TXT_FORM: TxtForm = TxtForm::PresentationOctal;
@@ -31,6 +36,8 @@ pub struct Route53Provider {
 	secret_key: String,
 	hosted_zone_id: String,
 	base: HttpsUrl,
+	/// The apex of the hosted zone once a lookup found it.
+	apex: std::sync::Mutex<Option<String>>,
 }
 
 impl Route53Provider {
@@ -42,6 +49,7 @@ impl Route53Provider {
 			secret_key,
 			hosted_zone_id,
 			base: HttpsUrl::from_static("https://route53.amazonaws.com"),
+			apex: std::sync::Mutex::new(None),
 		}
 	}
 
@@ -127,97 +135,6 @@ impl Route53Provider {
 			Err(ProviderError::Remote(format!("HTTP {status}")))
 		}
 	}
-}
-
-/// A record set as the API returns it (a TXT one for the TXT paths, any
-/// kind for `delete_exact`). `name` is the FQDN with the trailing dot AWS
-/// always uses; `values` is each rdata as Route 53 returns it, XML entities
-/// resolved but still quoted and escaped the way `upsert_rrset` writes it
-/// back.
-#[derive(Debug)]
-struct TxtRrset {
-	name: String,
-	kind: String,
-	ttl: u32,
-	values: Vec<String>,
-}
-
-/// Walk `LISTResourceRecordSetsResult` for the first `<ResourceRecordSet>`
-/// whose `<Name>` matches `target` and whose `<Type>` is `wanted`. The
-/// reader uses a lowercased view to find tag boundaries (the wire
-/// form is case-insensitive) and slices the original `xml` to keep
-/// the byte case of the values. The response is well-formed by API
-/// contract.
-fn parse_rrset(xml: &str, target: &str, wanted: &str) -> Option<TxtRrset> {
-	let lower = xml.to_ascii_lowercase();
-	let mut cursor = 0;
-	loop {
-		let rel_start = lower[cursor..].find("<resourcerecordset>")?;
-		let abs = cursor + rel_start;
-		let rel_end = lower[abs..].find("</resourcerecordset>")?;
-		let end = abs + rel_end;
-		let block_lower = &lower[abs..end];
-		let name = extract_tag_lower(block_lower, "name")?;
-		let kind = extract_tag_lower(block_lower, "type")?;
-		let mut values: Vec<String> = Vec::new();
-		let mut value_cursor = 0;
-		while let Some(rel_value) = block_lower[value_cursor..].find("<value>") {
-			let vstart = value_cursor + rel_value + "<value>".len();
-			let rel_close = block_lower[vstart..].find("</value>")?;
-			let vend = vstart + rel_close;
-			// Slice the original XML (the lowercased view kept the
-			// byte positions, but the bytes themselves are the
-			// lowercased ones, slice the original instead).
-			let abs_start = abs + vstart;
-			let abs_end = abs + vend;
-			values.push(xml_unescape(&xml[abs_start..abs_end]));
-			value_cursor = vend;
-		}
-		if kind.eq_ignore_ascii_case(wanted)
-			&& name
-				.trim_end_matches('.')
-				.eq_ignore_ascii_case(target.trim_end_matches('.'))
-		{
-			let ttl: u32 = extract_tag_lower(block_lower, "ttl")
-				.and_then(|s| s.parse().ok())
-				.unwrap_or(300);
-			return Some(TxtRrset {
-				name,
-				kind: wanted.to_ascii_uppercase(),
-				ttl,
-				values,
-			});
-		}
-		cursor = end + "</resourcerecordset>".len();
-	}
-}
-
-/// The text content of the first `<tag>...</tag>` in `block_lower`,
-/// with both halves already lowercased. The caller picks the original
-/// bytes from `xml` if it needs case preserved.
-fn extract_tag_lower(block_lower: &str, tag: &str) -> Option<String> {
-	let open = format!("<{tag}>");
-	let close = format!("</{tag}>");
-	let start = block_lower.find(&open)? + open.len();
-	let end = block_lower[start..].find(&close)? + start;
-	Some(block_lower[start..end].to_string())
-}
-
-/// Where the next page of a truncated ListResourceRecordSets answer
-/// starts, as `(NextRecordName, NextRecordType)`, or `None` when the list
-/// is complete.
-fn next_page(xml: &str) -> Option<(String, String)> {
-	let lower = xml.to_ascii_lowercase();
-	if extract_tag_lower(&lower, "istruncated")?.trim() != "true" {
-		return None;
-	}
-	let tag = |name: &str| {
-		let open = format!("<{name}>");
-		let start = lower.find(&open.to_ascii_lowercase())? + open.len();
-		let end = lower[start..].find(&format!("</{}>", name.to_ascii_lowercase()))? + start;
-		Some(xml_unescape(&xml[start..end]))
-	};
-	Some((tag("NextRecordName")?, tag("NextRecordType")?))
 }
 
 /// The SigV4 canonical query string of `url`: every pair URI-encoded the
@@ -313,9 +230,22 @@ impl DnsProvider for Route53Provider {
 			self.delete_exact_inner(record).await
 		}))
 	}
-	fn list(&self, _zone: &str) -> ListOp<'_> {
-		// Route 53 lists records as XML, which this provider does not parse.
-		Box::pin(async move { Err(ProviderError::Unsupported) })
+	fn list(&self, zone: &str) -> ListOp<'_> {
+		let zone = zone.to_string();
+		Box::pin(crate::dns::providers::listing(zone.clone(), async move {
+			self.list_inner(&zone).await
+		}))
+	}
+	/// The hosted zone is the one zone this provider holds, and its apex is
+	/// the name that holds the SOA record set.
+	fn has_zone<'a>(&'a self, zone: &'a str) -> ZoneOp<'a> {
+		Box::pin(crate::dns::providers::within(self.is_apex(zone)))
+	}
+	fn publish_snapshot<'a>(&'a self, zone: &'a str) -> SnapshotOp<'a> {
+		Box::pin(self.snapshot_inner(zone))
+	}
+	fn apply_guarded<'a>(&'a self, zone: &'a str, change: Change) -> ReceiptOp<'a> {
+		Box::pin(self.apply_inner(zone, change))
 	}
 }
 
@@ -424,6 +354,8 @@ fn xml_unescape(value: &str) -> String {
 }
 
 mod exact;
+mod guarded;
+mod list;
 mod rrset;
 mod sign;
 

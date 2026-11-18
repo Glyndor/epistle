@@ -172,3 +172,94 @@ fn the_size_rule_applies_only_to_defer_with_clamd() {
 	load("max_message_size = 52428800\n[antispam]\nclamd_on_error = 'defer'\n")
 		.expect("no clamd, nothing to scan");
 }
+
+#[test]
+fn the_inbound_defaults_are_what_the_server_did_before() {
+	let config = load("").expect("default config");
+	let antispam = &config.antispam;
+	assert_eq!(antispam.scanner_hook_on_error, ClamdOnError::Accept);
+	assert_eq!(antispam.scanner_hook_timeout_secs, 30);
+	assert_eq!(
+		(antispam.greylist_mask_v4, antispam.greylist_mask_v6),
+		(32, 128)
+	);
+	assert_eq!(antispam.greylist_lifetime_secs, 86_400);
+	assert!(antispam.reputation);
+	assert_eq!(antispam.reputation_min_observations, 3);
+}
+
+#[test]
+fn the_inbound_settings_load() {
+	let config = load(
+		"greylist_delay_secs = 300\n[antispam]\nscanner_hook_on_error = 'defer'\n\
+		 scanner_hook_timeout_secs = 5\ngreylist_mask_v4 = 24\ngreylist_mask_v6 = 64\n\
+		 greylist_lifetime_secs = 604800\nreputation = false\nreputation_min_observations = 10",
+	)
+	.expect("loads");
+	let antispam = &config.antispam;
+	assert_eq!(antispam.scanner_hook_on_error, ClamdOnError::Defer);
+	assert_eq!(antispam.scanner_hook_timeout_secs, 5);
+	assert_eq!(
+		(antispam.greylist_mask_v4, antispam.greylist_mask_v6),
+		(24, 64)
+	);
+	assert_eq!(antispam.greylist_lifetime_secs, 604_800);
+	assert!(!antispam.reputation);
+	assert_eq!(antispam.reputation_min_observations, 10);
+}
+
+/// Each floor and ceiling refuses the file, and the error names its key.
+#[test]
+fn each_inbound_floor_is_enforced_and_names_its_key() {
+	for (setting, key) in [
+		("scanner_hook_timeout_secs = 0", "scanner_hook_timeout_secs"),
+		(
+			"scanner_hook_timeout_secs = 121",
+			"scanner_hook_timeout_secs",
+		),
+		("greylist_mask_v4 = 16", "greylist_mask_v4"),
+		("greylist_mask_v4 = 33", "greylist_mask_v4"),
+		("greylist_mask_v6 = 32", "greylist_mask_v6"),
+		("greylist_lifetime_secs = 60", "greylist_lifetime_secs"),
+		(
+			"greylist_lifetime_secs = 99999999",
+			"greylist_lifetime_secs",
+		),
+		(
+			"reputation_min_observations = 2",
+			"reputation_min_observations",
+		),
+		(
+			"reputation_min_observations = 0",
+			"reputation_min_observations",
+		),
+		(
+			"reputation_min_observations = 1001",
+			"reputation_min_observations",
+		),
+	] {
+		let error = load(&format!("[antispam]\n{setting}")).expect_err(setting);
+		assert!(format!("{error:?}").contains(key), "{setting}: {error:?}");
+	}
+}
+
+#[test]
+fn the_greylist_lifetime_must_outlast_every_delay() {
+	// The server's delay is longer than the lifetime.
+	let error = load("greylist_delay_secs = 7200\n[antispam]\ngreylist_lifetime_secs = 3600")
+		.expect_err("a triplet would be forgotten first");
+	assert!(
+		format!("{error:?}").contains("greylist_lifetime_secs"),
+		"{error:?}"
+	);
+	// So is a scope's.
+	let error = load(
+		"domains = ['example.org']\n[antispam]\ngreylist_lifetime_secs = 3600\n\
+		 [[antispam_scope]]\ndomain = 'example.org'\ngreylist_delay_secs = 7200",
+	)
+	.expect_err("a scope's delay counts too");
+	assert!(
+		format!("{error:?}").contains("greylist_lifetime_secs"),
+		"{error:?}"
+	);
+}

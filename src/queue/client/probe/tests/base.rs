@@ -91,12 +91,13 @@ async fn auth_without_starttls_never_reaches_the_wire() {
 	let (client, server) = tokio::io::duplex(8192);
 	let task = tokio::spawn(scripted(server, &["250 smarthost\r\n"]));
 	let mut steps = Vec::new();
+	let secret = crate::test_support::fixtures::fresh_secret();
 	let error = probe(
 		client,
 		"smarthost",
 		"mail.example.org",
 		false,
-		Some(("user", "secret-value")),
+		Some(("user", secret.as_str())),
 		&mut steps,
 	)
 	.await

@@ -204,6 +204,7 @@ fn verify_key(secret: &str, domains: Vec<String>) -> super::api_keys::ApiKey {
 		scopes: vec!["write".to_string()],
 		domains,
 		account: None,
+		auto_submitted: false,
 	}
 }
 

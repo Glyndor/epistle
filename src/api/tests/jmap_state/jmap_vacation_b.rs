@@ -56,6 +56,7 @@ fn ann_only(dir: &std::path::Path) -> (Router, String) {
 		scopes: vec!["read".to_string(), "write".to_string(), "send".to_string()],
 		domains: Vec::new(),
 		account: Some("ann".to_string()),
+		auto_submitted: false,
 	})
 	.expect("add key");
 	drop(keys);

@@ -1,8 +1,19 @@
 name: Rust CI (reusable)
-
 on:
   workflow_call:
     inputs:
+      run-lint:
+        description: Run formatting and lint checks selected by the caller's plan
+        type: boolean
+        default: true
+      run-tests:
+        description: Run workspace tests and coverage selected by the caller's plan
+        type: boolean
+        default: true
+      run-msrv:
+        description: Check MSRV when selected by the caller's plan
+        type: boolean
+        default: true
       working-directory:
         description: Directory containing the Cargo workspace
         type: string
@@ -17,7 +28,7 @@ on:
       toolchain:
         description: Rust toolchain to pin the build, lint and test jobs to
         type: string
-        default: "1.99.1"
+        default: "1.100.0"
       coverage-threshold:
         description: Minimum line coverage percentage (0 disables the gate)
         type: number
@@ -29,7 +40,7 @@ on:
       llvm-cov-version:
         description: Exact version of the tool; bumped via .github releases
         type: string
-        default: "0.8.7"
+        default: "0.9.1"
       extra-test-os:
         description: JSON array of extra runner images to also run tests on (e.g. '["macos-latest"]')
         type: string
@@ -57,7 +68,7 @@ on:
       semver-checks-version:
         description: Exact version of the tool; bumped via .github releases
         type: string
-        default: "0.50.0"
+        default: "0.51.0"
       doc-warnings:
         description: Build the docs with -D warnings so broken doc links fail the build
         type: boolean
@@ -65,15 +76,14 @@ on:
 
 permissions:
   contents: read
-
 concurrency:
   group: rust-ci-${{ github.workflow }}-${{ github.ref }}-${{ inputs.working-directory }}
-  cancel-in-progress: true
-
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   lint:
     name: Format & lint
-    runs-on: ubuntu-latest
+    if: inputs.run-lint
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
     # Measured 2026-10-30: the slowest of four green runs took 3 min.
     timeout-minutes: 15
     defaults:
@@ -91,15 +101,11 @@ jobs:
           rustup toolchain install "$TOOLCHAIN" --profile minimal --component rustfmt,clippy
           rustup default "$TOOLCHAIN"
 
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - id: cargo-cache
+        uses: ./.github/actions/rust-cache
         with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            ${{ inputs.working-directory }}/target
-          key: rust-lint-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: rust-lint-${{ runner.os }}-
+          prefix: rust-lint
+          working-directory: ${{ inputs.working-directory }}
 
       - name: rustfmt
         run: cargo fmt --all --check
@@ -116,9 +122,37 @@ jobs:
         if: hashFiles('fuzz/Cargo.toml') != ''
         run: cargo metadata --locked --format-version 1 --manifest-path fuzz/Cargo.toml > /dev/null
 
+      - name: Save the cargo cache
+        if: ${{ success() }}
+        uses: ./.github/actions/rust-cache
+        with:
+          mode: save
+          cache-hit: ${{ steps.cargo-cache.outputs.cache-hit }}
+          prefix: rust-lint
+          working-directory: ${{ inputs.working-directory }}
+
   test:
     name: Test
-    runs-on: ubuntu-latest
+    needs: [test-suite, coverage]
+    # A skipped dependency must not hide a failed/cancelled suite. Coverage
+    # already runs every workspace test; reflect it under the required name.
+    if: ${{ always() && inputs.run-tests }}
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
+    timeout-minutes: 5
+    steps:
+      - name: Reflect the workspace suite result
+        env:
+          RESULT: ${{ inputs.coverage-threshold > 0 && needs.coverage.result || needs.test-suite.result }}
+        run: |
+          case "$RESULT" in
+            success) echo "Workspace tests passed" ;;
+            *) echo "::error::workspace tests did not pass (result: $RESULT)"; exit 1 ;;
+          esac
+
+  test-suite:
+    name: Workspace tests
+    if: inputs.run-tests && inputs.coverage-threshold == 0
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
     # Measured 2026-10-30: the slowest of four green runs took 34 min.
     timeout-minutes: 70
     defaults:
@@ -159,22 +193,27 @@ jobs:
             sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y --no-install-recommends $APT_PACKAGES
           fi
 
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - id: cargo-cache
+        uses: ./.github/actions/rust-cache
         with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            ${{ inputs.working-directory }}/target
-          key: rust-test-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: rust-test-${{ runner.os }}-
+          prefix: rust-test
+          working-directory: ${{ inputs.working-directory }}
 
       - name: Tests
         run: cargo test --locked --all-features --workspace
 
+      - name: Save the cargo cache
+        if: ${{ success() }}
+        uses: ./.github/actions/rust-cache
+        with:
+          mode: save
+          cache-hit: ${{ steps.cargo-cache.outputs.cache-hit }}
+          prefix: rust-test
+          working-directory: ${{ inputs.working-directory }}
+
   test-extra:
     name: Test (${{ matrix.os }})
-    if: inputs.extra-test-os != '[]'
+    if: inputs.run-tests && inputs.extra-test-os != '[]'
     runs-on: ${{ matrix.os }}
     # Measured 2026-10-30: the slowest of four green runs took 34 min.
     timeout-minutes: 70
@@ -203,18 +242,23 @@ jobs:
           rustup toolchain install "$TOOLCHAIN" --profile minimal
           rustup default "$TOOLCHAIN"
 
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - id: cargo-cache
+        uses: ./.github/actions/rust-cache
         with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            ${{ inputs.working-directory }}/target
-          key: rust-test-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: rust-test-${{ runner.os }}-
+          prefix: rust-test
+          working-directory: ${{ inputs.working-directory }}
 
       - name: Tests
         run: cargo test --locked --all-features --workspace
+
+      - name: Save the cargo cache
+        if: ${{ success() }}
+        uses: ./.github/actions/rust-cache
+        with:
+          mode: save
+          cache-hit: ${{ steps.cargo-cache.outputs.cache-hit }}
+          prefix: rust-test
+          working-directory: ${{ inputs.working-directory }}
 
   extra-platforms-gate:
     name: Extra platforms
@@ -228,8 +272,8 @@ jobs:
     # required check does not block a merge - which is the exact failure this job
     # exists to prevent. `if: always()` plus an explicit result check is what makes
     # it a gate rather than a decoration.
-    if: always()
-    runs-on: ubuntu-latest
+    if: ${{ always() && inputs.run-tests }}
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
     # Measured 2026-10-30: the slowest of four green runs took 1 min.
     timeout-minutes: 5
     steps:
@@ -247,8 +291,8 @@ jobs:
 
   coverage:
     name: Coverage
-    if: inputs.coverage-threshold > 0
-    runs-on: ubuntu-latest
+    if: inputs.run-tests && inputs.coverage-threshold > 0
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
     # Measured 2026-10-30: the slowest of four green runs took 36 min.
     timeout-minutes: 75
     defaults:
@@ -286,19 +330,15 @@ jobs:
             sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y --no-install-recommends $APT_PACKAGES
           fi
 
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      # The tool version is part of the key: a cache built under an older
+      # pin must not survive a version bump via the `command -v ... ||`
+      # short-circuit below, or the pin would be silently ignored.
+      - id: cargo-cache
+        uses: ./.github/actions/rust-cache
         with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            ~/.cargo/bin
-            ${{ inputs.working-directory }}/target
-          # The tool version is part of the key: a cache built under an older
-          # pin must not survive a version bump via the `command -v ... ||`
-          # short-circuit below, or the pin would be silently ignored.
-          key: rust-cov-${{ runner.os }}-${{ inputs.llvm-cov-version }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: rust-cov-${{ runner.os }}-${{ inputs.llvm-cov-version }}-
+          prefix: rust-cov-${{ inputs.llvm-cov-version }}
+          working-directory: ${{ inputs.working-directory }}
+          extra-path: ~/.cargo/bin
 
       - name: Install cargo-llvm-cov
         env:
@@ -333,10 +373,20 @@ jobs:
           sys.exit(0)
           EOF
 
+      - name: Save the cargo cache
+        if: ${{ success() }}
+        uses: ./.github/actions/rust-cache
+        with:
+          mode: save
+          cache-hit: ${{ steps.cargo-cache.outputs.cache-hit }}
+          prefix: rust-cov-${{ inputs.llvm-cov-version }}
+          working-directory: ${{ inputs.working-directory }}
+          extra-path: ~/.cargo/bin
+
   msrv:
     name: MSRV (${{ inputs.msrv }})
-    if: inputs.msrv != ''
-    runs-on: ubuntu-latest
+    if: inputs.run-msrv && inputs.msrv != ''
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
     # Measured 2026-10-30: the slowest of four green runs took 3 min.
     timeout-minutes: 15
     defaults:
@@ -354,18 +404,23 @@ jobs:
           rustup toolchain install "$MSRV" --profile minimal
           rustup default "$MSRV"
 
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - id: cargo-cache
+        uses: ./.github/actions/rust-cache
         with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            ${{ inputs.working-directory }}/target
-          key: rust-msrv-${{ inputs.msrv }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: rust-msrv-${{ inputs.msrv }}-
+          prefix: rust-msrv-${{ inputs.msrv }}
+          working-directory: ${{ inputs.working-directory }}
 
       - name: Build on the declared MSRV
         run: cargo build --locked --all-features
+
+      - name: Save the cargo cache
+        if: ${{ success() }}
+        uses: ./.github/actions/rust-cache
+        with:
+          mode: save
+          cache-hit: ${{ steps.cargo-cache.outputs.cache-hit }}
+          prefix: rust-msrv-${{ inputs.msrv }}
+          working-directory: ${{ inputs.working-directory }}
 
   msrv-gate:
     name: MSRV
@@ -374,8 +429,8 @@ jobs:
     # not a matrix - a single job interpolating an input into its own name. The
     # number stays visible in the job log and in the `MSRV (x.y)` job itself.
     needs: msrv
-    if: always()
-    runs-on: ubuntu-latest
+    if: ${{ always() && inputs.run-msrv }}
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
     # Measured 2026-10-30: the slowest of four green runs took 1 min.
     timeout-minutes: 5
     steps:
@@ -393,7 +448,7 @@ jobs:
   package:
     name: Package check
     if: inputs.package-check
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
     # Not measured (the job is skipped in this repository); a bound well above its work.
     timeout-minutes: 20
     defaults:
@@ -417,7 +472,7 @@ jobs:
   semver:
     name: Semver checks
     if: inputs.semver-check
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
     # Not measured (the job is skipped in this repository); a bound well above its work.
     timeout-minutes: 20
     defaults:
@@ -446,7 +501,7 @@ jobs:
   doc:
     name: Doc warnings
     if: inputs.doc-warnings
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
     # Measured 2026-10-30: the slowest of four green runs took 1 min.
     timeout-minutes: 10
     defaults:

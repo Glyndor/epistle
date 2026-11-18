@@ -22,8 +22,7 @@ src/imap/mailbox/         mailboxes on disk: flags, hierarchy, journal
 reach the same code the binary runs.
 
 `src/` itself holds only `lib.rs` and `main.rs`; every other file sits in a
-domain folder. Two helpers that used to sit loose now have a folder of their
-own:
+domain folder. Shared helpers have a folder of their own:
 
 ```text
 src/sasl/                 the SASL mechanisms and which ones are offered when
@@ -31,11 +30,9 @@ src/cli/util/             shared CLI helpers: stdin, token hash, secrets, key ge
 src/test_support/         credentials and process stubs shared by the unit tests
 ```
 
-The folders under `src/cli/` are the command groups. The few files that still
-sit directly in `src/cli/` (`delegation.rs`, `disabled_domain.rs`, `json_out.rs`,
-`resource.rs`, `role_addresses.rs`) wait for the module map tracked in #1211.
-Moving the product code from `src/` to `internal/`, as the organisation's
-layout standard asks, is a separate step that has not been taken yet.
+The folders under `src/cli/` are the command groups. The few files that
+sit directly in `src/cli/` are `delegation.rs`, `disabled_domain.rs`, `json_out.rs`,
+`resource.rs` and `role_addresses.rs`.
 
 ## The four rules
 
@@ -49,7 +46,7 @@ layout standard asks, is a separate step that has not been taken yet.
    does the same.
 4. `#[path]` declares a test file next to the module that uses it, or reads a
    data file next to it. A `#[path]` that splits production code across
-   files is a missing folder, and those are the ones the batches remove.
+   files is a missing folder.
 
 The tests of a module live in a folder of their own, and that is the shape the
 tree keeps.

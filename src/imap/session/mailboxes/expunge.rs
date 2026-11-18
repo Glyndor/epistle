@@ -18,7 +18,7 @@ impl Session {
 			return Output::text(format!("{tag} BAD no mailbox selected\r\n"));
 		};
 		if *read_only {
-			return Output::text(format!("{tag} NO mailbox is read-only\r\n"));
+			return Output::text(format!("{tag} NO [CANNOT] mailbox is read-only\r\n"));
 		}
 		// UIDONLY reports VANISHED with UIDs, captured before they are removed.
 		let deleted_uids: Vec<u32> = snapshot
@@ -31,7 +31,7 @@ impl Session {
 				let response = expunge_response(uidonly, &expunged, &deleted_uids);
 				Output::text(format!("{response}{tag} OK EXPUNGE completed\r\n"))
 			}
-			Err(_) => Output::text(format!("{tag} NO EXPUNGE failed\r\n")),
+			Err(_) => Output::text(format!("{tag} NO [SERVERBUG] EXPUNGE failed\r\n")),
 		}
 	}
 
@@ -60,7 +60,7 @@ impl Session {
 			return Output::text(format!("{tag} BAD no mailbox selected\r\n"));
 		};
 		if *read_only {
-			return Output::text(format!("{tag} NO mailbox is read-only\r\n"));
+			return Output::text(format!("{tag} NO [CANNOT] mailbox is read-only\r\n"));
 		}
 		let max_uid = snapshot.messages().map(|m| m.uid).max().unwrap_or(0);
 		let uids: Vec<u32> = snapshot
@@ -79,7 +79,7 @@ impl Session {
 				let response = expunge_response(uidonly, &expunged, &deleted_uids);
 				Output::text(format!("{response}{tag} OK EXPUNGE completed\r\n"))
 			}
-			Err(_) => Output::text(format!("{tag} NO EXPUNGE failed\r\n")),
+			Err(_) => Output::text(format!("{tag} NO [SERVERBUG] EXPUNGE failed\r\n")),
 		}
 	}
 }

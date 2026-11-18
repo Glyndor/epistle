@@ -4,6 +4,7 @@
 
 mod ldap;
 mod s3;
+mod sources;
 
 use std::time::Duration;
 

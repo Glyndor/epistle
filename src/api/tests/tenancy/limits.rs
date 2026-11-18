@@ -22,6 +22,7 @@ pub(super) fn unscoped_state(dir: &std::path::Path) -> ApiState {
 			scopes: vec!["read".to_string(), "write".to_string(), "send".to_string()],
 			domains: Vec::new(),
 			account: None,
+			auto_submitted: false,
 		})
 		.expect("add key");
 	drop(key_store);
@@ -85,6 +86,7 @@ pub(super) fn capped_state(dir: &std::path::Path, max_accounts: u64) -> ApiState
 			scopes: vec!["read".to_string(), "write".to_string(), "send".to_string()],
 			domains: Vec::new(),
 			account: None,
+			auto_submitted: false,
 		})
 		.expect("add key");
 	drop(key_store);

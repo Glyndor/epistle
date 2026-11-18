@@ -61,10 +61,10 @@ fn local_seconds(time: SystemTime, zone: i16) -> i64 {
 }
 
 /// The zone recorded for message `id` in `dir`; UTC when there is none.
-pub(super) fn read_zone(dir: &Path, id: Uuid) -> i16 {
+pub(super) fn read_zone(root: &Path, dir: &Path, id: Uuid) -> i16 {
 	message_file(dir, id, MessageExt::Zone)
 		.ok()
-		.and_then(|path| crate::util::fs_walk::read_to_string(&path).ok())
+		.and_then(|path| crate::util::fs_walk::rooted::read_to_string(root, &path).ok())
 		.and_then(|text| text.trim().parse::<i16>().ok())
 		.filter(|zone| zone.unsigned_abs() <= MAX_ZONE as u16)
 		.unwrap_or(0)

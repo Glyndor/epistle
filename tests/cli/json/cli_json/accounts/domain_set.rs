@@ -1,6 +1,5 @@
 //! `domain set`: the per-domain storage quota and submission rate, written
-//! to the same `domain_quotas` and `domain_submission_limits` maps that
-//! `limits set --domain` edits.
+//! to the `[domain.limits]` table of the domain state file.
 
 use serde_json::{Value, json};
 
@@ -26,9 +25,8 @@ fn refused(env: &Env, args: &[&str]) -> (Option<i32>, String, String) {
 }
 
 fn overrides(env: &Env) -> Value {
-	let output = epistle(&["limits", "--config", &env.config, "show", "--json"], b"");
-	let (_, value) = json(&output);
-	value["domain-overrides"]["example.org"].clone()
+	let (_, shown) = run_domain(env, &["show", "example.org"]);
+	json!({"quota": shown["quota"], "submission-rate": shown["submission_rate"]})
 }
 
 #[test]
@@ -43,7 +41,7 @@ fn set_then_clear_the_quota_and_the_submission_rate() {
 			0,
 			json!({
 				"result": "saved", "action": "set", "domain": "example.org",
-				"quota": 2_147_483_648_u64, "submission_rate": 50, "reload": "restart-needed",
+				"quota": 2_147_483_648_u64, "submission_rate": 50, "reload": "no-server",
 			})
 		)
 	);
@@ -63,7 +61,7 @@ fn set_then_clear_the_quota_and_the_submission_rate() {
 			0,
 			json!({
 				"result": "saved", "action": "set", "domain": "example.org",
-				"quota": null, "reload": "restart-needed",
+				"quota": null, "reload": "no-server",
 			})
 		)
 	);
@@ -111,7 +109,7 @@ fn a_dry_run_prints_the_diff_and_writes_nothing() {
 	assert!(
 		value["diff"]
 			.as_str()
-			.is_some_and(|diff| diff.contains("domain_quotas")),
+			.is_some_and(|diff| diff.contains("quota = 5242880")),
 		"diff: {}",
 		value["diff"]
 	);
@@ -178,8 +176,14 @@ fn removing_a_domain_drops_its_overrides() {
 		(0, Some("saved")),
 		"{value}"
 	);
-	let text = std::fs::read_to_string(&env.config).expect("read");
-	assert!(!text.contains("example.net"), "left behind:\n{text}");
+	// The overrides stay in the configuration file, which a domain change no
+	// longer writes, and no longer apply to a domain the server does not host.
+	let output = epistle(&["limits", "--config", &env.config, "show", "--json"], b"");
+	let (_, value) = json(&output);
+	assert!(
+		value["domain-overrides"]["example.net"].is_null(),
+		"left behind: {value}"
+	);
 }
 
 fn run_domain(env: &Env, args: &[&str]) -> (i32, Value) {

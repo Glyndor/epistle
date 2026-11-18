@@ -32,8 +32,14 @@ use serde_json::Value;
 
 use crate::jwt::{self, Algorithm};
 
+mod access;
 mod device;
+mod issue;
 mod pkce;
+mod refresh;
+mod revocation;
+mod scopes;
+pub(in crate::api) use access::is_jmap_path;
 
 pub use device::{device_approve, device_authorization};
 pub use pkce::{authorize, token};
@@ -42,8 +48,7 @@ pub use pkce::{authorize, token};
 const CODE_TTL_SECS: u64 = 600;
 /// Minimum seconds a device-flow client must wait between token polls.
 const POLL_INTERVAL_SECS: u64 = 5;
-/// Lifetime of an issued access token.
-const ACCESS_TOKEN_TTL_SECS: u64 = 3600;
+
 /// Unambiguous alphabet for the human `user_code` (no 0/O/1/I/L).
 const USER_CODE_ALPHABET: &[u8] = b"BCDFGHJKLMNPQRSTVWXZ23456789";
 
@@ -53,6 +58,8 @@ const USER_CODE_ALPHABET: &[u8] = b"BCDFGHJKLMNPQRSTVWXZ23456789";
 pub struct AuthzServer {
 	/// Base64-decoded PKCS#8 DER ES256 private key used to sign access tokens.
 	signing_key: Vec<u8>,
+	/// Public point derived from this server's signing key; never an external IdP key.
+	public_key: Vec<u8>,
 	/// `iss` claim stamped on issued tokens (the configured OAuth issuer).
 	issuer: String,
 	/// `aud` claim stamped on issued tokens (the configured OAuth audience).
@@ -61,11 +68,16 @@ pub struct AuthzServer {
 	devices: Mutex<HashMap<String, DeviceGrant>>,
 	/// Issued, not-yet-redeemed authorization codes, keyed by the `code`.
 	codes: Mutex<HashMap<String, AuthCode>>,
+	/// Lifetime of an issued access token, in seconds.
+	access_ttl: u64,
+	/// Lifetime of a refresh token in seconds; `None` issues none.
+	refresh_ttl: Option<u64>,
 	rng: SystemRandom,
 }
 
 /// A pending device authorization (RFC 8628 §3.2).
 struct DeviceGrant {
+	scopes: scopes::Scopes,
 	/// The human code the user types into the approval endpoint.
 	user_code: String,
 	/// Set to the approved account identity once approved; `None` while pending.
@@ -81,6 +93,7 @@ struct DeviceGrant {
 
 /// An issued authorization code bound to an account and a PKCE challenge.
 struct AuthCode {
+	scopes: scopes::Scopes,
 	/// The authenticated account the code was issued for.
 	account: String,
 	/// The S256 `code_challenge` the redeeming `code_verifier` must match.
@@ -98,7 +111,7 @@ struct AuthCode {
 impl AuthzServer {
 	/// Build the authorization server from the base64 PKCS#8 ES256 signing key and
 	/// the issuer/audience to stamp on issued tokens. Returns `None` if the key is
-	/// not valid base64 (fail closed: no server, no tokens).
+	/// not valid base64 or not a usable ES256 key (fail closed: no server, no tokens).
 	pub fn new(
 		signing_key_b64: &str,
 		issuer: impl Into<String>,
@@ -107,27 +120,49 @@ impl AuthzServer {
 		let signing_key = base64::engine::general_purpose::STANDARD
 			.decode(signing_key_b64.trim())
 			.ok()?;
+		use ring::signature::KeyPair;
+		let pair = ring::signature::EcdsaKeyPair::from_pkcs8(
+			&ring::signature::ECDSA_P256_SHA256_FIXED_SIGNING,
+			&signing_key,
+			&SystemRandom::new(),
+		)
+		.ok()?;
+		let public_key = pair.public_key().as_ref().to_vec();
 		Some(AuthzServer {
 			signing_key,
+			public_key,
 			issuer: issuer.into(),
 			audience: audience.into(),
 			devices: Mutex::new(HashMap::new()),
 			codes: Mutex::new(HashMap::new()),
+			access_ttl: crate::config::DEFAULT_ACCESS_TTL_SECS,
+			refresh_ttl: None,
 			rng: SystemRandom::new(),
 		})
 	}
 
-	/// Sign an access-token JWT for `account`, valid for [`ACCESS_TOKEN_TTL_SECS`]
-	/// from `now`. The `sub` is the account name, which the verifier of this
+	/// Set the token lifetimes from `[oauth]`, already validated by the loader:
+	/// the access token's in seconds, and the refresh token's, where `None`
+	/// issues no refresh token.
+	pub fn with_lifetimes(mut self, access_ttl: u64, refresh_ttl: Option<u64>) -> Self {
+		self.access_ttl = access_ttl;
+		self.refresh_ttl = refresh_ttl;
+		self
+	}
+
+	/// Sign an access-token JWT for `account`, valid for the access token
+	/// lifetime from `now`. The `sub` is the account name, which the verifier of this
 	/// server's own tokens returns as the identity. `None` only if signing
 	/// fails (fail closed).
-	fn issue_token(&self, account: &str, now: u64) -> Option<String> {
+	fn issue_token(&self, account: &str, scopes: &scopes::Scopes, now: u64) -> Option<String> {
 		let claims = serde_json::json!({
 			"sub": account,
 			"iss": self.issuer,
 			"aud": self.audience,
 			"iat": now,
-			"exp": now + ACCESS_TOKEN_TTL_SECS,
+			"exp": now.checked_add(self.access_ttl)?,
+			"scope": scopes.as_string(),
+			"jti": self.random_code()?,
 		});
 		jwt::sign(&claims, Algorithm::Es256, &self.signing_key).ok()
 	}
@@ -199,7 +234,13 @@ pub(crate) fn parse_fields(headers: &HeaderMap, body: &Bytes) -> HashMap<String,
 		match serde_json::from_slice::<Value>(body) {
 			Ok(Value::Object(map)) => map
 				.into_iter()
-				.filter_map(|(k, v)| v.as_str().map(|s| (k, s.to_string())))
+				.filter_map(|(k, v)| match v.as_str() {
+					Some(s) => Some((k, s.to_string())),
+					// An explicit malformed scope must not become an omitted
+					// scope and silently receive the default read permission.
+					None if k == "scope" => Some((k, String::new())),
+					None => None,
+				})
 				.collect(),
 			_ => HashMap::new(),
 		}
@@ -267,6 +308,24 @@ pub(crate) fn oauth_error(code: &'static str) -> Response {
 	(status, Json(serde_json::json!({ "error": code }))).into_response()
 }
 
+/// Why a grant was not redeemed: what the token endpoint answers instead.
+pub(crate) enum Refusal {
+	/// An RFC 6749 / 8628 error code.
+	Error(&'static str),
+	/// `slow_down`, with the seconds to wait.
+	SlowDown(u64),
+}
+
+impl Refusal {
+	/// The response that carries this refusal.
+	pub(crate) fn response(self) -> Response {
+		match self {
+			Refusal::Error(code) => oauth_error(code),
+			Refusal::SlowDown(seconds) => oauth_rate_limited(seconds),
+		}
+	}
+}
+
 /// OAuth throttling response with the remaining wait in whole seconds.
 fn oauth_rate_limited(seconds: u64) -> Response {
 	throttled("slow_down", seconds)
@@ -294,6 +353,7 @@ fn throttled(code: &'static str, seconds: u64) -> Response {
 pub fn public_router() -> Router<super::ApiState> {
 	Router::new()
 		.route("/oauth/token", post(token))
+		.route("/oauth/revoke", post(revocation::revoke))
 		.route("/oauth/device_authorization", post(device_authorization))
 }
 

@@ -201,10 +201,10 @@ fn served_certificate(config: &Config) -> Option<PathBuf> {
 
 /// Whether the configuration skips the TLSA record: the DANE association
 /// belongs to the `tlsa` group, so a configuration that skips it publishes
-/// none and owes none.
+/// none and owes none. The group is in the set while the operator has not
+/// said the zone is signed.
 fn skips_tlsa(config: &Config) -> bool {
 	config
-		.dns_publish
 		.skip_set()
 		.contains(crate::dns::skip::SkipGroup::Tlsa)
 }

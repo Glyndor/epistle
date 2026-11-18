@@ -47,6 +47,7 @@ pub(in crate::cli::serve) fn spawn_alert_engine(
 		spool,
 		config.hostname.clone(),
 		config.system_auto_submitted,
+		config.system_auto_response_suppress,
 	);
 	let _handle = crate::alerts::run(config.alerts.clone(), metrics, ctx);
 }

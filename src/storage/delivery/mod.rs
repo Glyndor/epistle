@@ -72,6 +72,11 @@ pub struct LocalDelivery {
 	crypto: MessageCrypto,
 	quota: crate::smtp::quota::MailboxQuota,
 	metrics: Option<std::sync::Arc<crate::metrics::Metrics>>,
+	fbl: Option<crate::reports::fbl::Fbl>,
+	folders: std::sync::Arc<crate::imap::special_use::FolderPolicy>,
+	/// Where forwarded copies may go and how many may be sent; `None`
+	/// forwards without either check.
+	forwarding: Option<std::sync::Arc<crate::forwarding::Guard>>,
 }
 
 impl LocalDelivery {
@@ -100,6 +105,9 @@ impl LocalDelivery {
 			),
 			crypto,
 			metrics: None,
+			fbl: None,
+			folders: std::sync::Arc::default(),
+			forwarding: None,
 		})
 	}
 
@@ -113,11 +121,36 @@ impl LocalDelivery {
 		self
 	}
 
+	/// Deliver by the operator's folder policy: the names of the folders a
+	/// new account starts with, and one spam folder or two.
+	pub fn with_folders(
+		mut self,
+		folders: std::sync::Arc<crate::imap::special_use::FolderPolicy>,
+	) -> Self {
+		self.folders = folders;
+		self
+	}
+
 	/// Attach a metrics handle so the report-ingest hook can count
 	/// ingested and dropped reports. Builder pattern so the default
 	/// constructor stays unchanged for every existing call site.
 	pub fn with_metrics(mut self, metrics: std::sync::Arc<crate::metrics::Metrics>) -> Self {
 		self.metrics = Some(metrics);
+		self
+	}
+
+	/// Hold every forward, Sieve redirect and vacation reply to `guard`:
+	/// its policy of where they may go and its limits on how many.
+	pub fn with_forwarding(mut self, guard: std::sync::Arc<crate::forwarding::Guard>) -> Self {
+		self.forwarding = Some(guard);
+		self
+	}
+
+	/// Read the spam complaints delivered to the feedback-loop mailbox of
+	/// `fbl` and suppress the complainant. `None` leaves that mailbox an
+	/// ordinary one.
+	pub fn with_fbl(mut self, fbl: Option<crate::reports::fbl::Fbl>) -> Self {
+		self.fbl = fbl;
 		self
 	}
 
@@ -168,8 +201,17 @@ impl LocalDelivery {
 		let account = AccountName::new(account)?;
 		let account_dir = account.root(&self.data_dir)?;
 		if !account_dir.child(FixedDir::New)?.is_dir() {
-			crate::imap::mailbox::ensure_defaults(&self.data_dir, account.as_str())?;
+			crate::imap::mailbox::ensure_defaults_with(
+				&self.data_dir,
+				account.as_str(),
+				&self.folders,
+			)?;
 		}
+		let target = mailbox.map(|name| {
+			self.folders
+				.delivery_target(&self.data_dir, account.as_str(), name)
+		});
+		let mailbox = target.as_deref();
 		// INBOX is the account root; named mailboxes live under folders/.
 		let base = match mailbox {
 			Some(name) => MailboxName::new(name)?
@@ -197,9 +239,15 @@ impl LocalDelivery {
 			&tmp_path,
 			&self.crypto.encode_for_account(account.as_str(), data)?,
 		)?;
-		fs::rename(&tmp_path, message_file(&new_dir, id, MessageExt::Eml)?)?;
-		// imap4flags: persist the Sieve-assigned flags as the IMAP sidecar.
-		io::write_flag_sidecar(&new_dir, id, flags);
+		// imap4flags: persist the Sieve-assigned flags as the IMAP sidecar
+		// before the rename that makes the message visible.
+		let sidecar = io::write_flag_sidecar(&new_dir, id, flags);
+		if let Err(error) = fs::rename(&tmp_path, message_file(&new_dir, id, MessageExt::Eml)?) {
+			if let Some(path) = sidecar {
+				let _ = fs::remove_file(path);
+			}
+			return Err(error);
+		}
 		let name = mailbox.unwrap_or("INBOX");
 		let changes = [
 			Change::email(Op::Created, id),
@@ -231,10 +279,6 @@ impl LocalDelivery {
 			return Err(SinkError::Unavailable("no recipient accounts".into()));
 		}
 		let mut delivered = Delivered::default();
-		// (Kind, domain) pairs already ingested for this message, so the report
-		// hook fires once per matching report even when an alias fans out to
-		// several accounts.
-		let mut ingested = reports::Ingested::new();
 		let mut listed = lists::ListedCopies::new(message);
 		let mut refused = 0;
 		let mut stored = 0;
@@ -247,7 +291,6 @@ impl LocalDelivery {
 				delivered_to,
 				listed.for_list(list.as_ref()),
 				mailbox,
-				&mut ingested,
 				&mut stored,
 			) {
 				Ok(one) => one,
@@ -269,14 +312,17 @@ impl LocalDelivery {
 			return Err(SinkError::MailboxFull(delivered.over_quota[0].clone()));
 		}
 		// Report-ingest hook: fires after normal delivery, never affects
-		// outcome, and never fires twice for the same (Kind, domain).
+		// outcome, and reads the message once however many recipients are report
+		// mailboxes.
 		reports::ingest_for_recipients(
 			&self.data_dir,
 			&self.directory,
 			self.metrics.as_ref(),
 			message,
-			&mut ingested,
 		);
+		if let Some(fbl) = &self.fbl {
+			reports::process_fbl(fbl, &self.data_dir, &self.directory, &self.metrics, message);
+		}
 		Ok(delivered)
 	}
 
@@ -290,7 +336,6 @@ impl LocalDelivery {
 		delivered_to: &str,
 		message: &AcceptedMessage,
 		hint: Option<&str>,
-		_ingested: &mut reports::Ingested,
 		stored_copies: &mut usize,
 	) -> Result<Delivered, SinkError> {
 		let stored = trace::final_copy(&message.reverse_path, delivered_to, &message.data);
@@ -317,13 +362,17 @@ impl LocalDelivery {
 		} else {
 			(Vec::new(), true)
 		};
+		let (forwards, mut held_back) = self.permitted_forwards(account, delivered_to, forwards);
 		let Some(mut outcome) = self.sieve_outcome(account, message) else {
 			if let Some(looped) = trace::forwarding_loop(message, delivered_to, &forwards) {
 				return Ok(looped);
 			}
+			let (forwards, limited) = self.within_forward_limits(account, delivered_to, forwards);
+			held_back |= limited;
 			// No filter (or it failed to compile): normal INBOX delivery, unless
-			// the account forwards with keep_local = false (pure forwarding).
-			if keep_local || forwards.is_empty() {
+			// the account forwards with keep_local = false (pure forwarding). A
+			// forward that was held back keeps the message here instead.
+			if keep_local || forwards.is_empty() || held_back {
 				store(None, &[])?;
 			}
 			return Ok(Delivered {
@@ -331,6 +380,7 @@ impl LocalDelivery {
 				replies: may_send
 					.then(|| self.vacation_autoreply(account, delivered_to, message, None))
 					.flatten()
+					.and_then(|reply| self.permitted_reply(account, delivered_to, reply))
 					.into_iter()
 					.collect(),
 				..Delivered::default()
@@ -357,16 +407,29 @@ impl LocalDelivery {
 		// Never redirect a bounce (null sender): that risks mail loops.
 		// Account-level forwards are additive to the user's filter; local
 		// storage follows the filter (keep_local governs only the no-filter case).
+		// Nor one that has crossed too many hops: a chain of accounts that
+		// redirect to each other ends here, as a chain of forwards does.
 		let requested = if message.reverse_path.is_empty() {
+			Vec::new()
+		} else if received_hops(&message.data) > MAX_FORWARD_HOPS {
+			if !outcome.redirects.is_empty() && self.may_say("sieve-redirect-hops", account) {
+				tracing::warn!(
+					account,
+					"a Sieve redirect was not forwarded: the message has crossed too many hops"
+				);
+			}
+			held_back |= !outcome.redirects.is_empty();
 			Vec::new()
 		} else {
 			outcome.redirects
 		};
-		let (mut redirects, unusable) = trace::deliverable(requested);
+		let (redirects, unusable) = trace::deliverable(requested);
+		let (mut redirects, refused) = self.permitted_forwards(account, delivered_to, redirects);
+		held_back |= refused;
 		// A `redirect` to something that is not an address fails, and a failed
 		// action is a run-time error: the message is kept (RFC 5228
 		// section 2.10.6) and not lost behind a redirect that never happened.
-		let mut keep = outcome.keep;
+		let mut keep = outcome.keep || held_back;
 		if unusable > 0 {
 			if self.may_say("sieve-redirect-address", account) {
 				tracing::warn!(
@@ -381,6 +444,8 @@ impl LocalDelivery {
 		if let Some(looped) = trace::forwarding_loop(message, delivered_to, &redirects) {
 			return Ok(looped);
 		}
+		let (redirects, limited) = self.within_forward_limits(account, delivered_to, redirects);
+		keep |= limited;
 		// A folder is one folder however many names reach it.
 		let mut folders: Vec<Option<String>> = Vec::new();
 		for folder in outcome.fileinto.iter().map(|name| io::sieve_mailbox(name)) {
@@ -427,6 +492,7 @@ impl LocalDelivery {
 				self.vacation_autoreply(account, delivered_to, message, outcome.vacation.as_ref())
 			})
 			.flatten()
+			.and_then(|reply| self.permitted_reply(account, delivered_to, reply))
 			.into_iter()
 			.collect();
 		Ok(Delivered {

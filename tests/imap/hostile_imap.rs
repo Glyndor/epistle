@@ -9,6 +9,8 @@ mod auth_tls;
 mod authenticate;
 #[path = "hostile_imap/compress.rs"]
 mod compress;
+#[path = "hostile_imap/compress_boundaries.rs"]
+mod compress_boundaries;
 #[path = "hostile_imap/compress_support.rs"]
 mod compress_support;
 #[path = "hostile_imap/framing.rs"]

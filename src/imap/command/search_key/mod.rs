@@ -1,10 +1,64 @@
-//! Parsing of one SEARCH `search-key` (RFC 9051 §6.4.4, RFC 3501 §6.4.4).
-//! Key names are case-insensitive: the word is upper-cased before matching.
+//! One SEARCH `search-key` (RFC 9051 §6.4.4, RFC 3501 §6.4.4) and its
+//! parser. Key names are case-insensitive: the word is upper-cased before
+//! matching.
 
 use super::parse::parse_astring;
 use super::search::find_close_paren;
-use super::{SearchKey, parse_imap_date, parse_sequence_set};
+use super::sequence_set::SequenceSet;
+use super::{parse_imap_date, parse_sequence_set};
 use crate::imap::mailbox::Flag;
+
+/// A single SEARCH criterion; multiple keys AND together.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SearchKey {
+	/// Legacy `RECENT`: always false under the zero-recent policy.
+	Recent,
+	/// `ALL`: match every message in the mailbox.
+	All,
+	/// Flag present (true) or absent (false).
+	FlagIs(Flag, bool),
+	/// Header substring: (header name lowercased, needle lowercased).
+	Header(String, String),
+	/// Substring anywhere in the message (headers + body).
+	Text(String),
+	/// Substring in the body only, after the header block (`BODY`).
+	Body(String),
+	/// Explicit message sequence set.
+	Sequence(SequenceSet),
+	/// Explicit UID set (`UID <set>`).
+	UidSet(SequenceSet),
+	/// Logical OR of two criteria.
+	Or(Box<SearchKey>, Box<SearchKey>),
+	/// Logical NOT of one criterion.
+	Not(Box<SearchKey>),
+	/// Parenthesized group: implicitly AND'd (RFC 3501 §6.4.4 search-key).
+	And(Vec<SearchKey>),
+	/// INTERNALDATE strictly before midnight UTC of this date (year, month, day).
+	Before(u32, u8, u8),
+	/// INTERNALDATE on or after midnight UTC of this date.
+	Since(u32, u8, u8),
+	/// INTERNALDATE falls within this date (midnight to midnight UTC).
+	On(u32, u8, u8),
+	/// `SENTBEFORE`: the Date header's own calendar date, time and zone
+	/// disregarded, is earlier than this date.
+	SentBefore(u32, u8, u8),
+	/// `SENTSINCE`: the Date header's calendar date is this date or later.
+	SentSince(u32, u8, u8),
+	/// `SENTON`: the Date header's calendar date is this date.
+	SentOn(u32, u8, u8),
+	/// RFC 2822 size strictly greater than n octets.
+	Larger(u32),
+	/// RFC 2822 size strictly less than n octets.
+	Smaller(u32),
+	/// CONDSTORE `MODSEQ n`: mod-sequence at or above n (RFC 7162).
+	ModSeq(u64),
+	/// WITHIN `YOUNGER n` (RFC 5032): internal date within the last `n`
+	/// seconds.
+	Younger(u32),
+	/// WITHIN `OLDER n` (RFC 5032): internal date strictly more than `n`
+	/// seconds ago.
+	Older(u32),
+}
 
 /// How deep parenthesised groups, NOT and OR may nest in one search key.
 /// Parsing, matching and dropping a key all recurse once per level, so the

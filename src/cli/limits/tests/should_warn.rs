@@ -93,14 +93,24 @@ fn the_retry_schedule_warnings_match_the_runtime_text() {
 			.is_empty(),
 		"a four-day give-up yields no SHOULD warning"
 	);
-	// A one-minute first retry with a five-day give-up: exactly one
-	// warning (the retry-base one).
-	let warnings =
-		parsed("queue_retry_base_secs = 60\nqueue_give_up_secs = 432000").retry_schedule_warnings();
+	// A two-minute first retry with a five-day give-up: exactly one
+	// warning (the retry-base one), with the value, the floor and the default.
+	let warnings = parsed("queue_retry_base_secs = 120\nqueue_give_up_secs = 432000")
+		.retry_schedule_warnings();
 	assert_eq!(
 		warnings.len(),
 		1,
-		"a one-minute first retry yields the retry-base SHOULD warning: {warnings:?}"
+		"a two-minute first retry yields the retry-base SHOULD warning: {warnings:?}"
+	);
+	for part in ["120 seconds", "1800 seconds", "the default is 60 seconds"] {
+		assert!(warnings[0].contains(part), "{part} missing: {warnings:?}");
+	}
+	// The default, left unset or written out, is not a deviation.
+	assert!(parsed("").retry_schedule_warnings().is_empty());
+	assert!(
+		parsed("queue_retry_base_secs = 60")
+			.retry_schedule_warnings()
+			.is_empty()
 	);
 	assert!(
 		parsed("queue_retry_base_secs = 1800\nqueue_give_up_secs = 432000")

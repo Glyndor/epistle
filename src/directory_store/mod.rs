@@ -36,7 +36,7 @@ pub mod sql;
 pub use sql::{SqlAccount, load_sql_accounts};
 
 pub mod ldap;
-pub use ldap::{LdapAccount, LdapAuthenticator, load_ldap_accounts};
+pub use ldap::{LdapAccount, LdapAuthenticator, LdapBusy, load_ldap_accounts};
 
 mod account;
 mod build;
@@ -46,6 +46,8 @@ mod error;
 pub use error::StoreError;
 mod handle;
 pub use handle::DirectoryHandle;
+mod hosted;
+pub use hosted::HostedDomains;
 mod store_debug;
 
 mod forward_catch_all_mutators;
@@ -70,7 +72,11 @@ pub use reload_status::{
 };
 
 mod collisions;
+mod credential_fingerprint;
+pub mod credential_reset;
+pub use credential_reset::{CredentialReset, NewPassword, ResetTarget};
 pub mod display_name;
+mod limits;
 mod mutate_store;
 mod normalize;
 pub use normalize::account_name;
@@ -91,18 +97,10 @@ struct DynamicFile {
 /// The mutable account store: static accounts + persisted dynamic ones.
 pub struct AccountStore {
 	path: PathBuf,
-	domains: Vec<String>,
-	domain_aliases: std::collections::HashMap<String, String>,
-	/// Hosted domains switched off (`disabled_domains` in the configuration).
-	disabled_domains: Vec<String>,
-	/// Hosted domains that only receive (`receive_only_domains`).
-	send_off_domains: Vec<String>,
+	/// The hosted domains, their aliases and switches. Replaced when the
+	/// domain state file is reloaded ([`AccountStore::reload_domains`]).
+	hosted: RwLock<hosted::HostedDomains>,
 	static_accounts: Vec<Account>,
-	/// Default storage quota (bytes) per domain.
-	domain_quotas: std::collections::HashMap<String, u64>,
-	/// Per-domain submission rate limit (messages/min) applied to authenticated
-	/// senders in that domain. Mirrors `domain_quotas` in shape and lifecycle.
-	domain_submission_limits: std::collections::HashMap<String, u32>,
 	/// Multi-target aliases from the static configuration.
 	aliases: Vec<crate::config::Alias>,
 	/// App passwords (secondary mail credentials) keyed by account; the
@@ -126,6 +124,9 @@ pub struct AccountStore {
 	/// mutate without going through `AccountStore`'s mutators.
 	masked: Arc<RwLock<MaskedAddressStore>>,
 	aliases_disabled: Arc<RwLock<AliasStore>>,
+	/// The caps on addresses, credentials and message sizes. Inert until
+	/// [`AccountStore::with_limits`] attaches the configuration's.
+	limits: Arc<crate::limits::Limits>,
 	/// Shared ban store consulted before any password hashing and updated
 	/// on every authentication outcome. Threaded into every rebuilt
 	/// directory by [`AccountStore::with_ban_store`]. `None` in deployments
@@ -202,11 +203,7 @@ impl AccountStore {
 		}
 		for raw in &account.addresses {
 			let address = address_reason::parse(raw).map_err(StoreError::Invalid)?;
-			if !self
-				.domains
-				.iter()
-				.any(|domain| domain.eq_ignore_ascii_case(address.domain()))
-			{
+			if !self.hosts_on_disk(address.domain())? {
 				return Err(StoreError::Invalid(address_reason::not_handled(
 					address.domain(),
 				)));
@@ -220,14 +217,17 @@ impl AccountStore {
 		account.name = normalize::account_name(&account.name);
 		normalize::account(&mut account);
 		account.display_name = display_name::stored(account.display_name.as_deref())?;
-		self.mutate_store(|state| {
+		self.mutate_store_hosted(|state| {
 			self.check_name_and_addresses(&account)?;
 			let name_taken = self
 				.static_accounts
 				.iter()
 				.map(|existing| existing.name.as_str())
 				.chain(state.accounts.iter().map(|existing| existing.name.as_str()))
-				.any(|existing| existing == account.name);
+				.any(|existing| existing == account.name)
+				|| self
+					.directory_names()
+					.any(|existing| existing.eq_ignore_ascii_case(&account.name));
 			if name_taken {
 				return Err(StoreError::Duplicate(account.name.clone()));
 			}
@@ -236,6 +236,7 @@ impl AccountStore {
 					return Err(StoreError::Duplicate(raw.to_string()));
 				}
 			}
+			self.admit_addresses(&account.name, &account.addresses, account.addresses.len())?;
 			state.accounts.push(account);
 			Ok(())
 		})?;
@@ -248,13 +249,17 @@ impl AccountStore {
 	/// dynamic account carries `name`. An address the account does not
 	/// already hold gets the checks `add` runs: `Invalid` outside the
 	/// served domains, `Duplicate` when another account, a static alias or
-	/// a masked address already routes it.
+	/// a masked address already routes it. The password, the SCRAM verifier,
+	/// the TOTP secret and a pending reset are the stored ones, whatever
+	/// `replacement` holds; `new_password` replaces the password in the same
+	/// write.
 	pub fn replace_account(
 		&self,
 		name: &str,
 		replacement: DynamicAccount,
+		new_password: Option<NewPassword>,
 	) -> Result<(), StoreError> {
-		self.mutate_store(|state| {
+		self.mutate_store_hosted(|state| {
 			let slot = state
 				.accounts
 				.iter()
@@ -262,6 +267,7 @@ impl AccountStore {
 				.ok_or_else(|| StoreError::NotFound(name.to_string()))?;
 			let mut fresh = replacement;
 			fresh.name = name.to_string();
+			credential_reset::carry(&state.accounts[slot], &mut fresh, new_password);
 			normalize::account(&mut fresh);
 			fresh.display_name = display_name::stored(fresh.display_name.as_deref())?;
 			// The same checks `add` runs, except for an address the account
@@ -280,6 +286,12 @@ impl AccountStore {
 				if self.address_taken(&state.accounts, Some(name), raw) {
 					return Err(StoreError::Duplicate(raw.to_string()));
 				}
+			}
+			// A replacement that keeps or drops addresses is never refused for
+			// a cap the account is already over; one that claims a new
+			// address must fit.
+			if !claimed.addresses.is_empty() {
+				self.admit_addresses(name, &claimed.addresses, fresh.addresses.len())?;
 			}
 			state.accounts[slot] = fresh;
 			Ok(())
@@ -347,19 +359,22 @@ impl AccountStore {
 			.expect("masked lock")
 			.entries()
 			.collect::<Vec<_>>();
-		let mut dir = Directory::new(self.domains.iter().cloned(), address_accounts)
+		let hosted = self.hosted.read().expect("hosted lock").clone();
+		let mut dir = Directory::new(hosted.domains, address_accounts)
 			.with_password_hashes(hashes)
 			.with_catch_all(catch_all)
-			.with_domain_aliases(self.domain_aliases.clone())
-			.with_disabled_domains(self.disabled_domains.iter().cloned())
-			.with_send_off_domains(self.send_off_domains.iter().cloned())
+			.with_domain_aliases(hosted.domain_aliases)
+			.with_disabled_domains(hosted.disabled)
+			.with_server_name(hosted.hostname)
+			.with_send_off_domains(hosted.send_off)
 			.with_scram(scram)
 			.with_totp(totp)
 			.with_disabled(disabled)
+			.with_credential_reset(credential_reset::names(&dynamic))
 			.with_switches(send_off, receive_off)
 			.with_account_quotas(account_quotas)
-			.with_domain_quotas(self.domain_quotas.clone())
-			.with_domain_submission_limits(self.domain_submission_limits.clone())
+			.with_domain_quotas(hosted.domain_quotas)
+			.with_domain_submission_limits(hosted.domain_submission_limits)
 			.with_forwards(forwards)
 			.with_save_sent(save_sent)
 			.with_aliases(aliases)
@@ -373,7 +388,8 @@ impl AccountStore {
 			.with_ldap(self.ldap_auth.clone())
 			.with_masked(masked)
 			.with_masked_paused(self.masked.read().expect("masked lock").paused())
-			.with_allowed_protocols(allowed_protocols);
+			.with_allowed_protocols(allowed_protocols)
+			.with_limits(Arc::clone(&self.limits));
 		if let Some(metrics) = self.metrics.clone() {
 			dir = dir.with_metrics(metrics);
 		}

@@ -50,7 +50,12 @@ async fn the_list_gives_the_date_and_the_reply_of_a_hard_bounce() {
 
 	let mut out = Vec::new();
 	assert_eq!(
-		list(&config(dir.path()), None, false, &mut out),
+		list(
+			&config(dir.path()),
+			Some("alice@example.org"),
+			false,
+			&mut out
+		),
 		ExitCode::SUCCESS
 	);
 	let out = String::from_utf8(out).expect("utf8");
@@ -69,7 +74,7 @@ async fn the_list_gives_the_date_and_the_reply_of_a_hard_bounce() {
 	assert_eq!(fields[2], "550 5.1.1 no such user");
 
 	let mut out = Vec::new();
-	list(
+	let _ = list(
 		&config(dir.path()),
 		Some("alice@example.org"),
 		true,
@@ -91,7 +96,7 @@ fn an_address_without_a_recorded_reason_lists_alone() {
 		.suppress("bob@example.net");
 
 	let mut out = Vec::new();
-	list(&config(dir.path()), None, false, &mut out);
+	let _ = list(&config(dir.path()), None, false, &mut out);
 	assert_eq!(String::from_utf8(out).expect("utf8"), "bob@example.net\n");
 }
 
@@ -99,7 +104,7 @@ fn an_address_without_a_recorded_reason_lists_alone() {
 fn an_address_added_by_hand_says_so() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let config = config(dir.path());
-	add(
+	let _ = add(
 		&config,
 		"bob@example.net",
 		None,
@@ -109,9 +114,42 @@ fn an_address_added_by_hand_says_so() {
 	);
 
 	let mut out = Vec::new();
-	list(&config, None, false, &mut out);
+	let _ = list(&config, None, false, &mut out);
 	let out = String::from_utf8(out).expect("utf8");
 	let fields: Vec<&str> = out.trim_end().split('\t').collect();
 	assert_eq!(fields.len(), 3, "{out:?}");
 	assert_eq!(fields[2], "added by hand (epistle suppression add)");
+}
+
+#[test]
+fn a_tenants_list_is_listed_and_cleared_from_the_cli() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let list = SuppressionList::open(dir.path()).expect("open");
+	let text = format!(
+		"hostname = 'mail.example.org'\ndata_dir = {:?}\ndomains = ['a.example']\n[[tenant]]\nname = 'acme'\ndomains = ['a.example']\n",
+		dir.path()
+	);
+	let rules = crate::queue::SuppressionRules::from_config(
+		&crate::config::Config::parse_text(&text, std::path::Path::new("mail.toml"))
+			.expect("config"),
+	);
+	list.publish_tenants(&rules).expect("publish");
+	list.record_bounce(&rules, "alice@a.example", "gone@example.net", "550", 1)
+		.expect("record");
+	let config = config(dir.path());
+	let mut out = Vec::new();
+	let list_it = TenantCli::List {
+		tenant: "acme".into(),
+		json: false,
+	};
+	assert_eq!(tenant(&config, list_it, &mut out), ExitCode::SUCCESS);
+	assert_eq!(String::from_utf8(out).expect("utf8"), "gone@example.net\n");
+	let mut out = Vec::new();
+	let remove = TenantCli::Remove {
+		tenant: "acme".into(),
+		address: "gone@example.net".into(),
+		json: false,
+	};
+	assert_eq!(tenant(&config, remove, &mut out), ExitCode::SUCCESS);
+	assert!(list.list_for_tenant("acme").is_empty());
 }

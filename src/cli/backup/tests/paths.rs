@@ -131,7 +131,8 @@ fn restore_strips_special_mode_bits() {
 		std::fs::metadata(data_dir.join("key"))
 			.expect("key")
 			.permissions()
-			.mode() & 0o7777,
+			.mode()
+			& 0o7777,
 		0o600,
 		"restore must strip setuid, setgid and sticky bits"
 	);

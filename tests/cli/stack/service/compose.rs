@@ -41,9 +41,16 @@ fn service_cli_compose_updates_ports_and_recreates_only_mail() {
 			override_path.to_str().unwrap(),
 			"up",
 			"-d",
-			"mail"
+			"mail",
+			"-f",
+			compose.to_str().unwrap(),
+			"-f",
+			override_path.to_str().unwrap(),
+			"autostart",
+			"install",
+			"--no-start"
 		],
-		"a port change must recreate only mail"
+		"a port change must recreate only mail; the boot unit is checked afterwards"
 	);
 	assert!(std::fs::read(&override_path).unwrap() == override_bytes);
 	let argv_before = std::fs::read(&argv_log).unwrap();
@@ -143,9 +150,10 @@ fn service_set_publishes_on_the_address_the_operator_asked_for() {
 		"{}",
 		String::from_utf8_lossy(&output.stderr)
 	);
-	assert_eq!(
-		String::from_utf8(output.stderr).unwrap(),
-		"imaps published on 127.0.0.1:19993.\n"
+	let stderr = String::from_utf8(output.stderr).unwrap();
+	assert!(
+		stderr.starts_with("imaps published on 127.0.0.1:19993.\n"),
+		"{stderr}"
 	);
 	assert_eq!(
 		ports(&compose),
@@ -165,10 +173,11 @@ fn service_set_publishes_on_the_address_the_operator_asked_for() {
 			== override_bytes,
 		"the operator override is never written"
 	);
-	assert_eq!(
-		helpers::read_argv_log(&argv_log).last().map(String::as_str),
-		Some("mail"),
-		"a mapping that moved recreates mail"
+	let argv = helpers::read_argv_log(&argv_log);
+	assert!(
+		argv.windows(3).any(|w| w == ["up", "-d", "mail"])
+			&& argv.ends_with(&["autostart".into(), "install".into(), "--no-start".into()]),
+		"a mapping that moved recreates mail, then checks the boot unit: {argv:?}"
 	);
 	let before = std::fs::read(&argv_log).unwrap();
 	let again = helpers::run_with_podup(

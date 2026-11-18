@@ -85,6 +85,7 @@ fn key(label: &str, secret: &str, scopes: &[Scope], account: &str) -> ApiKey {
 			.collect(),
 		domains: Vec::new(),
 		account: Some(account.to_string()),
+		auto_submitted: false,
 	}
 }
 

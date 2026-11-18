@@ -125,6 +125,45 @@ fn marketing_is_marked_bulk_and_suppressed_recipients_are_dropped() {
 }
 
 #[test]
+fn marketing_honours_the_scope_and_the_lifetime_of_an_automatic_suppression() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let list = crate::queue::SuppressionList::open(dir.path()).expect("list");
+	let now = crate::storage::delivery_log::now_epoch();
+	let rules = crate::queue::SuppressionRules::default().lasting(1);
+	// Recorded now, it blocks; recorded in 1970, its day is long over; and the
+	// sender's own list is the one that counts, not another sender's.
+	list.record_bounce(&rules, "news@example.org", "live@example.net", "550", now)
+		.expect("record");
+	list.record_bounce(&rules, "news@example.org", "old@example.net", "550", 1)
+		.expect("record");
+	list.record_bounce(
+		&rules,
+		"other@example.org",
+		"theirs@example.net",
+		"550",
+		now,
+	)
+	.expect("record");
+	let mut submitted = message(
+		ONE_CLICK,
+		&["live@example.net", "old@example.net", "theirs@example.net"],
+	);
+	let prepared = prepare(
+		&mut submitted,
+		marketing(),
+		Some(dir.path()),
+		&Policy::default(),
+		None,
+	)
+	.expect("prepared");
+	assert_eq!(prepared.suppressed, vec!["live@example.net"]);
+	assert_eq!(
+		submitted.recipients,
+		vec!["old@example.net", "theirs@example.net"]
+	);
+}
+
+#[test]
 fn other_classes_keep_suppressed_recipients_for_the_worker() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	crate::queue::SuppressionList::open(dir.path())

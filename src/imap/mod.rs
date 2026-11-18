@@ -5,6 +5,7 @@ pub mod archive;
 mod binary_append;
 pub mod bounds;
 pub(crate) mod changelog;
+pub mod cleanup;
 pub mod command;
 mod compress;
 pub(crate) mod fetch;

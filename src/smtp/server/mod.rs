@@ -17,21 +17,29 @@ pub use super::session::{AcceptedMessage, Session};
 pub use super::sink::MessageSink;
 pub use crate::directory_store::DirectoryHandle;
 pub use data_rate::{DEFAULT_DATA_RATE_GRACE_SECS, DEFAULT_MIN_DATA_RATE, DataRate};
+pub use inbound_policy::InboundPolicy;
 pub use session_time::{DEFAULT_MAX_SESSION_TIME_SECS, SessionLimits};
 
 mod builder;
 mod data_rate;
 mod dnsbl_check;
+mod inbound_policy;
+mod refusal;
+mod refusal_checks;
+mod refusal_text;
 mod run;
 pub(crate) use run::MAX_ERROR_STREAK;
 mod run_accept_log;
 mod run_attachments;
 mod run_auth;
 mod run_band;
+mod run_checks;
 mod run_class;
 mod run_deliver;
+mod run_scopes;
 mod run_sent;
 mod run_upgrade;
+mod run_withdrawn;
 mod session_time;
 
 /// Read buffer size per connection.
@@ -144,6 +152,9 @@ pub struct Server {
 	/// behaviour; `false` hides both mechanisms on the wire and refuses an
 	/// explicit `AUTH` against them. PLAIN/LOGIN stay in.
 	scram_enabled: bool,
+	/// Whether this is a submission listener; see
+	/// [`Server::with_submission_listener`].
+	submission_listener: bool,
 	/// Shared per-account submission rate limiter for authenticated senders.
 	send_limiter: Option<Arc<crate::smtp::ratelimit::SendLimiter>>,
 	/// Server-wide default submission rate limit (messages/min) for
@@ -157,9 +168,19 @@ pub struct Server {
 	/// Shared per-envelope-sender inbound rate limiter (limiter + cap),
 	/// consumed at MAIL FROM by unauthenticated sessions.
 	inbound_sender_limit: Option<crate::smtp::ratelimit::InboundLimit>,
+	/// How much the text of a refusal to an unauthenticated sender tells it
+	/// (`[smtp] reject_detail`); the code and the class never change.
+	refusal_detail: crate::config::RefusalDetail,
+	/// Whether a final refusal carries a reference (`[smtp] reject_reference`).
+	refusal_reference: bool,
+	/// The inbound decisions the operator sets: trusted relays, the
+	/// full-mailbox answer, the greylist mask and the reputation floor.
+	inbound: InboundPolicy,
 	/// Per-tenant aggregate limits (accounts, storage, rate). On top of the
 	/// per-account limiter; empty is the identity.
 	tenant_limits: Option<Arc<crate::api::TenantLimits>>,
+	/// The antispam scopes: sender lists and per-scope attachment settings.
+	scopes: Option<Arc<crate::antispam::scopes::Scopes>>,
 	/// Shared disk-space guard for `data_dir`. `None` disables the check,
 	/// which is the right behaviour for tests but not for production: the
 	/// production wiring in `cli/serve/mod.rs` always sets it.
@@ -409,6 +430,7 @@ impl Server {
 			.with_auth_protocol(self.auth_protocol)
 			.with_metrics(Arc::clone(&self.metrics))
 			.with_scram_enabled(self.scram_enabled)
+			.with_submission_listener(self.submission_listener)
 			.with_max_message_size(self.max_message_size)
 			.with_max_recipients(self.max_recipients)
 			.with_identification(self.identification.clone())
@@ -431,6 +453,9 @@ impl Server {
 			session =
 				session.with_inbound_ip_limit(Arc::clone(&ip_limit.limiter), ip_limit.per_min);
 		}
+		session = session
+			.with_refusal_detail(self.refusal_detail)
+			.with_mailbox_full(self.inbound.mailbox_full);
 		if let Some(sender_limit) = &self.inbound_sender_limit {
 			session = session
 				.with_inbound_sender_limit(Arc::clone(&sender_limit.limiter), sender_limit.per_min);
@@ -443,6 +468,9 @@ impl Server {
 		}
 		if let Some(limits) = &self.tenant_limits {
 			session = session.with_tenant_limits(Arc::clone(limits));
+		}
+		if let Some(scopes) = &self.scopes {
+			session = session.with_scopes(Arc::clone(scopes));
 		}
 		// Build the cap state in one go: the listener already holds
 		// `correspondents`, `daily_new_recipients`, and a metrics handle;

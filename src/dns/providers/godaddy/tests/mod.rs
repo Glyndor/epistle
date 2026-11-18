@@ -1,4 +1,6 @@
 pub use super::*;
+pub use crate::dns::provider::{DnsProvider, DnsRecord, ProviderError, RecordKind};
+pub use crate::net::HttpsUrl;
 
 pub(super) mod b;
 pub(super) mod base;

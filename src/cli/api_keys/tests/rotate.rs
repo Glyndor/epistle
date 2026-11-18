@@ -24,6 +24,7 @@ fn create_key(config: &Config, label: &str) -> String {
 				domains: vec!["example.org".into()],
 				account: None,
 				class: None,
+				auto_submitted: false,
 			},
 			false,
 			&mut out,

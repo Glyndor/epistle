@@ -80,7 +80,7 @@ impl Session {
 		};
 		let account = account.clone();
 		if *read_only {
-			return Output::text(format!("{tag} NO mailbox is read-only\r\n"));
+			return Output::text(format!("{tag} NO [CANNOT] mailbox is read-only\r\n"));
 		}
 		// Resolve the SEARCHRES `$` placeholder against this snapshot. The
 		// saved set is always keyed by UID; for UID commands the UIDs are
@@ -106,7 +106,7 @@ impl Session {
 		for token in flag_tokens {
 			match Flag::parse(token) {
 				Some(flag) => flags.push(flag),
-				None => return Output::text(format!("{tag} BAD unsupported flag\r\n")),
+				None => return Output::text(format!("{tag} BAD [CLIENTBUG] unsupported flag\r\n")),
 			}
 		}
 		super::super::mailbox::dedup_flags(&mut flags);
@@ -115,7 +115,7 @@ impl Session {
 		if matches!(mode, StoreMode::Set) && super::super::mailbox::count_keywords(&flags).is_none()
 		{
 			return Output::text(format!(
-				"{tag} BAD too many keywords (max {})\r\n",
+				"{tag} BAD [LIMIT] too many keywords (max {})\r\n",
 				super::super::super::keyword::MAX_KEYWORDS_PER_MESSAGE
 			));
 		}
@@ -204,12 +204,12 @@ impl Session {
 			// training job would name. The message itself is not read here.
 			let previous_flags = message.flags.clone();
 			let Ok(message_path) = snapshot.message_path(message) else {
-				return Output::text(format!("{tag} NO cannot store flags\r\n"));
+				return Output::text(format!("{tag} NO [SERVERBUG] cannot store flags\r\n"));
 			};
 			let stored = match snapshot.store_flags(sequence_number, updated) {
 				Ok(stored) => stored.to_vec(),
 				Err(_) => {
-					return Output::text(format!("{tag} NO cannot store flags\r\n"));
+					return Output::text(format!("{tag} NO [SERVERBUG] cannot store flags\r\n"));
 				}
 			};
 			// A `$Junk` / `$NotJunk` change queues a training job. The

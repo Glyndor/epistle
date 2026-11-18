@@ -3,9 +3,7 @@
 //! stays under the per-file code-line budget.
 
 use std::io::Write;
-use std::process::ExitCode;
 
-use crate::cli::config_edit::ConfigDocument;
 use crate::config::Config;
 
 use crate::dns::provider::RecordKind;
@@ -72,129 +70,21 @@ pub(super) struct Commit<'a> {
 	pub records_for: Option<&'a str>,
 }
 
-/// Validate and commit a config-edit domain mutation, then restart mail.
-/// `(dry_run, json)`: a dry run prints the diff; with `json` stdout gets
-/// one object, holding the records to publish under `records`.
-pub(super) fn commit(
-	document: ConfigDocument,
-	commit: Commit,
-	(dry_run, json): (bool, bool),
-	out: &mut impl Write,
-	status: &mut impl Write,
-) -> Result<ExitCode, crate::cli::resource::ResourceError> {
-	let failure = |e: std::io::Error| crate::cli::resource::ResourceError::Failure(e.to_string());
-	let Commit {
-		subject,
-		verb,
-		already,
-		action,
-		mut fields,
-		records_for,
-	} = commit;
-	if dry_run {
-		let diff = document.dry_run()?;
-		if json {
-			let object = crate::cli::json_out::dry_run_object(action, fields, diff);
-			return writeln!(out, "{object}")
-				.map(|()| ExitCode::SUCCESS)
-				.map_err(failure);
-		}
-		write!(out, "{diff}").map_err(failure)?;
-		return Ok(ExitCode::SUCCESS);
-	}
-	let config = document.config()?;
-	let outcome = document.commit()?;
-	let changed = outcome == crate::cli::config_edit::Outcome::Changed;
-	if !changed {
-		writeln!(status, "{subject} already {already}; nothing changed.").map_err(failure)?;
-		if json {
-			let reload = Some(crate::cli::json_out::Reload::None);
-			let object = crate::cli::json_out::change_object(action, false, fields, reload);
-			writeln!(out, "{object}").map_err(failure)?;
-		}
-		return Ok(ExitCode::SUCCESS);
-	}
-	writeln!(status, "{subject} {verb}.").map_err(failure)?;
-	if let Some(domain) = records_for {
-		if json {
-			let mut printed = Vec::new();
-			print_domain_records(&config, domain, &mut printed).map_err(failure)?;
-			let text = String::from_utf8_lossy(&printed);
-			let records: Vec<&str> = text
-				.lines()
-				.filter(|line| {
-					!line.is_empty()
-						&& !line.starts_with("DNS records to publish")
-						&& !line.starts_with("skipped by configuration")
-				})
-				.collect();
-			fields["records"] = records.into();
-		} else {
-			print_domain_records(&config, domain, out).map_err(failure)?;
-		}
-	}
-	let (code, reload) = crate::cli::config_edit::after_change_reporting(
-		&config,
-		outcome,
-		true,
-		status,
-		crate::cli::stack::run,
-	)?;
-	if json {
-		let object = crate::cli::json_out::change_object(action, true, fields, Some(reload));
-		writeln!(out, "{object}").map_err(failure)?;
-	}
-	Ok(code)
-}
-
-/// Commit `domain add`, printing the records to publish.
-#[cfg(test)]
-pub fn commit_add(
-	_config: &Config,
-	document: ConfigDocument,
-	domain: &str,
-	dry_run: bool,
-	out: &mut impl Write,
-	status: &mut impl Write,
-) -> Result<ExitCode, crate::cli::resource::ResourceError> {
-	commit(document, add_commit(domain), (dry_run, false), out, status)
-}
-
-/// Commit `domain remove`.
-#[cfg(test)]
-pub fn commit_remove(
-	document: ConfigDocument,
-	domain: &str,
-	dry_run: bool,
-	out: &mut impl Write,
-	status: &mut impl Write,
-) -> Result<ExitCode, crate::cli::resource::ResourceError> {
-	commit(
-		document,
-		remove_commit(domain),
-		(dry_run, false),
-		out,
-		status,
-	)
-}
-
-/// Commit `domain alias add|remove`.
-#[cfg(test)]
-pub fn commit_alias(
-	document: ConfigDocument,
-	alias: &str,
-	verb: &str,
-	dry_run: bool,
-	out: &mut impl Write,
-	status: &mut impl Write,
-) -> Result<ExitCode, crate::cli::resource::ResourceError> {
-	commit(
-		document,
-		alias_commit(alias, verb),
-		(dry_run, false),
-		out,
-		status,
-	)
+/// The DNS records of `domain` as the lines `--json` reports under
+/// `records`.
+pub(super) fn record_lines(config: &Config, domain: &str) -> std::io::Result<Vec<String>> {
+	let mut printed = Vec::new();
+	print_domain_records(config, domain, &mut printed)?;
+	let text = String::from_utf8_lossy(&printed);
+	Ok(text
+		.lines()
+		.filter(|line| {
+			!line.is_empty()
+				&& !line.starts_with("DNS records to publish")
+				&& !line.starts_with("skipped by configuration")
+		})
+		.map(str::to_string)
+		.collect())
 }
 
 /// The commit of `domain add`.
@@ -236,6 +126,9 @@ pub(super) fn alias_commit<'a>(alias: &str, verb: &'a str) -> Commit<'a> {
 		records_for: None,
 	}
 }
+
+mod state;
+pub(super) use state::{Mode, commit_state};
 
 #[cfg(test)]
 mod tests;

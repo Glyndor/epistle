@@ -52,6 +52,9 @@ fn build_config_writes_imap_and_imaps_when_imap_is_on() {
 	let mut answers = answers_minimal();
 	answers.services = Services {
 		antivirus: None,
+		panel: None,
+		panel_image: None,
+		freshclam_checks: None,
 		imap: true,
 		submission: false,
 		pop3: false,
@@ -121,6 +124,9 @@ fn build_config_writes_submission_and_submissions_when_submission_is_on() {
 	let mut answers = answers_minimal();
 	answers.services = Services {
 		antivirus: None,
+		panel: None,
+		panel_image: None,
+		freshclam_checks: None,
 		imap: false,
 		submission: true,
 		pop3: false,
@@ -178,6 +184,9 @@ fn build_config_omits_imap_and_imaps_when_imap_is_off() {
 	let mut answers = answers_minimal();
 	answers.services = Services {
 		antivirus: None,
+		panel: None,
+		panel_image: None,
+		freshclam_checks: None,
 		imap: false,
 		submission: true,
 		pop3: false,
@@ -210,6 +219,9 @@ fn build_config_omits_submission_and_submissions_when_submission_is_off() {
 	let mut answers = answers_minimal();
 	answers.services = Services {
 		antivirus: None,
+		panel: None,
+		panel_image: None,
+		freshclam_checks: None,
 		imap: true,
 		submission: false,
 		pop3: false,

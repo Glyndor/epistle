@@ -25,6 +25,7 @@ fn key(label: &str, secret: &str, scopes: &[&str], account: &str) -> crate::api:
 		scopes: scopes.iter().map(|s| s.to_string()).collect(),
 		domains: Vec::new(),
 		account: Some(account.to_string()),
+		auto_submitted: false,
 	}
 }
 
@@ -43,6 +44,7 @@ fn es_state(dir: &std::path::Path) -> crate::api::ApiState {
 	state
 		.store()
 		.add(crate::directory_store::DynamicAccount {
+			reset: None,
 			send: None,
 			receive: None,
 			display_name: None,

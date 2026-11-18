@@ -17,7 +17,8 @@ use axum::response::{IntoResponse, Response};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64URL;
 
-use super::{ACCESS_TOKEN_TTL_SECS, AuthCode, CODE_TTL_SECS, oauth_error, parse_fields};
+use super::issue::{grant_tokens, redeem_refresh_token};
+use super::{AuthCode, CODE_TTL_SECS, oauth_error, parse_fields};
 use crate::api::ApiState;
 use crate::util::constant_time;
 
@@ -52,15 +53,6 @@ fn now_secs() -> u64 {
 		.unwrap_or(0)
 }
 
-/// The success body of a token response (RFC 6749 §5.1).
-pub(crate) fn token_response(access_token: &str) -> Json<serde_json::Value> {
-	Json(serde_json::json!({
-		"access_token": access_token,
-		"token_type": "Bearer",
-		"expires_in": ACCESS_TOKEN_TTL_SECS,
-	}))
-}
-
 /// `POST /oauth/authorize` (authenticated): issue an authorization code bound to
 /// the authenticated account and the S256 `code_challenge`. The caller proves an
 /// account identity with `login`+`password` (form/JSON) or HTTP Basic.
@@ -80,6 +72,10 @@ pub async fn authorize(
 		return oauth_error("invalid_request");
 	};
 	let fields = parse_fields(&headers, &body);
+	let Some(scopes) = super::scopes::Scopes::requested(fields.get("scope").map(String::as_str))
+	else {
+		return oauth_error("invalid_scope");
+	};
 
 	// S256 only: a missing or `plain` method is rejected (RFC 7636 §4.3 downgrade
 	// protection — we never accept the weaker transformation).
@@ -125,6 +121,7 @@ pub async fn authorize(
 	};
 	let now = now_secs();
 	let grant = AuthCode {
+		scopes,
 		account,
 		code_challenge,
 		expires_at: now + CODE_TTL_SECS,
@@ -226,27 +223,35 @@ pub async fn token(
 			if device_code.is_empty() {
 				return oauth_error("invalid_request");
 			}
-			super::device::redeem_device_code(authz, device_code)
+			match super::device::redeem_device_code(authz, device_code) {
+				Ok((account, scopes)) => grant_tokens(&state, authz, &account, &scopes, now_secs()),
+				Err(refusal) => refusal.response(),
+			}
 		}
-		Some("authorization_code") => redeem_authorization_code(authz, &fields),
+		Some("authorization_code") => match redeem_authorization_code(authz, &fields) {
+			Ok((account, scopes)) => grant_tokens(&state, authz, &account, &scopes, now_secs()),
+			Err(refusal) => refusal.response(),
+		},
+		Some("refresh_token") => redeem_refresh_token(&state, authz, &fields, now_secs()),
 		_ => oauth_error("unsupported_grant_type"),
 	}
 }
 
 /// Verify a PKCE `code_verifier` against the stored S256 `code_challenge`, one-
-/// time-use the code, and issue the token. Fail-closed: a mismatched verifier,
-/// an expired or already-redeemed code, or signing failure all deny.
+/// time-use the code, and name the account and scopes to issue tokens for.
+/// Fail-closed: a mismatched verifier or an expired or already-redeemed code
+/// is refused with the answer to send.
 fn redeem_authorization_code(
 	authz: &super::AuthzServer,
 	fields: &std::collections::HashMap<String, String>,
-) -> Response {
+) -> Result<(String, super::scopes::Scopes), super::Refusal> {
 	let code = fields.get("code").map(String::as_str).unwrap_or("");
 	let verifier = fields
 		.get("code_verifier")
 		.map(String::as_str)
 		.unwrap_or("");
 	if code.is_empty() || verifier.is_empty() {
-		return oauth_error("invalid_request");
+		return Err(super::Refusal::Error("invalid_request"));
 	}
 	let now = now_secs();
 	// Remove the code up front: even on a verifier mismatch it is consumed, so a
@@ -257,34 +262,31 @@ fn redeem_authorization_code(
 		.unwrap_or_else(|p| p.into_inner())
 		.remove(code);
 	let Some(stored) = stored else {
-		return oauth_error("invalid_grant");
+		return Err(super::Refusal::Error("invalid_grant"));
 	};
 	if stored.expires_at <= now {
-		return oauth_error("invalid_grant");
+		return Err(super::Refusal::Error("invalid_grant"));
 	}
 	// RFC 6749 section 4.1.3: a code issued for a redirect_uri is redeemed with
 	// the same one, byte for byte.
 	if let Some(bound) = &stored.redirect_uri
 		&& fields.get("redirect_uri") != Some(bound)
 	{
-		return oauth_error("invalid_grant");
+		return Err(super::Refusal::Error("invalid_grant"));
 	}
 	// A verifier outside RFC 7636 section 4.1 cannot be the one the challenge
 	// came from, and it is refused before it is hashed. The code is already
 	// consumed, like on any other mismatch.
 	if !valid_verifier(verifier) {
-		return oauth_error("invalid_grant");
+		return Err(super::Refusal::Error("invalid_grant"));
 	}
 	// BASE64URL(SHA256(code_verifier)) == code_challenge (RFC 7636 §4.6).
 	let digest = ring::digest::digest(&ring::digest::SHA256, verifier.as_bytes());
 	let computed = B64URL.encode(digest.as_ref());
 	if !constant_time::eq(computed.as_bytes(), stored.code_challenge.as_bytes()) {
-		return oauth_error("invalid_grant");
+		return Err(super::Refusal::Error("invalid_grant"));
 	}
-	match authz.issue_token(&stored.account, now) {
-		Some(token) => token_response(&token).into_response(),
-		None => oauth_error("server_error"),
-	}
+	Ok((stored.account, stored.scopes))
 }
 
 /// A `code_verifier` as RFC 7636 section 4.1 writes it: 43 to 128 characters

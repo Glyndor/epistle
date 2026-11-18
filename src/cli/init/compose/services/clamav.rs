@@ -6,6 +6,27 @@ use std::path::Path;
 use super::{ComposeService, Healthcheck, VolumeMount, drop_all};
 use crate::cli::init::compose::Answers;
 
+/// Signature checks per day when the answers say nothing: the number the
+/// ClamAV documentation gives as its default, so a signature is hours old, not a day.
+const DEFAULT_FRESHCLAM_CHECKS: u8 = 12;
+/// The most checks per day `freshclam --checks` takes, which is what the
+/// signature servers allow one client.
+pub(in crate::cli::init) const MAX_FRESHCLAM_CHECKS: u8 = 50;
+
+/// The shell line the updater runs. The image's `freshclam.conf` has
+/// `NotifyClamd`, which dials `clamd` on its own socket, and `clamd` runs in
+/// another container with no socket in common, so every update logged
+/// `Clamd was NOT notified`. The line drops that one option from a copy and
+/// runs `freshclam` on the copy; `clamd` reloads the databases by itself at
+/// its `SelfCheck` interval (600 seconds in the generated `clamd.conf`).
+fn freshclam_script(checks: u8) -> String {
+	format!(
+		"grep -v '^NotifyClamd' /etc/clamav/freshclam.conf > /var/log/clamav/freshclam.conf \
+		 && exec freshclam --config-file=/var/log/clamav/freshclam.conf \
+		 --daemon --foreground --stdout --checks={checks}"
+	)
+}
+
 impl ComposeService {
 	pub(in crate::cli::init::compose) fn new_clamav(answers: &Answers, freshclam: bool) -> Self {
 		let mut service = Self {
@@ -47,18 +68,16 @@ impl ComposeService {
 			// root's unless its mode opens it, and freshclam runs as clamav.
 			// The log stops growing at LogFileMaxSize (1 MiB by default).
 			service.tmpfs = Some(vec!["/var/log/clamav:size=16m,mode=1777".to_string()]);
+			let checks = answers
+				.services
+				.freshclam_checks
+				.unwrap_or(DEFAULT_FRESHCLAM_CHECKS);
 			service.entrypoint = Some(
-				[
-					"/sbin/tini",
-					"--",
-					"freshclam",
-					"--daemon",
-					"--foreground",
-					"--stdout",
-					"--checks=1",
-				]
-				.map(str::to_string)
-				.to_vec(),
+				["/sbin/tini", "--", "/bin/sh", "-c"]
+					.map(str::to_string)
+					.into_iter()
+					.chain([freshclam_script(checks)])
+					.collect(),
 			);
 		} else {
 			service

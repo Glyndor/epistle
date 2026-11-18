@@ -157,6 +157,9 @@ pub struct Session {
 	/// hourly sweeper removes them. `0` keeps the legacy behaviour:
 	/// expunge deletes the on-disk files immediately.
 	retention_days: u64,
+	/// What the operator decided about the special folders: the names an
+	/// account's first folders get, and one spam folder or two.
+	pub(super) folders: Arc<crate::imap::special_use::FolderPolicy>,
 	/// Whether COMPRESS=DEFLATE is already active, so a second
 	/// `COMPRESS` is refused rather than restarting the deflate context.
 	pub(super) compressing: bool,
@@ -218,6 +221,12 @@ pub struct SavedSearch {
 pub const DEFAULT_QUOTA_BYTES: u64 = 5 * 1024 * 1024 * 1024;
 
 impl Session {
+	/// The operator's folder policy for the accounts of this session.
+	pub fn with_folders(mut self, folders: Arc<crate::imap::special_use::FolderPolicy>) -> Self {
+		self.folders = folders;
+		self
+	}
+
 	/// Days to keep expunged messages in `<account>/.archive/` before the
 	/// hourly sweeper removes them. `0` keeps the legacy behaviour.
 	pub fn with_retention_days(mut self, days: u64) -> Self {
@@ -277,6 +286,7 @@ impl Session {
 			peer_ip: None,
 			crypto: crate::storage::MessageCrypto::disabled(),
 			retention_days: 0,
+			folders: Arc::default(),
 			compressing: false,
 			saved_search: None,
 			auth_protocol: crate::config::Protocol::Imaps,

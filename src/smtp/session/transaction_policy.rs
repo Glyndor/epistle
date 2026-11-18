@@ -17,6 +17,7 @@
 use std::net::IpAddr;
 use std::sync::Arc;
 
+use crate::config::{MailboxFull, RefusalDetail};
 use crate::smtp::directory::Directory;
 use crate::smtp::diskspace::DiskGuard;
 use crate::smtp::ratelimit::{InboundLimit, SendLimiter};
@@ -49,6 +50,8 @@ pub(crate) struct TransactionPolicy {
 	/// Mailbox quota of local recipients: `RCPT TO` refuses a full mailbox,
 	/// and the end of DATA catches one this message would overfill.
 	quota: Option<Arc<crate::smtp::quota::MailboxQuota>>,
+	/// The antispam scopes' sender lists, consulted at `RCPT TO`.
+	scopes: Option<Arc<crate::antispam::scopes::Scopes>>,
 	/// Failure reports (DSNs) for recipients the last accepted message
 	/// could not be stored for, waiting for the server to send them once
 	/// the message itself is delivered.
@@ -56,6 +59,11 @@ pub(crate) struct TransactionPolicy {
 	/// The submission-limit charge of the last message handed to the
 	/// server, kept only once the server accepts it.
 	pending_charge: Option<Charge>,
+	/// How much the text of an inbound limit refusal tells the sender.
+	refusal_detail: RefusalDetail,
+	/// How a full mailbox is refused (`[smtp] mailbox_full`), at `RCPT TO`
+	/// and at the end of DATA alike.
+	mailbox_full: MailboxFull,
 }
 
 impl TransactionPolicy {
@@ -93,6 +101,25 @@ impl TransactionPolicy {
 	) -> Self {
 		self.inbound_sender = Some(InboundLimit { limiter, per_min });
 		self
+	}
+
+	/// How much the text of an inbound limit refusal tells the sender; the
+	/// code and the class do not change.
+	pub(crate) fn with_refusal_detail(mut self, detail: RefusalDetail) -> Self {
+		self.refusal_detail = detail;
+		self
+	}
+
+	/// How a full mailbox is refused.
+	pub(crate) fn with_mailbox_full(mut self, how: MailboxFull) -> Self {
+		self.mailbox_full = how;
+		self
+	}
+
+	/// The reply for a recipient whose mailbox is full: `452 4.2.2`, or
+	/// `552 5.2.2` when the operator made a full mailbox permanent.
+	pub(crate) fn mailbox_full_reply(&self) -> Reply {
+		crate::smtp::quota::full_reply(self.mailbox_full)
 	}
 
 	/// Attach a shared disk-space guard for `data_dir`. When set, MAIL FROM
@@ -156,31 +183,41 @@ impl TransactionPolicy {
 		// Per-IP first: a peer flooding one address hits both limits,
 		// but failing fast on the per-IP one keeps the per-sender budget
 		// untouched for legitimate clients behind a shared NAT.
-		if let (Some(ip_limit), Some(ip)) = (&self.inbound_ip, peer_ip)
-			&& !ip_limit
-				.limiter
-				.check(&ip.to_string(), ip_limit.per_min, now)
-		{
-			return Some(Reply::single(
-				450,
-				"4.7.1 too many messages from this client; retry later",
-			));
+		if let (Some(ip_limit), Some(ip)) = (&self.inbound_ip, peer_ip) {
+			let key = ip.to_string();
+			if !ip_limit.limiter.check(&key, ip_limit.per_min, now) {
+				return Some(self.limit_reply("client", ip_limit, &key, now));
+			}
 		}
 		// Per-sender next, skipping the null reverse-path used by bounces
 		// so a verification failure does not exhaust a legitimate sender.
 		if let Some(sender_limit) = &self.inbound_sender
 			&& !reverse_path.is_empty()
-			&& !sender_limit.limiter.check(
-				&reverse_path.to_ascii_lowercase(),
-				sender_limit.per_min,
-				now,
-			) {
-			return Some(Reply::single(
-				450,
-				"4.7.1 too many messages from this sender; retry later",
-			));
+		{
+			let key = reverse_path.to_ascii_lowercase();
+			if !sender_limit.limiter.check(&key, sender_limit.per_min, now) {
+				return Some(self.limit_reply("sender", sender_limit, &key, now));
+			}
 		}
 		None
+	}
+
+	/// The `450 4.7.1` for an inbound limit `who` (`client` or `sender`) is
+	/// over: the standard text, a generic one when terse, and with the cap
+	/// and the time the window ends when verbose.
+	fn limit_reply(&self, who: &str, limit: &InboundLimit, key: &str, now: u64) -> Reply {
+		let text = match self.refusal_detail {
+			RefusalDetail::Terse => "try again later".to_string(),
+			RefusalDetail::Standard => {
+				format!("too many messages from this {who}; retry later")
+			}
+			RefusalDetail::Verbose => format!(
+				"too many messages from this {who} (max {}/min); retry after {}",
+				limit.per_min,
+				crate::smtp::retry_time::clock_at(limit.limiter.retry_at(key, now)),
+			),
+		};
+		Reply::single(450, &format!("4.7.1 {text}"))
 	}
 
 	/// Check local recipients against their mailbox quota.
@@ -192,6 +229,17 @@ impl TransactionPolicy {
 	/// The mailbox quota checks, when wired.
 	pub(crate) fn quota(&self) -> Option<&crate::smtp::quota::MailboxQuota> {
 		self.quota.as_deref()
+	}
+
+	/// Consult the antispam scopes' sender lists at `RCPT TO`.
+	pub(crate) fn with_scopes(mut self, scopes: Arc<crate::antispam::scopes::Scopes>) -> Self {
+		self.scopes = Some(scopes);
+		self
+	}
+
+	/// The scopes' sender lists, when wired.
+	pub(crate) fn scopes(&self) -> Option<&crate::antispam::scopes::Scopes> {
+		self.scopes.as_deref()
 	}
 
 	/// Queue a failure report to send after the message is delivered.

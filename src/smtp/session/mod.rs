@@ -26,6 +26,8 @@ mod builder;
 mod data;
 mod envelope;
 mod limits;
+mod scope_refusal;
+mod size_caps;
 #[cfg(test)]
 mod test_hooks;
 pub use limits::*;
@@ -46,6 +48,9 @@ pub struct Session {
 	/// [`MAX_MESSAGE_SIZE`]; raised or lowered by
 	/// [`Session::with_max_message_size`].
 	max_message_size: usize,
+	/// The `SIZE` the sender declared at `MAIL FROM`, for the per-recipient
+	/// size caps at `RCPT TO`; `None` when it declared none.
+	declared_size: Option<u64>,
 	/// Recipients one transaction may name, advertised as `LIMITS RCPTMAX`
 	/// and enforced at `RCPT TO`. Default is [`DEFAULT_MAX_RECIPIENTS`];
 	/// changed by [`Session::with_max_recipients`].
@@ -105,6 +110,11 @@ pub struct Session {
 	/// tagged on every password attempt through this session so a
 	/// per-account `allowed_protocols` can admit or reject it.
 	auth_protocol: crate::config::Protocol,
+	/// Whether this is a submission listener (587 or 465): mail is only
+	/// taken from a client that has authenticated, and a client that has
+	/// not is told to (RFC 6409 section 4.3). The receiving listener
+	/// leaves it off and takes mail from anyone.
+	submission_listener: bool,
 	/// Which identification and reputation headers the mail this session
 	/// generates gets (the mailbox-full notice it builds at end-of-DATA).
 	identification: crate::smtp::identification::Policy,
@@ -146,6 +156,7 @@ impl Session {
 		Session {
 			hostname: hostname.to_string(),
 			max_message_size: MAX_MESSAGE_SIZE,
+			declared_size: None,
 			max_recipients: DEFAULT_MAX_RECIPIENTS,
 			state: State::Connected,
 			tls_available: false,
@@ -168,6 +179,7 @@ impl Session {
 			peer_ip: None,
 			cap: cap::Cap::empty(),
 			auth_protocol: crate::config::Protocol::Submission,
+			submission_listener: false,
 			identification: crate::smtp::identification::Policy::default(),
 			metrics: None,
 			scram_enabled: true,

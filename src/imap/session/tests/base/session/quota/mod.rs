@@ -8,3 +8,6 @@ mod quota_zero;
 
 #[cfg(test)]
 mod quota_race;
+
+#[cfg(test)]
+mod quota_copy;

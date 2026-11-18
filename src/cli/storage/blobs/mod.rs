@@ -25,6 +25,12 @@ pub enum StorageCli {
 		#[command(subcommand)]
 		action: BlobsCli,
 	},
+	/// List what the hourly cleanup of Trash, Junk and Rejects would remove.
+	///
+	/// Reads `[storage.cleanup]` and prints, for each account and folder with
+	/// mail past its retention, the days and the number of messages. It never
+	/// removes anything: the server does, hourly, on a clock it believes.
+	Cleanup,
 	/// Re-encrypt stored mail under each account's tenant key, or back.
 	TenantKeys {
 		/// Tenant key action.
@@ -139,6 +145,9 @@ fn execute_with(
 ) -> Result<ExitCode, resource::ResourceError> {
 	let action = match action {
 		StorageCli::Blobs { action } => action,
+		StorageCli::Cleanup => {
+			return Ok(crate::cli::storage::cleanup::run(path, json, out, status));
+		}
 		StorageCli::TenantKeys { action } => {
 			return Ok(crate::cli::storage::tenant_keys::run(
 				path, action, dry_run, json, out, status,

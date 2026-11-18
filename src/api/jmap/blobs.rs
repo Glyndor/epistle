@@ -177,7 +177,7 @@ pub fn reclaim_blobs(data_dir: &std::path::Path, ttl: std::time::Duration) -> us
 /// Counts from [`backfill_blob_ownership`]: lets the caller log progress at
 /// startup and lets tests verify what the pass actually did without scraping
 /// the filesystem.
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone)]
 pub struct BackfillStats {
 	/// Stored messages inspected across every account's mailboxes.
 	pub scanned: u64,
@@ -194,6 +194,85 @@ pub struct BackfillStats {
 	/// Per-message filesystem errors swallowed so a corrupt mailbox does not
 	/// abort the pass (the spec: "que no muera si un mensaje esta corrupto").
 	pub errors: u64,
+	/// The first [`LISTED_FAILURES`] errors, so the caller can say which
+	/// blob and account failed and why. [`BackfillStats::errors`] still counts
+	/// every error, listed or not.
+	pub failures: Vec<BackfillFailure>,
+}
+
+/// How many failures one backfill run lists individually. A mailbox with
+/// thousands of unreadable messages must not flood the log: the rest are only
+/// counted.
+pub const LISTED_FAILURES: usize = 20;
+
+/// One error of the backfill: where it happened and why.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BackfillFailure {
+	/// The account whose mailbox was being scanned.
+	pub account: String,
+	/// The blob (message UUID) concerned, or `None` when the failure was the
+	/// mailbox itself or one of its directory entries.
+	pub blob: Option<String>,
+	/// What went wrong.
+	pub reason: String,
+}
+
+impl BackfillStats {
+	/// Count one error and keep it for listing while there is room.
+	fn fail(&mut self, account: &str, blob: Option<uuid::Uuid>, reason: String) {
+		self.errors = self.errors.saturating_add(1);
+		if self.failures.len() < LISTED_FAILURES {
+			self.failures.push(BackfillFailure {
+				account: account.to_string(),
+				blob: blob.map(|blob| blob.to_string()),
+				reason,
+			});
+		}
+	}
+}
+
+impl BackfillStats {
+	/// Write the outcome of a run to the log: every listed error as its own
+	/// `warn` line with the account, the blob and the reason, one `warn` for
+	/// the errors past the bound, and the summary, which is a `warn` when any
+	/// error happened. A run that did nothing and failed nothing says nothing.
+	pub fn log(&self) {
+		for failure in &self.failures {
+			tracing::warn!(
+				account = %failure.account,
+				blob = failure.blob.as_deref().unwrap_or("-"),
+				reason = %failure.reason,
+				"jmap blob-ownership backfill error"
+			);
+		}
+		let unlisted = self.errors.saturating_sub(self.failures.len() as u64);
+		if unlisted > 0 {
+			tracing::warn!(
+				unlisted,
+				"jmap blob-ownership backfill: more errors than the {LISTED_FAILURES} listed above"
+			);
+		}
+		if self.written == 0 && self.conflicts == 0 && self.errors == 0 {
+			return;
+		}
+		macro_rules! summary {
+			($level:ident) => {
+				tracing::$level!(
+					scanned = self.scanned,
+					written = self.written,
+					skipped = self.skipped,
+					conflicts = self.conflicts,
+					errors = self.errors,
+					"jmap blob-ownership backfill complete"
+				)
+			};
+		}
+		if self.errors == 0 {
+			summary!(info);
+		} else {
+			summary!(warn);
+		}
+	}
 }
 
 /// One-shot startup migration: write `.owner` sidecars for every uploaded blob
@@ -232,21 +311,25 @@ pub fn backfill_blob_ownership(data_dir: &std::path::Path, accounts: &[String]) 
 	for account in accounts {
 		for mailbox in mailbox::list(data_dir, account) {
 			let Some(dir) = mailbox::mailbox_dir(data_dir, account, &mailbox) else {
-				stats.errors = stats.errors.saturating_add(1);
+				let reason = format!("mailbox {mailbox:?} has no usable directory");
+				stats.fail(account, None, reason);
 				continue;
 			};
-			let entries = match crate::util::fs_walk::read_dir(&dir) {
+			let entries = match crate::util::fs_walk::rooted::read_dir(data_dir, &dir) {
 				Ok(entries) => entries,
-				Err(_) => {
-					stats.errors = stats.errors.saturating_add(1);
+				Err(error) => {
+					let reason = format!("mailbox {mailbox:?} cannot be read: {error}");
+					stats.fail(account, None, reason);
 					continue;
 				}
 			};
 			for entry in entries {
 				let entry = match entry {
 					Ok(entry) => entry,
-					Err(_) => {
-						stats.errors = stats.errors.saturating_add(1);
+					Err(error) => {
+						let reason =
+							format!("entry of mailbox {mailbox:?} cannot be read: {error}");
+						stats.fail(account, None, reason);
 						continue;
 					}
 				};
@@ -278,9 +361,7 @@ pub fn backfill_blob_ownership(data_dir: &std::path::Path, accounts: &[String]) 
 					Ok(EnsureOutcome::Conflict) => {
 						stats.conflicts = stats.conflicts.saturating_add(1);
 					}
-					Err(()) => {
-						stats.errors = stats.errors.saturating_add(1);
-					}
+					Err(reason) => stats.fail(account, Some(blob_id), reason),
 				}
 			}
 		}
@@ -301,20 +382,22 @@ enum EnsureOutcome {
 
 /// Write the `.owner` sidecar only if it is missing or does not match the
 /// expected account. Returns the [`EnsureOutcome`] describing what happened,
-/// or `Err(())` on a filesystem error so the caller can count it without
-/// aborting the whole pass.
+/// or `Err(reason)` on a filesystem error so the caller can count and list it
+/// without aborting the whole pass.
 fn ensure_blob_owner(
 	data_dir: &std::path::Path,
 	blob_id: uuid::Uuid,
 	account: &str,
-) -> Result<EnsureOutcome, ()> {
+) -> Result<EnsureOutcome, String> {
 	// Read through the fallback so a blob still in the flat layout is seen,
 	// and write to the shard so the backfill does not recreate the old shape.
 	let owner_path = blob_path::read_path(data_dir, blob_id, OWNER_SIDECAR_SUFFIX);
 	match std::fs::read_to_string(&owner_path) {
 		Ok(existing) if existing == account => Ok(EnsureOutcome::AlreadyCorrect),
 		Ok(_) => Ok(EnsureOutcome::Conflict),
-		Err(_) if owner_path.exists() => Err(()),
+		Err(error) if owner_path.exists() => {
+			Err(format!("owner sidecar exists but cannot be read: {error}"))
+		}
 		Err(_) => {
 			// The payload file determines whether this sidecar is needed at
 			// all: if the blob was uploaded but never persisted under
@@ -327,9 +410,12 @@ fn ensure_blob_owner(
 			} else {
 				let write_to = blob_path::write_path(data_dir, blob_id, OWNER_SIDECAR_SUFFIX);
 				if let Some(parent) = write_to.parent() {
-					std::fs::create_dir_all(parent).map_err(|_| ())?;
+					std::fs::create_dir_all(parent).map_err(|error| {
+						format!("owner sidecar directory cannot be created: {error}")
+					})?;
 				}
-				std::fs::write(&write_to, account.as_bytes()).map_err(|_| ())?;
+				std::fs::write(&write_to, account.as_bytes())
+					.map_err(|error| format!("owner sidecar cannot be written: {error}"))?;
 				Ok(EnsureOutcome::Written)
 			}
 		}

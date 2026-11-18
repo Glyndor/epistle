@@ -14,7 +14,9 @@ fn dry_run_with(state: HostClock) -> (ExitCode, String) {
 		detector: &Scripted::found(None, None),
 		resolver: &|| None,
 		meminfo: std::path::Path::new("/nonexistent/meminfo"),
+		panel_manifest: std::path::Path::new("/nonexistent/epistle-panel/image"),
 		clock: &|| state.clone(),
+		boot: &|_, _| {},
 	};
 	let mut out = Vec::new();
 	let code = run_with(

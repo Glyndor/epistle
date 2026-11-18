@@ -56,6 +56,14 @@ impl Session {
 		self
 	}
 
+	/// Mark this session as served by a submission listener: `MAIL FROM`
+	/// before authentication is answered `530`, naming what is missing,
+	/// instead of being taken as inbound mail.
+	pub fn with_submission_listener(mut self, submission: bool) -> Self {
+		self.submission_listener = submission;
+		self
+	}
+
 	/// Set which identification and reputation headers the mail this
 	/// session generates gets.
 	pub fn with_identification(mut self, policy: crate::smtp::identification::Policy) -> Self {
@@ -138,6 +146,19 @@ impl Session {
 		self
 	}
 
+	/// How much the text of an inbound limit refusal tells the sender
+	/// (`[smtp] reject_detail`). The reply code and class do not change.
+	pub fn with_refusal_detail(mut self, detail: crate::config::RefusalDetail) -> Self {
+		self.policy = self.policy.with_refusal_detail(detail);
+		self
+	}
+
+	/// How a full mailbox is refused (`[smtp] mailbox_full`): `452` or `552`.
+	pub fn with_mailbox_full(mut self, how: crate::config::MailboxFull) -> Self {
+		self.policy = self.policy.with_mailbox_full(how);
+		self
+	}
+
 	/// Attach per-tenant aggregate limits. On top of the per-account
 	/// limiter in [`Self::with_send_limiter`]; the SMTP path checks both
 	/// before accepting MAIL FROM. `None` (the default) is the identity and
@@ -169,6 +190,13 @@ impl Session {
 	/// [`crate::smtp::quota`]).
 	pub fn with_quota(mut self, quota: Arc<crate::smtp::quota::MailboxQuota>) -> Self {
 		self.policy = self.policy.with_quota(quota);
+		self
+	}
+
+	/// Refuse at `RCPT TO` what the sender lists of the antispam scopes
+	/// deny (see [`crate::antispam::scopes`]).
+	pub fn with_scopes(mut self, scopes: Arc<crate::antispam::scopes::Scopes>) -> Self {
+		self.policy = self.policy.with_scopes(scopes);
 		self
 	}
 

@@ -26,13 +26,49 @@ pub struct Triplet<'a> {
 	pub recipient: &'a str,
 }
 
+/// How many leading bits of the client address greylisting tells apart:
+/// clients that share them share a triplet, so a sender that retries from
+/// another host of its own network is recognised.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Mask {
+	/// Bits of an IPv4 address that count, 32 for the whole address.
+	pub v4: u8,
+	/// Bits of an IPv6 address that count, 128 for the whole address.
+	pub v6: u8,
+}
+
+impl Default for Mask {
+	/// The whole address, as greylisting keyed before the mask was a setting.
+	fn default() -> Self {
+		Self { v4: 32, v6: 128 }
+	}
+}
+
+impl Mask {
+	/// `ip` reduced to the bits that count.
+	fn apply(self, ip: IpAddr) -> IpAddr {
+		let bits = match ip {
+			IpAddr::V4(_) => self.v4,
+			IpAddr::V6(_) => self.v6,
+		};
+		crate::cidr::Cidr::parse(&format!("{ip}/{bits}")).map_or(ip, |network| network.network())
+	}
+}
+
 impl Triplet<'_> {
 	/// A stable key for this triplet. The sender and recipient are lowercased
 	/// so case variations map to the same entry.
 	pub fn key(&self) -> String {
+		self.key_masked(Mask::default())
+	}
+
+	/// The key with the client address reduced by `mask`. With the default
+	/// mask it is the same key [`Self::key`] gives, so stored triplets stay
+	/// valid.
+	pub fn key_masked(&self, mask: Mask) -> String {
 		format!(
 			"{}|{}|{}",
-			self.client_ip,
+			mask.apply(self.client_ip),
 			self.sender.to_ascii_lowercase(),
 			self.recipient.to_ascii_lowercase(),
 		)
@@ -93,7 +129,19 @@ pub async fn decide(
 	now: u64,
 	delay_secs: u64,
 ) -> Decision {
-	let key = triplet.key();
+	decide_masked(store, triplet, Mask::default(), now, delay_secs).await
+}
+
+/// [`decide`] with the client address reduced by `mask` before the triplet
+/// is looked up.
+pub async fn decide_masked(
+	store: &dyn GreylistStore,
+	triplet: &Triplet<'_>,
+	mask: Mask,
+	now: u64,
+	delay_secs: u64,
+) -> Decision {
+	let key = triplet.key_masked(mask);
 	match store.first_seen(&key).await {
 		Err(StoreUnavailable) => Decision::Accept,
 		// First sighting: remember it and defer.

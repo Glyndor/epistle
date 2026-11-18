@@ -43,7 +43,7 @@ fn a_full_gate_answers_a_temporary_failure_to_every_password_login() {
 	let reply = session.handle(Command::Pass(fixtures::wrong_password().into()));
 	assert_eq!(
 		reply,
-		Response::Err("authentication failed".to_string()),
+		Response::Err("[AUTH] authentication failed".to_string()),
 		"a wrong password is refused again once a place is free"
 	);
 	session.handle(Command::User(OPEN.into()));

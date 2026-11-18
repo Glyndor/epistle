@@ -1,5 +1,6 @@
-//! `domain disable` and `domain enable`: the switch is the `disabled_domains`
-//! array of the configuration file, edited in place.
+//! `domain disable` and `domain enable`: the switch is the domain's
+//! `enabled` field in `<data_dir>/domains.toml`; the configuration file is
+//! not written, and no server is running to reload it.
 
 use serde_json::{Value, json};
 
@@ -16,6 +17,21 @@ fn text(env: &Env) -> String {
 	std::fs::read_to_string(&env.config).expect("read config")
 }
 
+/// The domain state file, or an empty string before the first write.
+fn state(env: &Env) -> String {
+	std::fs::read_to_string(env.data_dir().join("domains.toml")).unwrap_or_default()
+}
+
+/// The `enabled` flag the state file holds for `domain`.
+fn enabled_in_state(env: &Env, domain: &str) -> Option<bool> {
+	let parsed: toml::Value = toml::from_str(&state(env)).expect("the state file parses");
+	parsed["domain"]
+		.as_array()?
+		.iter()
+		.find(|entry| entry["name"].as_str() == Some(domain))
+		.map(|entry| entry["enabled"].as_bool().unwrap_or(true))
+}
+
 fn with_second_domain() -> Env {
 	let env = env("# kept across edits\n");
 	assert_eq!(run(&env.config, &["add", "example.net"]).0, 0);
@@ -27,31 +43,37 @@ fn disable_then_enable_a_domain() {
 	let env = with_second_domain();
 	let disabled = json!({
 		"result": "saved", "action": "disable", "domain": "example.net",
-		"enabled": false, "reload": "restart-needed",
+		"enabled": false, "reload": "no-server",
 	});
 	assert_eq!(
 		run(&env.config, &["disable", "example.net", "--yes"]),
 		(0, disabled)
 	);
-	assert!(
-		text(&env).contains("disabled_domains = [\"example.net\"]"),
-		"config after disable:\n{}",
-		text(&env)
+	assert_eq!(
+		enabled_in_state(&env, "example.net"),
+		Some(false),
+		"{}",
+		state(&env)
 	);
 	assert!(text(&env).contains("# kept across edits"));
+	assert!(
+		!text(&env).contains("disabled_domains"),
+		"mail.toml is not written"
+	);
 
 	let again = run(&env.config, &["disable", "example.net", "--yes"]);
 	assert_eq!(again.1["result"], "unchanged");
 
 	let enabled = json!({
 		"result": "saved", "action": "enable", "domain": "example.net",
-		"enabled": true, "reload": "restart-needed",
+		"enabled": true, "reload": "no-server",
 	});
 	assert_eq!(run(&env.config, &["enable", "example.net"]), (0, enabled));
-	assert!(
-		text(&env).contains("disabled_domains = []"),
-		"example.net must leave disabled_domains:\n{}",
-		text(&env)
+	assert_eq!(
+		enabled_in_state(&env, "example.net"),
+		Some(true),
+		"{}",
+		state(&env)
 	);
 	assert_eq!(
 		run(&env.config, &["enable", "example.net"]).1["result"],
@@ -86,23 +108,23 @@ fn list_and_show_say_whether_a_domain_is_enabled() {
 #[test]
 fn a_dry_run_changes_nothing_and_shows_the_diff() {
 	let env = with_second_domain();
-	let before = text(&env);
+	let before = (text(&env), state(&env));
 	let (code, value) = run(&env.config, &["disable", "example.net", "--dry-run"]);
 	assert_eq!((code, value["result"].as_str()), (0, Some("dry-run")));
 	assert!(
 		value["diff"]
 			.as_str()
-			.is_some_and(|diff| diff.contains("+disabled_domains = [\"example.net\"]")),
+			.is_some_and(|diff| diff.contains("+enabled = false") && diff.contains("domains.toml")),
 		"diff: {}",
 		value["diff"]
 	);
-	assert_eq!(text(&env), before);
+	assert_eq!((text(&env), state(&env)), before);
 }
 
 #[test]
 fn disabling_without_yes_off_a_terminal_is_refused() {
 	let env = with_second_domain();
-	let before = text(&env);
+	let before = state(&env);
 	let output = epistle(
 		&[
 			"domain",
@@ -121,7 +143,7 @@ fn disabling_without_yes_off_a_terminal_is_refused() {
 		"stderr: {}",
 		String::from_utf8_lossy(&output.stderr)
 	);
-	assert_eq!(text(&env), before);
+	assert_eq!(state(&env), before);
 }
 
 #[test]
@@ -152,7 +174,7 @@ fn an_unknown_domain_is_refused_and_nothing_is_printed() {
 #[test]
 fn the_last_enabled_domain_cannot_be_disabled_while_the_server_listens() {
 	let env = env("[[listeners]]\nkind = \"smtp\"\n");
-	let before = text(&env);
+	let before = (text(&env), state(&env));
 	let output = epistle(
 		&[
 			"domain",
@@ -172,7 +194,7 @@ fn the_last_enabled_domain_cannot_be_disabled_while_the_server_listens() {
 		"stderr: {}",
 		String::from_utf8_lossy(&output.stderr)
 	);
-	assert_eq!(text(&env), before);
+	assert_eq!((text(&env), state(&env)), before);
 }
 
 #[test]
@@ -186,9 +208,9 @@ fn removing_a_disabled_domain_drops_it_from_the_list_too() {
 		"{value}"
 	);
 	assert!(
-		!text(&env).contains("example.net"),
-		"example.net is still in the file:\n{}",
-		text(&env)
+		!state(&env).contains("example.net"),
+		"example.net is still in the state file:\n{}",
+		state(&env)
 	);
 }
 

@@ -67,6 +67,7 @@ pub(in super::super) fn tenants() -> (tempfile::TempDir, ApiState, Arc<AccountSt
 			scopes: vec![Scope::Scim.as_str().to_string()],
 			domains,
 			account: None,
+			auto_submitted: false,
 		})
 		.expect("add key");
 	}

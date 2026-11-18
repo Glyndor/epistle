@@ -96,6 +96,8 @@ fn from_config_enabled_without_key_fails_closed() {
 		deleted_retention_days: 0,
 		delivery_log_days: 0,
 		blobs: None,
+		folders: Default::default(),
+		cleanup: None,
 	};
 	let result = MessageCrypto::from_config(Some(&storage));
 	assert!(matches!(result, Err(CryptoError::NoKeySource)));
@@ -116,6 +118,8 @@ fn from_config_loads_key_from_file() {
 		deleted_retention_days: 0,
 		delivery_log_days: 0,
 		blobs: None,
+		folders: Default::default(),
+		cleanup: None,
 	};
 	let crypto = MessageCrypto::from_config(Some(&storage)).expect("build");
 	assert!(crypto.enabled());
@@ -140,6 +144,8 @@ fn from_config_keeps_key_loaded_when_disabled() {
 		deleted_retention_days: 0,
 		delivery_log_days: 0,
 		blobs: None,
+		folders: Default::default(),
+		cleanup: None,
 	};
 	let ciphertext = MessageCrypto::from_config(Some(&enabled))
 		.expect("build enabled")
@@ -155,6 +161,8 @@ fn from_config_keeps_key_loaded_when_disabled() {
 		deleted_retention_days: 0,
 		delivery_log_days: 0,
 		blobs: None,
+		folders: Default::default(),
+		cleanup: None,
 	};
 	let crypto = MessageCrypto::from_config(Some(&disabled)).expect("build disabled");
 	assert!(!crypto.enabled());
@@ -178,6 +186,8 @@ fn from_config_rejects_malformed_key() {
 		deleted_retention_days: 0,
 		delivery_log_days: 0,
 		blobs: None,
+		folders: Default::default(),
+		cleanup: None,
 	};
 	assert!(matches!(
 		MessageCrypto::from_config(Some(&storage)),
@@ -202,7 +212,7 @@ fn stored_plaintext_len_accounts_for_overhead() {
 	let stored = crypto.encode(plaintext).expect("encode");
 	let path = dir.path().join("msg.eml");
 	std::fs::write(&path, &stored).expect("write");
-	let len = crypto.stored_plaintext_len(&path, stored.len() as u64);
+	let len = crypto.stored_plaintext_len(dir.path(), &path, stored.len() as u64);
 	assert_eq!(len, plaintext.len() as u64);
 }
 
@@ -213,6 +223,6 @@ fn stored_plaintext_len_passes_through_plaintext_file() {
 	let plaintext = b"legacy on disk, no magic";
 	let path = dir.path().join("legacy.eml");
 	std::fs::write(&path, plaintext).expect("write");
-	let len = crypto.stored_plaintext_len(&path, plaintext.len() as u64);
+	let len = crypto.stored_plaintext_len(dir.path(), &path, plaintext.len() as u64);
 	assert_eq!(len, plaintext.len() as u64);
 }

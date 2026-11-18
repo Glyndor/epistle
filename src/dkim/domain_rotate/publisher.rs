@@ -4,13 +4,16 @@
 //! name, and take the one at a name away. [`KeyPublisher`] is that and no
 //! more, so the rotation does not depend on how the records reach the zone.
 //! [`ProviderPublisher`] writes through the configured `[dns]` providers,
-//! one write at a time across every domain that shares it.
+//! one write at a time across every domain that shares it, with the guarded
+//! writer of [`crate::dns::publish::write`].
 
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use crate::dns::provider::{DnsProvider, DnsRecord, RecordKind};
+use crate::dns::provider::live::LiveProvider;
+use crate::dns::provider::{DnsProvider, DnsRecord, RecordKind, same_txt_purpose, txt_purpose};
+use crate::dns::publish::write::{Unguarded, WriteError, replace_set};
 
 /// The answer of a publisher: `Err` carries why the write did not happen.
 pub type PublishOp<'a> = Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>>;
@@ -27,6 +30,10 @@ pub trait KeyPublisher: Send + Sync {
 	/// Remove the DKIM key record at `name`. A rotation names only selectors
 	/// it made itself, so nothing else is expected at the name.
 	fn withdraw<'a>(&'a self, name: &'a str) -> PublishOp<'a>;
+	/// Called at the start of every cycle of the rotation: a publisher that
+	/// holds a credential builds its provider again here. The default does
+	/// nothing.
+	fn refresh(&self) {}
 }
 
 /// A [`KeyPublisher`] over the `[dns]` providers.
@@ -41,6 +48,8 @@ pub trait KeyPublisher: Send + Sync {
 /// [`crate::dns::zone_lock`]).
 pub struct ProviderPublisher {
 	provider: Arc<dyn DnsProvider>,
+	/// The provider again, when it is built once per cycle.
+	live: Option<Arc<LiveProvider>>,
 	zones: Vec<String>,
 	writes: Arc<tokio::sync::Mutex<()>>,
 }
@@ -50,9 +59,18 @@ impl ProviderPublisher {
 	pub fn new(provider: Arc<dyn DnsProvider>, zones: Vec<String>) -> Self {
 		ProviderPublisher {
 			provider,
+			live: None,
 			zones,
 			writes: Arc::new(tokio::sync::Mutex::new(())),
 		}
+	}
+
+	/// Publish through `live`, which is built again at the start of every
+	/// cycle (see [`KeyPublisher::refresh`]).
+	pub fn live(live: Arc<LiveProvider>, zones: Vec<String>) -> Self {
+		let mut publisher = Self::new(Arc::clone(&live) as Arc<dyn DnsProvider>, zones);
+		publisher.live = Some(live);
+		publisher
 	}
 
 	/// Take `writes` as the lock every write holds, shared with other
@@ -73,6 +91,68 @@ impl ProviderPublisher {
 	}
 }
 
+/// Make `record` the DKIM key record at its name in `zone`: the DKIM record
+/// there is replaced and nothing else is touched, under the precondition
+/// that the set is still the one read (see [`crate::dns::publish::write`]).
+/// A provider without a precondition gets the `upsert`, which replaces the
+/// TXT of the same purpose. The caller holds the lock of the zone.
+pub(crate) async fn publish_key(
+	provider: &dyn DnsProvider,
+	zone: &str,
+	record: DnsRecord,
+) -> Result<(), WriteError> {
+	let name = record.name.clone();
+	replace_set(
+		provider,
+		zone,
+		&name,
+		&RecordKind::Txt,
+		|held| {
+			held.iter()
+				.filter(|r| !same_txt_purpose(&r.value, &record.value))
+				.cloned()
+				.chain([record.clone()])
+				.collect()
+		},
+		Unguarded::Upsert(record.clone()),
+		operation(),
+	)
+	.await
+}
+
+/// Take the DKIM key records at `name` in `zone` away, under the
+/// precondition that the set is still the one read; a TXT of another purpose
+/// at the name stays. A provider without a precondition gets the delete with
+/// an empty value, which removes the TXT set at the name, the way the
+/// `[dkim]` rotation retires a selector. The caller holds the lock of the
+/// zone.
+pub(crate) async fn withdraw_key(
+	provider: &dyn DnsProvider,
+	zone: &str,
+	name: &str,
+) -> Result<(), WriteError> {
+	replace_set(
+		provider,
+		zone,
+		name,
+		&RecordKind::Txt,
+		|held| {
+			held.iter()
+				.filter(|r| txt_purpose(&r.value) != Some("v=DKIM1"))
+				.cloned()
+				.collect()
+		},
+		Unguarded::Delete(txt(name, "")),
+		operation(),
+	)
+	.await
+}
+
+/// The name of one write, so a lost answer can be resolved.
+fn operation() -> String {
+	format!("epistle-dkim-{}", uuid::Uuid::now_v7())
+}
+
 fn txt(name: &str, value: &str) -> DnsRecord {
 	DnsRecord {
 		name: name.to_string(),
@@ -84,6 +164,12 @@ fn txt(name: &str, value: &str) -> DnsRecord {
 }
 
 impl KeyPublisher for ProviderPublisher {
+	fn refresh(&self) {
+		if let Some(live) = &self.live {
+			live.refresh_or_keep("per-domain DKIM rotation");
+		}
+	}
+
 	fn publish<'a>(&'a self, name: &'a str, value: &'a str) -> PublishOp<'a> {
 		Box::pin(async move {
 			let zone = self.zone_for(name)?;
@@ -91,8 +177,7 @@ impl KeyPublisher for ProviderPublisher {
 			// The lock of the zone: the reconcile loop publishes in the
 			// same zone, and the two must not write it at the same time.
 			let _zone = crate::dns::zone_lock::lock(zone).await;
-			self.provider
-				.upsert(zone, txt(name, value))
+			publish_key(self.provider.as_ref(), zone, txt(name, value))
 				.await
 				.map_err(|error| format!("publish {name}: {error}"))
 		})
@@ -105,10 +190,7 @@ impl KeyPublisher for ProviderPublisher {
 			// The lock of the zone: the reconcile loop publishes in the
 			// same zone, and the two must not write it at the same time.
 			let _zone = crate::dns::zone_lock::lock(zone).await;
-			// An empty value removes the TXT set at the name, the way the
-			// `[dkim]` rotation retires a selector it made.
-			self.provider
-				.delete(zone, txt(name, ""))
+			withdraw_key(self.provider.as_ref(), zone, name)
 				.await
 				.map_err(|error| format!("withdraw {name}: {error}"))
 		})

@@ -45,7 +45,10 @@ impl Server {
 			global_submission_rate_limit_per_min: None,
 			inbound_ip_limit: None,
 			inbound_sender_limit: None,
+			refusal_detail: crate::config::RefusalDetail::default(),
+			refusal_reference: false,
 			tenant_limits: None,
+			scopes: None,
 			disk_guard: None,
 			drain: None,
 			quota: None,
@@ -57,6 +60,7 @@ impl Server {
 			memory_budget: None,
 			max_connections_per_ip: MAX_CONNECTIONS_PER_IP,
 			trusted_networks: Vec::new(),
+			inbound: super::InboundPolicy::default(),
 			max_message_size: crate::smtp::session::MAX_MESSAGE_SIZE,
 			max_recipients: crate::smtp::session::DEFAULT_MAX_RECIPIENTS,
 			data_rate: super::DataRate::default(),
@@ -64,6 +68,7 @@ impl Server {
 			max_session_time: std::time::Duration::from_secs(super::DEFAULT_MAX_SESSION_TIME_SECS),
 			auth_protocol: crate::config::Protocol::Submission,
 			scram_enabled: true,
+			submission_listener: false,
 			#[cfg(test)]
 			strip_for_test: None,
 		}
@@ -89,6 +94,14 @@ impl Server {
 	/// so the choice has no practical effect).
 	pub fn with_auth_protocol(mut self, protocol: crate::config::Protocol) -> Self {
 		self.auth_protocol = protocol;
+		self
+	}
+
+	/// Serve a submission listener: a client that has not authenticated is
+	/// answered `530` at `MAIL FROM` and asked to start TLS or to
+	/// authenticate. Off by default, the receiving listener.
+	pub fn with_submission_listener(mut self, submission: bool) -> Self {
+		self.submission_listener = submission;
 		self
 	}
 
@@ -125,10 +138,39 @@ impl Server {
 		self
 	}
 
+	/// Apply the inbound decisions of `[smtp]` and `[antispam]`: the
+	/// operator's own relays (exempt from the per-IP connection cap and from
+	/// the checks of the connecting address), the full-mailbox answer, the
+	/// greylist mask and the reputation floor. A server built without this
+	/// call trusts nobody and decides as it always did.
+	pub fn with_inbound_policy(mut self, policy: super::InboundPolicy) -> Self {
+		self.trusted_networks = policy.trusted_networks().to_vec();
+		self.inbound = policy;
+		self
+	}
+
+	/// Set how much a refusal tells a sender that has not authenticated, and
+	/// whether a final refusal carries a reference (`[smtp]`). A server
+	/// built without this call says the standard wording and no reference;
+	/// `serve` calls it with the configuration, whose reference defaults to
+	/// on.
+	pub fn with_refusal(mut self, detail: crate::config::RefusalDetail, reference: bool) -> Self {
+		self.refusal_detail = detail;
+		self.refusal_reference = reference;
+		self
+	}
+
 	/// Attach per-tenant aggregate limits. On top of the per-account
 	/// limiter; the SMTP path checks both before accepting MAIL FROM.
 	pub fn with_tenant_limits(mut self, limits: Arc<crate::api::TenantLimits>) -> Self {
 		self.tenant_limits = Some(limits);
+		self
+	}
+
+	/// Apply the antispam scopes: the sender lists at `RCPT TO` and after
+	/// authentication, and the attachment settings of each recipient.
+	pub fn with_scopes(mut self, scopes: Arc<crate::antispam::scopes::Scopes>) -> Self {
+		self.scopes = Some(scopes);
 		self
 	}
 

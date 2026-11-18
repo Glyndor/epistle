@@ -58,7 +58,7 @@ fn json_has_an_entry_per_area_with_status_detail_and_items() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let path = valid(dir.path());
 	let mut out = Vec::new();
-	execute(&path, &[CheckArea::Config], true, false, &mut out);
+	let _ = execute(&path, &[CheckArea::Config], true, false, &mut out);
 	let value: serde_json::Value = serde_json::from_slice(&out).expect("valid JSON");
 	let config = &value["config"];
 	assert_eq!(config["status"], "ok", "{value}");
@@ -167,10 +167,29 @@ fn status_covers_every_area_in_a_stable_order() {
 			"spool",
 			"storage_keys",
 			"subid",
+			"boot",
 			"warmup",
 			"resources",
 			"clock",
-			"evidence"
+			"evidence",
+			"deliverability"
 		]
 	);
+}
+
+#[test]
+fn boot_is_an_area_of_status_and_of_check_and_of_the_json() {
+	assert_eq!(
+		clap::ValueEnum::from_str("boot", false),
+		Ok(CheckArea::Boot)
+	);
+	let dir = tempfile::tempdir().expect("tempdir");
+	let path = valid(dir.path());
+	let mut out = Vec::new();
+	// No compose file in this install, so the area has nothing to start.
+	let code = execute(&path, &[CheckArea::Boot], true, true, &mut out);
+	assert_eq!(code, ExitCode::SUCCESS);
+	let value: serde_json::Value = serde_json::from_slice(&out).expect("json");
+	assert_eq!(value["boot"]["status"], "ok", "{value}");
+	assert!(value["boot"]["items"].as_array().expect("items").is_empty());
 }

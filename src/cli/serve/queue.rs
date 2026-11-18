@@ -62,6 +62,10 @@ pub(super) fn spawn_queue_worker(
 			std::io::Error::other(format!("cannot build MTA-STS fetcher: {error:?}"))
 		})?,
 	)));
+	let suppression = crate::queue::SuppressionList::open(&config.data_dir)?;
+	let suppression_rules = crate::queue::SuppressionRules::from_config(config);
+	// The tenant scope trusts this map: publish what the configuration says now.
+	suppression.publish_tenants(&suppression_rules)?;
 	let mut worker = crate::queue::Worker::new(
 		crate::storage::FsSpool::open_with_crypto(&config.data_dir, crypto)?,
 		connector,
@@ -69,6 +73,7 @@ pub(super) fn spawn_queue_worker(
 	)
 	.with_bounce_sink(sink)
 	.with_system_auto_submitted(config.system_auto_submitted)
+	.with_system_auto_response_suppress(config.system_auto_response_suppress)
 	.with_mta_sts(mta_sts, Arc::clone(&spf_dns))
 	.with_dane(Arc::clone(&spf_dns))
 	.with_metrics(metrics.clone())
@@ -78,14 +83,17 @@ pub(super) fn spawn_queue_worker(
 		config.queue_retry_cap_secs,
 		config.queue_delay_warning_secs,
 	))
-	.with_suppression(crate::queue::SuppressionList::open(&config.data_dir)?)
+	.with_suppression(suppression)
+	.with_suppression_rules(suppression_rules)
 	.with_transports(config.transport.clone())
 	.with_outbound_tls(config.queue.outbound_tls)
 	.with_concurrency(
 		config.queue.concurrency,
 		config.queue.per_domain_concurrency,
 	)
+	.with_per_group_concurrency(config.queue.per_group_concurrency.clone())
 	.with_backoff(config.queue.backoff_steps.clone())
+	.with_provider_pause(config.queue.provider_pause_secs)
 	.with_delivery_log(crate::storage::DeliveryLog::open(
 		&config.data_dir,
 		config.delivery_log_days(),

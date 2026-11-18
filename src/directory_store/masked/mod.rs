@@ -58,7 +58,7 @@ pub struct MaskedAddressStore {
 	path: PathBuf,
 	/// All entries, keyed by lowercased address.
 	entries: HashMap<String, MaskedAddress>,
-	/// Per-account limit; `0` means no limit. Set via [`Self::with_max_per_account`].
+	/// Per-account limit; `0` refuses every new address, `usize::MAX` (the default of a freshly opened store) never does. Set via [`Self::with_max_per_account`].
 	max_per_account: usize,
 }
 
@@ -79,24 +79,24 @@ impl MaskedAddressStore {
 		Ok(Self {
 			path,
 			entries,
-			max_per_account: 0,
+			max_per_account: usize::MAX,
 		})
 	}
 
-	/// Override the per-account limit (0 = unlimited). The limit is enforced
+	/// Override the per-account limit (0 = masked addresses disabled). The limit is enforced
 	/// by [`Self::add`]; existing entries above the new limit are not pruned.
 	pub fn with_max_per_account(mut self, max: usize) -> Self {
 		self.max_per_account = max;
 		self
 	}
 
-	/// Set the per-account limit at runtime (0 = unlimited). For the
+	/// Set the per-account limit at runtime (0 = masked addresses disabled). For the
 	/// builder form, see [`Self::with_max_per_account`].
 	pub fn set_max_per_account(&mut self, max: usize) {
 		self.max_per_account = max;
 	}
 
-	/// The configured per-account limit (0 = unlimited).
+	/// The configured per-account limit (0 = masked addresses disabled).
 	pub fn max_per_account(&self) -> usize {
 		self.max_per_account
 	}
@@ -205,17 +205,15 @@ impl MaskedAddressStore {
 			},
 			MaskedFile::default,
 			|state: &mut MaskedFile| -> Result<(), StoreError> {
-				if max_per_account > 0 {
-					let current = state
-						.addresses
-						.values()
-						.filter(|entry| entry.account == account)
-						.count();
-					if current >= max_per_account {
-						return Err(StoreError::LimitReached {
-							max: max_per_account,
-						});
-					}
+				let current = state
+					.addresses
+					.values()
+					.filter(|entry| entry.account == account)
+					.count();
+				if current >= max_per_account {
+					return Err(StoreError::LimitReached {
+						max: max_per_account,
+					});
 				}
 				let mut entry = Self::fresh_entry(&account, &slug, &label, domain, now)?;
 				if state.addresses.contains_key(&entry.address) {

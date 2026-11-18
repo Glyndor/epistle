@@ -9,12 +9,15 @@ use crate::storage::{FsSpool, RecipientStatus, SpoolEntry};
 use super::client::DeliveryError;
 use super::resolver::Connector;
 use conversation::Conversation;
+use refusal::Refusal;
 
 mod attempt;
 mod blocking;
 mod claims;
 mod conversation;
 mod evidence;
+mod provider;
+mod refusal;
 mod report_failures;
 mod reports;
 mod scheduler;
@@ -48,6 +51,9 @@ pub struct Worker {
 	max_age_secs: u64,
 	/// Suppression list: recipients that hard-bounced are not retried.
 	suppression: Option<super::SuppressionList>,
+	/// Which lists a hard bounce suppresses an address in, for how long and
+	/// after how many.
+	suppression_rules: super::SuppressionRules,
 	/// Outbound transport rules (relay/socks/direct/fail). Empty = direct MX.
 	transports: Vec<crate::config::Transport>,
 	/// DNSSEC-validating resolver for DANE TLSA lookups. `None` disables DANE
@@ -72,6 +78,10 @@ pub struct Worker {
 	evidence: Option<Arc<crate::evidence::service::EvidenceService>>,
 	/// How many conversations run at once, overall and per domain.
 	limits: super::limits::Limits,
+	/// The limits of the receiver groups: how many conversations each may
+	/// have at once, and the minimum wait between two of them. A group
+	/// with no entry is not limited.
+	group_limits: std::collections::BTreeMap<super::warmup::Group, super::limits::GroupLimit>,
 	/// Recipients in conversation, and the slots in use.
 	claims: claims::Claims,
 	/// Held while an entry is settled, so two passes never send the same
@@ -80,6 +90,10 @@ pub struct Worker {
 	/// How long a destination that asks to slow down is held off, by the
 	/// number of times in a row it did (seconds).
 	backoff_steps: Vec<u64>,
+	/// Minimum provider pause; receiver-group connection counts are bounded by
+	/// the four known providers, independent of spool size.
+	provider_pause_secs: u64,
+	provider_connections: provider::Connections,
 	/// The longest one delivery attempt to one domain may take.
 	attempt_limit: Duration,
 	/// The destinations on hold, as the spool shows them: rebuilt from the
@@ -93,6 +107,8 @@ pub struct Worker {
 	/// `Auto-Submitted: auto-generated` (the `system_auto_submitted`
 	/// switch).
 	auto_submitted: bool,
+	/// Whether generated mail asks Exchange to suppress automatic responses.
+	auto_response_suppress: bool,
 }
 
 impl Worker {
@@ -109,6 +125,7 @@ impl Worker {
 			webhook: None,
 			max_age_secs: DEFAULT_MAX_AGE_SECS,
 			suppression: None,
+			suppression_rules: super::SuppressionRules::default(),
 			transports: Vec::new(),
 			dane_dns: None,
 			outbound_tls: crate::config::OutboundTls::default(),
@@ -118,14 +135,24 @@ impl Worker {
 			delivery_log: None,
 			evidence: None,
 			limits: super::limits::Limits::default(),
+			group_limits: Default::default(),
 			claims: claims::Claims::default(),
 			settling: std::sync::Mutex::new(()),
 			backoff_steps: super::backoff::DEFAULT_STEPS.to_vec(),
+			provider_pause_secs: super::backoff::DEFAULT_PROVIDER_PAUSE_SECS,
+			provider_connections: Default::default(),
 			attempt_limit: super::timeouts::ATTEMPT,
 			holds: Default::default(),
 			warmup: None,
 			auto_submitted: true,
+			auto_response_suppress: true,
 		}
+	}
+
+	/// Control Exchange auto-response suppression on failure and delay notices.
+	pub fn with_system_auto_response_suppress(mut self, enabled: bool) -> Self {
+		self.auto_response_suppress = enabled;
+		self
 	}
 
 	/// Write `Auto-Submitted` on the failure and delay notices this worker
@@ -150,6 +177,31 @@ impl Worker {
 	pub fn with_concurrency(mut self, total: usize, per_domain: usize) -> Self {
 		self.limits = super::limits::Limits::new(total, per_domain);
 		self
+	}
+
+	/// Limit the receiver groups: `limits` says how many conversations each
+	/// group may have at once, and how long it waits between two of them.
+	/// A group with no entry is not limited, which is how the queue
+	/// behaved before this setting existed.
+	pub fn with_per_group_concurrency(
+		mut self,
+		limits: std::collections::BTreeMap<super::warmup::Group, super::limits::GroupLimit>,
+	) -> Self {
+		self.group_limits = limits;
+		self
+	}
+
+	/// The limit of the receiver group `group`, when it has one. Never for
+	/// [`Group::Other`](super::warmup::Group::Other).
+	pub(super) fn group_limit(
+		&self,
+		group: super::warmup::Group,
+	) -> Option<&super::limits::GroupLimit> {
+		// `other` holds unrelated receivers, which never share a queue.
+		if group == super::warmup::Group::Other {
+			return None;
+		}
+		self.group_limits.get(&group)
 	}
 
 	/// Enable the per-recipient delivery log. A `0`-retention `log` is
@@ -226,6 +278,12 @@ impl Worker {
 		if secs > 0 {
 			self.max_age_secs = secs;
 		}
+		self
+	}
+
+	/// The scopes, lifetime and threshold of automatic suppression.
+	pub fn with_suppression_rules(mut self, rules: super::SuppressionRules) -> Self {
+		self.suppression_rules = rules;
 		self
 	}
 
@@ -471,16 +529,7 @@ impl Worker {
 			Err(error) => return Err(error),
 		}
 		if let Some(slow) = slow {
-			let mut holds = self.holds();
-			holds.note(slow.domain, slow.until, slow.deferrals, &slow.reason);
-			if let Some(host) = &slow.host {
-				holds.note(
-					super::destination::Destination::exchanger(host),
-					slow.until,
-					slow.deferrals,
-					&slow.reason,
-				);
-			}
+			self.remember_slow(&slow);
 		}
 		self.after_conversation(id, entry, conversation);
 		Ok(())

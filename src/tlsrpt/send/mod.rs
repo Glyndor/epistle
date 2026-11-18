@@ -101,11 +101,15 @@ pub struct Sender<'a> {
 	/// Whether outgoing report messages carry
 	/// `Auto-Submitted: auto-generated`.
 	pub auto_submitted: bool,
+	/// Whether generated mail asks Exchange to suppress automatic responses.
+	pub auto_response_suppress: bool,
 }
 
 /// Send the reports for every completed day before `today` (`YYYYMMDD`).
 pub async fn send_pending(sender: &Sender<'_>, today: &str) {
-	let Ok(days) = crate::util::fs_walk::read_dir(sessions::root(sender.data_dir)) else {
+	let Ok(days) =
+		crate::util::fs_walk::rooted::read_dir(sender.data_dir, sessions::root(sender.data_dir))
+	else {
 		return;
 	};
 	for day in days.flatten() {
@@ -113,7 +117,7 @@ pub async fn send_pending(sender: &Sender<'_>, today: &str) {
 		if name.as_str() >= today || name.len() != 8 || !name.bytes().all(|b| b.is_ascii_digit()) {
 			continue;
 		}
-		let Ok(files) = crate::util::fs_walk::read_dir(day.path()) else {
+		let Ok(files) = crate::util::fs_walk::rooted::read_dir(sender.data_dir, day.path()) else {
 			continue;
 		};
 		for file in files.flatten() {
@@ -182,6 +186,7 @@ async fn deliver(
 				hostname,
 				&gzip,
 				sender.auto_submitted,
+				sender.auto_response_suppress,
 			));
 			let message = AcceptedMessage {
 				reverse_path: contact.clone(),
@@ -241,6 +246,7 @@ pub async fn run(
 	sink: Arc<dyn MessageSink>,
 	poster: Arc<dyn ReportPoster>,
 	auto_submitted: bool,
+	auto_response_suppress: bool,
 ) {
 	let mut ticker = tokio::time::interval(INTERVAL);
 	ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -258,6 +264,7 @@ pub async fn run(
 			sink: sink.as_ref(),
 			poster: poster.as_ref(),
 			auto_submitted,
+			auto_response_suppress,
 		};
 		send_pending(&sender, &today).await;
 	}

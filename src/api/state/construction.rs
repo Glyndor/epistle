@@ -52,21 +52,15 @@ impl ApiState {
 			.map(|(name, _, _)| name)
 			.collect();
 		let stats = crate::api::jmap::backfill_blob_ownership(&data_dir, &account_names);
-		if stats.written > 0 || stats.conflicts > 0 || stats.errors > 0 {
-			tracing::info!(
-				scanned = stats.scanned,
-				written = stats.written,
-				skipped = stats.skipped,
-				conflicts = stats.conflicts,
-				errors = stats.errors,
-				"jmap blob-ownership backfill complete"
-			);
-		}
+		stats.log();
 		ApiState {
 			inner: Arc::new(Inner {
 				token_hash: token_hash.map(str::to_owned),
 				data_dir: data_dir.clone(),
-				domains,
+				hosted: Arc::new(std::sync::RwLock::new(Arc::new(
+					hosted::HostedView::hosting(domains, Vec::new()),
+				))),
+				live_domains: None,
 				store,
 				spool,
 				auth_limiter: std::sync::Mutex::new(ClientLimiters::new(AUTH_WINDOW)),
@@ -101,9 +95,9 @@ impl ApiState {
 				outbound: None,
 				delivery_log_days: 0,
 				webhook: None,
-				disabled_domains: Vec::new(),
 				max_message_size: crate::smtp::session::MAX_MESSAGE_SIZE,
 				max_recipients: crate::smtp::session::DEFAULT_MAX_RECIPIENTS,
+				events: crate::api::events::Hub::new(Default::default()),
 			}),
 		}
 	}

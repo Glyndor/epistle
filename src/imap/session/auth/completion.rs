@@ -13,7 +13,7 @@ impl Session {
 		account: String,
 		completion: &str,
 	) -> Output {
-		if let Err(error) = mailbox::ensure_defaults(&self.data_dir, &account) {
+		if let Err(error) = mailbox::ensure_defaults_with(&self.data_dir, &account, &self.folders) {
 			tracing::error!(%error, "cannot initialize personal mailboxes");
 			return Output::text(format!(
 				"{tag} NO [SERVERBUG] cannot initialize mailboxes\r\n"

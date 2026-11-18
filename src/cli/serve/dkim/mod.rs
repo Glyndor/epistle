@@ -24,6 +24,11 @@ pub(in crate::cli) struct SplitCompanions {
 	/// The signer of each `[[dkim.domain]]` entry, shared with the sink:
 	/// the rotation of each domain replaces its own.
 	pub domain_signers: Vec<crate::dkim::DomainSigner>,
+	/// The signer the sink signs with, present when `[dkim]` is configured:
+	/// its per-domain overrides follow the hosted domains.
+	pub per_domain: Option<crate::dkim::PerDomainSigner>,
+	/// The SRS keys the sink signs forwarded mail with.
+	pub srs: crate::storage::SrsSlot,
 	/// The webhook dispatcher, present when `[webhook]` is configured.
 	pub webhook: Option<Arc<crate::webhook::Webhook>>,
 	/// The ARC sealer, present when `[arc]` is configured.
@@ -43,21 +48,30 @@ pub(in crate::cli) fn load_per_domain_signers(
 ) -> std::io::Result<Vec<crate::dkim::DomainSigner>> {
 	let mut loaded = Vec::with_capacity(dkim.domain.len());
 	for entry in &dkim.domain {
-		let active = crate::dkim::domain_rotate::active_keys(entry, data_dir)
-			.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
-		let mut signer = crate::dkim::Signer::load(&active.ed.selector, &active.ed.key_file)
-			.map_err(std::io::Error::other)?;
-		if let Some(rsa) = &active.rsa {
-			signer = signer
-				.with_rsa(&rsa.selector, &rsa.key_file)
-				.map_err(std::io::Error::other)?;
-		}
-		loaded.push(crate::dkim::DomainSigner {
-			domain: entry.name.to_ascii_lowercase(),
-			signer: crate::dkim::ReloadableSigner::new(Arc::new(signer)),
-		});
+		loaded.push(load_domain_signer(entry, data_dir)?);
 	}
 	Ok(loaded)
+}
+
+/// Load the signer of one `[[dkim.domain]]` entry, the way
+/// [`load_per_domain_signers`] loads each.
+pub(in crate::cli) fn load_domain_signer(
+	entry: &crate::config::DkimDomain,
+	data_dir: &std::path::Path,
+) -> std::io::Result<crate::dkim::DomainSigner> {
+	let active = crate::dkim::domain_rotate::active_keys(entry, data_dir)
+		.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+	let mut signer = crate::dkim::Signer::load(&active.ed.selector, &active.ed.key_file)
+		.map_err(std::io::Error::other)?;
+	if let Some(rsa) = &active.rsa {
+		signer = signer
+			.with_rsa(&rsa.selector, &rsa.key_file)
+			.map_err(std::io::Error::other)?;
+	}
+	Ok(crate::dkim::DomainSigner {
+		domain: entry.name.to_ascii_lowercase(),
+		signer: crate::dkim::ReloadableSigner::new(Arc::new(signer)),
+	})
 }
 
 /// Stop the start when two signing owners publish one public key. The
@@ -95,11 +109,20 @@ pub(in crate::cli) fn build_split_with_companions(
 				.unwrap_or(crate::imap::session::DEFAULT_QUOTA_BYTES),
 		)
 		.with_evidence(Arc::clone(&evidence.service))
+		.with_folders(Arc::new(
+			crate::imap::special_use::FolderPolicy::from_config(config),
+		))
 		.with_rules(config.rules.clone())
 		.with_identification(crate::smtp::identification::Policy::from_config(config))
-		.with_metrics(metrics.clone());
+		.with_metrics(metrics.clone())
+		.with_fbl(crate::reports::fbl::Fbl::from_config(config))
+		.with_forwarding(Arc::new(crate::forwarding::Guard::from_config(
+			config,
+			Arc::new(crate::antispam::scopes::Scopes::from_config(config)),
+		)));
 	let mut dkim_signer: Option<crate::dkim::ReloadableSigner> = None;
 	let mut domain_signers = Vec::new();
+	let mut per_domain_signer = None;
 	if let Some(dkim) = &config.dkim {
 		// Two domains that publish one public key are refused before any
 		// listener binds, the way a key that does not load is.
@@ -123,6 +146,7 @@ pub(in crate::cli) fn build_split_with_companions(
 		domain_signers = load_per_domain_signers(dkim, &config.data_dir)?;
 		let per_domain =
 			crate::dkim::PerDomainSigner::new(reloadable.clone(), domain_signers.clone());
+		per_domain_signer = Some(per_domain.clone());
 		split = split.with_signer(per_domain);
 		dkim_signer = Some(reloadable);
 	}
@@ -142,10 +166,13 @@ pub(in crate::cli) fn build_split_with_companions(
 	if let Some(sealer) = &arc_sealer {
 		split = split.with_arc_sealer(Arc::clone(sealer));
 	}
+	let srs = split.srs_slot();
 	Ok(SplitCompanions {
 		split,
 		dkim_signer,
 		domain_signers,
+		per_domain: per_domain_signer,
+		srs,
 		webhook,
 		arc_sealer,
 		evidence,

@@ -19,7 +19,7 @@
 //!   of the existing per-account limiter. Both must pass.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crate::api::jmap;
 use crate::config::Tenant;
@@ -39,6 +39,37 @@ pub struct TenantRuntime {
 	pub send_limiter: Option<Arc<SendLimiter>>,
 	/// The tenant's domains, lowercased, for fast lookup.
 	domains_lc: HashSet<String>,
+	/// Bytes of uploads that passed the aggregate storage check and have not
+	/// stored their blob yet. Shared by every clone of the runtime.
+	reserved: Arc<Mutex<u64>>,
+}
+
+/// Bytes held against the aggregate storage cap of one or more tenants by an
+/// upload that passed the check and has not stored its blob yet. They are
+/// released when the guard is dropped, so a refusal or a failed write does
+/// not leave the tenant charged.
+#[derive(Debug, Default)]
+pub struct AggregateReservation {
+	held: Vec<(Arc<Mutex<u64>>, u64)>,
+}
+
+impl AggregateReservation {
+	/// Add `size` bytes to `counter`; returns what the counter holds then.
+	fn hold(&mut self, counter: &Arc<Mutex<u64>>, size: u64) -> u64 {
+		let mut reserved = counter.lock().unwrap_or_else(|e| e.into_inner());
+		*reserved = reserved.saturating_add(size);
+		self.held.push((Arc::clone(counter), size));
+		*reserved
+	}
+}
+
+impl Drop for AggregateReservation {
+	fn drop(&mut self) {
+		for (counter, size) in self.held.drain(..) {
+			let mut reserved = counter.lock().unwrap_or_else(|e| e.into_inner());
+			*reserved = reserved.saturating_sub(size);
+		}
+	}
 }
 
 impl TenantRuntime {
@@ -59,6 +90,7 @@ impl TenantRuntime {
 			config,
 			send_limiter,
 			domains_lc,
+			reserved: Arc::new(Mutex::new(0)),
 		}
 	}
 
@@ -253,7 +285,9 @@ impl TenantLimits {
 	/// in bytes of the upload about to be stored.
 	///
 	/// Returns `Ok(())` when no tenant owns any of the addresses, or every
-	/// tenant is still under its cap after the upload.
+	/// tenant is still under its cap after the upload. Nothing stays
+	/// reserved: an upload that stores its blob afterwards uses
+	/// [`TenantLimits::reserve_aggregate_quota`].
 	pub fn check_aggregate_quota(
 		&self,
 		store: &AccountStore,
@@ -262,20 +296,41 @@ impl TenantLimits {
 		account_addresses: &[String],
 		additional: u64,
 	) -> Result<(), String> {
+		self.reserve_aggregate_quota(store, data_dir, crypto, account_addresses, additional)
+			.map(drop)
+	}
+
+	/// [`TenantLimits::check_aggregate_quota`] that keeps `additional` bytes
+	/// reserved against every tenant it checked until the returned guard is
+	/// dropped. The reservation is added before the usage is read, so every
+	/// upload that checks afterwards counts it: of uploads at the same
+	/// moment, those that fit under the cap together are admitted and no
+	/// more. A reservation that finished in between is at worst counted
+	/// twice, which refuses a little more and never less.
+	pub fn reserve_aggregate_quota(
+		&self,
+		store: &AccountStore,
+		data_dir: &std::path::Path,
+		crypto: &MessageCrypto,
+		account_addresses: &[String],
+		additional: u64,
+	) -> Result<AggregateReservation, String> {
+		let mut guard = AggregateReservation::default();
 		for tenant in self.tenants_for_addresses(account_addresses.iter().map(String::as_str)) {
 			let Some(cap) = tenant.config.quota_bytes else {
 				continue;
 			};
+			let reserved = guard.hold(&tenant.reserved, additional);
 			let index = tenant_index_of(&self.tenants, tenant);
 			let usage = self.tenant_usage_bytes(index, store, data_dir, crypto);
-			if usage.saturating_add(additional) > cap {
+			if usage.saturating_add(reserved) > cap {
 				return Err(format!(
 					"tenant \"{}\" has reached its aggregate storage cap of {cap} bytes",
 					tenant.label()
 				));
 			}
 		}
-		Ok(())
+		Ok(guard)
 	}
 
 	/// Every per-tenant aggregate submission limiter, in config order. Empty

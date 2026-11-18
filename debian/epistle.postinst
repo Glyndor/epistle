@@ -10,9 +10,9 @@
 # warns on stderr when one does not take, and it never aborts the
 # installation: a package that refuses to install on a read-only /etc, or in an
 # image where systemd is not running, is worse than one that reports what is
-# missing. `epistle init` is the other half. It verifies the resulting state
-# and refuses to continue when something this script could not do is still
-# missing.
+# missing. `epistle init` is the other half. It ends with the `boot` summary of
+# `epistle check boot`, which reports linger, the user manager, the unit and
+# the port floor, with the command that fixes each one that is still missing.
 #
 # Several steps depend on something another process finishes a moment later:
 # the lock on /etc/subuid, the name service answering for an account just
@@ -505,6 +505,8 @@ configure)
 					epistle_clear_rollback
 					epistle_clear_legacy_rollback
 				fi
+			else
+				echo "epistle: podup-epistle.service exists but is not enabled, so the stack was not updated and does not start at boot; run sudo epistle stack start, which starts the existing containers without recreating them and enables the unit, and sudo epistle stack update to move to this version" >&2
 			fi
 		)
 	fi

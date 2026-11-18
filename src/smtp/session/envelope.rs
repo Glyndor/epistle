@@ -57,6 +57,23 @@ impl Session {
 		}
 	}
 
+	/// The `530` that turns away a client of a submission listener who has
+	/// not authenticated (RFC 6409 section 4.3, RFC 4954 section 6): the
+	/// request to start TLS while the session is still in the clear and
+	/// STARTTLS is on offer (RFC 3207 section 4), else the request to
+	/// authenticate. `None` on the receiving listener and for a client
+	/// that has authenticated.
+	fn unauthenticated_submission(&self) -> Option<Reply> {
+		if !self.submission_listener || self.authenticated.is_some() {
+			return None;
+		}
+		Some(if self.tls_available && !self.tls_active {
+			Reply::single(530, "5.7.0 Must issue a STARTTLS command first")
+		} else {
+			Reply::single(530, "5.7.0 Authentication required")
+		})
+	}
+
 	pub(super) fn mail_from(
 		&mut self,
 		reverse_path: String,
@@ -65,6 +82,9 @@ impl Session {
 	) -> Action {
 		match self.state {
 			State::Greeted => {
+				if let Some(refusal) = self.unauthenticated_submission() {
+					return Action::Continue(refusal);
+				}
 				// RFC 8689 §4.2: REQUIRETLS is only valid once the current
 				// hop is already TLS-protected; otherwise the requirement is
 				// already violated. Fail closed.
@@ -139,6 +159,12 @@ impl Session {
 						"5.3.4 message exceeds maximum size",
 					));
 				}
+				// The size cap of the authenticated sender's account, scope by
+				// scope, below the server's.
+				if let Some(reply) = self.sender_size_refusal(size) {
+					return Action::Continue(reply);
+				}
+				self.declared_size = size;
 				// Filesystem holding `data_dir` is too full to accept another
 				// message. Reject before `DATA` so the remote retries instead
 				// of receiving `250 OK` for a payload the spool cannot hold.
@@ -177,7 +203,11 @@ impl Session {
 		let Ok(address) = Address::parse(&forward_path) else {
 			return Action::Continue(Reply::single(553, "5.1.3 invalid recipient address"));
 		};
-		match self.directory.resolve(&address) {
+		let resolution = self.directory.resolve(&address);
+		if let Some(refusal) = self.scope_refusal(&address, &resolution) {
+			return Action::Continue(refusal);
+		}
+		match &resolution {
 			// Foreign domains are relayed only for authenticated users.
 			Resolution::NotLocal => {
 				if self.authenticated.is_none() {
@@ -193,12 +223,17 @@ impl Session {
 				if self
 					.policy
 					.quota()
-					.is_some_and(|quota| quota.is_full(&self.directory, &account)) =>
+					.is_some_and(|quota| quota.is_full(&self.directory, account)) =>
 			{
-				return Action::Continue(Reply::single(452, "4.2.2 mailbox full"));
+				return Action::Continue(self.policy.mailbox_full_reply());
 			}
 			// A local account or a multi-target alias is an acceptable recipient.
 			Resolution::Account(_) | Resolution::Alias(_) => {}
+		}
+		// A declared SIZE past the cap of an account this recipient delivers
+		// to refuses this recipient only.
+		if let Some(reply) = self.recipient_size_refusal(&resolution) {
+			return Action::Continue(reply);
 		}
 		let forward_path = address.to_string();
 		// Suppress failure DSNs for NOTIFY=NEVER or a NOTIFY without FAILURE (RFC 3461).

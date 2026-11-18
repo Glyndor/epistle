@@ -36,6 +36,7 @@ async fn aggregate_quota_blocks_an_over_cap_upload() {
 			scopes: vec!["read".to_string(), "write".to_string()],
 			domains: Vec::new(),
 			account: None,
+			auto_submitted: false,
 		})
 		.expect("add key");
 	drop(key_store);
@@ -114,6 +115,7 @@ async fn aggregate_rate_blocks_a_second_send_within_the_window() {
 			scopes: vec!["read".to_string(), "send".to_string()],
 			domains: Vec::new(),
 			account: None,
+			auto_submitted: false,
 		})
 		.expect("add key");
 	drop(key_store);
@@ -203,6 +205,7 @@ async fn aggregate_rate_charges_per_recipient() {
 			scopes: vec!["read".to_string(), "send".to_string()],
 			domains: Vec::new(),
 			account: None,
+			auto_submitted: false,
 		})
 		.expect("add key");
 	drop(key_store);

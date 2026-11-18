@@ -30,7 +30,10 @@ pub(super) fn email_submission_set(
 		for (creation_id, submission) in create {
 			match submit_email(state, principal, account, &view.addresses, submission) {
 				Ok(id) => {
-					created.insert(creation_id.clone(), json!({ "id": id, "sendAt": null }));
+					created.insert(
+						creation_id.clone(),
+						super::email_submission_undo::created(state, account, &id),
+					);
 				}
 				Err(refusal) => {
 					not_created.insert(creation_id.clone(), refusal.to_json());
@@ -38,12 +41,18 @@ pub(super) fn email_submission_set(
 			}
 		}
 	}
-	json!([
-		"EmailSubmission/set",
-		{ "accountId": account, "oldState": "0", "newState": "0",
-		  "created": created, "notCreated": not_created },
-		call_id,
-	])
+	let mut response = json!({
+		"accountId": account, "oldState": "0", "newState": "0",
+		"created": created, "notCreated": not_created,
+	});
+	// The update is only for taking a held submission back; a request with
+	// none is answered as it always was.
+	if let Some(update) = args.get("update").and_then(Value::as_object) {
+		let (updated, not_updated) = super::email_submission_undo::updates(state, account, update);
+		response["updated"] = Value::Object(updated);
+		response["notUpdated"] = Value::Object(not_updated);
+	}
+	json!(["EmailSubmission/set", response, call_id])
 }
 
 /// Submit one email: read it, build the envelope, route it like SMTP
@@ -237,6 +246,26 @@ fn submit_email(
 		data: stamped,
 		..
 	} = queued;
+	// The size cap of the sending account, its tenant and its domains, below
+	// the server's `max_message_size`.
+	if let Err(reached) = state
+		.store()
+		.handle()
+		.current()
+		.admit_message(account, stamped.len() as u64)
+	{
+		reached.log(account);
+		return Err(Refusal {
+			kind: "tooLarge",
+			description: Some(reached.to_string()),
+		});
+	}
+	if crate::api::quota::over_recipient_size_cap(state, &recipients, stamped.len() as u64) {
+		return Err(Refusal {
+			kind: "tooLarge",
+			description: Some("the message is over the size limit of a recipient".into()),
+		});
+	}
 	// Submission rate limits: the per-account limit and every tenant of
 	// the account, the same limiters SMTP and `POST /api/v1/send` charge.
 	// Asked here so a sender with no room left is refused before anything
@@ -307,7 +336,10 @@ fn submit_email(
 		.and_then(Value::as_object)
 		.and_then(|update| update.get("mailboxIds"))
 		.and_then(Value::as_object)
-		.is_some_and(|ids| ids.keys().any(|key| key.eq_ignore_ascii_case("Sent")));
+		.is_some_and(|ids| {
+			let sent = crate::imap::special_use::sent_folder(state.data_dir(), account);
+			ids.keys().any(|key| key.eq_ignore_ascii_case(&sent))
+		});
 	let sent_copy = prepared.class.allows_sent_copy().then(|| stamped.clone());
 	let message = crate::smtp::session::AcceptedMessage {
 		reverse_path: mail_from,

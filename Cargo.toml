@@ -1,6 +1,6 @@
 [package]
 name = "epistle"
-version = "0.12.9"
+version = "0.13.0"
 edition = "2024"
 # The floor CI builds on, and the one `epistle` claims to support. It now comes
 # from mail-parser 1.0's own `rust-version` (1.98), so it is a derived floor rather
@@ -9,7 +9,7 @@ edition = "2024"
 #
 # The packaging path has none: debian/control carries no rustc on `Build-Depends`
 # because the .deb is built for musl with a rustup toolchain, and
-# `release.yml` pins that toolchain at 1.99.1. tests/workflows/msrv_agrees_with_ci.rs ties
+# `release.yml` pins that toolchain at 1.100.0. tests/workflows/msrv_agrees_with_ci.rs ties
 # this to ci.yml's `msrv` input, and cargo itself refuses to build on anything
 # older.
 #
@@ -146,6 +146,10 @@ name = "utc_purity"
 path = "tests/repository/utc_purity.rs"
 
 [[test]]
+name = "advisory_ignores_agree"
+path = "tests/repository/advisory_ignores_agree.rs"
+
+[[test]]
 name = "rust_audit_workflow"
 path = "tests/workflows/audit/rust_audit_workflow.rs"
 
@@ -190,8 +194,16 @@ name = "workflow_coverage_ignore_regex"
 path = "tests/workflows/workflow_coverage_ignore_regex.rs"
 
 [[test]]
+name = "workflow_hash_files_no_glob"
+path = "tests/workflows/workflow_hash_files_no_glob.rs"
+
+[[test]]
 name = "workflow_release_tag_identity"
 path = "tests/workflows/workflow_release_tag_identity.rs"
+
+[[test]]
+name = "workflow_runner_variable"
+path = "tests/workflows/workflow_runner_variable.rs"
 
 [[test]]
 name = "workflow_toolchain_pins"
@@ -394,6 +406,14 @@ name = "service"
 path = "tests/cli/stack/service.rs"
 
 [[test]]
+name = "stack_autostart"
+path = "tests/cli/stack/stack_autostart.rs"
+
+[[test]]
+name = "stack_logs"
+path = "tests/cli/stack/stack_logs.rs"
+
+[[test]]
 name = "stack_podup"
 path = "tests/cli/stack/stack_podup.rs"
 
@@ -486,6 +506,10 @@ name = "hostile_config"
 path = "tests/config/hostile_config.rs"
 
 [[test]]
+name = "auth_settings"
+path = "tests/config/auth_settings.rs"
+
+[[test]]
 name = "webhook_proxy"
 path = "tests/http/webhook_proxy.rs"
 
@@ -504,3 +528,7 @@ path = "tests/contracts/credentials_survive_upgrade.rs"
 [[test]]
 name = "api_without_static_token"
 path = "tests/http/api_without_static_token.rs"
+
+[[test]]
+name = "stack_reboot"
+path = "tests/scripts/stack_reboot.rs"

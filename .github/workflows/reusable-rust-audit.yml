@@ -29,11 +29,11 @@ on:
       toolchain:
         description: Rust toolchain to pin the audit and deny jobs to
         type: string
-        default: "1.99.1"
+        default: "1.100.0"
       cargo-audit-version:
         description: Exact version of cargo-audit to install; bumped via .github releases
         type: string
-        default: "0.22.2"
+        default: "0.23.0"
       extra-lockfiles:
         description: >
           Newline-separated lockfiles to audit in addition to the one in
@@ -66,7 +66,8 @@ jobs:
     # On a pull request the ref is empty and the name stays `cargo audit`,
     # the check name branch rules and the release PR already know.
     name: cargo audit${{ inputs.ref != '' && format(' ({0})', inputs.ref) || '' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: ${{ inputs.working-directory }}
@@ -188,7 +189,8 @@ jobs:
 
   deny:
     name: cargo deny${{ inputs.ref != '' && format(' ({0})', inputs.ref) || '' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: ${{ inputs.working-directory }}

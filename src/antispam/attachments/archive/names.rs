@@ -18,7 +18,8 @@ pub(super) fn names_of(raw: &[u8], flags: u16, extra: &[u8]) -> (Vec<String>, bo
 	// C extractors stop at a NUL. When the cut dropped it with the middle
 	// of the name, the name up to it is a reading of its own.
 	if let Some(nul) = whole.iter().position(|&byte| byte == 0)
-		&& cut && !raw.contains(&0)
+		&& cut
+		&& !raw.contains(&0)
 	{
 		let (head, _) = bounded_name(&whole[..nul]);
 		names.push(String::from_utf8_lossy(&head).into_owned());

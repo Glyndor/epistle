@@ -149,10 +149,13 @@ fn allowed(key: &str) -> bool {
 			| "DNS provider"
 			| "DNS zone"
 			| "DNS credential source"
-			| "IMAP" | "submission"
-			| "POP3" | "ManageSieve"
+			| "IMAP"
+			| "submission"
+			| "POP3"
+			| "ManageSieve"
 			| "WebDAV"
-			| "API" | "PostgreSQL"
+			| "API"
+			| "PostgreSQL"
 			| "image"
 	)
 }

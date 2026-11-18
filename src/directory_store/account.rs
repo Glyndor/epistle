@@ -85,6 +85,11 @@ pub struct DynamicAccount {
 	/// [`DynamicAccount::send`].
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub receive: Option<bool>,
+	/// What a reset of the credentials after a compromise still waits for
+	/// (`epistle rotate`). `None` (the default) for an account that signs in
+	/// as usual; while it is set the account signs in nowhere.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub reset: Option<super::credential_reset::CredentialReset>,
 }
 
 impl DynamicAccount {
@@ -134,6 +139,7 @@ impl DynamicAccount {
 			save_sent: None,
 			send: None,
 			receive: None,
+			reset: None,
 		})
 	}
 }

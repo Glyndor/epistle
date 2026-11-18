@@ -6,6 +6,7 @@ use std::net::IpAddr;
 use std::sync::Arc;
 
 use super::dns_dkim::{SigningKey, compare, signing_keys, state_item};
+mod own_ip;
 mod uncovered;
 
 use super::report::{AreaReport, Item, Level};
@@ -85,6 +86,7 @@ async fn evaluate(config: &Config, dns: &dyn DnsLookup) -> AreaReport {
 	// provider so other providers keep their existing surface.
 	findings.extend(proxied_items(config, proxy_provider(config)).await);
 	findings.extend(uncovered::items(config, uncovered::provider(config)).await);
+	findings.extend(own_ip::items(config));
 	let mut items: Vec<Item> = records.iter().map(record_item).collect();
 	let ok = count(&records, &Status::Ok);
 	let missing = count(&records, &Status::Missing);

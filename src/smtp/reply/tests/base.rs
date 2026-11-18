@@ -40,3 +40,15 @@ fn rejects_invalid_code() {
 fn rejects_empty_lines() {
 	let _ = Reply::new(250, vec![]);
 }
+
+#[test]
+fn a_reference_goes_at_the_end_of_the_last_line_and_nothing_else_changes() {
+	let reply = Reply::new(550, vec!["5.7.1 first".into(), "5.7.1 last".into()]);
+	let stamped = reply.clone().with_reference("7f3a9c");
+	assert_eq!(stamped.code(), 550);
+	assert_eq!(
+		stamped.to_string(),
+		"550-5.7.1 first\r\n550 5.7.1 last (ref 7f3a9c)\r\n"
+	);
+	assert_eq!(reply.text(), "5.7.1 first 5.7.1 last");
+}

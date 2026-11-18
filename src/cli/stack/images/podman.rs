@@ -7,7 +7,7 @@ use std::process::Command;
 use super::Engine;
 
 /// The `podman` on the account's `PATH`.
-pub(in crate::cli::stack) struct Podman;
+pub(in crate::cli) struct Podman;
 
 impl Podman {
 	/// `podman <args>`, waited for.

@@ -11,6 +11,7 @@ mod masked;
 mod queue;
 mod scope;
 mod send;
+mod send_cancel;
 #[cfg(test)]
 pub(crate) use send::sink_refusal;
 mod send_from;
@@ -31,7 +32,20 @@ pub fn router(max_message_size: usize) -> Router<ApiState> {
 		.route("/status", get(status::get))
 		.route("/openapi.json", get(crate::api::openapi::get))
 		.route("/auth/verify", post(auth::verify))
-		.route("/domains", get(domains::list))
+		.route("/domains", get(domains::list).post(domains::add::add))
+		.route(
+			"/domains/{domain}",
+			get(domains::domain::get)
+				.put(domains::set::set)
+				.delete(domains::change::remove),
+		)
+		.route("/domains/{domain}/enable", post(domains::switch::enable))
+		.route("/domains/{domain}/disable", post(domains::switch::disable))
+		.route("/domains/{domain}/aliases", post(domains::aliases::add))
+		.route(
+			"/domains/{domain}/aliases/{alias}",
+			axum::routing::delete(domains::aliases::remove),
+		)
 		.route("/accounts", get(accounts::list).post(accounts::create))
 		.route("/accounts/{name}", axum::routing::delete(accounts::remove))
 		.route(
@@ -60,9 +74,15 @@ pub fn router(max_message_size: usize) -> Router<ApiState> {
 			"/accounts/{name}/archive/{id}/restore",
 			axum::routing::post(archive::restore),
 		)
+		.route("/events", get(crate::api::events::get))
 		.route("/queue", get(queue::list))
 		.route("/queue/{id}", axum::routing::delete(queue::remove))
-		.route("/suppression", get(suppression::list))
+		.route(
+			"/suppression",
+			get(suppression::list)
+				.post(suppression::add)
+				.layer(DefaultBodyLimit::max(4096)),
+		)
 		.route(
 			"/suppression/{address}",
 			axum::routing::delete(suppression::remove),
@@ -77,4 +97,5 @@ pub fn router(max_message_size: usize) -> Router<ApiState> {
 			"/send",
 			post(send::send).layer(DefaultBodyLimit::max(max_message_size)),
 		)
+		.route("/send/{id}", axum::routing::delete(send_cancel::cancel))
 }

@@ -20,6 +20,9 @@ mod tests_basic_limits;
 mod tests_basic_recipients;
 
 #[cfg(test)]
+mod tests_postmaster_hostname;
+
+#[cfg(test)]
 mod tests_enhanced;
 
 #[cfg(test)]
@@ -29,7 +32,11 @@ mod tests_newrecipients;
 #[cfg(test)]
 mod tests_recipients;
 #[cfg(test)]
+mod tests_scope_refusal;
+#[cfg(test)]
 mod tests_single_label;
+#[cfg(test)]
+mod tests_size_caps;
 
 #[cfg(test)]
 mod scram;

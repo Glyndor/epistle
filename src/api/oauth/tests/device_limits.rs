@@ -49,6 +49,7 @@ async fn one_client_cannot_hold_more_than_its_share_of_grants() {
 
 fn grant(client: Option<(bool, u64)>, expires_at: u64) -> super::DeviceGrant {
 	super::DeviceGrant {
+		scopes: crate::api::oauth::scopes::Scopes::requested(None).unwrap(),
 		user_code: "AAAA-AAAA".to_string(),
 		approved_account: None,
 		expires_at,

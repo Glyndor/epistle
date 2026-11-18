@@ -228,7 +228,10 @@ fn next_line(u: &mut Unstructured, accounts: &[Account]) -> String {
 fn check_framing(response: &Response) {
 	let wire = response.encode();
 	assert!(wire.ends_with(b"\r\n"), "reply does not end in CRLF");
-	assert_eq!(response.is_final(), matches!(response, Response::Bye(_)));
+	assert_eq!(
+		response.is_final(),
+		matches!(response, Response::Bye(_) | Response::Closing(_))
+	);
 	match response {
 		Response::Multiline { .. } => {
 			assert!(wire.starts_with(b"+OK "), "multiline reply without +OK");

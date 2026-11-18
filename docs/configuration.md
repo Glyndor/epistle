@@ -42,18 +42,18 @@ a connection URL.
 | `public_ipv4` | IPv4 | unset | Public IPv4 the hostname resolves to. Required by `verify-dns` to check the PTR and confirm the address matches the published A record; absent leaves `verify-dns` to look it up on the fly. Loopback, link-local, RFC 1918, carrier-grade NAT (`100.64.0.0/10`, RFC 6598), multicast, broadcast and the documentation ranges are refused by `epistle init` and by validation: only a global unicast address is accepted. A value already in the file that fails the rule (an older release accepted more, for example a site-local `fec0::` address) does not stop the server from starting: it is ignored, as if unset, with a warning that names the value and says what to do, in the log, in `epistle config-check` and in `epistle status`. |
 | `public_ipv6` | IPv6 | unset | Same for IPv6, including the way a value in the file that fails the rule is ignored with a warning. Publishing SPF for a host that also has AAAA without listing the v6 makes mail sent over IPv6 fail SPF. |
 | `data_dir` | path | — (required) | Absolute path where all server state lives (mail, spool, suppression, …). |
-| `domains` | list | `[]` | Domains this server accepts mail for. Required once any listener is configured. A domain needs at least one dot: `localhost` and `intranet` are refused, because RFC 5321 §2.3.5 keeps unqualified names out of an SMTP transaction and mail for them cannot be delivered on the public internet. |
-| `domain_aliases` | table | `{}` | `alias → target`: mail to `user@alias` is delivered as `user@target`. |
-| `disabled_domains` | array | `[]` | Entries of `domains` that are switched off: mail for them is rejected like mail for an unknown user and nobody may send as an address in them. Accounts, mailboxes and DKIM keys are kept; its DNS says the same (null SPF, null MX, a `reject` DMARC policy, no DKIM, MTA-STS, TLS-RPT or client locator, see [`dns.md`](dns.md#domain-roles)). Every entry must be in `domains`, once; with listeners configured at least one domain must stay enabled. `epistle domain disable\|enable` edits it. |
-| `send_only_domains` | array | `[]` | Entries of `domains` that only send mail (the `send-only` role): the DNS they need is SPF, DKIM, DMARC without `rua=`, and MX, with no MTA-STS, TLS-RPT, SRV, `autoconfig` or `autodiscover` record. Every other domain is `full`. Every entry must be in `domains`, once. `epistle domain add --send-only` and `domain set --send-only\|--receive-only\|--full` edit it. |
-| `receive_only_domains` | array | `[]` | Entries of `domains` that only receive mail (the `receive-only` role): nothing is sent as them, so no account may send as an address in them (SMTP submission, the API and JMAP refuse, and a forward, a Sieve redirect or a vacation reply for mail to them is dropped), and their DNS carries the null SPF, a `reject` DMARC policy and no DKIM key. Every entry must be in `domains`, once, and not in `send_only_domains`. A domain that neither sends nor receives goes in `disabled_domains`, which wins over both lists. `epistle domain add --receive-only` and `domain set --receive-only\|--send-only\|--full` edit it. |
+| `domains` | list | `[]` | Domains this server accepts mail for. Required once any listener is configured. A domain needs at least one dot: `localhost` and `intranet` are refused, because RFC 5321 §2.3.5 keeps unqualified names out of an SMTP transaction and mail for them cannot be delivered on the public internet. Seeds the [domain state file](#the-domain-state-file), which wins once it exists. |
+| `domain_aliases` | table | `{}` | `alias → target`: mail to `user@alias` is delivered as `user@target`. Seeds the [domain state file](#the-domain-state-file). |
+| `disabled_domains` | array | `[]` | Entries of `domains` that are switched off: mail for them is rejected like mail for an unknown user and nobody may send as an address in them. Accounts, mailboxes and DKIM keys are kept; its DNS says the same (null SPF, null MX, a `reject` DMARC policy, no DKIM, MTA-STS, TLS-RPT or client locator, see [`dns.md`](dns.md#domain-roles)). Every entry must be in `domains`, once; with listeners configured at least one domain must stay enabled. Seeds the [domain state file](#the-domain-state-file); `epistle domain disable\|enable` edits that file. |
+| `send_only_domains` | array | `[]` | Entries of `domains` that only send mail (the `send-only` role): the DNS they need is SPF, DKIM, DMARC without `rua=`, and MX, with no MTA-STS, TLS-RPT, SRV, `autoconfig` or `autodiscover` record. Every other domain is `full`. Every entry must be in `domains`, once. Seeds the [domain state file](#the-domain-state-file); `epistle domain add --send-only` and `domain set --send-only\|--receive-only\|--full` edit that file. |
+| `receive_only_domains` | array | `[]` | Entries of `domains` that only receive mail (the `receive-only` role): nothing is sent as them, so no account may send as an address in them (SMTP submission, the API and JMAP refuse, and a forward, a Sieve redirect or a vacation reply for mail to them is dropped), and their DNS carries the null SPF, a `reject` DMARC policy and no DKIM key. Every entry must be in `domains`, once, and not in `send_only_domains`. A domain that neither sends nor receives goes in `disabled_domains`, which wins over both lists. Seeds the [domain state file](#the-domain-state-file); `epistle domain add --receive-only` and `domain set --receive-only\|--send-only\|--full` edit that file. |
 | `dnsbl_zones` | list | `[]` | DNS blocklist zones (RFC 5782) screened against unauthenticated clients. Empty disables the IP screen. |
 | `dnsbl_domain_zones` | list | `[]` | Right-hand-side blocklist zones queried with the envelope sender's domain (RFC 5782 §2.3). Empty disables the sender-domain screen. |
 | `dnsbl_url_zones` | list | `[]` | URI blocklist zones queried with the host of every URL found in the body (RFC 5782 §2.3). Empty disables the URL-host screen. |
 | `first_time_sender_delay_secs` | int | `0` | Delay a first-time (no-reputation) unauthenticated sender before accepting. Requires `[database]`. `0` disables. |
-| `greylist_delay_secs` | int | `0` | Seconds an unseen (client, sender, recipient) triplet is greylisted (451) before a retry is accepted. `0` disables. |
+| `greylist_delay_secs` | int | `0` | Seconds an unseen (client, sender, recipient) triplet is greylisted (451) before a retry is accepted. `0` disables. Every recipient of a message has a triplet of its own, and one that is new defers the message. How clients are grouped and how long a triplet lives are `greylist_mask_v4`, `greylist_mask_v6` and `greylist_lifetime_secs` in [`[antispam]`](#antispam-clamd-scanner-and-bayesian-thresholds); a peer in `[smtp] trusted_networks` is never greylisted. |
 | `srs_secret` | string | unset | Server-wide secret for Sender Rewriting Scheme on forwarded mail (SPF survives the next hop). Signs every domain that has no `[[srs_domain]]` of its own, and keeps verifying the addresses it signed. Absent disables SRS for those domains. See [`[[srs_domain]]`](#srs_domain). |
-| `quota_bytes` | int | 5 GiB | Default per-account mailbox quota (RFC 9208), used when an account has no per-account or per-domain quota. Absent means 5 GiB; `0` means no limit, here and in `domain_quotas` or an account's own `quota_bytes`. IMAP QUOTA, JMAP `Quota/get` and `epistle limits show` report the same limit (none when it is `0`). Enforced on every path, measured as IMAP QUOTA reports it (archived mail included): IMAP APPEND answers `NO [OVERQUOTA]`; SMTP refuses a full mailbox at `RCPT TO` with `452 4.2.2` for that recipient only, and a message that would overfill one is accepted for the other recipients with a DSN to the sender, or refused with `552 5.2.2` when it fits none; `POST /api/v1/send` answers `507 mailbox_full` and JMAP `EmailSubmission/set` `overQuota`, with nothing queued. |
+| `quota_bytes` | int | 5 GiB | Default per-account mailbox quota (RFC 9208), used when an account has no per-account or per-domain quota. Absent means 5 GiB; `0` means no limit, here and in `domain_quotas` or an account's own `quota_bytes`. IMAP QUOTA, JMAP `Quota/get` and `epistle limits show` report the same limit (none when it is `0`). Enforced on every path, measured as IMAP QUOTA reports it (archived mail included): IMAP APPEND answers `NO [OVERQUOTA]`; SMTP refuses a full mailbox at `RCPT TO` with `452 4.2.2` for that recipient only, and a message that would overfill one is accepted for the other recipients with a DSN to the sender, or refused with `452 4.2.2`, as at `RCPT TO`, when it fits none, so the sender retries; `POST /api/v1/send` answers `507 mailbox_full` and JMAP `EmailSubmission/set` `overQuota`, with nothing queued. |
 | `domain_quotas` | table | `{}` | `domain → bytes`: default mailbox quota for accounts in a domain (overridden by a per-account `quota_bytes`). `0` means no limit. |
 | `submission_rate_limit_per_min` | int | unset | Recipients an authenticated account may submit per minute, on SMTP, `POST /api/v1/send` and JMAP `EmailSubmission/set` together: one budget per account whatever the protocol, app password or sender address. A message costs one unit per recipient: on SMTP every `RCPT TO` the server accepted, on the API every `to`, `cc` and `bcc` address, on JMAP the envelope `rcptTo` or, without an envelope, the deduplicated `To`, `Cc` and `Bcc` (RFC 8621). It is charged once, when the message is accepted, all of it or none: a transaction ended by `RSET`, a message over the limit and one refused on the way out cost nothing. Over the limit: SMTP `450 4.7.1 sending rate limit exceeded; retry later` (at `MAIL FROM` once the budget is spent, at the end of the data when the message has more recipients than are left), REST `429` `rate_limited` with the message `sending rate limit exceeded; retry later`, JMAP `SetError` `rateLimit` with the same description. Absent disables it (the default); `epistle limits` refuses `0`, which the server reads as no limit. Changes apply when the server restarts. |
 | `new_recipients_per_day` | int | unset | Cap on first-time recipients an authenticated account may write to in a rolling 24h window. Refused: SMTP `450 4.7.1 too many new recipients today; retry tomorrow`, REST `429 rate_limited`, JMAP `tooManyRecipients`. Absent disables the cap (the default); it stays disabled until the operator sets it (`epistle limits set new-recipients-per-day <N>`). |
@@ -62,13 +62,14 @@ a connection URL.
 | `bulk_recipients` | int | `20` | Recipients above which a `transactional` submission counts as bulk for `default_list_unsubscribe`: `20`, the default, means twenty-one or more. A notice to a handful of people is correspondence, not bulk mail. Refused below `1`: it is a count of recipients, and zero would make every transactional submission bulk. For no unsubscribe at all, turn `default_list_unsubscribe` off. |
 | `default_list_id` | bool | `true` | Write the `List-Id`, `List-Post` and `List-Unsubscribe` of the list the envelope sender speaks for, when that sender is a `[[alias]]` with a `list_id`. The first two replace whatever the client wrote; a `List-Unsubscribe` the client already sent is kept, one-click included. `false` leaves them to the client. |
 | `system_auto_submitted` | bool | `true` | Write `Auto-Submitted: auto-generated` on the mail the server generates itself: bounces and delay notices, alert emails, DMARC and TLS-RPT reports. `false` leaves the field out of that mail, failure and delay notices among them, so nothing marks those as generated and the null return path is what keeps a bounce from looping. The abuse report builder does not read this switch and always writes `auto-generated`, and the report `epistle report-abuse` prints carries no `Auto-Submitted` at all. A vacation reply is always `auto-replied (vacation)` and is not affected. |
+| `system_auto_response_suppress` | bool | `true` | Write `X-Auto-Response-Suppress: DR, NDR, RN, NRN, OOF, AutoReply` on server-built bounces, delay notices, alerts, DMARC and TLS-RPT reports. Independent of `system_auto_submitted`; `false` omits it. Abuse reports do not carry it. REST uses its own opt-in field. |
 | `x_epistle_header` | bool | `true` | Write `X-Epistle: 1` on every submission, on all three paths. It names the software the message left. The value is fixed: it carries no version and no version field sits beside it, and a client cannot write or change it. `false` leaves the field out. |
 | `organization_header` | bool | `true` | Write the `Organization` of the sending domain on a submission, using `domain_organization`. The configured value replaces whatever the client wrote. `false` leaves the field alone. |
 | `domain_organization` | table | `{}` | `domain → name`: the `Organization` each domain publishes (RFC 2369). The key is a DNS name, the value printable ASCII with no control character. A domain with no entry gets no `Organization` from the server. |
 | `domain_submission_limits` | table | `{}` | `domain → recipients/min`: per-domain override for `submission_rate_limit_per_min`, counted and refused the same way. An account picks up its own domain's entry when one is set; otherwise the server-wide default applies; otherwise no limit. The domain is taken from the account's own addresses (the same walk `domain_quotas` performs), not from the first configured domain; an account with addresses in several limited domains gets the strictest entry. Edited through `epistle limits set submission-rate --domain <NAME> <N>`. |
 | `inbound_rate_limit_per_ip_per_min` | int | unset | Max messages an unauthenticated client IP may start per minute. Sessions that authenticate are charged against the submission limiters instead; bounces (null sender) are not charged against the per-sender limit. A send over the cap is deferred with `450 4.7.1 too many messages from this client; retry later`; the temporary code lets a real burst (a mailing list, a resend after an outage) retry rather than bounce. Absent disables the per-IP limit. |
 | `inbound_rate_limit_per_sender_per_min` | int | unset | Max messages a single envelope sender may start per minute across all clients (lowercased reverse path). Excludes the null sender used by bounces. A send over the cap is deferred with `450 4.7.1 too many messages from this sender; retry later`. Absent disables the per-sender limit. |
-| `masked_addresses_max` | int | `100` | Per-account cap on server-generated masked email addresses (the disposable aliases at `POST /api/v1/accounts/{name}/masked`). `0` means no cap; the request that would go above it returns `409 conflict`. |
+| `masked_addresses_max` | int | `100` | Per-account cap on server-generated masked email addresses (the disposable aliases at `POST /api/v1/accounts/{name}/masked`). `0` turns masked addresses off (every request is refused); the request that would go above it returns `409 conflict`. |
 | `max_message_size` | int | 25 MiB | Per-instance message-size cap; `0` means the default. Not below 64 KiB: RFC 5321 §4.5.3.1.7 makes 64K octets the least a server may accept. A smaller value in the file is raised to 65536 bytes when it loads, with a warning that names both values, in the log, in `epistle config-check` and in `epistle status`; `epistle limits set max-message-size 64k` writes the floor into the file, and `limits set` refuses anything smaller. It may not exceed the effective `message_memory_budget` unless the budget is `0`: the server refuses to start (and `epistle limits set` refuses the change) rather than accept a size it could never receive. The same number is the SMTP `SIZE` extension value, the `MAIL FROM` SIZE parameter cap, the per-line running size check, the end-of-DATA check, the per-chunk BDAT cap, the JMAP upload route's body limit, the JMAP `Email/set` create builder cap, and the REST `POST /api/v1/send` body limit. The cap is advertised in EHLO `SIZE` and the JMAP Session resource (`maxSizeUpload`, `maxSizeAttachmentsPerEmail`). Oversize is refused with `552 5.3.4 message exceeds maximum size` (SMTP), the JMAP `limit` problem (`maxSizeUpload`), or the REST `413 message_too_large`. |
 | `max_connections_per_listener` | int | per-protocol | Max concurrent connections per listener, at most 1000000; excess are dropped. Absent uses the built-in default (SMTP 1000, IMAP 500, POP3 500, ManageSieve 100). |
 | `max_connections_per_ip` | int | 20 | Max concurrent connections from a single client IP per SMTP listener (IMAP, POP3, ManageSieve and plain HTTP have their own, below). A peer over the cap is answered `421 4.7.0 too many connections from your address` and closed; the per-listener semaphore still bounds the total. An IPv6 client is counted by its /64, and an IPv4-mapped address as the IPv4 address. No peer is exempt. `0` uses the built-in default. Behind a proxy or NAT that hides the client address (Podman rootless bridge networking reports every client as one gateway address) every client shares one count. |
@@ -78,7 +79,7 @@ a connection URL.
 | `junk_command_limit` | int | 100 | Commands without progress one SMTP session may send before it gets `421 4.7.0 too many commands without progress, closing connection` and is disconnected (the same default as Postfix). Two counts share the limit. Commands that never move a message count for the whole session: `NOOP`, `RSET` and `VRFY` whatever their reply, unknown commands (`EXPN`, `HELP`, `ETRN`), a repeated `EHLO` or `HELO` (the one after the banner and the one after `STARTTLS` are free), a `BDAT 0` chunk that is not `LAST`, and every `AUTH` response line; a delivered message or a successful login does not reset them, and a logged-in session has the same limit, so a client that sends `RSET` before each message reconnects after about a hundred. Refused commands (syntax errors, refused `MAIL` and `RCPT`, commands out of sequence) count only since the last message the server accepted (after every check on its body), as Postfix forgives earlier errors once a message is received: a relay delivering a list with many recipients that no longer exist keeps its connection while its messages are accepted, and a client that only collects refusals is cut. Runs of consecutive refusals are bounded separately (20). `0` turns it off; otherwise between 10 and 10000. |
 | `max_session_time` | int | 1800 | Seconds one SMTP session may last. Past it the client gets `421 4.4.2 session time limit reached` and is disconnected at the next command boundary: while the server waits for a command or an `AUTH` response line, or before it runs one. A message body being received (`DATA`, or the chunks of a `BDAT` transaction) is never cut, since `min_data_rate` bounds it; the command after it is, except `QUIT`, and a client whose body ended past the limit has one 300 s idle timeout to send it. `0` turns it off; otherwise between 60 and 86400. |
 | `preauth_timeout` | int | 60 | Seconds an IMAP, POP3 or ManageSieve client gets, from the start of the connection, to sign in. One deadline covers the TLS handshake, every command and every literal (or `AUTHENTICATE` response) before authentication; bytes arriving slowly and a stream of harmless commands (`NOOP`, `CAPABILITY`) do not move it. At the deadline IMAP answers `* BYE idle timeout` and ManageSieve `BYE`, POP3 closes. A signed-in session is not held to it: it gets the idle timeout of its protocol (30 minutes IMAP and ManageSieve, 10 minutes POP3) for each command, counted from the moment the server starts waiting for it, and `IDLE` keeps its own limit. A client that signs in with a very slow password hash or over a very slow link needs a longer value. From 5 to 3600, but on IMAP and POP3 the phase never outlasts the idle timeout of the protocol, so a value above 600 acts as 600 on POP3 and above 1800 acts as 1800 on IMAP. ManageSieve uses the configured pre-authentication deadline without this idle-timeout cap. |
-| `max_mailbox_connections_per_ip` | int | 200 (ManageSieve 40) | Max concurrent connections one client may hold on each IMAP, POP3 and ManageSieve listener. A client over the cap is answered `* BYE too many connections from your address` (IMAP), `-ERR too many connections from your address` (POP3) or `BYE "too many connections from your address"` (ManageSieve) and closed before any handshake or session is set up; a listener that is full gets `... too many connections, try again later`. On the implicit-TLS ports (993, 995) the line arrives in clear, ahead of a TLS handshake that never starts. An IPv6 client is counted by its /64, an IPv4-mapped address as the IPv4 address, and no peer is exempt. The count is released when the connection ends, however it ends. `0` uses the default. A mail client keeps several connections open (three to six, one per folder it watches with `IDLE`), so at four per device and two devices a user holds about eight: 200 serves about 25 active users behind one address, and an office or a mobile carrier sharing one address with more people needs a higher value. 200 is also 40% of the IMAP and POP3 listener (500), so three such addresses can fill it. ManageSieve defaults to 40 because its listener holds 100 and a script editor keeps one or two connections: a cap above the listener's would never act. A value you set applies to the three protocols alike. Behind a proxy or NAT that hides the client address, and with a bridge network or `rootlessport` instead of `pasta` (Podman rootless reports every client as one gateway address), every client shares one count and the ceiling of the listener falls from 500 connections to this value, about 25 users: raise it to about the listener's `max_connections_per_listener`. |
+| `max_mailbox_connections_per_ip` | int | 200 (ManageSieve 40) | Max concurrent connections one client may hold on each IMAP, POP3 and ManageSieve listener. A client over the cap is answered `* BYE too many connections from your address` (IMAP), `-ERR [SYS/TEMP] too many connections from your address` (POP3) or `BYE "too many connections from your address"` (ManageSieve) and closed before any handshake or session is set up; a listener that is full gets `... too many connections, try again later`. On the implicit-TLS ports (993, 995) the line arrives in clear, ahead of a TLS handshake that never starts. An IPv6 client is counted by its /64, an IPv4-mapped address as the IPv4 address, and no peer is exempt. The count is released when the connection ends, however it ends. `0` uses the default. A mail client keeps several connections open (three to six, one per folder it watches with `IDLE`), so at four per device and two devices a user holds about eight: 200 serves about 25 active users behind one address, and an office or a mobile carrier sharing one address with more people needs a higher value. 200 is also 40% of the IMAP and POP3 listener (500), so three such addresses can fill it. ManageSieve defaults to 40 because its listener holds 100 and a script editor keeps one or two connections: a cap above the listener's would never act. A value you set applies to the three protocols alike. Behind a proxy or NAT that hides the client address, and with a bridge network or `rootlessport` instead of `pasta` (Podman rootless reports every client as one gateway address), every client shares one count and the ceiling of the listener falls from 500 connections to this value, about 25 users: raise it to about the listener's `max_connections_per_listener`. |
 | `max_connections_per_account_per_ip` | int | 10 | Max concurrent authenticated connections one account may hold from one client IP, on the IMAP, POP3 and JMAP listeners together. Applied after sign-in: a connection over the cap is answered `NO [LIMIT]` (IMAP), `-ERR [IN-USE]` (POP3) or `429` (JMAP) and closed. `0` uses the default. The singular `max_connections_per_account` is refused. |
 | `max_connections_per_account_total` | int | 50 | Max concurrent authenticated connections one account may hold across every client IP, on the same listeners and with the same replies. `0` uses the default. |
 | `max_recipients` | int | 100 | Recipients one message may name, on SMTP (advertised as `LIMITS RCPTMAX`), `POST /api/v1/send` and JMAP `EmailSubmission/set`. Not below 100, the least RFC 5321 §4.5.3.1.8 lets a server offer, and at most 10000. |
@@ -86,18 +87,73 @@ a connection URL.
 | `max_http_connections` | int | 1024 | Max concurrent connections each plain-HTTP listener serves, at most 1000000: the API and JMAP, WebDAV, autoconfig without TLS, the ACME responder and metrics. A connection over the cap gets `503 Service Unavailable` with `Connection: close` and is closed without reading its request. `0` uses the default. A JMAP push (WebSocket) connection keeps its place in both this cap and `max_http_connections_per_ip` for as long as the socket is open, not only until the upgrade. A panel or proxy that carries the sockets of many users from one address needs `max_http_connections_per_ip` raised to match. |
 | `max_http_connections_per_ip` | int | 256 | Max concurrent connections one client may hold on each plain-HTTP listener (API, JMAP, WebDAV, autoconfig without TLS, ACME, metrics), answered with the same `503`, and on each listener that terminates TLS in the server (autoconfig over HTTPS, MTA-STS), where the connection is closed before any TLS handshake so no `503`/`BYE`/`-ERR` is ever written. The cap uses the TCP peer address from the socket, never a forwarded header, so the server never reads `X-Forwarded-For` before admission and `[api].trusted_proxies` does not affect it: the only way to share it is to actually be the same source address. An IPv6 client is counted by its /64 (the /48 a single subscriber receives usually lives in the same /64) and an IPv4-mapped address as the IPv4 address. No peer is exempt. `0` uses the default. The plain-HTTP and TLS caps share this key and value. A reverse proxy or the panel in front of the API is one client for all its users, so raise this to the listener cap (`max_http_connections` for plain HTTP, `max_connections_per_listener` for the autoconfig listener over HTTPS and MTA-STS) when the listener only talks to it; behind a proxy every connection looks like the proxy, so a small default (256) is one user per proxy connection and a single proxy saturating the cap is a denial of service for everyone behind it. The MTA-STS default of 32 (one eighth of the listener default of 256) covers a single resolver fleet refetching at the same time; raise it for a fleet. |
 | `queue_give_up_secs` | int | 5 days | Outbound give-up window: undelivered mail older than this is bounced. A delay-warning DSN is sent once at `queue_delay_warning_secs`. |
-| `queue_retry_base_secs` | int | 60 | Wait after a recipient's first failed attempt; each later wait doubles up to `queue_retry_cap_secs`. Every wait is spread by a random ±20% so mail deferred together does not all retry in the same second. At least 60. |
+| `queue_retry_base_secs` | int | 60 | Wait after a recipient's first failed attempt; each later wait doubles up to `queue_retry_cap_secs`. Every wait is spread by a random ±20% so mail deferred together does not all retry in the same second. At least 60. The default is short on purpose (a first temporary failure such as greylisting clears in minutes), so running on it logs nothing; a value you set below 1800 (the 30 minutes RFC 5321 §4.5.4.1 recommends) logs one warning at start with the value, the floor and the default. |
 | `queue_retry_cap_secs` | int | 3600 | Longest wait between attempts for one recipient. Not below `queue_retry_base_secs`. |
 | `queue_delay_warning_secs` | int | 4 hours | Message age at which the one "delivery delayed" DSN is sent for the recipients still pending. Below `queue_give_up_secs`. |
-| `scanner_hook_url` | string | unset | External HTTP scanner for unauthenticated inbound mail. Mutually exclusive with `antispam.clamd_socket`. |
+| `scanner_hook_url` | string | unset | External HTTP scanner for unauthenticated inbound mail. Mutually exclusive with `antispam.clamd_socket`. What a failed call does and how long it may take are `scanner_hook_on_error` and `scanner_hook_timeout_secs` in [`[antispam]`](#antispam-clamd-scanner-and-bayesian-thresholds). |
 | `antispam` | section | unset | Unix socket clamd scanner. See the settings below. |
 | `ldap` | section | unset | LDAP or Active Directory backend for logins and recipients no local account claims. Absent disables it. See [`[ldap]`](#ldap). |
 | `antispam_llm` | section | unset | LLM-assisted screening for unauthenticated mail whose Bayesian score lands in an uncertain band. Absent disables the hook. |
 | `subjectpass` | section | disabled | Signed token for the uncertain Bayesian band: when no LLM verdict decides a message in the band, the server refuses it with `550 5.7.1` and a token the sender can put in the `Subject:`, and accepts the resend that carries it. Requires `[database]`. Disabled by default (changes what remote senders see). See [`[subjectpass]`](#subjectpass). |
-| `log_format` | `text`\|`json` | `text` | Log output format. |
+| `log_format` | `text`\|`json` | `text` | Log output format. The level filter is the `RUST_LOG` environment variable (default `info`); with it unset, the resolver's DNSSEC validator (`hickory_net::dnssec`, which logs whole responses for every unsigned zone) is off, and epistle writes one debug line per TLSA lookup instead. A `RUST_LOG` you set is used as written: `RUST_LOG=info,hickory_net::dnssec=warn` brings the library back. |
 | `rules` | array | `[]` | Delivery rules that route or flag locally delivered mail by sender/header. |
+| `limits` | table | `{}` | Caps on addresses, aliases, lists, list members, API keys, app passwords, sessions and message size, for the whole server. See [`[limits]` and `[[limit_scope]]`](#limit_scope). |
+| `limit_scope` | array | `[]` | The same caps for one tenant, domain or account; each may only tighten the scope above it. Empty changes nothing. |
+| `antispam_scope` | array | `[]` | Antispam settings for one tenant, domain or account, on top of the server-wide sections: sender and recipient lists and stronger attachment settings. Empty changes nothing. See [`[[antispam_scope]]`](#antispam_scope). |
 | `alerts` | array | `[]` | Metric alerts: rules that fire a webhook or email when a counter crosses its configured threshold over a sample window. |
 | `tenant` | array | `[]` | Tenant definitions: named groups of domains with optional aggregate caps on accounts, domains, storage and submission rate. Empty means no tenancy is in effect. See [`[[tenant]]`](#tenant). |
+
+## The domain state file
+
+The hosted domains, the role of each, whether it is switched on and the
+domain aliases and overrides set through `epistle domain set` or the management
+API are kept in `<data_dir>/domains.toml`, so they can change while
+`/etc/epistle` stays read-only for the server. `epistle domain` and the
+`/api/v1/domains` routes write it, under the same lock as `accounts.toml`, and
+the running server reloads it within a few seconds, as it reloads
+`accounts.toml` and `api_keys.toml`. Nothing restarts `mail`.
+
+```toml
+[[domain]]
+name = "example.org"
+role = "full"          # full, send-only or receive-only
+enabled = true
+
+[aliases]
+"example.net" = "example.org"
+```
+
+- **The configuration file is the seed.** While the file does not exist,
+  `domains`, `domain_aliases`, `disabled_domains`, `send_only_domains` and
+  `receive_only_domains` are read from the configuration file as before. The
+  first start of `serve`, or the first `epistle domain` change, writes the file
+  from them. From then on the file wins and those keys are not read.
+- **Editing those keys afterwards does nothing.** The file records a digest of
+  what it was made from; when the configuration file's lists no longer match
+  it, `serve`, `config-check` and `status` say that the change is ignored.
+  `epistle domain import` copies the lists in again (it asks first, and
+  refuses to drop a domain that is still in use).
+- **What stays in the configuration file.** `[[dkim.domain]]`,
+  `[[srs_domain]]`, `domain_quotas`, `domain_submission_limits`,
+  `[acme] domains` and `[[tenant]]` keep applying to the domains the file
+  hosts; an entry for a domain it no longer hosts is ignored. A domain added
+  with `epistle domain add` carries the DKIM key and the SRS secret made for it
+  (`dkim` and `srs_secret`); an entry of the configuration file for the same
+  domain wins. A domain's optional `[domain.limits]` table replaces its quota
+  and submission-rate overrides from the configuration. An empty table clears
+  both overrides; an absent table inherits them. `domain set` and the API write
+  this table atomically with the role, without writing `/etc/epistle`.
+- **Reloads are checked.** A file that does not parse, or that gives a
+  configuration the server would refuse at start, is not loaded: the running
+  domains stay and the log says why. At start, such a file stops the server
+  with the file named; fix it, or run `epistle domain import`.
+- **Live and at the next start.** A reload reaches mail acceptance, who may
+  send as a domain, logins, DKIM signing with the domain's own key, SRS,
+  autoconfig and autodiscover, the management API and the DNS reconcile loop.
+  The rotation schedule of a new domain's own key, and what the certificates
+  container accepts to publish for it, follow at the next start of `serve`.
+- The file holds secrets and is written `0600`. Back it up with the data
+  directory; `epistle backup` includes it.
 
 ## `[antispam]` clamd scanner and Bayesian thresholds
 
@@ -111,6 +167,15 @@ a connection URL.
 | `scan_authenticated` | boolean | `true` | Also scan what this server's own accounts send: SMTP submission after AUTH, `/api/v1/send` and JMAP `EmailSubmission/set`, to local and remote recipients alike. A detection is always refused, whatever `clamd_on_found` says. Only the antivirus runs on that mail, never the Bayesian filter, reputation, DNSBL or greylisting. On the antivirus it has an effect only with `clamd_socket` set; the attachment policy applies to the submissions it covers with or without clamd. |
 | `bayes_junk_at` | float in `[0.0, 1.0]` | `0.95` | Score at or above which an unauthenticated message is delivered to the recipient's Junk mailbox with `X-Spam-Status: Yes` and the score in `X-Spam-Score`. Authenticated mail is never scored this way. A corpus below `MIN_TRUSTED_MESSAGES` (200) ham AND spam does not decide anything: a threshold acts only on a trained corpus: the account's own, or the shared one for an account with too little of its own, an alias or a list. |
 | `bayes_reject_at` | float in `[0.0, 1.0]` | unset | Score at or above which an unauthenticated message is refused during DATA with `550 5.7.1 message rejected as spam`. Absent disables the rejection path (default). When set, must be at least `bayes_junk_at` so the rejected band is a subset of the junked one. |
+
+| `scanner_hook_on_error` | `accept` or `defer` | `accept` | What a call to `scanner_hook_url` that fails does: the connection breaks, the deadline passes, the answer is over 64 KiB or it is not a JSON verdict. `accept` lets the message through unscanned (what the hook always did); `defer` answers `451 4.7.1 content scan unavailable, try again later`, so nothing passes unscanned while the scanner is down. A verdict the hook does not know (`"action": "maybe"`) is an answer, not an error, and accepts. |
+| `scanner_hook_timeout_secs` | integer | `30` | Deadline of one call to `scanner_hook_url`, from 1 to 120; the sender's connection waits it out. Outside the range the file is refused. |
+| `greylist_mask_v4` | integer | `32` | Leading bits of an IPv4 client address that greylisting tells apart, from 24 to 32. `24` makes the hosts of one /24 share a triplet, so a sender whose retry leaves from another of its outgoing servers is recognised. Below 24 the file is refused: a wider group lets a neighbour's retry release a stranger's message. The default keeps every stored triplet valid. |
+| `greylist_mask_v6` | integer | `128` | The same for IPv6, from 48 to 128. `64` treats a subscriber network as one client. |
+| `greylist_lifetime_secs` | integer | `86400` | How long a triplet is remembered, from 3600 to 2592000 (30 days). It has to be at least the longest greylist delay of the server or of any scope, or a triplet would be forgotten before it could be accepted: the file is refused. A longer lifetime keeps a sender that mails rarely from being greylisted again each time. |
+| `reputation` | boolean | `true` | The sender-domain reputation screen runs whenever `[database]` exists: it records every accepted unauthenticated message and quarantines a domain that has more rejections than acceptances in the Rejects mailbox. `false` neither records nor consults it. Bayes, greylisting and the other screens are not touched. The reputation is keyed on the envelope domain, so the whole of a large mailbox provider is one counter; a provider operator who has no use for that sets `false`, or raises `reputation_min_observations`. |
+| `reputation_min_observations` | integer | `3` | Observations a domain needs before its reputation is judged, from 3 to 1000. Fewer than 3 is refused: a domain would be quarantined on a single bad message. |
+| `senders` | table | empty | Allow and deny lists of senders and recipients for the whole server, the widest scope of [`[[antispam_scope]]`](#antispam_scope): `allow`, `deny` and `deny_recipients`, with the entry shapes and rules given there. Empty by default: no sender is favoured or refused by name. |
 
 ```toml
 [antispam]
@@ -169,6 +234,8 @@ if clamd answers `PING` at that moment.
 | `encrypted_archives` | `allow`, `flag` or `quarantine` | `flag` | Archives no scanner can read, never above `mode`. |
 | `block_extensions` | list | empty | Extensions treated as dangerous on top of the built-in list. |
 | `allow_extensions` | list | empty | Extensions taken off the dangerous list, for names only. The always-dangerous ones are refused. |
+| `max_attachment_bytes` | integer | unset | Largest single attachment, in bytes after decoding. A larger one is the finding `attachment-too-large`, handled as `mode` says. Unset means no cap. Applies to what accounts submit too, when `mode` quarantines or rejects. |
+| `block_mime_types` | list | empty | Declared MIME types (`application/pdf`, or `image/*` for a whole family) that are the finding `blocked-mime-type`. The declared type is what the sender wrote; the bytes are judged by the other findings. |
 
 What each finding means, what `allow_extensions` can and cannot do, and the
 residual risks are in [attachments.md](attachments.md).
@@ -203,7 +270,7 @@ addr = "0.0.0.0"   # default: 127.0.0.1
 
 Plaintext listeners (`submission` 587, `web-dav` 8090, `api` 8025, `autoconfig` 8091, `metrics` 9090) are accepted without a `[tls]` block ONLY when bound to a loopback address. When `addr = 0.0.0.0` (or any non-loopback address) and `[tls]` is unset, a warning is emitted at validate time.
 
-`[tls]` does not encrypt `api`, `web-dav` or `autoconfig`: those three carry plain HTTP and the mail certificate is not offered on them. Configuring `[tls]` leaves them in plaintext, so the way to expose them is a TLS reverse proxy in front of a loopback listener, which is where I keep them. `epistle service enable` gives them loopback for that reason, on a host install as much as on the container stack, `epistle service set <name> --bind <address>` refuses any address outside loopback, and the generated compose map publishes them on `127.0.0.1` even when nothing narrowed it explicitly.
+`[tls]` does not encrypt `api`, `web-dav` or `autoconfig`: those three carry plain HTTP and the mail certificate is not offered on them. Configuring `[tls]` leaves them in plaintext, so the way to expose them is a TLS reverse proxy in front of a loopback listener, which is where they belong. `epistle service enable` gives them loopback for that reason, on a host install as much as on the container stack, `epistle service set <name> --bind <address>` refuses any address outside loopback, and the generated compose map publishes them on `127.0.0.1` even when nothing narrowed it explicitly.
 
 ### A listener on a private interface
 
@@ -274,11 +341,12 @@ A public install has to let inbound TCP through the host firewall (or fronting l
 | 25 | SMTP | Inbound mail from other servers. |
 | 80 | HTTP | Certificate issuance with `[acme] challenge = "http-01"` (the default): the HTTP-01 challenge responder (`acme` listener). Open to the public internet, the CA connects from outside. Not needed with `tls-alpn-01` or `dns-01`. |
 | 143 | IMAP+STARTTLS | Mail clients that negotiate TLS on connect. |
+| 443 | HTTPS | The public endpoint (`autoconfigs` listener): the Thunderbird autoconfig document, the Microsoft Autodiscover document, the Apple `.mobileconfig` profile and the public MTA-STS policy. `init` writes the listener and the certificate that covers the three names. |
 | 465 | Submissions | Mail clients that use implicit TLS for submission. |
 | 587 | Submission+STARTTLS | Mail clients that submit with STARTTLS. |
 | 993 | IMAPS | Mail clients that use implicit TLS for IMAP. |
 
-Optional ports the operator turns on per `[[listeners]]`: `995` (POP3S) when `services.pop3 = true`, `4190` (ManageSieve) when `services.managesieve = true`, `8090` (WebDAV) when `services.webdav = true`, `8025` (loopback management API) when `services.api = true`, `443` (`autoconfigs`) when the operator wants Thunderbird/Outlook/Apple autodiscovery over HTTPS (or `8091`, `autoconfig`, behind a TLS proxy).
+Optional ports the operator turns on per `[[listeners]]`: `995` (POP3S) when `services.pop3 = true`, `4190` (ManageSieve) when `services.managesieve = true`, `8090` (WebDAV) when `services.webdav = true`, `8025` (loopback management API) when `services.api = true`. The plain `autoconfig` listener (`8091`) is for a deployment that keeps its own TLS proxy in front of those names.
 
 With the default `http-01` challenge, port 80 has to be open even when no certificate renewal is in flight: the first certificate and every renewal are validated through the same responder, so closing it means the first certificate never lands. Port 80 is needed only with `http-01`. With `tls-alpn-01` the CA connects to port 443 instead, and with `dns-01` it connects to nothing on this host (see [`[acme]`](#acme)).
 
@@ -297,7 +365,7 @@ max_age = 604800
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
-| `policy_dir` | path | unset | Directory where `serve` writes `mta-sts.txt` at startup. Unset disables writing. |
+| `policy_dir` | path | unset | Directory where `serve` writes `mta-sts.txt` at startup. Unset disables writing. `epistle init` writes `<data_dir>/mta-sts`. |
 | `mode` | `testing`, `enforce`, or `none` | `testing` | Enforcement mode announced to sending mail servers. |
 | `max_age` | unsigned integer | `604800` | Policy cache lifetime in seconds. |
 
@@ -312,12 +380,20 @@ a content hash for its `id=` value. Identical policy contents keep the same ID;
 changing the mode, hostname, or cache lifetime changes it. Restart `serve`
 after changing these settings and publish the regenerated DNS records.
 
-Run [`epistle mta-sts-serve`](cli.md#epistle-mta-sts-serve) with the same policy
-directory and make it reachable at
-`https://mta-sts.<domain>/.well-known/mta-sts.txt` on port 443. Its default
-bind address is `0.0.0.0:8443`. The HTTPS certificate must cover
-`mta-sts.<domain>` for each domain, even when the CNAME points to the mail
-hostname. Supply that certificate and its private key with `--cert` and `--key`.
+The policy is fetched from `https://mta-sts.<domain>/.well-known/mta-sts.txt`,
+so it has to be served on port 443 under a certificate that covers
+`mta-sts.<domain>`, even when the CNAME points to the mail hostname. The
+public endpoint of the server (the `autoconfigs` listener) serves it when
+`policy_dir` names a directory: the same port 443 that answers the client
+setup documents answers the policy. `epistle init` writes both the
+`autoconfigs` listener and a `policy_dir`, and asks the authority for a
+certificate that covers `mta-sts.<domain>` (and `autoconfig.<domain>` and
+`autodiscover.<domain>`) of every hosted domain.
+
+A deployment that serves the policy elsewhere (behind a proxy of its own)
+uses [`epistle mta-sts-serve`](cli.md#epistle-mta-sts-serve) with the same
+policy directory. Its default bind address is `0.0.0.0:8443`. Supply the
+certificate and its private key with `--cert` and `--key`.
 
 ### `[tls]`
 TLS material, shared by all transports. Required by `submissions`/`imap`/`imaps`/`manage-sieve`; enables STARTTLS on `smtp`/`submission`.
@@ -355,7 +431,7 @@ With `rsa_selector` and `rsa_key_file` set (dual signing), each rotation also re
 | `rotate_overlap_days` | **Deprecated.** Ignored. Same backward-compatibility note as `rotate_days`. |
 
 #### `[[dkim.domain]]`
-Per-domain keys. A domain listed here signs with its own key instead of the `[dkim]` default, so one domain's key can be replaced, or kept from another server, without touching the others; every other domain keeps the default. `epistle init` (for every domain after the first) and `epistle domain add` write these entries themselves, with the key files under `<data_dir>/keys/dkim/<domain>/`, so a new install has one key per domain; an install made before that has the entries it had, and none are added to it. The signer picks the key of the signature's `d=` domain and never another domain's. `epistle dns-records`, `verify-dns`, `status` and `dkim show` show each domain's own selector and record.
+Per-domain keys. A domain listed here signs with its own key instead of the `[dkim]` default, so one domain's key can be replaced, or kept from another server, without touching the others; every other domain keeps the default. `epistle init` (for every domain after the first) writes these entries itself, and `epistle domain add` names the key it makes in the [domain state file](#the-domain-state-file), with the key files under `<data_dir>/keys/dkim/<domain>/`, so a new install has one key per domain; an entry here wins over the state file's for the same domain; an install made before that has the entries it had, and none are added to it. The signer picks the key of the signature's `d=` domain and never another domain's. `epistle dns-records`, `verify-dns`, `status` and `dkim show` show each domain's own selector and record.
 
 ```toml
 [dkim]
@@ -392,6 +468,25 @@ codes. See [the API guide](api.md#turn-it-on).
 | `token_hash` | Optional `sha256:<hex>` (from `epistle token-hash`) or legacy argon2id PHC string. Omit for labelled keys only; an empty string is invalid. |
 | `trusted_proxies` | Optional CIDR list for trusted reverse proxies. Default `[]`. See below. |
 | `admins` | Optional list of account names allowed to authenticate to the admin panel (via `POST /api/v1/auth/verify`). Empty (default) means no account can administer the panel. |
+| `event_streams_per_key` | Streams of `GET /api/v1/events` one API key may hold open, 1 to 1024. Default `4`. The next one is refused with `429` and `Retry-After`. |
+| `event_streams_per_server` | Streams of `GET /api/v1/events` the server holds open in all, 1 to 65536. Default `64`. |
+| `event_stream_max_secs` | Seconds a stream of `GET /api/v1/events` stays open before the server closes it and the client reconnects, 60 to 86400. Default `3600`. |
+| `limiter` | The limits on failed bearer sign-ins and on password checks, the `[api.limiter]` table below. |
+
+#### `[api.limiter]`
+Failed bearer attempts are counted per client (an IPv4 address or an IPv6 /64)
+in a sliding window; a client that spends its budget is answered `429` until
+the window ends, before its token is looked at. An absent table keeps every
+default. Each value has a bound on the weak side that the loader enforces.
+
+| Key | Meaning |
+|---|---|
+| `max_failures` | Failed attempts one client may make per window. Default `20`. Floor: `1` to `100`. |
+| `window_secs` | The window, in seconds. Default `60`. Floor and ceiling: `30` to `3600`. |
+| `network_factor` | An IPv6 /48 may fail this many times a client's budget, which is what stops a client rotating through the /64s of one allocation. Default `8`. Floor: `1` to `32`. |
+| `global_max_failures` | Failures from all clients in a window after which failing requests answer `429` instead of `401`; a valid token is never refused because of it. Default `2000`. Floor: `100` to `20000`. |
+| `max_concurrent_hashes` | Argon2 checks of the configured bearer token that run at once. Default `2`. Bounds: `1` to `64`. |
+| `hash_queue` | Argon2 checks that may wait for a turn; the next one is told `429`. Default `64`. Bounds: `1` to `4096`. |
 
 `trusted_proxies` is an optional list of IPv4 and IPv6 CIDR networks, empty by
 default. Invalid CIDRs stop configuration loading. For example:
@@ -473,7 +568,7 @@ data, not only on the accounts routes:
 |---|---|
 | `GET /api/v1/status` | `domains` and `accounts` count only what the key covers; `queue_size` is left out because the queue is shared |
 | `GET /api/v1/queue`, `DELETE /api/v1/queue/{id}` | only entries whose sender is in the key's domains; an entry with an empty sender (a bounce) is for unconfined keys; any other entry answers `404` |
-| `GET /api/v1/suppression`, `DELETE /api/v1/suppression/{address}` | the shared list answers `403`; `?account=` works for an account the key covers and answers `404` for any other |
+| `GET`, `POST /api/v1/suppression`, `DELETE /api/v1/suppression/{address}` | the shared list answers `403`; `?account=` works for an account the key covers and answers `404` for any other |
 | `/api/v1/accounts/{name}/masked`, `.../archive` | `404` unless the account is covered, unknown accounts included |
 | `POST /api/v1/auth/verify` | checks only the passwords of covered accounts; any other login answers `valid: false` without the password being tried |
 | `POST /api/v1/accounts`, `POST /scim/v2/Users` | a name that is malformed or held outside the key's domains gives the same `400`, so the answer does not reveal other tenants' names |
@@ -514,6 +609,7 @@ The response's `queued` id names the queue entry.
 | `importance` (or `priority`) | `high`, `normal` or `low`: writes `Importance` and `X-Priority`. |
 | `list_unsubscribe`, `list_unsubscribe_post` | `mailto:` and `https://` URLs; `true` adds the RFC 8058 one-click header (needs an `https://` URL). |
 | `auto_submitted`, `feedback_id` | `Auto-Submitted` (RFC 3834 values) and `Feedback-ID`. |
+| `auto_response_suppress` | boolean, default `false`: writes `X-Auto-Response-Suppress: DR, NDR, RN, NRN, OOF, AutoReply` when true, independently of the server mail setting and `auto_submitted`. |
 | `headers` | Custom headers, `X-` names only. |
 
 A control character in any of these is refused with `400`. A message over
@@ -567,6 +663,32 @@ command names, flag names and header keys endlessly. The tagged `OK` for the
 command itself travels uncompressed, as the RFC requires. A second `COMPRESS`
 on the same connection answers `NO [COMPRESSIONACTIVE]`: restarting the
 context underneath a client that is already decoding would desynchronise it.
+
+### IMAP failure response codes
+
+IMAP failures carry the response codes from RFC 5530. The code comes first
+and the existing human-readable text follows, so clients that ignore codes
+keep seeing the same explanation. This behaviour is always enabled.
+
+| Code | Meaning |
+|---|---|
+| `[AUTHENTICATIONFAILED]` | `LOGIN` or `AUTHENTICATE` rejected the credentials. An unknown user and a wrong password produce the same response. |
+| `[NONEXISTENT]` | The requested mailbox or message does not exist. `APPEND` and `COPY` to a missing mailbox keep `[TRYCREATE]`, which RFC 9051 defines for them. |
+| `[ALREADYEXISTS]` | `CREATE` or `RENAME` found a mailbox with the requested name. |
+| `[CANNOT]` | The server does not allow the operation, such as changing a read-only mailbox or using an unsupported SASL mechanism. |
+| `[NOPERM]` | The mailbox ACL denies the operation. |
+| `[CLIENTBUG]` | The client sent a malformed command, invalid arguments or invalid literal framing. |
+| `[SERVERBUG]` | The server failed while storing or reading mailbox data. |
+| `[UNAVAILABLE]` | A temporary dependency is unavailable; the client can retry later. |
+| `[OVERQUOTA]` | The operation would exceed the account's storage quota. |
+| `[PRIVACYREQUIRED]` | The operation requires TLS, usually `STARTTLS` before `LOGIN`. |
+
+A command sent in the wrong state is answered with `BAD`: commands that need
+authentication say `not authenticated`, and commands that need a selected
+mailbox say `no mailbox selected`. Extension-specific codes such as `[LIMIT]`,
+`[TOOBIG]`, `[CLOSED]`, `[UIDREQUIRED]` and `[COMPRESSIONACTIVE]` remain available where
+their protocol defines them. A reply carries one code, so a failed `SELECT`
+that closed the previous mailbox answers `[CLOSED]`.
 
 ### IMAP mailbox names and folders
 
@@ -973,6 +1095,13 @@ section, an unknown key fails the config load.
 |---|---|
 | `scram` | Offer SCRAM-SHA-256 (and SCRAM-SHA-256-PLUS where channel binding is available) and store a SCRAM verifier for each dynamic account (default `true`). With `false` the mechanisms are not advertised on SMTP, IMAP or ManageSieve, an `AUTH`/`AUTHENTICATE` with them is refused exactly like an unknown mechanism, no verifier is derived when an account is created or its password set (CLI, `/api/v1/accounts`, SCIM), and the next password change of an account that has one drops it. PLAIN and LOGIN stay available. Over SMTP the exchange ends with a `334` challenge carrying the server-final and an empty-line acknowledgement from the client (see [security](security.md#authentication)); a client that only speaks PLAIN or LOGIN keeps working. |
 | `unicode_passwords` | Accept non-ASCII passwords and normalise with NFKC on both set and verify (RFC 8265 OpaqueString profile, in spirit RFC 5802 SASLprep / RFC 7677). Default `false` keeps the historical ASCII-only policy. With the flag on the validator accepts any non-control Unicode scalar, the length is counted in scalars (still 12-64 on the normalised form), and the argon2id hash and the SCRAM verifier are derived from the same canonical form — a password set with one keyboard verifies from another. Scrambling on the client: SCRAM-SHA-256 clients already do SASLprep on the supplied credential, so a SCRAM login from a non-ASCII password works without further config. The flag is opt-in because older IMAP/POP clients mangle non-ASCII in AUTH PLAIN/LOGIN on the wire, and the operator who flips the flag is opting the deployment into the expectation that every client normalises consistently. Absent stays the historical default. |
+| `min_password_length` | Fewest characters a password may have. Default `12`. Floor the loader enforces: `8`; it must not be above `max_password_length`. The bundled breach list is consulted whatever the minimum. |
+| `max_password_length` | Most characters a password may have. Default `64`. Floor and ceiling the loader enforces: `64` to `1024` (NIST SP 800-63B asks every verifier to accept 64; a longer limit is for operators who want passphrases of any length). |
+| `forbidden_passwords_file` | Path to the operator's own list of refused passwords, checked next to the bundled breach list: one per line, `#` starts a comment, blank lines and case are ignored (`Example Corp 2026` refuses `example corp 2026`). Default unset. Read when the configuration is loaded: a file that cannot be read, is not a regular file or is larger than 16 MiB stops the server. A password on it is refused with its own message. |
+| `argon2_memory_kib` | Memory, in KiB, of a new argon2id password hash. Default `19456` (19 MiB). Floor and ceiling: `19456` to `1048576`. The floor, `argon2_iterations = 2` and `argon2_parallelism = 1` are the minimum of the OWASP Password Storage Cheat Sheet, so the cost can be raised and never lowered below it. Each hash records its own parameters: changing these never invalidates a stored password, only new hashes carry the new cost. Each running hash holds this much memory, so raise it together with the hash concurrency of `[api.limiter]`. |
+| `argon2_iterations` | Passes of a new argon2id hash. Default `2`. Floor and ceiling: `2` to `20`. |
+| `argon2_parallelism` | Lanes of a new argon2id hash. Default `1`. Floor and ceiling: `1` to `16`. |
+| `scram_iterations` | PBKDF2-HMAC-SHA256 iterations of a new SCRAM verifier. Default `600000`. Floor and ceiling: `600000` (the OWASP figure) to `10000000`, so it can only be raised. A verifier keeps the count it was derived with; one below this value is replaced the next time its account signs in with a cleartext password, which is also how a raised count reaches the accounts that already have one. |
 
 ### `[auth] unicode_passwords` (`[auth] unicode_passwords = true`)
 
@@ -1010,6 +1139,26 @@ configs that predate the field stay ASCII-only. There is no on-the-wire
 advertisement of which policy the server is running; clients discover
 it by trying a non-ASCII credential.
 
+### `[bans]`
+The sign-in ban policy. `threshold` failed sign-ins inside `window_secs` ban
+the client (or the account and client pair) for `base_secs`; each next ban of
+the same subject doubles, up to `max_secs`; the account subject needs
+`account_threshold_factor` times the failures, so one client alone cannot ban
+an account. Needs the `[database]` store, like the bans themselves. An absent
+section keeps every default, which is what the server did before these were
+settings. Each value is bounded on the weak side, because more tolerated
+failures, a shorter window or a shorter ban make guessing cheaper; a value
+outside its bounds is a load error naming the key.
+
+| Key | Meaning |
+|---|---|
+| `threshold` | Failures inside the window that fire a ban. Default `5`. Floor and ceiling: `2` to `20`. |
+| `window_secs` | The rolling window, in seconds. Default `900`. Floor and ceiling: `300` to `86400`. |
+| `base_secs` | Length of the first ban, in seconds. Default `900`. Floor and ceiling: `300` to `86400`. |
+| `max_secs` | Longest ban, in seconds. Default `86400`. Floor and ceiling: `3600` to `2592000`, and not shorter than `base_secs`. |
+| `account_threshold_factor` | How many times `threshold` the account subject needs. Default `4`. Bounds: `2` to `8`. |
+| `known_network_max_per_account` | Networks kept per account on the known-network list. Default `32`. Bounds: `1` to `256`. The window of that list is `known_network_window_secs` at the top of the file. |
+
 ### `[oauth]`
 OAuth2/OIDC bearer-token verification (OAUTHBEARER/XOAUTH2) for IMAP/SMTP/JMAP.
 
@@ -1025,6 +1174,8 @@ OAuth2/OIDC bearer-token verification (OAUTHBEARER/XOAUTH2) for IMAP/SMTP/JMAP.
 | `allow_private_jwks` | Permit the discovery document's `jwks_uri` to resolve to a loopback, private (RFC 1918 / RFC 4193), link-local or unspecified address. Default `false`. The check exists because the `jwks_uri` is chosen by the IdP, not the operator, and a hostile or compromised IdP could pivot it at a cloud-metadata service (`169.254.169.254`) or an internal host. Set this only when the IdP genuinely lives on a private network and the trust relationship justifies it. |
 | `allow_unverified_email` | Accept a token whose `email` claim has no `email_verified` claim at all. Default `false`: the address in a token names the mailbox only when the identity provider says it verified it (`true`, or the string `"true"`), and a token that says `false` is refused either way. The `sub` claim of an external provider is never read as an identity, and the address must be the exact address of an account: a catch-all, a masked address or a sub-address does not match. Set this only for a provider that does not emit `email_verified` but confirms every address it issues tokens for. A refused token is logged with its reason (`bearer token refused: ...`), never with a value from the token. |
 | `idp_enforces_second_factor` | Declare that the identity provider enforces a second factor itself before it issues a token. Default `false`: a bearer token cannot carry a TOTP code, so an account that has a TOTP secret cannot sign in with OAUTHBEARER or XOAUTH2 (the same refusal SCRAM gets; the log says so), and its owner uses a password plus code instead. When `true`, a valid token stands for the second factor as well, for every account. It has no effect with `signing_key`: tokens of the built-in authorization server are matched by `sub` and always count as having passed the second factor, because the server asks for the code when it issues them. `epistle config-check`, `epistle status` and the startup log warn when an external provider is configured, accounts have a TOTP secret and this is `false`; `status` and the log also carry a plain line about `email_verified` for an external provider, which is not a warning. |
+| `access_token_ttl_secs` | Lifetime of an access token the built-in authorization server issues (needs `signing_key` or `signing_key_file`; the loader refuses it otherwise). Default `3600`. Floor and ceiling the loader enforces: `60` to `86400`. A token is only checked against the revocation list and its account, never renewed, so a long lifetime is how long a revoked grant keeps working elsewhere; lowering the value later also refuses the tokens issued under the old one that outlive the new one. |
+| `refresh_token_ttl_secs` | Turns on refresh tokens (RFC 6749 section 6) and sets their lifetime, for example `2592000` for 30 days (needs `signing_key` or `signing_key_file`). Default unset: no refresh token is issued and `grant_type=refresh_token` answers `unsupported_grant_type`, as before. Floor and ceiling: `3600` to `31536000`, and not shorter than `access_token_ttl_secs`. With it set, every grant also returns a `refresh_token`, and each use of one returns a new one and retires the old one (rotation); the new one lives the full lifetime again, so an idle client stays signed in for that long. The scope of a refresh can be narrowed, never widened. A retired token that comes back means two parties hold it: the whole family of tokens that came from that grant is deleted and both are signed out. A family also ends when the account is disabled, removed or locked, when its password is changed or reset (any path: API, CLI, SCIM, `epistle rotate`), when its second factor is set, replaced or removed, and when `POST /oauth/revoke` receives one of its tokens. This is told by a digest of the credentials the account holds, kept with each family: the password hash (and for dynamic accounts the second-factor secret) of the accounts file or the SQL directory, and the password hash of accounts in the configuration file. An account that gives no such marker, such as one of the LDAP directory (its password lives outside epistle) or a receive-only one, is issued the access token alone and never a refresh token, and a refresh token is refused for it, because a password change could not be seen. Only a hash of each token is stored, in `oauth_refresh.json` under `data_dir`; an account keeps at most 50 families, the one that expires first making room for a new one. |
 
 ### `[webhook]`
 Outbound event notifications. The URL must be `https://` (or a loopback `http://`).
@@ -1047,7 +1198,9 @@ Each request is a JSON object whose `event` field names the event:
 `message_received`, `delivery_failed`, `metric_alert`, `dkim_rotation_failed`
 (a rotated DKIM key never showed up in DNS, so the previous key keeps signing),
 `outbound_virus` (the antivirus refused a message one of your accounts sent;
-it carries `account` and `signature`), and `test`. When `secret` is
+it carries `account` and `signature`), `own_ip_blocklisted` (one of the
+server's own public addresses is in a DNS blocklist; it carries `address`,
+`zone` and, when known, `delist_url`), and `test`. When `secret` is
 set, `X-Webhook-Signature: sha256=<hex>` carries the HMAC-SHA256 of the body.
 
 The events for each recipient of outbound mail (`delivered`, `delayed`,
@@ -1109,7 +1262,7 @@ secret = "…"                       # signs only acme's events
   other, signed with that webhook's secret. It is never also posted to the
   default.
 - A domain of no tenant, a tenant without a `[tenant.webhook]`, and the events
-  that belong to the server (`metric_alert`, `dkim_rotation_failed`, the warm-up
+  that belong to the server (`metric_alert`, `dkim_rotation_failed`, `own_ip_blocklisted`, the warm-up
   events, `test`, forwarded mail and bounces, whose sender is the null address or
   the server's) use the `[webhook]`. An alert with `webhook = true` posts to it,
   not to a tenant's.
@@ -1245,7 +1398,264 @@ email = ["ops@example.org"]
 cooldown_secs = 900
 ```
 
-The counter names accepted by `metric` (the ones `Metrics::snapshot` exposes) are: `abuse_dropped`, `accepted`, `accept_failed`, `auth_hash_gate_rejected`, `auth_login_failed`, `auth_login_succeeded`, `bayes_learning_failed`, `bayes_learning_refused`, `bayes_learning_unreadable`, `bayes_training_dropped`, `bounced`, `clock_drift_exceeded`, `connections`, `database_unavailable`, `deferred`, `dmarc_report_rows_failing`, `dmarc_reports_ingested`, `forwarded`, `mta_sts_connections_dropped`, `outbound_policy_rejected`, `outbound_virus`, `quarantined`, `rejected_dmarc`, `rejected_dnsbl`, `rejected_header_fields`, `rejected_loop`, `rejected_rate_limit`, `rejected_reputation`, `rejected_scanner`, `rejected_spf`, `relayed`, `reports_dropped`, `scanner_clamd_failed`, `scanner_clamd_skipped`, `send_limited_new_recipients`, `sieve_inspection_truncated`, `sieve_rejected`, `subjectpass_challenged`, `subjectpass_passed`, `tlsrpt_failed_sessions`, `tlsrpt_reports_ingested`, `vacation_sent`, `warmup_backoff`, `warmup_held`, `webhook_failed`, `webhook_sent`.
+The counter names accepted by `metric` (the ones `Metrics::snapshot` exposes) are: `abuse_dropped`, `accepted`, `accept_failed`, `auth_hash_gate_rejected`, `auth_login_failed`, `auth_login_succeeded`, `bayes_learning_failed`, `bayes_learning_refused`, `bayes_learning_unreadable`, `bayes_training_dropped`, `bounced`, `clock_drift_exceeded`, `connections`, `database_unavailable`, `deferred`, `dmarc_report_rows_failing`, `dmarc_reports_ingested`, `fbl_complaints`, `forwarded`, `mta_sts_connections_dropped`, `outbound_policy_rejected`, `outbound_virus`, `own_ip_blocklisted`, `quarantined`, `rejected_dmarc`, `rejected_dnsbl`, `rejected_header_fields`, `rejected_loop`, `rejected_rate_limit`, `rejected_reputation`, `rejected_scanner`, `rejected_spf`, `relayed`, `reports_dropped`, `scanner_clamd_failed`, `scanner_clamd_skipped`, `send_limited_new_recipients`, `sieve_inspection_truncated`, `sieve_rejected`, `subjectpass_challenged`, `subjectpass_passed`, `tlsrpt_failed_sessions`, `tlsrpt_reports_ingested`, `vacation_sent`, `warmup_backoff`, `warmup_held`, `webhook_failed`, `webhook_sent`.
+
+### `[reports]`
+Spam complaints from the providers' feedback loops. Yahoo, Microsoft and
+Mail.ru send what their users mark as spam back to the sender as ARF reports
+(RFC 5965: `multipart/report; report-type=feedback-report`) to an address you
+enrol. The receiver is off until `fbl_mailbox` names that address, and the
+server never picks one. The steps of each enrolment are in
+[sender panels](operations/providers.md).
+
+| Key | Default | Meaning |
+|---|---|---|
+| `fbl_mailbox` | absent | The hosted address the reports are sent to, for example `fbl@example.org`. It has to exist (an account or an alias) on a hosted domain. Absent turns the receiver off. |
+| `fbl_senders` | `[]` | The providers whose reports are believed: the envelope address a loop sends from (`fbl@arf.example.net`) or a domain, which covers its subdomains. The addresses are the ones the provider's enrolment page gives; they are not guessed here. Empty trusts nobody. |
+| `fbl_suppress` | `true` when `fbl_mailbox` is set | Add the complainant to the suppression list of the sending account. `false` only counts. |
+| `fbl_max_per_hour` | `100` | The most complaints that can be suppressed for one sending account in an hour. A report over the cap is logged and changes nothing. |
+
+```toml
+[reports]
+fbl_mailbox = "fbl@example.org"
+fbl_senders = ["fbl@arf.example.net"]
+```
+
+`fbl_senders` refuses at load the domains of public mailbox providers
+(`gmail.com`, `outlook.com`, `yahoo.com` and the like: anyone can hold an
+address there) and a domain the server hosts. Enrol the address or domain the
+provider's loop sends from, such as a subdomain of its own.
+
+A report counts only when all of this holds, and otherwise changes nothing
+(the message is still delivered to the mailbox):
+
+- Its envelope sender is one of `fbl_senders` **and** this server proved it
+  exactly, in the `Authentication-Results` it stamps itself: SPF passed for
+  the exact domain of the envelope sender, or a DKIM signature passed whose
+  `d=` is exactly that domain or exactly the enrolled domain. A sibling
+  domain of the same organization, a login, or a `MAIL FROM` that merely
+  matches does not count. Without a resolver (so no stamp) nothing is
+  trusted.
+- It is no larger than 256 KiB, is `multipart/report` with
+  `report-type=feedback-report` at the top level, and has exactly one
+  `message/feedback-report` part, read with the bounds of the DMARC and
+  TLS-RPT parsers. A report that fails any of this is counted in
+  `reports_dropped` and nothing of it is read.
+- `Feedback-Type` is `abuse` and `Original-Rcpt-To` names the complainant,
+  who has to be a `To` or `Cc` addressee of the quoted message. A provider
+  that redacts the recipient, or a Bcc complaint, gives the server nothing to
+  suppress. One report suppresses at most that one address.
+- The quoted headers carry the `Feedback-ID` the server writes
+  (`epistle:<class>:<domain>`, see [headers](headers.md#identification-headers))
+  for a hosted domain, a `Message-ID` of that domain, a `DKIM-Signature` by
+  that domain with one of the server's own selectors, and one `From` address
+  that is an account of that domain. A report quotes headers and usually not
+  the body, so that signature cannot be verified here: the authenticated
+  provider vouches for the quote, and these checks refuse one that is not
+  shaped like this server's mail. The server keeps no index of sent
+  `Message-ID`s. The `Feedback-ID` holds no account, so the account is the one that
+  owns the `From`. A `Feedback-ID` a client wrote itself, one for another
+  domain or one that names a sender that is not an account here is ignored:
+  the server does not claim a message it cannot show it sent.
+
+The complainant is suppressed **for that account only**, so one customer's
+complaint never costs another customer its mail, and the entry shows in the
+account's list with the reason `spam complaint via <provider> (<class>)`. The
+same report arriving twice is counted once, because the recipient is already
+on the list. With `fbl_suppress = false` there is no list to tell a repeat
+from a new report, so every trusted report is counted.
+
+Each counted complaint adds to `mail_fbl_complaints_total` and to
+`mail_fbl_complaints_by_sender_total{account,class}` in the Prometheus text,
+and to the `fbl_complaints` counter of `[[alerts]]`. A rule on it is the
+alert for a rising complaint rate: Yahoo and Microsoft watch for 0.3 %, so
+choose the count per window that is that share of what the account sends.
+
+```toml
+[[alerts]]
+name = "complaints"
+metric = "fbl_complaints"
+op = ">="
+threshold = 5
+window_secs = 3600
+email = ["ops@example.org"]
+cooldown_secs = 3600
+```
+
+The log carries the account, the class, the sending domain and the provider
+of each complaint; the recipient, the subject and the body are not logged.
+
+### `[smtp]`
+What a refusal sent to a sender that has not authenticated tells it, and the
+reference it carries. It changes the text of a refusal and nothing else: the
+reply code, the enhanced status code and whether the refusal is permanent or
+temporary are the same at every level.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `reject_detail` | `"standard"` | `"terse"`, `"standard"` or `"verbose"`; any other value is refused on load. See the table below. |
+| `reject_reference` | `true` | Put a reference such as `(ref 7f3a9c)` at the end of a final refusal and in the log line of the same refusal. `false` leaves the text as it was and logs no such line. |
+| `trusted_networks` | `[]` | CIDR blocks of the operator's own relays: a secondary MX, an internal gateway. See [trusted networks](#trusted-networks). |
+| `mailbox_full` | `"temporary"` | `"temporary"` answers a full mailbox `452 4.2.2` and the sender retries until room is made, which is what RFC 3463 describes; `"permanent"` answers `552 5.2.2`, a bounce at once. The same answer at `RCPT TO`, at the end of DATA and when the store refuses the copy. When only some recipients of a message are full the others still receive it and the sender gets the failure report, whatever this says. |
+
+The refusals the level applies to are the SPF, DMARC and blocklist refusals,
+the per-client and per-sender limits (`inbound_rate_limit_per_ip_per_min`,
+`inbound_rate_limit_per_sender_per_min`) and a greylist deferral. The examples
+use `example.net` and `192.0.2.7`.
+
+| Level | What the text says | Example for an SPF failure |
+|---|---|---|
+| `terse` | The least a stranger can learn: the enhanced code and a generic sentence that names no check, list, policy or limit. | `550 5.7.23 message refused` |
+| `standard` | What epistle always answered. | `550 5.7.23 SPF validation failed for 192.0.2.7 as sender of example.net (result: fail)` |
+| `verbose` | The standard text plus what to fix: how to make SPF or DMARC pass, which list to ask to delist the address, domain or link, the figure of a limit (`max 100/min`) and the time to retry at (`retry after 14:05 UTC`, in UTC, rounded up to the minute, because SMTP has no `Retry-After`). | `550 5.7.23 SPF validation failed for 192.0.2.7 as sender of example.net (result: fail); add 192.0.2.7 to the SPF record of example.net or send through a host it lists` |
+
+A terse refusal keeps its class: a permanent refusal stays `5xx` and a
+temporary one stays `4xx`, so a legitimate sender is never told to retry what
+can never succeed. A blocklist zone is named by its public name only, at every
+level; the key a zone can carry in a leading label is never in a reply.
+
+The reference is six random hexadecimal digits drawn for each refusal. It is
+not a counter and it is not derived from the server, the client or the
+message, so it says nothing about any of them. It goes on a `5xx` answer to
+`MAIL`, `RCPT` and `DATA`, and on any `4xx` or `5xx` after the message body
+(the end of `DATA`, or `BDAT`). The log line (INFO, `refusing message`) carries
+the same `reference`, the reply `code`, the client `ip` and the `reply` text,
+so a sender that quotes it is found with one search. A server built without
+the setting, as in a test, sends no reference.
+
+```toml
+[smtp]
+reject_detail = "verbose"
+reject_reference = true
+trusted_networks = ["192.0.2.0/24", "2001:db8:25::/48"]
+mailbox_full = "temporary"
+```
+
+#### Trusted networks
+
+A secondary MX or an internal gateway delivers mail for other people's
+domains from an address that no sender's SPF record lists, and from an
+address the operator knows. Mail from a peer in `trusted_networks` skips the
+checks that judge the connecting address: the DNS blocklist check of the
+client address, greylisting, the first-time sender delay, and SPF, DKIM and
+DMARC. It also keeps the per-IP connection cap off the peer, as before.
+
+What does not change, whatever the network: nothing the relay says is
+believed (its `Authentication-Results` and other trust fields are stripped as
+for any unauthenticated peer), and the message is never marked as verified,
+so no allow list favours it. The sender deny lists, the blocklists of the
+sender domain and of the links in the body, the virus scanner, the attachment
+policy, the Bayesian thresholds, the size and recipient limits and the
+inbound rate limits all apply. Account sessions are not affected: a peer
+that authenticates is judged as it always was.
+
+The floors are enforced when the file loads, and the error names the key: an
+entry is a network with a prefix length (a bare address is a single host), an
+IPv4 prefix is at least `/8`, an IPv6 prefix at least `/32`, no entry is
+repeated and the list has at most 256 entries. `0.0.0.0/0` is never accepted.
+It is a list of the operator's own relays, so a provider keeps it as short as
+it can: a wide network means every host in it can send as anyone.
+
+### `[forwarding]`
+
+Where the mail an account sends on by itself may go, and how much of it. A
+copy of this kind is a `forward` address of the account, a Sieve `redirect`
+and a vacation reply (the Sieve action and the JMAP `VacationResponse`).
+
+| Key | Default | Meaning |
+|---|---|---|
+| `policy` | `"any"` | `"any"` forwards to any address, as the server always did. `"hosted-only"` forwards only to an address in a domain this server hosts (a domain alias counts). `"none"` forwards nowhere: no `forward` address, no `redirect`, no vacation reply. |
+| `account_per_min` | unset | The most copies one account may forward in a minute. Unset follows the account's submission limit: its domain's entry of `domain_submission_limits`, else `submission_rate_limit_per_min`; with neither there is no limit. At least 1: `0` is refused, because it would read as no limit. |
+| `server_per_min` | unset | The most copies the whole server forwards in a minute, over every account. Unset sets none. |
+
+A `[[antispam_scope]]` sets `forward_policy` and `forward_per_min` for a
+tenant, a domain or an account (see [`[[antispam_scope]]`](#antispam_scope)).
+The most specific scope in reach wins and may relax what a wider one set, so
+a provider can forbid forwarding on its default plan and allow it on one
+customer's domain; the script of the account cannot change it.
+
+- A copy the policy refuses is not queued. A message whose only way out
+  was the copy (a pure forward with `forward_keep_local = false`, or a
+  `redirect`, which cancels the implicit keep) stays in the mailbox, so a
+  refusal never loses mail. The log says so once an hour per account.
+- The limits count a copy as one unit per address, like a submission counts
+  a recipient, and take a whole batch or none of it: a script that
+  redirects to three addresses with two units left sends none of them, and
+  keeps the message. The account window and the server window are fixed
+  windows of a minute. A refused batch charges the side that refused it
+  nothing.
+- A vacation reply goes to the sender of the message, so under
+  `hosted-only` only a sender in a hosted domain is answered, and each reply
+  is one unit. The reply markers are still written, so the same sender is
+  not answered again during the reply period.
+- The limits are counted in memory, one count per process, and start over
+  with it.
+- These stay fixed whatever the settings: a bounce (null sender) is never
+  forwarded, a message that names an address already in `Delivered-To` is
+  refused as a loop (`554 5.4.6` to the sender), a message that has crossed
+  more than 25 `Received` hops is not forwarded by `forward` or by `redirect`,
+  and every copy leaves with SRS and an ARC seal when those are configured.
+
+```toml
+[forwarding]
+policy = "hosted-only"
+account_per_min = 30
+server_per_min = 600
+
+[[antispam_scope]]
+domain = "example.org"          # a customer allowed to forward anywhere
+forward_policy = "any"
+forward_per_min = 10
+```
+
+Not done yet: an admin Sieve script that runs before or after the user's, a
+server rule that rejects, tags or forwards, and the CLI and API to manage
+either. They need a decision on where the script lives and what the user may
+see of it, and are tracked in the issue.
+
+### `[own_ip_blocklist]`
+A periodic check of the server's own `public_ipv4` and `public_ipv6` against
+DNS blocklist zones, so a listing is found before the big providers start
+answering `550 5.7.1`. It is on by default, it only warns, and nothing about
+how mail is sent changes. A lookup that fails or times out leaves the address
+`UNKNOWN`; it is never treated as clean. IPv6 is looked up in the
+nibble-reversed form. Nothing runs when neither public address is set.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `enabled` | `true` | Turns the check off with `false`. |
+| `zones` | `[]` | Zones to query. Empty uses `dnsbl_zones`. No zone is built in: a zone that needs a paid key or limits queries stays out until you add it. At most 16, each a fully qualified DNS name. |
+| `period_secs` | `3600` | Seconds between checks, at least `300`; a smaller value is refused on load. Each check sends one query per zone and address, each bounded to 10 seconds. |
+
+The result is kept in `<data_dir>/own-ip-blocklist.json`, so a restart does
+not announce a listing again. A new listing is logged as a warning, shown by
+`epistle status` in the `dns` area (the zone, and the provider's delisting
+page when the zone is Spamhaus or Barracuda; other zones carry no link), and
+counted in `own_ip_blocklisted`. An address is announced once per listing:
+only after it was seen clean and is listed again is it announced anew. To be
+told, add a rule such as:
+
+```toml
+[[alerts]]
+name = "own-ip-listed"
+metric = "own_ip_blocklisted"
+op = ">="
+threshold = 1
+window_secs = 300
+webhook = true
+email = ["ops@example.org"]
+cooldown_secs = 3600
+```
+
+The webhook event is `own_ip_blocklisted` (address, zone and, when known,
+`delist_url`); the email lists the same.
+
+A zone can carry a secret in its name (Spamhaus DQS is queried as
+`<key>.zen.dq.spamhaus.net`), so nothing that can leave the host prints it:
+`epistle status` (text and JSON), the webhook's `zone` field, the alert email
+and the refusal text of an inbound message name the list by its last two
+labels (`spamhaus.net`), or `a DNS blocklist` when the zone has no such
+suffix. The full zone stays in the server log.
 
 ### `[clock_external]`
 
@@ -1339,33 +1749,22 @@ The shipped sources are `nts:nts.netnod.se`, `nts:nts.time.nl` and
 Physikalisch-Technische Bundesanstalt (Germany), three independent
 operators, every offset authenticated. The diagnostic median is
 insensitive to one drifting source, subject to the verdict limitation
-above. All three answered the whole NTS exchange (key exchange, cookies,
-authenticated poll) from the development host when the list was measured
-on 2026-10-22. A whole NTS exchange costs a dial, a TLS handshake, the
-key exchange and the authenticated poll, so on a slow link it comes close
-to the `2 s` budget: `nts.netnod.se` took between 1.37 s and 1.82 s on
-the development host across eight consecutive runs. The `2 s` per-source
-budget is a constant in the binary, not a key here. A miss is reported as
-a timeout, the run loses its diagnostic median, and the area gives at
-least `Warn`; no valid readings or a valid offset at the fail threshold
-gives `Fail`. Measure the three from the host that will run
-`epistle status`, because a network can answer one operator and not
-another.
+above. A whole NTS exchange costs a dial, a TLS handshake, the key exchange and
+the authenticated poll, so on a slow link it can come close to the `2 s`
+per-source budget, which is a constant in the binary, not a key here. A miss is
+reported as a timeout, the run loses its diagnostic median, and the area gives
+at least `Warn`; no valid readings or a valid offset at the fail threshold
+gives `Fail`. Check the three from the host that will run `epistle status`,
+because a network can answer one operator and not another.
 
-Two other providers are not in the list because of what they answered:
+`time.cloudflare.com` and `time.google.com` are not in the list.
+`time.google.com` publishes no NTS-KE endpoint, so it can only be a plain NTPv4
+source (`kind = "ntp"`); `time.cloudflare.com` can be used as `kind = "ntp"`, or
+as `kind = "nts"` on a network where its authenticated exchange answers.
 
-- `time.cloudflare.com` answers plain NTPv4 in 82 ms to 106 ms on every
-  attempt measured. Its NTS-KE endpoint answers the key exchange and
-  returns cookies, then never answers the authenticated poll, on every run
-  recorded for this branch and at budgets up to 15 s. Use it as
-  `kind = "ntp"`, or set `kind = "nts"` on a network where its
-  authenticated exchange does answer.
-- `time.google.com` publishes no NTS-KE endpoint, so it can only be a plain
-  NTPv4 source.
-
-Replace any of them when the chosen peers change; keep one provider per
-autonomous system, and set `kind` per source to what that source actually
-answers.
+Replace any of the shipped sources when the chosen peers change; keep one
+provider per autonomous system, and set `kind` per source to what that source
+actually answers.
 
 Two notes an operator should have. The area renders one line saying how
 many of the sources were authenticated over NTS and names them, so a run
@@ -1375,11 +1774,18 @@ authenticated readings that agree within 100 ms, so on the shipped list,
 which has no plain source, it stays dormant; it can fire when an operator
 replaces one `nts` source with a plain `ntp` one.
 
-The defaults at `warn_seconds = 1`, `fail_seconds = 5` come from the
-design that drove the first delivery. They are the same numbers
-`docs/limits.md` would expose as adjustable limits if a catalog entry
-were added later. Until then they live in `[clock_external]` and
-`Config::validate` enforces the strict-less relation.
+The defaults are `warn_seconds = 1` and `fail_seconds = 5`; `Config::validate`
+enforces that the warn threshold is strictly below the fail threshold.
+
+### `[boot]`
+Which drop-ins `epistle` writes for the stack's boot unit. Both default to on
+and neither changes what the unit runs: a reboot still only starts the
+containers that exist. See [Boot drop-ins](cli.md#boot-drop-ins).
+
+| Key | Default | Meaning |
+|---|---|---|
+| `restart_on_failure` | `true` | The user drop-in that retries `podup-epistle.service` every 30 seconds when its start fails, without giving up. Needs systemd 244. `false` removes it. |
+| `order_after_network` | `true` | The system drop-in that starts the account's user manager after `network-online.target` and `systemd-sysctl.service`. Needs root, so `sudo epistle` writes it. `false` removes it. |
 
 ### `[privileges]`
 Drop OS privileges after binding ports (run the daemon unprivileged).
@@ -1406,7 +1812,7 @@ guide's "Data at rest".
 | `encryption_key_file` | Path to a file holding the base64 32-byte key (ideally outside `data_dir`); takes precedence over `encryption_key_env`. |
 | `tenant_keys` | Seal each account's new mail and JMAP blobs with the key of its `[[tenant]]` when every address of the account is in that one tenant and the tenant has an `encryption_key_file` (default `false`). Needs `encrypt_at_rest = true` and filesystem blobs. Rejected with `backend = "s3"` until a backend-aware migration exists. Mail already stored keeps its key until `epistle storage tenant-keys migrate`. See the security guide's "Keys per tenant". |
 | `retired_key_files` | Previous server keys, each a `0600` file, kept only to read what they sealed while `epistle storage tenant-keys migrate` moves it under the current key. Nothing is written with them, and one equal to the current key is refused. |
-| `deleted_retention_days` | Days to keep expunged messages in `<account>/.archive/` before the hourly sweeper removes them (default `0`). Setting this to a positive value moves expunged messages into the archive instead of deleting them; restore with `epistle archive restore` or `POST /api/v1/accounts/{name}/archive/{id}/restore`. Archived messages count toward the account's quota. |
+| `deleted_retention_days` | Days to keep expunged messages in `<account>/.archive/` before the hourly sweeper removes them (default `0`). Setting this to a positive value moves expunged messages into the archive instead of deleting them; restore with `epistle archive restore` or `POST /api/v1/accounts/{name}/archive/{id}/restore`. Archived messages count toward the account's quota. The purge runs only on a clock the server's time reference believes. |
 | `delivery_log_days` | Days to keep one line of per-recipient delivery state under `<data_dir>/deliverylog/YYYY-MM-DD.jsonl` (default `30`; `0` turns the log off). The log is metadata only; the hourly sweep removes files older than this window. Records cover delivered, deferred (one per recipient per message for each distinct reply, at most eight: a retry deferred for the same reason as the one before adds no record), failed, suppressed and canceled outcomes, each with the number of the attempt it came from, never the subject or body, and never a message body. Read with `epistle delivery list` or `GET /api/v1/deliveries`. |
 | _DMARC / TLS-RPT report retention_ | The constant `reports::RETENTION_DAYS` (90 days) controls how long ingested reports live under `data_dir/reports/{dmarc,tlsrpt}/YYYYMMDD/` before the hourly sweeper removes them. The retention ceiling is hard-coded: `epistle reports --days N` cannot read past it. The same sweep covers `data_dir/reports/tlsrpt-outbound/`, the TLS sessions of our own deliveries kept for the TLS-RPT reports we send (see `[queue] tlsrpt_reports`); a day there is normally deleted once its reports went out. |
 
@@ -1418,6 +1824,112 @@ sealed with the same key under the message id as associated data, so an
 envelope cannot be swapped onto another message. Spool files and directories
 are pinned to `0600`/`0700`. See [`storage.md`](storage.md) for the on-disk
 format and the migration path.
+
+### `[storage.folders]`
+The roles of an account's special folders (Junk, Trash, Sent, Drafts,
+Archive) and the names they get. Everything here is optional; with the table
+absent a new account gets `Rejects`, `Sent`, `Drafts`, `Trash` and `Archive`
+as it always did.
+
+An account keeps its own record of which folder holds which role, in
+`<account>/.roles`, and that record wins over the name: a folder the account
+renamed or created under another name keeps its role in IMAP `LIST`
+(`\Junk`, `\Sent`, ...), in what moving mail teaches the spam filter, and in
+where the copy of sent mail is stored. A role the account recorded nothing
+for is still decided by the well-known English name, so an account with no
+record behaves exactly as before. Renaming a folder with a recorded role
+moves the record, and deleting it drops the record, so a delivery never
+creates the folder again.
+
+| Key | Meaning |
+|---|---|
+| `single_spam_folder` | Default `false`: the attachment policy, the scanner hook, domain reputation and the LLM deliver to `Rejects`, and the Bayes verdict and `rule.junk` to `Junk`, both advertised as `\Junk`. `true` sends all of them to the one folder with the `\Junk` role (`Junk`, or the folder the operator or the account named) and `Rejects` is not created for new accounts. A folder already holding mail stays as it is. |
+| `names.junk`, `names.trash`, `names.sent`, `names.drafts`, `names.archive` | The name a new account gets for that role, for every account of the server. A role left out keeps the English default. |
+| `tenants.<tenant>` | A table with the same five keys, for the accounts of one `[[tenant]]`, by its `name`. Narrower than the server. |
+| `domains."<domain>"` | A table with the same five keys, for the accounts of one domain. Narrower than the tenant's. |
+
+A name that differs from the English one is created only when the account has
+no folder with that role yet, and is recorded for the account, so turning a
+language on never adds a second `Sent` next to the one an account already
+has. Each name is a folder name in UTF-8, at most 16 levels deep, never `INBOX`
+and without control characters; an invalid one stops the start.
+
+```toml
+[storage.folders]
+single_spam_folder = true
+
+[storage.folders.names]
+trash = "Trash"
+
+[storage.folders.domains."example.org"]
+junk = "Correo no deseado"
+trash = "Papelera"
+sent = "Enviados"
+drafts = "Borradores"
+archive = "Archivo"
+```
+
+### `[storage.cleanup]`
+Automatic removal of old mail from Trash, Junk, Rejects and any folder by
+name. Nothing is removed unless this table is present: without it, and with a
+table that has no rule, the behaviour is the one before it existed.
+
+The hourly run visits the accounts in order and removes at most `max_per_run`
+messages in all. A run that reaches the cap remembers the account it stopped
+in (`<data_dir>/cleanup-cursor`) and the next run starts there, so a large
+backlog is worked off over several hours instead of in one burst. A message
+leaves the way an IMAP `EXPUNGE` removes it: when `[storage]
+deleted_retention_days` is above `0` it goes to the archive and can be
+restored, and the QRESYNC log and the JMAP change journal record it.
+
+A message is due when it has been in its folder for the retention. That is the
+later of its INTERNALDATE and the change time of its file, so mail that was
+moved into Trash today does not go on the next run because it arrived two years
+ago: a COPY or MOVE keeps the INTERNALDATE, and the file's change time is the
+file system's, which no client can set back. The run acts only on a clock the
+server's time reference believes (see [Evidence](evidence.md)); on one it does
+not, it removes nothing and logs that once. The log carries counts only.
+
+| Key | Meaning |
+|---|---|
+| `max_per_run` | Most messages one hourly run removes, all accounts together, at least 1. Default `1000`. |
+| `[[storage.cleanup.rule]]` | One retention rule, below. |
+
+| Rule key | Meaning |
+|---|---|
+| `scope` | `server`, `tenant`, `domain` or `account`. The narrower scope wins: account, then domain, then tenant, then server. |
+| `name` | The tenant (its `[[tenant]]` `name`), the domain or the account the rule covers. Absent for `server`, required for the others. A tenant or domain must be declared; an invalid one stops the start. |
+| `folder` | `trash`, `junk` or `rejects`, or the name of any other folder. `trash` and `junk` match the folder with that role (the one the account recorded, else the one the English name gives), `rejects` the folder of that name, and a folder name matches that folder; within a scope the folder name beats the role. `junk` covers `Junk` and `Rejects` unless a `rejects` rule says otherwise. |
+| `days` | Days a message stays, from `0` to `36500`. `0` keeps it for ever, and beats a longer rule of a wider scope. |
+
+An account can ask for a shorter retention of its own (`<account>/.cleanup`,
+`folder<TAB>days`, read by the cleanup). It can shorten what the operator set
+and never lengthen it; where the operator set `0` or no rule it sets no cap,
+so the account's value applies. Setting that file from the CLI, the API and the
+panel is not available yet. `epistle storage cleanup` lists what would be
+removed and removes nothing.
+
+```toml
+[storage.cleanup]
+max_per_run = 500
+
+[[storage.cleanup.rule]]
+scope = "server"
+folder = "trash"
+days = 30
+
+[[storage.cleanup.rule]]
+scope = "domain"
+name = "example.org"
+folder = "rejects"
+days = 7
+
+[[storage.cleanup.rule]]
+scope = "account"
+name = "keeper@example.org"
+folder = "trash"
+days = 0
+```
 
 ### `[storage.blobs]`
 Where uploaded JMAP blobs (`POST /jmap/upload/{account}`) live. Absent (or
@@ -1963,16 +2475,20 @@ runs. The first run is two minutes after the start.
 [dns_publish]
 interval_secs = 21600   # six hours, the default; 0 turns the loop off
 skip = ["client-locators"]   # groups of records automatic mode does not publish
+dane = true   # publish the DANE TLSA record; the zone has to be signed with DNSSEC
 senders = ["news.example.org"]   # names that send mail, besides the hosted domains
 null_records = true   # keep the null SPF and null MX true in automatic mode (default false)
+extra_txt = [{ name = "example.org", value = "google-site-verification=..." }]   # TXT records you supply
 ```
 
 | Key | Default | Meaning |
 |---|---|---|
 | `interval_secs` | `21600` | Seconds between two runs. `0` turns the loop off; otherwise from `600` (ten minutes) to `604800` (one week). |
 | `skip` | `[]` | The named groups of records automatic mode must not publish. An unknown name is refused when the file is read, and the error names the groups that exist. |
+| `dane` | `false` | Whether the DANE TLSA record may be published. Turn it on for a zone that is signed with DNSSEC; while it is off the record is left out of the wanted set and the certificate refresh publishes none. |
 | `senders` | `[]` | Names that send mail besides the hosted domains. `epistle dns lockdown` leaves each of them its own SPF and gives every other name under a hosted domain, at any depth, a null SPF and a null MX (except a name with an SPF or MX of its own, a CNAME or a delegation). Each entry is an ASCII DNS name, once, at or under a hosted domain; only the exact name is a sender, not the names under it. |
 | `null_records` | `false` | Keep the null SPF and null MX that `epistle dns lockdown` publishes true in automatic mode. Each run covers a name added to the zone since, at any depth, and withdraws the records epistle published at a name that became a sender, got an SPF or MX of its own or was delegated; a record somebody else wrote is never touched. They go into the ledger like the other records. The DMARC policy ramp stays a command you run. |
+| `extra_txt` | `[]` | TXT records you supply: a domain verification token (the one Google Postmaster Tools asks for) or any other TXT epistle does not derive from the configuration. Each entry is `{ name = "...", value = "..." }`, a DNS name at or under a hosted domain and a value that is not empty; a name outside the hosted domains, an empty value, or a value that starts with the version tag of a record epistle publishes itself (`v=spf1`, `v=DMARC1`, `v=DKIM1`, `v=STSv1`, `v=TLSRPTv1`) is refused when the file is read. A value longer than 255 bytes is split into TXT strings the way the derived records are. The records are wanted like the ones epistle derives: `epistle dns-records` prints them, `epistle dns publish` writes them, and they stay published while they are in the list. |
 
 `skip` names a group of records, not a DNS type: `autoconfig` is a CNAME and
 shares its type with the `mta-sts` name, which a deployment may want to keep.
@@ -1983,7 +2499,7 @@ The groups are:
 | `client-locators` | The SRV client locators (`_imap._tcp`, `_imaps._tcp`, `_submission._tcp`, `_submissions._tcp`, `_jmap._tcp` and the other locators the listeners enable) and the `autoconfig` and `autodiscover` names. |
 | `mta-sts` | The `_mta-sts` TXT record and the `mta-sts` CNAME it needs. |
 | `tls-rpt` | The `_smtp._tls` TXT record (TLS-RPT, RFC 8460). |
-| `tlsa` | The DANE TLSA record at `_25._tcp.<hostname>`. The certificate refresh publishes none either. |
+| `tlsa` | The DANE TLSA record at `_25._tcp.<hostname>`. The certificate refresh publishes none either. It is also skipped while `[dns_publish] dane` is off. |
 | `caa` | The CAA record that locks issuance to the CA. |
 
 The core records are in no group and are never skipped: MX, SPF, DKIM, DMARC
@@ -2005,6 +2521,33 @@ every run, so a credential that was rotated, or created after the server
 started, is picked up without a restart; when the build fails the provider of
 the last run keeps writing and the reason is logged (the credential itself
 never is). See [`dns.md`](dns.md#publishing-the-record-set).
+
+### `[deliverability]`
+
+The sender panels the operator has enrolled in. Google and Microsoft carry
+most of the traffic of a mail server, and each provider has a portal where
+the sender watches what the provider thinks of the sending addresses: the
+spam rate, the complaints, the standing of the sending IP. Enrolling in one
+is a step in the provider's own page; the list here only records that the
+operator did it.
+
+```toml
+[deliverability]
+enrolled = ["postmaster", "snds"]
+```
+
+| Key | Default | Meaning |
+|---|---|---|
+| `enrolled` | `[]` | The panels that are done. `epistle check deliverability` warns about the ones that are not, one warning each, and never blocks: the exit code does not change and no behaviour of the server depends on the list. A panel is only reported when the delivery log shows mail answered by an exchanger of its provider; a server that has not delivered to that provider hears nothing about its panel. |
+| `remind` | `true` | `false` turns the reminder off: the check says so and lists nothing. Nothing else changes. |
+
+The names are `postmaster` (Google Postmaster Tools), `snds` (Microsoft
+SNDS), `jmrp` (Microsoft JMRP), `yahoo-cfl` (Yahoo Complaint Feedback Loop)
+and `apple` (the Apple iCloud Mail postmaster contact). A name that is not
+one of them is refused when the file is read, and the error names the
+panels that exist. The enrolment of each panel, what it shows and the
+limits it asks the sender to stay inside are in
+[sender panels](operations/providers.md).
 
 ### `[ldap]`
 LDAP or Active Directory backend. A login that no local or SQL account claims is checked with a bind against the directory, and its users are loaded for recipient resolution. Absent disables it. A malformed section aborts startup. The login is escaped (RFC 4515) before it goes into `user_filter`, and an unknown user and a wrong password get the same refusal.
@@ -2062,7 +2605,7 @@ A multi-target alias: one address that delivers to several local accounts.
 | `list_id` | Treat the alias as a **mailing list**: delivered copies gain `List-Id` (this value), `List-Post`, and `List-Unsubscribe` headers (RFC 2369/2919). Absent means a plain alias. The value is written between angle brackets as it stands, so it has to be an identifier those brackets can carry: a dot-atom of non-empty `atext` atoms joined by single dots, as in `team.example.org`. Anything else is refused at load, brackets and whitespace included; RFC 2919 puts a description outside the brackets (`Team List <team.example.org>`) and this server does not compose one |
 
 ### Masked email addresses
-Per-account disposable aliases, surfaced under `/api/v1/accounts/{name}/masked`. The server picks the random suffix (8 lowercase base32 chars from the CSPRNG); the client only supplies a human-readable label. The local part of every mask is `<label-slug>.<random>@<first configured domain>`. Disabled masks reject exactly like unknown users (no leak that one existed). The per-account cap is `masked_addresses_max` (default 100); going over returns `409 conflict`.
+Per-account disposable aliases, surfaced under `/api/v1/accounts/{name}/masked`. The server picks the random suffix (8 lowercase base32 chars from the CSPRNG); the client only supplies a human-readable label. The local part of every mask is `<label-slug>.<random>`; its domain is the account's first address domain, falling back to the first configured domain only when the account has no address. Disabled masks reject exactly like unknown users (no leak that one existed). Creating a mask for a disabled domain returns `409 conflict`. The per-account cap is `masked_addresses_max` (default 100); going over returns `409 conflict`.
 
 ### `[[tenant]]`
 A tenant is a named group of domains with optional aggregate caps. Tenancy is what makes a resellable deployment work: each tenant gets its own per-account cap (already covered by `quota_bytes` / `domain_quotas`) plus aggregate caps the operator can promise to the tenant without having to revisit per-account limits. With no `[[tenant]]` block the server behaves exactly as it always has; the empty list is the identity.
@@ -2096,6 +2639,244 @@ Rules:
 - `quota_bytes` is enforced on `POST /jmap/upload` alongside the per-account quota, with the JMAP limit problem type (`urn:ietf:params:jmap:error:limit`, `limit: "tenant_storage"`, HTTP `507`).
 - `submission_rate_limit_per_min` is enforced on SMTP submission, `POST /api/v1/send` and JMAP `EmailSubmission/set` with one counter per tenant shared by the three, counted and charged like the per-account limit (one unit per recipient, once, when the message is accepted, together with the per-account limit or not at all). An account with addresses in two tenants is charged by both. The refusal is the one the per-account limit gives and does not name the tenant.
 
+### `[[antispam_scope]]`
+
+Antispam settings for one tenant, one domain or one account, on top of the
+server-wide sections. An entry names exactly one target:
+
+```toml
+[antispam.senders]                        # the whole server
+deny = ["*.spam.example.net"]
+deny_recipients = ["*.blocked.example.net"]
+
+[[antispam_scope]]
+domain = "example.org"                    # or tenant = "acme", or account = "alice"
+[antispam_scope.senders]
+allow = ["partner.example.com", "ceo@example.net"]
+deny = ["bad@example.com"]
+[antispam_scope.attachments]
+mode = "reject"                           # only stronger than [attachments] mode
+block_extensions = ["docm"]
+block_mime_types = ["audio/*"]
+max_attachment_bytes = 5000000
+```
+
+| Key | Meaning |
+|---|---|
+| `tenant` / `domain` / `account` | The target, exactly one. A tenant is the `name` of a `[[tenant]]`; a domain must be in `domains`; an account is a name from any source (the file, the API, a directory), and a name that does not exist has no effect. |
+| `senders.allow` | Envelope senders favoured when this server verified them. See "Allow lists never override authentication". |
+| `senders.deny` | Envelope senders refused at `RCPT TO` with `550 5.7.1 sender not accepted for this recipient`, before any data, so nothing is stored and no bounce goes to a forged address. |
+| `senders.deny_recipients` | Recipients an authenticated account may not write to, refused at `RCPT TO` with `550 5.7.1 sending to this recipient is not allowed`, with no queue entry. Unlike `[[transport]] kind = "fail"` it covers subdomains and answers at once. |
+| `bayes_junk_at`, `bayes_reject_at` | The junk and reject thresholds of the `[antispam]` section for the mail of this scope. Absent keeps the next wider scope's value. A reject threshold below the junk one in the same entry is refused at load; after resolution it is raised to the junk one, so the rejected band stays inside the junked one. |
+| `greylist_delay_secs` | Greylisting for this scope, in seconds (at most 86400). `0` turns it off here even when the server greylists; a number turns it on here even when the server does not (the greylist store is then built at start). |
+| `first_time_sender_delay_secs` | The wait of a sender never seen before (at most 300, the connection waits it out). Needs `[database]` like the server-wide key. |
+| `forward_policy`, `forward_per_min` | Where this scope's mail may be forwarded (`"any"`, `"hosted-only"`, `"none"`) and how many copies one account may forward in a minute (at least 1); see [`[forwarding]`](#forwarding). Absent keeps the next wider scope's value. |
+| `attachments` | `mode`, `macros`, `encrypted_archives`, `block_extensions`, `block_mime_types` and `max_attachment_bytes`, as in `[attachments]`, and only stronger. |
+| `checks` | `dkim`, `dkim_require_signature`, `arc` and `reverse_dns`: whether the DKIM, ARC and reverse-DNS checks of inbound mail only annotate or refuse. See "Strict checks per scope" below. |
+
+**Entries** are `user@example.com` (that address), `example.com` (that domain
+and not its subdomains) and `*.example.com` (every subdomain at any depth, and
+not `example.com`). Case does not matter; `badexample.com` and
+`example.com.example.net` are not subdomains of `example.com`. The null
+sender `<>` matches nothing, so a list cannot refuse or favour bounces. A list
+holds up to 4096 entries and an entry cannot be both in `allow` and in `deny`
+of the same scope.
+
+**Resolution.** The scopes in reach of a recipient are the server, the tenant
+that owns the recipient's domain, the domain and the account (a domain alias
+counts as the domain it delivers to; a multi-target alias has no account
+scope). A scope in reach adds its entries and never removes another's:
+
+- A `deny` of any scope in reach refuses, and no `allow` of any scope lifts it.
+  A domain cannot allow what the server denies.
+- Attachment settings only tighten. The load refuses a scope whose `mode`,
+  `macros`, `encrypted_archives` or `max_attachment_bytes` is weaker than the
+  server's, and a scope with attachment settings when `[attachments] mode` is
+  `off`. There is no way to allow an extension the server blocks; the
+  always-dangerous list stays dangerous at every scope.
+- A message with several recipients is judged by all of them: a sender denied
+  for one recipient is refused for that recipient only, an allow only counts
+  when every recipient's scopes favour the sender, and the attachment settings
+  are the strictest of any recipient's.
+
+**Numbers.** For `bayes_junk_at`, `bayes_reject_at`, `greylist_delay_secs`,
+`first_time_sender_delay_secs`, `forward_policy` and `forward_per_min` the
+most specific scope in reach wins:
+account, then domain, then tenant, then the server. There is no floor: a scope
+may set any valid value, looser or stricter than the server. A message with several
+recipients is judged by the strictest values of its recipients: the lowest
+thresholds, a reject threshold if any recipient has one, and the longest
+delays. Scopes carry no quarantine digests, release rules, notice texts, per-tenant
+audit log or operator notices.
+
+**Strict checks per scope.** `[antispam_scope.checks]` turns the DKIM, ARC and
+reverse-DNS results of unauthenticated inbound mail from a note in the headers
+into a refusal, for the recipients of that scope only:
+
+```toml
+[[antispam_scope]]
+domain = "example.org"
+[antispam_scope.checks]
+dkim = "reject"                 # off | annotate | reject
+dkim_require_signature = false  # true: also refuse mail with no passing signature
+arc = "annotate"
+reverse_dns = "reject"
+```
+
+| Key | Default | `annotate` | `reject` |
+|---|---|---|---|
+| `dkim` | `annotate` | The result is in `Authentication-Results` (today's behaviour). `off` is the same: DMARC needs the result, so DKIM is always evaluated. | Every signature failed: `550 5.7.21`. A DNS error on a key: `451 4.7.20`. |
+| `dkim_require_signature` | `false` | Not used. | With `dkim = "reject"`, mail with no passing signature is refused with `550 5.7.20`, including mail from a domain that publishes no DKIM key. |
+| `arc` | `off` | `arc=pass`, `fail` or `none` is added to `Authentication-Results`. `off` is today's behaviour: the chain is only read to seal. | A broken chain: `550 5.7.29`. A DNS error: `451 4.7.29`. No chain is never refused. |
+| `reverse_dns` | `off` | `iprev=pass`, `fail`, `none` or `temperror` is added to `Authentication-Results`. `off` is today's behaviour: no PTR lookup. | A missing PTR, or none whose name resolves back to the address: `550 5.7.25`. A DNS error: `451 4.7.25`. |
+
+Rules, the same for the three checks:
+
+- A scope that sets nothing changes nothing, and so does a server with no
+  `[[antispam_scope]]`. The default is the server's own behaviour today, so
+  the ARC and reverse-DNS checks are `off` until a scope turns them on
+  (there is no server-wide `[antispam]` key for them).
+- `reject` never refuses on a lookup that failed: a temporary DNS error is a
+  `4xx`, the sender retries, and only a result that says the check failed is
+  a `5xx`.
+- A sender whose domain publishes no DKIM key, or that does not sign, is not
+  refused by `dkim = "reject"` unless `dkim_require_signature = true` says so
+  for the domain.
+- The most specific scope in reach wins for a recipient (account, then
+  domain, then tenant); a message for several recipients gets the strictest
+  value any of them has, `reject` over `annotate` over `off`, and is refused
+  as a whole, as with `bayes_reject_at`: one transaction that names recipients
+  of two scopes with different settings is refused for both, because SMTP
+  answers once for the whole message. Splitting such a transaction with a
+  `452` at `RCPT TO` is not done.
+- The refusal text follows `[smtp] reject_detail` like the SPF and DMARC
+  ones. The checks run with the SPF check: they need `[dns]` and an
+  unauthenticated peer, and a message from a logged-in account is not
+  touched.
+- Not part of this setting: `5.7.22` (a signature that passes but not for the
+  author's domain), a per-listener value and a counter in the metrics.
+
+**Allow lists never override authentication.** An `allow` entry names the
+envelope sender, which anybody can write, so matching it is never enough. The
+server favours a message only when all of these hold, checked in this order in
+the delivery code (`src/smtp/server/run_scopes.rs`):
+
+1. the message already passed SPF and DMARC: a failure was refused before
+   the lists are consulted, so a forged allowed sender gets the same `550`
+   it gets without the list;
+2. this server verified the sender itself (SPF passed for its domain, or a
+   DKIM signature of the same organization did), never a header the sender
+   wrote;
+3. the `From` header names the same organization as the envelope sender, so
+   a listed envelope that only lends its address to another `From` is not
+   favoured;
+4. every recipient's scopes allow the sender and none denies it.
+
+A favoured message skips only the score-based screens: the Bayesian junk and
+reject thresholds, the uncertain band (the LLM hook and SubjectPass) and the
+reputation screen. It never skips SPF, DMARC, DNS blocklists, greylisting,
+the virus scanner or the attachment policy. Without a DNS resolver
+(`[dns]`) nothing is ever verified, so an `allow` list has no effect.
+
+Defaults for the two kinds of operator: with no `[antispam.senders]` and no
+`[[antispam_scope]]` nothing changes, which is right for a company that runs
+mail only for its own people. A provider that sells mail puts the lists a
+customer controls in that customer's `domain` or `account` scope, and keeps
+`deny` entries of the server for what no customer may undo. The lists can be
+emptied (that turns them off); the attachment floor of the server can only be
+raised.
+
+Not available: editing these lists from the command line, the API and the panel
+with an audit entry for each change, `allow` for outbound recipients,
+attachment `strip`, an allowed-extensions list per scope, and the same lists
+on `POST /api/v1/send` and JMAP `EmailSubmission` (they apply to SMTP).
+
+### `[limits]` and `[[limit_scope]]`
+<a id="limit_scope"></a>
+
+Caps on what an account, a domain or a message may hold. `[limits]` is the
+server scope; a `[[limit_scope]]` entry names exactly one `tenant`, `domain` or
+`account` (the same rules as `[[antispam_scope]]`) and sets the same keys. A
+key is left out (the wider scope's value stands), a whole number, or
+`"unlimited"`.
+
+```toml
+max_message_size = 26214400               # the server's cap, as always
+
+[limits]
+max_addresses_per_account = 20
+max_sessions_per_account = 50
+sessions_when_full = "end_oldest"         # or "refuse"
+
+[[limit_scope]]
+tenant = "acme"                           # or domain = "example.org", or account = "alice"
+max_addresses_per_account = 5
+max_app_passwords_per_account = 10
+max_message_size = 10485760               # below the server's, at least 65536
+```
+
+| Key | Counts | Default |
+|---|---|---|
+| `max_message_size` | Bytes in one message an account of the scope sends or receives. Never above the server's top-level `max_message_size`, never below 65536 (RFC 5321 section 4.5.3.1.7). Not allowed in `[limits]`: the server's cap is the top-level key. | the server's |
+| `max_addresses_per_account` | Addresses one account holds, counted when an account is created, an address is added, or a replacement (SCIM `PUT`) claims a new one. Accounts of the configuration file are not counted. | unlimited |
+| `max_aliases_per_domain` | Aliases, lists included, whose address is in one domain (a domain alias counts as the domain it delivers to). Checked by `epistle alias add`. | unlimited |
+| `max_lists_per_domain` | Aliases with a `list_id` in one domain. Checked by `epistle alias add`. | unlimited |
+| `max_members_per_list` | Members of one alias or list. Checked by `epistle alias add` and `epistle alias member add`. | unlimited |
+| `max_api_keys_per_account` | API keys bound to one account (`--account`). Keys that name no account are administrative and are not counted. Checked by `epistle api-key create`. | unlimited |
+| `max_app_passwords_per_account` | App passwords of one account. Checked by `epistle app-password create`. | unlimited |
+| `max_sessions_per_account` | OAuth refresh-token families of one account, the sessions that survive a restart. | 50 |
+| `sessions_when_full` | `end_oldest` (the family that expires first is ended to make room) or `refuse` (the grant is answered `access_denied` with the reason). The most specific scope that sets it wins. | `end_oldest` |
+
+**Resolution.** The scopes in reach are the server, the tenant that owns the
+domain, the domain and the account, widest first, and the strictest number of
+any of them applies: a narrower scope tightens what a wider one allows and
+never loosens it. `"unlimited"` sets no cap of its own and does not lift the
+cap of a wider scope. The load refuses an entry that tries: a number above the
+scope it sits under, or `"unlimited"` under a number. A domain is compared with
+its tenant's entry and the server's, a tenant and an account with the server's.
+The account-to-domain step cannot be known at load (the addresses of an API
+account are not in the file), so the resolution takes the strictest. An account
+with addresses in several domains gets the strictest of them. `0` is a number:
+it allows none. With nothing configured nothing is capped except the 50 sessions
+that always were.
+
+**Where they apply.** A cap is checked inside the lock that guards the store it
+guards, with the count and the insert as one step, so N writers racing for the
+last place admit exactly the cap: the `accounts.toml` lock for addresses, the
+`app_passwords.toml` and `api_keys.toml` locks for credentials, the refresh
+store's lock for sessions, and for aliases the compare-and-replace of the
+configuration file (a command that finds the file changed writes nothing). A
+cap lowered under what already exists keeps what exists and refuses the next
+one.
+
+**Message size.** A sender that authenticated is held to its own cap at
+`MAIL FROM` (declared `SIZE`) and at the end of the data, on SMTP submission
+and BDAT, in `POST /jmap/upload/{accountId}` (`413`, JMAP `maxSizeUpload`
+problem), JMAP `EmailSubmission/set` (`tooLarge`) and `POST /api/v1/send`
+(`413 message_too_large`). A recipient is held to the cap of the account it
+delivers to: a declared `SIZE` over it refuses that recipient at `RCPT TO`
+(`552 5.3.4 message exceeds the size limit of a recipient of this server`), and
+a message that turns out larger than the cap of any recipient is refused whole
+at the end of the data with the same answer. A multi-target alias counts as all
+its members. The cap of a recipient is not told to the sender; the sender's own
+is, with the scope that set it. EHLO `SIZE` and the JMAP session keep the
+server's value.
+
+**Refusals** name the limit, its value, the scope that set it and how to make
+room, for example `account bob is at the limit of 5 addresses per account (set
+by tenant acme); to make room remove an address, or ask the operator to raise
+max_addresses_per_account`. The API answers `409 limit_reached`, SCIM `409`
+with that detail, the CLI exits `3` (policy) with the same text, and the token
+endpoint `400 access_denied` with `error_description`.
+
+Not done yet: caps per domain or per tenant as a total (accounts, addresses,
+aliases summed over a scope), a frozen state, sign-in and token requests per
+minute per account and per IP, webmail sessions and device-grant counts,
+`epistle status` and `epistle check` showing each account's use against its
+caps, plans that name the values, IMAP `APPEND` and the JMAP `Email/set` builder
+against the per-account message cap, and editing the caps from the CLI, the API
+and the panel.
+
 ### `[[srs_domain]]`
 <a id="srs_domain"></a>
 A hosted domain's own Sender Rewriting Scheme secret. One `srs_secret` for the whole server means an address made for one domain is valid for all of them, and replacing it breaks the return of every bounce in flight at once. A domain with an entry signs the sender of the mail it forwards with that secret and verifies the bounce with the same secret and no other.
@@ -2127,7 +2908,7 @@ Rules:
 - Two domains that share a secret fail to load, and so does a domain whose secret is `srs_secret` or another domain's `previous_secret`. The message names both.
 - While two or more hosted domains still sign with `srs_secret`, `epistle status` and `epistle config-check` warn about it.
 - An account that forwards needs `srs_secret` or an entry for each of its domains; without either the file fails to load.
-- `epistle domain add` writes the new domain's entry, `epistle domain remove` removes it, and a new `epistle init` writes one per domain. An existing installation moves with `epistle srs split` (every hosted domain without an entry) and `epistle srs rotate DOMAIN`.
+- `epistle domain add` keeps the new domain's secret in the [domain state file](#the-domain-state-file) (an entry here wins over it), an entry for a domain that is no longer hosted is ignored, and a new `epistle init` writes one per domain. An existing installation moves with `epistle srs split` (every hosted domain without an entry) and `epistle srs rotate DOMAIN`.
 - Naming the hosted domain makes the return address longer. RFC 5321 limits a local part to 64 octets, and a receiver that enforces it refuses a longer sender, as it would refuse a long SRS address without the name.
 
 ### `[[transport]]`
@@ -2151,21 +2932,58 @@ Outbound queue settings. Absent keeps the secure defaults.
 |---|---|
 | `outbound_tls` | STARTTLS certificate authentication for a hop that is **not** otherwise mandated or DANE-protected. `strict` (the default) verifies the certificate against the public trust anchors and the MX hostname, exactly like a browser — a self-signed/expired certificate with no DANE/MTA-STS defers the message. `opportunistic` completes the handshake with any certificate (encryption without authentication): it stops passive eavesdropping but not an active man-in-the-middle, and is the historical SMTP norm. |
 | `tlsrpt_reports` | Send TLS-RPT reports (RFC 8460) about our outbound TLS, default `true`. Each direct delivery to a recipient MX records its TLS outcome (success, or the failure type: `starttls-not-supported`, `certificate-expired`, `certificate-host-mismatch`, `certificate-not-trusted`, `tlsa-invalid`, `sts-policy-invalid`, `validation-failure`) under `data_dir/reports/tlsrpt-outbound/`. Once a UTC day is over, every domain with sessions that publishes a `_smtp._tls` TXT record gets one report per `rua=`: `mailto:` as a message from `postmaster@<hostname>` with the gzip report attached, queued and DKIM-signed like other mail; `https:` as a POST with `Content-Type: application/tlsrpt+gzip` (30 s timeout, no redirects, at most 1 MiB). Domains without the record get nothing, and the day's sessions are deleted once reported. Mail through a `[[transport]]` relay is not recorded. `false` records and sends nothing. |
+| `dmarc_reports` | Send DMARC aggregate reports (RFC 7489) about the mail we receive, default `true`. Every inbound message with one From domain leaves one delivery record under `data_dir/dmarc-reports/{YYYYMMDD}/{from domain}.jsonl`. Once a UTC day is over, the records of each domain that asks for reports (`rua=`) become one gzip XML report per `rua=`, queued like any other outbound mail; the report quotes the `p=`, `sp=` and `pct=` of the record that was evaluated, so the receiver sees what its own record says. A `rua=` on another domain only receives the report when the policy domain authorizes it (RFC 7489 section 7.1). `false` records nothing and sends nothing; a journal written before the switch was turned off stays on disk until reports are turned back on. |
+| `dmarc_report_from` | Address the DMARC aggregate reports come from, and the contact the report XML names. Absent uses `postmaster@<hostname>`. It must be one plain mailbox (`local@domain`, printable ASCII, no display name, quotes, spaces, commas or angle brackets) with a valid domain name: the value goes into the `From:` header, so anything else is refused when the configuration loads. The envelope sender of the queued message stays `postmaster@<hostname>`, so a report sent from another domain still leaves from the server's own domain. |
 | `concurrency` | Outbound SMTP conversations running at once, all destinations together, default `8`, between 1 and 1024. A slow or silent destination holds its own conversations and no others. Read and change it with `epistle limits show` and `epistle limits set queue-concurrency N`. |
 | `per_domain_concurrency` | Outbound conversations running at once with any one recipient domain, default `2`, between 1 and `concurrency`. The cap covers every exchanger of the domain together. `epistle limits set queue-per-domain-concurrency N`. |
+| `per_group_concurrency` | Outbound conversations running at once with any one receiver group, in a table of its own: `per_group_concurrency = { gmail = 2, outlook = 2 }`, or one entry per line under `[queue.per_group_concurrency]`. The group is the provider behind the exchanger that answers, read from its MX name the same way the [IP warm-up](operations/warmup.md) reads it: `gmail`, `outlook`, `yahoo`, `icloud`, `gmx`, `mailru`. A provider judges a sender by the traffic it sees, so the domains it hosts share one queue: fifty recipient domains hosted by one provider open one set of conversations towards it, not fifty. The value is the number of conversations the group may have at once, between 1 and `concurrency`, or a table with `concurrency` and `min_wait_secs` (the minimum wait between two connections to the group, between 0 and 3600 seconds). A group with no entry is not limited, and `other` (every receiver that is not one of those providers) cannot be limited, because its domains share nothing. The table is absent on a server that existed before this setting, and `epistle init` writes it for a new installation. |
 | `backoff_steps` | How long a destination that asks to slow down is held off, in seconds, one step per deferral in a row with the last repeating: default `[60, 300, 900, 3600]` (1, 5, 15 and 60 minutes), 1 to 16 steps of 1 to 86400 seconds each. `epistle limits set queue-backoff 1m,5m,15m,1h`. |
+| `provider_pause_secs` | Minimum pause in seconds after `4.7.28` or a temporary Yahoo `TSS04` reply, default `600` (10 minutes), from 1 to 86400. The queue waits for the greater of this value and the current `backoff_steps` step. Known receiver groups share the pause across their MX hosts and resume with at most one connection while rate-limit replies remain pending. See [provider rejection causes](operations/queue.md). |
+| `suppression_scopes` | Where a permanent bounce that proves an address bad suppresses it: any of `"account"` (the sending account), `"tenant"` (kept under the sender's `[[tenant]]` by its `name`, which the server publishes at start; a sender whose domain is in no named tenant has none, a domain that moves to another tenant does not hand the old tenant's entries to it, and the entries of a tenant removed from the configuration are removed at the next start) and `"server"` (every sender). Default `["account", "tenant"]`: one customer's typo, or a misconfiguration at the remote side, no longer blocks every other customer, which the earlier behaviour (the server list and the account list) did. A message is stopped when the address is in any of the three lists, so entries made by hand, and the server entries an earlier release wrote, still hold. A sender with no address, such as a bounce, has no account to record against. |
+| `suppression_days` | Days an automatic suppression lasts, after which the address is tried again, and the window in which bounces are counted. Default `0`: for ever, as before. The hourly sweep removes the expired entries on a clock the time reference believes, and an expired entry stops blocking at once whether or not it has been removed. Entries added by hand never expire and a bounce never replaces one. |
+| `suppression_threshold` | Permanent bounces of mail from one sender to one address before it is suppressed, 1 to 100. Default `1`: the first one does. The counts are kept apart from the entries (`<data_dir>/suppression/pending/`) and only bounces inside `suppression_days` count when it is set. |
 
 How the queue delivers:
 
 - **Parallel and bounded.** Up to `concurrency` conversations run at once, at most `per_domain_concurrency` of them with one recipient domain, and a recipient is never in two conversations at once (two passes cannot deliver it twice). Waiting messages cost nothing until a slot frees.
+- **One queue per provider.** A provider judges a sender by the traffic it sees, not by the domain the mail is for, so the conversations of every recipient domain it hosts share the queue of its receiver group: at most `per_group_concurrency` of them at once, and never two closer than the group's `min_wait_secs`. The group is read from the exchanger that answers, so a domain is counted with the provider that actually receives it. A conversation that finds its group full is not attempted: its recipients wait for the next slot with no attempt counted and no backoff of their own, exactly as a recipient waiting for the warm-up cap does. The wait is in memory, in the worker: a restart forgets it.
 - **Fair across senders.** One sender (the account the server recorded as submitting the message; mail the server sends on its own, such as bounces, auto-replies and forwards, shares one system bucket, whatever its reverse path) runs at most three quarters of `concurrency` at once (6 of the default 8, at least 1), and senders take turns for free slots, so an account queueing thousands of messages to slow or silent destinations never holds every slot, and another sender's message queued behind them goes out at once.
 - **Timeouts** (RFC 5321 section 4.5.3.2, fixed): connect 30 s per exchanger (at most two of its addresses, 15 s each), greeting 5 min, EHLO, MAIL and other commands 5 min, each RCPT 5 min, DATA 2 min, each 64 KiB block of the message 3 min, the reply to the final dot 10 min, the STARTTLS handshake 60 s, QUIT 30 s. One whole delivery attempt to a domain, every exchanger and step together, ends after 1 hour. A timeout defers the recipients to their retry schedule.
 - **Next exchanger.** A failure before the mail transaction begins (a refused or silent connection, a `4xx` or silent greeting, a failed TLS handshake) moves on to the next MX in the same attempt, at most five per attempt, still only those MTA-STS permits and with DANE checked per host. Once `MAIL` is sent, the replies are about the message and stand.
 - **Slowing down.** A `421`, any `4.7.x` reply, or a `451`/`452` about a rate or a limit makes the recipients of that conversation wait for the next step of `backoff_steps` (an attempt counted), and holds their domain and the exchanger host that answered while they wait: no conversation starts with a held domain, every other message to it waits too (no attempt counted), and no other domain served by a held exchanger connects to that host either, so many domains hosted by one provider share its hold. The spool is the only record: each such recipient keeps its next attempt at the end of the wait and counts its slow-down deferrals in a row, which pick the next step and only go back to zero with any other answer, so the backoff grows across holds that ran out and starts over only after a delivery. There is no separate hold table to fill, evict or lose: a restart reads the holds back from the spool. `epistle queue destinations` lists them and `epistle queue release-destination` makes the waiting recipients due at once. A `452 4.5.3` (too many recipients) only sends the recipients left over in another transaction at once.
+- **Local failures.** A failure on this side of the conversation, with no reply of a server to quote, carries an enhanced status code and one fixed sentence that names the cause, in the delivery log, in `reason` of the webhook events and as `Diagnostic-Code: X-epistle; <sentence>` in the report to the sender. TLS required (MTA-STS enforce, DANE, `REQUIRETLS`) and not offered is `X.7.10`; a failed handshake, a certificate that matches no TLSA record, a TLSA lookup that fails, an MTA-STS policy that allows none of the mail servers and a DNSSEC failure are `X.7.5`; an unreachable mail server is `X.4.1`; a failed MX lookup is `X.4.3`. They are always retried (an MTA-STS or DANE failure never falls back to plain delivery), so the delay notice says `4.x.y` and the failure notice sent at expiry says `5.x.y`. Fixed behaviour, no setting. The list is also in [headers.md](headers.md).
 
 These keys are read when the server starts: after `epistle limits set` the command restarts the mail service of a stack it manages, or says the server must be restarted.
 
 `outbound_tls` never weakens an authenticated hop: MTA-STS enforce, a sender's REQUIRETLS, and DANE (TLSA records) always authenticate the certificate regardless of `outbound_tls`, and a remote that does not offer STARTTLS where TLS is mandated still defers (never cleartext). The one exception is a message one of your accounts submitted with `TLS-Required: No` (RFC 8689) and without REQUIRETLS: for that message MTA-STS and DANE are set aside, any certificate is accepted, and STARTTLS is still used when offered. Inbound mail loses the field.
+
+### `[queue.undo_send]`
+Hold the mail an account submits for a few seconds before anything is delivered, so the sender can take it back. Off by default: with no section, or `delay_secs = 0`, a submission is handled the instant it is accepted, as it always was.
+
+```toml
+[queue.undo_send]
+delay_secs = 30   # held for 30 seconds; 0 (the default) holds nothing
+max_secs = 120    # no scope may hold longer than this (default 120, at most 600)
+
+[[queue.undo_send.scope]]
+account = "ann"   # exactly one of tenant, domain or account
+delay_secs = 0    # ann's mail is not held
+```
+
+| Key | Meaning |
+|---|---|
+| `delay_secs` | Seconds a submission is held, for every account no scope says otherwise about. Default `0`, which holds nothing. At most `max_secs`. |
+| `max_secs` | The longest any scope may hold a submission, default `120`, from 0 to 600. `0` makes the feature unavailable. The load refuses a `delay_secs` above it, and a value above it is never applied. |
+| `scope` | `[[queue.undo_send.scope]]` entries, each naming exactly one of `tenant` (the `name` of a `[[tenant]]`), `domain` (a hosted domain) or `account`, and its `delay_secs` (0 to `max_secs`; `0` turns the hold off for that scope). The most specific scope that names the account wins: account, then domain, then tenant, then the server. A domain is the one all of the account's addresses sit in; an account with addresses in several domains is decided by its own scope or the server's. A scope for an account is not checked against any list. |
+
+How it works:
+
+- **What is held.** Only mail an authenticated account submits: SMTP submission after `AUTH`, `POST /api/v1/send` and JMAP `EmailSubmission/set`. Mail that arrives from elsewhere, the reports and bounces the server writes, and mail of class `transactional` (whose acceptance is recorded as evidence when it is queued) are never held.
+- **What waits.** Everything: local recipients are not delivered either, and nothing is queued, until the time. The held message is a sealed file under `data_dir/undo/pending`, written with the same guarantees as the spool (owner-only, synced, encrypted when `[storage]` encrypts), with its release time in the file name. Nothing sleeps: a restart keeps every hold and its time, and what is due goes out at once.
+- **Taking it back.** The account that sent it, or an unconfined key or the operator, cancels it until its release time: `DELETE /api/v1/send/{id}`, a JMAP `EmailSubmission/set` update with `undoStatus: "canceled"`, or `epistle queue undo cancel ID`. A cancelled message is never delivered. At or after the release time nothing can take it back: the answer is `409 already_sent` (JMAP `cannotUnsend`). The record that a message was handed on is kept for a day, so a late cancel by its sender says "already sent" and by anyone else says "not found".
+- **At release.** The message goes through the same routing as an ordinary submission, under the id the sender was given, so the queue entry carries that id. If it cannot be handed on, a transient fault retries every second for up to a day; a refusal that would come again (a mailbox that is full, a virus found) is reported to the sender as a failure notice. A crash exactly between handing the message on and forgetting it can deliver it twice.
+- **Counted once.** Rate limits, the new-recipient cap and the `Sent` copy are applied when the message is accepted, not at release. A cancelled message keeps its `Sent` copy and does not give its rate-limit units back.
+- **Turning it off.** Setting every delay to `0` and restarting stops new holds; what is still held goes out at its time.
 
 ## JMAP submission
 
@@ -2429,12 +3247,15 @@ by the script:
   written into an `RCPT TO` line, so a line break in it would have been an
   SMTP command). A redirect that names something that is not an address is a
   run-time error: the message is kept. Redirects past the limit are not
-  forwarded and the log says so. Known gap: the forwards a script
-  makes are not charged to the sending limits of
-  `submission_rate_limit_per_min`, and a message forwarded to another local
-  account is filtered again there. The loop check stops a message that comes
-  back to an address it went through, but a chain across different accounts
-  that each redirect is bounded only by the number of accounts.
+  forwarded and the log says so. The copies a script makes are counted by the
+  forwarding limits (`[forwarding]`: the account's own, else its submission
+  limit, and the server's), and `[forwarding] policy` says where they may go;
+  a copy that is refused or over the limit is not sent and the message is
+  kept. A message that has crossed more than 25 `Received` hops is not
+  redirected. A message forwarded to another local account is filtered again
+  there; the loop check stops a message that comes back to an address it went
+  through, and the hop limit stops a chain across different accounts that each
+  redirect.
 - A filter file over 1 MiB (the store never writes one) is not run, and nor is
   one the parser refuses today (a script stored before a stricter check): mail
   goes to INBOX and the log says so. Every warning a filter causes (a run that

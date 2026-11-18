@@ -1,6 +1,6 @@
 # Roundcube with epistle
 
-For this setup, I use IMAP for mailboxes and authenticated SMTP for sending.
+This setup uses IMAP for mailboxes and authenticated SMTP for sending.
 The HTTP API is for administration and integrations; it is not
 the backend to configure in Roundcube. The available services are described in
 [configuration](configuration.md#listeners), and the API's purpose is described
@@ -40,8 +40,8 @@ Use these backend ports, or the custom ports reported by `service list`:
 | Submit outgoing mail | `submissions` | 465 | TLS from connection start |
 | Alternative submission | `submission` | 587 | STARTTLS before authentication |
 
-Port 25 is the inbound SMTP service for other mail servers. I use a submission
-listener for webmail. IMAPS and implicit-TLS submission require TLS material;
+Port 25 is the inbound SMTP service for other mail servers. Webmail uses a submission
+listener. IMAPS and implicit-TLS submission require TLS material;
 SMTP authentication is refused before TLS even on loopback. Sources:
 [listeners](configuration.md#listeners), [service commands](cli.md#service-listeners),
 [transport security](security.md#transport), and
@@ -58,7 +58,7 @@ Roundcube container networking and name resolution are **not verified** here.
 
 ## Certificates
 
-I keep TLS on the mail connection as well as on the browser connection.
+Keep TLS on the mail connection as well as on the browser connection.
 epistle accepts an operator-managed PEM chain and key through `[tls]`, or
 certificates managed through `[acme]`. Its `init` certificate is self-signed
 and intended for the first setup. Sources: [TLS configuration](configuration.md#tls),
@@ -81,7 +81,7 @@ this repository contains no Roundcube installation recipe for them.
 
 ## SMTP authentication
 
-I choose SCRAM-SHA-256 when the client supports the complete SMTP exchange.
+Choose SCRAM-SHA-256 when the client supports the complete SMTP exchange.
 It proves knowledge of the password without sending the password itself.
 epistle enables SCRAM by default. The SMTP server sends the server-final
 signature (`v=...`, base64 encoded on the wire) in a **334 challenge**. The
@@ -190,7 +190,7 @@ HTTP requests to epistle. Adding the proxy in front of Roundcube to this list
 does not restore browser IP attribution on Roundcube's IMAP/SMTP connections.
 Roundcube's own handling of forwarded headers is **not verified** here.
 
-I inspect the ban subjects before lifting one:
+Inspect the ban subjects before lifting one:
 
 ```sh
 sudo epistle ban list

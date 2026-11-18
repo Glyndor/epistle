@@ -174,6 +174,22 @@ pub fn plan(answers: &Answers) -> Result<Plan, ApplyError> {
 			.is_ok_and(|metadata| metadata.file_type().is_file() && metadata.len() > 0);
 		steps.push(PlanStep::DbAdminPassword { path, reused });
 	}
+	if answers.services.panel_image.is_some() {
+		let decision = crate::cli::init::compose::panel_secrets::decide(
+			&answers.data_dir,
+			crate::cli::init::compose::panel_secrets::now(),
+		)?;
+		steps.push(PlanStep::PanelSecrets {
+			api_token: crate::cli::init::compose::panel_secrets::api_token_path(&answers.data_dir),
+			key: decision.key.to_string(),
+			session_secret: crate::cli::init::compose::panel_secrets::session_secret_path(
+				&answers.data_dir,
+			),
+			session: decision.session.to_string(),
+			admin_id: crate::cli::init::compose::panel_secrets::admin_id_path(&answers.data_dir),
+			admin: decision.admin_id.to_string(),
+		});
+	}
 	steps.push(PlanStep::Config {
 		path: answers.config_path.clone(),
 		identical,
@@ -208,6 +224,12 @@ pub fn plan(answers: &Answers) -> Result<Plan, ApplyError> {
 		for role in first.role_addresses(&answers.domains) {
 			steps.push(PlanStep::RoleAlias {
 				address: role,
+				target: address.clone(),
+			});
+		}
+		if let Some(mailbox) = first.fbl_alias() {
+			steps.push(PlanStep::RoleAlias {
+				address: mailbox,
 				target: address.clone(),
 			});
 		}
@@ -303,5 +325,12 @@ fn listener_entries(
 			port: crate::config::ListenerKind::Acme.default_port(),
 		});
 	}
+	// The public HTTPS endpoint (port 443): the client setup documents and
+	// the public MTA-STS policy.
+	entries.push(ListenerEntry {
+		kind: "autoconfigs".to_string(),
+		addr: mail_addr,
+		port: crate::config::ListenerKind::Autoconfigs.default_port(),
+	});
 	entries
 }

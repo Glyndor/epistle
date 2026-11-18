@@ -211,7 +211,8 @@ async fn hostile_f07_public_screen_cannot_rebind_https_to_loopback() {
 		assert!(
 			seen.iter()
 				.position(|e| e == "screen:jwks.idp.example")
-				.unwrap() < transport,
+				.unwrap()
+				< transport,
 			"transport preceded screen: {seen:?}"
 		);
 	}

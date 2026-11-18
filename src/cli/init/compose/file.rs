@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 use super::services::ComposeService;
 use super::{KEY_SECRETS, db_password_path, resolve_image};
 use crate::cli::init::answers::Answers;
+use crate::config::Listener;
 
 #[derive(Debug, Serialize)]
 struct TopLevelSecret {
@@ -36,6 +37,18 @@ pub(in crate::cli::init) struct ComposeFile {
 		skip_serializing_if = "Option::is_none"
 	)]
 	antivirus: Option<bool>,
+	/// The signature checks per day the answers set, which `stack update`
+	/// reads back; absent when the stack runs the default.
+	#[serde(
+		rename = "x-epistle-freshclam-checks",
+		skip_serializing_if = "Option::is_none"
+	)]
+	freshclam_checks: Option<u8>,
+	/// The operator's `services.panel` choice, which `stack update` reads
+	/// back: `false` keeps the panel out of a stack that has the package,
+	/// `true` demands it. Absent leaves the package to decide.
+	#[serde(rename = "x-epistle-panel", skip_serializing_if = "Option::is_none")]
+	panel: Option<bool>,
 	/// The limits the answers set, which `stack update` reads back.
 	#[serde(
 		rename = "x-epistle-resources",
@@ -55,9 +68,10 @@ impl ComposeFile {
 		answers: &Answers,
 		published_ports: Vec<String>,
 		database: bool,
+		listeners: &[Listener],
 	) -> Self {
 		let nofile = super::services::mail_nofile(super::services::host_hard_nofile());
-		Self::build_with_nofile(answers, published_ports, database, nofile)
+		Self::build_with_nofile(answers, published_ports, database, nofile, listeners)
 	}
 
 	/// [`Self::build`] asking for `nofile` open files in the `mail` service.
@@ -66,6 +80,7 @@ impl ComposeFile {
 		published_ports: Vec<String>,
 		database: bool,
 		nofile: Option<u64>,
+		listeners: &[Listener],
 	) -> Self {
 		let image = resolve_image(answers.image.as_deref());
 		let mut services = BTreeMap::new();
@@ -91,6 +106,17 @@ impl ComposeFile {
 				ComposeService::new_clamav(answers, true),
 			);
 		}
+		// The panel, when the package is installed and the stack serves the
+		// API it needs. Its image is the reference the pin file named, and
+		// its namespace is the mail container's, so it reaches the API on
+		// the container's loopback.
+		let panel_image = answers.services.panel_image.as_deref();
+		if let Some(image) = panel_image {
+			services.insert(
+				"panel".to_string(),
+				ComposeService::new_panel(image, super::services::api_port(listeners)),
+			);
+		}
 		let mut secrets = BTreeMap::new();
 		for (name, path) in KEY_SECRETS {
 			secrets.insert(
@@ -109,6 +135,19 @@ impl ComposeFile {
 						.to_string(),
 				},
 			);
+		}
+		// The panel's three files: the API key, the session secret and the
+		// admin id. They live in the host secrets directory beside data_dir,
+		// which the mail container and the backup never hold.
+		if panel_image.is_some() {
+			for (name, path) in super::services::PANEL_SECRETS {
+				secrets.insert(
+					name.to_string(),
+					TopLevelSecret {
+						file: path(&answers.data_dir).display().to_string(),
+					},
+				);
+			}
 		}
 		let mut configs = BTreeMap::new();
 		let mut volumes = BTreeMap::new();
@@ -152,6 +191,10 @@ impl ComposeFile {
 			name: "epistle".to_string(),
 			managed_image: answers.image.is_none(),
 			antivirus: (!antivirus).then_some(false),
+			freshclam_checks: antivirus
+				.then_some(answers.services.freshclam_checks)
+				.flatten(),
+			panel: answers.services.panel,
 			resources: answers.resources.clone(),
 			services,
 			secrets,

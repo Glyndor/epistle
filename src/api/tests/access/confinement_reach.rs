@@ -105,6 +105,7 @@ fn a_binding_outside_the_domains_owns_nothing() {
 			scopes: vec!["read".to_string()],
 			domains: vec!["a.example".to_string()],
 			account: Some(account.to_string()),
+			auto_submitted: false,
 		};
 		Principal::of_key(&key, None)
 	};

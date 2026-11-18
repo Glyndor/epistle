@@ -128,7 +128,7 @@ async fn serve(mut socket: WebSocket, state: ApiState, auth: MatchedAuth, _slot:
 /// The configured static token is fixed for the life of the process, so it is
 /// not compared again: its hash may be a legacy argon2id one, and hashing on
 /// every frame is a cost a long-lived socket should not pay.
-pub(super) fn credential_still_valid(
+pub(crate) fn credential_still_valid(
 	state: &ApiState,
 	auth: &MatchedAuth,
 	opened_as: &Principal,

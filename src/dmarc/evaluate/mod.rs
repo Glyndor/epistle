@@ -51,6 +51,21 @@ pub fn from_domain(raw: &[u8]) -> Option<String> {
 	}
 }
 
+/// The policy a domain published, as the record that was evaluated states it,
+/// so the aggregate report can quote it (RFC 7489 appendix C,
+/// `PolicyPublishedType`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PublishedPolicy {
+	/// The record's `p=` value: `none`, `quarantine` or `reject`.
+	pub policy: &'static str,
+	/// The record's `sp=` value, or its `p=` value when the record carries
+	/// no `sp=` (RFC 7489 section 6.3).
+	pub subdomain_policy: &'static str,
+	/// The record's `pct=` value: how much of the failing mail the policy
+	/// is applied to.
+	pub pct: u8,
+}
+
 /// Evaluate DMARC for a message: `from_domain` is the RFC5322.From domain,
 /// `spf` the SPF result with the domain it was evaluated on.
 pub async fn evaluate(
@@ -60,6 +75,18 @@ pub async fn evaluate(
 	dkim: &[DkimResult],
 ) -> DmarcOutcome {
 	evaluate_inner(dns, from_domain, spf, dkim, sample_pct()).await
+}
+
+/// Evaluate DMARC and report the policy the record published, so the
+/// aggregate report can state it. The policy is `None` when no record
+/// applied: nothing was published, so nothing can be quoted.
+pub async fn evaluate_with_policy(
+	dns: &dyn DnsLookup,
+	from_domain: &str,
+	spf: (SpfOutcome, Option<&str>),
+	dkim: &[DkimResult],
+) -> (DmarcOutcome, Option<PublishedPolicy>) {
+	evaluate_detailed(dns, from_domain, spf, dkim, sample_pct()).await
 }
 
 /// Draws a random number in [1, 100] for pct= sampling.
@@ -81,10 +108,28 @@ async fn evaluate_inner(
 	dkim: &[DkimResult],
 	pct_roll: u8,
 ) -> DmarcOutcome {
+	evaluate_detailed(dns, from_domain, spf, dkim, pct_roll)
+		.await
+		.0
+}
+
+/// The evaluation and the policy the evaluated record published.
+async fn evaluate_detailed(
+	dns: &dyn DnsLookup,
+	from_domain: &str,
+	spf: (SpfOutcome, Option<&str>),
+	dkim: &[DkimResult],
+	pct_roll: u8,
+) -> (DmarcOutcome, Option<PublishedPolicy>) {
 	let (record, applied_policy) = match fetch_record(dns, from_domain).await {
 		Ok(Some(found)) => found,
-		Ok(None) => return DmarcOutcome::None,
-		Err(outcome) => return outcome,
+		Ok(None) => return (DmarcOutcome::None, None),
+		Err(outcome) => return (outcome, None),
+	};
+	let published = PublishedPolicy {
+		policy: record.policy.as_str(),
+		subdomain_policy: record.subdomain_policy.as_str(),
+		pct: record.pct,
 	};
 
 	let dkim_aligned = dkim.iter().any(|result| {
@@ -100,9 +145,9 @@ async fn evaluate_inner(
 			.is_some_and(|domain| aligned(record.spf_alignment, domain, from_domain));
 
 	if dkim_aligned || spf_aligned {
-		return DmarcOutcome::Pass;
+		return (DmarcOutcome::Pass, Some(published));
 	}
-	match applied_policy {
+	let outcome = match applied_policy {
 		Policy::None => DmarcOutcome::Fail,
 		// RFC 7489 §6.6.2: apply policy only to pct% of failing messages;
 		// non-sampled messages are treated as if policy were "none".
@@ -113,7 +158,8 @@ async fn evaluate_inner(
 				DmarcOutcome::Reject
 			}
 		}
-	}
+	};
+	(outcome, Some(published))
 }
 
 /// Fetch `_dmarc.<domain>`, falling back to the organizational domain for

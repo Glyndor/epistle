@@ -211,7 +211,8 @@ async fn requests_arriving_together_from_one_client_cannot_pass_its_budget() {
 		statuses
 			.iter()
 			.filter(|s| **s == StatusCode::TOO_MANY_REQUESTS)
-			.count() >= 20
+			.count()
+			>= 20
 	);
 }
 

@@ -177,6 +177,10 @@ pub enum Reason {
 	/// A cap was hit (depth, parts, header size, decoded bytes, archive
 	/// entries or time) and what lay beyond it was not inspected.
 	ScanLimit,
+	/// An attachment is larger than `max_attachment_bytes`.
+	AttachmentTooLarge,
+	/// An attachment is declared as a type in `block_mime_types`.
+	BlockedMimeType,
 }
 
 impl Reason {
@@ -201,6 +205,8 @@ impl Reason {
 			Self::Macro => "macro",
 			Self::AmbiguousMime => "ambiguous-mime",
 			Self::ScanLimit => "scan-limit",
+			Self::AttachmentTooLarge => "attachment-too-large",
+			Self::BlockedMimeType => "blocked-mime-type",
 		}
 	}
 }
@@ -301,6 +307,13 @@ impl Extensions {
 			}
 		}
 		common.filter(|ext| self.allowed.contains(ext))
+	}
+
+	/// This set with `extra` also dangerous.
+	pub fn with_blocks(&self, extra: &[String]) -> Self {
+		let mut set = self.clone();
+		set.blocked.extend(extra.iter().cloned());
+		set
 	}
 
 	fn is_dangerous(&self, ext: &str) -> bool {

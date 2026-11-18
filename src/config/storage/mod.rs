@@ -5,6 +5,12 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 
+mod cleanup;
+mod folders;
+
+pub use cleanup::{Cleanup, CleanupRule, CleanupScope, is_selector_word as cleanup_selector_word};
+pub use folders::{FolderNames, Folders};
+
 /// Days of per-recipient delivery log kept when the operator sets none.
 pub const DEFAULT_DELIVERY_LOG_DAYS: u64 = 30;
 
@@ -87,6 +93,14 @@ pub struct Storage {
 	/// `backend = "s3"` redirects to a remote bucket.
 	#[serde(default)]
 	pub blobs: Option<BlobBackendConfig>,
+	/// The names of the special folders and the one-spam-folder switch,
+	/// `[storage.folders]`.
+	#[serde(default)]
+	pub folders: Folders,
+	/// Automatic removal of old mail from Trash, Junk, Rejects and named
+	/// folders, `[storage.cleanup]`. Absent: nothing is removed.
+	#[serde(default)]
+	pub cleanup: Option<Cleanup>,
 }
 
 /// The blob backend the operator configured under `[storage.blobs]`. Two

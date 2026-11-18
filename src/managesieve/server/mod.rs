@@ -46,7 +46,7 @@ fn refusal(why: Refusal) -> &'static [u8] {
 /// Storage/auth backend backed by the live directory and the accounts tree.
 struct DirectoryBackend {
 	directory: DirectoryHandle,
-	accounts_root: PathBuf,
+	data_dir: PathBuf,
 }
 
 impl Backend for DirectoryBackend {
@@ -69,14 +69,17 @@ impl Backend for DirectoryBackend {
 		)
 	}
 	fn store(&self, account: &str) -> ScriptStore {
-		ScriptStore::new(&self.accounts_root, account)
+		ScriptStore::in_data_dir(&self.data_dir, account)
+	}
+	fn account_is_live(&self, account: &str) -> bool {
+		self.directory.account_is_live(account)
 	}
 }
 
 /// A ManageSieve server bound to one listener.
 pub struct Server {
 	directory: DirectoryHandle,
-	accounts_root: PathBuf,
+	data_dir: PathBuf,
 	tls: TlsAcceptor,
 	max_connections: usize,
 	max_per_ip: usize,
@@ -89,7 +92,7 @@ impl Server {
 	pub fn new(data_dir: PathBuf, directory: DirectoryHandle, tls: TlsAcceptor) -> Self {
 		Self {
 			directory,
-			accounts_root: data_dir.join("accounts"),
+			data_dir,
 			tls,
 			max_connections: MAX_CONNECTIONS,
 			max_per_ip: crate::net::conn_limit::DEFAULT_MANAGESIEVE_CONNECTIONS_PER_IP,
@@ -202,7 +205,7 @@ impl Server {
 	{
 		let backend = DirectoryBackend {
 			directory: self.directory.clone(),
-			accounts_root: self.accounts_root.clone(),
+			data_dir: self.data_dir.clone(),
 		};
 		let mut session = Session::new(backend, true);
 		session.adopt_account_for_test(account);
@@ -223,7 +226,7 @@ impl Server {
 	{
 		let backend = DirectoryBackend {
 			directory: self.directory.clone(),
-			accounts_root: self.accounts_root.clone(),
+			data_dir: self.data_dir.clone(),
 		};
 		let mut session = Session::new(backend, false);
 		session.set_peer_ip(Some(peer_ip));

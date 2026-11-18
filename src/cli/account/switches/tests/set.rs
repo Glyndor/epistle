@@ -43,7 +43,7 @@ fn turning_receive_off_is_stored_and_leaves_send_alone() {
 fn both_switches_change_in_one_call() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let store = store_with_app(&dir);
-	run(&store, Some(false), Some(false), false);
+	let _ = run(&store, Some(false), Some(false), false);
 	assert_eq!(store.switches("app"), (false, false));
 }
 
@@ -52,8 +52,8 @@ fn turning_a_switch_back_on_removes_the_key() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let store = store_with_app(&dir);
 	let before = std::fs::read_to_string(store.store_path()).expect("accounts.toml");
-	run(&store, Some(false), Some(false), false);
-	run(&store, Some(true), Some(true), false);
+	let _ = run(&store, Some(false), Some(false), false);
+	let _ = run(&store, Some(true), Some(true), false);
 	let after = std::fs::read_to_string(store.store_path()).expect("accounts.toml");
 	assert_eq!(before, after);
 }

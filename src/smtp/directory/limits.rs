@@ -4,6 +4,51 @@
 use super::Directory;
 
 impl Directory {
+	/// Attach the caps of the configuration.
+	pub fn with_limits(mut self, limits: std::sync::Arc<crate::limits::Limits>) -> Self {
+		self.limits = limits;
+		self
+	}
+
+	/// The caps attached to the directory.
+	pub fn limits(&self) -> &crate::limits::Limits {
+		&self.limits
+	}
+
+	/// The domains of the addresses `account` holds, lower case, once each.
+	pub fn domains_of(&self, account: &str) -> Vec<String> {
+		let mut domains: Vec<String> = self
+			.accounts_by_address
+			.iter()
+			.filter(|(_, name)| name.eq_ignore_ascii_case(account))
+			.filter_map(|(address, _)| address.rsplit_once('@').map(|(_, domain)| domain))
+			.map(str::to_string)
+			.collect();
+		domains.sort();
+		domains.dedup();
+		domains
+	}
+
+	/// The scopes of `account` for a cap: its own and those of the domains
+	/// it holds addresses in.
+	pub fn limit_target(&self, account: &str) -> crate::limits::Target {
+		crate::limits::Target::account(account, self.domains_of(account))
+	}
+
+	/// Whether a message of `size` bytes is within what `account` may send
+	/// or receive, the cap of the server counting as the widest scope.
+	pub fn admit_message(
+		&self,
+		account: &str,
+		size: u64,
+	) -> Result<(), crate::limits::LimitReached> {
+		self.limits.admit_message(
+			&self.limit_target(account),
+			size,
+			&format!("account {account}"),
+		)
+	}
+
 	/// Attach per-account storage quotas (account name → bytes).
 	pub fn with_account_quotas(mut self, quotas: impl IntoIterator<Item = (String, u64)>) -> Self {
 		self.account_quotas = quotas

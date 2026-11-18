@@ -18,9 +18,7 @@ that file at build time, so a release that moves a digest there moves it in
 the compose file `epistle stack update` renders on every install; Dependabot
 watches both files. The image carries the musl-statically linked
 release binary, the runtime data the binary needs, and nothing else.
-The list below describes the intended runtime contents. The previous Debian 12
-inventory was inspected on 2026-10-04 with `podman 5.7.0`; the Debian 13
-image has not yet been inspected or measured.
+The image holds the following:
 
 - `/usr/bin/epistle`, the binary. Built with the same
   `cargo build --release --locked --target <musl>` invocation the .deb
@@ -33,8 +31,7 @@ image has not yet been inspected or measured.
   bundle is what verifies outbound TLS for SMTP submission, IMAP
   retrieval, ACME, and any other connection that pins a public CA.
 - `/etc/passwd` and `/etc/group` supplied by the base. The image sets
-  `USER 65532:65532`, so the binary runs as `nonroot`. The exact account
-  inventory of the Debian 13 base still needs inspection.
+  `USER 65532:65532`, so the binary runs as `nonroot`.
 - `/usr/share/zoneinfo/` and the tzdata package metadata under
   `/usr/share/doc/tzdata/`. The binary is single-timezone (the host's
   `TZ`), so tzdata is not exercised at runtime; it is in the base.
@@ -47,8 +44,8 @@ image has not yet been inspected or measured.
   and `io.containers.autoupdate=registry` so `podman-auto-update(1)`
   can track the `<version>` tag.
 
-The Debian 13 image size has not yet been measured. `USER 65532:65532`; `ENTRYPOINT
-["/usr/bin/epistle"]`; `CMD ["serve", "--config", "/etc/epistle/mail.toml"]`.
+The image sets `USER 65532:65532`, `ENTRYPOINT ["/usr/bin/epistle"]` and
+`CMD ["serve", "--config", "/etc/epistle/mail.toml"]`.
 
 ## What is meant to run inside the image
 
@@ -94,7 +91,11 @@ upgrade, the saved binaries and the dumps `stack update` took are removed, so
 rollback exists only while an upgrade can still fail; see
 [Rolling back an upgrade](../cli.md#rolling-back-an-upgrade). The same step
 removes the container images the previous compose file ran and the new one does
-not, when no container uses them. Purge removes the host binary store.
+not, when no container uses them. `db upgrade` does the same for a PostgreSQL
+major move: once the stack is healthy on the new major it removes the old
+cluster, its dump and the old image; see
+[Moving PostgreSQL to a new major](../cli.md#moving-postgresql-to-a-new-major).
+Purge removes the host binary store.
 
 The minimum a Podman or Docker compose unit needs is:
 
@@ -106,7 +107,7 @@ podman run --rm \
   -p 143:143 -p 993:993 -p 995:995 \
   -v /etc/glyndor/epistle:/etc/epistle:ro \
   -v /var/lib/glyndor/epistle/data:/var/lib/glyndor/epistle/data \
-  ghcr.io/glyndor/epistle:0.12.9
+  ghcr.io/glyndor/epistle:0.13.0
 ```
 
 The `/etc/glyndor/epistle` mount carries `mail.toml`; the
@@ -135,19 +136,12 @@ The compose form is the same flag under the `userns_mode:` key:
 ```yaml
 services:
   epistle:
-    image: ghcr.io/glyndor/epistle:0.12.9
+    image: ghcr.io/glyndor/epistle:0.13.0
     userns_mode: "keep-id:uid=65532,gid=65532"
     volumes:
       - /etc/glyndor/epistle:/etc/epistle:ro
       - /var/lib/glyndor/epistle/data:/var/lib/glyndor/epistle/data
 ```
-
-Both the failing default and the working mapping were checked on this
-host: a host directory with a `0600` file owned by the operator, mounted
-into the image with no userns flag, returned `Permission denied (os
-error 13)`. The same mount with `--userns=keep-id:uid=65532,gid=65532`
-let `config-check` print
-`configuration is valid` and exit 0.
 
 ## Bringing up the stack
 
@@ -196,7 +190,7 @@ init stack's. Init keeps publishing a listener when the
 operator's keep-existing-listeners merge leaves it on a
 non-loopback address; where the host reaches it is the
 operator's decision, made with `epistle service set
-<name> --bind <address>`. For API and WebDAV I publish on loopback behind a TLS
+<name> --bind <address>`. Publish API and WebDAV on loopback behind a TLS
 reverse proxy; their HTTP transport is not encrypted by the mail `[tls]` section.
 
 `epistle service enable` starts those two on loopback instead of on SMTP's
@@ -281,19 +275,17 @@ accept loopback. When the two files describe different stacks, which is what a
 command killed between its writes leaves behind, the next service command says
 which ports each one published before it brings them together.
 
-#### What was measured for the mapping form
+#### Port mapping forms under pasta
 
 pasta, the rootless network mode the stack uses, refuses a port mapping that
-names an explicit address on Podman 5.4.2 (Debian 13): `"[::]:25:25"`, alone or
-next to `"0.0.0.0:25:25"`, fails with `pasta failed ... Failed to bind port 25`,
-and `"25:25"` is the form that publishes on both families. That is why a
-wildcard is never written as an explicit address. Podman 5.7.0 accepts the
-explicit forms, so this is a floor and not a rule of the format.
-
-Not measured: an explicit IPv6 host address (`[ADDR]:PORT:PORT`) under pasta on
-Podman 5.4.2, a rootless bridge instead of pasta, and a client connecting from
-another host. Those shapes are written by the operator in
-`compose.override.yaml`, where the generated map can not reach them.
+names an explicit address on Podman 5.4.2: `"[::]:25:25"`, alone or next to
+`"0.0.0.0:25:25"`, fails with `pasta failed ... Failed to bind port 25`, and
+`"25:25"` is the form that publishes on both families. That is why a wildcard
+is never written as an explicit address. Podman 5.7.0 accepts the explicit
+forms, so this is a floor of the engine and not a rule of the format. An
+explicit IPv6 host address (`[ADDR]:PORT:PORT`) and a rootless bridge instead of
+pasta are shapes the operator writes in `compose.override.yaml`, where the
+generated map cannot reach them.
 
 The override stays the place for a mapping that has to carry every port, or
 one that changes shape: `init` regenerates the base file on a rerun and `stack
@@ -334,10 +326,7 @@ network does not carry the client's address.
 ### What each container may do
 
 Every service starts from `cap_drop: [ALL]` with `no-new-privileges`, and
-every root filesystem is read-only. Each line below was found by starting the
-service without the capability, or without the writable path, and reading the
-failure; the writes were listed with `podman diff` after mail in, a
-submission, an IMAP read, a 20 MB message and an EICAR scan.
+every root filesystem is read-only. The table lists what each service gets back.
 
 | Service | Runs as | Capabilities | Writable besides its volumes | Memory (8 GiB host) | Processes |
 |---|---|---|---|---|---|
@@ -346,17 +335,28 @@ submission, an IMAP read, a 20 MB message and an EICAR scan.
 | `clamav` | root, then clamav | `CHOWN`, `FOWNER`, `SETGID`, `SETUID` | `/tmp` (512 MiB) | `2g` | 128 |
 | `freshclam` | 100 (clamav) | none | `/var/log/clamav` (16 MiB) | `1g` | 32 |
 
+`freshclam` runs in its own container with no socket in common with `clamd`,
+so it cannot tell it that the databases changed. It starts from a copy of the
+image's `freshclam.conf` without `NotifyClamd` (otherwise every update would log
+`Clamd was NOT notified`), and `clamd` notices a changed database by itself at
+its `SelfCheck`, 600 seconds in the generated `clamd.conf`. The updater asks the
+signature servers 12 times a day. To change that, put it in the answers file,
+1 to 50 (what ClamAV accepts from one client); `init` records it in
+`compose.yaml` under `x-epistle-freshclam-checks` and `stack update` keeps it:
+
+```toml
+[services]
+freshclam_checks = 24
+```
+
 `clamav` keeps its root entrypoint: it chowns and chmods the socket volume and
 clamd then steps down to the `clamav` user. Ports below 1024 reach `mail`
 through the `ip_unprivileged_port_start` sysctl of its own network namespace,
 not through `NET_BIND_SERVICE`.
 
-The limits come from a local stack under 64 parallel SMTP sessions and 32
-IMAP sessions: `mail` peaked at 47 MB of anonymous memory and 62 tasks, `db`
-at 113 MB plus 148 MB of shared buffers, clamd at 1.99 GB while it reloaded
-its signatures (it loads the new set before it frees the old one), and
-freshclam at 860 MB while it tested a download. Podman lets each container
-swap as much again.
+clamd loads a new signature set before it frees the old one, so it needs
+roughly twice its resident size while it reloads; the `clamav` and `freshclam`
+limits below leave room for that.
 
 `init` picks the memory limits from the host's `MemTotal`:
 
@@ -394,9 +394,8 @@ value in `compose.override.yaml` works too and wins over both.
 
 ### Sizing
 
-A message in flight takes about 2.9 times its size in `mail` (measured: a
-24 MiB BDAT transfer peaked at 55.7 MiB, the same over DATA and TLS at
-70 MiB). The message memory budget counts message bytes only, so when
+A message in flight takes about 2.9 times its size in `mail` (over DATA and TLS
+more than over BDAT). The message memory budget counts message bytes only, so when
 `message_memory_budget` is unset it is a fifth of the `mail` limit (at
 least `max_message_size`, at most 1 GiB): full, it costs about 60% of the
 limit, under the 70% line below. Past it, a new message gets `452 4.3.1` and the sender retries
@@ -408,7 +407,7 @@ Worked example: 5,000 messages, each with a 10 MiB attachment, arrive in a
 burst at a VPS with 8 GiB of memory and 500 GB of disk, installed with the
 defaults above.
 
-| What | On this host |
+| What | Worked figure |
 |---|---|
 | Size on the wire | base64 turns 10 MiB into 13.7 MiB (4/3, plus a CRLF every 76 characters); under the 25 MiB `max_message_size` |
 | Memory in flight | `mail 2g` gives a 409 MiB budget: about 29 such messages at once, 7 of them from one sending address (it may hold a quarter of the budget), about 1.2 GiB at the peak. The limits add up to 5.9 GiB of the 8 |
@@ -486,7 +485,7 @@ differ. Backups do not carry these keys: save `secrets/` separately.
 
 ### DNS provider token
 
-I keep the DNS provider token in `secrets/dns_provider_token` beside `data_dir`,
+Keep the DNS provider token in `secrets/dns_provider_token` beside `data_dir`,
 with mode `0600`. `epistle dns provider set <provider> --zone <zone> --store-token`
 moves an existing inline or environment token there, updates the generated
 Compose file to mount it read-only only in `mail` (in `certs` when the stack
@@ -525,16 +524,67 @@ provider; `sudo epistle stack certs disable` returns to one `mail`.
 | `<data_dir>/acme` (certificate, key, renewal request) | read-write | read-only |
 | `<data_dir>/dns-tlsa` (TLSA retry state) | read-write | read-only |
 | `<data_dir>/compose` | not mounted | read-only |
+| `<data_dir>/dns-handoff` (DKIM record requests) | read-write | read-write |
 | rest of data_dir | not mounted | read-write |
 | ports | none | as before |
 
 `mail` picks a new certificate up from disk within a minute, without a
 restart. If `certs` stops, `mail` keeps serving the certificate it has until it
 expires; `epistle status` reports the container in its `tls` area with the
-days left. DKIM keys do not rotate while the split is on: rotation publishes
-through the credential `mail` no longer holds, and moves to its own service in
-a later step. The design and what is left are in
-[the split plan](container-split.md).
+days left. DKIM keys keep rotating while the split is on: `mail` keeps the
+keys and asks `certs` to publish each record through
+`<data_dir>/dns-handoff`, which both containers mount. The details are in
+[the container split](container-split.md).
+
+### Which process holds what
+
+| Component | Process | Isolation | Holds |
+|---|---|---|---|
+| PostgreSQL | `db` container, uid 999 | `network_mode: none`; reached over a Unix socket on the `epistle-pgsock` volume | the directory, bans, Bayes, reputation, greylist |
+| ClamAV | `clamav` and `freshclam` containers | reached over a Unix socket on the `clamd-socket` volume | nothing of the installation; it parses the attachments it is sent |
+| Certificates (off by default) | `certs` container, `epistle serve --role certs` | its own `pasta` instance with the host alias closed; no port, no listener | the DNS credential and the ACME account key |
+| Everything else | `mail` container, `epistle serve` | `pasta`, uid 65532, no capability, read-only root | every other secret and every parser below |
+
+With the certificates container off, which is the default, `mail` reads every
+secret of the installation: the DNS provider credential and the ACME account
+key, the TLS private key, the DKIM keys (`[dkim]` and every `[[dkim.domain]]`),
+the ARC sealing key (`[arc] key_file`), the evidence signing key, the at-rest
+storage key (`[storage] encryption_key_file`), the SRS secret (`srs_secret`, or the `secret` of a domain's SRS entry), the
+API token hash and `api_keys.toml`, the account hashes, SCRAM verifiers, TOTP
+secrets, app passwords and the LDAP bind password, the OAuth signing key, the
+webhook secret, the API key of the LLM classifier, the object storage secret
+and the database password. With it on, the DNS credential and the ACME account
+key move to `certs` and `mail` mounts neither.
+
+Every parser of hostile input runs in `mail`, apart from the virus scan, which
+`clamav` performs: SMTP and its SASL exchanges, DKIM, ARC, SPF and DMARC
+verification, the MIME walk and attachment inspection, the Bayes tokenizer, DMARC,
+TLS-RPT and ARF report parsing, the Sieve interpreter, IMAP, POP3 and
+ManageSieve, the HTTP surfaces (API, JMAP, WebDAV, OAuth, SCIM, autoconfig,
+metrics) and the replies of remote MTAs.
+
+Where the certificates container departs from a separation by uid:
+
+- `certs` runs with the same uid and the same `keep-id` mapping as `mail`, so a
+  file one of them can read under a path both mount is readable by the other.
+- `certs` mounts the whole configuration directory read-only. The process drops
+  the `[database]`, `[accounts]`, `[api]`, `[storage]`, `[oauth]` and `[dkim]`
+  tables before it parses the file, but the file it can read still carries the
+  account hashes and the API token hash.
+- `mail` reaches the hand-off directory through its read-write `data_dir`, so
+  it can write results as well as requests. Only its own rotation reads the
+  results, so a forged result can stall or mislead that rotation and nothing
+  else.
+
+### The DKIM signer socket
+
+`src/dkim/remote/` holds the code that serves DKIM signing on a Unix socket and
+the client that calls it. The stack does not run it: no service of the
+generated Compose file starts a signer, and signing happens in `mail`. The
+server refuses to bind in a directory that is a symlink, is not owned by its
+uid or is open to group or others (a missing directory is created `0700`), and
+the socket is `0600`. The server does not read the caller's uid
+(`SO_PEERCRED`): whoever can reach the socket can ask for a signature.
 
 ### The database roles
 
@@ -618,15 +668,15 @@ is absent (a bare host deployment without the container stack).
 The release job pushes per-arch images plus a multi-arch manifest list with
 three floating tags:
 
-- `ghcr.io/glyndor/epistle:0.12.9-amd64`, `…:0.12.9-arm64` per-arch, built
+- `ghcr.io/glyndor/epistle:0.13.0-amd64`, `…:0.13.0-arm64` per-arch, built
   natively on the matching runner.
-- `ghcr.io/glyndor/epistle:0.12.9` the full release.
+- `ghcr.io/glyndor/epistle:0.13.0` the full release.
 - `ghcr.io/glyndor/epistle:0.12` the latest patch release in the `0.12` line.
 - `ghcr.io/glyndor/epistle:0` the latest minor release in the `0.x` line.
 
 `podman pull ghcr.io/glyndor/epistle:0.12` keeps getting patches;
 `…:0` keeps getting minors. A consumer that wants to pin a specific build
-uses `gh attestation verify oci://ghcr.io/glyndor/epistle:0.12.9 …` (below);
+uses `gh attestation verify oci://ghcr.io/glyndor/epistle:0.13.0 …` (below);
 that command resolves the tag itself, so a separate digest lookup is
 not needed. `podman pull --quiet` only prints the local image id and is
 not a digest, so it has no place in the verification path.
@@ -638,7 +688,7 @@ Sigstore. The signed envelope is published as a GitHub attestation, so a
 consumer does not need a separate signer key:
 
 ```sh
-gh attestation verify oci://ghcr.io/glyndor/epistle:0.12.9 \
+gh attestation verify oci://ghcr.io/glyndor/epistle:0.13.0 \
   --repo Glyndor/epistle \
   --signer-workflow Glyndor/epistle/.github/workflows/release.yml \
   --deny-self-hosted-runners
@@ -648,7 +698,7 @@ A green `Verification succeeded` line proves four things and only four
 things:
 
 1. An attestation exists in `Glyndor/epistle` for the manifest list
-   that resolves from `oci://ghcr.io/glyndor/epistle:0.12.9`.
+   that resolves from `oci://ghcr.io/glyndor/epistle:0.13.0`.
 2. The signer workflow is `Glyndor/epistle/.github/workflows/release.yml`,
    identified by the `SubjectAlternativeName` of the Sigstore-issued
    certificate. Not just any workflow in this repository -- specifically
@@ -677,11 +727,8 @@ floating tags and for a digest-pinned
 `oci://ghcr.io/glyndor/epistle@sha256:...` reference; the digest form
 is what podup's update path uses.
 
-## How the image is built and published
+## How the image is built
 
-`Containerfile` and `.containerignore` at the repository root. The build is
-exercised on every pull request that touches `Containerfile`, `.containerignore`,
-`Cargo.toml`, `Cargo.lock`, `src/**`, `.sqlx/**` or the workflow file
-itself, by `.github/workflows/container.yml`. The release-time publish is
-appended to `.github/workflows/release.yml` and runs on every release,
-because `epistle stack` pulls the image of the installed version.
+The `Containerfile` and `.containerignore` at the repository root build it; the
+image holds the same binary as the `.deb`, and `epistle stack` pulls the image
+of the installed version.

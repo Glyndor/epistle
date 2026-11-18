@@ -1,6 +1,7 @@
 //! What the worker does with the outcome of a recipient: suppression, the
 //! failure webhook, the failure report (DSN) and the delay warning.
 
+use super::Refusal;
 use super::Worker;
 use super::conversation::Conversation;
 use crate::queue::bounce::ReportRecipient;
@@ -78,17 +79,21 @@ impl Worker {
 		}
 	}
 
-	/// Truncate `reply` to the first 200 bytes of UTF-8 (the first
-	/// 200 bytes of the remote SMTP reply line; longer values are not
-	/// interesting to log).
-	fn bounded_reply(reply: &str) -> String {
+	/// Keep the enhanced code at the head and reserve room for the fixed
+	/// provider cause. The entire log reply still fits its 200-byte bound.
+	pub(super) fn bounded_reply(reply: &str) -> String {
+		let suffix = crate::queue::reply::provider_cause(reply)
+			.map(|cause| format!("; cause: {}", cause.sentence()))
+			.unwrap_or_default();
+		let limit = 200usize.saturating_sub(suffix.len());
 		let mut out = String::new();
 		for ch in reply.chars() {
-			if out.len() + ch.len_utf8() > 200 {
+			if out.len() + ch.len_utf8() > limit {
 				break;
 			}
 			out.push(ch);
 		}
+		out.push_str(&suffix);
 		out
 	}
 
@@ -105,10 +110,10 @@ impl Worker {
 			return Ok(due);
 		};
 		let account = &envelope.reverse_path;
-		let (skipped, due): (Vec<String>, Vec<String>) = due.into_iter().partition(|recipient| {
-			suppression.is_suppressed(recipient)
-				|| suppression.is_suppressed_for(account, recipient)
-		});
+		let now = self.now_epoch();
+		let (skipped, due): (Vec<String>, Vec<String>) = due
+			.into_iter()
+			.partition(|recipient| suppression.is_blocked(account, recipient, now));
 		if !skipped.is_empty() {
 			tracing::debug!(%id, ?skipped, "not delivering to suppressed recipients");
 			self.spool.update_envelope(id, |envelope| {
@@ -216,9 +221,11 @@ impl Worker {
 				}
 				Err(DeliveryError::Transient(reason)) => {
 					let class = classify_reason(reason, false).class.label();
+					let cause =
+						crate::queue::reply::provider_cause(reason).map(|cause| cause.sentence());
 					let before = entry.envelope.recipient_state(recipient);
 					let attempts = before.attempts;
-					tracing::debug!(%id, %recipient, remote, class, %reason, "delivery deferred");
+					tracing::debug!(%id, %recipient, remote, class, cause, %reason, "delivery deferred");
 					if logs_deferral(&before, reason) {
 						self.log_outcome(
 							&entry.envelope,
@@ -241,7 +248,9 @@ impl Worker {
 				Err(DeliveryError::Permanent(reason)) => {
 					let verdict = classify_reason(reason, true);
 					let class = verdict.class.label();
-					tracing::warn!(%id, %recipient, remote, class, %reason, "delivery failed");
+					let cause =
+						crate::queue::reply::provider_cause(reason).map(|cause| cause.sentence());
+					tracing::warn!(%id, %recipient, remote, class, cause, %reason, "delivery failed");
 					self.record_outcome(
 						&entry.envelope,
 						super::evidence::Recorded {
@@ -264,14 +273,11 @@ impl Worker {
 					if verdict.class == FailureClass::PolicyRejected {
 						// Not the address: the remote does not want mail from
 						// us. The operator has to look at the sending side.
-						tracing::warn!(
-							%id,
-							remote,
-							%reason,
-							"remote refused mail on policy grounds: check the sending \
-							 reputation (IP and domain listings, SPF, DKIM, DMARC)"
-						);
-						self.metric(|m| m.outbound_policy_rejected());
+						let refusal = Refusal::of(reason, remote, &self.ehlo_hostname);
+						tracing::warn!(%id, remote, %reason, "{}", refusal.advice());
+						if refusal == Refusal::Reputation {
+							self.metric(|m| m.outbound_policy_rejected());
+						}
 					}
 					// Only a reply proving the address bad suppresses it; a
 					// policy refusal, a full or disabled mailbox, a message
@@ -291,15 +297,17 @@ impl Worker {
 		}
 	}
 
-	/// Record `recipient` on the suppression lists, global and the sending
-	/// account's, with the reply that proved it bad, so future mail to it is
-	/// not even attempted.
+	/// Count a permanent bounce of mail from `account` to `recipient`, with
+	/// the reply that proved it bad. At the operator's threshold the address
+	/// is suppressed in the scopes and for the lifetime they chose, so future
+	/// mail to it is not even attempted.
 	fn suppress(&self, account: &str, recipient: &str, reason: &str) {
 		if let Some(suppression) = &self.suppression {
 			let now = self.now_epoch();
-			suppression.suppress_because(recipient, reason, now);
-			if !account.is_empty() {
-				suppression.suppress_for_because(account, recipient, reason, now);
+			if let Err(error) =
+				suppression.record_bounce(&self.suppression_rules, account, recipient, reason, now)
+			{
+				tracing::warn!(kind = ?error.kind(), "cannot record a suppression");
 			}
 		}
 	}
@@ -490,6 +498,7 @@ impl Worker {
 				&entry.data,
 				std::time::SystemTime::now(),
 				self.auto_submitted,
+				self.auto_response_suppress,
 			) {
 			// The warning is advisory and attempted once, whatever came of it.
 			let _ = self.send_report(id, message, "delay warning");

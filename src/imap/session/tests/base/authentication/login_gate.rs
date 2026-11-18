@@ -59,14 +59,16 @@ fn scram_admits_an_open_account() {
 }
 
 #[test]
-fn scram_refuses_a_disabled_account_that_proves_the_password() {
-	let dir = tempfile::tempdir().expect("tempdir");
-	let mut session = session(dir.path(), gate_directory_arc());
-	assert!(
-		!scram(&mut session, DISABLED, fixtures::password()),
-		"a disabled account must not finish SCRAM"
-	);
-	assert_eq!(session.account(), None);
+fn scram_refuses_a_disabled_or_reset_account_that_proves_the_password() {
+	for user in [DISABLED, RESET] {
+		let dir = tempfile::tempdir().expect("tempdir");
+		let mut session = session(dir.path(), gate_directory_arc());
+		assert!(
+			!scram(&mut session, user, fixtures::password()),
+			"{user} must not finish SCRAM"
+		);
+		assert_eq!(session.account(), None);
+	}
 }
 
 #[test]
@@ -104,7 +106,7 @@ fn the_account_name_still_signs_in_when_its_domain_is_switched_off() {
 fn password_commands_refuse_the_same_accounts() {
 	let password = fixtures::password();
 	let off_address = format!("{OFF_DOMAIN_ACCOUNT}@{OFF_DOMAIN}");
-	for user in [DISABLED, TWO_FACTOR, off_address.as_str()] {
+	for user in [DISABLED, TWO_FACTOR, RESET, off_address.as_str()] {
 		let dir = tempfile::tempdir().expect("tempdir");
 		let mut by_login = session(dir.path(), gate_directory_arc());
 		assert!(!login(&mut by_login, user, password), "LOGIN {user}");
@@ -164,12 +166,14 @@ fn a_bearer_token_admits_an_open_account() {
 }
 
 #[test]
-fn a_bearer_token_for_a_disabled_account_is_refused() {
+fn a_bearer_token_for_a_disabled_or_reset_account_is_refused() {
 	for mechanism in ["OAUTHBEARER", "XOAUTH2"] {
-		assert!(
-			!is_ok(&bearer("bob@example.org", mechanism)),
-			"{mechanism} must not open a disabled account"
-		);
+		for email in ["bob@example.org", "dave@example.org"] {
+			assert!(
+				!is_ok(&bearer(email, mechanism)),
+				"{mechanism} must not open {email}"
+			);
+		}
 	}
 }
 
@@ -219,13 +223,15 @@ fn a_verified_email_that_only_a_catch_all_matches_opens_nothing() {
 }
 
 #[test]
-fn a_client_certificate_for_a_disabled_account_is_refused() {
-	let dir = tempfile::tempdir().expect("tempdir");
-	let mut session = session(dir.path(), gate_directory_arc());
-	session.set_client_identity(Some("bob@example.org".to_string()));
-	let out = session.command_line("a AUTHENTICATE EXTERNAL =");
-	assert!(!is_ok(&out), "EXTERNAL must not open a disabled account");
-	assert_eq!(session.account(), None);
+fn a_client_certificate_for_a_disabled_or_reset_account_is_refused() {
+	for identity in ["bob@example.org", "dave@example.org"] {
+		let dir = tempfile::tempdir().expect("tempdir");
+		let mut session = session(dir.path(), gate_directory_arc());
+		session.set_client_identity(Some(identity.to_string()));
+		let out = session.command_line("a AUTHENTICATE EXTERNAL =");
+		assert!(!is_ok(&out), "EXTERNAL must not open {identity}");
+		assert_eq!(session.account(), None);
+	}
 }
 
 #[test]

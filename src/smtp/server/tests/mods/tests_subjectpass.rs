@@ -455,7 +455,8 @@ impl crate::antispam::hook::MailHook for QuarantineStubHook {
 	fn scan(
 		&self,
 		_raw: &[u8],
-	) -> std::pin::Pin<Box<dyn Future<Output = crate::antispam::hook::HookVerdict> + Send + '_>> {
+	) -> std::pin::Pin<Box<dyn Future<Output = crate::antispam::hook::HookVerdict> + Send + '_>>
+	{
 		Box::pin(async { crate::antispam::hook::HookVerdict::Quarantine })
 	}
 }

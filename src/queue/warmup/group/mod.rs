@@ -25,13 +25,19 @@ pub enum Group {
 	Yahoo,
 	/// iCloud Mail.
 	Icloud,
+	/// GMX, Web.de and mail.com.
+	Gmx,
+	/// Mail.ru.
+	Mailru,
 	/// Every other receiver.
 	Other,
 }
 
 /// The exchanger name suffixes of each named provider. Each one is matched
-/// on whole labels.
-const PROVIDERS: [(Group, &[&str]); 4] = [
+/// on whole labels. The suffixes are the names the provider publishes its
+/// exchangers under: `mx00.emig.gmx.net` and `mx-ha02.web.de` are GMX and
+/// Web.de, `mxs.mail.ru` is Mail.ru.
+const PROVIDERS: [(Group, &[&str]); 6] = [
 	(Group::Gmail, &["google.com", "googlemail.com"]),
 	(
 		Group::Outlook,
@@ -39,15 +45,19 @@ const PROVIDERS: [(Group, &[&str]); 4] = [
 	),
 	(Group::Yahoo, &["yahoodns.net", "yahoo.com"]),
 	(Group::Icloud, &["icloud.com"]),
+	(Group::Gmx, &["gmx.net", "web.de", "mail.com"]),
+	(Group::Mailru, &["mail.ru"]),
 ];
 
 impl Group {
 	/// Every group, in the order reports list them.
-	pub const ALL: [Group; 5] = [
+	pub const ALL: [Group; 7] = [
 		Group::Gmail,
 		Group::Outlook,
 		Group::Yahoo,
 		Group::Icloud,
+		Group::Gmx,
+		Group::Mailru,
 		Group::Other,
 	];
 
@@ -70,6 +80,8 @@ impl Group {
 			Group::Outlook => "outlook",
 			Group::Yahoo => "yahoo",
 			Group::Icloud => "icloud",
+			Group::Gmx => "gmx",
+			Group::Mailru => "mailru",
 			Group::Other => "other",
 		}
 	}

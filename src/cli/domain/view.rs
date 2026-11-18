@@ -1,22 +1,12 @@
 //! `epistle domain list` and `epistle domain show`: what is configured for
-//! the hosted domains, as a table or as JSON.
+//! the hosted domains, as a table or as JSON. What each domain is comes from
+//! [`crate::domain::catalog`], which the `/api/v1/domains` routes read too.
 
 use std::io::Write;
 
-use serde::Serialize;
-
-use super::state;
 use crate::cli::term::table::Table;
 use crate::config::Config;
-
-#[derive(Serialize)]
-struct DomainRow {
-	domain: String,
-	enabled: bool,
-	role: &'static str,
-	aliases_to: Vec<String>,
-	aliases_from: Vec<String>,
-}
+use crate::domain::catalog::{Catalog, DomainRow};
 
 /// List every configured domain plus its alias map. JSON-friendly.
 pub(in crate::cli) fn list(
@@ -24,28 +14,7 @@ pub(in crate::cli) fn list(
 	json: bool,
 	out: &mut impl Write,
 ) -> std::io::Result<()> {
-	let mut rows = Vec::new();
-	for domain in &config.domains {
-		let aliases_to: Vec<String> = config
-			.domain_aliases
-			.iter()
-			.filter(|(_, target)| target.eq_ignore_ascii_case(domain))
-			.map(|(alias, _)| alias.clone())
-			.collect();
-		let aliases_from: Vec<String> = config
-			.domain_aliases
-			.iter()
-			.filter(|(alias, _)| alias.eq_ignore_ascii_case(domain))
-			.map(|(_, target)| target.clone())
-			.collect();
-		rows.push(DomainRow {
-			domain: domain.clone(),
-			enabled: state::is_enabled(config, domain),
-			role: config.domain_role(domain).name(),
-			aliases_to,
-			aliases_from,
-		});
-	}
+	let rows = Catalog::from_config(config).rows();
 	if json {
 		serde_json::to_writer(&mut *out, &rows).map_err(std::io::Error::other)?;
 		writeln!(out)?;
@@ -104,19 +73,6 @@ pub(in crate::cli) fn list(
 	Ok(())
 }
 
-#[derive(Serialize)]
-struct DomainView {
-	domain: String,
-	enabled: bool,
-	role: &'static str,
-	quota: Option<u64>,
-	submission_rate: Option<u32>,
-	aliases_to: Vec<String>,
-	aliases_from: Vec<String>,
-	accounts: Vec<String>,
-	aliases: Vec<String>,
-}
-
 /// Show one domain: alias edges plus the local accounts and aliases that
 /// rely on it.
 pub(super) fn show(
@@ -125,64 +81,10 @@ pub(super) fn show(
 	json: bool,
 	out: &mut impl Write,
 ) -> std::io::Result<()> {
-	if !config
-		.domains
-		.iter()
-		.any(|existing| existing.eq_ignore_ascii_case(domain))
-	{
+	let Some(view) = Catalog::from_config(config).view(domain) else {
 		return Err(std::io::Error::other(format!(
 			"domain {domain} is not configured"
 		)));
-	}
-	let aliases_to: Vec<String> = config
-		.domain_aliases
-		.iter()
-		.filter(|(_, target)| target.eq_ignore_ascii_case(domain))
-		.map(|(alias, _)| alias.clone())
-		.collect();
-	let aliases_from: Vec<String> = config
-		.domain_aliases
-		.iter()
-		.filter(|(alias, _)| alias.eq_ignore_ascii_case(domain))
-		.map(|(_, target)| target.clone())
-		.collect();
-	let accounts: Vec<String> = config
-		.accounts
-		.iter()
-		.flat_map(|account| account.addresses.iter())
-		.filter(|address| {
-			crate::smtp::address::Address::parse(address)
-				.map(|parsed| parsed.domain().eq_ignore_ascii_case(domain))
-				.unwrap_or(false)
-		})
-		.cloned()
-		.collect();
-	let aliases: Vec<String> = config
-		.alias
-		.iter()
-		.filter(|alias| {
-			crate::smtp::address::Address::parse(&alias.address)
-				.map(|parsed| parsed.domain().eq_ignore_ascii_case(domain))
-				.unwrap_or(false)
-		})
-		.map(|alias| alias.address.clone())
-		.collect();
-	let view = DomainView {
-		domain: domain.to_string(),
-		enabled: state::is_enabled(config, domain),
-		role: config.domain_role(domain).name(),
-		quota: config
-			.domain_quotas
-			.get(&domain.to_ascii_lowercase())
-			.copied(),
-		submission_rate: config
-			.domain_submission_limits
-			.get(&domain.to_ascii_lowercase())
-			.copied(),
-		aliases_to,
-		aliases_from,
-		accounts,
-		aliases,
 	};
 	if json {
 		serde_json::to_writer(&mut *out, &view).map_err(std::io::Error::other)?;

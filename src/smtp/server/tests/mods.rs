@@ -47,6 +47,12 @@ mod tests_starttls;
 mod tests_author;
 
 #[cfg(test)]
+mod refusal;
+
+#[cfg(test)]
+mod tests_dmarc_journal;
+
+#[cfg(test)]
 mod tests_sender_verified;
 
 #[cfg(test)]
@@ -72,3 +78,12 @@ mod scanning;
 
 #[cfg(test)]
 mod limits;
+
+#[cfg(test)]
+mod withdrawn;
+
+#[cfg(test)]
+mod scopes;
+
+#[cfg(test)]
+mod inbound;

@@ -252,3 +252,10 @@ path = "fuzz_targets/config/config_parse.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "signer_frame"
+path = "fuzz_targets/message/signer_frame.rs"
+test = false
+doc = false
+bench = false

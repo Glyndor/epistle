@@ -79,6 +79,7 @@ pub(super) fn world() -> World {
 		scopes: vec!["read".to_string(), "write".to_string()],
 		domains: vec!["a.test".to_string()],
 		account: None,
+		auto_submitted: false,
 	})
 	.expect("add key");
 	drop(keys);

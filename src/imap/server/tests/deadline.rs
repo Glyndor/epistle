@@ -311,7 +311,7 @@ async fn audit_discard_timeout_write_is_bounded() {
 		.expect("announcement");
 	let mut reply = [0u8; 1024];
 	let n = client.read(&mut reply).await.expect("reject");
-	assert_eq!(&reply[..n], b"a NO not authenticated\r\n");
+	assert_eq!(&reply[..n], b"a BAD not authenticated\r\n");
 	ctl.block(1);
 	tokio::time::advance(PREAUTH).await;
 	crate::net::tests::audit_support::settle().await;
@@ -339,7 +339,7 @@ async fn audit_discard_timeout_flush_is_bounded() {
 		.expect("announcement");
 	let mut reply = [0u8; 1024];
 	let n = client.read(&mut reply).await.expect("reject");
-	assert_eq!(&reply[..n], b"a NO not authenticated\r\n");
+	assert_eq!(&reply[..n], b"a BAD not authenticated\r\n");
 	crate::net::tests::audit_support::settle().await;
 	ctl.block(2);
 	tokio::time::advance(PREAUTH).await;
@@ -369,7 +369,7 @@ async fn audit_rejected_tail_write_and_flush_are_bounded() {
 			.expect("announcement");
 		let mut reply = [0u8; 1024];
 		let n = client.read(&mut reply).await.expect("reject");
-		assert_eq!(&reply[..n], b"a NO not authenticated\r\n");
+		assert_eq!(&reply[..n], b"a BAD not authenticated\r\n");
 		crate::net::tests::audit_support::settle().await;
 		ctl.block(mode);
 		client.write_all(b" {2048+}\r\n").await.expect("tail");

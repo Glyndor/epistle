@@ -23,19 +23,25 @@ fn mailbox(count: usize) -> (tempfile::TempDir, Vec<Uuid>) {
 #[test]
 fn messages_without_a_uid_get_consecutive_ones_in_order() {
 	let (dir, ids) = mailbox(5);
-	assert_eq!(resolve_uids(dir.path(), &ids), vec![1, 2, 3, 4, 5]);
+	assert_eq!(
+		resolve_uids(dir.path(), dir.path(), &ids),
+		vec![1, 2, 3, 4, 5]
+	);
 	// A second look reads them back and assigns nothing.
-	assert_eq!(resolve_uids(dir.path(), &ids), vec![1, 2, 3, 4, 5]);
+	assert_eq!(
+		resolve_uids(dir.path(), dir.path(), &ids),
+		vec![1, 2, 3, 4, 5]
+	);
 }
 
 #[test]
 fn a_message_that_arrives_later_continues_the_counter() {
 	let (dir, mut ids) = mailbox(3);
-	assert_eq!(resolve_uids(dir.path(), &ids), vec![1, 2, 3]);
+	assert_eq!(resolve_uids(dir.path(), dir.path(), &ids), vec![1, 2, 3]);
 	let late = Uuid::now_v7();
 	std::fs::write(dir.path().join(format!("{late}.eml")), b"x").expect("late message");
 	ids.push(late);
-	assert_eq!(resolve_uids(dir.path(), &ids), vec![1, 2, 3, 4]);
+	assert_eq!(resolve_uids(dir.path(), dir.path(), &ids), vec![1, 2, 3, 4]);
 }
 
 #[test]
@@ -49,7 +55,7 @@ fn scans_at_the_same_time_never_give_one_uid_to_two_messages() {
 				let (path, ids, start) = (dir.path().to_path_buf(), ids.clone(), start.clone());
 				std::thread::spawn(move || {
 					start.wait();
-					resolve_uids(&path, &ids)
+					resolve_uids(&path, &path, &ids)
 				})
 			})
 			.collect();
@@ -71,10 +77,10 @@ fn scans_at_the_same_time_never_give_one_uid_to_two_messages() {
 #[test]
 fn a_counter_left_behind_never_makes_a_uid_be_handed_out_twice() {
 	let (dir, mut ids) = mailbox(3);
-	assert_eq!(resolve_uids(dir.path(), &ids), vec![1, 2, 3]);
-	super::super::write_counter(dir.path(), 1).expect("rewind the counter");
+	assert_eq!(resolve_uids(dir.path(), dir.path(), &ids), vec![1, 2, 3]);
+	super::super::write_counter(dir.path(), dir.path(), 1).expect("rewind the counter");
 	let late = Uuid::now_v7();
 	std::fs::write(dir.path().join(format!("{late}.eml")), b"x").expect("late message");
 	ids.push(late);
-	assert_eq!(resolve_uids(dir.path(), &ids), vec![1, 2, 3, 4]);
+	assert_eq!(resolve_uids(dir.path(), dir.path(), &ids), vec![1, 2, 3, 4]);
 }

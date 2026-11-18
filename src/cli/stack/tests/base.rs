@@ -33,8 +33,12 @@ fn version_at_least_is_numeric_per_component_not_lexicographic() {
 		("5.14.1", false),
 		("5.15.0", false),
 		("5.15.3", false),
-		("5.15.4", true),
-		("5.15.5", true),
+		("5.15.4", false),
+		("5.18.0", false),
+		("5.18.9", false),
+		("5.19.0", true),
+		("5.19.1", true),
+		("5.20.0", true),
 		("6.0", true),
 	];
 	for (input, expected) in rows {

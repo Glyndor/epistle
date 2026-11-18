@@ -74,6 +74,9 @@ fn build_config_includes_the_api_listener_when_services_request_it() {
 	let mut answers = answers_minimal();
 	answers.services = Services {
 		antivirus: None,
+		panel: None,
+		panel_image: None,
+		freshclam_checks: None,
 		imap: false,
 		submission: false,
 		pop3: false,

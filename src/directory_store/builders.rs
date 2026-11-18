@@ -37,13 +37,12 @@ impl AccountStore {
 
 		let store = AccountStore {
 			path,
-			domains,
-			domain_aliases,
-			disabled_domains: Vec::new(),
-			send_off_domains: Vec::new(),
+			hosted: RwLock::new(super::HostedDomains {
+				domains,
+				domain_aliases,
+				..super::HostedDomains::default()
+			}),
 			static_accounts,
-			domain_quotas: std::collections::HashMap::new(),
-			domain_submission_limits: std::collections::HashMap::new(),
 			aliases: Vec::new(),
 			app_passwords,
 			dynamic: RwLock::new(dynamic.accounts),
@@ -52,6 +51,7 @@ impl AccountStore {
 			ldap_auth: None,
 			masked: Arc::new(RwLock::new(masked)),
 			aliases_disabled: Arc::new(RwLock::new(AliasStore::open(data_dir)?)),
+			limits: Arc::default(),
 			ban_store: None,
 			metrics: None,
 			scram_upgrader: Arc::new(NoopScramUpgrader) as Arc<dyn ScramUpgrader>,
@@ -64,9 +64,17 @@ impl AccountStore {
 		Ok(store)
 	}
 
+	/// Name the server, so `postmaster` at it is accepted although it is not
+	/// a hosted domain, and rebuild the directory.
+	pub fn with_server_name(mut self, hostname: String) -> Self {
+		self.hosted.get_mut().expect("hosted lock").hostname = hostname;
+		self.handle.replace(self.build_directory());
+		self
+	}
+
 	/// Switch off hosted domains and rebuild the directory.
 	pub fn with_disabled_domains(mut self, domains: Vec<String>) -> Self {
-		self.disabled_domains = domains;
+		self.hosted.get_mut().expect("hosted lock").disabled = domains;
 		self.handle.replace(self.build_directory());
 		self
 	}
@@ -74,14 +82,14 @@ impl AccountStore {
 	/// Set the hosted domains nobody may send as (`receive_only_domains`)
 	/// and rebuild the directory.
 	pub fn with_send_off_domains(mut self, domains: Vec<String>) -> Self {
-		self.send_off_domains = domains;
+		self.hosted.get_mut().expect("hosted lock").send_off = domains;
 		self.handle.replace(self.build_directory());
 		self
 	}
 
 	/// Set the per-domain default storage quotas and rebuild the directory.
 	pub fn with_domain_quotas(mut self, quotas: std::collections::HashMap<String, u64>) -> Self {
-		self.domain_quotas = quotas;
+		self.hosted.get_mut().expect("hosted lock").domain_quotas = quotas;
 		self.handle.replace(self.build_directory());
 		self
 	}
@@ -92,7 +100,10 @@ impl AccountStore {
 		mut self,
 		limits: std::collections::HashMap<String, u32>,
 	) -> Self {
-		self.domain_submission_limits = limits;
+		self.hosted
+			.get_mut()
+			.expect("hosted lock")
+			.domain_submission_limits = limits;
 		self.handle.replace(self.build_directory());
 		self
 	}

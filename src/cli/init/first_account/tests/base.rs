@@ -13,6 +13,7 @@ fn account(address: &str) -> FirstAccount {
 		display_name: None,
 		password_file: None,
 		role_aliases: true,
+		fbl_mailbox: None,
 	}
 }
 

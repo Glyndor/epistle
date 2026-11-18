@@ -5,8 +5,8 @@
 use std::io::Write;
 use std::path::Path;
 
-use super::*;
 use crate::config::Config;
+use crate::domain::state::blockers::removal_blockers;
 
 fn fixture(extra: &str) -> (tempfile::TempDir, tempfile::NamedTempFile) {
 	let dir = tempfile::tempdir().unwrap();

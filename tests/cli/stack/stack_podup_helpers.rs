@@ -57,6 +57,16 @@ pub(crate) fn write_podup_shim(shim_dir: &Path, body: &str) -> PathBuf {
 	if !podman.exists() {
 		write_podman_shim(shim_dir, "#!/bin/sh\nexit 125\n");
 	}
+	// The boot unit check asks `systemctl --user` whether the unit is loaded
+	// and enabled. Without this, it would ask the machine that runs the test.
+	let systemctl = shim_dir.join("systemctl");
+	if !systemctl.exists() {
+		// It still answers the two things the boot drop-in asks: the version, and a reload.
+		executable::write_executable(
+			&systemctl,
+			"#!/bin/sh\ncase \"$*\" in\n--version) echo 'systemd 255 (255.4)' ;;\n*daemon-reload*) exit 0 ;;\n*) exit 1 ;;\nesac\n",
+		);
+	}
 	path
 }
 
@@ -157,7 +167,7 @@ pub(crate) fn stderr_shim(argv_log: &Path, lines: &[String]) -> String {
 		"#!/bin/sh\n\
 		 printf '%s\\n' \"$@\" >> {argv_log}\n\
 		 if [ \"$1\" = \"--version\" ]; then\n\
-		 \tprintf '\\npodup version v5.15.4\\n\\n'\n\
+		 \tprintf '\\npodup version v5.19.0\\n\\n'\n\
 		 \texit 0\n\
 		 fi\n",
 		argv_log = argv_log.display()
@@ -185,6 +195,7 @@ pub(crate) fn run_with_podup(args: &[&str], shim_dir: &Path) -> std::process::Ou
 	cmd.args(args);
 	cmd.env("PATH", path_with_shim_first(shim_dir));
 	cmd.env("XDG_RUNTIME_DIR", fake_podman_runtime(shim_dir));
+	cmd.env("XDG_CONFIG_HOME", shim_dir.join("xdg"));
 	cmd.env_remove("CLICOLOR_FORCE");
 	cmd.env("NO_COLOR", "1");
 	cmd.stdin(Stdio::null())
@@ -217,7 +228,7 @@ pub(crate) fn ps_shim(argv_log: &Path, canned_path: &Path) -> String {
 		"#!/bin/sh\n\
 		 printf '%s\\n' \"$@\" >> {argv_log}\n\
 		 if [ \"$1\" = \"--version\" ]; then\n\
-		 \tprintf '\\npodup version v5.15.4\\n\\n'\n\
+		 \tprintf '\\npodup version v5.19.0\\n\\n'\n\
 		 \texit 0\n\
 		 fi\n\
 		 for arg in \"$@\"; do\n\
@@ -276,7 +287,7 @@ pub(crate) fn write_ps_fixture(dir: &Path) -> PathBuf {
 }
 
 /// A podup shim that only records argv, prints the canonical
-/// `v5.15.4` banner, and exits 0 for every other command. Used
+/// `v5.19.0` banner, and exits 0 for every other command. Used
 /// by the streaming subcommand tests (`up`, `down`, `logs`,
 /// `restart`).
 #[allow(dead_code)]
@@ -285,7 +296,7 @@ pub(crate) fn recorder_shim(argv_log: &Path) -> String {
 		"#!/bin/sh\n\
 		 printf '%s\\n' \"$@\" >> {argv_log}\n\
 		 if [ \"$1\" = \"--version\" ]; then\n\
-		 \tprintf '\\npodup version v5.15.4\\n\\n'\n\
+		 \tprintf '\\npodup version v5.19.0\\n\\n'\n\
 		 \texit 0\n\
 		 fi\n\
 		 exit 0\n",

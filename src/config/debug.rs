@@ -20,6 +20,8 @@ impl std::fmt::Debug for Config {
 			.field("dnsbl_zones", &self.dnsbl_zones)
 			.field("dnsbl_domain_zones", &self.dnsbl_domain_zones)
 			.field("dnsbl_url_zones", &self.dnsbl_url_zones)
+			.field("smtp", &self.smtp)
+			.field("forwarding", &self.forwarding)
 			.field(
 				"first_time_sender_delay_secs",
 				&self.first_time_sender_delay_secs,
@@ -54,6 +56,10 @@ impl std::fmt::Debug for Config {
 			.field("bulk_recipients", &self.bulk_recipients)
 			.field("default_list_id", &self.default_list_id)
 			.field("system_auto_submitted", &self.system_auto_submitted)
+			.field(
+				"system_auto_response_suppress",
+				&self.system_auto_response_suppress,
+			)
 			.field("x_epistle_header", &self.x_epistle_header)
 			.field("organization_header", &self.organization_header)
 			.field("domain_organization", &self.domain_organization)
@@ -112,6 +118,9 @@ impl std::fmt::Debug for Config {
 			.field("ldap", &self.ldap)
 			.field("webhook", &self.webhook)
 			.field("tenants", &self.tenants)
+			.field("antispam_scopes", &self.antispam_scopes)
+			.field("limits", &self.limits)
+			.field("limit_scopes", &self.limit_scopes)
 			.field("privileges", &self.privileges)
 			.field("storage", &self.storage)
 			.field("queue", &self.queue)

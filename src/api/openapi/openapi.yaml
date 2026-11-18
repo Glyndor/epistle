@@ -24,12 +24,15 @@ info:
     **Authentication.** Every route of the API listener except `/healthz` and
     `/oauth/*` needs `Authorization: Bearer <token>`: the optional static token whose hash is
     `[api] token_hash`, or an API key made with `epistle api-key create`.
+    JMAP also accepts locally issued OAuth access tokens, confined to the
+    signed `sub` account and explicit `read`, `write`, `send` scopes. These
+    tokens never authenticate `/api/v1` or SCIM.
     A key carries scopes (`read`, `write`, `send`, `scim`); a request the
     scopes do not cover is answered `403 forbidden` and does not count as a
     failed authentication; an unknown token is `401 unauthenticated`.
     `x-epistle-scope` on each operation names the
-    scope it needs. Without `token_hash`, only labelled keys in `api_keys.toml`
-    authenticate bearer-protected routes. No current route becomes unreachable:
+    scope it needs. Without `token_hash`, labelled keys in `api_keys.toml`
+    authenticate bearer-protected routes, and local OAuth tokens authenticate JMAP. No current route becomes unreachable:
     SCIM accepts `scim` keys, and OAuth uses account credentials or grant codes.
     A static-only route without a per-key scope must refuse keys with `403`,
     even all-scope keys. An absent hash never matches any bearer.
@@ -41,8 +44,12 @@ info:
     malformed JSON, query or path values, `415` without
     `Content-Type: application/json`, `422` for a missing or mistyped field.
     An unknown path is `404` with an empty body; a known path with another
-    method is `405` with an `allow` header. Authentication-window and OAuth
-    throttling responses include `Retry-After` in seconds. Client attribution
+    method is `405` with an `allow` header. Every `429` of `/api/v1` includes
+    `Retry-After` in seconds, and every `401` includes
+    `WWW-Authenticate: Bearer`. A client that sends
+    `Accept: application/problem+json` gets each of these errors as an RFC 9457
+    problem (`#/components/schemas/Problem`) instead of the `error` object; any
+    other `Accept` keeps the `error` object. Client attribution
     uses the TCP peer unless `[api] trusted_proxies` permits a validated
     `X-Forwarded-For` chain, scanned from right to left.
 
@@ -57,6 +64,8 @@ tags:
     description: Liveness, status and this description.
   - name: Accounts
     description: Accounts, passwords, two-factor, mailboxes, masked addresses and the archive.
+  - name: Domains
+    description: Hosted-domain reads and atomic writes shared with `epistle domain`.
   - name: Queue
     description: The outbound queue, the suppression list and the delivery log.
   - name: Send
@@ -179,7 +188,7 @@ paths:
   /api/v1/domains:
     get:
       operationId: listDomains
-      tags: [Accounts]
+      tags: [Domains]
       summary: The hosted domains in the key's reach
       x-epistle-scope: [read]
       responses:
@@ -195,6 +204,337 @@ paths:
           $ref: "#/components/responses/AccountBoundKey"
         "429":
           $ref: "#/components/responses/AuthRateLimited"
+    post:
+      operationId: addDomain
+      tags: [Domains]
+      summary: Host a new domain
+      description: |-
+        Requires an unconfined write key. Names use the CLI ASCII DNS-name rules;
+        leading/trailing whitespace is trimmed and ASCII case is folded.
+        Creates the same DKIM key and SRS secret as epistle domain add, exclusively
+        under data_dir. No configuration file is written. Duplicate names are 409.
+        The response never exposes key material or the SRS secret.
+      x-epistle-scope: [write]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddDomain"
+      responses:
+        "201":
+          description: The durable result; a changed state is applied by the file watcher.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DomainChanged"
+        "400":
+          $ref: "#/components/responses/InvalidInput"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/AccountBoundKey"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Already present, in use, or the last enabled domain; the CLI refusal message is preserved.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "422":
+          $ref: "#/components/responses/UnprocessableBody"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
+  /api/v1/domains/{domain}:
+    get:
+      operationId: getDomain
+      tags: [Domains]
+      summary: One hosted domain
+      description: |-
+        The object `epistle domain show <domain> --json` prints for the same
+        name, read from the configuration the server started with. The name is
+        compared as given except for ASCII case, and `domain` in the answer is
+        the name as asked. A domain outside a confined key's domains answers
+        exactly like one the server does not host.
+      x-epistle-scope: [read]
+      parameters:
+        - $ref: "#/components/parameters/DomainName"
+      responses:
+        "200":
+          description: The domain.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DomainView"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/AccountBoundKey"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+    put:
+      operationId: setDomain
+      tags: [Domains]
+      summary: Set a hosted domain role and limits atomically
+      description: |-
+        Needs write scope and the domain in the key's reach. A foreign domain is
+        404 no such domain. Omitted fields stay unchanged; null quota or
+        submission_rate removes the domain override, falling back to server defaults.
+        quota is bytes (0 means unlimited); submission_rate is recipients per minute.
+        Naming quota or submission_rate, even as null, needs an unconfined key: a
+        key confined to some domains gets 403, since limits belong to the operator;
+        it may still change the role. An empty body object is 400. Values already in
+        effect succeed with changed false and do not write a state file. The
+        configuration file is never written.
+      x-epistle-scope: [write]
+      parameters:
+        - $ref: "#/components/parameters/DomainName"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetDomain"
+      responses:
+        "200":
+          description: The durable result; a changed state is applied by the file watcher.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DomainChanged"
+        "400":
+          $ref: "#/components/responses/InvalidInput"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/AccountBoundKey"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Already present, in use, or the last enabled domain; the CLI refusal message is preserved.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "422":
+          $ref: "#/components/responses/UnprocessableBody"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
+    delete:
+      operationId: removeDomain
+      tags: [Domains]
+      summary: Stop hosting an unused domain
+      description: |-
+        Needs write scope and the domain in the key's reach. A foreign domain is
+        404 no such domain. Refused while accounts, aliases or configuration entries
+        still use it, with the same blockers as epistle domain remove. The 409 names
+        them only for an unconfined key; a confined key gets "domain is still in use",
+        so it learns nothing about other tenants. An account created through the API
+        at the same moment can still land on the domain being removed, because the
+        check reads accounts.toml while account creation checks the running
+        snapshot; the command has the same race.
+      x-epistle-scope: [write]
+      parameters:
+        - $ref: "#/components/parameters/DomainName"
+      responses:
+        "200":
+          description: The durable result; a changed state is applied by the file watcher.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DomainChanged"
+        "400":
+          $ref: "#/components/responses/InvalidInput"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/AccountBoundKey"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Already present, in use, or the last enabled domain; the CLI refusal message is preserved.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
+  /api/v1/domains/{domain}/enable:
+    post:
+      operationId: enableDomain
+      tags: [Domains]
+      summary: Enable a hosted domain
+      description: |-
+        Needs write scope and the domain in the key's reach; foreign domains answer
+        404 no such domain. Preserves its stored role. Disabling the last enabled
+        domain of a server with listeners is 409. Repeating the current switch
+        succeeds with changed false and writes nothing.
+      x-epistle-scope: [write]
+      parameters:
+        - $ref: "#/components/parameters/DomainName"
+      responses:
+        "200":
+          description: The durable result; a changed state is applied by the file watcher.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DomainChanged"
+        "400":
+          $ref: "#/components/responses/InvalidInput"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/AccountBoundKey"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Already present, in use, or the last enabled domain; the CLI refusal message is preserved.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
+  /api/v1/domains/{domain}/disable:
+    post:
+      operationId: disableDomain
+      tags: [Domains]
+      summary: Disable a hosted domain
+      description: |-
+        Needs write scope and the domain in the key's reach; foreign domains answer
+        404 no such domain. Preserves its stored role. Disabling the last enabled
+        domain of a server with listeners is 409. Repeating the current switch
+        succeeds with changed false and writes nothing.
+      x-epistle-scope: [write]
+      parameters:
+        - $ref: "#/components/parameters/DomainName"
+      responses:
+        "200":
+          description: The durable result; a changed state is applied by the file watcher.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DomainChanged"
+        "400":
+          $ref: "#/components/responses/InvalidInput"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/AccountBoundKey"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Already present, in use, or the last enabled domain; the CLI refusal message is preserved.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
+  /api/v1/domains/{domain}/aliases:
+    post:
+      operationId: addDomainAlias
+      tags: [Domains]
+      summary: Declare a domain alias
+      description: |-
+        Needs write scope. A confined key must admit both the target domain and
+        the alias name; otherwise 404 no such domain. The target must be hosted.
+        Both names use CLI DNS-name validation. A taken alias or hosted-name
+        collision is 409, with the CLI refusal message.
+      x-epistle-scope: [write]
+      parameters:
+        - $ref: "#/components/parameters/DomainName"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddDomainAlias"
+      responses:
+        "201":
+          description: The durable result; a changed state is applied by the file watcher.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DomainChanged"
+        "400":
+          $ref: "#/components/responses/InvalidInput"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/AccountBoundKey"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Already present, in use, or the last enabled domain; the CLI refusal message is preserved.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "422":
+          $ref: "#/components/responses/UnprocessableBody"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
+  /api/v1/domains/{domain}/aliases/{alias}:
+    delete:
+      operationId: removeDomainAlias
+      tags: [Domains]
+      summary: Drop an alias of a hosted domain
+      description: |-
+        Needs write scope. A confined key must admit both the target domain and
+        the alias name; otherwise 404 no such domain. The alias must currently
+        point to the path domain, checked under the state lock; another domain's
+        alias or an absent alias is 404. Both names use CLI DNS-name validation.
+      x-epistle-scope: [write]
+      parameters:
+        - $ref: "#/components/parameters/DomainName"
+        - $ref: "#/components/parameters/DomainAliasName"
+      responses:
+        "200":
+          description: The durable result; a changed state is applied by the file watcher.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DomainChanged"
+        "400":
+          $ref: "#/components/responses/InvalidInput"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/AccountBoundKey"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Already present, in use, or the last enabled domain; the CLI refusal message is preserved.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
   /api/v1/accounts:
     get:
       operationId: listAccounts
@@ -529,8 +869,9 @@ paths:
       description: |-
         The local part is the label reduced to lowercase letters, digits and
         hyphens, a dot and 8 random base32 characters; the domain is that of
-        the account's first address. Mail sent to it lands in the account
-        while it is enabled.
+        the account's first address, falling back to the first configured
+        domain only when the account has no address. Mail sent to it lands in
+        the account while it is enabled.
       x-epistle-scope: [write]
       parameters:
         - $ref: "#/components/parameters/AccountName"
@@ -567,7 +908,9 @@ paths:
         "409":
           description: |-
             `conflict`: the account is at the per-account cap of masked
-            addresses (`masked_addresses_max`). Delete one or raise the cap.
+            addresses (`masked_addresses_max`); delete one or raise the cap.
+            `conflict`: the address's domain is disabled; enable the domain
+            before creating a masked address under it.
           content:
             application/json:
               schema:
@@ -741,6 +1084,72 @@ paths:
           $ref: "#/components/responses/NotFound"
         "429":
           $ref: "#/components/responses/AuthRateLimited"
+  /api/v1/events:
+    get:
+      operationId: streamEvents
+      tags: [Service]
+      summary: Notifications that something changed, for live dashboards
+      description: |-
+        A `text/event-stream` that stays open. Each event is named after a
+        topic (`queue`, `deliveries`, `suppression`, `status`, `accounts` or
+        `domains`), carries `{"topic": "<name>"}` and an opaque `id`, and
+        says nothing about what changed: no address, subject, content or
+        credential. The client fetches the detail from the route it already
+        uses. Changes are looked for once a second and a burst is one event
+        per topic. Send the last `id` as `Last-Event-ID` to be sent what came
+        after it; an id the server cannot replay from gets one event per
+        topic the key may be told about, meaning "fetch again". A key
+        confined to some domains is told only `status`, `accounts` and
+        `domains`, and only about what it reaches; a key bound to one
+        account is refused. A `:heartbeat` comment keeps an idle stream
+        alive. The stream ends after `[api] event_stream_max_secs`, or when
+        the key is revoked, expires, is narrowed or loses `read`. A key may
+        hold `[api] event_streams_per_key` streams and the server
+        `event_streams_per_server`.
+      x-epistle-scope: [read]
+      parameters:
+        - name: Last-Event-ID
+          in: header
+          required: false
+          description: The `id` of the last event received.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The event stream.
+          headers:
+            X-Accel-Buffering:
+              description: Always `no`, so an nginx in front does not buffer the stream.
+              schema:
+                type: string
+                enum: ["no"]
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/AccountBoundKey"
+        "429":
+          description: |-
+            `rate_limited`: the key already holds its streams, or the server
+            holds all it allows. `Retry-After` gives the seconds to wait. The
+            authentication limiter answers the same status for a client
+            address with too many failed credentials.
+          headers:
+            Retry-After:
+              description: Seconds to wait before trying again.
+              schema:
+                type: integer
+                minimum: 1
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
   /api/v1/queue:
     get:
       operationId: listQueue
@@ -878,7 +1287,7 @@ paths:
         - name: account
           in: query
           required: false
-          description: The sending account whose list to show.
+          description: The account name or sending address whose list to show.
           schema:
             type: string
         - name: limit
@@ -923,6 +1332,72 @@ paths:
           $ref: "#/components/responses/AuthRateLimited"
         "500":
           $ref: "#/components/responses/Internal"
+    post:
+      operationId: addSuppression
+      tags: [Queue]
+      summary: Add an address to a suppression list
+      description: |-
+        Adds a recipient to the global list, or to the sending account's list
+        with `account`. The global list is refused to a key confined to an
+        account or domain. The address is validated by the server. Adding an
+        address already on the list succeeds without replacing its first
+        reason or timestamp.
+      x-epistle-scope: [write]
+      parameters:
+        - name: account
+          in: query
+          required: false
+          description: Add to this account name or sending address's list instead of the global one.
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [address]
+              properties:
+                address:
+                  type: string
+                  description: Recipient address to suppress.
+                reason:
+                  type: string
+                  maxLength: 512
+                  description: Optional reason kept with the entry. The suppression listing returns addresses only.
+      responses:
+        "200":
+          description: The normalized address now on the list.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [suppressed]
+                properties:
+                  suppressed:
+                    type: string
+        "400":
+          $ref: "#/components/responses/InvalidInput"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/AccountBoundKey"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "413":
+          description: The request body exceeds 4096 bytes.
+          content:
+            text/plain:
+              schema:
+                type: string
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "422":
+          $ref: "#/components/responses/UnprocessableBody"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
   /api/v1/suppression/{address}:
     delete:
       operationId: removeSuppression
@@ -942,7 +1417,7 @@ paths:
         - name: account
           in: query
           required: false
-          description: Remove from this sending account's list instead of the global one.
+          description: Remove from this account name or sending address's list instead of the global one.
           schema:
             type: string
       responses:
@@ -1031,6 +1506,47 @@ paths:
           $ref: "#/components/responses/AuthRateLimited"
         "500":
           $ref: "#/components/responses/Internal"
+  /api/v1/send/{id}:
+    delete:
+      operationId: cancelSend
+      tags: [Send]
+      summary: Take back a message the send delay still holds
+      description: |-
+        With `[queue.undo_send]` on, what an account sends waits on disk until
+        its release time (`cancel_until` in the answer to `POST /api/v1/send`).
+        Until then this removes it, and nothing of it is delivered or queued.
+        A key bound to one account cancels that account's messages, a key
+        confined to some domains those of the accounts it reaches, an
+        unconfined key any. An id that is unknown, belongs to an account the
+        key does not reach, or was never held answers the same `404`. A message
+        already handed on answers `409 already_sent`.
+      x-epistle-scope: [send, write]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The `queued` id of the send.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: The message was taken back.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [canceled]
+                properties:
+                  canceled:
+                    type: string
+                    format: uuid
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "404":
+          description: No such pending message for this key.
+        "409":
+          description: The message was already handed on (`already_sent`).
   /api/v1/send:
     post:
       operationId: sendMail
@@ -1053,6 +1569,11 @@ paths:
         A request body larger than `[server] max_message_size` (25 MiB by
         default) is refused before it is read with a plain-text `413`; one
         whose built message is larger answers `413 message_too_large`.
+
+        When the request omits `auto_submitted` and the API key has the
+        per-key setting enabled, the server writes
+        `Auto-Submitted: auto-generated`. A value in the request always wins.
+        Other credentials and other send paths do not receive this default.
       x-epistle-scope: [send]
       requestBody:
         required: true
@@ -1118,12 +1639,23 @@ paths:
             per-account or per-tenant submission rate (`sending rate limit
             exceeded; retry later`) or the daily cap on first-time
             recipients (`too many new recipients today; retry tomorrow`).
-            Nothing was sent. The message tells them apart. Authentication-window
-            refusals include `Retry-After` with the remaining seconds rounded up.
+            Nothing was sent. The message tells them apart. `Retry-After`
+            gives the seconds to wait: the remaining authentication window
+            rounded up, 60 for a submission rate limit, 86400 for the daily
+            cap on first-time recipients.
+          headers:
+            Retry-After:
+              description: Seconds to wait before the request can succeed.
+              schema:
+                type: integer
+                minimum: 1
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiError"
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
         "500":
           $ref: "#/components/responses/Internal"
         "503":
@@ -1838,7 +2370,9 @@ paths:
         every `/oauth/*` path answers `401` without a bearer and `404` with a valid
         one. When the server is configured, no bearer is needed. The body
         is form-encoded or a JSON object of strings. `client_id` must be
-        non-empty and is not otherwise checked; `scope` is ignored. At most
+        non-empty and is not otherwise checked. `scope` is a space-separated
+        subset of `read write send`, defaulting to `read` when omitted. Empty
+        or unknown scopes return `400 invalid_scope`. At most
         10 grants may be pending per client address (an IPv6 /64), 100 per
         IPv6 /48 and 10,000 in all; past them the answer is `429 slow_down`.
       security: []
@@ -1909,7 +2443,9 @@ paths:
         Send `client_id` (non-empty, not otherwise checked),
         `code_challenge`, `code_challenge_method=S256` and the account's
         `login` and `password` (form or JSON) or HTTP Basic. No bearer is
-        needed. The code lives 600 seconds and is single-use. `plain` is
+        needed. `scope` is a space-separated subset of `read write send`,
+        defaulting to `read`; empty or unknown scopes return `400 invalid_scope`.
+        The code lives 600 seconds and is single-use. `plain` is
         refused. Bad credentials are `400 invalid_grant`. The
         `code_challenge` is the digest of the verifier, so it is exactly 43
         characters of `A-Z a-z 0-9 - _` (RFC 7636 section 4.2); another
@@ -1954,10 +2490,19 @@ paths:
         `urn:ietf:params:oauth:grant-type:device_code` (with `device_code`;
         poll no faster than every 5 seconds or get `429 slow_down`) or
         `authorization_code` (with `code` and `code_verifier`; the code is
-        consumed even when the verifier is wrong). The token is an ES256 JWT
-        with `sub` the account name, valid for 3600 seconds. It is for
-        OAUTHBEARER on IMAP and SMTP submission; the REST API does not
-        accept it as a bearer.
+        consumed even when the verifier is wrong) or, only when
+        `[oauth] refresh_token_ttl_secs` is set, `refresh_token` (with
+        `refresh_token` and an optional narrower `scope`; the token presented is
+        retired and a new one returned, and presenting a retired one revokes the
+        whole family). Otherwise `refresh_token` is `unsupported_grant_type`. The token is an ES256 JWT
+        with `sub` the account name, valid for 3600 seconds unless
+        `[oauth] access_token_ttl_secs` sets another lifetime. It is accepted
+        on JMAP only for that account, with the scopes stored in the grant.
+        Redemption cannot widen scopes. A missing scope claim, invalid signature,
+        issuer or audience, expiry or revocation returns `401` on JMAP,
+        counting in the ordinary bearer failure limiter. Tokens also support
+        OAUTHBEARER on IMAP and SMTP submission; REST administration refuses them.
+        The response carries `Cache-Control: no-store` and `Pragma: no-cache`.
       security: []
       x-epistle-scope: []
       requestBody:
@@ -1980,6 +2525,35 @@ paths:
           $ref: "#/components/responses/OAuthError"
         "429":
           $ref: "#/components/responses/OAuthSlowDown"
+  /oauth/revoke:
+    post:
+      operationId: oauthRevoke
+      tags: [OAuth]
+      summary: Revoke a local access token for JMAP (RFC 7009)
+      description: |-
+        Possession of the token permits revoking it. No other credential is
+        needed. Revocations survive restart and are checked on each JMAP request,
+        WebSocket frame and event-source poll. Invalid, expired and already
+        revoked tokens receive the same empty success response. A storage failure
+        returns `503` and does not report successful revocation.
+      security: []
+      x-epistle-scope: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: "#/components/schemas/RevokeRequest"
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RevokeRequest"
+      responses:
+        "200":
+          description: Empty success response, including for an invalid token.
+        "400":
+          $ref: "#/components/responses/OAuthError"
+        "503":
+          description: Revocation storage unavailable. Retry later.
   /mail/config-v1.1.xml:
     servers:
       - url: "http://autoconfig.example.org"
@@ -2180,6 +2754,20 @@ components:
         considered. The static token holds every scope and reaches every
         domain.
   parameters:
+    DomainAliasName:
+      name: alias
+      in: path
+      required: true
+      description: An alias domain using the CLI ASCII DNS-name rules, percent-encoded; ASCII case is ignored.
+      schema:
+        type: string
+    DomainName:
+      name: domain
+      in: path
+      required: true
+      description: A hosted domain, as the configuration spells it; ASCII case is ignored.
+      schema:
+        type: string
     AccountName:
       name: name
       in: path
@@ -2214,15 +2802,24 @@ components:
         `unauthenticated`: no `Authorization: Bearer` header, an unknown or
         expired token, a key pinned to another client IP, or a key whose
         scopes do not cover this route. All four look the same on purpose.
+      headers:
+        WWW-Authenticate:
+          description: The scheme the API accepts (RFC 6750 section 3), always `Bearer`.
+          schema:
+            type: string
+            enum: [Bearer]
       content:
         application/json:
           schema:
             $ref: "#/components/schemas/ApiError"
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
     AccountBoundKey:
       description: |-
         `forbidden`: the key is bound to one account and this route is
-        administrative. Bound keys reach JMAP, `/api/v1/send` and
-        `/api/v1/deliveries` only.
+        administrative. Bound keys reach JMAP, `/api/v1/send`,
+        `/api/v1/deliveries` and that account's suppression list only.
       content:
         application/json:
           schema:
@@ -2234,10 +2831,10 @@ components:
         request from it, valid or not, is refused until the window passes;
         or too many credential checks are already waiting. Window-based refusals
         include `Retry-After` with the remaining seconds rounded up. Queue
-        saturation has no fixed window.
+        saturation has no fixed window and answers `Retry-After: 1`.
       headers:
         Retry-After:
-          description: Remaining authentication window in seconds, rounded up.
+          description: Seconds to wait; the remaining authentication window rounded up, or 1 when the queue is full.
           schema:
             type: integer
             minimum: 1
@@ -2245,13 +2842,17 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/ApiError"
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
     NotFound:
       description: |-
         `not_found`. The message says what is missing: `no such account`,
         `no such dynamic account` (the account exists but is declared in the
         configuration file), `no such masked address`, `no such queue entry`,
-        `the delivery log is disabled`. An account outside a confined key's
-        domains answers exactly like one that does not exist.
+        `no such domain`, `the delivery log is disabled`. An account or a
+        domain outside a confined key's domains answers exactly like one that
+        does not exist.
       content:
         application/json:
           schema:
@@ -2260,11 +2861,17 @@ components:
       description: |-
         `invalid_input` with the reason in `message`, or, when the HTTP layer
         could not read the request (malformed JSON, a query or path value of
-        the wrong type, an unreadable UUID), a `text/plain` message.
+        the wrong type, an unreadable UUID), a `text/plain` message. As a
+        problem, `code` is the cause (`field_missing`, `field_out_of_range`,
+        `value_not_allowed`, or `invalid_input` when none applies) and
+        `errors[].field` names the request field.
       content:
         application/json:
           schema:
             $ref: "#/components/schemas/ApiError"
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
         text/plain:
           schema:
             type: string
@@ -2364,6 +2971,60 @@ components:
           schema:
             $ref: "#/components/schemas/OAuthErrorBody"
   schemas:
+    DomainChanged:
+      type: object
+      required: [changed, domain, reload]
+      properties:
+        changed:
+          type: boolean
+        domain:
+          type: string
+          description: Canonical hosted domain; for alias routes this is the target.
+        reload:
+          type: string
+          enum: [watcher, none]
+          description: The watcher applies a durable change asynchronously; none for a no-op.
+    AddDomain:
+      type: object
+      additionalProperties: false
+      required: [domain]
+      properties:
+        domain:
+          type: string
+          description: ASCII DNS name; Unicode names must use an A-label, as in the CLI.
+        role:
+          type: string
+          enum: [full, send-only, receive-only]
+          default: full
+        shared_dkim_key:
+          type: boolean
+          default: false
+    SetDomain:
+      type: object
+      additionalProperties: false
+      properties:
+        role:
+          type: [string, "null"]
+          enum: [full, send-only, receive-only, null]
+          description: Omitted or null leaves the role unchanged.
+        quota:
+          type: [integer, "null"]
+          minimum: 0
+          maximum: 9223372036854775807
+          description: Bytes; 0 means unlimited, null clears the domain override, omitted keeps it.
+        submission_rate:
+          type: [integer, "null"]
+          minimum: 1
+          maximum: 4294967295
+          description: Recipients per minute; null clears the domain override, omitted keeps it.
+    AddDomainAlias:
+      type: object
+      additionalProperties: false
+      required: [alias]
+      properties:
+        alias:
+          type: string
+          description: ASCII DNS name of the alias; the target is the path domain.
     ApiError:
       type: object
       required: [error]
@@ -2377,7 +3038,8 @@ components:
               description: |-
                 Stable, for programs. One of `unauthenticated` (401),
                 `forbidden`, `forbidden_from` and `sending_off` (403), `not_found` (404),
-                `invalid_input` (400), `conflict` (409), `message_too_large`
+                `invalid_input` (400), `conflict`, `already_sent` and `limit_reached`
+                (409), `message_too_large`
                 and `scan_too_large` (413), `virus_detected`,
                 `attachment_refused`, `too_many_header_fields` and
                 `marketing_refused` (422), `rate_limited` (429), `internal`
@@ -2386,6 +3048,49 @@ components:
             message:
               type: string
               description: For people; its wording is not a contract.
+    Problem:
+      type: object
+      description: |-
+        An RFC 9457 problem, sent as `application/problem+json` to a client
+        whose `Accept` names that type. The `error` object stays the default.
+      required: [type, title, status, detail, code, instance, request_id]
+      properties:
+        type:
+          type: string
+          description: A stable URN, `urn:epistle:problem:` followed by `code`.
+        title:
+          type: string
+          description: A short summary of the type; the same for every occurrence.
+        status:
+          type: integer
+        detail:
+          type: string
+          description: For people; its wording is not a contract.
+        code:
+          type: string
+          description: |-
+            Stable, for programs. The code of `ApiError`, except that an
+            `invalid_input` with a known cause carries that cause instead:
+            `field_missing`, `field_out_of_range` or `value_not_allowed`.
+        instance:
+          type: string
+          description: '`urn:uuid:` followed by `request_id`, naming this occurrence.'
+        request_id:
+          type: string
+          format: uuid
+          description: Also written to the server log with the code and the route.
+        errors:
+          type: array
+          description: Present for an input error whose field is known.
+          items:
+            type: object
+            required: [field, detail]
+            properties:
+              field:
+                type: string
+                description: The request field, as named in the JSON body or the query.
+              detail:
+                type: string
     Status:
       type: object
       required: [version, domains, accounts]
@@ -2422,7 +3127,7 @@ components:
           description: Always false when `valid` is false.
     Domains:
       type: object
-      required: [domains, disabled]
+      required: [domains, disabled, details]
       properties:
         domains:
           type: array
@@ -2431,6 +3136,69 @@ components:
         disabled:
           type: array
           description: The domains above that are switched off and take no mail.
+          items:
+            type: string
+        details:
+          type: array
+          description: The same domains, each the row `epistle domain list --json` prints for it.
+          items:
+            $ref: "#/components/schemas/DomainRow"
+    DomainRow:
+      type: object
+      required: [domain, enabled, role, aliases_to, aliases_from]
+      properties:
+        domain:
+          type: string
+        enabled:
+          type: boolean
+          description: "`false` for a domain in `disabled_domains`: mail for it is rejected and nobody may send as it."
+        role:
+          type: string
+          enum: [full, send-only, receive-only, disabled]
+        aliases_to:
+          type: array
+          description: The alias domains that resolve as this one.
+          items:
+            type: string
+        aliases_from:
+          type: array
+          description: The domains this one resolves as, when it is itself an alias.
+          items:
+            type: string
+    DomainView:
+      type: object
+      required: [domain, enabled, role, quota, submission_rate, aliases_to, aliases_from, accounts, aliases]
+      properties:
+        domain:
+          type: string
+          description: The domain as it was asked for.
+        enabled:
+          type: boolean
+        role:
+          type: string
+          enum: [full, send-only, receive-only, disabled]
+        quota:
+          type: [integer, "null"]
+          description: Default storage quota of the domain's accounts in bytes, when the domain overrides the server's.
+        submission_rate:
+          type: [integer, "null"]
+          description: Recipients per minute a sender in the domain may submit, when the domain overrides the server's.
+        aliases_to:
+          type: array
+          items:
+            type: string
+        aliases_from:
+          type: array
+          items:
+            type: string
+        accounts:
+          type: array
+          description: Addresses in the domain held by accounts declared in the configuration file; accounts made through the API are not listed.
+          items:
+            type: string
+        aliases:
+          type: array
+          description: The `[[alias]]` addresses in the domain.
           items:
             type: string
     AccountView:
@@ -2690,7 +3458,14 @@ components:
         auto_submitted:
           type: string
           enum: ["no", auto-generated, auto-replied, auto-notified]
-          description: Written as `Auto-Submitted`. Case-insensitive.
+          description: |-
+            Written as `Auto-Submitted`. Case-insensitive. A value in the
+            request always wins. When absent and the API key has the per-key
+            setting enabled, the server writes `auto-generated`.
+        auto_response_suppress:
+          type: boolean
+          default: false
+          description: "Writes `X-Auto-Response-Suppress: DR, NDR, RN, NRN, OOF, AutoReply` when true. Independent of auto_submitted and the server mail setting."
         feedback_id:
           type: string
           description: Written as `Feedback-ID`. Printable ASCII without spaces.
@@ -2699,7 +3474,7 @@ components:
           maxProperties: 32
           additionalProperties:
             type: string
-          description: Custom headers. A name is `X-` followed by letters, digits and hyphens, at most 76 characters, and not `X-Priority`.
+          description: Custom headers. A name is `X-` followed by letters, digits and hyphens, at most 76 characters, and neither `X-Priority` nor `X-Auto-Response-Suppress`.
         save_sent:
           type: boolean
           description: Whether a copy goes to the account's Sent folder. Absent follows the account setting. Transactional mail is never copied.
@@ -2726,6 +3501,10 @@ components:
           description: The queue id, also the `spool_id` of delivery records and webhook events.
         class:
           $ref: "#/components/schemas/MailClass"
+        cancel_until:
+          type: string
+          format: date-time
+          description: When the send delay releases the message; until then `DELETE /api/v1/send/{id}` takes it back. Absent when nothing holds the message (the default).
         suppressed:
           type: array
           items:
@@ -2911,7 +3690,7 @@ components:
           type: string
         scope:
           type: string
-          description: Ignored.
+          description: Space-separated read, write, send; omitted means read.
     DeviceAuthorization:
       type: object
       required: [device_code, user_code, verification_uri, verification_uri_complete, expires_in, interval]
@@ -2932,16 +3711,32 @@ components:
         interval:
           type: integer
           description: "5."
+        scope:
+          type: string
+          description: The scopes the device asked for, space-separated. The approval has to name them.
     DeviceApproveRequest:
       type: object
       required: [user_code]
       properties:
+        scope:
+          type: string
+          description: |
+            The scopes being approved. Required when the device asked for anything
+            beyond `read`, and it has to name exactly the scopes the device asked
+            for (any order); otherwise the answer is `400 invalid_grant`.
         user_code:
           type: string
         login:
           type: string
         password:
           type: string
+    RevokeRequest:
+      type: object
+      required: [token]
+      properties:
+        token:
+          type: string
+          writeOnly: true
     AuthorizeRequest:
       type: object
       required: [client_id, code_challenge, code_challenge_method]
@@ -2953,6 +3748,9 @@ components:
         code_challenge_method:
           type: string
           enum: [S256]
+        scope:
+          type: string
+          description: Space-separated read, write, send; omitted means read.
         state:
           type: string
         login:
@@ -2965,26 +3763,37 @@ components:
       properties:
         grant_type:
           type: string
-          enum: ["urn:ietf:params:oauth:grant-type:device_code", authorization_code]
+          enum: ["urn:ietf:params:oauth:grant-type:device_code", authorization_code, refresh_token]
         device_code:
           type: string
+        refresh_token:
+          type: string
+        scope:
+          type: string
+          description: With `refresh_token`, a subset of the scopes granted.
         code:
           type: string
         code_verifier:
           type: string
     TokenResponse:
       type: object
-      required: [access_token, token_type, expires_in]
+      required: [access_token, token_type, expires_in, scope]
       properties:
         access_token:
           type: string
           description: An ES256 JWT with `sub` the account name.
+        scope:
+          type: string
+          description: The granted space-separated scopes.
         token_type:
           type: string
           enum: [Bearer]
+        refresh_token:
+          type: string
+          description: Present only when `[oauth] refresh_token_ttl_secs` is set.
         expires_in:
           type: integer
-          description: "3600."
+          description: The access token lifetime in seconds, 3600 unless configured.
     OAuthErrorBody:
       type: object
       required: [error]

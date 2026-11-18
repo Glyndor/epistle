@@ -9,6 +9,11 @@ use crate::cli::prompt::script::{Pty, scripted};
 fn input(account: &str) -> String {
 	let mut text = String::from("manual\nmail.example.org\nexample.org\nexample.net\n\n");
 	text.push_str(account);
+	// A first account is followed by the question of the complaint mailbox,
+	// left empty here.
+	if !account.trim().is_empty() {
+		text.push('\n');
+	}
 	// Both address questions, the two paths, seven services and the image.
 	text.push_str("\n\n/var/lib/epistle\n/etc/epistle/mail.toml\n");
 	text.push_str(&"\n".repeat(8));
@@ -138,9 +143,9 @@ fn an_address_whose_name_is_taken_is_asked_again_once_the_paths_are_known() {
 		std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o600)).expect("chmod");
 	}
 	let mut text = String::from("manual\nmail.example.org\nexample.org\nexample.net\n\n");
-	text.push_str("torre.control@example.org\n\nZq8!vT3#mL0@pW6$\n\n");
+	text.push_str("torre.control@example.org\n\nZq8!vT3#mL0@pW6$\n\n\n");
 	text.push_str(&format!("\n\n{}\n{}\n", data.display(), config.display()));
-	text.push_str("alice@example.org\n\nZq8!vT3#mL0@pW6$\n\n");
+	text.push_str("alice@example.org\n\nZq8!vT3#mL0@pW6$\n\n\n");
 	text.push_str(&"\n".repeat(8));
 	let (result, printed) = drive(&text);
 	let filled = result.unwrap_or_else(|()| panic!("gave up: {printed}"));
@@ -151,5 +156,33 @@ fn an_address_whose_name_is_taken_is_asked_again_once_the_paths_are_known() {
 	assert_eq!(
 		filled.answers.first_account.map(|a| a.address),
 		Some("alice@example.org".to_string())
+	);
+}
+
+#[test]
+fn the_complaint_mailbox_is_never_assumed() {
+	let (result, printed) = drive(&input("alice@example.org\n\nZq8!vT3#mL0@pW6$\n\n"));
+	let filled = result.unwrap_or_else(|()| panic!("gave up: {printed}"));
+	assert_eq!(
+		filled.answers.first_account.and_then(|a| a.fbl_mailbox),
+		None
+	);
+}
+
+#[test]
+fn a_complaint_mailbox_outside_the_domains_is_asked_again() {
+	// The last answer has no line end: the helper closes it.
+	let text =
+		input("alice@example.org\n\nZq8!vT3#mL0@pW6$\n\nfbl@elsewhere.example\nfbl@example.org");
+	let (result, printed) = drive(&text);
+	let filled = result.unwrap_or_else(|()| panic!("gave up: {printed}"));
+	assert!(printed.contains("fbl_mailbox"), "{printed}");
+	assert_eq!(
+		filled
+			.answers
+			.first_account
+			.and_then(|a| a.fbl_mailbox)
+			.as_deref(),
+		Some("fbl@example.org")
 	);
 }

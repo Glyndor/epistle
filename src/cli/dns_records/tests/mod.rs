@@ -1,5 +1,6 @@
 pub use super::*;
 
+pub(super) mod extra_txt;
 pub(super) mod families;
 pub(super) mod per_domain;
 pub(super) mod report;

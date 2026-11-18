@@ -1,10 +1,17 @@
 //! Directory walks that exclude links and special files from mail data.
+//!
+//! Every walk and read is in [`rooted`], every write, lock, rename and removal
+//! in [`rooted_write`]: the caller names the trusted root the path lies
+//! under, and nothing outside it is reached.
 
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::fs::{DirEntry, FileType, ReadDir};
 use std::io;
 use std::path::{Path, PathBuf};
+
+pub(crate) mod rooted;
+pub(crate) mod rooted_write;
 
 thread_local! {
 	static WARNED: RefCell<Option<HashSet<PathBuf>>> = const { RefCell::new(None) };
@@ -68,31 +75,6 @@ pub(crate) fn allowed(path: &Path, kind: FileType) -> bool {
 	}
 }
 
-// Known directory names also need checking: an accounts/new/folders link must
-// not bypass entry filtering simply because the caller joins its name directly.
-pub(crate) fn check_directories(path: &Path) -> io::Result<()> {
-	for ancestor in path.ancestors().filter(|p| !p.as_os_str().is_empty()) {
-		match std::fs::symlink_metadata(ancestor) {
-			Ok(metadata) if metadata.is_dir() => {}
-			Ok(_) => {
-				warn_skipped(ancestor);
-				return Err(io::Error::new(
-					io::ErrorKind::NotFound,
-					"skipped non-directory data path",
-				));
-			}
-			Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-			Err(error) => return Err(error),
-		}
-	}
-	Ok(())
-}
-
-pub(crate) fn read_dir(path: impl AsRef<Path>) -> io::Result<Entries> {
-	check_directories(path.as_ref())?;
-	Ok(Entries(std::fs::read_dir(path)?))
-}
-
 pub(crate) struct Entries(ReadDir);
 
 impl Iterator for Entries {
@@ -113,45 +95,6 @@ impl Iterator for Entries {
 			}
 		}
 	}
-}
-
-pub(crate) fn read(path: impl AsRef<Path>) -> io::Result<Vec<u8>> {
-	use std::io::Read;
-	let path = path.as_ref();
-	if let Some(parent) = path.parent() {
-		check_directories(parent)?;
-	}
-	if !std::fs::symlink_metadata(path)?.is_file() {
-		warn_skipped(path);
-		return Err(io::Error::new(
-			io::ErrorKind::NotFound,
-			"skipped non-regular data file",
-		));
-	}
-	let mut options = std::fs::OpenOptions::new();
-	options.read(true);
-	#[cfg(unix)]
-	{
-		use std::os::unix::fs::OpenOptionsExt;
-		// A replaced leaf must not follow a link or block on a FIFO after the check.
-		options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
-	}
-	let mut file = options.open(path)?;
-	if !file.metadata()?.is_file() {
-		warn_skipped(path);
-		return Err(io::Error::new(
-			io::ErrorKind::NotFound,
-			"skipped non-regular data file",
-		));
-	}
-	let mut bytes = Vec::new();
-	file.read_to_end(&mut bytes)?;
-	Ok(bytes)
-}
-
-pub(crate) fn read_to_string(path: impl AsRef<Path>) -> io::Result<String> {
-	String::from_utf8(read(path)?)
-		.map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
 }
 
 #[cfg(test)]

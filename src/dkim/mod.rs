@@ -5,6 +5,7 @@ pub mod domain_keys;
 pub mod domain_rotate;
 pub(crate) mod key_record;
 mod per_domain;
+pub mod remote;
 pub mod rotate;
 mod rsa_keygen;
 pub mod sharing;
@@ -24,7 +25,7 @@ pub use rotate::{
 	publication_waits,
 };
 pub use rsa_keygen::{KeygenError, generate_rsa_key};
-pub use sign::{Signer, SignerError, generate_key};
+pub use sign::{HeaderBlock, KeyHolder, Malformed, Refusal, Signer, SignerError, generate_key};
 pub(crate) use sign::{load_ed25519_key, rsa_record_value};
 pub use verify::{DkimOutcome, DkimResult, verify_message};
 

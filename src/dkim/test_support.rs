@@ -1,4 +1,4 @@
-//! In-memory DNS and field checks for signing lifecycle tests.
+//! In-memory DNS, field checks and fixed keys for signing tests.
 
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -144,3 +144,43 @@ impl DnsLookup for FailingDns {
 		Box::pin(async { Ok(Vec::new()) })
 	}
 }
+
+/// The PKCS#8 v2 envelope of an ed25519 key, around the seed and the public
+/// key, the way `Ed25519KeyPair::generate_pkcs8` writes it.
+pub(crate) fn ed25519_pem(seed: [u8; 32]) -> String {
+	let pair = ring::signature::Ed25519KeyPair::from_seed_unchecked(&seed).expect("seed");
+	let mut der = vec![
+		0x30, 0x53, 0x02, 0x01, 0x01, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04,
+		0x20,
+	];
+	der.extend_from_slice(&seed);
+	der.extend_from_slice(&[0xa1, 0x23, 0x03, 0x21, 0x00]);
+	der.extend_from_slice(ring::signature::KeyPair::public_key(&pair).as_ref());
+	super::sign::pem_encode(&der)
+}
+
+/// A signer whose keys never change: an ed25519 key from a fixed seed and
+/// the committed RSA test key.
+pub(crate) fn fixed_signer(dir: &std::path::Path) -> super::Signer {
+	let ed = dir.join("ed.pem");
+	std::fs::write(&ed, ed25519_pem([7; 32])).expect("write ed25519 key");
+	let rsa = dir.join("rsa.pem");
+	std::fs::write(&rsa, include_str!("test_rsa_key.pem")).expect("write RSA key");
+	super::Signer::load("sel", &ed)
+		.expect("load ed25519")
+		.with_rsa("rsasel", &rsa)
+		.expect("load RSA")
+}
+
+pub(crate) const PLAIN: &str = "From: Alice <alice@example.org>\r\nTo: bob@example.net\r\nSubject: hello\r\nDate: Fri, 13 Nov 2026 10:00:00 +0000\r\nMessage-ID: <1@example.org>\r\nX-Other: kept out\r\n\r\nBody line\r\n\r\n\r\n";
+
+pub(crate) const FOLDED: &str = "Resent-From: relay@example.org\r\nResent-Bad;Name: x\r\nSubject: a\r\n folded \t value\r\nFrom: alice@example.org\r\nCC: Carol\r\n <carol@example.net>\r\n\r\nbody\nwith bare line feeds\n";
+
+/// What the signer wrote for [`PLAIN`] and [`FOLDED`] before it was split
+/// into halves, captured from `develop` at 30a2235f. Both algorithms are deterministic, so a change here is a
+/// change of what receivers verify.
+pub(crate) const GOLDEN_PLAIN: &str = "DKIM-Signature: v=1; a=ed25519-sha256; c=relaxed/relaxed; d=example.org;\r\n\ts=sel; h=message-id:date:subject:to:from:from:to:cc:subject:reply-to:date:\r\n\tmessage-id:list-unsubscribe:list-unsubscribe-post:content-type:\r\n\tdisposition-notification-to:return-receipt-to:auto-submitted:\r\n\tx-auto-response-suppress; bh=WgzUh9Cj9ZxoxfDX0KmEumMyCUUcs6RcTjwCBcKBIOc=; b=\r\n\tFiT6rqlmcCHZUzMhqlGt4OgaE17mmRrPJ4K+d7DPUthAQkFPbholRyjGbuH1C+1f\r\n\tYmiz8KjvN40uyDW+5KcoDg==\r\nDKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=example.org; s=rsasel;\r\n\th=message-id:date:subject:to:from:from:to:cc:subject:reply-to:date:\r\n\tmessage-id:list-unsubscribe:list-unsubscribe-post:content-type:\r\n\tdisposition-notification-to:return-receipt-to:auto-submitted:\r\n\tx-auto-response-suppress; bh=WgzUh9Cj9ZxoxfDX0KmEumMyCUUcs6RcTjwCBcKBIOc=; b=\r\n\tdQc3POgXeDeyhfrf7w5Cosy0NPya3gfuE6Ieo9YWMK4rIpzTS99zmWoPSFn4FSNT\r\n\txB4ivorllp6NV0uzJTNwcZLwcLmK0npxusUpMmx1zpTgOZUU/Bh891hB39v6mFm3\r\n\t8vthD3VrxAv9mdrSmGXvp7yBuZm9XVpOpQ2lU9I7VmOFrRCVoCjvBU+AuzCNGVnC\r\n\tD25QxzqeJt+1RxSOcETEAYk7oNlQ0Xv8uZ1xSG46WGlzMUZ4P9g/6O3dVMM9+N7h\r\n\tkW6StTGxMSkCoxwC2pK5txVWtGyDBfzf/WMzyEwJFkHfStWHxszoVeg3bvxfUojo\r\n\tmqFePDPaq4SSeeRGiMYHsg==\r\n";
+
+pub(crate) const GOLDEN_FOLDED: &str = "DKIM-Signature: v=1; a=ed25519-sha256; c=relaxed/relaxed; d=example.org;\r\n\ts=sel; h=cc:from:subject:resent-from:from:to:cc:subject:reply-to:date:\r\n\tmessage-id:list-unsubscribe:list-unsubscribe-post:content-type:\r\n\tdisposition-notification-to:return-receipt-to:auto-submitted:\r\n\tx-auto-response-suppress; bh=dZvyjtyXOyRe6QCP62Q/S7Omps/slg7C1smbbvjKeKk=; b=\r\n\t6AYOnDfZGsIwsp5SPolvsDcYCfAlentghYPKCSLJI8/LR9OvpDYj0iKBv2mO6Af+\r\n\tJuwGMTGsy/hDI+nDydxSCQ==\r\nDKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=example.org; s=rsasel;\r\n\th=cc:from:subject:resent-from:from:to:cc:subject:reply-to:date:message-id:\r\n\tlist-unsubscribe:list-unsubscribe-post:content-type:\r\n\tdisposition-notification-to:return-receipt-to:auto-submitted:\r\n\tx-auto-response-suppress; bh=dZvyjtyXOyRe6QCP62Q/S7Omps/slg7C1smbbvjKeKk=; b=\r\n\taSfA+6E6cXrAY4s7mgLyNF92D+w3Mh76ty16mB9irYoWH7URXOnN9TChEwKrDXNS\r\n\tDlDEOjh34NKcfvElvJEWjU9XxGhC2tSoiDSfBZQaQCizmPpfRvYmCe8iOm0gHo8I\r\n\tjIw4jQnlaP78A/REdoamDcdp+ifHxs8BsGt+aryxYKBXNJfYSmgenefjl+OLXay8\r\n\tdgad/srrKmvNGJJdf4Vfai3uVO49EJ9q4INect+kdzzmsjtZvpQ5eZlGWWSXSBY6\r\n\tK8BPFiii8Y2xb5XBXSW9PY142JPfGwCPzcWGuyZfwSYCCsYZgMD3zzLkW2yetWID\r\n\tei2kMkLLCROrxWnJWvmIXQ==\r\n";
+
+pub(crate) const GOLDEN: [(&str, &str); 2] = [(PLAIN, GOLDEN_PLAIN), (FOLDED, GOLDEN_FOLDED)];

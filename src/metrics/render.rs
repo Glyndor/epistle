@@ -181,6 +181,11 @@ impl Metrics {
 				&self.warmup_backoff,
 			),
 			(
+				"mail_own_ip_blocklisted_total",
+				"New DNS blocklist listings found for the server's own public addresses.",
+				&self.own_ip_blocklisted,
+			),
+			(
 				"mail_accept_failed_total",
 				"Failed accepts on any listener (out of descriptors, aborted connections); the listener keeps running.",
 				&ACCEPT_FAILED,
@@ -239,6 +244,7 @@ impl Metrics {
 			out.push_str(&format!("# HELP {name} {help}\n# TYPE {name} counter\n"));
 			out.push_str(&format!("{name} {}\n", counter.load(Ordering::Relaxed)));
 		}
+		self.render_fbl(&mut out);
 		out
 	}
 }

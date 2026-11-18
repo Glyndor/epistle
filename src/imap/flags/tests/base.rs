@@ -32,7 +32,7 @@ fn writers_at_the_same_time_all_succeed_and_leave_one_whole_answer() {
 				.expect("writer")
 				.expect("a writer lost its rename to a sibling");
 		}
-		let flags = read_flags(dir.path(), id);
+		let flags = read_flags(dir.path(), dir.path(), id);
 		assert!(
 			flags == vec![Flag::Seen] || flags == vec![Flag::Deleted, Flag::Flagged],
 			"{flags:?}"

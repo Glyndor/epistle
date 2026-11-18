@@ -16,6 +16,8 @@ use super::http01::ChallengeStore;
 use super::jws::AccountKey;
 use super::tlsalpn::AlpnChallengeStore;
 use crate::dns::provider::{DnsProvider, DnsRecord, RecordKind};
+use crate::dns::publish::write::{Unguarded, replace_set};
+use crate::dns::txt::same_txt_value;
 
 mod pending;
 pub use pending::{PENDING_FILE, journal_path};
@@ -193,13 +195,51 @@ impl Dns01 {
 	/// before the delete returned, or a delete that failed, is run again by
 	/// the next withdrawal, at shutdown or at the next start.
 	async fn remove(&self, entry: PendingTxt) {
-		match self.provider.delete(&entry.zone, entry.record).await {
+		let record = entry.record.clone();
+		let outcome = write_txt(
+			self.provider.as_ref(),
+			&entry.zone,
+			&record,
+			|held| {
+				held.iter()
+					.filter(|r| !same_txt_value(&r.value, &record.value))
+					.cloned()
+					.collect()
+			},
+			Unguarded::Remove(entry.record.clone()),
+		)
+		.await;
+		match outcome {
 			Ok(()) => self.published.remove(&entry.domain, &entry.token),
 			Err(error) => {
 				tracing::warn!(%error, domain = %entry.domain, "dns-01: challenge record not removed");
 			}
 		}
 	}
+}
+
+/// Write the TXT set at the name of `record` in `zone` as `plan` makes it,
+/// under the guarded contract, holding the lock of the zone the reconcile
+/// loop takes too. A provider that checks no precondition gets `unguarded`,
+/// the ordinary write.
+async fn write_txt(
+	provider: &dyn DnsProvider,
+	zone: &str,
+	record: &DnsRecord,
+	plan: impl FnOnce(&[DnsRecord]) -> Vec<DnsRecord>,
+	unguarded: Unguarded,
+) -> Result<(), crate::dns::publish::write::WriteError> {
+	let _lock = crate::dns::zone_lock::lock(zone).await;
+	replace_set(
+		provider,
+		zone,
+		&record.name,
+		&RecordKind::Txt,
+		plan,
+		unguarded,
+		format!("epistle-acme-{}", uuid::Uuid::now_v7()),
+	)
+	.await
 }
 
 impl ChallengeResponder for Dns01 {
@@ -235,10 +275,21 @@ impl ChallengeResponder for Dns01 {
 				.map_err(|error| {
 					AcmeError::Protocol(format!("dns-01: publish: journal: {error}"))
 				})?;
-			self.provider
-				.upsert(&zone, record.clone())
-				.await
-				.map_err(|error| AcmeError::Protocol(format!("dns-01: publish: {error}")))?;
+			write_txt(
+				self.provider.as_ref(),
+				&zone,
+				&record,
+				|held| {
+					held.iter()
+						.filter(|r| !same_txt_value(&r.value, &record.value))
+						.cloned()
+						.chain([record.clone()])
+						.collect()
+				},
+				Unguarded::Upsert(record.clone()),
+			)
+			.await
+			.map_err(|error| AcmeError::Protocol(format!("dns-01: publish: {error}")))?;
 			self.wait_visible(&record).await
 		})
 	}

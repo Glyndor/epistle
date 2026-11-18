@@ -87,6 +87,9 @@ fn apply_keeps_operator_listeners_when_existing_config_has_them() {
 	// normally add.
 	answers.services = Services {
 		antivirus: None,
+		panel: None,
+		panel_image: None,
+		freshclam_checks: None,
 		imap: true,
 		submission: true,
 		pop3: false,

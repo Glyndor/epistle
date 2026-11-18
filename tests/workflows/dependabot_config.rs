@@ -147,6 +147,26 @@ fn every_entry_lands_on_develop_weekly_with_labels_and_a_limit() {
 	}
 }
 
+/// Every bump title starts with a Conventional Commits prefix that matches
+/// the entry's type, so the squash commit passes the title check without a
+/// manual edit: `ci(deps)` for actions, `chore(deps)` for everything else.
+#[test]
+fn every_entry_sets_a_conventional_commit_prefix() {
+	for update in updates() {
+		let name = update["package-ecosystem"].as_str().expect("ecosystem");
+		let want = if name == "github-actions" {
+			"ci(deps)"
+		} else {
+			"chore(deps)"
+		};
+		assert_eq!(
+			update["commit-message"]["prefix"].as_str(),
+			Some(want),
+			"{name}"
+		);
+	}
+}
+
 /// A pull request carries one value of each single-valued dimension the
 /// repository labels by: `type:`, `prio:` and `effort:`. Two types on one
 /// bump, or none of the others, is what the pull request template forbids.

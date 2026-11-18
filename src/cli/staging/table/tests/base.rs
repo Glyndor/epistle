@@ -267,7 +267,7 @@ fn a_line_repeating_the_path_many_times_is_searched_with_a_bound() {
 		kind: MESSAGE,
 	};
 	let mut found = Vec::new();
-	let started = std::time::Instant::now();
+	reset_positional_probes();
 	positional(
 		&line,
 		&root,
@@ -275,9 +275,10 @@ fn a_line_repeating_the_path_many_times_is_searched_with_a_bound() {
 		&entry,
 		&mut found,
 	);
+	let probes = positional_probes();
 	assert!(
-		started.elapsed() < std::time::Duration::from_secs(5),
-		"the number of probes is bounded"
+		(1..=MAX_PROBES).contains(&probes),
+		"expected a nonzero probe count capped at {MAX_PROBES}, got {probes}"
 	);
 	assert!(found.is_empty(), "past the bound nothing is staged");
 }

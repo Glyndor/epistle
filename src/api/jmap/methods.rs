@@ -226,46 +226,14 @@ pub(super) fn mailbox_query(
 	])
 }
 
-/// `Email/query` (RFC 8621 §4.4): the email ids in a mailbox, newest first.
+/// `Email/query` (RFC 8621 §4.4): filtered, sorted and paged email ids.
 pub(super) fn email_query(
 	state: &ApiState,
 	principal: &Principal,
 	args: &Value,
 	call_id: &str,
-) -> Value {
-	let Some(account) = args.get("accountId").and_then(Value::as_str) else {
-		return json!(["error", { "type": "invalidArguments" }, call_id]);
-	};
-	let Some(view) = state.accounts().into_iter().find(|a| a.name == account) else {
-		return json!(["error", { "type": "accountNotFound" }, call_id]);
-	};
-	if !principal.admits_account(&view.name, &view.addresses) {
-		return json!(["error", { "type": "accountNotFound" }, call_id]);
-	}
-	let mailbox = args
-		.get("filter")
-		.and_then(|f| f.get("inMailbox"))
-		.and_then(Value::as_str)
-		.unwrap_or("INBOX");
-	let ids = super::query_changes::email_query_ids(state, account, mailbox);
-	let total = ids.len();
-	let query_state =
-		state::email_get_state(state.data_dir(), account).unwrap_or_else(|| "0".to_string());
-	// Only the query shapes `Email/queryChanges` can replay exactly.
-	let can_calculate = super::query_changes::replayable_email_query(args).is_some();
-
-	json!([
-		"Email/query",
-		{
-			"accountId": account,
-			"queryState": query_state,
-			"canCalculateChanges": can_calculate,
-			"position": 0,
-			"total": total,
-			"ids": ids,
-		},
-		call_id,
-	])
+) -> Result<Value, super::email_query::Failure> {
+	super::email_query::query(state, principal, args, call_id)
 }
 
 /// `Email/get` (RFC 8621 §4.1): return parsed Email objects by id.

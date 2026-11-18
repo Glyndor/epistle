@@ -268,6 +268,11 @@ impl Worker {
 		let mut slowed: Option<(String, String)> = None;
 		let now = self.now_epoch();
 		let mut held: Option<Conversation> = None;
+		// The receiver group of the exchanger that answers is the queue its
+		// provider is judged by, so the group's own limit is applied where
+		// the connection is opened, and not when the conversation is
+		// claimed: the group is only known there.
+		let group_admission = super::claims::GroupAdmission::default();
 		loop {
 			if tried.len() >= MAX_EXCHANGERS {
 				let mut conversation = last.or(held).unwrap_or_else(|| {
@@ -278,11 +283,18 @@ impl Worker {
 				return conversation;
 			}
 			// A host on hold, or whose receiver group is at its warm-up
-			// cap, is not even connected to.
-			let on_hold = move |host: &str| {
-				self.holds()
+			// cap, or at its own limit, is not even connected to. A provider
+			// rate limit and the group's limit both have to admit it: the
+			// stricter wins.
+			let admission = super::provider::Admission::default();
+			let on_hold = |host: &str| {
+				let held = self
+					.holds()
 					.held(&Destination::exchanger(host), now)
-					.is_some() || self.host_closed(&route.entry.envelope, host, now).is_some()
+					.is_some();
+				held || self.host_closed(&route.entry.envelope, host, now).is_some()
+					|| admission.held(self, host, self.now_epoch())
+					|| group_admission.blocked(self, host, now)
 			};
 			let connection = match self
 				.connector
@@ -303,7 +315,13 @@ impl Worker {
 			// An exchanger on hold (its provider asked to slow down for
 			// another of its domains) is left before a word is said.
 			let exchanger = Destination::exchanger(&connection.host);
-			let hold = self.holds().held(&exchanger, now).cloned();
+			let hold = {
+				let holds = self.holds();
+				holds
+					.held(&exchanger, now)
+					.or_else(|| holds.provider_held(&connection.host, now))
+					.cloned()
+			};
 			// A host whose receiver group is at its warm-up cap is left
 			// before a word is said: its recipients wait for the cap.
 			if hold.is_none()
@@ -317,10 +335,17 @@ impl Worker {
 			// A host named without a connection was on hold when asked for,
 			// and stays passed over even should its hold just have ended.
 			let hold = hold.or_else(|| {
-				(!connection.opened).then(|| crate::queue::backoff::Hold {
-					until: now,
-					deferrals: 0,
-					reason: "slowing down".to_string(),
+				(!connection.opened).then(|| match group_admission.busy() {
+					Some((group, until)) => crate::queue::backoff::Hold {
+						until,
+						deferrals: 0,
+						reason: format!("the {group} group is at its limit"),
+					},
+					None => crate::queue::backoff::Hold {
+						until: now.saturating_add(1),
+						deferrals: 0,
+						reason: "slowing down".to_string(),
+					},
 				})
 			});
 			if let Some(hold) = hold {
@@ -360,6 +385,18 @@ impl Worker {
 					self.give_back_unoffered(&route.entry.envelope, group, &conversation, now);
 				}
 				conversation.add_capped(&route.recipients[granted..], group, until);
+			}
+			// A provider rate limit applies across its MXs: do not try another
+			// host in the same attempt. Publish the pause before dropping the
+			// connection slot so another pass cannot race past this reply.
+			let provider_pause = conversation.throttled_by().is_some_and(|(_, reason)| {
+				crate::queue::reply::provider_cause(reason).is_some_and(|cause| cause.pauses())
+			});
+			if provider_pause {
+				if let Some(slow) = self.slow_down(route.entry, &conversation, self.now_epoch()) {
+					self.remember_slow(&slow);
+				}
+				return conversation;
 			}
 			if !next {
 				let mut conversation = conversation;
@@ -424,16 +461,19 @@ impl Worker {
 			.max_by_key(|hold| hold.until)
 			.map(|hold| (hold.until, hold.deferrals));
 		let behind = keys.map(|key| holds.deferrals(key)).fold(own, u32::max);
-		let (until, deferrals) = running.unwrap_or_else(|| {
+		let (mut until, deferrals) = running.unwrap_or_else(|| {
 			let wait = crate::queue::backoff::step(&self.backoff_steps, behind);
 			(now.saturating_add(wait), behind.saturating_add(1))
 		});
+		if crate::queue::reply::provider_cause(reason).is_some_and(|cause| cause.pauses()) {
+			until = until.max(now.saturating_add(self.provider_pause_secs));
+		}
 		Some(SlowDown {
 			domain,
 			host,
 			until,
 			deferrals: deferrals.max(own.saturating_add(1)),
-			reason: reason.chars().take(200).collect(),
+			reason: super::provider::hold_reason(reason),
 		})
 	}
 }
