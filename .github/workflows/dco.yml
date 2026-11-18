@@ -69,10 +69,10 @@ jobs:
           persist-credentials: false
 
       - name: Test the check
-        run: bash scripts/check-secrets/check-secrets.test.sh
+        run: bash scripts/scan-credentials/scan-credentials.test.sh
 
       - name: Scan the lines this change adds
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
-        run: bash scripts/check-secrets/check-secrets.sh "$BASE_SHA" "$HEAD_SHA"
+        run: bash scripts/scan-credentials/scan-credentials.sh "$BASE_SHA" "$HEAD_SHA"

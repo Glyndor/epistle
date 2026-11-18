@@ -19,7 +19,7 @@
 # This is a filter for the mistake, not a vault: GitHub's push protection and
 # secret scanning remain the other half.
 #
-# Usage: check-secrets.sh <base> <head>
+# Usage: scan-credentials.sh <base> <head>
 
 set -euo pipefail
 

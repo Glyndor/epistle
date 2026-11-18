@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 #
-# Tests for scripts/check-secrets/check-secrets.sh. The credential-shaped strings are
+# Tests for scripts/scan-credentials/scan-credentials.sh. The credential-shaped strings are
 # assembled at run time, so this file does not trip the check it tests, and no
 # value is ever printed by the script.
 set -u
 
 HERE="$(cd "$(dirname "$0")/../.." && pwd)"
-SCRIPT="$HERE/scripts/check-secrets/check-secrets.sh"
+SCRIPT="$HERE/scripts/scan-credentials/scan-credentials.sh"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 pass=0; fail=0

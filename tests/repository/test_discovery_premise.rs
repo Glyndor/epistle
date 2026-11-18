@@ -52,9 +52,9 @@ const WORKFLOW_INVOKED_DIRS: &[(&str, &str, &str)] = &[
 		"folder-limit.test.sh",
 	),
 	(
-		"scripts/check-secrets",
+		"scripts/scan-credentials",
 		".github/workflows/dco.yml",
-		"check-secrets.test.sh",
+		"scan-credentials.test.sh",
 	),
 ];
 
