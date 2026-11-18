@@ -396,10 +396,7 @@ fn an_account_that_is_a_link_to_another_account_or_outside_is_refused() {
 	std::os::unix::fs::symlink(outside.path(), accounts.join("carol")).expect("link");
 	for account in ["alice", "carol"] {
 		let opened = Snapshot::open(dir.path(), account, "INBOX", &MessageCrypto::disabled());
-		assert!(
-			opened.is_err(),
-			"{account}: a linked account must be refused"
-		);
+		assert!(opened.is_err(), "a linked account must be refused");
 	}
 }
 
