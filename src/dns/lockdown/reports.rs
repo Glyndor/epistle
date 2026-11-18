@@ -49,8 +49,16 @@ pub fn recent_dmarc_failures(
 			if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
 				continue;
 			}
-			let Ok(text) = crate::util::fs_walk::rooted::read_to_string(data_dir, &path) else {
-				continue;
+			let text = match crate::util::fs_walk::rooted::read_to_string(data_dir, &path) {
+				Ok(text) => text,
+				Err(error) => {
+					// A name that is not plain UTF-8 cannot be read; say so
+					// instead of dropping a report that counts for the warning.
+					if error.kind() == std::io::ErrorKind::InvalidInput {
+						crate::util::fs_walk::warn_skipped(&path);
+					}
+					continue;
+				}
 			};
 			for line in text.lines().filter(|l| !l.trim().is_empty()) {
 				let Ok(report) = serde_json::from_str::<DmarcReport>(line) else {

@@ -358,3 +358,39 @@ fn a_directory_swapped_for_another_after_the_check_is_refused_before_listing() {
 	});
 	assert_eq!(kind(read_dir(&l.root, &dir)), ErrorKind::InvalidInput);
 }
+
+#[test]
+fn a_root_that_does_not_exist_yet_behind_a_link_is_empty_not_refused() {
+	let l = layout();
+	let parent = l.root.parent().expect("parent").join("linked-parent");
+	symlink(&l.root, &parent).expect("symlink");
+	let absent = parent.join("data");
+	let resolved_spelling = l
+		.root
+		.canonicalize()
+		.expect("canonicalize")
+		.join("data")
+		.join("accounts");
+	assert_eq!(
+		kind(read_dir(&absent, &resolved_spelling)),
+		ErrorKind::NotFound
+	);
+	assert!(check_directories(&absent, &resolved_spelling).is_ok());
+	assert_eq!(
+		kind(read(&absent, resolved_spelling.join("m"))),
+		ErrorKind::NotFound
+	);
+}
+
+#[test]
+fn a_link_that_loops_back_on_itself_is_skipped_with_one_warning() {
+	let l = layout();
+	symlink(l.root.join("loop"), l.root.join("loop")).expect("symlink");
+	let target = l.root.join("loop");
+	let events = crate::cli::trace::capture::run_with_capture(|| {
+		let _scope = crate::util::fs_walk::warning_scope();
+		assert_eq!(kind(read(&l.root, &target)), ErrorKind::NotFound);
+		assert_eq!(kind(read(&l.root, &target)), ErrorKind::NotFound);
+	});
+	assert_eq!(events.len(), 1, "one warning for the looping link");
+}

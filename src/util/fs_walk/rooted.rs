@@ -102,7 +102,11 @@ fn split<'a>(root: &Path, path: &'a Path) -> io::Result<(Option<PathBuf>, Vec<&'
 		Ok(below) => below,
 		Err(_) => match &resolved {
 			Some(resolved) => path.strip_prefix(resolved).map_err(|_| escapes_root())?,
-			None => return Err(escapes_root()),
+			// A root that does not exist yet may sit behind a link, and the
+			// path may already carry the resolved spelling of that prefix.
+			None => path
+				.strip_prefix(resolve_existing_prefix(root))
+				.map_err(|_| escapes_root())?,
 		},
 	};
 	let mut names = Vec::new();
@@ -114,6 +118,28 @@ fn split<'a>(root: &Path, path: &'a Path) -> io::Result<(Option<PathBuf>, Vec<&'
 		}
 	}
 	Ok((resolved, names))
+}
+
+/// `root` with the part that exists resolved and the missing names kept as
+/// they are: the spelling `contained` gives a directory that is not there yet.
+fn resolve_existing_prefix(root: &Path) -> PathBuf {
+	let mut missing = Vec::new();
+	let mut existing = root;
+	loop {
+		if let Ok(resolved) = existing.canonicalize() {
+			return missing
+				.iter()
+				.rev()
+				.fold(resolved, |path, name| path.join(name));
+		}
+		match (existing.parent(), existing.file_name()) {
+			(Some(parent), Some(name)) => {
+				missing.push(name);
+				existing = parent;
+			}
+			_ => return root.to_path_buf(),
+		}
+	}
 }
 
 /// One resolved entry below a checked directory.
@@ -143,7 +169,9 @@ fn entry(root: &Path, parent: &Path, name: &str) -> io::Result<Option<Found>> {
 	};
 	let resolved = match joined.canonicalize() {
 		Ok(resolved) => resolved,
-		Err(error) if error.kind() == io::ErrorKind::NotFound => {
+		// The entry exists, so a failure to resolve it is a link that points
+		// nowhere or loops back on itself: skipped, not an absent entry.
+		Err(error) if error.kind() == io::ErrorKind::NotFound || metadata.is_symlink() => {
 			warn_skipped(&joined);
 			return Err(skipped_file());
 		}
