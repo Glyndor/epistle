@@ -359,17 +359,31 @@ fn an_unreadable_message_is_serverbug() {
 	);
 }
 
-#[cfg(unix)]
 #[test]
 fn a_flag_change_that_cannot_be_stored_is_serverbug() {
-	use std::os::unix::fs::PermissionsExt;
 	let dir = tempfile::tempdir().expect("tempdir");
 	let mut session = selected(dir.path(), "SELECT");
-	let tmp = dir.path().join("accounts/alice/new");
-	std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o500)).expect("chmod");
-	let response = reply(&mut session, "a STORE 1 +FLAGS (\\Seen)");
-	std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o700)).expect("chmod back");
-	assert_eq!(response, "a NO [SERVERBUG] cannot store flags\r\n");
+	// A directory where the `.flags` sidecar belongs makes the final rename
+	// fail for any user, root included (a permission bit would not).
+	let mailbox = dir.path().join("accounts/alice/new");
+	let id = std::fs::read_dir(&mailbox)
+		.expect("read mailbox")
+		.map(|entry| {
+			entry
+				.expect("entry")
+				.file_name()
+				.to_string_lossy()
+				.into_owned()
+		})
+		.find_map(|name| name.strip_suffix(".eml").map(str::to_owned))
+		.expect("a delivered message");
+	let blocker = mailbox.join(format!("{id}.flags"));
+	std::fs::create_dir(&blocker).expect("blocker");
+	std::fs::write(blocker.join("keep"), b"x").expect("fill blocker");
+	assert_eq!(
+		reply(&mut session, "a STORE 1 +FLAGS (\\Seen)"),
+		"a NO [SERVERBUG] cannot store flags\r\n"
+	);
 }
 
 #[test]
