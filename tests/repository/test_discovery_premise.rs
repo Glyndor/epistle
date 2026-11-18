@@ -51,6 +51,11 @@ const WORKFLOW_INVOKED_DIRS: &[(&str, &str, &str)] = &[
 		".github/workflows/folder-limit.yml",
 		"folder-limit.test.sh",
 	),
+	(
+		"scripts/check-secrets",
+		".github/workflows/dco.yml",
+		"check-secrets.test.sh",
+	),
 ];
 
 /// Extensions whose test files are not discovered by any runner — something has
