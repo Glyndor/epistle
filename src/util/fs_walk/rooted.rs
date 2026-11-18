@@ -232,8 +232,9 @@ fn walk<'a>(root: &Path, path: &'a Path) -> io::Result<Walk<'a>> {
 	// Resolve the root again and use only the value that passed the prefix
 	// check for everything below.
 	let base = root.canonicalize()?;
-	let resolved = resolved.canonicalize()?;
-	if !resolved.starts_with(&base) {
+	let unchecked = resolved;
+	let resolved = unchecked.canonicalize()?;
+	if resolved != unchecked || !resolved.starts_with(&base) {
 		return Err(escapes_root());
 	}
 	if !resolved.is_dir() {
@@ -284,9 +285,13 @@ pub(crate) fn read_dir(root: &Path, path: impl AsRef<Path>) -> io::Result<Entrie
 	};
 	// The walked directory is resolved and checked against the root here, and
 	// only that value reaches the filesystem calls below.
+	#[cfg(test)]
+	hook::run_after_walk();
 	let base = root.canonicalize()?;
 	let checked = walked.checked.canonicalize()?;
-	if !checked.starts_with(&base) {
+	// A component turned into a link since the walk, even one that points
+	// inside the root, makes the resolved value differ from the walked one.
+	if checked != walked.checked || !checked.starts_with(&base) {
 		return Err(escapes_root());
 	}
 	let expected = identity(&std::fs::symlink_metadata(&checked)?);
@@ -353,6 +358,19 @@ pub(super) mod hook {
 
 	thread_local! {
 		static BEFORE_OPEN: RefCell<Option<Box<dyn Fn()>>> = const { RefCell::new(None) };
+		static AFTER_WALK: RefCell<Option<Box<dyn Fn()>>> = const { RefCell::new(None) };
+	}
+
+	pub(in crate::util::fs_walk) fn set_after_walk(action: impl Fn() + 'static) {
+		AFTER_WALK.with(|slot| *slot.borrow_mut() = Some(Box::new(action)));
+	}
+
+	pub(super) fn run_after_walk() {
+		AFTER_WALK.with(|slot| {
+			if let Some(action) = slot.borrow_mut().take() {
+				action();
+			}
+		});
 	}
 
 	pub(in crate::util::fs_walk) fn set(action: impl Fn() + 'static) {
