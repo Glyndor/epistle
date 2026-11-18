@@ -18,7 +18,8 @@ fn escapes_root() -> io::Error {
 /// before is left as it is, one created here is `0700`.
 ///
 /// `path` must be `root` joined with plain names, and `root` is chosen by
-/// the trusted caller: a missing `root` is created `0700` with its parents.
+/// the trusted caller: a missing `root` is created `0700` with its parents,
+/// one name at a time below its deepest existing ancestor.
 /// The root is resolved once; the part of `path` below it is walked one
 /// name at a time. A `..`, an absolute tail or a NUL in a name is refused.
 /// A missing name is created with `mkdir`, which never follows a link, and
@@ -27,27 +28,68 @@ fn escapes_root() -> io::Error {
 /// fails with `InvalidInput`, and the filesystem calls only ever see a
 /// value derived from the checked one.
 pub(crate) fn create_private_dir(root: &Path, path: &Path) -> io::Result<()> {
-	make_dir_all(root)?;
-	let root_resolved = root.canonicalize()?;
+	let root_resolved = bootstrap_root(root)?;
 	let tail = path.strip_prefix(root).map_err(|_| escapes_root())?;
-	let mut current = root_resolved.clone();
+	let current = walk_names(&root_resolved, root_resolved.clone(), tail)?;
+	tighten(&root_resolved, &current)
+}
+
+/// Walk the plain names of `tail` down from the checked directory `start`,
+/// creating the missing ones, and return the last directory.
+fn walk_names(root: &Path, start: PathBuf, tail: &Path) -> io::Result<PathBuf> {
+	let mut current = start;
 	for component in tail.components() {
 		let name = match component {
 			Component::CurDir => continue,
 			Component::Normal(name) if !name.to_string_lossy().contains('\0') => name,
 			_ => return Err(escapes_root()),
 		};
-		current = step(&root_resolved, &current, name)?;
+		current = step(root, &current, name)?;
 	}
-	tighten(&current)
+	Ok(current)
+}
+
+/// The resolved `root`, created `0700` when missing.
+///
+/// `root` is chosen by the trusted caller. The part that exists is resolved
+/// once; the missing names below it are then created one at a time under
+/// that resolved ancestor, with the same checks as any other name.
+fn bootstrap_root(root: &Path) -> io::Result<PathBuf> {
+	let mut existing = root;
+	let base = loop {
+		match existing.canonicalize() {
+			Ok(resolved) => break resolved,
+			Err(error) if error.kind() == io::ErrorKind::NotFound => {
+				existing = existing.parent().ok_or_else(escapes_root)?;
+			}
+			Err(error) => return Err(error),
+		}
+	};
+	let tail = root.strip_prefix(existing).map_err(|_| escapes_root())?;
+	walk_names(&base, base.clone(), tail)
 }
 
 /// One name below the checked directory `parent`: a freshly created `0700`
 /// directory, or the resolved existing entry.
 fn step(root: &Path, parent: &Path, name: &std::ffi::OsStr) -> io::Result<PathBuf> {
+	let parent = parent.canonicalize()?;
+	if !parent.starts_with(root) {
+		return Err(escapes_root());
+	}
 	let next = parent.join(name);
+	if !next.starts_with(root) {
+		return Err(escapes_root());
+	}
 	match make_dir(&next) {
-		Ok(()) => return Ok(next),
+		Ok(()) => {
+			// Created by `mkdir`, which never follows a link: resolve it and
+			// trust only the result.
+			let created = next.canonicalize()?;
+			if !created.starts_with(root) {
+				return Err(escapes_root());
+			}
+			return Ok(created);
+		}
 		Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
 		Err(error) => return Err(error),
 	}
@@ -68,19 +110,6 @@ fn step(root: &Path, parent: &Path, name: &std::ffi::OsStr) -> io::Result<PathBu
 	Ok(resolved)
 }
 
-/// `path` and its missing parents, `0700`, without any containment check:
-/// only for the root, which the trusted caller chose.
-fn make_dir_all(path: &Path) -> io::Result<()> {
-	let mut builder = std::fs::DirBuilder::new();
-	builder.recursive(true);
-	#[cfg(unix)]
-	{
-		use std::os::unix::fs::DirBuilderExt;
-		builder.mode(0o700);
-	}
-	builder.create(path)
-}
-
 /// One directory, `0700`, failing with `AlreadyExists` when the name is taken
 /// by anything, a link included.
 fn make_dir(path: &Path) -> io::Result<()> {
@@ -93,16 +122,20 @@ fn make_dir(path: &Path) -> io::Result<()> {
 	builder.create(path)
 }
 
-fn tighten(path: &Path) -> io::Result<()> {
+/// Set `path`, which lies under `root`, to `0700`; only the resolved and
+/// checked value reaches the filesystem calls.
+fn tighten(root: &Path, path: &Path) -> io::Result<()> {
+	let checked = path.canonicalize()?;
+	if !checked.starts_with(root) {
+		return Err(escapes_root());
+	}
 	#[cfg(unix)]
 	{
 		use std::os::unix::fs::PermissionsExt;
-		let metadata = std::fs::metadata(path)?;
+		let metadata = std::fs::metadata(&checked)?;
 		if metadata.permissions().mode() & 0o777 != 0o700 {
-			std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
+			std::fs::set_permissions(&checked, std::fs::Permissions::from_mode(0o700))?;
 		}
 	}
-	#[cfg(not(unix))]
-	let _ = path;
 	Ok(())
 }

@@ -229,6 +229,13 @@ fn walk<'a>(root: &Path, path: &'a Path) -> io::Result<Walk<'a>> {
 			missing: names,
 		});
 	};
+	// Resolve the root again and use only the value that passed the prefix
+	// check for everything below.
+	let base = root.canonicalize()?;
+	let resolved = resolved.canonicalize()?;
+	if !resolved.starts_with(&base) {
+		return Err(escapes_root());
+	}
 	if !resolved.is_dir() {
 		warn_skipped(&resolved);
 		return Err(skipped_directory());
@@ -244,13 +251,12 @@ fn walk<'a>(root: &Path, path: &'a Path) -> io::Result<Walk<'a>> {
 /// Resolve `path` again once it has been opened: it must still be the same
 /// location inside `root` and, when `expected` is given, the same object.
 fn still_there(root: &Path, path: &Path, expected: Option<Identity>) -> io::Result<()> {
-	match path.canonicalize() {
-		Ok(now) if now == path && now.starts_with(root) => {}
-		Ok(_) => return Err(escapes_root()),
-		Err(error) => return Err(error),
+	let now = path.canonicalize()?;
+	if now != path || !now.starts_with(root) {
+		return Err(escapes_root());
 	}
 	match expected {
-		Some(expected) if identity(&std::fs::symlink_metadata(path)?) != expected => {
+		Some(expected) if identity(&std::fs::symlink_metadata(&now)?) != expected => {
 			Err(escapes_root())
 		}
 		_ => Ok(()),
@@ -276,11 +282,18 @@ pub(crate) fn read_dir(root: &Path, path: impl AsRef<Path>) -> io::Result<Entrie
 	let (Some(root), true) = (walked.root, walked.missing.is_empty()) else {
 		return Err(not_found());
 	};
-	let expected = identity(&std::fs::symlink_metadata(&walked.checked)?);
+	// The walked directory is resolved and checked against the root here, and
+	// only that value reaches the filesystem calls below.
+	let base = root.canonicalize()?;
+	let checked = walked.checked.canonicalize()?;
+	if !checked.starts_with(&base) {
+		return Err(escapes_root());
+	}
+	let expected = identity(&std::fs::symlink_metadata(&checked)?);
 	#[cfg(test)]
 	hook::run();
-	let entries = std::fs::read_dir(&walked.checked)?;
-	still_there(&root, &walked.checked, Some(expected))?;
+	let entries = std::fs::read_dir(&checked)?;
+	still_there(&base, &checked, Some(expected))?;
 	Ok(Entries(entries))
 }
 
