@@ -101,6 +101,11 @@ fn open_regular(root: &Path, path: &Path, options: &mut OpenOptions) -> io::Resu
 	Ok(file)
 }
 
+/// Open the regular file `path` under `root` for reading.
+pub(crate) fn open_read(root: &Path, path: &Path) -> io::Result<File> {
+	open_regular(root, path, OpenOptions::new().read(true))
+}
+
 /// Open, creating it when absent and without truncating it, the regular file
 /// `path` under `root` that a lock is taken on.
 pub(crate) fn open_lock(root: &Path, path: &Path) -> io::Result<File> {
@@ -109,6 +114,12 @@ pub(crate) fn open_lock(root: &Path, path: &Path) -> io::Result<File> {
 		path,
 		OpenOptions::new().create(true).truncate(false).write(true),
 	)
+}
+
+/// Open, creating it when absent, the regular file `path` under `root` for
+/// appending.
+pub(crate) fn open_append(root: &Path, path: &Path) -> io::Result<File> {
+	open_regular(root, path, OpenOptions::new().create(true).append(true))
 }
 
 /// Replace the file `path` under `root` with `bytes` in one rename, so a
