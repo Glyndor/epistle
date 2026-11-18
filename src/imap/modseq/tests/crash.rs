@@ -34,7 +34,7 @@ fn a_message_staging_file_a_kill_left_keeps_the_old_modseq() {
 	for staging in STAGING {
 		let dir = tempfile::tempdir().expect("tempdir");
 		let id = Uuid::now_v7();
-		write_message(dir.path(), id, 5).expect("old stamp");
+		write_message(dir.path(), dir.path(), id, 5).expect("old stamp");
 		let tmp = message_tmp_file(dir.path(), id, MessageExt::Modseq).expect("tmp");
 		std::fs::write(tmp, staging).expect("staging");
 		assert_eq!(
@@ -42,7 +42,7 @@ fn a_message_staging_file_a_kill_left_keeps_the_old_modseq() {
 			5,
 			"staging {staging:?} was read"
 		);
-		write_message(dir.path(), id, 6).expect("the retry");
+		write_message(dir.path(), dir.path(), id, 6).expect("the retry");
 		assert_eq!(read_message(dir.path(), dir.path(), id), 6);
 	}
 }

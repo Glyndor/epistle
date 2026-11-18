@@ -2,7 +2,9 @@ use std::io::{ErrorKind, Read, Write};
 use std::os::unix::fs::symlink;
 use std::path::PathBuf;
 
-use crate::util::fs_walk::rooted_write::{metadata, open_lock, write_atomic};
+use crate::util::fs_walk::rooted_write::{
+	metadata, open_append, open_lock, open_read, write_atomic,
+};
 
 /// A `root` directory with a sibling `outside` one the writes must never reach.
 struct Layout {
@@ -131,6 +133,56 @@ fn open_lock_creates_without_truncating_and_refuses_a_link() {
 		ErrorKind::InvalidInput
 	);
 	assert_eq!(entries(&l.outside), vec!["victim"]);
+}
+
+#[test]
+fn open_append_adds_to_the_end_and_open_read_reads_it_back() {
+	let l = layout();
+	let log = l.root.join("log");
+	open_append(&l.root, &log)
+		.expect("open")
+		.write_all(b"a\n")
+		.expect("write");
+	open_append(&l.root, &log)
+		.expect("open")
+		.write_all(b"b\n")
+		.expect("write");
+	let mut text = String::new();
+	open_read(&l.root, &log)
+		.expect("open")
+		.read_to_string(&mut text)
+		.expect("read");
+	assert_eq!(text, "a\nb\n");
+	assert_eq!(
+		kind(open_read(&l.root, &l.root.join("none"))),
+		ErrorKind::NotFound
+	);
+}
+
+#[test]
+fn open_read_and_append_refuse_a_link_and_a_directory_out_of_the_root() {
+	let l = layout();
+	std::fs::write(l.outside.join("note"), "reached").expect("write");
+	symlink(l.outside.join("note"), l.root.join("note")).expect("symlink");
+	assert_eq!(
+		kind(open_read(&l.root, &l.root.join("note"))),
+		ErrorKind::InvalidInput
+	);
+	assert_eq!(
+		kind(open_append(&l.root, &l.root.join("note"))),
+		ErrorKind::InvalidInput
+	);
+	symlink(&l.outside, l.root.join("account")).expect("symlink");
+	let through = l.root.join("account").join("note");
+	assert_eq!(kind(open_read(&l.root, &through)), ErrorKind::InvalidInput);
+	assert_eq!(
+		kind(open_append(&l.root, &through)),
+		ErrorKind::InvalidInput
+	);
+	assert_eq!(
+		std::fs::read(l.outside.join("note")).expect("read"),
+		b"reached"
+	);
 }
 
 #[test]

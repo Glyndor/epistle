@@ -108,7 +108,7 @@ fn expunge_in_a_folder_logs_vanished_uids() {
 	snapshot.expunge().expect("expunge");
 	let folder_dir = mailbox_dir(dir.path(), "alice", "Work").expect("folder dir");
 	assert_eq!(
-		crate::imap::vanished::since(&folder_dir, base),
+		crate::imap::vanished::since(dir.path(), &folder_dir, base),
 		vec![1],
 		"the folder expunge must be in the folder's vanished log"
 	);

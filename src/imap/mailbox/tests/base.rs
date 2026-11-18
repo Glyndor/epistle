@@ -117,10 +117,10 @@ fn expunge_logs_vanished_uids() {
 	let account_dir = dir.path().join("accounts").join("alice").join("new");
 	// UID 1 vanished after the pre-expunge modseq; nothing vanished "in the future".
 	assert_eq!(
-		super::super::super::vanished::since(&account_dir, base),
+		super::super::super::vanished::since(dir.path(), &account_dir, base),
 		vec![1]
 	);
-	assert!(super::super::super::vanished::since(&account_dir, u64::MAX).is_empty());
+	assert!(super::super::super::vanished::since(dir.path(), &account_dir, u64::MAX).is_empty());
 }
 
 #[test]
