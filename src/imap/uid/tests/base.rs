@@ -78,7 +78,7 @@ fn scans_at_the_same_time_never_give_one_uid_to_two_messages() {
 fn a_counter_left_behind_never_makes_a_uid_be_handed_out_twice() {
 	let (dir, mut ids) = mailbox(3);
 	assert_eq!(resolve_uids(dir.path(), dir.path(), &ids), vec![1, 2, 3]);
-	super::super::write_counter(dir.path(), 1).expect("rewind the counter");
+	super::super::write_counter(dir.path(), dir.path(), 1).expect("rewind the counter");
 	let late = Uuid::now_v7();
 	std::fs::write(dir.path().join(format!("{late}.eml")), b"x").expect("late message");
 	ids.push(late);

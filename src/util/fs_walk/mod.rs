@@ -1,7 +1,8 @@
 //! Directory walks that exclude links and special files from mail data.
 //!
-//! Every walk and read is in [`rooted`]: the caller names the trusted root
-//! the path lies under, and nothing outside it is reached.
+//! Every walk and read is in [`rooted`], every write, lock, rename and removal
+//! in [`rooted_write`]: the caller names the trusted root the path lies
+//! under, and nothing outside it is reached.
 
 use std::cell::RefCell;
 use std::collections::HashSet;
@@ -10,6 +11,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 pub(crate) mod rooted;
+pub(crate) mod rooted_write;
 
 thread_local! {
 	static WARNED: RefCell<Option<HashSet<PathBuf>>> = const { RefCell::new(None) };

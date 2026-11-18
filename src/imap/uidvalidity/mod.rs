@@ -4,7 +4,8 @@
 //! trust cached UIDs across sessions; it changes only if the mailbox is
 //! recreated (the sidecar is gone).
 
-use crate::util::path_component::{AccountRoot, FixedDir, StateFile, state_file, state_tmp_file};
+use crate::util::fs_walk::rooted_write;
+use crate::util::path_component::{AccountRoot, FixedDir, StateFile, state_file};
 use std::path::Path;
 
 /// Read the mailbox's UIDVALIDITY, initializing it on first open. The value
@@ -23,7 +24,9 @@ pub(super) fn read_or_init(account_dir: &Path, account_root: &AccountRoot) -> u3
 	}
 	// A mailbox without a directory yet (an INBOX that never received mail)
 	// keeps nothing, so it takes the clock and records no allocation.
-	if !account_dir.is_dir() {
+	if !rooted_write::metadata(account_root.data_dir(), account_dir)
+		.is_ok_and(|found| found.is_dir())
+	{
 		return clock();
 	}
 	// Without the lock nothing is recorded, so the next open allocates again.
@@ -36,8 +39,16 @@ pub(super) fn read_or_init(account_dir: &Path, account_root: &AccountRoot) -> u3
 	let value = allocate(account_root);
 	// The counter goes first: a crash between the two writes leaves it ahead
 	// of the mailbox, never behind.
-	if write(account_root.as_path(), StateFile::UidValidityLast, value).is_ok() {
-		let _ = write(account_dir, StateFile::UidValidity, value);
+	let root = account_root.data_dir();
+	if write(
+		root,
+		account_root.as_path(),
+		StateFile::UidValidityLast,
+		value,
+	)
+	.is_ok()
+	{
+		let _ = write(root, account_dir, StateFile::UidValidity, value);
 	}
 	value
 }
@@ -81,24 +92,19 @@ fn in_use(account_root: &AccountRoot) -> Vec<u32> {
 }
 
 fn lock(account_root: &AccountRoot) -> std::io::Result<std::fs::File> {
-	let file = std::fs::OpenOptions::new()
-		.create(true)
-		.truncate(false)
-		.write(true)
-		.open(state_file(
-			account_root.as_path(),
-			StateFile::UidValidityLock,
-		)?)?;
+	let file = rooted_write::open_lock(
+		account_root.data_dir(),
+		&state_file(account_root.as_path(), StateFile::UidValidityLock)?,
+	)?;
 	file.lock()?;
 	Ok(file)
 }
 
 /// Replace `file` in `dir` with `value` in one rename, so a reader sees the
-/// old value or the new one and never a partial write.
-fn write(dir: &Path, file: StateFile, value: u32) -> std::io::Result<()> {
-	let tmp = state_tmp_file(dir, file)?;
-	std::fs::write(&tmp, value.to_string())?;
-	std::fs::rename(tmp, state_file(dir, file)?)
+/// old value or the new one and never a partial write. `root` is the data
+/// directory `dir` lies under.
+fn write(root: &Path, dir: &Path, file: StateFile, value: u32) -> std::io::Result<()> {
+	rooted_write::write_atomic(root, &state_file(dir, file)?, value.to_string().as_bytes())
 }
 
 fn clock() -> u32 {
