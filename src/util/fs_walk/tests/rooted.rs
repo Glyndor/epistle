@@ -394,3 +394,15 @@ fn a_link_that_loops_back_on_itself_is_skipped_with_one_warning() {
 	});
 	assert_eq!(events.len(), 1, "one warning for the looping link");
 }
+
+#[test]
+fn a_component_swapped_for_an_inner_link_after_the_walk_is_refused() {
+	let l = layout();
+	std::fs::create_dir_all(l.root.join("a").join("b")).expect("mkdir");
+	let (dir, root) = (l.root.join("a").join("b"), l.root.clone());
+	crate::util::fs_walk::rooted::hook::set_after_walk(move || {
+		std::fs::rename(root.join("a"), root.join("a-moved")).expect("rename");
+		symlink(root.join("a-moved"), root.join("a")).expect("symlink");
+	});
+	assert_eq!(kind(read_dir(&l.root, &dir)), ErrorKind::InvalidInput);
+}
