@@ -39,13 +39,19 @@ fn callers_at_the_same_time_each_get_their_own_modseq() {
 
 #[cfg(unix)]
 #[test]
-fn the_root_is_the_data_dir_so_a_linked_account_is_not_trusted() {
+fn the_root_is_the_data_dir_so_a_linked_account_is_refused() {
 	let data = tempfile::tempdir().expect("data");
 	let outside = tempfile::tempdir().expect("outside");
 	std::fs::write(outside.path().join(".modseqctr"), "41").expect("counter");
 	std::fs::create_dir_all(data.path().join("accounts")).expect("mkdir");
 	let account = data.path().join("accounts").join("alice");
 	std::os::unix::fs::symlink(outside.path(), &account).expect("link");
-	// The counter behind the link is not read: it counts as absent.
-	assert_eq!(next_counter(data.path(), &account).expect("next"), 2);
+	// The counter behind the link is neither read nor written: the call is
+	// refused and the value outside stays as it was.
+	let error = next_counter(data.path(), &account).expect_err("refused");
+	assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+	assert_eq!(
+		std::fs::read_to_string(outside.path().join(".modseqctr")).expect("read"),
+		"41"
+	);
 }

@@ -56,7 +56,8 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crate::util::path_component::{StateFile, state_file, state_tmp_file};
+use crate::util::fs_walk::rooted_write;
+use crate::util::path_component::{StateFile, state_file};
 use uuid::Uuid;
 
 use super::mailbox::{Flag, MessageRef};
@@ -230,6 +231,7 @@ fn parse_flags(field: &str) -> Option<Vec<Flag>> {
 /// (temp file + rename). A write failure is reported to the caller but must not
 /// fail the open — the snapshot already succeeded from the scan.
 pub(super) fn write(
+	root: &Path,
 	account_dir: &Path,
 	generation: (u64, usize, u64),
 	messages: &[MessageRef],
@@ -250,9 +252,7 @@ pub(super) fn write(
 		write_record(&mut out, message);
 	}
 
-	let tmp = state_tmp_file(account_dir, StateFile::Index)?;
-	std::fs::write(&tmp, out.as_bytes())?;
-	std::fs::rename(&tmp, index_path(account_dir)?)
+	rooted_write::write_atomic(root, &index_path(account_dir)?, out.as_bytes())
 }
 
 /// Append one record line to `out`, mirroring [`parse_record`].

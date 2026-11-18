@@ -81,7 +81,7 @@ impl Snapshot {
 		// the stamp is unchanged). A failed index write must not fail the
 		// open — the snapshot already succeeded from the scan, which is
 		// canonical.
-		let _ = super::index::write(&account_dir, generation, &scanned);
+		let _ = super::index::write(data_dir, &account_dir, generation, &scanned);
 		Ok(Snapshot {
 			account_dir,
 			account_root,
@@ -112,7 +112,7 @@ impl Snapshot {
 
 	/// UIDs expunged after `modseq` (QRESYNC `VANISHED (EARLIER)`, RFC 7162).
 	pub fn vanished_since(&self, modseq: u64) -> Vec<u32> {
-		super::vanished::since(&self.account_dir, modseq)
+		super::vanished::since(self.account_root.data_dir(), &self.account_dir, modseq)
 	}
 
 	/// Number of messages in the snapshot (the highest sequence number plus
@@ -232,7 +232,12 @@ impl Snapshot {
 		super::flags::write_flags(&self.account_dir, id, &flags)?;
 		// A flag change advances the mailbox mod-sequence and stamps the message.
 		let modseq = super::modseq::next_counter(self.account_root.data_dir(), &self.account_dir)?;
-		let _ = super::modseq::write_message(&self.account_dir, id, modseq);
+		let _ = super::modseq::write_message(
+			self.account_root.data_dir(),
+			&self.account_dir,
+			id,
+			modseq,
+		);
 		self.highest_modseq = self.highest_modseq.max(modseq);
 		let seen = super::mailbox::Flag::Seen;
 		let unread_changed = self.messages[index].flags.contains(&seen) != flags.contains(&seen);
