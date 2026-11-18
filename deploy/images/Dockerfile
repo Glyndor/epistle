@@ -15,6 +15,6 @@
 # `clamav/clamav:1.5` on 2026-10-18. The mail base must stay the digest the
 # Containerfile's runtime stage uses; a test compares the two.
 
-FROM docker.io/library/postgres:18@sha256:b9f6b8ff03b62f3cfd9d9ba3fe56226a9991c79d3fb46fd46536263bf02be553 AS postgres
+FROM docker.io/library/postgres:18@sha256:2ea8630df176ad090ec92136dee850397c5af8781e4bcf2e4162593691c61bbc AS postgres
 FROM docker.io/clamav/clamav:1.5@sha256:45fe5149fbee5a46509c9848ef20d0c354b7b2323c9369f285939a37cf33422a AS clamav
 FROM gcr.io/distroless/static-debian13:nonroot@sha256:aafe993665bf6200db38a02c11a9351e782a84b6a45e7f33b6695638c88e3931 AS mail
