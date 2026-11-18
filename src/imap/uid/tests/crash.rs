@@ -61,7 +61,7 @@ fn a_kill_after_any_sidecar_leaves_no_uid_handed_out_twice() {
 				let (dir, ids) = mailbox();
 				let mut persisted = Vec::new();
 				for (index, id) in ids.iter().take(renamed).enumerate() {
-					write_message(dir.path(), *id, index as u32 + 1).expect("sidecar");
+					write_message(dir.path(), dir.path(), *id, index as u32 + 1).expect("sidecar");
 					persisted.push((*id, index as u32 + 1));
 				}
 				if let Some(next) = ids.get(renamed) {
@@ -69,7 +69,7 @@ fn a_kill_after_any_sidecar_leaves_no_uid_handed_out_twice() {
 					std::fs::write(tmp, staging).expect("staging");
 				}
 				if let Some(value) = counter_state {
-					write_counter(dir.path(), value).expect("counter");
+					write_counter(dir.path(), dir.path(), value).expect("counter");
 				}
 				let note =
 					format!("renamed {renamed}, staging {staging:?}, counter {counter_state:?}");

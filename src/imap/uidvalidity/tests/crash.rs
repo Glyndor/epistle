@@ -30,7 +30,13 @@ fn a_kill_between_the_counter_and_the_mailbox_never_repeats_a_value() {
 	let root = root(data.path());
 	let dir = folder(&root);
 	// The kill came after the counter was renamed and before the mailbox was.
-	write(root.as_path(), StateFile::UidValidityLast, AHEAD).unwrap();
+	write(
+		root.data_dir(),
+		root.as_path(),
+		StateFile::UidValidityLast,
+		AHEAD,
+	)
+	.unwrap();
 	let value = read_or_init(&dir, &root);
 	assert!(value > AHEAD, "{value} is not past the counter {AHEAD}");
 	assert_eq!(read_or_init(&dir, &root), value, "the value moved");
@@ -41,8 +47,14 @@ fn a_kill_after_both_writes_keeps_the_value() {
 	let data = tempfile::tempdir().unwrap();
 	let root = root(data.path());
 	let dir = folder(&root);
-	write(root.as_path(), StateFile::UidValidityLast, AHEAD).unwrap();
-	write(&dir, StateFile::UidValidity, AHEAD).unwrap();
+	write(
+		root.data_dir(),
+		root.as_path(),
+		StateFile::UidValidityLast,
+		AHEAD,
+	)
+	.unwrap();
+	write(root.data_dir(), &dir, StateFile::UidValidity, AHEAD).unwrap();
 	assert_eq!(read_or_init(&dir, &root), AHEAD);
 }
 

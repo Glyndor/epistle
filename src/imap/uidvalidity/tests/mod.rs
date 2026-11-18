@@ -3,3 +3,4 @@ pub use super::*;
 
 pub(super) mod base;
 mod crash;
+mod rooted;
