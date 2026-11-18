@@ -91,7 +91,7 @@ impl<'a> AccountName<'a> {
 	/// and checked to lie inside `<data_dir>/accounts`.
 	pub fn root(&self, data_dir: &Path) -> std::io::Result<AccountRoot> {
 		let accounts = contained(data_dir, &data_dir.join("accounts"))?;
-		contained_subdir(&accounts, self.0).map(AccountRoot)
+		contained_subdir(&accounts, self.0).map(|dir| AccountRoot(dir, data_dir.to_path_buf()))
 	}
 
 	/// An account name that skips validation, so tests can show that the
@@ -106,13 +106,20 @@ impl<'a> AccountName<'a> {
 /// [`AccountName::root`] builds one, so code that receives it does not have
 /// to trust whoever joined the path.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AccountRoot(PathBuf);
+pub struct AccountRoot(PathBuf, PathBuf);
 
 impl AccountRoot {
 	/// A root that names no directory, for values that are never read from
 	/// disk (a placeholder swapped in while a session re-opens a mailbox).
 	pub fn placeholder() -> Self {
-		Self(PathBuf::new())
+		Self(PathBuf::new(), PathBuf::new())
+	}
+
+	/// The data directory this root was resolved under: the trusted root for
+	/// reading anything below the account, so the account directory itself is
+	/// walked and checked rather than trusted.
+	pub fn data_dir(&self) -> &Path {
+		&self.1
 	}
 
 	/// The directory path.

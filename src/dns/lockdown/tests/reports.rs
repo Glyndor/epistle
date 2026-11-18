@@ -145,3 +145,22 @@ fn no_report_store_means_no_reports() {
 
 #[allow(unused_imports)]
 use super::super::reports;
+
+#[cfg(unix)]
+#[test]
+fn a_report_whose_name_is_not_utf8_is_warned_about_not_dropped_in_silence() {
+	use std::os::unix::ffi::OsStrExt;
+	let dir = tempfile::tempdir().expect("tempdir");
+	let day = dir.path().join("reports").join("dmarc").join("20261014");
+	std::fs::create_dir_all(&day).expect("mkdir");
+	std::fs::write(
+		day.join(std::ffi::OsStr::from_bytes(b"receiver\xff.jsonl")),
+		b"{}\n",
+	)
+	.expect("write");
+	let events = crate::cli::trace::capture::run_with_capture(|| {
+		let (sources, seen) = recent_dmarc_failures(dir.path(), "example.org", NOW);
+		assert!(sources.is_empty() && !seen);
+	});
+	assert_eq!(events.len(), 1, "the unreadable report is reported once");
+}

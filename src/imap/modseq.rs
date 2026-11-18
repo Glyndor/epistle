@@ -45,7 +45,7 @@ pub(super) fn read_counter(root: &Path, account_dir: &Path) -> u64 {
 /// same counter and hand out the same mod-sequence — RFC 7162 wants strictly
 /// increasing values — and the second rename would fail with ENOENT, so the
 /// client would be told the flags could not be stored although they were.
-pub(super) fn next_counter(account_dir: &Path) -> std::io::Result<u64> {
+pub(super) fn next_counter(root: &Path, account_dir: &Path) -> std::io::Result<u64> {
 	// The guard is held until the end of the function: the counter must not
 	// advance between the read and the write.
 	let _guard = match lock(account_dir) {
@@ -61,14 +61,7 @@ pub(super) fn next_counter(account_dir: &Path) -> std::io::Result<u64> {
 			None
 		}
 	};
-	// Still the unrooted read: this function has no root to hand yet, and its
-	// callers outside the IMAP snapshot move to the rooted form in a later change.
-	let next = state_file(account_dir, StateFile::ModseqCounter)
-		.and_then(crate::util::fs_walk::read_to_string)
-		.ok()
-		.and_then(|s| s.trim().parse().ok())
-		.unwrap_or(1)
-		+ 1;
+	let next = read_counter(root, account_dir) + 1;
 	let tmp = state_tmp_file(account_dir, StateFile::ModseqCounter)?;
 	std::fs::write(&tmp, next.to_string())?;
 	std::fs::rename(&tmp, state_file(account_dir, StateFile::ModseqCounter)?)?;

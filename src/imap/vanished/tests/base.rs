@@ -22,10 +22,24 @@ fn records_and_queries_vanished_uids() {
 #[test]
 fn record_advancing_assigns_a_modseq() {
 	let dir = tempfile::tempdir().expect("tempdir");
-	record_advancing(dir.path(), &[7]);
+	record_advancing(dir.path(), dir.path(), &[7]);
 	// The uid is logged at some positive mod-sequence.
 	assert_eq!(since(dir.path(), 0), vec![7]);
 	// An empty set advances nothing.
-	record_advancing(dir.path(), &[]);
+	record_advancing(dir.path(), dir.path(), &[]);
 	assert_eq!(since(dir.path(), 0), vec![7]);
+}
+
+#[cfg(unix)]
+#[test]
+fn record_advancing_does_not_take_its_modseq_from_a_linked_account() {
+	let data = tempfile::tempdir().expect("data");
+	let outside = tempfile::tempdir().expect("outside");
+	std::fs::write(outside.path().join(".modseqctr"), "41").expect("counter");
+	std::fs::create_dir_all(data.path().join("accounts")).expect("mkdir");
+	let account = data.path().join("accounts").join("alice");
+	std::os::unix::fs::symlink(outside.path(), &account).expect("link");
+	record_advancing(data.path(), &account, &[9]);
+	assert_eq!(since(&account, 1), vec![9], "logged at 2, not at 42");
+	assert!(since(&account, 2).is_empty());
 }

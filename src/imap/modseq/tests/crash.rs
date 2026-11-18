@@ -13,8 +13,8 @@ const STAGING: [&[u8]; 3] = [b"", b"4", b"9999"];
 fn a_counter_staging_file_a_kill_left_is_not_the_counter() {
 	for staging in STAGING {
 		let dir = tempfile::tempdir().expect("tempdir");
-		assert_eq!(next_counter(dir.path()).expect("first"), 2);
-		assert_eq!(next_counter(dir.path()).expect("second"), 3);
+		assert_eq!(next_counter(dir.path(), dir.path()).expect("first"), 2);
+		assert_eq!(next_counter(dir.path(), dir.path()).expect("second"), 3);
 		let tmp = state_tmp_file(dir.path(), StateFile::ModseqCounter).expect("tmp");
 		std::fs::write(tmp, staging).expect("staging");
 		assert_eq!(
@@ -22,7 +22,10 @@ fn a_counter_staging_file_a_kill_left_is_not_the_counter() {
 			3,
 			"staging {staging:?} was read"
 		);
-		assert_eq!(next_counter(dir.path()).expect("after the kill"), 4);
+		assert_eq!(
+			next_counter(dir.path(), dir.path()).expect("after the kill"),
+			4
+		);
 	}
 }
 
