@@ -171,3 +171,25 @@ fn a_preexisting_parent_is_left_as_it_was_and_the_leaf_is_tightened() {
 	assert_eq!(mode(&parent), 0o755);
 	assert_eq!(mode(&parent.join("leaf")), 0o700);
 }
+
+#[test]
+fn a_missing_root_is_created_owner_only_one_name_at_a_time() {
+	let outer = tempfile::tempdir().expect("tempdir");
+	let root = outer.path().join("x").join("y").join("root");
+	let leaf = root.join("leaf");
+	create_private_dir(&root, &leaf).expect("create");
+	assert_eq!(mode(&leaf), 0o700);
+	assert_eq!(mode(&root), 0o700);
+	assert_eq!(mode(&outer.path().join("x").join("y")), 0o700);
+}
+
+#[test]
+fn a_root_behind_a_dangling_link_is_refused() {
+	let outer = tempfile::tempdir().expect("tempdir");
+	let link = outer.path().join("link");
+	symlink(outer.path().join("missing"), &link).expect("symlink");
+	let root = link.join("root");
+	let error = create_private_dir(&root, &root.join("leaf")).expect_err("refuse");
+	assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+	assert!(!outer.path().join("missing").exists());
+}
