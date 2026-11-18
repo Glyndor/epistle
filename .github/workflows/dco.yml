@@ -52,3 +52,27 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
         run: bash .github/scripts/check_noreply_signoff.sh "$BASE_SHA" "$HEAD_SHA"
+
+  # What the lines of a change add, not who wrote them: a private key, a known
+  # token format, or a long value assigned to a name like token or signing key.
+  # GitHub's push protection knows other services' token formats, not a key of
+  # our own. Reports the file and line, never the value; the test of the check
+  # runs first. Not part of the required `dco` check.
+  secret-scan:
+    name: no credential-shaped line is added
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Test the check
+        run: bash scripts/scan-credentials/scan-credentials.test.sh
+
+      - name: Scan the lines this change adds
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
+        run: bash scripts/scan-credentials/scan-credentials.sh "$BASE_SHA" "$HEAD_SHA"
