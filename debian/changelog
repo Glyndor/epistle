@@ -1,3 +1,9 @@
+epistle (0.13.2) unstable; urgency=medium
+
+  * The 0.13.0 and 0.13.1 releases were never published: the package build failed on a test that depended on the user and then on a missing build tool. This is the first release after 0.12.9 and carries every change listed under 0.13.0.
+
+ -- Glyndor <packages@glyndor.net>  Thu, 19 Nov 2026 12:00:00 +0000
+
 epistle (0.13.1) unstable; urgency=medium
 
   * The 0.13.0 release was never published: its package build failed on a test that depended on the user. This is the first release after 0.12.9 and carries every change listed under 0.13.0.
