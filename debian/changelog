@@ -1,3 +1,9 @@
+epistle (0.13.1) unstable; urgency=medium
+
+  * The 0.13.0 release was never published: its package build failed on a test that depended on the user. This is the first release after 0.12.9 and carries every change listed under 0.13.0.
+
+ -- Glyndor <packages@glyndor.net>  Wed, 18 Nov 2026 12:00:00 +0000
+
 epistle (0.13.0) unstable; urgency=medium
 
   * The stack comes back by itself after a reboot. The boot unit stays installed and only starts what exists, `status` and `check` report whether the stack would come back in a `boot` area, the services carry a retry drop-in and a network order drop-in, and a script in `deploy` proves the stack returns after a reboot.
