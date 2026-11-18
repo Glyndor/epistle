@@ -4,14 +4,20 @@
 use super::*;
 use std::os::unix::fs::symlink;
 
+/// The account directory is swapped for a link after the account root was
+/// built, so `archive_dir` accepts the `.archive` name and the refusal has to
+/// come from `create_dir_all`.
 #[test]
-fn an_archive_linked_out_of_the_data_directory_receives_nothing() {
+fn an_account_swapped_for_a_link_receives_no_archive_directory() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let outside = tempfile::tempdir().expect("outside");
 	let id = delivered(dir.path(), "alice", "INBOX", b"Subject: hi\r\n\r\nbody\r\n");
 	let account = root(dir.path(), "alice");
-	symlink(outside.path(), account.as_path().join(".archive")).expect("symlink");
-	let inbox = account.as_path().join("new");
+	let real = account.as_path().to_path_buf();
+	let moved = dir.path().join("alice-moved");
+	std::fs::rename(&real, &moved).expect("move");
+	symlink(outside.path(), &real).expect("symlink");
+	let inbox = moved.join("new");
 
 	let result = archive::archive_message(&account, &inbox, "INBOX", id, 1_000);
 
