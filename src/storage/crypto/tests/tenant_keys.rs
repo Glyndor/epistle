@@ -284,7 +284,10 @@ fn the_plaintext_length_of_a_version_2_file_drops_its_overhead() {
 		.seal_v2_for(&acme(), b"twelve bytes", &[])
 		.expect("seal");
 	std::fs::write(&path, &sealed).expect("write");
-	assert_eq!(crypto.stored_plaintext_len(&path, sealed.len() as u64), 12);
+	assert_eq!(
+		crypto.stored_plaintext_len(path.parent().expect("dir"), &path, sealed.len() as u64),
+		12
+	);
 }
 
 /// Addresses served from a fixed table, standing in for the directory.

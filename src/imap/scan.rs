@@ -61,13 +61,13 @@ pub(super) fn scan_mailbox(
 	let mut messages = Vec::with_capacity(ids.len());
 	for (uid, id) in order {
 		let path = message_file(account_dir, id, MessageExt::Eml)?;
-		let meta = std::fs::metadata(&path);
+		let meta = crate::util::fs_walk::rooted_write::metadata(root, &path);
 		// RFC822.SIZE must be the plaintext size a client sees, not the
 		// on-disk envelope size, so subtract the fixed crypto overhead for an
 		// encrypted file.
 		let size = meta
 			.as_ref()
-			.map(|m| crypto.stored_plaintext_len(&path, m.len()))
+			.map(|m| crypto.stored_plaintext_len(root, &path, m.len()))
 			.unwrap_or(0);
 		let internal_date = meta
 			.as_ref()

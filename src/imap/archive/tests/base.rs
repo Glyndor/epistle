@@ -193,5 +193,6 @@ fn restore_falls_back_to_inbox_when_original_mailbox_was_deleted() {
 	);
 }
 
+mod rooted;
 mod session;
 mod sweep;
