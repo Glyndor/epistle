@@ -15,6 +15,7 @@ use super::Ctx;
 use super::report::{AreaReport, Item, Level};
 use crate::config::Config;
 
+mod address;
 mod compose_items;
 mod dropin_items;
 mod floor;
@@ -70,6 +71,7 @@ fn judge(host: &mut impl BootHost, config: &Config, summary: bool) -> AreaReport
 		dropin_items::retry(host, config),
 		compose_items::restart(&text),
 		network::wait(host),
+		address::bound(host, config),
 		floor::port_floor(host, config),
 		mounts::mounted(host, config),
 		compose_items::images(host, &text),
