@@ -78,6 +78,8 @@ pub use credential_reset::{CredentialReset, NewPassword, ResetTarget};
 pub mod display_name;
 mod limits;
 mod mutate_store;
+mod password_rehash;
+pub use password_rehash::Rehashed;
 mod normalize;
 pub use normalize::account_name;
 

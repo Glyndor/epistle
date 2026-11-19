@@ -45,6 +45,7 @@ fn es_state(dir: &std::path::Path) -> crate::api::ApiState {
 		.store()
 		.add(crate::directory_store::DynamicAccount {
 			reset: None,
+			rehashed: None,
 			send: None,
 			receive: None,
 			display_name: None,

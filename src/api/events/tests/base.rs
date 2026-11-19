@@ -289,6 +289,7 @@ pub(super) fn add_account(state: &ApiState, name: &str, address: &str) {
 		.store()
 		.add(DynamicAccount {
 			reset: None,
+			rehashed: None,
 			send: None,
 			receive: None,
 			display_name: None,

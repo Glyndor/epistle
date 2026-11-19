@@ -67,13 +67,27 @@ pub fn parse_plain(encoded: &str) -> Result<PlainCredentials, PlainError> {
 /// always the same, and the policy decision lives at one place per call
 /// site.
 pub fn hash_password(password: &str) -> Result<String, String> {
-	// The salt comes out of the system generator whole: there is no
-	// placeholder array that is later overwritten, so no fixed value can reach
-	// the hash if the generator fails.
-	let salt = ring::rand::generate::<[u8; 16]>(&ring::rand::SystemRandom::new())
-		.map_err(|_| "cannot gather salt entropy".to_string())?
-		.expose();
-	hash_password_with_cost(password, cost::current(), &salt)
+	hash_password_with_cost(password, cost::current(), &fresh_salt()?)
+}
+
+/// A salt straight out of the system generator. It is produced whole: there
+/// is no placeholder array that is later overwritten, so no fixed value can
+/// reach a hash if the generator fails.
+fn fresh_salt() -> Result<[u8; 16], String> {
+	Ok(
+		ring::rand::generate::<[u8; 16]>(&ring::rand::SystemRandom::new())
+			.map_err(|_| "cannot gather salt entropy".to_string())?
+			.expose(),
+	)
+}
+
+/// A new hash of `password`, which just verified against `stored`, when
+/// `stored` is weaker than the cost in force (see [`cost::rewrite_cost`]):
+/// a fresh salt, and for each parameter the larger of the stored and the
+/// configured value. `None` when `stored` needs no rewrite.
+pub(crate) fn upgraded_hash(stored: &str, password: &str) -> Option<Result<String, String>> {
+	let cost = cost::rewrite_cost(stored, cost::current())?;
+	Some(fresh_salt().and_then(|salt| hash_password_with_cost(password, cost, &salt)))
 }
 
 /// [`hash_password`] at an explicit `cost` and `salt`, which the caller draws.
