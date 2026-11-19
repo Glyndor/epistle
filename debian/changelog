@@ -1,3 +1,11 @@
+epistle (0.13.4) unstable; urgency=medium
+
+  * `epistle deliverability test --account NAME --to ADDRESS --yes` sends one test message from a hosted account to an address you name, signed with the server's DKIM key, and reports what became of it: the delivery result with the remote's answer in plain words, and SPF, DKIM, DMARC alignment and the reverse name from DNS. One test per minute per server, the destination must be outside the hosted domains, and it exits 1 when a check fails.
+  * The recipients of the send API can carry a display name: an object with `name` and `address` is accepted next to a plain address.
+  * A weaker argon2id hash is rewritten at the configured cost the next time its password verifies, under the lock a password change uses and without changing the credential digest an OAuth refresh token is bound to. `docs/configuration.md` says how to change the cost.
+
+ -- Glyndor <packages@glyndor.net>  Fri, 20 Nov 2026 12:00:00 +0000
+
 epistle (0.13.3) unstable; urgency=medium
 
   * `status`, `stack up` and `init` warn when a port is published on an address that something creates at boot, such as the interface of a WireGuard tunnel, and the boot unit does not wait for it. The `port addresses` item of the `boot` area names the interface and the unit and prints the drop-in that orders the account's user manager after it. A boot unit that failed because of such an address quotes the journal line.
