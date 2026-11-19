@@ -6,6 +6,8 @@ pub(super) mod send_as;
 pub(super) mod send_bcc;
 pub(super) mod send_case;
 pub(super) mod send_identification;
+pub(super) mod send_names;
+pub(super) mod send_names_jmap;
 pub(super) mod send_principal;
 pub(super) use class::send_class;
 

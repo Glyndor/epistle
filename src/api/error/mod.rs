@@ -5,6 +5,8 @@
 
 mod problem;
 
+use std::borrow::Cow;
+
 use axum::Json;
 use axum::http::header::{RETRY_AFTER, WWW_AUTHENTICATE};
 use axum::http::{HeaderValue, StatusCode};
@@ -46,7 +48,7 @@ pub struct ApiError {
 	/// The cause of an `invalid_input`, when known.
 	pub cause: Option<Cause>,
 	/// The request field an `invalid_input` is about, when known.
-	pub field: Option<&'static str>,
+	pub field: Option<Cow<'static, str>>,
 }
 
 /// What a response needs to be rewritten as a problem: put in its
@@ -56,7 +58,7 @@ pub(crate) struct ErrorInfo {
 	status: StatusCode,
 	code: &'static str,
 	message: String,
-	field: Option<&'static str>,
+	field: Option<Cow<'static, str>>,
 }
 
 impl ApiError {
@@ -103,10 +105,16 @@ impl ApiError {
 		Self::invalid_field(Cause::NotAllowed, field, message)
 	}
 
-	fn invalid_field(cause: Cause, field: &'static str, message: &str) -> Self {
+	/// `400` for a value that is not allowed in a field the request names by
+	/// position, such as `to[2].name`.
+	pub fn value_not_allowed_at(field: String, message: &str) -> Self {
+		Self::invalid_field(Cause::NotAllowed, field, message)
+	}
+
+	fn invalid_field(cause: Cause, field: impl Into<Cow<'static, str>>, message: &str) -> Self {
 		ApiError {
 			cause: Some(cause),
-			field: Some(field),
+			field: Some(field.into()),
 			..Self::invalid_input(message)
 		}
 	}

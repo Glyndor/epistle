@@ -97,6 +97,15 @@ fn headers(spec: &Value) -> Result<Vec<String>, Value> {
 		}) {
 			return Err(invalid(&[property]));
 		}
+		// A name is held to the limits `from_name` has in `/api/v1/send`:
+		// refused, never altered.
+		if listed.iter().any(|addr| {
+			addr.get("name")
+				.and_then(Value::as_str)
+				.is_some_and(|name| crate::directory_store::display_name::validate(name).is_err())
+		}) {
+			return Err(invalid(&[property]));
+		}
 		let addresses: Vec<String> = listed.into_iter().filter_map(render_address).collect();
 		if !addresses.is_empty() {
 			let line = compose::address_list(name, &addresses).map_err(|_| invalid(&[property]))?;

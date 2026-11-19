@@ -53,14 +53,17 @@ pub async fn send(
 	request.from = crate::util::address::normalize(&request.from);
 	// The headers epistle writes and signs carry the same lowercase addresses.
 	for list in [&mut request.to, &mut request.cc, &mut request.bcc] {
-		for address in list.iter_mut() {
+		for recipient in list.iter_mut() {
+			let address = recipient.address_mut();
 			*address = crate::util::address::normalize(address);
 		}
 	}
-	for single in [&mut request.reply_to, &mut request.sender] {
-		if let Some(address) = single.as_mut() {
-			*address = crate::util::address::normalize(address);
-		}
+	if let Some(recipient) = request.reply_to.as_mut() {
+		let address = recipient.address_mut();
+		*address = crate::util::address::normalize(address);
+	}
+	if let Some(address) = request.sender.as_mut() {
+		*address = crate::util::address::normalize(address);
 	}
 	let explicit_class = request.class()?;
 	let recipients = request.recipients();
@@ -88,6 +91,8 @@ pub async fn send(
 			"Header fields must not contain CR or LF or exceed 1000 bytes.",
 		));
 	}
+	// A display name is checked like `from_name`, before any address is.
+	request.check_recipients()?;
 	// Sender and every recipient must be syntactically valid addresses.
 	if let Err(why) = address_reason::parse(&request.from) {
 		return Err(ApiError::value_not_allowed(
@@ -97,8 +102,9 @@ pub async fn send(
 	}
 	if let Some(why) = recipients
 		.iter()
-		.chain(&request.reply_to)
-		.chain(&request.sender)
+		.map(String::as_str)
+		.chain(request.reply_to.as_ref().map(|r| r.address()))
+		.chain(request.sender.as_deref())
 		.find_map(|address| address_reason::parse(address).err())
 	{
 		return Err(ApiError::value_not_allowed(

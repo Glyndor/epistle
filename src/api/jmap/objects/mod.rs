@@ -29,28 +29,10 @@ pub(super) fn render_address(addr: &Value) -> Option<String> {
 		.and_then(Value::as_str)
 		.map(str::trim)
 		.filter(|n| !n.is_empty());
-	match name {
-		Some(raw) => {
-			let sanitized = sanitize_header_value(raw);
-			// `atext` plus the space that separates the words of an RFC 5322
-			// phrase. Anything outside that has to be written as a quoted
-			// string rather than an atom.
-			let atom = sanitized.is_ascii()
-				&& sanitized
-					.bytes()
-					.all(|b| b == b' ' || crate::util::validation::is_atext_byte(b));
-			let encoded = if atom {
-				encoded_word::encode(&sanitized)
-			} else {
-				format!(
-					"\"{}\"",
-					sanitized.replace('\\', "\\\\").replace('"', "\\\"")
-				)
-			};
-			Some(format!("{encoded} <{sanitized_email}>"))
-		}
-		None => Some(sanitized_email),
-	}
+	Some(crate::compose::mailbox(
+		name.map(sanitize_header_value).as_deref(),
+		&sanitized_email,
+	))
 }
 
 /// Raw (plaintext) bytes of a stored message by id, searching the account's

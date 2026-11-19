@@ -3380,6 +3380,30 @@ components:
         content_id:
           type: string
           description: Required for `inline` parts, which the HTML refers to as `cid:<content_id>`.
+    SendRecipient:
+      description: |-
+        A bare address, or an object with a display name. A string of the
+        form `Name <address>` is refused: use the object. The name is
+        written as a quoted string when it holds a comma, a quote, a
+        backslash, parentheses, angle brackets or an at sign, and as RFC 2047
+        encoded-words when it holds non-ASCII text. Control characters, line
+        breaks and more than 128 characters are refused with the field
+        `to[2].name`; the name is never dropped or altered. An address
+        given twice is one recipient and the first name wins.
+      oneOf:
+        - type: string
+          example: ana@example.org
+        - type: object
+          required: [name, address]
+          additionalProperties: false
+          properties:
+            name:
+              type: string
+              maxLength: 128
+              example: Ana Pérez
+            address:
+              type: string
+              example: ana@example.org
     SendRequest:
       type: object
       required: [from, to]
@@ -3399,20 +3423,20 @@ components:
         to:
           type: array
           items:
-            type: string
+            $ref: "#/components/schemas/SendRecipient"
         cc:
           type: array
           items:
-            type: string
+            $ref: "#/components/schemas/SendRecipient"
           default: []
         bcc:
           type: array
           items:
-            type: string
+            $ref: "#/components/schemas/SendRecipient"
           default: []
-          description: Envelope only; never written into the message.
+          description: Envelope only; never written into the message, and a name here appears in no header.
         reply_to:
-          type: string
+          $ref: "#/components/schemas/SendRecipient"
         sender:
           type: string
           description: Written as `Sender`. Must be an address the account owns, like `from`.
