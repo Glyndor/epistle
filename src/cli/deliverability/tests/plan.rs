@@ -59,11 +59,7 @@ fn a_sending_domain_the_server_does_not_host_is_refused() {
 	moved.domains = vec!["other.example".to_string()];
 	let refusal = resolve(&moved, &store, "alice", DESTINATION).expect_err("refused");
 	assert_eq!(refusal.code, POLICY);
-	assert!(
-		refusal.message.contains("example.org"),
-		"{}",
-		refusal.message
-	);
+	assert!(refusal.message.contains("example.org"));
 }
 
 #[test]

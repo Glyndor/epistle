@@ -57,8 +57,12 @@ fn a_marker_made_for_another_hash_is_ignored() {
 	let store = rewritten(dir.path(), STRONGER);
 	let kept = store.credential_fingerprint("alice").expect("digest");
 	let mut account = persisted(dir.path());
-	account.password_hash =
-		hash_password_with_cost(fixtures::second_password(), DEFAULT, &[4; 16]).expect("hash");
+	account.password_hash = hash_password_with_cost(
+		fixtures::second_password(),
+		DEFAULT,
+		&crate::smtp::auth::fresh_salt().expect("salt"),
+	)
+	.expect("hash");
 	assert_ne!(
 		crate::directory_store::password_rehash::fingerprint(&account),
 		kept
@@ -96,8 +100,12 @@ fn a_reset_decided_before_the_rewrite_still_lands_and_the_old_password_stops() {
 		"not landed yet"
 	);
 
-	let placeholder =
-		hash_password_with_cost("never-known-by-anyone", DEFAULT, &[8; 16]).expect("placeholder");
+	let placeholder = hash_password_with_cost(
+		&uuid::Uuid::now_v7().to_string(),
+		DEFAULT,
+		&crate::smtp::auth::fresh_salt().expect("salt"),
+	)
+	.expect("placeholder");
 	let reset = store
 		.reset_credentials(std::slice::from_ref(&target), &placeholder)
 		.expect("reset");
