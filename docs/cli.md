@@ -2238,12 +2238,12 @@ delivering that entry takes effect for the next attempt.
 epistle deliverability test --account alice --to check@mail-tester.example --yes
 ```
 
-Sends one message from a hosted account to an address you name, and reports
-what became of it. It is for a new server: the question after the install is
-whether the message leaves this server and is accepted by the receiver, and
-this answers it without leaving the terminal. The destination is always
-yours, for example the single-use address a deliverability test service
-gives you; the command never picks one.
+Sends one message from a hosted account to an address you name, and prints what
+the outside will make of it. It is for a new server: the question after the
+install is whether SPF, DKIM, DMARC and the reverse name hold from the real
+sending address, and this answers it without leaving the terminal. The
+destination is always yours, for example the single-use address a
+deliverability test service gives you; the command never picks one.
 
 The message is a short plain note from the account's first address, signed
 with the DKIM key the server signs that domain with, and queued in the spool. The running server delivers it from its real
@@ -2251,7 +2251,7 @@ sending address within its next queue scan, which is every 30 seconds.
 `--wait SECONDS` (default 90, at most 600) is how long the command looks in
 the delivery log for the result.
 
-The report has two parts (with `--json`, one JSON document; without `--yes`, `--json` prints `would_send`, the account and the two addresses):
+The report has three parts (with `--json`, one JSON document; without `--yes`, `--json` prints `would_send`, the account and the two addresses):
 
 - `signing`: `signed` when the message went out with the server's own DKIM signature, `no_key` when no `[dkim]` key is configured for the sending domain, and `failed` when a key is configured but the signature could not be produced; the last one exits 1, because the test then measures a message the receiver treats as unauthenticated.
 - `delivery`: `delivered`, `deferred`, `failed`, `suppressed`, `canceled`,
@@ -2262,6 +2262,17 @@ The report has two parts (with `--json`, one JSON document; without `--yes`, `--
   accepted is `delivered`: that says the receiver took it, not that it reached
   the inbox instead of the spam folder. A deferral is not a failure; the queue
   retries it.
+- `checks`, each `pass`, `warn`, `FAIL` or `unknown`: `spf` (the message's
+  sender and domain from each public address of the server, with the host name
+  as the EHLO name), `dkim` (a signature for the sending domain verifies
+  against the key published in DNS), `dmarc` (SPF or DKIM passes aligned with
+  the From domain, and the policy published), `ptr` (the reverse name of each
+  public address is the EHLO name and resolves back) and `tls`. The TLS version
+  and certificate the receiver saw are not recorded by the delivery log, so
+  `tls` is always `unknown`.
+
+The public addresses are `public_ipv4` and `public_ipv6` from the
+configuration, or what the host name resolves to when they are not set.
 
 | Case | Result |
 |---|---|
@@ -2269,7 +2280,7 @@ The report has two parts (with `--json`, one JSON document; without `--yes`, `--
 | The account is unknown, disabled or has sending switched off, or its address is on a domain this server does not host or does not send for | Refused before anything is written, exit 2 for an unknown account and 3 for the rest. |
 | The destination is not an address, or is on a domain this server hosts | Refused, exit 2: mail to a hosted domain is delivered locally and says nothing about the outside. |
 | A test was queued less than a minute ago | Refused, exit 3, with the time the next one is allowed. The bound is one per minute per server, kept in `deliverability-test.json` in the data directory under a lock, so two runs that start together cannot both pass. |
-| The message was refused for good | Exit 1, after the whole report. |
+| A check fails or the message was refused for good | Exit 1, after the whole report. |
 
 `--json` prints the same report as one object. Remote answers are escaped before
 they reach the terminal. A new address has no reputation, so what a first test

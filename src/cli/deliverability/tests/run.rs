@@ -16,6 +16,7 @@ struct Fixture {
 	config: crate::config::Config,
 	store: crate::directory_store::AccountStore,
 	signer: Option<crate::dkim::PerDomainSigner>,
+	dns: crate::cli::status::dns_fake::FakeDns,
 }
 
 impl Fixture {
@@ -29,6 +30,7 @@ impl Fixture {
 			config,
 			store,
 			signer,
+			dns: dns(),
 		}
 	}
 
@@ -37,6 +39,7 @@ impl Fixture {
 			config: &self.config,
 			store: &self.store,
 			signer: self.signer.as_ref(),
+			dns: &self.dns,
 			crypto: MessageCrypto::disabled(),
 			now: Some(now),
 			poll: Duration::from_millis(1),
@@ -82,7 +85,7 @@ async fn without_yes_nothing_is_sent_or_recorded() {
 }
 
 #[tokio::test]
-async fn with_yes_a_signed_message_is_queued_and_the_result_is_reported() {
+async fn with_yes_a_signed_message_is_queued_and_the_report_passes() {
 	let fixture = Fixture::new();
 	let (code, out) = fixture.run(true, false, T).await;
 	assert_eq!(code, ExitCode::SUCCESS, "{out}");
@@ -93,6 +96,13 @@ async fn with_yes_a_signed_message_is_queued_and_the_result_is_reported() {
 	assert!(data.contains("From: alice@example.org\r\nTo: check@mail-tester.example\r\n"));
 	assert!(out.contains("delivery  queued"), "{out}");
 	assert!(out.contains("no reputation"), "{out}");
+	for check in ["spf", "dkim", "dmarc", "ptr"] {
+		assert!(
+			out.lines()
+				.any(|l| l.trim_start().starts_with(check) && l.contains("pass")),
+			"{check}: {out}"
+		);
+	}
 	assert!(fixture.state_file().exists());
 }
 
@@ -114,6 +124,7 @@ async fn a_refused_run_does_not_spend_the_minute() {
 		config: &fixture.config,
 		store: &fixture.store,
 		signer: fixture.signer.as_ref(),
+		dns: &fixture.dns,
 		crypto: MessageCrypto::disabled(),
 		now: Some(T),
 		poll: Duration::from_millis(1),
@@ -135,11 +146,13 @@ async fn a_refused_run_does_not_spend_the_minute() {
 }
 
 #[tokio::test]
-async fn an_unsigned_message_is_queued_without_a_signature() {
+async fn an_unsigned_message_exits_non_zero() {
 	let mut fixture = Fixture::new();
 	fixture.signer = None;
 	let (code, out) = fixture.run(true, false, T).await;
-	assert_eq!(code, ExitCode::SUCCESS, "{out}");
+	assert_eq!(code, ExitCode::FAILURE);
+	assert!(out.contains("FAIL"), "{out}");
+	assert!(out.contains("unsigned"), "{out}");
 	let queued = fixture.queued();
 	assert_eq!(queued.len(), 1);
 	let data = std::fs::read_to_string(&queued[0]).expect("message");
@@ -147,13 +160,19 @@ async fn an_unsigned_message_is_queued_without_a_signature() {
 }
 
 #[tokio::test]
-async fn the_json_report_is_one_object() {
+async fn the_json_report_is_one_object_with_the_checks() {
 	let fixture = Fixture::new();
 	let (code, out) = fixture.run(true, true, T).await;
 	assert_eq!(code, ExitCode::SUCCESS);
 	let value: serde_json::Value = serde_json::from_str(out.trim()).expect("one json object");
 	assert_eq!(value["to"], DESTINATION);
 	assert_eq!(value["delivery"]["state"], "queued");
+	let checks = value["checks"].as_array().expect("checks");
+	assert!(
+		checks
+			.iter()
+			.any(|c| c["check"] == "spf" && c["level"] == "pass")
+	);
 }
 
 #[tokio::test]
@@ -194,4 +213,17 @@ fn the_wait_for_the_lock_is_not_counted_against_the_run_that_waited() {
 	first.record(T).expect("record");
 	let second = Guard::lock(dir.path()).expect("lock again");
 	assert!(second.checked(T + MIN_INTERVAL_SECS).is_ok());
+}
+
+#[tokio::test]
+async fn a_name_the_resolver_returns_is_escaped_in_the_text_report() {
+	let mut fixture = Fixture::new();
+	fixture.dns.ptr.insert(
+		"203.0.113.10".parse().expect("ip"),
+		vec!["evil\u{1b}[2J.hoster.example".into()],
+	);
+	let (code, out) = fixture.run(true, false, T).await;
+	assert_eq!(code, ExitCode::FAILURE);
+	assert!(!out.contains('\u{1b}'), "{out:?}");
+	assert!(out.contains("\\u{1b}"), "{out:?}");
 }
