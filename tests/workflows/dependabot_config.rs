@@ -245,6 +245,35 @@ fn the_mail_base_moves_in_one_pull_request_across_both_directories() {
 }
 
 #[test]
+fn a_major_crate_bump_moves_in_one_pull_request_across_both_lockfiles() {
+	let updates = updates();
+	let cargo = entry(&updates, "cargo");
+	let dirs = directories(cargo);
+	for dir in ["/", "/fuzz"] {
+		assert!(
+			dirs.contains(&dir.to_string()),
+			"{dir} left the cargo entry"
+		);
+	}
+	let Yaml::Hash(groups) = &cargo["groups"] else {
+		panic!("the cargo entry has no groups");
+	};
+	let major = groups
+		.iter()
+		.find(|(name, _)| name.as_str() == Some("rust-major"))
+		.map(|(_, group)| group)
+		.expect("a rust-major group");
+	assert_eq!(major["group-by"].as_str(), Some("dependency-name"));
+	let types: Vec<_> = major["update-types"]
+		.as_vec()
+		.expect("update-types")
+		.iter()
+		.filter_map(Yaml::as_str)
+		.collect();
+	assert_eq!(types, ["major"]);
+}
+
+#[test]
 fn the_glob_matches_like_a_dependabot_pattern() {
 	assert!(glob("*", "anything"));
 	assert!(glob("*distroless*", "gcr.io/distroless/static-debian13"));
