@@ -122,8 +122,21 @@ fn every_manifest_in_the_tree_is_watched_by_its_ecosystem() {
 	assert_covered(&cargo, entry(&updates, "cargo"), "Cargo manifests", 2);
 	let pip = dirs_with(&|n| n.contains("requirements") && n.ends_with(".txt"));
 	assert_covered(&pip, entry(&updates, "pip"), "Python requirement files", 1);
-	assert_eq!(directories(entry(&updates, "github-actions")), ["/"]);
+	assert_eq!(
+		directories(entry(&updates, "github-actions")),
+		["/", "/.github/actions/*"]
+	);
 	assert!(root().join(".github/workflows").is_dir());
+	// The glob reaches one level below `.github/actions`: every entry there is
+	// a composite action with its own `action.yml`, which pins actions too.
+	for item in fs::read_dir(root().join(".github/actions")).expect("actions dir") {
+		let path = item.expect("entry").path();
+		assert!(
+			path.join("action.yml").is_file() || path.join("action.yaml").is_file(),
+			"{} is not a composite action",
+			path.display()
+		);
+	}
 }
 
 #[test]
