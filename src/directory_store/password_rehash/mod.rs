@@ -21,6 +21,9 @@ use serde::{Deserialize, Serialize};
 use super::credential_reset::hash_digest;
 use super::{AccountStore, DynamicAccount, StoreError};
 
+#[cfg(test)]
+mod tests;
+
 /// The credential digest an account had before its hash was rewritten, and
 /// what it was made for. Written only by the rewrite; every other change of
 /// the password or the second factor makes it stale, and a stale one is
@@ -121,6 +124,8 @@ impl AccountStore {
 		});
 		match result {
 			Ok(()) => {
+				#[cfg(test)]
+				tests::count_write(&self.path);
 				tracing::info!(
 					target: "epistle::auth",
 					event = "password.rehash",

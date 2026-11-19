@@ -41,6 +41,20 @@ impl super::Directory {
 		}
 	}
 
+	/// Hand the password that just verified against `hash` to the upgrader
+	/// when `hash` is weaker than the argon2id cost in force. A single
+	/// parse of the stored string; the rewrite is best-effort and never
+	/// changes the answer to the login.
+	pub(super) fn maybe_rehash_password(&self, account: &str, hash: &str, password: &str) {
+		let Some(upgrader) = self.scram_upgrader.as_ref() else {
+			return;
+		};
+		if crate::smtp::auth::cost::rewrite_cost(hash, crate::smtp::auth::cost::current()).is_some()
+		{
+			upgrader.rehash_password(account, hash, password);
+		}
+	}
+
 	/// Whether the runtime password policy on this directory is unicode
 	/// (so set-time and verify-time normalise via NFKC). The
 	/// `upgrade_scram` callback does not see the directory directly; the
