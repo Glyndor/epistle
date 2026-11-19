@@ -314,6 +314,17 @@ jobs:
           PYEOF
           echo "marker seeded"
 
+      - name: Hand the data directory to the runner
+        run: |
+          set -euo pipefail
+          # The previous binary runs as root under systemd and, since 0.13, it
+          # keeps the hosted domains in `domains.toml` under the data directory
+          # with mode 0600. The seed below runs that release's CLI as the
+          # runner, which could not read the file and stopped with "Permission
+          # denied". An operator runs the CLI as the user the server runs as,
+          # so the harness gives the runner what the server wrote.
+          sudo chown -R "$(id -u):$(id -g)" "$DATA_DIR"
+
       - name: Seed (create the app password on the previous binary)
         env:
           APP_OUT: "${{ env.CONF_DIR }}/app-password.txt"
