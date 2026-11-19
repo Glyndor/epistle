@@ -1,3 +1,9 @@
+epistle (0.13.3) unstable; urgency=medium
+
+  * `status`, `stack up` and `init` warn when a port is published on an address that something creates at boot, such as the interface of a WireGuard tunnel, and the boot unit does not wait for it. The `port addresses` item of the `boot` area names the interface and the unit and prints the drop-in that orders the account's user manager after it. A boot unit that failed because of such an address quotes the journal line.
+
+ -- Glyndor <packages@glyndor.net>  Thu, 19 Nov 2026 12:00:00 +0000
+
 epistle (0.13.2) unstable; urgency=medium
 
   * The 0.13.0 and 0.13.1 releases were never published: the package build failed on a test that depended on the user and then on a missing build tool. This is the first release after 0.12.9 and carries every change listed under 0.13.0.
