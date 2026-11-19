@@ -1,9 +1,10 @@
 //! The `boot` items against a fake host in a good and a bad state.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 
-use super::host::Account;
+use super::host::{Account, Link};
 use super::*;
 use crate::cli::stack::autostart::{Host, dropins};
 
@@ -23,6 +24,7 @@ pub(super) struct Fake {
 	pub(super) version: Option<u32>,
 	pub(super) ps: Result<String, String>,
 	pub(super) log: String,
+	pub(super) links: BTreeMap<IpAddr, Link>,
 }
 
 pub(super) fn unit_text() -> String {
@@ -112,6 +114,7 @@ pub(super) fn good() -> Fake {
 		version: Some(255),
 		ps: Ok(r#"[{"Service":"mail","State":"running","ExitCode":0},{"Service":"db","State":"running","ExitCode":0}]"#.into()),
 		log: String::new(),
+		links: BTreeMap::new(),
 	}
 }
 
@@ -166,6 +169,9 @@ impl BootHost for Fake {
 	fn unit_log(&mut self) -> Result<String, String> {
 		Ok(self.log.clone())
 	}
+	fn link_of(&mut self, ip: IpAddr) -> Link {
+		self.links.get(&ip).cloned().unwrap_or(Link::Absent)
+	}
 }
 
 pub(super) fn config() -> Config {
@@ -189,11 +195,11 @@ pub(super) fn run(host: &mut Fake) -> AreaReport {
 }
 
 #[test]
-fn a_host_where_everything_is_in_place_is_ok_on_all_thirteen_items() {
+fn a_host_where_everything_is_in_place_is_ok_on_all_fourteen_items() {
 	let mut host = good();
 	let report = run(&mut host);
 	assert_eq!(report.status, Level::Ok, "{report:?}");
-	assert_eq!(report.items.len(), 13, "{report:?}");
+	assert_eq!(report.items.len(), 14, "{report:?}");
 	assert!(
 		report.items.iter().all(|item| item.status == Level::Ok),
 		"{report:?}"

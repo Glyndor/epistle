@@ -107,11 +107,21 @@ pub(super) fn unit(host: &mut impl BootHost, account: &Account) -> Item {
 	}
 	let (active, result) = state(host);
 	if result != "success" || active == "failed" {
+		let why = host
+			.unit_log()
+			.ok()
+			.and_then(|log| super::address::bind_failure(&log))
+			.map(|line| {
+				format!(
+					"; the journal says a published address did not exist yet when the start ran (`{line}`), see the `port addresses` item"
+				)
+			})
+			.unwrap_or_default();
 		return Item::new(
 			"boot unit",
 			Level::Fail,
 			format!(
-				"{UNIT} is {active} and its last result is {result}; read why with `sudo journalctl _UID={} --user-unit={UNIT} -b`, then {fix}",
+				"{UNIT} is {active} and its last result is {result}{why}; read why with `sudo journalctl _UID={} --user-unit={UNIT} -b`, then {fix}",
 				account.uid
 			),
 		);

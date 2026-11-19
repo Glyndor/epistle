@@ -95,6 +95,14 @@ updates:
       rust-minor-patch:
         patterns: ["*"]
         update-types: ["minor", "patch"]
+      # A major bump (for a 0.x crate, a minor one) is still one pull request
+      # per dependency, but across both directories: `nix` 0.32 came as one
+      # pull request for the root and one for /fuzz, and each failed under
+      # --locked because the other lockfile moves with the version too.
+      rust-major:
+        patterns: ["*"]
+        update-types: ["major"]
+        group-by: dependency-name
 
   # The release-signing script (`.github/scripts/sign.py`) pulls `cryptography`
   # from `sign-requirements.txt`, and nothing was watching that file. Every

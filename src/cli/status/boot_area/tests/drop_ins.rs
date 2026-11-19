@@ -249,7 +249,7 @@ fn the_summary_leaves_out_what_is_written_or_asked_after_it() {
 	host.ps = Err("podup must not be asked".into());
 	let report = judge(&mut host, &config(), true);
 	let names: Vec<&str> = report.items.iter().map(|item| item.name.as_str()).collect();
-	assert_eq!(report.items.len(), 11, "{names:?}");
+	assert_eq!(report.items.len(), 12, "{names:?}");
 	assert!(!names.contains(&"services") && !names.contains(&"order drop-in"));
 	assert_eq!(report.status, Level::Ok, "{report:?}");
 }

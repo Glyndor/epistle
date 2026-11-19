@@ -1,6 +1,7 @@
 //! What the `boot` checks read from the host. Every question is read-only:
 //! nothing here starts, enables or installs anything. The tests fake it.
 
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -11,6 +12,22 @@ use crate::cli::stack::autostart::{self, Host};
 pub(super) struct Account {
 	pub(super) name: String,
 	pub(super) uid: u32,
+}
+
+/// What owns an address the stack publishes a port on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum Link {
+	/// An interface backed by hardware: it has its address once the network
+	/// is up, which the boot unit already waits for.
+	Physical,
+	/// A WireGuard interface, which `wg-quick@<name>.service` brings up.
+	WireGuard(String),
+	/// Any other software interface (a tunnel, a bridge, a dummy).
+	Virtual(String),
+	/// No interface holds the address now.
+	Absent,
+	/// The host could not be asked.
+	Unknown,
 }
 
 /// The host as the `boot` area sees it, on top of what the unit check needs.
@@ -34,6 +51,35 @@ pub(super) trait BootHost: Host {
 	fn ps_json(&mut self, compose: &Path) -> Result<String, String>;
 	/// What the boot unit logged this boot, oldest line first.
 	fn unit_log(&mut self) -> Result<String, String>;
+	/// What holds `ip` on this host now.
+	fn link_of(&mut self, ip: IpAddr) -> Link;
+}
+
+/// An interface name that is safe to write into a unit name and a command
+/// line: the characters the kernel and `wg-quick` both accept.
+fn plain_name(name: &str) -> bool {
+	!name.is_empty()
+		&& name.len() <= 15
+		&& name
+			.chars()
+			.all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '=' | '+'))
+}
+
+/// The kind of the interface called `name`, read from sysfs.
+fn classify(name: &str) -> Link {
+	let base = Path::new("/sys/class/net").join(name);
+	let uevent = std::fs::read_to_string(base.join("uevent")).unwrap_or_default();
+	if uevent
+		.lines()
+		.any(|line| line.trim() == "DEVTYPE=wireguard")
+		&& plain_name(name)
+	{
+		Link::WireGuard(name.to_string())
+	} else if base.join("device").exists() {
+		Link::Physical
+	} else {
+		Link::Virtual(name.to_string())
+	}
 }
 
 /// The real host.
@@ -170,5 +216,22 @@ impl BootHost for Live {
 			"--no-pager",
 		]))
 		.map_err(|error| format!("cannot run journalctl: {error}"))
+	}
+
+	fn link_of(&mut self, ip: IpAddr) -> Link {
+		let Ok(entries) = nix::ifaddrs::getifaddrs() else {
+			return Link::Unknown;
+		};
+		for entry in entries {
+			let Some(address) = entry.address else {
+				continue;
+			};
+			let held = address.as_sockaddr_in().map(|a| IpAddr::V4(a.ip())) == Some(ip)
+				|| address.as_sockaddr_in6().map(|a| IpAddr::V6(a.ip())) == Some(ip);
+			if held {
+				return classify(&entry.interface_name);
+			}
+		}
+		Link::Absent
 	}
 }
