@@ -73,7 +73,7 @@ pub fn hash_password(password: &str) -> Result<String, String> {
 /// A salt straight out of the system generator. It is produced whole: there
 /// is no placeholder array that is later overwritten, so no fixed value can
 /// reach a hash if the generator fails.
-fn fresh_salt() -> Result<[u8; 16], String> {
+pub(crate) fn fresh_salt() -> Result<[u8; 16], String> {
 	Ok(
 		ring::rand::generate::<[u8; 16]>(&ring::rand::SystemRandom::new())
 			.map_err(|_| "cannot gather salt entropy".to_string())?

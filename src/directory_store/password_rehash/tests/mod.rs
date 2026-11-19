@@ -42,7 +42,12 @@ const STRONGER: Argon2Cost = Argon2Cost {
 };
 
 fn hash_at(cost: Argon2Cost) -> String {
-	hash_password_with_cost(fixtures::password(), cost, &[9; 16]).expect("hash")
+	hash_password_with_cost(
+		fixtures::password(),
+		cost,
+		&crate::smtp::auth::fresh_salt().expect("salt"),
+	)
+	.expect("hash")
 }
 
 fn open(dir: &Path) -> AccountStore {

@@ -93,7 +93,10 @@ fn an_older_algorithm_or_version_is_rewritten_as_argon2id() {
 		(Algorithm::Argon2id, Version::V0x10, "v=16"),
 	] {
 		let old = Argon2::new(algorithm, version, params.clone())
-			.hash_password_with_salt(fixtures::password().as_bytes(), &[3; 16])
+			.hash_password_with_salt(
+				fixtures::password().as_bytes(),
+				&crate::smtp::auth::fresh_salt().expect("salt"),
+			)
 			.expect("hash")
 			.to_string();
 		assert!(old.contains(shown), "{old}");
@@ -133,8 +136,12 @@ fn a_password_changed_in_the_meantime_is_not_put_back() {
 	let dir = tempfile::tempdir().expect("dir");
 	let old = hash_at(DEFAULT);
 	let store = store_with(dir.path(), old.clone()).into_shared();
-	let changed =
-		hash_password_with_cost(fixtures::second_password(), DEFAULT, &[5; 16]).expect("hash");
+	let changed = hash_password_with_cost(
+		fixtures::second_password(),
+		DEFAULT,
+		&crate::smtp::auth::fresh_salt().expect("salt"),
+	)
+	.expect("hash");
 	store
 		.set_password_hash("alice", changed.clone(), None)
 		.expect("change");
