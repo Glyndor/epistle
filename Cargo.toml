@@ -105,7 +105,7 @@ unicode-normalization = "0.1.25"
 
 # Interface enumeration without unsafe: only the `net` feature (ifaddrs).
 [target.'cfg(unix)'.dependencies]
-nix = { version = "0.31.3", default-features = false, features = ["net"] }
+nix = { version = "0.32.0", default-features = false, features = ["net"] }
 
 [profile.release]
 lto = "thin"
