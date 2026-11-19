@@ -27,6 +27,7 @@ fn config_path(command: &Command) -> Option<&Path> {
 		| Command::Account { config, .. }
 		| Command::Queue { config, .. }
 		| Command::Warmup { config, .. }
+		| Command::Deliverability { config, .. }
 		| Command::Ban { config, .. }
 		| Command::Learning { config, .. }
 		| Command::Evidence { config, .. } => Some(config),
