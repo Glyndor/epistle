@@ -1,7 +1,12 @@
-//! A hosted `example.org` with one account and a fixed signing key.
+//! A hosted `example.org` with one account, a fixed signing key and a healthy
+//! resolver.
 
 use std::sync::Arc;
 
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
+
+use crate::cli::status::dns_fake::FakeDns;
 use crate::config::Config;
 use crate::directory_store::{AccountStore, DynamicAccount};
 use crate::dkim::{PerDomainSigner, ReloadableSigner};
@@ -49,10 +54,22 @@ pub(super) fn store(
 	store
 }
 
-/// The signer every test signs with: a fixed key.
+/// The signer every test signs with: a fixed key published by [`dns`].
 pub(super) fn signer(dir: &std::path::Path) -> PerDomainSigner {
 	PerDomainSigner::new(
 		ReloadableSigner::new(Arc::new(crate::dkim::test_support::fixed_signer(dir))),
 		Vec::new(),
 	)
+}
+
+/// A healthy resolver that also publishes the signing key.
+pub(super) fn dns() -> FakeDns {
+	let pair = ring::signature::Ed25519KeyPair::from_seed_unchecked(&[7; 32]).expect("seed");
+	let public = ring::signature::KeyPair::public_key(&pair);
+	let mut dns = FakeDns::healthy();
+	dns.txt.insert(
+		"sel._domainkey.example.org".into(),
+		vec![format!("v=DKIM1; k=ed25519; p={}", STANDARD.encode(public))],
+	);
+	dns
 }

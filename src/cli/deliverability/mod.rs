@@ -1,9 +1,11 @@
 //! `epistle deliverability test`: send one message from a hosted account to
-//! an address the operator names, and report what became of it.
+//! an address the operator names, and report what the outside will make of
+//! it from a new server.
 //!
 //! The message is DKIM-signed with the server's own key and queued in the
 //! spool, where the running server delivers it from its real sending
-//! address. The command then reads the delivery log for the result. Nothing
+//! address. The command then reads the delivery log for the result and
+//! checks SPF, DKIM, DMARC alignment and the reverse name from DNS. Nothing
 //! in the report is a secret: no key, password or hash is read into it.
 //!
 //! The destination is always the operator's: the command never picks one,
@@ -21,21 +23,23 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use super::style;
-use crate::cli::term::sanitize;
 use crate::config::Config;
 use crate::directory_store::AccountStore;
 use crate::dkim::PerDomainSigner;
+use crate::spf::DnsLookup;
 use crate::storage::{DeliveryLog, FsSpool, MessageCrypto, StoreOptions};
 
+mod checks;
 mod delivery;
 mod guard;
 mod message;
 mod plan;
+mod report;
 #[cfg(test)]
 mod tests;
 
-use delivery::Delivery;
 use plan::{Plan, Refusal};
+use report::Report;
 
 /// The longest the command waits for the result.
 const MAX_WAIT_SECS: u64 = 600;
@@ -45,14 +49,15 @@ const POLL: Duration = Duration::from_secs(2);
 /// `epistle deliverability` actions.
 #[derive(Debug, Subcommand)]
 pub enum DeliverabilityCli {
-	/// Send one test message and report what became of it.
+	/// Send one test message and report what the outside will make of it.
 	///
 	/// Sends one message from a hosted account to an address you name, such as
-	/// the one a deliverability test service gives you, and prints the delivery
-	/// result with the remote's answer in plain language. Needs `--yes`,
-	/// allows one run per minute per server, and refuses a sending domain this
-	/// server does not host. The destination must be outside this server.
-	/// Exits 1 when the message is refused for good.
+	/// the one a deliverability test service gives you, and prints SPF, DKIM
+	/// and DMARC as the message was sent, the reverse name against the EHLO
+	/// name, and the delivery result with the remote's answer in plain
+	/// language. Needs `--yes`, allows one run per minute per server, and
+	/// refuses a sending domain this server does not host. The destination
+	/// must be outside this server. Exits 1 when a check fails.
 	Test(TestArgs),
 }
 
@@ -83,6 +88,7 @@ pub(super) struct Env<'a> {
 	pub config: &'a Config,
 	pub store: &'a AccountStore,
 	pub signer: Option<&'a PerDomainSigner>,
+	pub dns: &'a dyn DnsLookup,
 	pub crypto: MessageCrypto,
 	/// The time to use; `None` reads the clock each time it is needed, which
 	/// a test replaces with a fixed value.
@@ -127,6 +133,13 @@ pub(super) fn run(config_path: &Path, action: DeliverabilityCli) -> ExitCode {
 			return ExitCode::FAILURE;
 		}
 	};
+	let resolver = match crate::spf::SystemDns::from_system() {
+		Ok(resolver) => crate::cli::status::TimeoutDns(resolver),
+		Err(error) => {
+			style::error(format_args!("cannot start the resolver: {error}"));
+			return ExitCode::FAILURE;
+		}
+	};
 	let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
 		.enable_all()
 		.build()
@@ -138,6 +151,7 @@ pub(super) fn run(config_path: &Path, action: DeliverabilityCli) -> ExitCode {
 		config: &config,
 		store: &store,
 		signer: signer.as_ref(),
+		dns: &resolver,
 		crypto,
 		now: None,
 		poll: POLL,
@@ -159,9 +173,9 @@ pub(super) async fn execute(env: &Env<'_>, args: &TestArgs, out: &mut impl Write
 	};
 	if !args.yes {
 		let _ = if args.json {
-			write_plan_json(&plan, out)
+			report::write_plan_json(&plan, out)
 		} else {
-			write_plan(&plan, out)
+			report::write_plan(&plan, out)
 		};
 		return crate::cli::exit::refused("--yes is required to send the message");
 	}
@@ -188,12 +202,9 @@ pub(super) async fn execute(env: &Env<'_>, args: &TestArgs, out: &mut impl Write
 	let log = DeliveryLog::open(&env.config.data_dir, log_days);
 	let delivery =
 		delivery::await_result(&log, log_days, id, Duration::from_secs(args.wait), env.poll).await;
-	let report = Report::new(
-		&plan,
-		id,
-		signing_of(env.signer.is_some(), built.signed),
-		delivery,
-	);
+	let signing = signing_of(env.signer.is_some(), built.signed);
+	let items = checks::run(env.config, &plan, &built.data, signing, env.dns).await;
+	let report = Report::new(&plan, id, signing, delivery, items);
 	let written = if args.json {
 		serde_json::to_writer(&mut *out, &report)
 			.map_err(std::io::Error::other)
@@ -215,7 +226,7 @@ pub(super) async fn execute(env: &Env<'_>, args: &TestArgs, out: &mut impl Write
 /// How the message was signed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-enum Signing {
+pub(super) enum Signing {
 	/// With the server's DKIM key.
 	Signed,
 	/// No `[dkim]` key is configured for the sending domain.
@@ -225,7 +236,7 @@ enum Signing {
 }
 
 impl Signing {
-	fn sentence(self) -> &'static str {
+	pub(super) fn sentence(self) -> &'static str {
 		match self {
 			Self::Signed => "yes, with the server's DKIM key",
 			Self::NoKey => "no: no DKIM key is configured for the sending domain",
@@ -241,88 +252,6 @@ fn signing_of(has_signer: bool, signed: bool) -> Signing {
 		(true, false) => Signing::Failed,
 		(false, false) => Signing::NoKey,
 	}
-}
-
-/// The whole result of one run.
-#[derive(Debug, Serialize)]
-struct Report {
-	account: String,
-	from: String,
-	to: String,
-	/// The queue id of the message, the one `epistle delivery show` takes.
-	message: Uuid,
-	/// Whether the message went out with the server's own DKIM signature.
-	signing: Signing,
-	delivery: Delivery,
-}
-
-impl Report {
-	fn new(plan: &Plan, message: Uuid, signing: Signing, delivery: Delivery) -> Self {
-		Self {
-			account: plan.account.clone(),
-			from: plan.from.clone(),
-			to: plan.to.clone(),
-			message,
-			signing,
-			delivery,
-		}
-	}
-
-	/// The message was refused for good, or went out unsigned although a key
-	/// is configured: the test then measures a message the receiver treats as
-	/// unauthenticated, which is the case the command exists to catch.
-	fn failed(&self) -> bool {
-		self.delivery.is_failure() || self.signing == Signing::Failed
-	}
-
-	/// The report as text, every value that came from outside escaped.
-	fn write_text(&self, out: &mut impl Write) -> std::io::Result<()> {
-		writeln!(out, "account   {}", sanitize(&self.account))?;
-		writeln!(out, "from      {}", sanitize(&self.from))?;
-		writeln!(out, "to        {}", sanitize(&self.to))?;
-		writeln!(out, "message   {}", self.message)?;
-		writeln!(out, "signing   {}", self.signing.sentence())?;
-		writeln!(out, "delivery  {}", self.delivery.state)?;
-		if let Some(remote) = &self.delivery.remote {
-			writeln!(out, "  remote   {remote}")?;
-		}
-		if let Some(reply) = &self.delivery.reply {
-			writeln!(out, "  reply    {reply}")?;
-		}
-		writeln!(out, "  meaning  {}", self.delivery.explanation)?;
-		writeln!(out, "{REPUTATION_NOTE}")
-	}
-}
-
-/// The one thing a first test cannot say.
-const REPUTATION_NOTE: &str = "A new address has no reputation yet, so what a first test shows says little about steady state; see `epistle warmup`.";
-
-/// What a run without `--yes` shows with `--json`: one document, so a
-/// consumer that parses stdout does not choke on the text.
-fn write_plan_json(plan: &Plan, out: &mut impl Write) -> std::io::Result<()> {
-	serde_json::to_writer(
-		&mut *out,
-		&serde_json::json!({
-			"would_send": true,
-			"account": plan.account,
-			"from": plan.from,
-			"to": plan.to,
-		}),
-	)
-	.map_err(std::io::Error::other)?;
-	writeln!(out)
-}
-
-/// What a run without `--yes` shows, and stops.
-fn write_plan(plan: &Plan, out: &mut impl Write) -> std::io::Result<()> {
-	writeln!(out, "would send one test message")?;
-	writeln!(out, "account   {}", sanitize(&plan.account))?;
-	writeln!(out, "from      {}", sanitize(&plan.from))?;
-	writeln!(out, "to        {}", sanitize(&plan.to))?;
-	writeln!(
-		out,
-		"It goes out through this server's own queue, DKIM-signed, from its sending address.\nOne test is allowed per minute per server. Run again with --yes to send it."
-	)
 }
 
 /// Put the signed message in the spool under `id`, for the running server's
