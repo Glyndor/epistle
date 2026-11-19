@@ -19,12 +19,7 @@ impl AccountStore {
 	pub fn credential_fingerprint(&self, name: &str) -> Option<String> {
 		let dynamic = self.dynamic.read().expect("store lock");
 		if let Some(account) = dynamic.iter().find(|account| account.name == name) {
-			let marker = format!(
-				"{}\0{}",
-				account.password_hash,
-				account.totp_secret.as_deref().unwrap_or("")
-			);
-			return Some(hash_digest(&marker));
+			return Some(super::password_rehash::fingerprint(account));
 		}
 		drop(dynamic);
 		if let Some(account) = self

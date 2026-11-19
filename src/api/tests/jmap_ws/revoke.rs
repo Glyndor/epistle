@@ -64,6 +64,7 @@ pub(super) fn ws_state(
 	store
 		.add(crate::directory_store::DynamicAccount {
 			reset: None,
+			rehashed: None,
 			send: None,
 			receive: None,
 			display_name: None,

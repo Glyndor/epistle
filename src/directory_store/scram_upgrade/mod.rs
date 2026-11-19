@@ -26,6 +26,13 @@ pub trait ScramUpgrader: std::fmt::Debug + Send + Sync {
 	/// pays the PBKDF2 cost only then. Errors are swallowed: a write failure
 	/// must not change the authentication outcome that triggered it.
 	fn upgrade(&self, account: &str, password: &str);
+
+	/// Rewrite `account`'s password hash from the `password` that just
+	/// verified against `verified_hash`, when that hash is weaker than the
+	/// cost in force. The implementor writes only if the row still holds
+	/// `verified_hash`. Errors are swallowed for the same reason as in
+	/// [`Self::upgrade`]. The default does nothing.
+	fn rehash_password(&self, _account: &str, _verified_hash: &str, _password: &str) {}
 }
 
 /// The default upgrader: no upgrade until the store is shared through
@@ -50,6 +57,12 @@ impl ScramUpgrader for StoreUpgrader {
 	fn upgrade(&self, account: &str, password: &str) {
 		if let Some(store) = self.0.upgrade() {
 			store.upgrade_scram(account, password);
+		}
+	}
+
+	fn rehash_password(&self, account: &str, verified_hash: &str, password: &str) {
+		if let Some(store) = self.0.upgrade() {
+			store.rehash_password(account, verified_hash, password);
 		}
 	}
 }

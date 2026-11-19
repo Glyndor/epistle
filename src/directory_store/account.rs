@@ -90,6 +90,11 @@ pub struct DynamicAccount {
 	/// as usual; while it is set the account signs in nowhere.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub reset: Option<super::credential_reset::CredentialReset>,
+	/// Kept when the password hash was rewritten at a higher cost after a
+	/// sign-in, so a grant bound to the credentials (an OAuth refresh token)
+	/// does not stop working: see [`super::Rehashed`]. `None` otherwise.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub rehashed: Option<super::Rehashed>,
 }
 
 impl DynamicAccount {
@@ -140,6 +145,7 @@ impl DynamicAccount {
 			send: None,
 			receive: None,
 			reset: None,
+			rehashed: None,
 		})
 	}
 }

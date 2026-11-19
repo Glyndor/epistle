@@ -57,3 +57,52 @@ fn a_cost_the_hasher_cannot_use_is_an_error_not_a_weak_hash() {
 	};
 	assert!(hash_password_with_cost(fixture_password(), broken, salt).is_err());
 }
+
+fn stored(cost: Argon2Cost) -> String {
+	hash_password_with_cost(fixture_password(), cost, &[1; 16]).expect("hash")
+}
+
+#[test]
+fn a_hash_at_or_above_the_cost_in_force_needs_no_rewrite() {
+	let default = Argon2Cost::default();
+	assert_eq!(cost::rewrite_cost(&stored(default), default), None);
+	assert_eq!(cost::rewrite_cost(&stored(STRONGER), default), None);
+}
+
+#[test]
+fn a_hash_below_the_cost_in_force_in_any_respect_is_rewritten_at_the_larger_of_each() {
+	let default = Argon2Cost::default();
+	assert_eq!(
+		cost::rewrite_cost(&stored(default), STRONGER),
+		Some(STRONGER)
+	);
+	let lanes = Argon2Cost {
+		parallelism: 2,
+		..default
+	};
+	assert_eq!(cost::rewrite_cost(&stored(lanes), default), None);
+	let wide = Argon2Cost {
+		memory_kib: 65_536,
+		..default
+	};
+	assert_eq!(
+		cost::rewrite_cost(&stored(wide), STRONGER),
+		Some(Argon2Cost {
+			memory_kib: 65_536,
+			iterations: 3,
+			parallelism: 2,
+		})
+	);
+}
+
+#[test]
+fn an_unreadable_string_is_left_alone() {
+	for text in [
+		"",
+		"plain",
+		"$2b$12$abcdefghijklmnopqrstuv",
+		"$argon2id$v=19$m=x",
+	] {
+		assert_eq!(cost::rewrite_cost(text, STRONGER), None, "{text:?}");
+	}
+}
