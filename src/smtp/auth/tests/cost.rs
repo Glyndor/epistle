@@ -59,7 +59,12 @@ fn a_cost_the_hasher_cannot_use_is_an_error_not_a_weak_hash() {
 }
 
 fn stored(cost: Argon2Cost) -> String {
-	hash_password_with_cost(fixture_password(), cost, &[1; 16]).expect("hash")
+	hash_password_with_cost(
+		fixture_password(),
+		cost,
+		&crate::smtp::auth::fresh_salt().expect("salt"),
+	)
+	.expect("hash")
 }
 
 #[test]
