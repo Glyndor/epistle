@@ -38,7 +38,7 @@ forward). Policy refusals exited `2` before they had their own code.
 | `app-password` | `list`, `create`, `rotate`, `rename`, `revoke` | `app-passwords`, `app-password-create`, `app-password-revoke` |
 | `api-key` | `list`, `create`, `set`, `revoke`, `rotate` | `api-keys`, `api-key-create`, `api-key-revoke` |
 | `suppression` | `list`, `show`, `add`, `remove`, `tenant list\|remove`, `export`, `import` | `suppression`, `suppression --remove ADDR` |
-| `boot` | the stack would come back after a reboot: thirteen items, below | a restart policy, the network wait, a drop-in, a mount, an image of a disabled service or a service that is down while the boot unit has not failed is not right | linger, the user manager, the boot unit, its file list, Podman's socket, an image of an enabled service, the port floor or a service that is down after the boot unit failed is not right |
+| `boot` | the stack would come back after a reboot: fourteen items, below | a restart policy, the network wait, a drop-in, a mount, an image of a disabled service or a service that is down while the boot unit has not failed is not right | linger, the user manager, the boot unit, its file list, Podman's socket, an image of an enabled service, the port floor or a service that is down after the boot unit failed is not right |
 | `warmup` | `status`, `plan`, `start`, `enable`, `disable`, `pause`, `resume`, `set`, `reset` | |
 | `domain` | `list`, `show`, `add`, `remove`, `set`, `disable`, `enable`, `alias add\|remove`, `import` | |
 | `db` | `upgrade`, `status` | |
@@ -358,12 +358,13 @@ and the message carries the command that fixes it:
 5. `podman socket`: `podman.socket` is enabled and active (`fail`).
 6. `restart policy`: no enabled service has the policy `no` (`warn`).
 7. `network wait`: the unit orders itself after `podman-user-wait-network-online.service`, systemd loads it and `network-online.target` is active (`warn`).
-8. `port floor`: `net.ipv4.ip_unprivileged_port_start` is at or below the lowest port the listeners use, both now (`/proc/sys`) and in the configuration systemd applies at the next boot (`systemd-analyze cat-config sysctl.d` and `/etc/sysctl.conf`) (`fail`; a configuration that cannot be read is `warn`).
-9. `mounts`: `data_dir` and the container storage exist, and no `/etc/fstab` mount that covers them is missing from the mount table (`warn`).
-10. `images`: every image `compose.yaml` names is in the account's container storage, because the unit starts with `--pull never` (`fail` for an enabled service, `warn` for one with `profiles`; `sudo epistle stack update`, the command that pulls).
-11. `retry drop-in`: `podup-epistle.service.d/10-epistle.conf` is beside the unit and holds what epistle writes, so a start that fails is tried again; absent, different, left behind after `[boot] restart_on_failure = false`, or refused by a systemd older than 244, it is `warn` (`sudo epistle stack start`).
-12. `order drop-in`: `/etc/systemd/system/user@<uid>.service.d/glyndor-epistle-boot.conf` holds what epistle writes now, so the user manager starts after the network and the sysctl; absent or different it is `warn`, and only root writes it (`sudo epistle stack start`).
-13. `services`: every enabled service of the stack has a running container. Judged once the boot unit is no longer `activating` (a unit still starting is a `warn` that says so). Each service that is down is named with its state and exit status, the last line the unit's journal has about it, and the command that starts it: `sudo epistle stack start <service>`, or `sudo epistle stack up` when it has no container. `fail` when the unit finished with a result other than `success`, `warn` otherwise (a service stopped on purpose is down too). A service with `profiles`, and a job that exited 0 under the policy `no`, are not expected to run.
+8. `port addresses`: a listener bound to an address that is neither the wildcard nor loopback has that address owned by a physical interface, or the account's user manager is ordered after the unit that creates it (`wg-quick@<name>.service` for a WireGuard interface); otherwise it is a `warn` that names the interface and prints the drop-in that fixes it. An address on no interface now is a `warn` too (`warn`).
+9. `port floor`: `net.ipv4.ip_unprivileged_port_start` is at or below the lowest port the listeners use, both now (`/proc/sys`) and in the configuration systemd applies at the next boot (`systemd-analyze cat-config sysctl.d` and `/etc/sysctl.conf`) (`fail`; a configuration that cannot be read is `warn`).
+10. `mounts`: `data_dir` and the container storage exist, and no `/etc/fstab` mount that covers them is missing from the mount table (`warn`).
+11. `images`: every image `compose.yaml` names is in the account's container storage, because the unit starts with `--pull never` (`fail` for an enabled service, `warn` for one with `profiles`; `sudo epistle stack update`, the command that pulls).
+12. `retry drop-in`: `podup-epistle.service.d/10-epistle.conf` is beside the unit and holds what epistle writes, so a start that fails is tried again; absent, different, left behind after `[boot] restart_on_failure = false`, or refused by a systemd older than 244, it is `warn` (`sudo epistle stack start`).
+13. `order drop-in`: `/etc/systemd/system/user@<uid>.service.d/glyndor-epistle-boot.conf` holds what epistle writes now, so the user manager starts after the network and the sysctl; absent or different it is `warn`, and only root writes it (`sudo epistle stack start`).
+14. `services`: every enabled service of the stack has a running container. Judged once the boot unit is no longer `activating` (a unit still starting is a `warn` that says so). Each service that is down is named with its state and exit status, the last line the unit's journal has about it, and the command that starts it: `sudo epistle stack start <service>`, or `sudo epistle stack up` when it has no container. `fail` when the unit finished with a result other than `success`, `warn` otherwise (a service stopped on purpose is down too). A service with `profiles`, and a job that exited 0 under the policy `no`, are not expected to run.
 
 Where there is no `compose.yaml` the area is `ok` with no items. The unit
 repairs say `sudo epistle stack start`, which starts the containers that exist
@@ -1355,6 +1356,25 @@ epistle` for `stack up`, `start`, `update`, `apply`, `restart`, `certs` and
 
 `apt purge epistle` removes the system drop-in; the user one goes with the
 account's home. The `boot` area of `epistle status` shows both.
+
+A port published on an address that something else creates at boot, such as the
+interface of a WireGuard tunnel, needs one more drop-in that epistle cannot
+write for you, because it does not know which unit creates the address. The user
+manager of the account starts after the network and the sysctl and after nothing
+else, so the boot unit can run before the address exists and fail with `Cannot
+assign requested address`. The retry drop-in then tries again every 30 seconds,
+but ordering avoids the failed start. The `port addresses` item of the `boot`
+area names the interface and the unit, and prints the drop-in:
+
+```ini
+# /etc/systemd/system/user@<uid>.service.d/glyndor-epistle-address.conf
+[Unit]
+After=wg-quick@wg0.service
+Wants=wg-quick@wg0.service
+```
+
+Run `sudo systemctl daemon-reload` after writing it. When the boot unit has
+failed for this reason, the `boot unit` item quotes the journal line.
 
 Keep container customizations in
 `<data_dir>/compose/compose.override.yaml`. Init preserves this file and its
