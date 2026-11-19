@@ -44,6 +44,7 @@ fn show_dynamic_reports_forwards_catch_all_and_two_factor() {
 	store
 		.add(DynamicAccount {
 			reset: None,
+			rehashed: None,
 			send: None,
 			receive: None,
 			name: "alice".to_string(),
@@ -92,6 +93,7 @@ fn show_dynamic_two_factor_yes_when_totp_enrolled() {
 	store
 		.add(DynamicAccount {
 			reset: None,
+			rehashed: None,
 			send: None,
 			receive: None,
 			name: "alice".to_string(),

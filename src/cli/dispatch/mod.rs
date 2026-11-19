@@ -168,6 +168,9 @@ impl Cli {
 				action,
 			} => delivery_ops::queue(&config, json, action),
 			Command::Warmup { config, action } => delivery_ops::warmup(&config, action),
+			Command::Deliverability { config, action } => {
+				delivery_ops::deliverability(&config, action)
+			}
 			Command::Delivery(args) => delivery_ops::delivery(args),
 			Command::Evidence { config, action } => evidence::run(
 				&config,

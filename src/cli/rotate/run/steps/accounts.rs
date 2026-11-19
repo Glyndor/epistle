@@ -104,7 +104,7 @@ pub(super) fn landed(config: &Config, targets: &[ResetTarget]) -> Result<bool, S
 	Ok(targets.iter().all(|target| {
 		store
 			.dynamic_account(&target.name)
-			.is_none_or(|account| hash_digest(&account.password_hash) != target.digest)
+			.is_none_or(|account| !account.holds_hash_digest(&target.digest))
 	}))
 }
 

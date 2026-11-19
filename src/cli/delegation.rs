@@ -73,6 +73,7 @@ impl Command {
 			| Command::Legacy(_)
 			| Command::Queue { .. }
 			| Command::Warmup { .. }
+			| Command::Deliverability { .. }
 			| Command::Delivery { .. }
 			| Command::Ban { .. }
 			| Command::Learning { .. }

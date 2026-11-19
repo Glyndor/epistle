@@ -63,6 +63,7 @@ impl Directory {
 					return None;
 				}
 				self.maybe_upgrade_scram(&account, &prepared);
+				self.maybe_rehash_password(&account, hash, &prepared);
 				return Some((account, None));
 			}
 		}

@@ -129,7 +129,10 @@ jobs:
       - id: cargo-cache
         uses: ./.github/actions/rust-cache
         with:
-          prefix: rust-e2e
+          # The two images of the matrix must not share a cache: `runner.os` is
+          # `Linux` for both, and objects built on ubuntu-24.04 (glibc 2.39) do not
+          # link on ubuntu-22.04 (undefined symbol __isoc23_sscanf).
+          prefix: rust-e2e-${{ matrix.os }}
 
       - name: Build release binary
         run: cargo build --locked --release
@@ -239,4 +242,7 @@ jobs:
         with:
           mode: save
           cache-hit: ${{ steps.cargo-cache.outputs.cache-hit }}
-          prefix: rust-e2e
+          # The two images of the matrix must not share a cache: `runner.os` is
+          # `Linux` for both, and objects built on ubuntu-24.04 (glibc 2.39) do not
+          # link on ubuntu-22.04 (undefined symbol __isoc23_sscanf).
+          prefix: rust-e2e-${{ matrix.os }}

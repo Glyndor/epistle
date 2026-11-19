@@ -3,6 +3,7 @@
 
 use base64::Engine;
 
+use super::send_recipient::header_mailboxes;
 use super::send_request::{MAX_PARTS, PartRequest, SendRequest};
 use crate::api::error::ApiError;
 use crate::compose::{self, Bodies, Content, Disposition, Leaf};
@@ -31,15 +32,21 @@ pub(super) fn build(
 		))?);
 	}
 	if !request.to.is_empty() {
-		headers.push(line(compose::address_list("To", &request.to))?);
+		headers.push(line(compose::address_list(
+			"To",
+			&header_mailboxes(&request.to),
+		))?);
 	}
 	if !request.cc.is_empty() {
-		headers.push(line(compose::address_list("Cc", &request.cc))?);
+		headers.push(line(compose::address_list(
+			"Cc",
+			&header_mailboxes(&request.cc),
+		))?);
 	}
 	if let Some(reply_to) = &request.reply_to {
 		headers.push(line(compose::address_list(
 			"Reply-To",
-			std::slice::from_ref(reply_to),
+			&header_mailboxes(std::slice::from_ref(reply_to)),
 		))?);
 	}
 	headers.push(line(compose::unstructured("Subject", &request.subject))?);

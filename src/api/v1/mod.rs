@@ -16,6 +16,7 @@ mod send_cancel;
 pub(crate) use send::sink_refusal;
 mod send_from;
 mod send_message;
+mod send_recipient;
 mod send_request;
 mod status;
 mod suppression;

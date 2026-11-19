@@ -363,4 +363,15 @@ pub(in crate::cli) const CASES: &[(&[&str], bool)] = &[
 	(&["domain", "alias", "remove", "alias.example.org"], true),
 	(&["completions", "bash"], false),
 	(&["manpages", "/tmp/man"], false),
+	(
+		&[
+			"deliverability",
+			"test",
+			"--account",
+			"alice",
+			"--to",
+			"check@mail-tester.example",
+		],
+		true,
+	),
 ];

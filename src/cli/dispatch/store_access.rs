@@ -21,6 +21,7 @@ pub(super) fn guard(command: &Command) -> Result<Option<FileLock>, String> {
 		| Command::Masked { config, .. }
 		| Command::Queue { config, .. }
 		| Command::Warmup { config, .. }
+		| Command::Deliverability { config, .. }
 		| Command::Learning { config, .. }
 		| Command::ReportAbuse { config, .. } => config,
 		Command::Storage {

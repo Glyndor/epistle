@@ -50,6 +50,10 @@ const EXEMPT: &[&str] = &[
 /// cannot run on a bare temporary setup.
 const SKIPPED: &[(&str, &str)] = &[
 	(
+		"deliverability test",
+		"sends mail and reads the network's DNS; src/cli/deliverability/tests",
+	),
+	(
 		"ban list",
 		"needs PostgreSQL; tests/cli/json/cli_json/accounts/ban.rs",
 	),

@@ -5,6 +5,8 @@
 //! `{"error": ...}` body it always got. The headers of the answer
 //! (`Retry-After`, `WWW-Authenticate`) are the same in both.
 
+use std::borrow::Cow;
+
 use axum::body::Body;
 use axum::extract::Request;
 use axum::http::header::{ACCEPT, CONTENT_LENGTH, CONTENT_TYPE};
@@ -37,7 +39,7 @@ struct Problem {
 
 #[derive(Serialize)]
 struct FieldError {
-	field: &'static str,
+	field: Cow<'static, str>,
 	detail: String,
 }
 

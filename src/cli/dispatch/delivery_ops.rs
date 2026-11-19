@@ -5,7 +5,7 @@
 use std::path::Path;
 use std::process::ExitCode;
 
-use crate::cli::{delivery, queue, style, suppression, warmup};
+use crate::cli::{deliverability, delivery, queue, style, suppression, warmup};
 use crate::config::Config;
 
 pub(super) fn queue(config: &Path, json: bool, action: Option<queue::QueueCli>) -> ExitCode {
@@ -91,4 +91,8 @@ pub(super) fn suppression(
 			ExitCode::FAILURE
 		}
 	}
+}
+
+pub(super) fn deliverability(config: &Path, action: deliverability::DeliverabilityCli) -> ExitCode {
+	deliverability::run(config, action)
 }

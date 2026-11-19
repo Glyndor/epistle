@@ -16,6 +16,7 @@ mod completions;
 pub mod config_edit;
 mod csv;
 mod db_upgrade;
+mod deliverability;
 mod delivery;
 mod disabled_domain;
 mod dkim;

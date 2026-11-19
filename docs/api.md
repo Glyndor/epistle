@@ -443,12 +443,33 @@ curl -s -X POST "$API/api/v1/send" \
 and webhook event of the message, so keep it. A message for local recipients
 only is delivered at once and also gets an id.
 
+A recipient in `to`, `cc` or `reply_to` can carry a display name, which is
+written in front of the address in the `To`, `Cc` and `Reply-To` headers:
+
+```json
+{"to": [{"name": "Ana Pérez", "address": "ana@example.org"}, "bob@example.org"]}
+```
+
+A plain string keeps its meaning: the address alone. A string of the form
+`Ana Pérez <ana@example.org>` is refused; use the object. The name follows
+the rules of `from_name`: at most 128 characters and no control character or
+line break. It is written as a quoted string when it holds a comma, a quote,
+a backslash, parentheses, angle brackets or an at sign, and as RFC 2047
+encoded-words when it holds non-ASCII text. A name that cannot be written
+safely is refused with `400 invalid_input` and the field `to[2].name`
+(`reply_to.name` for the reply address); it is never dropped or altered.
+Names in `bcc` are checked but appear in no header. The envelope, the
+delivery records and the webhook events identify a recipient by its address
+only. An address given more than once is one recipient, and the first name
+given for it is the one written in the header.
+
 | Field | Type | Notes |
 |---|---|---|
 | `from` | string, required | A bare address, no display name. Must be one the acting account owns |
 | `from_name` | string | The phrase of `From`. Absent uses the account's display name. At most 128 characters |
-| `to`, `cc`, `bcc` | arrays of strings | `to` is required but may be empty if `cc` or `bcc` has someone. Together at most 100 by default (`max_recipients`). `bcc` is envelope only |
-| `reply_to`, `sender` | string | `sender` must be an address the account owns, like `from` |
+| `to`, `cc`, `bcc` | arrays of recipients | A recipient is a bare address or `{"name": "Ana Pérez", "address": "ana@example.org"}`; see below. `to` is required but may be empty if `cc` or `bcc` has someone. Together at most 100 distinct addresses by default (`max_recipients`). `bcc` is envelope only |
+| `reply_to` | recipient | A bare address or the same object |
+| `sender` | string | A bare address; it must be one the account owns, like `from` |
 | `subject` | string | Default empty |
 | `text`, `html` | string | With both, a `multipart/alternative`, text first |
 | `attachments`, `inline` | arrays of `{name, content_type, data, content_id}` | `data` is base64 (standard alphabet, padded). An empty `content_type` is detected. Every `inline` part needs a `content_id`; the HTML refers to it as `cid:<content_id>`. At most 100 parts together |
