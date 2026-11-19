@@ -45,7 +45,13 @@ jobs:
     with:
       package-name: epistle
       run-build: ${{ needs.plan.outputs.debian != 'false' }}
-      run-tests: ${{ github.event_name != 'pull_request' && github.event_name != 'merge_group' }}
+      # The package build runs as root in a container, which the ordinary test
+      # job does not, so a test that relies on a permission bit passes there and
+      # fails here. A pull request into develop and the merge queue skip the
+      # tests (the build is the question they ask); the promotion into main and
+      # the push to main run them, so the failure shows before the tag instead of
+      # after it (0.13.0 and 0.13.1 were tagged and never published).
+      run-tests: ${{ (github.event_name != 'pull_request' && github.event_name != 'merge_group') || github.base_ref == 'main' }}
       # Not the reusable's trixie default: trixie ships rustc 1.85 and the
       # dependency floor is 1.94 (set by sqlx 0.9's `rust-version`), which
       # edition 2024 alone does not reveal. sid carries 1.95. Digest-pinned so

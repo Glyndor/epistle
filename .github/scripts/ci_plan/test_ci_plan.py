@@ -245,7 +245,13 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIsNotNone(compat)
         self.assertGreaterEqual(int(compat[1]), 13)
         caller = workflow("debian.yml")["jobs"]["debian"]["with"]
-        self.assertEqual(caller["run-tests"], "${{ github.event_name != 'pull_request' && github.event_name != 'merge_group' }}")
+        # The promotion into main runs the tests too: the package build is the
+        # one run as root, and a test that needs a permission bit must fail
+        # before the tag, not after it.
+        self.assertEqual(
+            caller["run-tests"],
+            "${{ (github.event_name != 'pull_request' && github.event_name != 'merge_group') || github.base_ref == 'main' }}",
+        )
         reusable = workflow("reusable-rust-debian.yml")
         self.assertIs(reusable[True]["workflow_call"]["inputs"]["run-tests"]["default"], True)
         build = next(s for s in reusable["jobs"]["build"]["steps"] if s.get("name") == "Build the package")
