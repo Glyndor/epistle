@@ -138,7 +138,12 @@ jobs:
           rustup toolchain install nightly-2026-10-31 --profile minimal
           rustup default nightly-2026-10-31
 
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      # Restore only. A pull request and a merge queue group used to save their
+      # own copy of `fuzz/target` (about 528 MB each), which evicted what the
+      # default branches seeded; only a push or a schedule on a default branch
+      # saves, with the condition `rust-cache` uses.
+      - id: fuzz-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/bin
@@ -154,3 +159,17 @@ jobs:
         env:
           FUZZ_TARGET: ${{ matrix.target }}
         run: cargo fuzz run "$FUZZ_TARGET" -- -max_total_time=60 -timeout=10
+
+      - if: >-
+          ${{ !cancelled()
+          && steps.fuzz-cache.outputs.cache-hit != 'true'
+          && (github.event_name == 'push' || github.event_name == 'schedule')
+          && (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            fuzz/target
+          key: cargo-fuzz-${{ runner.os }}-${{ hashFiles('fuzz/Cargo.toml') }}
