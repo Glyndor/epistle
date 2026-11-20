@@ -3,7 +3,7 @@ name: Mutation testing
 # No push or pull_request trigger. Mutation testing asks "do existing
 # tests miss real regressions?", which is too expensive to gate on a
 # single change. The weekly schedule lives on main, where GitHub reads
-# schedule: triggers from. workflow_dispatch is for ad hoc reruns.
+# schedule: triggers from, and it checks out develop. workflow_dispatch is for ad hoc reruns.
 
 on:
   schedule:
@@ -23,6 +23,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # The nightly run fires from the workflow file on main, the branch
+          # GitHub reads schedule: from, but main changes only at a release.
+          # It fuzzes develop, so what was merged during the day is fuzzed
+          # the same night; every other event keeps its own ref.
+          ref: ${{ github.event_name == 'schedule' && 'develop' || '' }}
 
       - name: Install toolchain
         run: |
