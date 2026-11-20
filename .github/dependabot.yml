@@ -7,7 +7,11 @@ updates:
   # major bump stays alone because it is the one that can break a workflow.
   # Security updates ignore the schedule and the groups below.
   - package-ecosystem: "github-actions"
-    directory: "/"
+    # `/` covers `.github/workflows`; the composite actions under
+    # `.github/actions` pin actions by SHA too and nothing else watches them.
+    directories:
+      - "/"
+      - "/.github/actions/*"
     schedule:
       interval: "weekly"
       day: "monday"
