@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[3]
 KNOWN = {
     ("codeql.yml", "analyze"): "Analyze (${{ matrix.language }})",  # actions, rust
     ("db.yml", "db-tests"): "database integration (PostgreSQL ${{ matrix.postgres }})",  # 18
+    ("fuzz.yml", "fuzz"): "cargo fuzz (group ${{ matrix.group.id }})",  # 1 to 5
     ("e2e.yml", "e2e"): "full-server e2e (${{ matrix.os }})",  # ubuntu-22.04, ubuntu-24.04
     ("release.yml", "build-deb"): "Build Debian package (${{ matrix.arch }})",
     ("release.yml", "image-build"): "Build and push image (${{ matrix.arch }})",

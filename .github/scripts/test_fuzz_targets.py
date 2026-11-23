@@ -308,7 +308,7 @@ class VersionBumpTests(unittest.TestCase):
                 check=False,
             )
             self.assertEqual(done.returncode, 0, done.stderr)
-            return output.read()
+            return output.read().split("groups=")[0]
 
     def test_a_bump_runs_no_target(self):
         self.assertEqual(self.plan(judge=True), "targets=[]\n")
@@ -345,6 +345,44 @@ class VersionBumpTests(unittest.TestCase):
             if not any(folder.startswith(f"{entry}/") for entry in listed)
         ]
         self.assertEqual(missing, [])
+
+
+class GroupTests(unittest.TestCase):
+    """The targets of a run are shared among a few jobs, each of which compiles once."""
+
+    def test_every_target_is_in_exactly_one_group_and_no_group_is_empty(self):
+        for chosen in (ft.ALL, ft.ALL[:1], ft.ALL[:4], ft.ALL[:5], ft.ALL[3:11], ["mime", "smtp_line"]):
+            with self.subTest(count=len(chosen)):
+                result = ft.groups(chosen)
+                flat = [target for group in result for target in group]
+                self.assertEqual(sorted(flat), sorted(chosen))
+                self.assertTrue(all(result))
+                self.assertLessEqual(len(result), ft.GROUPS)
+                sizes = {len(group) for group in result}
+                self.assertLessEqual(max(sizes) - min(sizes), 1, "as even as can be")
+
+    def test_nothing_chosen_makes_no_group(self):
+        self.assertEqual(ft.groups([]), [])
+
+    def test_the_whole_set_is_five_groups_of_seven_and_the_old_cost_is_gone(self):
+        result = ft.groups(ft.ALL)
+        self.assertEqual([len(group) for group in result], [7, 7, 7, 7, 7])
+        self.assertEqual(len(ft.ALL), 35)
+
+    def test_neighbours_in_the_list_do_not_share_a_group(self):
+        result = ft.groups(ft.ALL)
+        where = {target: index for index, group in enumerate(result) for target in group}
+        for left, right in zip(ft.ALL, ft.ALL[1:]):
+            self.assertNotEqual(where[left], where[right])
+
+    def test_the_groups_the_workflow_reads_are_spaces_between_known_names(self):
+        for group in (" ".join(g) for g in ft.groups(ft.ALL)):
+            for name in group.split(" "):
+                self.assertIn(name, ft.ALL)
+                self.assertRegex(name, r"^[a-z0-9_]+$")
+
+    def test_a_version_bump_makes_no_group(self):
+        self.assertEqual(ft.groups(json.loads("[]")), [])
 
 
 if __name__ == "__main__":

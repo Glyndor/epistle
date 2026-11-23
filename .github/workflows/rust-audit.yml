@@ -21,29 +21,12 @@ on:
     # other if either fires.
     - cron: "37 5 * * *"
   workflow_dispatch:
-  # Every push to develop is audited, with cargo-deny, on the tree it carries.
-  # A pull request into main (the promotion) matches the paths below because
-  # every release changes Cargo.toml.
+  # Every push to develop is audited, with cargo-deny, on the tree it carries. A
+  # pull request is audited by the gate in ci.yml, on every pull request and queue
+  # entry and whatever changed, so this workflow has no pull_request trigger and no
+  # path filter: a new advisory appears without any file changing.
   push:
     branches: [develop]
-  pull_request:
-    paths:
-      # This file is in its own filter on purpose. A workflow whose path
-      # list omits itself does not run on the pull request that changes
-      # it, so a broken edit merges without ever having been executed.
-      - ".github/workflows/rust-audit.yml"
-      - "**/Cargo.toml"
-      - "**/Cargo.lock"
-      - "deny.toml"
-      # The reusable this calls, the Python scripts the report job runs,
-      # and the ignore policy the audit reads. A change to any of them
-      # alters what the job accepts, so none should land without the job
-      # having run.
-      - ".github/workflows/reusable-rust-audit.yml"
-      - ".github/scripts/rust_audit_combine.py"
-      - ".github/scripts/test_rust_audit_combine.py"
-      - ".github/scripts/test_rust_audit_lookup.py"
-      - ".cargo/audit.toml"
 
 # A newer push to a pull request supersedes the run in flight. Queue and
 # branch runs are never cancelled: only a pull_request event is.
@@ -57,17 +40,15 @@ permissions:
 jobs:
   audit:
     # Two shapes. On schedule and workflow_dispatch the matrix is
-    # `[develop, main]` so a finding on either branch opens an issue
-    # the day it appears. On pull_request the matrix is `[""]` so the
-    # reusable audits the PR's own lockfile (an empty `ref` makes
-    # `actions/checkout` use the pull-request head). A PR that bumps a
-    # crate to a vulnerable version is caught at the pull request, not
-    # by the next day's main run. `fail-fast: false` keeps both halves
-    # independent: a slow or dirty ref's report still publishes.
+    # `[develop, main]` so a finding on either branch opens an issue the day it
+    # appears, and each branch is audited by its lockfiles alone. On a push to
+    # develop the matrix is `[""]`: the reusable audits the tree that was pushed.
+    # `fail-fast: false` keeps both halves independent: a slow or dirty ref's
+    # report still publishes.
     strategy:
       fail-fast: false
       matrix:
-        ref: ${{ fromJSON((github.event_name == 'pull_request' || github.event_name == 'push') && '[""]' || '["develop","main"]') }}
+        ref: ${{ fromJSON(github.event_name == 'push' && '[""]' || '["develop","main"]') }}
     uses: ./.github/workflows/reusable-rust-audit.yml
     with:
       ref: ${{ matrix.ref }}

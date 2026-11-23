@@ -42,6 +42,12 @@ on:
 permissions:
   contents: read
 
+# A newer push to a pull request supersedes the run in flight. Queue and branch
+# runs are never cancelled: only a pull_request event is.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   plan:
     uses: ./.github/workflows/reusable-ci-plan.yml
@@ -52,8 +58,12 @@ jobs:
   # was skipped. `!= 'false'` keeps an empty or missing output on the side of
   # running.
   rust:
-    needs: plan
-    if: ${{ !cancelled() && (needs.plan.outputs.lint != 'false' || needs.plan.outputs.tests != 'false' || needs.plan.outputs.doc != 'false' || needs.plan.outputs.msrv != 'false') }}
+    # On a pull request the line limit goes first (seconds), and the long jobs
+    # start only if it did not fail. The condition names that one gate, does not
+    # apply to a push or a queue entry, which run everything side by side, and a
+    # job skipped behind a failed gate fails `CI gate` through the plan check.
+    needs: [plan, line-limit]
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.line-limit.result != 'failure') && (needs.plan.outputs.lint != 'false' || needs.plan.outputs.tests != 'false' || needs.plan.outputs.doc != 'false' || needs.plan.outputs.msrv != 'false') }}
     uses: ./.github/workflows/reusable-rust-ci.yml
     with:
       run-lint: ${{ needs.plan.outputs.lint != 'false' }}
@@ -148,8 +158,8 @@ jobs:
   # the .deb a user installs is built by the compiler that vouched for the code.
   # Neither build subsumes the other. Coverage owns the workspace suite.
   debian:
-    needs: plan
-    if: ${{ !cancelled() && needs.plan.outputs.debian != 'false' }}
+    needs: [plan, line-limit]
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.line-limit.result != 'failure') && needs.plan.outputs.debian != 'false' }}
     uses: ./.github/workflows/reusable-rust-debian.yml
     with:
       package-name: epistle
@@ -189,8 +199,8 @@ jobs:
     uses: ./.github/workflows/reusable-line-limit.yml
 
   sbom-and-licenses:
-    needs: plan
-    if: ${{ !cancelled() && needs.plan.outputs.supply != 'false' }}
+    needs: [plan, line-limit]
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.line-limit.result != 'failure') && needs.plan.outputs.supply != 'false' }}
     uses: ./.github/workflows/reusable-rust-supply-chain.yml
     with:
       run-sbom: ${{ needs.plan.outputs.supply != 'false' }}

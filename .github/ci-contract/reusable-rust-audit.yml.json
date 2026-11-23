@@ -2,14 +2,24 @@
  "True": {
   "workflow_call": {
    "inputs": {
+    "cargo-audit-sha256": {
+     "default": "4f01c74ed84b2dffd0b1d37012a62cdf2a92c96e25bdf8eec7fcc0d4d3eb7811",
+     "description": "SHA-256 of the x86_64 musl archive of that release; moves with the version",
+     "type": "string"
+    },
     "cargo-audit-version": {
      "default": "0.23.0",
-     "description": "Exact version of cargo-audit to install; bumped via .github releases",
+     "description": "Exact version of cargo-audit to download from its release",
+     "type": "string"
+    },
+    "cargo-deny-sha256": {
+     "default": "98c56e6a408bfa5c3c60744b6015aaa6aa08f743fdeb88386d06fca035bb1786",
+     "description": "SHA-256 of the x86_64 musl archive of that release; moves with the version",
      "type": "string"
     },
     "cargo-deny-version": {
      "default": "0.22.0",
-     "description": "Exact version of cargo-deny to install; bumped via .github releases",
+     "description": "Exact version of cargo-deny to download from its release",
      "type": "string"
     },
     "extra-lockfiles": {
@@ -47,6 +57,7 @@
     }
    },
    "env": {
+    "TOOL_SHA256": "${{ inputs.cargo-audit-sha256 }}",
     "TOOL_VERSION": "${{ inputs.cargo-audit-version }}"
    },
    "name": "cargo audit${{ inputs.ref != '' && format(' ({0})', inputs.ref) || '' }}",
@@ -84,7 +95,7 @@
     },
     {
      "name": "Install cargo-audit",
-     "run": "command -v cargo-audit >/dev/null || cargo install cargo-audit --version \"=$TOOL_VERSION\" --locked"
+     "run": "set -euo pipefail\n[[ \"$TOOL_VERSION\" =~ ^[0-9]+\\.[0-9]+\\.[0-9]+$ ]] || { echo \"::error::the version is not a plain X.Y.Z\"; exit 1; }\n[[ \"$TOOL_SHA256\" =~ ^[0-9a-f]{64}$ ]] || { echo \"::error::the digest is not a lowercase SHA-256\"; exit 1; }\nwork=\"$(mktemp -d \"$RUNNER_TEMP/cargo-audit.XXXXXX\")\"\ncurl --fail --silent --show-error --location --retry 5 --retry-delay 5 --retry-all-errors \\\n  --proto '=https' --tlsv1.2 --output \"$work/archive.tgz\" \\\n  \"https://github.com/rustsec/rustsec/releases/download/cargo-audit%2Fv${TOOL_VERSION}/cargo-audit-x86_64-unknown-linux-musl-v${TOOL_VERSION}.tgz\"\necho \"${TOOL_SHA256}  $work/archive.tgz\" | sha256sum --check --strict --status - \\\n  || { echo \"::error::the cargo-audit archive does not match the pinned SHA-256\"; exit 1; }\ntar -xzf \"$work/archive.tgz\" -C \"$work\"\ninstall -d \"$RUNNER_TEMP/tools/cargo-audit\"\ninstall -m 0755 \"$work/cargo-audit-x86_64-unknown-linux-musl-v${TOOL_VERSION}/cargo-audit\" \"$RUNNER_TEMP/tools/cargo-audit/cargo-audit\"\necho \"$RUNNER_TEMP/tools/cargo-audit\" >> \"$GITHUB_PATH\"\n"
     },
     {
      "env": {
@@ -123,6 +134,7 @@
     }
    },
    "env": {
+    "TOOL_SHA256": "${{ inputs.cargo-deny-sha256 }}",
     "TOOL_VERSION": "${{ inputs.cargo-deny-version }}"
    },
    "if": "inputs.ref == ''",
@@ -149,7 +161,7 @@
     },
     {
      "name": "Install cargo-deny",
-     "run": "command -v cargo-deny >/dev/null || cargo install cargo-deny --version \"=$TOOL_VERSION\" --locked"
+     "run": "set -euo pipefail\n[[ \"$TOOL_VERSION\" =~ ^[0-9]+\\.[0-9]+\\.[0-9]+$ ]] || { echo \"::error::the version is not a plain X.Y.Z\"; exit 1; }\n[[ \"$TOOL_SHA256\" =~ ^[0-9a-f]{64}$ ]] || { echo \"::error::the digest is not a lowercase SHA-256\"; exit 1; }\nwork=\"$(mktemp -d \"$RUNNER_TEMP/cargo-deny.XXXXXX\")\"\ncurl --fail --silent --show-error --location --retry 5 --retry-delay 5 --retry-all-errors \\\n  --proto '=https' --tlsv1.2 --output \"$work/archive.tgz\" \\\n  \"https://github.com/EmbarkStudios/cargo-deny/releases/download/${TOOL_VERSION}/cargo-deny-${TOOL_VERSION}-x86_64-unknown-linux-musl.tar.gz\"\necho \"${TOOL_SHA256}  $work/archive.tgz\" | sha256sum --check --strict --status - \\\n  || { echo \"::error::the cargo-deny archive does not match the pinned SHA-256\"; exit 1; }\ntar -xzf \"$work/archive.tgz\" -C \"$work\"\ninstall -d \"$RUNNER_TEMP/tools/cargo-deny\"\ninstall -m 0755 \"$work/cargo-deny-${TOOL_VERSION}-x86_64-unknown-linux-musl/cargo-deny\" \"$RUNNER_TEMP/tools/cargo-deny/cargo-deny\"\necho \"$RUNNER_TEMP/tools/cargo-deny\" >> \"$GITHUB_PATH\"\n"
     },
     {
      "name": "Run cargo deny",

@@ -99,8 +99,9 @@
      "working-directory": "${{ inputs.working-directory }}"
     }
    },
-   "if": "inputs.run-tests && inputs.coverage-threshold > 0",
+   "if": "${{ !cancelled() && (github.event_name != 'pull_request' || needs.lint.result != 'failure') && inputs.run-tests && inputs.coverage-threshold > 0 }}",
    "name": "Coverage",
+   "needs": "lint",
    "runs-on": "${{ fromJSON(vars.CI_RUNNER || '\"ubuntu-latest\"') }}",
    "steps": [
     {
@@ -206,15 +207,19 @@
   "extra-platforms-gate": {
    "if": "${{ always() && inputs.run-tests }}",
    "name": "Extra platforms",
-   "needs": "test-extra",
+   "needs": [
+    "lint",
+    "test-extra"
+   ],
    "runs-on": "${{ fromJSON(vars.CI_RUNNER || '\"ubuntu-latest\"') }}",
    "steps": [
     {
      "env": {
+      "LINT": "${{ needs.lint.result }}",
       "RESULT": "${{ needs.test-extra.result }}"
      },
      "name": "Reflect the extra-platform test result",
-     "run": "set -euo pipefail\n# `skipped` is a pass: test-extra is gated on `extra-test-os != '[]'`, so a\n# caller that asks for no extra platforms has nothing to fail.\ncase \"$RESULT\" in\n  success | skipped) echo \"extra-platform tests: $RESULT\" ;;\n  *) echo \"::error::extra-platform tests did not pass (result: $RESULT)\"; exit 1 ;;\nesac\n"
+     "run": "set -euo pipefail\n# `skipped` is a pass only when test-extra was not asked for: it is gated on\n# `extra-test-os != '[]'`, so a caller that asks for no extra platforms has\n# nothing to fail. A skip because lint failed is not that.\n[ \"$LINT\" != failure ] || { echo \"::error::lint failed, so the extra-platform tests did not run\"; exit 1; }\ncase \"$RESULT\" in\n  success | skipped) echo \"extra-platform tests: $RESULT\" ;;\n  *) echo \"::error::extra-platform tests did not pass (result: $RESULT)\"; exit 1 ;;\nesac\n"
     }
    ],
    "timeout-minutes": 5
@@ -477,8 +482,9 @@
      "working-directory": "${{ inputs.working-directory }}"
     }
    },
-   "if": "inputs.run-tests && inputs.extra-test-os != '[]'",
+   "if": "${{ !cancelled() && (github.event_name != 'pull_request' || needs.lint.result != 'failure') && inputs.run-tests && inputs.extra-test-os != '[]' }}",
    "name": "Test (${{ matrix.os }})",
+   "needs": "lint",
    "runs-on": "${{ matrix.os }}",
    "steps": [
     {
@@ -519,7 +525,7 @@
     }
    ],
    "strategy": {
-    "fail-fast": false,
+    "fail-fast": true,
     "matrix": {
      "os": "${{ fromJSON(inputs.extra-test-os) }}"
     }
@@ -532,8 +538,9 @@
      "working-directory": "${{ inputs.working-directory }}"
     }
    },
-   "if": "inputs.run-tests && inputs.coverage-threshold == 0",
+   "if": "${{ !cancelled() && (github.event_name != 'pull_request' || needs.lint.result != 'failure') && inputs.run-tests && inputs.coverage-threshold == 0 }}",
    "name": "Workspace tests",
+   "needs": "lint",
    "runs-on": "${{ fromJSON(vars.CI_RUNNER || '\"ubuntu-latest\"') }}",
    "steps": [
     {
