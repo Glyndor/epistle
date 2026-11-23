@@ -100,6 +100,21 @@ class SelectionTests(unittest.TestCase):
         "scripts/folder-limit/folder-limit.test.sh",
     }
 
+    def test_every_workflow_and_action_selects_the_suites_it_runs_and_the_tests_that_read_it(self):
+        """The machinery of the map: a change to a file a suite uses selects that suite, whatever the suffix."""
+        files = [p.relative_to(ROOT).as_posix() for p in (*ci_yaml.workflow_files(ROOT), *ci_yaml.action_files(ROOT))]
+        self.assertGreater(len(files), 25)
+        for path in files:
+            chosen = self.selected(path)
+            self.assertIn("tests", chosen, path)
+            owned = cp.WORKFLOWS.get(path.rsplit("/", 1)[-1], set())
+            self.assertTrue(owned - cp.ALWAYS <= chosen, path)
+        # Nothing in there selects less than the tests, and a new file with either suffix is treated the same.
+        for path in (".github/workflows/new-suite.yml", ".github/workflows/new-suite.yaml",
+                     ".github/actions/new/action.yaml", ".github/actions/new/action.yml"):
+            self.assertIn("tests", self.selected(path), path)
+        self.assertEqual(self.selected(".github/workflows/ci-e2e.yaml"), set(cp.JOBS) - cp.ALWAYS)
+
     def test_the_files_that_select_no_suite_are_exactly_the_listed_ones(self):
         listing = subprocess.check_output(["git", "ls-files"], cwd=ROOT, text=True).split("\n")
         nothing = {path for path in listing if path and not self.selected(path)}
@@ -134,7 +149,6 @@ class SelectionTests(unittest.TestCase):
             ".github/workflows/reusable-rust-supply-chain.yml": {"supply", "tests"},
             ".github/workflows/reusable-line-limit.yml": {"tests"},
             ".github/workflows/reusable-dependabot-freshness.yml": {"freshness", "tests"},
-            ".github/workflows/folder-limit.yml": {"tests"},
         }
         for path, expected in table.items():
             with self.subTest(path=path):
@@ -298,6 +312,7 @@ class WorkflowContractTests(unittest.TestCase):
             "sbom-and-licenses": ("reusable-rust-supply-chain.yml", "${{ !cancelled() && " + skip("supply") + " }}",
                                   {"run-sbom": "${{ " + skip("supply") + " }}"}),
             "line-limit": ("reusable-line-limit.yml", "${{ !cancelled() }}", None),
+            "audit": ("reusable-rust-audit.yml", "${{ !cancelled() }}", {"ref": "", "extra-lockfiles": "fuzz/Cargo.lock"}),
         }
         jobs = workflow("ci.yml")["jobs"]
         self.assertEqual(jobs["plan"]["uses"], "./.github/workflows/reusable-ci-plan.yml")
@@ -305,9 +320,12 @@ class WorkflowContractTests(unittest.TestCase):
             job = jobs[job_id]
             self.assertEqual(job["uses"], f"./.github/workflows/{reusable}", job_id)
             self.assertEqual(job["if"], condition, job_id)
-            if inputs is None:
+            if inputs is None or job_id == "audit":
                 self.assertNotIn("needs", job, job_id)
-                self.assertNotIn("with", job, job_id)
+                if inputs is None:
+                    self.assertNotIn("with", job, job_id)
+                else:
+                    self.assertEqual(job["with"], inputs, job_id)
                 continue
             self.assertEqual(job["needs"], "plan", job_id)
             with_ = dict(job["with"])

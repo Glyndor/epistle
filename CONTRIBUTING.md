@@ -169,12 +169,17 @@ you did not mean.
 
 ## Required checks
 
-A pull request into `develop` has to pass `CI gate` and
-`dco / Signed-off-by present on every commit`. `CI gate` is the last job of
+A pull request into `develop` has to pass `CI gate`,
+`dco / Signed-off-by present on every commit`,
+`author and sign-off use a GitHub noreply address` and
+`no credential-shaped line is added`. `CI gate` is the last job of
 `.github/workflows/ci.yml`: it fails unless the plan succeeded and every suite
-(`rust`, `debian`, `line-limit`, `sbom-and-licenses`) either succeeded or was
-skipped because the plan said its inputs did not change. The workflow files are
-in `.github/workflows/`.
+(`rust`, `debian`, `line-limit`, `sbom-and-licenses`, `audit`, `folder-limit` and
+`python-tests`) either succeeded or was skipped because the plan said its inputs
+did not change. A pull request into `main` is named `CI gate (main)`. The
+workflow files are in `.github/workflows/`, and the reference copy of the ones the
+gate rests on is in `.github/ci-contract/`: after a change on purpose, run
+`python3 .github/scripts/ci_contract/snapshot.py` and review the diff.
 
 ## Security
 

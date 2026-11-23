@@ -44,11 +44,15 @@ def reusable_text(names):
 GATE = f"  gate:\n    name: {json.dumps(mod.GATE_NAME)}\n    runs-on: ubuntu-latest\n    steps: []\n"
 
 
+DCO_JOBS = ("  noreply:\n    name: author and sign-off use a GitHub noreply address\n    runs-on: ubuntu-latest\n    steps: []\n"
+            "  secret-scan:\n    name: no credential-shaped line is added\n    runs-on: ubuntu-latest\n    steps: []\n")
+
+
 def caller_text(job_id, reusable, mg=MG, extra=None):
     """A caller of one reusable; the CI workflow also carries the gate job."""
     jobs = {job_id: reusable, **(extra or {})}
     body = "".join(f"  {j}:\n    uses: ./.github/workflows/{r}\n" for j, r in jobs.items())
-    return f"name: c\non:\n  pull_request:\n{mg}jobs:\n{body}{GATE if job_id == 'rust' else ''}"
+    return f"name: c\non:\n  pull_request:\n{mg}jobs:\n{body}{GATE if job_id == 'rust' else ''}{DCO_JOBS if job_id == 'dco' else ''}"
 
 
 class Tree:

@@ -682,7 +682,7 @@ jobs:
           # `:0` onto a candidate and a consumer pinning the major
           # would pull the candidate as if it were the next stable.
           # The test in `.github/scripts/test_image_tags.py` pins the
-          # behaviour; `scripts.yml` discovers it on its own.
+          # behaviour; the `python scripts` job of ci.yml discovers it on its own.
           mapfile -t tags < <(python3 "$GITHUB_WORKSPACE/.github/scripts/image_tags.py" "${CRATE_VERSION}")
           if [ "${#tags[@]}" -eq 0 ]; then
             echo "::error::image_tags.py produced no tags for ${CRATE_VERSION}"

@@ -21,6 +21,11 @@ SUITES = {
     # Judges the whole tree, so no plan output licenses skipping it.
     "line-limit": (),
     "sbom-and-licenses": ("supply",),
+    # Advisories appear without a file changing, so no plan output skips it.
+    "audit": (),
+    # Judge the whole tree and the tests of the CI itself: no plan skips them.
+    "folder-limit": (),
+    "python-tests": (),
 }
 # The jobs of ci.yml, exactly. A job added to the workflow turns the test below
 # red until the author decides here, on purpose, whether the gate waits for it.

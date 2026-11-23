@@ -1,0 +1,16 @@
+{
+ "True": {
+  "pull_request": {
+   "branches": [
+    "main"
+   ]
+  }
+ },
+ "jobs": {
+  "develop-only": {
+   "uses": "./.github/workflows/reusable-main-guard.yml"
+  }
+ },
+ "name": "guard",
+ "permissions": {}
+}

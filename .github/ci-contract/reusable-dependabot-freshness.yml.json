@@ -1,0 +1,45 @@
+{
+ "True": {
+  "workflow_call": {
+   "inputs": {
+    "max-age-days": {
+     "description": "Fail when the newest Dependabot pull request is older than this. Allow well above one missed run, since Dependabot only opens a PR when there is an upstream update; 15 covers daily cadence.",
+     "required": true,
+     "type": "number"
+    }
+   }
+  }
+ },
+ "concurrency": {
+  "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
+  "group": "dependabot-freshness-${{ github.workflow }}-${{ github.ref }}"
+ },
+ "defaults": {
+  "run": {
+   "shell": "bash"
+  }
+ },
+ "jobs": {
+  "freshness": {
+   "name": "dependabot freshness",
+   "permissions": {
+    "contents": "read"
+   },
+   "runs-on": "${{ fromJSON(vars.CI_RUNNER || '\"ubuntu-latest\"') }}",
+   "steps": [
+    {
+     "env": {
+      "GH_TOKEN": "${{ github.token }}",
+      "MAX_AGE_DAYS": "${{ inputs.max-age-days }}",
+      "REPO": "${{ github.repository }}"
+     },
+     "name": "Check the newest Dependabot pull request",
+     "run": "set -euo pipefail\n\n# List recent PRs (any state), filter client-side for\n# dependabot[bot], and pick the newest. Doing the filter and sort in\n# jq avoids the GitHub API's known wrinkle where\n# `state=all&sort=created&per_page=1` does not always include\n# closed/merged PRs in the sort order one would expect, and depends\n# on the bot author being a queryable user login (it is \u2014\n# dependabot[bot] \u2014 not the app slug `app/dependabot`).\n#\n# The window has to be paged, not fixed. A single page of 20 is a\n# window on *total* PR activity, not on Dependabot's: in a busy\n# repository the bot's newest pull request falls off the end and the\n# check reports it as never having run. Measured on Glyndor/podup,\n# where the twenty newest PRs contained none from Dependabot while\n# ten sat within the newest forty \u2014 the gate failed on a repository\n# where Dependabot had opened ten pull requests that same day.\n#\n# Three pages of 100 is a 300-PR window, and the loop stops at the\n# first page that yields a hit, so the common case still costs one\n# request.\nlatest=\"\"\npages_read=0\nfor page in 1 2 3; do\n  pages_read=\"$page\"\n  latest=$(gh api \\\n    \"repos/${REPO}/pulls?state=all&per_page=100&page=${page}\" \\\n    --jq '[.[] | select(.user.login == \"dependabot[bot]\")] | sort_by(.created_at) | reverse | .[0].created_at // empty')\n  [ -n \"$latest\" ] && break\ndone\n\nif [ -z \"$latest\" ]; then\n  echo \"::error::No Dependabot pull request in the newest $((pages_read * 100)) for ${REPO}.\"\n  echo \"Either Dependabot has never run here, or its schedule was dropped.\" >&2\n  echo \"Check that dependabot.yml is on the default branch and touches the package ecosystem you expect,\" >&2\n  echo \"then disable and re-enable Dependabot to re-register it.\" >&2\n  exit 1\nfi\n\nage_seconds=$(( $(date -u +%s) - $(date -u -d \"$latest\" +%s) ))\nage_days=$(( age_seconds / 86400 ))\n\necho \"Newest Dependabot pull request in ${REPO}: ${latest} (${age_days}d ago).\"\n\nif [ \"$age_days\" -gt \"$MAX_AGE_DAYS\" ]; then\n  echo \"::error::Dependabot last opened a pull request ${age_days} days ago in ${REPO}, over the ${MAX_AGE_DAYS}-day limit.\"\n  echo \"A silent Dependabot reports nothing, so treat this as the alert it never sent.\" >&2\n  echo \"GitHub runs Dependabot on its own schedule, hours late; a small overrun right at the boundary\" >&2\n  echo \"is not the problem \u2014 a multiple of the period is. Check dependabot.yml is still on the default\" >&2\n  echo \"branch and that the package ecosystem is configured, then disable/enable Dependabot to\" >&2\n  echo \"re-register it, and check the next scheduled scan rather than the next few minutes.\" >&2\n  exit 1\nfi\n\necho \"Within the ${MAX_AGE_DAYS}-day limit.\"\n"
+    }
+   ],
+   "timeout-minutes": 15
+  }
+ },
+ "name": "Dependabot freshness (reusable)",
+ "permissions": {}
+}

@@ -523,3 +523,50 @@ jobs:
         env:
           RUSTDOCFLAGS: "-D warnings"
         run: cargo doc --no-deps --all-features
+
+  # The caller of this workflow ends in success when every job in here is skipped,
+  # and a job skipped by a condition that drifted looks the same as one the plan
+  # skipped. This one always runs and fails unless each job the inputs select
+  # finished in success, and unless nothing failed or was cancelled whether it was
+  # selected or not. The `Test` job above reflects the workspace suite; this one
+  # checks the same for every other selected job, and for that one too.
+  sentinel:
+    name: Selected suites ran
+    needs: [lint, test, test-suite, coverage, test-extra, msrv, doc, package, semver]
+    if: always()
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
+    timeout-minutes: 5
+    steps:
+      - name: Every selected job ended in success
+        env:
+          WANT_LINT: ${{ inputs.run-lint }}
+          WANT_TEST: ${{ inputs.run-tests }}
+          WANT_COVERAGE: ${{ inputs.run-tests && inputs.coverage-threshold > 0 }}
+          WANT_SUITE: ${{ inputs.run-tests && inputs.coverage-threshold == 0 }}
+          WANT_MSRV: ${{ inputs.run-msrv && inputs.msrv != '' }}
+          WANT_DOC: ${{ inputs.doc-warnings }}
+          WANT_PACKAGE: ${{ inputs.package-check }}
+          WANT_SEMVER: ${{ inputs.semver-check }}
+          GOT_LINT: ${{ needs.lint.result }}
+          GOT_TEST: ${{ needs.test.result }}
+          GOT_COVERAGE: ${{ needs.coverage.result }}
+          GOT_SUITE: ${{ needs.test-suite.result }}
+          GOT_MSRV: ${{ needs.msrv.result }}
+          GOT_DOC: ${{ needs.doc.result }}
+          GOT_PACKAGE: ${{ needs.package.result }}
+          GOT_SEMVER: ${{ needs.semver.result }}
+          GOT_EXTRA: ${{ needs.test-extra.result }}
+        run: |
+          set -u
+          failed=0
+          for name in LINT TEST COVERAGE SUITE MSRV DOC PACKAGE SEMVER; do
+            want="WANT_$name"
+            got="GOT_$name"
+            case "${!want}" in
+              true) [ "${!got}" = success ] || { echo "::error::$name was selected and ended in ${!got}"; failed=1; } ;;
+              false) case "${!got}" in failure | cancelled) echo "::error::$name ended in ${!got}"; failed=1 ;; esac ;;
+              *) echo "::error::$name: the selection is neither true nor false (${!want})"; failed=1 ;;
+            esac
+          done
+          case "$GOT_EXTRA" in failure | cancelled) echo "::error::the extra-platform tests ended in $GOT_EXTRA"; failed=1 ;; esac
+          exit "$failed"

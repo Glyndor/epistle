@@ -1,0 +1,166 @@
+{
+ "True": {
+  "workflow_call": {
+   "inputs": {
+    "cargo-audit-version": {
+     "default": "0.23.0",
+     "description": "Exact version of cargo-audit to install; bumped via .github releases",
+     "type": "string"
+    },
+    "cargo-deny-version": {
+     "default": "0.20.2",
+     "description": "Exact version of cargo-deny to install; bumped via .github releases",
+     "type": "string"
+    },
+    "extra-lockfiles": {
+     "default": "",
+     "description": "Newline-separated lockfiles to audit in addition to the one in working-directory, given relative to it. A second workspace has its own Cargo.lock and its own dependency graph, and auditing only the root leaves it unexamined.\n",
+     "type": "string"
+    },
+    "ref": {
+     "default": "develop",
+     "description": "Branch to audit, one of develop or main, or empty for the ref that triggered the run",
+     "type": "string"
+    },
+    "toolchain": {
+     "default": "1.100.0",
+     "description": "Rust toolchain to pin the audit and deny jobs to",
+     "type": "string"
+    },
+    "working-directory": {
+     "default": ".",
+     "description": "Directory containing the Cargo workspace",
+     "type": "string"
+    }
+   }
+  }
+ },
+ "concurrency": {
+  "cancel-in-progress": true,
+  "group": "rust-audit-${{ github.workflow }}-${{ github.ref }}-${{ inputs.ref }}-${{ inputs.working-directory }}"
+ },
+ "jobs": {
+  "audit": {
+   "defaults": {
+    "run": {
+     "working-directory": "${{ inputs.working-directory }}"
+    }
+   },
+   "env": {
+    "TOOL_VERSION": "${{ inputs.cargo-audit-version }}"
+   },
+   "name": "cargo audit${{ inputs.ref != '' && format(' ({0})', inputs.ref) || '' }}",
+   "runs-on": "${{ fromJSON(vars.CI_RUNNER || '\"ubuntu-latest\"') }}",
+   "steps": [
+    {
+     "if": "inputs.ref != '' && inputs.ref != 'develop' && inputs.ref != 'main'",
+     "name": "Reject an unknown ref",
+     "run": "echo \"::error::ref must be empty, develop or main.\"\nexit 1\n"
+    },
+    {
+     "uses": "actions/checkout@PIN",
+     "with": {
+      "fetch-depth": "${{ inputs.ref != '' && 0 || 1 }}",
+      "persist-credentials": false
+     }
+    },
+    {
+     "env": {
+      "EXTRA_LOCKFILES": "${{ inputs.extra-lockfiles }}",
+      "REF": "${{ inputs.ref }}",
+      "WORKDIR": "${{ inputs.working-directory }}"
+     },
+     "id": "audited",
+     "if": "inputs.ref != ''",
+     "name": "Take the lockfiles of the audited branch",
+     "run": "set -euo pipefail\nprefix=\"\"\n[ \"$WORKDIR\" = . ] || prefix=\"${WORKDIR%/}/\"\ndir=\"$(mktemp -d \"$RUNNER_TEMP/audited.XXXXXX\")\"\ntake() {\n  mkdir -p \"$dir/$(dirname \"$1\")\"\n  git show \"origin/${REF}:${prefix}$1\" > \"$dir/$1\"\n}\ntake Cargo.lock\nwhile read -r lockfile; do\n  [ -n \"$lockfile\" ] && take \"$lockfile\"\ndone <<< \"$EXTRA_LOCKFILES\"\n# The audit runs with this directory as its working directory, and\n# cargo-audit reads `.cargo/audit.toml` from there. A branch without the\n# file gets an empty list, so no list of another branch or of the runner\n# can apply to it.\nif git cat-file -e \"origin/${REF}:${prefix}.cargo/audit.toml\" 2> /dev/null; then\n  take .cargo/audit.toml\nelse\n  mkdir -p \"$dir/.cargo\"\n  printf '[advisories]\\nignore = []\\n' > \"$dir/.cargo/audit.toml\"\nfi\necho \"dir=$dir\" >> \"$GITHUB_OUTPUT\"\n"
+    },
+    {
+     "env": {
+      "TOOLCHAIN": "${{ inputs.toolchain }}"
+     },
+     "name": "Install toolchain",
+     "run": "rustup toolchain install \"$TOOLCHAIN\" --profile minimal\nrustup default \"$TOOLCHAIN\"\n"
+    },
+    {
+     "name": "Install cargo-audit",
+     "run": "command -v cargo-audit >/dev/null || cargo install cargo-audit --version \"=$TOOL_VERSION\" --locked"
+    },
+    {
+     "env": {
+      "AUDITED_DIR": "${{ steps.audited.outputs.dir }}"
+     },
+     "name": "Run cargo audit",
+     "run": "out=\"$PWD\"\nargs=()\nif [ -n \"$AUDITED_DIR\" ]; then\n  cd \"$AUDITED_DIR\"\n  args+=(--file \"$AUDITED_DIR/Cargo.lock\")\nfi\nif ! cargo audit --json --deny warnings \"${args[@]}\" > \"$out/audit.json\" 2> \"$out/audit.stderr\"; then\n  cat \"$out/audit.stderr\" >&2\n  exit 1\nfi\n"
+    },
+    {
+     "env": {
+      "AUDITED_DIR": "${{ steps.audited.outputs.dir }}",
+      "EXTRA_LOCKFILES": "${{ inputs.extra-lockfiles }}"
+     },
+     "if": "inputs.extra-lockfiles != ''",
+     "name": "Run cargo audit on the extra lockfiles",
+     "run": "set -euo pipefail\nout=\"$PWD\"\nrun_dir=\"${AUDITED_DIR:-$PWD}\"\necho \"$EXTRA_LOCKFILES\" | while read -r lockfile; do\n  [ -n \"$lockfile\" ] || continue\n  source=\"${AUDITED_DIR:+$AUDITED_DIR/}$lockfile\"\n  if [ ! -f \"$source\" ]; then\n    echo \"::error::$lockfile does not exist; the input is stale.\"\n    exit 1\n  fi\n  # The name carries the whole path with the separators folded, so\n  # two workspaces cannot land on the same report: `fuzz/Cargo.lock`\n  # becomes `audit-fuzz-Cargo.json`. Naming it after the file alone\n  # gives every workspace the name `audit-Cargo.json`.\n  name=\"$(printf '%s' \"${lockfile%.lock}\" | tr '/' '-')\"\n  if ! (cd \"$run_dir\" && cargo audit --json --deny warnings --file \"$source\" \\\n      > \"$out/audit-${name}.json\" 2> \"$out/audit-${name}.stderr\"); then\n    cat \"$out/audit-${name}.stderr\" >&2\n    exit 1\n  fi\ndone\n"
+    },
+    {
+     "if": "always() && hashFiles('audit*.json') != ''",
+     "name": "Upload cargo audit JSON",
+     "uses": "actions/upload-artifact@PIN",
+     "with": {
+      "if-no-files-found": "error",
+      "name": "audit-json-${{ inputs.ref }}",
+      "path": "audit.json\naudit-*.json\n",
+      "retention-days": 7
+     }
+    }
+   ],
+   "timeout-minutes": 30
+  },
+  "deny": {
+   "defaults": {
+    "run": {
+     "working-directory": "${{ inputs.working-directory }}"
+    }
+   },
+   "env": {
+    "TOOL_VERSION": "${{ inputs.cargo-deny-version }}"
+   },
+   "if": "inputs.ref == ''",
+   "name": "cargo deny${{ inputs.ref != '' && format(' ({0})', inputs.ref) || '' }}",
+   "runs-on": "${{ fromJSON(vars.CI_RUNNER || '\"ubuntu-latest\"') }}",
+   "steps": [
+    {
+     "if": "inputs.ref != '' && inputs.ref != 'develop' && inputs.ref != 'main'",
+     "name": "Reject an unknown ref",
+     "run": "echo \"::error::ref must be empty, develop or main.\"\nexit 1\n"
+    },
+    {
+     "uses": "actions/checkout@PIN",
+     "with": {
+      "persist-credentials": false
+     }
+    },
+    {
+     "env": {
+      "TOOLCHAIN": "${{ inputs.toolchain }}"
+     },
+     "name": "Install toolchain",
+     "run": "rustup toolchain install \"$TOOLCHAIN\" --profile minimal\nrustup default \"$TOOLCHAIN\"\n"
+    },
+    {
+     "name": "Install cargo-deny",
+     "run": "command -v cargo-deny >/dev/null || cargo install cargo-deny --version \"=$TOOL_VERSION\" --locked"
+    },
+    {
+     "name": "Run cargo deny",
+     "run": "cargo deny check"
+    }
+   ],
+   "timeout-minutes": 30
+  }
+ },
+ "name": "Rust audit (reusable)",
+ "permissions": {
+  "contents": "read"
+ }
+}

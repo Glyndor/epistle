@@ -43,12 +43,12 @@ const SKIP_DIRS: &[&str] = &["target", ".git", "vendor", "node_modules", "cargo-
 const WORKFLOW_INVOKED_DIRS: &[(&str, &str, &str)] = &[
 	(
 		".github/scripts",
-		".github/workflows/scripts.yml",
+		".github/workflows/ci.yml",
 		"unittest discover -s .github/scripts",
 	),
 	(
 		"scripts/folder-limit",
-		".github/workflows/folder-limit.yml",
+		".github/workflows/ci.yml",
 		"folder-limit.test.sh",
 	),
 	(
