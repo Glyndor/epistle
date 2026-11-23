@@ -65,5 +65,11 @@ jobs:
           fi
           echo "No trusted PR plan; running all work on $EVENT_NAME"
           for job in lint tests doc msrv debian supply freshness folder lines; do
-            echo "$job=true" >> "$GITHUB_OUTPUT"
+            value=true
+            # The nightly run exists to seed the cargo caches, which only the
+            # Rust jobs use; the rest would be a second copy of the push to main.
+            if [ "$EVENT_NAME" = schedule ]; then
+              case "$job" in debian | supply | folder | lines) value=false ;; esac
+            fi
+            echo "$job=$value" >> "$GITHUB_OUTPUT"
           done

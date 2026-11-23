@@ -183,6 +183,11 @@ class GitPlanTests(unittest.TestCase):
         self.assertEqual(set(self.plan(base="f" * 40).values()), {"true"})
         self.assertEqual(set(self.plan(head="f" * 40).values()), {"true"})
 
+    def test_nightly_run_selects_only_the_jobs_that_seed_the_caches(self):
+        result = self.plan("schedule", base="")
+        self.assertEqual({job for job, run in result.items() if run == "true"},
+                         {"lint", "tests", "doc", "msrv", "freshness"})
+
     def test_queue_and_push_do_not_need_a_diff(self):
         for event in ("merge_group", "push"):
             self.assertEqual(set(self.plan(event, base="missing").values()), {"true"})
@@ -190,20 +195,20 @@ class GitPlanTests(unittest.TestCase):
 
 class WorkflowContractTests(unittest.TestCase):
     def test_required_callers_have_no_workflow_paths_and_keep_queue_trigger(self):
-        for filename in ("ci.yml", "debian.yml", "supply-chain.yml", "line-limit.yml", "dco.yml"):
+        for filename in ("ci.yml", "dco.yml"):
             on = workflow(filename)[True]
             self.assertIn("merge_group", on)
             self.assertFalse({"paths", "paths-ignore"} & set(on["pull_request"] or {}))
 
     def test_gated_callers_run_after_a_failed_plan_and_default_to_running(self):
-        for filename, job_id, inputs in (
-            ("ci.yml", "rust", {"run-lint": "lint", "run-tests": "tests", "run-msrv": "msrv", "doc-warnings": "doc"}),
-            ("debian.yml", "debian", {"run-build": "debian"}),
-            ("supply-chain.yml", "sbom-and-licenses", {"run-sbom": "supply"}),
-            ("line-limit.yml", "line-limit", {"run-check": "lines"}),
+        jobs = workflow("ci.yml")["jobs"]
+        self.assertEqual(jobs["plan"]["uses"], "./.github/workflows/reusable-ci-plan.yml")
+        for job_id, inputs in (
+            ("rust", {"run-lint": "lint", "run-tests": "tests", "run-msrv": "msrv", "doc-warnings": "doc"}),
+            ("debian", {"run-build": "debian"}),
+            ("sbom-and-licenses", {"run-sbom": "supply"}),
+            ("line-limit", {"run-check": "lines"}),
         ):
-            jobs = workflow(filename)["jobs"]
-            self.assertEqual(jobs["plan"]["uses"], "./.github/workflows/reusable-ci-plan.yml")
             job = jobs[job_id]
             self.assertEqual(job["needs"], "plan")
             self.assertEqual(job["if"], "${{ !cancelled() }}")
@@ -244,7 +249,7 @@ class WorkflowContractTests(unittest.TestCase):
         compat = re.search(r"debhelper-compat\s*\(=\s*(\d+)\)", control)
         self.assertIsNotNone(compat)
         self.assertGreaterEqual(int(compat[1]), 13)
-        caller = workflow("debian.yml")["jobs"]["debian"]["with"]
+        caller = workflow("ci.yml")["jobs"]["debian"]["with"]
         # The promotion into main runs the tests too: the package build is the
         # one run as root, and a test that needs a permission bit must fail
         # before the tag, not after it.

@@ -1,6 +1,20 @@
 name: CI
 
+# One workflow carries every check a pull request must pass, and one job at the
+# end, `gate`, is the check the ruleset requires. GitHub counts a skipped job
+# as a pass, and the plan below skips work on purpose (a pull request that
+# only edits documentation compiles nothing), so a required check that can end
+# up skipped says "passed" for work that never ran. `gate` runs always and
+# fails unless the plan succeeded and every suite either succeeded or was
+# skipped because the plan said so. The suite names are not required any more.
+#
+# The jobs moved here from debian.yml, line-limit.yml and supply-chain.yml keep
+# their ids and their reusable job names, so the checks they emit keep their
+# names; only the file changed.
+
 on:
+  # develop is not listed: a push to develop would be a second run of the commit
+  # the merge queue just built, and the queue is where it was checked.
   push:
     branches: [main]
   pull_request:
@@ -8,11 +22,12 @@ on:
     # Seeds the cargo caches that pull requests and the merge queue restore from:
     # a cache written on a pull request or on a queue ref is invisible to every
     # other one, and only `main` and `develop` are visible to all of them. The
-    # plan job runs everything for an event that is not a pull request.
+    # plan selects the Rust jobs for this event and nothing else.
     - cron: "17 2 * * *"
-  # Required checks `rust / Format & lint`, `rust / Test` and `rust / Coverage`: the merge queue fires
-  # `merge_group` on a temporary `gh-readonly-queue/...` branch and a required check that
-  # does not report there leaves the queue waiting forever.
+  # Required check `CI gate`, and the checks it replaces in the ruleset: the
+  # merge queue fires `merge_group` on a temporary `gh-readonly-queue/...`
+  # branch and a required check that does not report there leaves the queue
+  # waiting forever.
   # `paths:` and `branches:` filters do not apply to merge_group, so the
   # trigger sits at the top level.
   merge_group:
@@ -113,3 +128,133 @@ jobs:
     uses: ./.github/workflows/reusable-dependabot-freshness.yml
     with:
       max-age-days: 15
+
+  # Is epistle still a legitimate Debian package? Two different questions, two
+  # different builds: this one builds with Debian's own rustc through the
+  # reusable, and `dpkg-checkbuilddeps` proves Build-Depends is satisfiable
+  # rather than aspirational. release.yml answers the other question with a
+  # pinned upstream toolchain (1.100.0, the version this workflow validates), so
+  # the .deb a user installs is built by the compiler that vouched for the code.
+  # Neither build subsumes the other. Coverage owns the workspace suite.
+  debian:
+    needs: plan
+    if: ${{ !cancelled() }}
+    uses: ./.github/workflows/reusable-rust-debian.yml
+    with:
+      package-name: epistle
+      run-build: ${{ needs.plan.outputs.debian != 'false' }}
+      # The package build runs as root in a container, which the ordinary test
+      # job does not, so a test that relies on a permission bit passes there and
+      # fails here. A pull request into develop and the merge queue skip the
+      # tests (the build is the question they ask); the promotion into main and
+      # the push to main run them, so the failure shows before the tag instead of
+      # after it (0.13.0 and 0.13.1 were tagged and never published).
+      run-tests: ${{ (github.event_name != 'pull_request' && github.event_name != 'merge_group') || github.base_ref == 'main' }}
+      # Not the reusable's trixie default: trixie ships rustc 1.85 and the
+      # dependency floor is 1.94 (set by sqlx 0.9's `rust-version`), which
+      # edition 2024 alone does not reveal. sid carries 1.95. Digest-pinned so
+      # the check runs against a fixed environment instead of a moving tag.
+      debian-image: "debian:sid@sha256:e276677157e13bc51ea5b8651f54ad28883f503cc37b3e3af2c4b6cc2f4efe7b"
+      # Debian's toolchain ships no musl standard library, so debian/rules
+      # builds for a target it has to bring itself. Keep this in step with the
+      # toolchain of the `rust` job: the whole point is that the packaged binary
+      # comes from the compiler CI validates with.
+      rust-toolchain: "1.100.0"
+      rust-target: x86_64-unknown-linux-musl
+      # aws-lc-sys is the only -sys crate in the tree and it compiles C, so
+      # cross-compiling to musl needs a C cross-compiler. ring and rcgen
+      # compile C without being -sys crates; the same package covers all three.
+      # Measured by .github/workflows/probe-musl.yml (epistle#757, closed):
+      # without it the build fails at aws-lc-sys and the floor survives.
+      apt-packages: "musl-tools fakeroot jq"
+
+  # A statement about the state of the tree, not about a diff: the reusable ends
+  # in `git ls-files -z` and counts the lines of every tracked file by extension.
+  # The plan only skips it when the changed paths cannot affect any of the
+  # extensions it scans.
+  line-limit:
+    needs: plan
+    if: ${{ !cancelled() }}
+    uses: ./.github/workflows/reusable-line-limit.yml
+    with:
+      run-check: ${{ needs.plan.outputs.lines != 'false' }}
+
+  sbom-and-licenses:
+    needs: plan
+    if: ${{ !cancelled() }}
+    uses: ./.github/workflows/reusable-rust-supply-chain.yml
+    with:
+      run-sbom: ${{ needs.plan.outputs.supply != 'false' }}
+
+  # The one check the ruleset requires from this workflow. It runs whatever
+  # happened to the jobs it waits for, because a job that `needs` a failed job is
+  # skipped and a skipped job reports success. It fails unless:
+  #   - the plan succeeded, and every output it gives is `true` or `false`;
+  #   - every suite succeeded, or was skipped and the plan said `false` for each
+  #     thing that suite does.
+  # A suite that failed, was cancelled, or was skipped without that `false` is a
+  # failure here. A `needs` entry the table below does not know is a failure too,
+  # so a job added to this workflow cannot be left outside the gate.
+  # `dependabot-freshness` is outside on purpose: it reads the age of the newest
+  # Dependabot pull request, not the commit, so it would fail unrelated work.
+  # The ruleset requires `CI gate` and `dco / Signed-off-by present on every
+  # commit`; the names of the suites above are not required.
+  gate:
+    name: CI gate
+    needs: [plan, rust, debian, line-limit, sbom-and-licenses]
+    if: always()
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Every suite ran or the plan said it could be skipped
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          python3 -I - <<'PY'
+          import json
+          import os
+          import sys
+
+          SUITES = {
+              "rust": ("lint", "tests", "doc", "msrv"),
+              "debian": ("debian",),
+              "line-limit": ("lines",),
+              "sbom-and-licenses": ("supply",),
+          }
+          needs = json.loads(os.environ["NEEDS"])
+          problems = []
+
+          plan = needs.get("plan") or {}
+          if plan.get("result") != "success":
+              problems.append(f"the plan job did not succeed (result: {plan.get('result')})")
+          outputs = plan.get("outputs") or {}
+          for dims in SUITES.values():
+              for dim in dims:
+                  if outputs.get(dim) not in ("true", "false"):
+                      problems.append(f"plan output {dim!r} is neither true nor false: {outputs.get(dim)!r}")
+
+          for name in needs:
+              if name != "plan" and name not in SUITES:
+                  problems.append(f"{name} is not in the gate table")
+          for name, dims in SUITES.items():
+              job = needs.get(name)
+              if job is None:
+                  problems.append(f"{name} is not among the jobs the gate waits for")
+                  continue
+              result = job.get("result")
+              if result == "success":
+                  continue
+              if result == "skipped":
+                  if plan.get("result") == "success" and all(outputs.get(d) == "false" for d in dims):
+                      continue
+                  problems.append(f"{name} was skipped and the plan did not say it could be")
+              else:
+                  problems.append(f"{name} did not succeed (result: {result})")
+
+          for problem in problems:
+              print(f"::error::{problem}")
+          if problems:
+              sys.exit(1)
+          print("The plan succeeded and every suite passed or was skipped by the plan.")
+          PY

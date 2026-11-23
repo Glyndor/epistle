@@ -17,15 +17,12 @@ OWN = {".github/scripts/ci_plan/ci_plan.py", ".github/scripts/ci_plan/test_ci_pl
        ".github/scripts/ci_plan/__init__.py",
        ".github/workflows/reusable-ci-plan.yml"}
 WORKFLOWS = {
-    "ci.yml": RUST | {"freshness"},
+    "ci.yml": RUST | {"freshness", "debian", "supply", "lines"},
     "reusable-rust-ci.yml": RUST,
-    "debian.yml": {"debian"},
     "reusable-rust-debian.yml": {"debian"},
-    "supply-chain.yml": {"supply"},
     "reusable-rust-supply-chain.yml": {"supply"},
     "reusable-dependabot-freshness.yml": {"freshness"},
     "folder-limit.yml": {"folder"},
-    "line-limit.yml": {"lines"},
     "reusable-line-limit.yml": {"lines"},
 }
 TEST_FILE = re.compile(r"(?:^tests?(?:_[a-z0-9_]+)?$|_tests(?:_[a-z0-9_]+)?$|^test_support$)")
