@@ -57,6 +57,11 @@ const PRIVILEGED: &[(&str, &str, &str)] = &[
 		"publishes and attests the image with packages, id-token and attestations: write",
 	),
 	(
+		"codeql.yml",
+		"analyze",
+		"uploads the results with security-events: write",
+	),
+	(
 		"rust-audit.yml",
 		"report",
 		"opens and comments on issues with issues: write",
