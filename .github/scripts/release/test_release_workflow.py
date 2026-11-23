@@ -13,7 +13,7 @@ import ci_yaml
 HERE = Path(__file__).resolve().parent
 ROOT = Path(__file__).resolve().parents[3]
 WORKFLOW = ROOT / ".github/workflows/release.yml"
-PUBLISHING = ("attest", "sign", "publish", "image-build", "image-manifest", "image-promote")
+PUBLISHING = ("attest", "sign", "verify-signatures", "publish", "image-build", "image-manifest", "image-promote")
 KEY = "secrets.GLYNDOR_RELEASE_ED25519_KEY"
 
 
@@ -61,11 +61,11 @@ class Authority(unittest.TestCase):
     def test_every_job_that_publishes_or_signs_is_in_the_release_environment(self):
         for name in PUBLISHING:
             self.assertEqual(jobs()[name].get("environment"), "release", name)
-        for name in ("verify", "build-deb", "build", "sign-rehearsal", "verify-signatures"):
+        for name in ("verify", "build-deb", "build", "sign-rehearsal"):
             self.assertNotIn("environment", jobs()[name], name)
 
     def test_the_jobs_with_authority_check_the_event_and_the_ref_in_shell_too(self):
-        for name in ("attest", "sign", "publish"):
+        for name in ("attest", "sign", "verify-signatures", "publish"):
             first = jobs()[name]["steps"][0]["run"]
             self.assertIn("push:refs/tags/v*", first, name)
             self.assertIn("workflow_dispatch:refs/heads/main", first, name)

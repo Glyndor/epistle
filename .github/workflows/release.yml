@@ -619,6 +619,10 @@ jobs:
     name: Verify the signatures
     needs: [verify, build, attest, sign]
     if: ${{ !inputs.images-only && !inputs.dry-run }}
+    # No secret here, but it runs scripts of the verified commit and its answer decides
+    # whether anything is published, so it is held to what the jobs that hold secrets are:
+    # the environment's deployment rules and the event and ref checked in shell.
+    environment: release
     # Fixed on GitHub's runners, never CI_RUNNER: release job; holds secrets or write/OIDC permissions.
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -627,6 +631,13 @@ jobs:
     env:
       TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
     steps:
+      - name: Only a release tag or main may verify for publication
+        run: |
+          case "${GITHUB_EVENT_NAME}:${GITHUB_REF}" in
+            push:refs/tags/v* | workflow_dispatch:refs/heads/main | workflow_dispatch:refs/tags/v*) ;;
+            *) echo "::error::${GITHUB_EVENT_NAME} on ${GITHUB_REF} may not verify a release"; exit 1 ;;
+          esac
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.verify.outputs.commit }}
