@@ -13,8 +13,7 @@
 //!   hands it to `Command::new`.
 //! - The host-side spec builders ([`host_pg_dump_spec`],
 //!   [`host_psql_load_spec`]) and the container-side ones
-//!   ([`container_pg_dump_spec`], [`container_psql_load_spec`],
-//!   [`container_cp_into_spec`]). The two halves share the
+//!   ([`container_pg_dump_spec`], [`container_psql_load_spec`]). The two halves share the
 //!   invariant that the password never appears in argv; the host
 //!   path uses `PGPASSWORD` env, and the container shell reads the
 //!   mounted secret into `PGPASSWORD` before executing the client.
@@ -28,7 +27,6 @@
 //! `psql`.
 
 mod db_dump_container;
-mod db_dump_host_temp;
 mod db_dump_marker;
 mod db_dump_target;
 mod dispatch;
@@ -40,13 +38,11 @@ mod spec;
 #[cfg(test)]
 use crate::config::Database;
 use db_dump_container::load_dump_container_with;
+#[cfg(test)]
+use db_dump_container::{confirmed_commit, transaction};
 pub(crate) use db_dump_container::{
-	container_cp_into_spec, container_pg_dump_spec, container_psql_load_spec, load_dump_container,
+	container_pg_dump_spec, container_psql_load_spec, load_dump_container,
 };
-#[cfg(test)]
-use db_dump_container::{container_rm_temp_spec, leftover_note};
-#[cfg(test)]
-use db_dump_host_temp::{RestoreHostTemp, SQL_FILE_NAME};
 pub(in crate::cli::backup) use db_dump_marker::output_ends_with_pg_dump_complete;
 use db_dump_target::ensure_stack_database;
 pub(crate) use dispatch::{
