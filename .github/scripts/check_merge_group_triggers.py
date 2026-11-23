@@ -13,7 +13,7 @@ there.
 A required check is named `<caller job id> / <reusable job name>`, or just the
 job's `name:` when the job is not a call to a reusable. REQUIRED below lists
 the checks of the first kind and REQUIRED_DIRECT the second, each with the file
-that holds the job. The ruleset requires `CI gate` and the DCO check; the other
+that holds the job. The ruleset requires `CI gate`, the DCO check and the two identity and secret checks of dco.yml; the other
 five are the suites the gate replaces, listed until the ruleset stops requiring
 them, and they are still emitted afterwards. For each one the scan finds the caller workflow whose job has
 that id and `uses:` that reusable, and demands `merge_group` in its `on:`
@@ -55,6 +55,9 @@ GATE_NAME = (
 # (job id, job name) -> workflow file holding a job that runs its own steps.
 REQUIRED_DIRECT = {
     ("gate", GATE_NAME): "ci.yml",
+    # Security results count for merging: the ruleset requires them by name.
+    ("noreply", "author and sign-off use a GitHub noreply address"): "dco.yml",
+    ("secret-scan", "no credential-shaped line is added"): "dco.yml",
 }
 
 

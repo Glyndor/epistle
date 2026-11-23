@@ -1,0 +1,172 @@
+{
+ "True": {
+  "merge_group": {
+   "types": [
+    "checks_requested"
+   ]
+  },
+  "pull_request": {
+   "branches": [
+    "develop",
+    "main"
+   ]
+  },
+  "push": {
+   "branches": [
+    "main"
+   ]
+  },
+  "schedule": [
+   {
+    "cron": "17 2 * * *"
+   }
+  ]
+ },
+ "jobs": {
+  "audit": {
+   "if": "${{ !cancelled() }}",
+   "uses": "./.github/workflows/reusable-rust-audit.yml",
+   "with": {
+    "extra-lockfiles": "fuzz/Cargo.lock",
+    "ref": ""
+   }
+  },
+  "debian": {
+   "if": "${{ !cancelled() && needs.plan.outputs.debian != 'false' }}",
+   "needs": "plan",
+   "uses": "./.github/workflows/reusable-rust-debian.yml",
+   "with": {
+    "apt-packages": "musl-tools fakeroot jq",
+    "debian-image": "debian:sid@sha256:PIN",
+    "package-name": "epistle",
+    "run-build": "${{ needs.plan.outputs.debian != 'false' }}",
+    "run-tests": "${{ (github.event_name != 'pull_request' && github.event_name != 'merge_group') || github.base_ref == 'main' }}",
+    "rust-target": "x86_64-unknown-linux-musl",
+    "rust-toolchain": "1.100.0"
+   }
+  },
+  "dependabot-freshness": {
+   "if": "${{ !cancelled() && github.event_name != 'merge_group' && needs.plan.outputs.freshness != 'false' }}",
+   "needs": "plan",
+   "uses": "./.github/workflows/reusable-dependabot-freshness.yml",
+   "with": {
+    "max-age-days": 15
+   }
+  },
+  "folder-limit": {
+   "if": "${{ !cancelled() }}",
+   "name": "folder limit",
+   "runs-on": "${{ fromJSON(vars.CI_RUNNER || '\"ubuntu-latest\"') }}",
+   "steps": [
+    {
+     "uses": "actions/checkout@PIN",
+     "with": {
+      "fetch-depth": 0,
+      "persist-credentials": false
+     }
+    },
+    {
+     "env": {
+      "BASE": "${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}"
+     },
+     "name": "Check direct file counts with the base gate",
+     "run": "set -euo pipefail\nscript=\"$RUNNER_TEMP/folder-limit.sh\"\nif [ -z \"$BASE\" ]; then\n  cp scripts/folder-limit/folder-limit.sh \"$script\"\nelse\n  base=\"$(git rev-parse --verify \"${BASE}^{commit}\")\"\n  git ls-tree --name-only \"$base\" -- scripts/folder-limit/folder-limit.sh >\"$RUNNER_TEMP/folder-limit-base-path\"\n  if [ -s \"$RUNNER_TEMP/folder-limit-base-path\" ]; then\n    git show \"$base:scripts/folder-limit/folder-limit.sh\" >\"$script\"\n  else\n    echo \"base has no folder-limit gate; using PR copy for its first introduction\" >&2\n    cp scripts/folder-limit/folder-limit.sh \"$script\"\n  fi\nfi\nbash \"$script\"\n"
+    },
+    {
+     "name": "Test the proposed gate",
+     "run": "bash scripts/folder-limit/folder-limit.test.sh"
+    }
+   ],
+   "timeout-minutes": 5
+  },
+  "gate": {
+   "if": "always()",
+   "name": "${{ github.event_name == 'merge_group' && 'CI gate' || github.event_name == 'pull_request' && (github.event.pull_request.base.ref == 'main' && 'CI gate (main)' || 'CI gate') || format('CI gate ({0})', github.event_name) }}",
+   "needs": [
+    "plan",
+    "rust",
+    "debian",
+    "line-limit",
+    "sbom-and-licenses",
+    "audit",
+    "folder-limit",
+    "python-tests"
+   ],
+   "permissions": {},
+   "runs-on": "${{ fromJSON(vars.CI_RUNNER || '\"ubuntu-latest\"') }}",
+   "steps": [
+    {
+     "env": {
+      "BASE_REF": "${{ github.event.pull_request.base.ref }}",
+      "EVENT_NAME": "${{ github.event_name }}",
+      "NEEDS": "${{ toJSON(needs) }}"
+     },
+     "name": "Every suite ran or the plan said it could be skipped",
+     "run": "python3 -I - <<'PY'\nimport json\nimport os\nimport sys\n\nSUITES = {\n    \"rust\": (\"lint\", \"tests\", \"doc\", \"msrv\"),\n    \"debian\": (\"debian\",),\n    \"line-limit\": (),\n    \"audit\": (),\n    \"folder-limit\": (),\n    \"python-tests\": (),\n    \"sbom-and-licenses\": (\"supply\",),\n}\nneeds = json.loads(os.environ[\"NEEDS\"])\nproblems = []\n\n# Compared here, in code that tells `develop` from `Develop`, and not\n# only in the expression that names this job.\nif os.environ.get(\"EVENT_NAME\") == \"pull_request\" and os.environ.get(\"BASE_REF\") not in (\"develop\", \"main\"):\n    problems.append(f\"the base of this pull request is {os.environ.get('BASE_REF')!r}, not develop or main\")\n\nplan = needs.get(\"plan\") or {}\nif plan.get(\"result\") != \"success\":\n    problems.append(f\"the plan job did not succeed (result: {plan.get('result')})\")\noutputs = plan.get(\"outputs\") or {}\nfor dims in SUITES.values():\n    for dim in dims:\n        if outputs.get(dim) not in (\"true\", \"false\"):\n            problems.append(f\"plan output {dim!r} is neither true nor false: {outputs.get(dim)!r}\")\n\nfor name in needs:\n    if name != \"plan\" and name not in SUITES:\n        problems.append(f\"{name} is not in the gate table\")\nfor name, dims in SUITES.items():\n    job = needs.get(name)\n    if job is None:\n        problems.append(f\"{name} is not among the jobs the gate waits for\")\n        continue\n    result = job.get(\"result\")\n    if result == \"success\":\n        continue\n    if result == \"skipped\":\n        if plan.get(\"result\") == \"success\" and dims and all(outputs.get(d) == \"false\" for d in dims):\n            continue\n        problems.append(f\"{name} was skipped and the plan did not say it could be\")\n    else:\n        problems.append(f\"{name} did not succeed (result: {result})\")\n\nprint(f\"{'suite':<20} {'plan says':<28} result\")\nfor name, dims in SUITES.items():\n    says = \",\".join(f\"{d}={outputs.get(d)}\" for d in dims) or \"always runs\"\n    print(f\"{name:<20} {says:<28} {(needs.get(name) or {}).get('result')}\")\nfor problem in problems:\n    print(f\"::error::{problem}\")\nif problems:\n    sys.exit(1)\nprint(\"The plan succeeded and every suite passed or was skipped by the plan.\")\nPY\n"
+    }
+   ],
+   "timeout-minutes": 5
+  },
+  "line-limit": {
+   "if": "${{ !cancelled() }}",
+   "uses": "./.github/workflows/reusable-line-limit.yml"
+  },
+  "plan": {
+   "uses": "./.github/workflows/reusable-ci-plan.yml"
+  },
+  "python-tests": {
+   "if": "${{ !cancelled() }}",
+   "name": "python scripts",
+   "runs-on": "${{ fromJSON(vars.CI_RUNNER || '\"ubuntu-latest\"') }}",
+   "steps": [
+    {
+     "uses": "actions/checkout@PIN",
+     "with": {
+      "persist-credentials": false
+     }
+    },
+    {
+     "name": "Install signing dependencies",
+     "run": "python3 -m pip install --require-hashes -r .github/scripts/sign-requirements.txt"
+    },
+    {
+     "name": "Run the script tests",
+     "run": "python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v"
+    },
+    {
+     "name": "Every required check is reachable from a merge queue",
+     "run": "python3 .github/scripts/check_merge_group_triggers.py"
+    }
+   ],
+   "timeout-minutes": 15
+  },
+  "rust": {
+   "if": "${{ !cancelled() && (needs.plan.outputs.lint != 'false' || needs.plan.outputs.tests != 'false' || needs.plan.outputs.doc != 'false' || needs.plan.outputs.msrv != 'false') }}",
+   "needs": "plan",
+   "uses": "./.github/workflows/reusable-rust-ci.yml",
+   "with": {
+    "apt-packages": "fakeroot",
+    "coverage-ignore-regex": "(db/mod|antispam/((reputation|hook)(/mod)?|corpus(/(mod|store|score|training))?|bans/sql/mod)|acme/renew(/mod)?|pop3/server(/mod)?|managesieve/server(/mod)?|directory_store/(sql|ldap)(/mod)?|storage/delivery/(containment|default_mailboxes|sieve_limits|sieve_names|sieve_warnings)|imap/session/list_status/(hierarchy|root_hierarchy|special_use_selection)|_tests(_[a-z0-9_]+)?|test_support|tests_[a-z0-9_]+|/tests)\\.rs|/tests/[^/]+\\.rs|src/[^/]*(/[^/]+)*/tests(/[^/]+)*\\.rs",
+    "coverage-threshold": 88,
+    "doc-warnings": "${{ needs.plan.outputs.doc != 'false' }}",
+    "msrv": "1.98",
+    "run-lint": "${{ needs.plan.outputs.lint != 'false' }}",
+    "run-msrv": "${{ needs.plan.outputs.msrv != 'false' }}",
+    "run-tests": "${{ needs.plan.outputs.tests != 'false' }}",
+    "toolchain": "1.100.0"
+   }
+  },
+  "sbom-and-licenses": {
+   "if": "${{ !cancelled() && needs.plan.outputs.supply != 'false' }}",
+   "needs": "plan",
+   "uses": "./.github/workflows/reusable-rust-supply-chain.yml",
+   "with": {
+    "run-sbom": "${{ needs.plan.outputs.supply != 'false' }}"
+   }
+  }
+ },
+ "name": "CI",
+ "permissions": {
+  "contents": "read"
+ }
+}

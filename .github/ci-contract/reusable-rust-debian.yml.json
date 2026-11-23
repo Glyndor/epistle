@@ -1,0 +1,203 @@
+{
+ "True": {
+  "workflow_call": {
+   "inputs": {
+    "apt-packages": {
+     "default": "",
+     "description": "Space-separated apt packages the build needs on top of the fixed tooling",
+     "type": "string"
+    },
+    "arch": {
+     "default": "",
+     "description": "Architecture to verify/stage (empty matches any)",
+     "type": "string"
+    },
+    "artifact-name": {
+     "default": "",
+     "description": "Artifact name when upload-artifact is true",
+     "type": "string"
+    },
+    "check-vendored": {
+     "default": false,
+     "description": "Also run an offline build from vendored crates",
+     "type": "boolean"
+    },
+    "debian-image": {
+     "default": "debian:trixie@sha256:PIN",
+     "description": "Container image to build in (a stable suite is reproducible)",
+     "type": "string"
+    },
+    "offline-cargo-args": {
+     "default": "",
+     "description": "Extra cargo args for the offline build (e.g. feature flags)",
+     "type": "string"
+    },
+    "package-name": {
+     "description": "Debian package name (the .deb is <package-name>_*.deb)",
+     "required": true,
+     "type": "string"
+    },
+    "run-build": {
+     "default": true,
+     "description": "Build the package selected by the caller's plan",
+     "type": "boolean"
+    },
+    "run-tests": {
+     "default": true,
+     "description": "Run dh_auto_test (false uses Debian's nocheck build option)",
+     "type": "boolean"
+    },
+    "rust-target": {
+     "default": "",
+     "description": "Extra rustup target to install (needs rust-toolchain; e.g. x86_64-unknown-linux-musl)",
+     "type": "string"
+    },
+    "rust-toolchain": {
+     "default": "",
+     "description": "rustup toolchain to install instead of the distro cargo/rustc (empty keeps the distro toolchain)",
+     "type": "string"
+    },
+    "upload-artifact": {
+     "default": false,
+     "description": "Upload the produced .deb as an artifact",
+     "type": "boolean"
+    }
+   }
+  }
+ },
+ "concurrency": {
+  "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
+  "group": "rust-debian-${{ github.workflow }}-${{ github.ref }}-${{ inputs.arch }}-${{ inputs.package-name }}"
+ },
+ "jobs": {
+  "build": {
+   "container": {
+    "image": "${{ inputs.debian-image }}"
+   },
+   "defaults": {
+    "run": {
+     "shell": "bash"
+    }
+   },
+   "env": {
+    "ARCH": "${{ inputs.arch }}",
+    "PKG": "${{ inputs.package-name }}",
+    "RUST_TARGET": "${{ inputs.rust-target }}"
+   },
+   "if": "inputs.run-build",
+   "name": "dpkg-buildpackage",
+   "runs-on": "${{ fromJSON(vars.CI_RUNNER || '\"ubuntu-latest\"') }}",
+   "steps": [
+    {
+     "env": {
+      "APT_PACKAGES": "${{ inputs.apt-packages }}",
+      "DEBIAN_FRONTEND": "noninteractive",
+      "RUST_TOOLCHAIN": "${{ inputs.rust-toolchain }}"
+     },
+     "name": "Install build tooling",
+     "run": "apt-get update -qq\nif [ -n \"$RUST_TOOLCHAIN\" ]; then\n  apt-get install -y --no-install-recommends \\\n    ca-certificates build-essential dpkg-dev debhelper curl\nelse\n  apt-get install -y --no-install-recommends \\\n    ca-certificates build-essential dpkg-dev debhelper cargo rustc\nfi\nif [ -n \"$APT_PACKAGES\" ]; then\n  # shellcheck disable=SC2086 # intentional word-splitting of the list\n  apt-get install -y --no-install-recommends $APT_PACKAGES\nfi\n"
+    },
+    {
+     "env": {
+      "RUST_TARGET": "${{ inputs.rust-target }}",
+      "RUST_TOOLCHAIN": "${{ inputs.rust-toolchain }}"
+     },
+     "if": "inputs.rust-toolchain != ''",
+     "name": "Install the pinned Rust toolchain",
+     "run": "set -euo pipefail\n# Download the installer whole, with retries, then run it: a pipe\n# into sh would run a script cut short by a failed download.\ninstaller=\"$(mktemp)\"\ncurl --proto '=https' --tlsv1.2 -fsSL --retry 5 --retry-delay 5 --retry-all-errors \\\n  -o \"$installer\" https://sh.rustup.rs\nsh \"$installer\" -y --profile minimal --default-toolchain \"$RUST_TOOLCHAIN\"\nrm -f \"$installer\"\n. \"$HOME/.cargo/env\"\nif [ -n \"$RUST_TARGET\" ]; then\n  rustup target add \"$RUST_TARGET\" --toolchain \"$RUST_TOOLCHAIN\"\nfi\necho \"$HOME/.cargo/bin\" >> \"$GITHUB_PATH\"\n"
+    },
+    {
+     "uses": "actions/checkout@PIN",
+     "with": {
+      "persist-credentials": false
+     }
+    },
+    {
+     "name": "Confirm build dependencies are satisfiable",
+     "run": "dpkg-checkbuilddeps"
+    },
+    {
+     "env": {
+      "DEB_BUILD_OPTIONS": "${{ !inputs.run-tests && 'nocheck' || '' }}"
+     },
+     "name": "Build the package",
+     "run": "dpkg-buildpackage -us -uc -b"
+    },
+    {
+     "name": "Confirm the .deb was produced",
+     "run": "set -euo pipefail\nshopt -s nullglob\nif [ -n \"$ARCH\" ]; then\n  debs=( ../\"${PKG}\"_*_\"${ARCH}\".deb )\nelse\n  debs=( ../\"${PKG}\"_*.deb )\nfi\nif [ ${#debs[@]} -eq 0 ]; then\n  echo \"::error::no .deb artifact was produced\"\n  exit 1\nfi\ndeb=\"${debs[0]}\"\necho \"Built $deb\"\ndpkg-deb --contents \"$deb\"\n\n# What the package DECLARES, not just what it contains. Depends is\n# generated from ${shlibs:Depends}, so it is derived at build time\n# from the binary's shared-library needs and cannot be read off any\n# file in the repository - the built package is the only place it\n# exists.\n#\n# Glyndor/podup#1512 is why this is here. Every published .deb\n# declared `libc6 (>= 2.39)`, so apt install failed on Debian 12\n# (2.36) and Ubuntu 22.04 (2.35). The fix builds against musl so the\n# substitution comes out empty - and the lane could confirm the\n# package builds while saying nothing about the line that was the\n# whole point. Printing it turns that claim into something a run\n# settles instead of something a person re-measures by hand.\necho \"--- control fields ---\"\ndpkg-deb -f \"$deb\"\n\n# And fail when the declaration is wrong, not just print it. A musl\n# target is a static binary, so ${shlibs:Depends} must substitute to\n# nothing and Depends must name no shared library. That property is\n# the whole fix for Glyndor/podup#1512, and until now nothing\n# defended it: if the build ever links dynamically again, the\n# dpkg-shlibdeps warnings simply stop appearing and a libc6 floor\n# comes back with every check still green. A regression here is\n# invisible at build time and only shows up as apt refusing to\n# install on an older release, which is the expensive place to find\n# it.\ncase \"$RUST_TARGET\" in\n  *musl*)\n    depends=\"$(dpkg-deb -f \"$deb\" Depends || true)\"\n    if printf '%s' \"$depends\" | grep -qE '(^|[[:space:],])lib[a-z0-9]'; then\n      echo \"::error::built for $RUST_TARGET but the package declares a shared-library dependency: $depends\"\n      exit 1\n    fi\n    echo \"Depends declares no shared library, as a $RUST_TARGET build must.\"\n    ;;\nesac\n\ncp \"$deb\" \"$(basename \"$deb\")\"\n"
+    },
+    {
+     "if": "${{ inputs.upload-artifact }}",
+     "name": "Upload artifact",
+     "uses": "actions/upload-artifact@PIN",
+     "with": {
+      "if-no-files-found": "error",
+      "name": "${{ inputs.artifact-name }}",
+      "path": "${{ inputs.package-name }}_*.deb",
+      "retention-days": 1
+     }
+    }
+   ],
+   "timeout-minutes": 80
+  },
+  "vendored": {
+   "container": {
+    "image": "${{ inputs.debian-image }}"
+   },
+   "defaults": {
+    "run": {
+     "shell": "bash"
+    }
+   },
+   "env": {
+    "OFFLINE_ARGS": "${{ inputs.offline-cargo-args }}",
+    "PKG": "${{ inputs.package-name }}"
+   },
+   "if": "${{ inputs.run-build && inputs.check-vendored }}",
+   "name": "build (vendored / offline)",
+   "runs-on": "${{ fromJSON(vars.CI_RUNNER || '\"ubuntu-latest\"') }}",
+   "steps": [
+    {
+     "env": {
+      "DEBIAN_FRONTEND": "noninteractive",
+      "RUST_TOOLCHAIN": "${{ inputs.rust-toolchain }}"
+     },
+     "name": "Install build tooling",
+     "run": "apt-get update -qq\nif [ -n \"$RUST_TOOLCHAIN\" ]; then\n  apt-get install -y --no-install-recommends \\\n    ca-certificates build-essential curl fakeroot\nelse\n  apt-get install -y --no-install-recommends \\\n    ca-certificates build-essential cargo rustc fakeroot\nfi\n"
+    },
+    {
+     "env": {
+      "RUST_TARGET": "${{ inputs.rust-target }}",
+      "RUST_TOOLCHAIN": "${{ inputs.rust-toolchain }}"
+     },
+     "if": "inputs.rust-toolchain != ''",
+     "name": "Install the pinned Rust toolchain",
+     "run": "set -euo pipefail\n# Download the installer whole, with retries, then run it: a pipe\n# into sh would run a script cut short by a failed download.\ninstaller=\"$(mktemp)\"\ncurl --proto '=https' --tlsv1.2 -fsSL --retry 5 --retry-delay 5 --retry-all-errors \\\n  -o \"$installer\" https://sh.rustup.rs\nsh \"$installer\" -y --profile minimal --default-toolchain \"$RUST_TOOLCHAIN\"\nrm -f \"$installer\"\n. \"$HOME/.cargo/env\"\nif [ -n \"$RUST_TARGET\" ]; then\n  rustup target add \"$RUST_TARGET\" --toolchain \"$RUST_TOOLCHAIN\"\nfi\necho \"$HOME/.cargo/bin\" >> \"$GITHUB_PATH\"\n"
+    },
+    {
+     "uses": "actions/checkout@PIN",
+     "with": {
+      "persist-credentials": false
+     }
+    },
+    {
+     "name": "Vendor dependencies (the only step allowed network access)",
+     "run": "cargo vendor vendor\nmkdir -p .cargo\nprintf '[source.crates-io]\\nreplace-with = \"vendored-sources\"\\n\\n[source.vendored-sources]\\ndirectory = \"vendor\"\\n' > .cargo/config.toml\n"
+    },
+    {
+     "env": {
+      "CARGO_NET_OFFLINE": "true"
+     },
+     "name": "Build offline from the vendored tree",
+     "run": "read -ra offline_args <<< \"$OFFLINE_ARGS\"\ncargo build --release --locked --offline \"${offline_args[@]}\"\ntest -x \"target/release/${PKG}\"\necho \"Built target/release/${PKG} offline from vendored sources\"\n"
+    }
+   ],
+   "timeout-minutes": 80
+  }
+ },
+ "name": "Rust Debian package (reusable)",
+ "permissions": {
+  "contents": "read"
+ }
+}

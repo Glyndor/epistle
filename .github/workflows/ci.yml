@@ -195,6 +195,81 @@ jobs:
     with:
       run-sbom: ${{ needs.plan.outputs.supply != 'false' }}
 
+  # How many files a folder holds is a statement about the whole tree, so it runs
+  # on every pull request and queue entry. The gate comes from the base commit, so
+  # a pull request cannot rewrite its own checker, and the proposed copy is tested
+  # too. Only the first pull request that introduces the gate uses its own copy.
+  folder-limit:
+    name: folder limit
+    if: ${{ !cancelled() }}
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check direct file counts with the base gate
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+        # An unreadable base is an error and never falls back to the copy of the
+        # pull request. A push or a nightly run has no base and checks the tree.
+        run: |
+          set -euo pipefail
+          script="$RUNNER_TEMP/folder-limit.sh"
+          if [ -z "$BASE" ]; then
+            cp scripts/folder-limit/folder-limit.sh "$script"
+          else
+            base="$(git rev-parse --verify "${BASE}^{commit}")"
+            git ls-tree --name-only "$base" -- scripts/folder-limit/folder-limit.sh >"$RUNNER_TEMP/folder-limit-base-path"
+            if [ -s "$RUNNER_TEMP/folder-limit-base-path" ]; then
+              git show "$base:scripts/folder-limit/folder-limit.sh" >"$script"
+            else
+              echo "base has no folder-limit gate; using PR copy for its first introduction" >&2
+              cp scripts/folder-limit/folder-limit.sh "$script"
+            fi
+          fi
+          bash "$script"
+
+      - name: Test the proposed gate
+        run: bash scripts/folder-limit/folder-limit.test.sh
+
+  # The tests of the CI itself: the gate, the plan, the map, the reference copy of
+  # the workflows, the audit, the signing scripts. They are part of the gate
+  # because a test nobody is made to pass guards nothing. The signing
+  # requirements are hash-pinned, and the release workflow installs from the same
+  # file, so what passes here is what signs a real release.
+  python-tests:
+    name: python scripts
+    if: ${{ !cancelled() }}
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install signing dependencies
+        run: python3 -m pip install --require-hashes -r .github/scripts/sign-requirements.txt
+
+      - name: Run the script tests
+        run: python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v
+
+      - name: Every required check is reachable from a merge queue
+        run: python3 .github/scripts/check_merge_group_triggers.py
+
+  # Dependency advisories and the cargo-deny policy of the tree under test. They
+  # run on every pull request and in the merge queue, whatever changed, because a
+  # new advisory appears without any file changing, and a failure here stops the
+  # merge: they are a suite of the gate like the others, and no plan skips them.
+  audit:
+    if: ${{ !cancelled() }}
+    uses: ./.github/workflows/reusable-rust-audit.yml
+    with:
+      ref: ""
+      extra-lockfiles: fuzz/Cargo.lock
+
   # The one check the ruleset requires from this workflow. It runs whatever
   # happened to the jobs it waits for, because a job that `needs` a failed job is
   # skipped and a skipped job reports success. It fails unless:
@@ -216,7 +291,7 @@ jobs:
     # too, and a skipped job counts as passed, so nothing else may carry the name a
     # ruleset requires.
     name: ${{ github.event_name == 'merge_group' && 'CI gate' || github.event_name == 'pull_request' && (github.event.pull_request.base.ref == 'main' && 'CI gate (main)' || 'CI gate') || format('CI gate ({0})', github.event_name) }}
-    needs: [plan, rust, debian, line-limit, sbom-and-licenses]
+    needs: [plan, rust, debian, line-limit, sbom-and-licenses, audit, folder-limit, python-tests]
     if: always()
     runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
     timeout-minutes: 5
@@ -237,6 +312,9 @@ jobs:
               "rust": ("lint", "tests", "doc", "msrv"),
               "debian": ("debian",),
               "line-limit": (),
+              "audit": (),
+              "folder-limit": (),
+              "python-tests": (),
               "sbom-and-licenses": ("supply",),
           }
           needs = json.loads(os.environ["NEEDS"])

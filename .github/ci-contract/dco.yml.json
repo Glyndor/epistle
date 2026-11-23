@@ -1,0 +1,71 @@
+{
+ "True": {
+  "merge_group": {
+   "types": [
+    "checks_requested"
+   ]
+  },
+  "pull_request": null
+ },
+ "concurrency": {
+  "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
+  "group": "${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}"
+ },
+ "jobs": {
+  "dco": {
+   "uses": "./.github/workflows/reusable-dco.yml"
+  },
+  "noreply": {
+   "name": "author and sign-off use a GitHub noreply address",
+   "runs-on": "${{ fromJSON(vars.CI_RUNNER || '\"ubuntu-latest\"') }}",
+   "steps": [
+    {
+     "uses": "actions/checkout@PIN",
+     "with": {
+      "fetch-depth": 0,
+      "persist-credentials": false
+     }
+    },
+    {
+     "env": {
+      "BASE_SHA": "${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}",
+      "HEAD_SHA": "${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}"
+     },
+     "name": "Check author and trailer addresses",
+     "run": "bash .github/scripts/check_noreply_signoff.sh \"$BASE_SHA\" \"$HEAD_SHA\""
+    }
+   ],
+   "timeout-minutes": 3
+  },
+  "secret-scan": {
+   "name": "no credential-shaped line is added",
+   "runs-on": "${{ fromJSON(vars.CI_RUNNER || '\"ubuntu-latest\"') }}",
+   "steps": [
+    {
+     "uses": "actions/checkout@PIN",
+     "with": {
+      "fetch-depth": 0,
+      "persist-credentials": false
+     }
+    },
+    {
+     "name": "Test the check",
+     "run": "bash scripts/scan-credentials/scan-credentials.test.sh"
+    },
+    {
+     "env": {
+      "BASE_SHA": "${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}",
+      "HEAD_SHA": "${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}"
+     },
+     "name": "Scan the lines this change adds",
+     "run": "bash scripts/scan-credentials/scan-credentials.sh \"$BASE_SHA\" \"$HEAD_SHA\""
+    }
+   ],
+   "timeout-minutes": 5
+  }
+ },
+ "name": "DCO",
+ "permissions": {
+  "contents": "read"
+ }
+}

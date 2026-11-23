@@ -23,7 +23,6 @@ WORKFLOWS = {
     "reusable-rust-debian.yml": {"debian"},
     "reusable-rust-supply-chain.yml": {"supply"},
     "reusable-dependabot-freshness.yml": {"freshness"},
-    "folder-limit.yml": {"folder"},
     "reusable-line-limit.yml": {"lines"},
 }
 TEST_FILE = re.compile(r"(?:^tests?(?:_[a-z0-9_]+)?$|_tests(?:_[a-z0-9_]+)?$|^test_support$)")
