@@ -404,10 +404,10 @@ struct SecretMount {
 	target: String,
 	uid: String,
 	gid: String,
-	/// Mode as a JSON number. 0o400 == 256 decimal; the rendered
-	/// file carries the same byte, and podup reads it as the octal
-	/// mode. The string form is rejected by podup's mode parser as
-	/// decimal, so the number is the only safe shape.
+	/// Mode as a JSON number whose digits are the octal mode (`400` is
+	/// `0o400`), the way podup 6.0.0 reads an integer. A string would be
+	/// parsed as octal too, but the number is the one form every writer of
+	/// this file already uses.
 	mode: u32,
 }
 
@@ -466,10 +466,10 @@ struct BindMount {
 }
 
 /// The `Z` private SELinux relabel hint the apply phase
-/// attaches to operator bind mounts. The shell knob in
-/// podup 5.10.11+ recognises it as "relabel the source with
-/// the container's private label, then unlabel it on
-/// teardown"; podup writes its absence as no relabel.
+/// attaches to operator bind mounts. podup 6.0.0 passes it to Podman
+/// as the `Z` mount option, which relabels the source with the
+/// container's private label (measured: the container's binds read
+/// `...:ro,Z,rprivate,rbind`); its absence is no relabel.
 #[derive(Debug, Serialize)]
 struct BindOptions {
 	selinux: &'static str,

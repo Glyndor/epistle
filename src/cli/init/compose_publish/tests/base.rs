@@ -51,9 +51,10 @@ fn a_mapping_renders_and_reads_back_the_host_address_it_fixes() {
 		"25:25",
 		"an unspecified host address keeps the form init writes"
 	);
-	// pasta on Podman 5.4.2 refuses an explicit wildcard, and a wildcard
-	// publishes on every address of the host either way, so the family it
-	// names is kept in the container bind instead of in the mapping.
+	// `PORT:PORT` listens on both families, and `0.0.0.0:PORT:PORT` on IPv4
+	// only (Podman 6.2.0; pasta on 5.4.2 refused both explicit wildcards), so
+	// the family a wildcard names is kept in the container bind instead of
+	// in the mapping.
 	for wildcard in ["0.0.0.0", "::"] {
 		assert_eq!(entry(Some(wildcard.parse().unwrap()), 25), "25:25");
 		assert_eq!(

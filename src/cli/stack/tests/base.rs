@@ -121,9 +121,10 @@ fn format_ports_renders_a_dash_for_no_publishers() {
 
 #[test]
 fn ps_parser_accepts_published_port_null_for_unpublished_mappings() {
-	// podup 5.10.10 emits `PublishedPort: null` for a container
-	// that exposes a port without publishing it on a host
-	// interface. The old `u16` field rejected the entire service
+	// podup 5.10.10 emitted `PublishedPort: null` for a container
+	// that exposed a port without publishing it on a host
+	// interface (6.0.0 lists no mapping for it, so this guards the
+	// parser against the older shape). The old `u16` field rejected the entire service
 	// array; the row below would not parse before this commit, so
 	// `ps` and `ps --json` both exited 1 on a service whose
 	// container port 5432 has no host binding. The test only
