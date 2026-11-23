@@ -49,7 +49,10 @@ pub enum Key {
 	/// Shared byte budget every DATA / BDAT reservation draws from. The
 	/// reservation is released on every path that drops the in-flight
 	/// body (success, error, RSET, disconnect). `0` disables the
-	/// budget (every reservation succeeds). The default is 256 MiB.
+	/// budget (every reservation succeeds). Unset, the budget is derived:
+	/// a fifth of the memory limit of the `mail` container, in whole MiB, at
+	/// least `max-message-size` and at most 1 GiB (204 MiB at the default
+	/// limit of 1 GiB).
 	MessageMemoryBudget,
 	/// Per-client-IP concurrent connection cap. A peer over the cap
 	/// is answered `421 4.7.0` and closed. Default is 20.
