@@ -32,9 +32,7 @@ UNGATED = {"dependabot-freshness"}
 
 GATE_NAME = (
     "${{ github.event_name == 'merge_group' && 'CI gate' || github.event_name == 'pull_request'"
-    " && (github.event.pull_request.base.ref == 'develop' && 'CI gate'"
-    " || github.event.pull_request.base.ref == 'main' && 'CI gate (main)'"
-    " || format('CI gate (pr into {0})', github.event.pull_request.base.ref))"
+    " && (github.event.pull_request.base.ref == 'main' && 'CI gate (main)' || 'CI gate')"
     " || format('CI gate ({0})', github.event_name) }}"
 )
 
@@ -63,10 +61,10 @@ def needs(plan_=None, **results):
     return context
 
 
-def run_gate(context):
+def run_gate(context, event="pull_request", base="develop"):
     done = subprocess.run(
         ["bash", "-e", "-c", gate_step()],
-        env={**os.environ, "NEEDS": json.dumps(context)},
+        env={**os.environ, "NEEDS": json.dumps(context), "EVENT_NAME": event, "BASE_REF": base},
         capture_output=True,
         text=True,
         check=False,
@@ -75,17 +73,28 @@ def run_gate(context):
 
 
 class GateDecisions(unittest.TestCase):
-    def passes(self, context):
-        code, out = run_gate(context)
+    def passes(self, context, **where):
+        code, out = run_gate(context, **where)
         self.assertEqual(code, 0, out)
 
-    def fails(self, context, fragment):
-        code, out = run_gate(context)
+    def fails(self, context, fragment, **where):
+        code, out = run_gate(context, **where)
         self.assertEqual(code, 1, out)
         self.assertIn(fragment, out)
 
     def test_every_suite_green_passes(self):
         self.passes(needs())
+
+    def test_a_base_that_is_not_exactly_develop_or_main_fails_whatever_the_suites_did(self):
+        for base in ("Develop", "DEVELOP", "Main", "develop-2", "feature", "", "refs/heads/develop"):
+            with self.subTest(base=base):
+                self.fails(needs(), "not develop or main", base=base)
+
+    def test_develop_and_main_pass_and_so_do_events_that_have_no_base(self):
+        self.passes(needs(), base="develop")
+        self.passes(needs(), base="main")
+        self.passes(needs(), event="merge_group", base="")
+        self.passes(needs(), event="push", base="")
 
     def test_a_failed_plan_fails_even_if_every_suite_ran(self):
         failed = needs(plan_={"result": "failure", "outputs": {}})
@@ -190,30 +199,34 @@ class GateWiring(unittest.TestCase):
             self.assertIn(f'"{suite}": ({expected}),', text)
         self.assertEqual(len(re.findall(r'^\s+"[a-z-]+": \(.*\),$', text, re.M)), len(SUITES))
 
-    def test_the_name_is_the_required_one_only_for_the_queue_and_a_base_of_exactly_develop(self):
-        """The name per event and base, as the expression reads (deny by default)."""
+    def test_the_name_is_the_required_one_only_for_the_queue_and_a_pull_request_the_filter_lets_through(self):
+        """The name per event and base, with `==` modelled as GitHub does it: without regard to case."""
+        def eq(left, right):
+            return left.lower() == right.lower()
+
         def named(event, base):
             if event == "merge_group":
                 return "CI gate"
             if event == "pull_request":
-                if base == "develop":
-                    return "CI gate"
-                return "CI gate (main)" if base == "main" else f"CI gate (pr into {base})"
+                return "CI gate (main)" if eq(base, "main") else "CI gate"
             return f"CI gate ({event})"
+
+        def triggered(base):
+            """The `branches` filter of the workflow compares exactly."""
+            return base in ci_yaml.load(CI)[True]["pull_request"]["branches"]
+
         self.assertEqual(workflow()["jobs"]["gate"]["name"], GATE_NAME)
+        self.assertEqual(ci_yaml.load(CI)[True]["pull_request"]["branches"], ["develop", "main"])
+        self.assertTrue(eq("Develop", "develop"), "the expression alone would take Develop for develop")
         required = {"CI gate"}
-        for base in ("develop", "main", "release/1.0", "feature", "Develop", "develop-2", "", "refs/heads/develop"):
-            produced = named("pull_request", base)
-            self.assertEqual(produced in required, base == "develop", base)
+        for base in ("develop", "main", "Develop", "DEVELOP", "Main", "release/1.0", "feature", "develop-2", "", "refs/heads/develop"):
+            emitted = triggered(base) and named("pull_request", base) in required
+            self.assertEqual(emitted, base == "develop", base)
         for event in ("push", "schedule", "workflow_dispatch", "pull_request_target", "issues"):
             for base in ("develop", "main"):
                 self.assertNotIn(named(event, base), required)
         self.assertEqual(named("merge_group", "develop"), "CI gate")
         self.assertEqual(named("pull_request", "main"), "CI gate (main)")
-        # The expression has no branch that answers `CI gate` by default.
-        text = GATE_NAME
-        self.assertEqual(text.count("'CI gate'"), 2)
-        self.assertIn("base.ref == 'develop' && 'CI gate'", text)
 
     def test_the_workflows_that_emit_a_required_check_run_on_no_push_to_develop(self):
         """A push to develop would answer, for the same commit, the check the promotion pull request requires."""
@@ -244,7 +257,8 @@ class GateWiring(unittest.TestCase):
 
     def test_it_reads_the_context_from_the_environment_only(self):
         step = workflow()["jobs"]["gate"]["steps"][0]
-        self.assertEqual(step["env"], {"NEEDS": "${{ toJSON(needs) }}"})
+        self.assertEqual(step["env"], {"NEEDS": "${{ toJSON(needs) }}", "EVENT_NAME": "${{ github.event_name }}",
+                                       "BASE_REF": "${{ github.event.pull_request.base.ref }}"})
         self.assertNotIn("${{", step["run"])
 
     def test_it_uses_the_runner_variable_like_every_other_job(self):

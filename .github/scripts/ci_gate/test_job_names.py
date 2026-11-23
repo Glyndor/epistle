@@ -26,9 +26,7 @@ KNOWN = {
     ("reusable-rust-ci.yml", "msrv"): "MSRV (${{ inputs.msrv }})",
     ("ci.yml", "gate"): (
         "${{ github.event_name == 'merge_group' && 'CI gate' || github.event_name == 'pull_request'"
-        " && (github.event.pull_request.base.ref == 'develop' && 'CI gate'"
-        " || github.event.pull_request.base.ref == 'main' && 'CI gate (main)'"
-        " || format('CI gate (pr into {0})', github.event.pull_request.base.ref))"
+        " && (github.event.pull_request.base.ref == 'main' && 'CI gate (main)' || 'CI gate')"
         " || format('CI gate ({0})', github.event_name) }}"
     ),
 }

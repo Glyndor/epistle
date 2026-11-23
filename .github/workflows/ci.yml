@@ -17,7 +17,13 @@ on:
   # the merge queue just built, and the queue is where it was checked.
   push:
     branches: [main]
+  # The branch filter tells `develop` from `Develop`; an expression comparing
+  # `base.ref == 'develop'` does not, since GitHub compares strings without regard
+  # to case. This workflow emits the check the rulesets require, so it runs only
+  # for a base that is exactly one of the two branches they protect, and the gate
+  # checks that again in shell.
   pull_request:
+    branches: [develop, main]
   schedule:
     # Seeds the cargo caches that pull requests and the merge queue restore from:
     # a cache written on a pull request or on a queue ref is invisible to every
@@ -203,12 +209,13 @@ jobs:
   # The ruleset requires `CI gate` and `dco / Signed-off-by present on every
   # commit`; the names of the suites above are not required.
   gate:
-    # `CI gate` only in the merge queue and on a pull request whose base is
-    # exactly develop; `CI gate (main)` on a pull request into main, which plans
-    # differently; and a name no ruleset requires for any other base or event. A
-    # job that is skipped emits its name too, and a skipped job counts as passed,
-    # so nothing else may carry the name a ruleset requires.
-    name: ${{ github.event_name == 'merge_group' && 'CI gate' || github.event_name == 'pull_request' && (github.event.pull_request.base.ref == 'develop' && 'CI gate' || github.event.pull_request.base.ref == 'main' && 'CI gate (main)' || format('CI gate (pr into {0})', github.event.pull_request.base.ref)) || format('CI gate ({0})', github.event_name) }}
+    # `CI gate` in the merge queue and on a pull request into develop, `CI gate
+    # (main)` on a pull request into main, which plans differently, and a name no
+    # ruleset requires for any other event. The trigger only lets those two bases
+    # through; the step checks the base again. A job that is skipped emits its name
+    # too, and a skipped job counts as passed, so nothing else may carry the name a
+    # ruleset requires.
+    name: ${{ github.event_name == 'merge_group' && 'CI gate' || github.event_name == 'pull_request' && (github.event.pull_request.base.ref == 'main' && 'CI gate (main)' || 'CI gate') || format('CI gate ({0})', github.event_name) }}
     needs: [plan, rust, debian, line-limit, sbom-and-licenses]
     if: always()
     runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
@@ -218,6 +225,8 @@ jobs:
       - name: Every suite ran or the plan said it could be skipped
         env:
           NEEDS: ${{ toJSON(needs) }}
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
           python3 -I - <<'PY'
           import json
@@ -232,6 +241,11 @@ jobs:
           }
           needs = json.loads(os.environ["NEEDS"])
           problems = []
+
+          # Compared here, in code that tells `develop` from `Develop`, and not
+          # only in the expression that names this job.
+          if os.environ.get("EVENT_NAME") == "pull_request" and os.environ.get("BASE_REF") not in ("develop", "main"):
+              problems.append(f"the base of this pull request is {os.environ.get('BASE_REF')!r}, not develop or main")
 
           plan = needs.get("plan") or {}
           if plan.get("result") != "success":
