@@ -128,21 +128,28 @@ pub(in crate::cli) fn create(
 	if let Some(problem) = crate::util::label_rule::problem(label) {
 		return crate::cli::exit::refused(problem);
 	}
-	if let Err(code) = ensure_known_dynamic_account(config, account) {
-		return code;
-	}
+	// Every argument is checked before the account store is opened or
+	// anything is bound, so a bad value exits with 2 whatever the data
+	// directory holds.
 	let save_sent = match save_sent {
 		Some(raw) => match crate::cli::account::parse_on_off(&raw) {
 			Ok(value) => Some(value),
 			Err(error) => {
-				crate::cli::style::error(format_args!(
+				return crate::cli::exit::refused(format_args!(
 					"account {account}: app-password save-sent: {error}"
 				));
-				return ExitCode::FAILURE;
 			}
 		},
 		None => None,
 	};
+	if let Some(spec) = &ip_cidr
+		&& crate::cidr::Cidr::parse(spec).is_none()
+	{
+		return crate::cli::exit::refused(crate::cidr::Cidr::refusal(spec));
+	}
+	if let Err(code) = ensure_known_dynamic_account(config, account) {
+		return code;
+	}
 	let secret = match crate::cli::generate_secret() {
 		Some(secret) => secret,
 		None => {

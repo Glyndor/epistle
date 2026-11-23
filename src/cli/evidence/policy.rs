@@ -113,6 +113,15 @@ fn set(root: &Path, rule: Rule, as_json: bool, out: &mut impl Write) -> ExitCode
 	if rule.mode == Mode::Off && rule.class == Some(MailClass::Transactional) {
 		return crate::cli::exit::refused("transactional mail always keeps evidence");
 	}
+	// The rule is checked on its own before the data directory is looked at,
+	// so a value the policy refuses exits with 2 whatever the directory holds.
+	if let Err(why) = (Policy {
+		rules: vec![rule.clone()],
+	})
+	.validate()
+	{
+		return crate::cli::exit::refused(why);
+	}
 	let operator = match Operator::current(root) {
 		Ok(operator) => operator,
 		Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
