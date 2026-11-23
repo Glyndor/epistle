@@ -124,3 +124,12 @@ mod snapshot;
 
 #[path = "cli_json/accounts/forward_catch_all_refusals.rs"]
 mod forward_catch_all_refusals;
+
+#[path = "cli_json/accounts/class_arguments.rs"]
+mod class_arguments;
+
+#[path = "cli_json/delivery/evidence_policy.rs"]
+mod evidence_policy;
+
+#[path = "cli_json/operator/rotate_scope.rs"]
+mod rotate_scope;
