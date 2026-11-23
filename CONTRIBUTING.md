@@ -180,3 +180,5 @@ in `.github/workflows/`.
 
 Never open a public issue for a vulnerability. Use the Security tab and
 choose **Report a vulnerability**.
+
+A scratch line used to watch the gate on a documentation-only change.
