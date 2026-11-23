@@ -1,0 +1,56 @@
+name: CodeQL
+
+# Every pull request into develop or main is analysed before it merges, and each of the
+# two branches again after the merge, so an alert shows up where the change enters and
+# not at the release. The weekly run catches a query added to the suite since.
+#
+# Not a required check, so it carries no `merge_group` trigger:
+# .github/scripts/check_merge_group_triggers.py refuses that trigger on a workflow
+# that emits no check required on develop.
+on:
+  pull_request:
+    branches: [develop, main]
+  push:
+    branches: [develop, main]
+  schedule:
+    - cron: "17 5 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codeql-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    # Fixed on GitHub's runners, never CI_RUNNER: holds `security-events: write`.
+    runs-on: ubuntu-latest
+    # No run has been measured yet; 30 minutes is a ceiling for the Rust extraction of
+    # a tree this size. Lower it to the slowest green run plus a margin once there are some.
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: actions
+            build-mode: none
+          - language: rust
+            build-mode: none
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: github/codeql-action/init@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea # v4.39.4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+
+      - uses: github/codeql-action/analyze@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea # v4.39.4
+        with:
+          category: "/language:${{ matrix.language }}"
