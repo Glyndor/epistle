@@ -107,7 +107,7 @@ fn podup_body(log: &Path, state: &Path, shim: &Path) -> String {
 		"#!/bin/sh\n\
 		 printf '%s\\n' \"$*\" >> {log}\n\
 		 case \"$*\" in\n\
-		 \t--version) printf '\\npodup version v5.19.0\\n\\n' ;;\n\
+		 \t--version) printf '\\npodup version v6.0.0\\n\\n' ;;\n\
 		 \t*autostart\\ install*)\n\
 		 \t\tfiles=''; prev=''\n\
 		 \t\tfor a in \"$@\"; do if [ \"$prev\" = '-f' ]; then files=\"$files -f $a\"; fi; prev=$a; done\n\
@@ -337,7 +337,7 @@ fn stop_and_down_never_install_a_unit_and_a_stack_taken_down_stays_without_one()
 fn a_failing_command_does_not_check_the_unit() {
 	let world = World::new();
 	let failing = world.shim.join("podup");
-	std::fs::write(&failing, "#!/bin/sh\ncase \"$*\" in --version) printf '\\npodup version v5.19.0\\n\\n'; exit 0;; esac\nexit 3\n").unwrap();
+	std::fs::write(&failing, "#!/bin/sh\ncase \"$*\" in --version) printf '\\npodup version v6.0.0\\n\\n'; exit 0;; esac\nexit 3\n").unwrap();
 	let out = world.run(&["apply"]);
 	assert_ne!(out.status.code(), Some(0));
 	assert!(!world.installed());

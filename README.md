@@ -17,8 +17,9 @@ It has no web interface: you run it through the CLI and its API.
 
 ## Install
 
-epistle needs **Podman 5 or newer**, which means Debian 13 or Ubuntu 25.04 and
-later, on x86_64 or arm64.
+epistle needs **Podman 6.2 or newer** and **podup 6.0 or newer**. The Glyndor apt
+repository carries both for Debian 13 and Ubuntu 24.04 and 26.04, on x86_64 or
+arm64.
 
 ```sh
 curl -fsSL https://apt.glyndor.net/install/epistle | sudo sh

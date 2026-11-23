@@ -23,7 +23,7 @@ Rules-Requires-Root: no
 
 Package: epistle
 Architecture: any
-Depends: ${shlibs:Depends}, ${misc:Depends}, glyndor-archive-keyring, adduser, podup (>= 5.19.0), wireguard-tools
+Depends: ${shlibs:Depends}, ${misc:Depends}, glyndor-archive-keyring, adduser, podman (>= 6.2.0), podup (>= 6.0.0), wireguard-tools
 Recommends: openssl, systemd-timesyncd | chrony
 Description: self-hosted mail server with a management API and CLI
  epistle is a headless mail server: SMTP, IMAP4rev2, JMAP and POP3 with the
@@ -33,7 +33,8 @@ Description: self-hosted mail server with a management API and CLI
  HTTP API, which is closed to the network by default.
  .
  A production deployment runs as a rootless Podman stack alongside
- PostgreSQL, so the package depends on podup, and podup on Podman 5. The binary
+ PostgreSQL, so the package depends on podup 6.0.0 or newer, and on Podman 6.2.0
+ or newer, which podup 6 needs and epistle calls directly. The binary
  also runs standalone for the management commands, for `epistle config-check`,
  and for key generation, import and export, none of which need a container
  runtime.

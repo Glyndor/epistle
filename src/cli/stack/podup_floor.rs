@@ -6,10 +6,12 @@ use std::process::{Command, ExitCode};
 use super::exit_code_from_status;
 
 /// The `podup` version this build requires at minimum. Mirrors the
-/// `podup (>= 5.19.0)` dependency in `debian/control`; a test reads
+/// `podup (>= 6.0.0)` dependency in `debian/control`; a test reads
 /// the control file and asserts the two are equal so the floor cannot
-/// drift away from the package relationship.
-pub(super) const PODUP_FLOOR: &str = "5.19.0";
+/// drift away from the package relationship. podup 6.0.0 is the first
+/// release that requires Podman 6.2.0, which `debian/control` declares
+/// as well.
+pub(super) const PODUP_FLOOR: &str = "6.0.0";
 
 /// Spawn `podup --version`, parse the `vMAJOR.MINOR.PATCH` it prints,
 /// and refuse to run any subcommand below [`PODUP_FLOOR`]. The error
@@ -66,8 +68,8 @@ pub(super) fn ensure_podup_floor() -> Result<(), ExitCode> {
 		Ok(())
 	} else {
 		crate::cli::style::error(format_args!(
-			"`podup` {version} is older than the required floor {PODUP_FLOOR}; \
-			 upgrade with `apt install podup` (>= {PODUP_FLOOR})"
+			"`podup` {version} is older than the required floor {PODUP_FLOOR}, which runs on \
+			 Podman 6.2.0 or newer; upgrade with `apt install podup` (>= {PODUP_FLOOR})"
 		));
 		Err(ExitCode::FAILURE)
 	}
