@@ -24,12 +24,13 @@ if [ -z "${GLYNDOR_RELEASE_ED25519_KEY:-}" ]; then
 	exit 1
 fi
 
-# Before the key is used: nothing but the files this tag has.
-python3 -I "$here/release/release_files.py" check "$dist" "$tag" built >&2
+# Before the key is used, and by processes that never see it (they read the bytes
+# of a package): nothing but the files this tag has.
+env -u GLYNDOR_RELEASE_ED25519_KEY python3 -I "$here/release/release_files.py" check "$dist" "$tag" built >&2
 
 # From a directory of its own, so that nothing in the files can be imported.
 cd "$here"
-mapfile -t files < <(python3 -I "$here/release/release_files.py" names "$tag" built)
+mapfile -t files < <(env -u GLYNDOR_RELEASE_ED25519_KEY python3 -I "$here/release/release_files.py" names "$tag" built)
 for name in "${files[@]}"; do
 	"$venv/bin/python" -I "$here/sign.py" "$dist/$name"
 done

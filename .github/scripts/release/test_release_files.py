@@ -14,7 +14,7 @@ TAG = "v1.2.3"
 VERSION = "1.2.3"
 
 
-def deb(path, package="epistle", version=VERSION, arch="amd64"):
+def deb(path, package="epistle", version=VERSION, arch="amd64", payload=None):
     """A real, empty package with the given control fields."""
     with tempfile.TemporaryDirectory() as tree:
         control = Path(tree) / "DEBIAN"
@@ -23,6 +23,8 @@ def deb(path, package="epistle", version=VERSION, arch="amd64"):
             f"Package: {package}\nVersion: {version}\nArchitecture: {arch}\nMaintainer: t <t@example.org>\n"
             "Description: fixture\n"
         )
+        if payload:
+            (Path(tree) / "payload").write_bytes(payload)
         subprocess.run(["dpkg-deb", "--build", "--root-owner-group", tree, str(path)], check=True, capture_output=True)
 
 
@@ -31,25 +33,35 @@ def run(*args):
     return done.returncode, done.stdout + done.stderr
 
 
+def write_sums(dist):
+    lines = []
+    for path in sorted(Path(dist).iterdir()):
+        if path.is_file() and not path.is_symlink() and path.name != "SHA256SUMS" and not path.name.endswith(".sig"):
+            lines.append(f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}")
+    (Path(dist) / "SHA256SUMS").write_text("\n".join(lines) + "\n")
+
+
+def make_dist(dist):
+    """The directory a build hands over: the binary, the SBOM, one real package for each architecture and the sums."""
+    dist = Path(dist)
+    dist.mkdir(parents=True, exist_ok=True)
+    (dist / f"epistle-{TAG}-x86_64-linux").write_bytes(b"binary")
+    (dist / f"epistle-{TAG}.cdx.json").write_text("{}")
+    deb(dist / f"epistle_{VERSION}_amd64.deb", arch="amd64")
+    deb(dist / f"epistle_{VERSION}_arm64.deb", arch="arm64")
+    write_sums(dist)
+
+
 @unittest.skipUnless(shutil.which("dpkg-deb"), "dpkg-deb is not installed")
 class Directory(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.dist = Path(self.tmp.name) / "dist"
-        self.dist.mkdir()
-        (self.dist / f"epistle-{TAG}-x86_64-linux").write_bytes(b"binary")
-        (self.dist / f"epistle-{TAG}.cdx.json").write_text("{}")
-        deb(self.dist / f"epistle_{VERSION}_amd64.deb", arch="amd64")
-        deb(self.dist / f"epistle_{VERSION}_arm64.deb", arch="arm64")
-        self.sums()
+        make_dist(self.dist)
 
     def sums(self):
-        lines = []
-        for path in sorted(self.dist.iterdir()):
-            if path.is_file() and not path.is_symlink() and path.name not in ("SHA256SUMS",) and not path.name.endswith(".sig"):
-                lines.append(f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}")
-        (self.dist / "SHA256SUMS").write_text("\n".join(lines) + "\n")
+        write_sums(self.dist)
 
     def sign(self):
         for path in list(self.dist.iterdir()):

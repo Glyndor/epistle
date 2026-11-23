@@ -13,7 +13,7 @@ import ci_yaml
 HERE = Path(__file__).resolve().parent
 ROOT = Path(__file__).resolve().parents[3]
 WORKFLOW = ROOT / ".github/workflows/release.yml"
-PUBLISHING = ("attest", "sign", "publish", "image-build", "image-manifest")
+PUBLISHING = ("attest", "sign", "publish", "image-build", "image-manifest", "image-promote")
 KEY = "secrets.GLYNDOR_RELEASE_ED25519_KEY"
 
 
@@ -34,8 +34,10 @@ class Authority(unittest.TestCase):
             "attest": {"contents": "read", "id-token": "write", "attestations": "write"},
             "sign": {"contents": "read"},
             "sign-rehearsal": {"contents": "read"},
+            "verify-signatures": {"contents": "read"},
             "publish": {"contents": "write"},
             "image-build": {"contents": "read", "packages": "write"},
+            "image-promote": {"contents": "read", "packages": "write"},
             "image-manifest": {"contents": "read", "packages": "write", "id-token": "write", "attestations": "write"},
         })
         self.assertEqual(workflow()["permissions"], {})
@@ -51,7 +53,7 @@ class Authority(unittest.TestCase):
     def test_the_attestation_job_runs_nothing_that_was_built(self):
         steps = jobs()["attest"]["steps"]
         runs = " ".join(step.get("run", "") for step in steps)
-        for forbidden in ("cargo", "pip", "dpkg-buildpackage", "make", "npm", "bun"):
+        for forbidden in ("cargo", "pip install", "dpkg-buildpackage", "make", "npm", "bun"):
             self.assertNotIn(forbidden, runs)
         for step in steps:
             self.assertNotIn("merge-multiple", str(step))
@@ -59,7 +61,7 @@ class Authority(unittest.TestCase):
     def test_every_job_that_publishes_or_signs_is_in_the_release_environment(self):
         for name in PUBLISHING:
             self.assertEqual(jobs()[name].get("environment"), "release", name)
-        for name in ("verify", "build-deb", "build", "sign-rehearsal"):
+        for name in ("verify", "build-deb", "build", "sign-rehearsal", "verify-signatures"):
             self.assertNotIn("environment", jobs()[name], name)
 
     def test_the_jobs_with_authority_check_the_event_and_the_ref_in_shell_too(self):
@@ -71,11 +73,13 @@ class Authority(unittest.TestCase):
 
     def test_a_rehearsal_gets_no_permission_to_publish_and_no_secret(self):
         for name in PUBLISHING:
-            if name != "image-manifest":
+            if name not in ("image-manifest", "image-promote"):
                 self.assertIn("!inputs.dry-run", jobs()[name]["if"], name)
-        # The manifest job only runs after the image jobs, which a rehearsal skips.
+        # The manifest and promotion jobs only run after the image jobs, which a rehearsal skips.
         self.assertIn("image-build", jobs()["image-manifest"]["needs"])
         self.assertIn("needs.image-build.result == 'success'", jobs()["image-manifest"]["if"])
+        self.assertIn("image-manifest", jobs()["image-promote"]["needs"])
+        self.assertIn("needs.image-manifest.result == 'success'", jobs()["image-promote"]["if"])
         self.assertNotIn("secrets.", str(jobs()["sign-rehearsal"]))
         self.assertEqual(jobs()["sign-rehearsal"]["permissions"], {"contents": "read"})
         self.assertIn("inputs.dry-run", jobs()["sign-rehearsal"]["if"])
@@ -131,21 +135,22 @@ class TheCommit(unittest.TestCase):
         self.assertIn('[[ "$TAG" =~ $pattern ]]', first)
 
     def test_every_job_that_builds_checks_out_the_verified_commit(self):
-        for name in ("build-deb", "build", "attest", "sign", "image-build", "image-manifest"):
+        for name in ("build-deb", "build", "attest", "sign", "verify-signatures", "image-build", "image-manifest", "image-promote"):
             checkout = next(s for s in jobs()[name]["steps"] if "actions/checkout" in s.get("uses", ""))
             self.assertEqual(checkout["with"]["ref"], "${{ needs.verify.outputs.commit }}", name)
 
-    def test_the_release_is_made_from_the_verified_tag_after_it_is_read_again(self):
+    def test_the_release_is_made_as_a_draft_and_the_tag_is_read_before_and_after_it_becomes_public(self):
         steps = jobs()["publish"]["steps"]
-        recheck = next(i for i, s in enumerate(steps) if "git ls-remote" in s.get("run", ""))
-        create = next(i for i, s in enumerate(steps) if "gh release create" in s.get("run", ""))
-        self.assertLess(recheck, create)
-        run = steps[create]["run"]
+        create = next(s for s in steps if s.get("name") == "Create the release")
+        run = create["run"]
         self.assertIn("--verify-tag", run)
+        self.assertRegex(run, r"\n\s*--draft \\\n")
+        self.assertIn("--draft=false", run)
         for forbidden in ("--target", "git tag", "git push", "gh api"):
             self.assertNotIn(forbidden, run)
+        self.assertLess(run.index("tag_names_the_commit\ngh release create"), run.index("gh release create"))
+        self.assertEqual(run.count("tag_names_the_commit"), 4)  # defined, before, after the draft, after the publication
         self.assertEqual(jobs()["publish"]["env"]["RELEASE_COMMIT"], "${{ needs.verify.outputs.commit }}")
-        self.assertIn('"$now" != "$RELEASE_COMMIT"', steps[recheck]["run"])
 
     def test_the_packages_are_named_by_the_version_the_tag_gives_them(self):
         stage = next(s for s in jobs()["build-deb"]["steps"] if "Stage" in s.get("name", ""))["run"]
@@ -175,25 +180,65 @@ class WhoMayRun(unittest.TestCase):
             for event, ref in refused:
                 self.assertEqual(sh(text, GITHUB_EVENT_NAME=event, GITHUB_REF=ref)[0], 1, (job, event, ref))
 
-    def test_the_tag_is_read_again_before_publishing_and_a_moved_tag_stops_it(self):
-        text = next(s for s in jobs()["publish"]["steps"] if "git ls-remote" in s.get("run", ""))["run"]
+    def run_create(self, reads, files=True):
+        """The create step against a git that answers each read of the tag in turn and a gh that records its calls."""
+        text = next(s for s in jobs()["publish"]["steps"] if s.get("name") == "Create the release")["run"]
         commit = "a" * 40
-        other = "b" * 40
-        cases = [
-            (f"{commit}\trefs/tags/v1.2.3\n", 0),  # lightweight tag
-            (f"{other}\trefs/tags/v1.2.3\n{commit}\trefs/tags/v1.2.3^{{}}\n", 0),  # annotated: the peeled commit counts
-            (f"{commit}\trefs/tags/v1.2.3\n{other}\trefs/tags/v1.2.3^{{}}\n", 1),  # annotated, peeled elsewhere
-            (f"{other}\trefs/tags/v1.2.3\n", 1),  # moved
-            ("", 1),  # deleted
-        ]
-        for output, status in cases:
-            with tempfile.TemporaryDirectory() as tmp:
-                git = Path(tmp) / "git"
-                git.write_text(f"#!/bin/sh\nprintf '{output}'\n")
-                git.chmod(git.stat().st_mode | stat.S_IEXEC)
-                code, out = sh(text, PATH=f"{tmp}:{os.environ['PATH']}", TAG="v1.2.3", RELEASE_COMMIT=commit,
-                               GITHUB_SERVER_URL="https://example.org", GITHUB_REPOSITORY="o/r")
-                self.assertEqual(code, status, (output, out))
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            (tmp / "reads").write_text("\n".join(reads) + "\n")
+            git = tmp / "git"
+            git.write_text('#!/bin/sh\nread line < "' + str(tmp / "reads") + '"\nsed -i 1d "' + str(tmp / "reads") + '"\n'
+                           'case "$line" in none) ;; *) printf "%s\\trefs/tags/v1.2.3\\n" "$line";; esac\n')
+            gh = tmp / "gh"
+            gh.write_text('#!/bin/sh\necho "$*" >> "' + str(tmp / "calls") + '"\n')
+            for tool in (git, gh):
+                tool.chmod(tool.stat().st_mode | stat.S_IEXEC)
+            code, out = sh(text, PATH=f"{tmp}:{os.environ['PATH']}", TAG="v1.2.3", RELEASE_COMMIT=commit, GH_TOKEN="t",
+                           GITHUB_SERVER_URL="https://example.org", GITHUB_REPOSITORY="o/r", RUNNER_TEMP=str(tmp))
+            calls = (tmp / "calls").read_text().splitlines() if (tmp / "calls").exists() else []
+            return code, [" ".join(c.split()[:2]) + (" --draft=false" if "--draft=false" in c else "") for c in calls]
+
+    def test_a_tag_that_stays_puts_the_release_public(self):
+        ok = "a" * 40
+        code, calls = self.run_create([ok, ok, ok])
+        self.assertEqual(code, 0)
+        self.assertEqual(calls, ["release create", "release edit --draft=false"])
+
+    def test_a_tag_moved_before_the_draft_creates_nothing(self):
+        code, calls = self.run_create(["b" * 40])
+        self.assertEqual((code, calls), (1, []))
+
+    def test_a_tag_moved_while_the_draft_was_made_deletes_the_draft_and_never_publishes(self):
+        ok = "a" * 40
+        code, calls = self.run_create([ok, "b" * 40])
+        self.assertEqual(code, 1)
+        self.assertEqual(calls, ["release create", "release delete"])
+
+    def test_a_tag_moved_after_publication_fails_loudly(self):
+        ok = "a" * 40
+        code, calls = self.run_create([ok, ok, "b" * 40])
+        self.assertEqual(code, 1)
+        self.assertEqual(calls, ["release create", "release edit --draft=false"])
+
+    def test_a_deleted_tag_is_a_moved_tag(self):
+        self.assertEqual(self.run_create(["none"])[0], 1)
+
+    def test_an_annotated_tag_counts_by_its_peeled_commit(self):
+        # a git that prints the tag object first and the peeled commit second
+        text = next(s for s in jobs()["publish"]["steps"] if s.get("name") == "Create the release")["run"]
+        commit, other = "a" * 40, "b" * 40
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            git = tmp / "git"
+            git.write_text(f'#!/bin/sh\nprintf "{other}\\trefs/tags/v1.2.3\\n{commit}\\trefs/tags/v1.2.3^{{}}\\n"\n')
+            gh = tmp / "gh"
+            gh.write_text("#!/bin/sh\nexit 0\n")
+            for tool in (git, gh):
+                tool.chmod(tool.stat().st_mode | stat.S_IEXEC)
+            code, _ = sh(text, PATH=f"{tmp}:{os.environ['PATH']}", TAG="v1.2.3", RELEASE_COMMIT=commit, GH_TOKEN="t",
+                         GITHUB_SERVER_URL="https://example.org", GITHUB_REPOSITORY="o/r", RUNNER_TEMP=str(tmp))
+            self.assertEqual(code, 0)
 
     def test_the_signing_environment_is_never_made_where_the_key_is(self):
         script = HERE / "prepare_signing_venv.sh"

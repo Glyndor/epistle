@@ -11,6 +11,8 @@ less, every entry a regular file.
 Usage:
   release_files.py names <tag> <built|signed>
   release_files.py check <dir> <tag> <built|signed>
+  release_files.py check-package <dir> <tag> <arch>
+  release_files.py same-packages <dir> <tag> amd64=<sha256> arm64=<sha256>
 
 `built` is what the build job hands over; `signed` adds one signature for each of
 those. `check` also reads the control fields of the packages with `dpkg-deb`
@@ -19,6 +21,7 @@ It runs with `python3 -I` and needs nothing installed.
 """
 
 import hashlib
+import os
 import re
 import stat
 import subprocess
@@ -66,8 +69,17 @@ def entries(directory):
     return found
 
 
+KEY_VARIABLES = ("GLYNDOR_RELEASE_ED25519_KEY",)
+
+
+def clean_environment():
+    """The environment a parser of untrusted bytes gets: without the signing key, whoever set it."""
+    return {name: value for name, value in os.environ.items() if name not in KEY_VARIABLES}
+
+
 def control_field(deb, field):
-    done = subprocess.run(["dpkg-deb", "--field", str(deb), field], capture_output=True, text=True, check=False)
+    done = subprocess.run(["dpkg-deb", "--field", str(deb), field], capture_output=True, text=True, check=False,
+                          env=clean_environment())
     return done.stdout.strip() if done.returncode == 0 else None
 
 
@@ -112,11 +124,60 @@ def check(directory, tag, stage):
     return problems
 
 
+def check_package(directory, tag, arch):
+    """A directory that holds exactly one package, the one this tag names for this architecture."""
+    if arch not in ARCHES:
+        return [f"unknown architecture {arch!r}"]
+    root = Path(directory)
+    name = package_name(tag, arch)
+    held = entries(root)
+    problems = [f"unexpected entry: {n}" for n in sorted(set(held) - {name})]
+    if name not in held:
+        return problems + [f"missing: {name}"]
+    if held[name] != "file":
+        return problems + [f"{name} is {held[name]}"]
+    version = version_of(tag)
+    for field, want in (("Package", "epistle"), ("Version", version), ("Architecture", arch)):
+        got = control_field(root / name, field)
+        if got != want:
+            problems.append(f"{name}: {field} is {got!r}, expected {want!r}")
+    return problems
+
+
+def same_packages(directory, tag, digests):
+    """The gathered packages are byte for byte the ones their builders handed over."""
+    problems = []
+    for arch in ARCHES:
+        want = digests.get(arch, "")
+        if not re.fullmatch(r"[0-9a-f]{64}", want):
+            problems.append(f"{arch}: the digest handed over is not a SHA-256: {want!r}")
+            continue
+        path = Path(directory) / package_name(tag, arch)
+        if not path.is_file() or path.is_symlink():
+            problems.append(f"{path.name} is missing or not a regular file")
+        elif hashlib.sha256(path.read_bytes()).hexdigest() != want:
+            problems.append(f"{path.name} is not the package its builder produced")
+    return problems
+
+
 def main(argv):
     try:
         if len(argv) == 4 and argv[1] == "names":
             print("\n".join(names(argv[2], argv[3])))
             return 0
+        if len(argv) == 5 and argv[1] == "check-package":
+            problems = check_package(argv[2], argv[3], argv[4])
+            for problem in problems:
+                print(f"error: {problem}")
+            if not problems:
+                print(f"{argv[2]} holds exactly the {argv[4]} package of {argv[3]}")
+            return 1 if problems else 0
+        if len(argv) == 6 and argv[1] == "same-packages":
+            pairs = dict(item.split("=", 1) for item in argv[4:])
+            problems = same_packages(argv[2], argv[3], pairs)
+            for problem in problems:
+                print(f"error: {problem}")
+            return 1 if problems else 0
         if len(argv) == 5 and argv[1] == "check":
             problems = check(argv[2], argv[3], argv[4])
             for problem in problems:

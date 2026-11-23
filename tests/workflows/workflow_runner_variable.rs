@@ -48,6 +48,11 @@ const PRIVILEGED: &[(&str, &str, &str)] = &[
 	),
 	(
 		"release.yml",
+		"image-promote",
+		"moves the image tags with packages: write",
+	),
+	(
+		"release.yml",
 		"image-manifest",
 		"publishes and attests the image with packages, id-token and attestations: write",
 	),
@@ -79,6 +84,11 @@ const FIXED: &[(&str, &str, &str)] = &[
 		"release.yml",
 		"build",
 		"compiles the release binary with a read of the repository only; the release stays on one kind of runner",
+	),
+	(
+		"release.yml",
+		"verify-signatures",
+		"verifies the signatures against the pinned public key with a read of the repository only; the release stays on one kind of runner",
 	),
 	(
 		"release.yml",

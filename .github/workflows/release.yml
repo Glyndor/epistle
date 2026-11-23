@@ -1,5 +1,14 @@
 name: Release
 
+# Signatures today: Ed25519 only, verified under the public key pinned in
+# `.github/release/ed25519-public-key.b64` before anything is published. A second,
+# post-quantum signature (ML-DSA-65) is not made here: the owner has not set a key
+# for it, and the apt archive requires it for no product yet (its
+# `keyring/pq-required-products` is empty). When a key is configured, the list of
+# products that require it must not be empty, because a second signature that may
+# be left out protects nothing; that rule and the signing step belong to the same
+# change.
+#
 # Tag push and manual dispatch only. This workflow answers "is this
 # tag ready to release?", which is a question about a specific tag,
 # not branch state. workflow_dispatch lets a maintainer re-run a
@@ -398,10 +407,15 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
-  # Attests the provenance of the finished files. It holds the OIDC token and
-  # the attestation scope, so it runs nothing that came with the dependencies:
-  # it downloads the files into an empty directory outside the checkout, checks
-  # that they are exactly the ones this tag has, and attests them by name.
+  # Attests the provenance of what was built. It holds the OIDC token and the
+  # attestation scope, so it runs nothing that came with the dependencies: it
+  # downloads into empty directories outside the checkout and attests by name.
+  #
+  # The packages it attests are the ones their own builders uploaded, one
+  # artifact for each architecture, and not the copies the `build` job gathered
+  # next to the binary: that job runs dependency code and could have swapped
+  # them. It publishes their digests as outputs, and the jobs that sign and
+  # publish refuse a package whose bytes are not those.
   attest:
     name: Attest build provenance
     needs: [verify, build-deb, build]
@@ -414,6 +428,9 @@ jobs:
       contents: read
       id-token: write
       attestations: write
+    outputs:
+      deb-amd64: ${{ steps.digests.outputs.amd64 }}
+      deb-arm64: ${{ steps.digests.outputs.arm64 }}
     env:
       TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
     steps:
@@ -430,26 +447,55 @@ jobs:
           ref: ${{ needs.verify.outputs.commit }}
           persist-credentials: false
 
-      - name: Receive the files
+      - name: Receive the binary
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-dist
           path: ${{ runner.temp }}/dist
 
-      - name: Check that they are exactly this release
-        run: python3 -I .github/scripts/release/release_files.py check "$RUNNER_TEMP/dist" "$TAG" built
+      - name: Receive the amd64 package from its builder
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: epistle-deb-amd64
+          path: ${{ runner.temp }}/own/amd64
 
-      - name: Name the files to attest
-        id: names
-        run: echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+      - name: Receive the arm64 package from its builder
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: epistle-deb-arm64
+          path: ${{ runner.temp }}/own/arm64
+
+      - name: Check the packages of the builders and take their digests
+        id: digests
+        run: |
+          set -euo pipefail
+          for arch in amd64 arm64; do
+            python3 -I .github/scripts/release/release_files.py check-package "$RUNNER_TEMP/own/$arch" "$TAG" "$arch"
+          done
+          version="${TAG#v}"
+          for arch in amd64 arm64; do
+            digest="$(sha256sum "$RUNNER_TEMP/own/$arch/epistle_${version}_${arch}.deb" | cut -d' ' -f1)"
+            echo "$arch=$digest" >> "$GITHUB_OUTPUT"
+          done
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Check that the gathered files are exactly this release, and the same packages
+        env:
+          DEB_AMD64: ${{ steps.digests.outputs.amd64 }}
+          DEB_ARM64: ${{ steps.digests.outputs.arm64 }}
+        run: |
+          set -euo pipefail
+          python3 -I .github/scripts/release/release_files.py check "$RUNNER_TEMP/dist" "$TAG" built
+          python3 -I .github/scripts/release/release_files.py same-packages "$RUNNER_TEMP/dist" "$TAG" \
+            "amd64=$DEB_AMD64" "arm64=$DEB_ARM64"
 
       - name: Attest build provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
             ${{ runner.temp }}/dist/epistle-${{ env.TAG }}-x86_64-linux
-            ${{ runner.temp }}/dist/epistle_${{ steps.names.outputs.version }}_amd64.deb
-            ${{ runner.temp }}/dist/epistle_${{ steps.names.outputs.version }}_arm64.deb
+            ${{ runner.temp }}/own/amd64/epistle_${{ steps.digests.outputs.version }}_amd64.deb
+            ${{ runner.temp }}/own/arm64/epistle_${{ steps.digests.outputs.version }}_arm64.deb
 
   # Signs the finished files with the org key. It runs in the `release`
   # environment, which only `main` and the release tags may use, and the key is
@@ -460,7 +506,7 @@ jobs:
   # tag has.
   sign:
     name: Sign
-    needs: [verify, build]
+    needs: [verify, build, attest]
     if: ${{ !inputs.images-only && !inputs.dry-run }}
     environment: release
     # Fixed on GitHub's runners, never CI_RUNNER: release job; holds secrets or write/OIDC permissions.
@@ -501,6 +547,14 @@ jobs:
         # Exactly the files of this tag, nothing more, as regular files, with the
         # package fields and the hashes right, before a key is near them.
         run: python3 -I .github/scripts/release/release_files.py check "$RUNNER_TEMP/dist" "$TAG" built
+
+      - name: The packages are the ones that were attested
+        env:
+          DEB_AMD64: ${{ needs.attest.outputs.deb-amd64 }}
+          DEB_ARM64: ${{ needs.attest.outputs.deb-arm64 }}
+        run: |
+          python3 -I .github/scripts/release/release_files.py same-packages "$RUNNER_TEMP/dist" "$TAG" \
+            "amd64=$DEB_AMD64" "arm64=$DEB_ARM64"
 
       - name: Sign artifacts with the org Ed25519 key
         env:
@@ -557,9 +611,51 @@ jobs:
           .github/scripts/sign_release.sh "$RUNNER_TEMP/signing-venv" "$RUNNER_TEMP/dist" "$TAG"
           python3 -I .github/scripts/release/release_files.py check "$RUNNER_TEMP/dist" "$TAG" signed
 
+  # Checks every signature against the release public key the repository pins,
+  # before anything is published. The key to sign with is a secret and could hold
+  # some other valid seed; a signature that does not verify under the key people
+  # were given authenticates nothing. This job has no secret and no write scope.
+  verify-signatures:
+    name: Verify the signatures
+    needs: [verify, build, attest, sign]
+    if: ${{ !inputs.images-only && !inputs.dry-run }}
+    # Fixed on GitHub's runners, never CI_RUNNER: release job; holds secrets or write/OIDC permissions.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.verify.outputs.commit }}
+          persist-credentials: false
+
+      - name: Prepare the verifying environment
+        run: bash .github/scripts/release/prepare_signing_venv.sh "$RUNNER_TEMP/signing-venv"
+
+      - name: Receive the files
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-dist
+          path: ${{ runner.temp }}/dist
+
+      - name: Receive the signatures
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-signatures
+          path: ${{ runner.temp }}/dist
+
+      - name: Every signature verifies under the pinned key
+        run: >-
+          cd "$RUNNER_TEMP" && "$RUNNER_TEMP/signing-venv/bin/python" -I
+          "$GITHUB_WORKSPACE/.github/scripts/release/verify_signatures.py"
+          "$RUNNER_TEMP/dist" "$TAG" "$GITHUB_WORKSPACE/.github/release/ed25519-public-key.b64"
+
   publish:
     name: Publish release
-    needs: [verify, build, attest, sign]
+    needs: [verify, build, attest, sign, verify-signatures]
     # A rehearsal stops before this job.
     if: ${{ !inputs.images-only && !inputs.dry-run }}
     environment: release
@@ -571,6 +667,8 @@ jobs:
     env:
       TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
       RELEASE_COMMIT: ${{ needs.verify.outputs.commit }}
+      DEB_AMD64: ${{ needs.attest.outputs.deb-amd64 }}
+      DEB_ARM64: ${{ needs.attest.outputs.deb-arm64 }}
     steps:
       - name: Only a release tag or main may publish
         run: |
@@ -627,25 +725,38 @@ jobs:
           fi
           (cd "$dist" && sha256sum --check --strict SHA256SUMS)
 
-      - name: The tag still names the commit that was verified
+      - name: The packages are the ones that were attested
         run: |
           set -euo pipefail
-          # Between the gate and here a tag can be moved. Read it again where it
-          # lives, with no checkout: the peeled commit if the tag is annotated.
-          refs="$(git ls-remote "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" "refs/tags/$TAG" "refs/tags/$TAG^{}")"
-          peeled="$(printf '%s\n' "$refs" | awk -v r="refs/tags/$TAG^{}" '$2 == r { print $1 }')"
-          plain="$(printf '%s\n' "$refs" | awk -v r="refs/tags/$TAG" '$2 == r { print $1 }')"
-          now="${peeled:-$plain}"
-          if [ "$now" != "$RELEASE_COMMIT" ]; then
-            echo "::error::$TAG names ${now:-nothing} now, and the release was built from $RELEASE_COMMIT"
-            exit 1
-          fi
+          version="${TAG#v}"
+          for arch in amd64 arm64; do
+            want="DEB_${arch^^}"
+            got="$(sha256sum "$RUNNER_TEMP/dist/epistle_${version}_${arch}.deb" | cut -d' ' -f1)"
+            [ "$got" = "${!want}" ] || { echo "::error::the $arch package is not the one that was attested"; exit 1; }
+          done
 
-      - name: Create release
+      - name: Create the release
         env:
           GH_TOKEN: ${{ github.token }}
+        # The release is created as a draft, the tag is read again, and only then is
+        # it made public; the tag is read once more after, so a tag moved at any point
+        # between the gate and the publication is seen. No option of `gh release`
+        # makes creation conditional on the tag, so this narrows the window and the
+        # ruleset of the repository, which refuses to update or delete a `v*` tag,
+        # closes it for everybody but its admins.
         run: |
           set -euo pipefail
+          tag_names_the_commit() {
+            local refs peeled plain now
+            refs="$(git ls-remote "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" "refs/tags/$TAG" "refs/tags/$TAG^{}")"
+            peeled="$(printf '%s\n' "$refs" | awk -v r="refs/tags/$TAG^{}" '$2 == r { print $1 }')"
+            plain="$(printf '%s\n' "$refs" | awk -v r="refs/tags/$TAG" '$2 == r { print $1 }')"
+            now="${peeled:-$plain}"
+            if [ "$now" != "$RELEASE_COMMIT" ]; then
+              echo "::error::$TAG names ${now:-nothing} now, and the release was built from $RELEASE_COMMIT"
+              return 1
+            fi
+          }
           dist="$RUNNER_TEMP/dist"
           version="${TAG#v}"
           files=()
@@ -653,14 +764,35 @@ jobs:
             "epistle_${version}_amd64.deb" "epistle_${version}_arm64.deb"; do
             files+=("$dist/$base" "$dist/$base.sig")
           done
+          tag_names_the_commit
           gh release create "$TAG" \
             --repo "$GITHUB_REPOSITORY" \
+            --draft \
             --generate-notes \
             --verify-tag \
             "${files[@]}"
+          if ! tag_names_the_commit; then
+            gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --yes
+            exit 1
+          fi
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false
+          tag_names_the_commit || { echo "::error::the tag moved after the release became public: review $TAG"; exit 1; }
 
   # The container stack pulls ghcr.io/glyndor/epistle:<version>, so every
   # release publishes the image next to the .deb.
+  #
+  # Images are handled by digest and never by tag, because a tag is a name that
+  # somebody with write access to the registry can move:
+  #   image-build    builds one architecture, pushes it under its own tag and hands
+  #                  its digest to the next job. A tag that already exists is never
+  #                  replaced; with images-only an existing one is reused only if it
+  #                  was built from the verified commit.
+  #   image-manifest assembles the two digests into a manifest list, checks that it
+  #                  holds exactly them, attests it and checks the attestation, all
+  #                  under a tag nobody consumes.
+  #   image-promote  only then moves the tags people consume, the exact one first
+  #                  and the floating ones only if no higher stable version exists,
+  #                  one release at a time.
   image-build:
     name: Build and push image (${{ matrix.arch }})
     needs: [verify, publish]
@@ -674,11 +806,11 @@ jobs:
       contents: read
       packages: write
     env:
-      # The release job receives `v0.8.0`; the image tags are
-      # unqualified, so strip the leading `v` once and pass it
-      # down.
       VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
       REGISTRY_IMAGE: ghcr.io/glyndor/epistle
+      COMMIT: ${{ needs.verify.outputs.commit }}
+      IMAGES_ONLY: ${{ inputs.images-only && 'true' || 'false' }}
+      ARCH: ${{ matrix.arch }}
     strategy:
       fail-fast: false
       matrix:
@@ -688,6 +820,13 @@ jobs:
           - arch: arm64
             runner: ubuntu-24.04-arm
     steps:
+      - name: Only a release tag or main may publish an image
+        run: |
+          case "${GITHUB_EVENT_NAME}:${GITHUB_REF}" in
+            push:refs/tags/v* | workflow_dispatch:refs/heads/main | workflow_dispatch:refs/tags/v*) ;;
+            *) echo "::error::${GITHUB_EVENT_NAME} on ${GITHUB_REF} may not publish an image"; exit 1 ;;
+          esac
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # The commit `verify` resolved, so the image carries the same tree
@@ -695,51 +834,68 @@ jobs:
           ref: ${{ needs.verify.outputs.commit }}
           persist-credentials: false
 
-      - name: Build the image for ${{ matrix.arch }}
-        env:
-          # `VERSION` keeps its leading `v` here; the OCI label
-          # records the unversioned `0.8.0` so the image is
-          # addressable on its own. `REVISION` is the commit the
-          # checkout above actually produced, not `${{ github.sha }}`:
-          # on `workflow_dispatch` with a tag input, `github.sha` is
-          # the dispatch commit (a ref-creation event in the UI), not
-          # the commit the tag points at. `git rev-parse HEAD` reads
-          # the commit the runner's working tree is on, which is the
-          # tag's commit because the checkout step above checked out
-          # the tag.
-          LABEL_VERSION: ${{ env.VERSION }}
-        run: |
-          set -euo pipefail
-          crate_version="${LABEL_VERSION#v}"
-          revision="$(git rev-parse HEAD)"
-          podman build \
-            --platform "linux/${{ matrix.arch }}" \
-            --build-arg "VERSION=${crate_version}" \
-            --build-arg "REVISION=${revision}" \
-            -t "${REGISTRY_IMAGE}:${crate_version}-${{ matrix.arch }}" \
-            .
-
       - name: Log in to ghcr.io
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ACTOR: ${{ github.actor }}
         run: |
           set -euo pipefail
-          # `podman login` accepts `--password-stdin` so the token
-          # never lands on the command line or in the runner log.
+          # `podman login` accepts `--password-stdin` so the token never lands on the
+          # command line or in the runner log. skopeo reads the same credentials.
           echo "${GH_TOKEN}" | podman login ghcr.io -u "${ACTOR}" --password-stdin
 
-      - name: Push ${{ matrix.arch }} image
-        env:
-          CRATE_VERSION: ${{ env.VERSION }}
+      - name: Decide whether this architecture is built
+        id: decide
+        # An image tag that already exists is never replaced. With images-only, one
+        # that exists is reused, by digest, only if its revision label is the verified
+        # commit; any other is refused.
+        run: python3 -I .github/scripts/release/images.py decide "$REGISTRY_IMAGE" "${VERSION#v}-${ARCH}" "$COMMIT" "$IMAGES_ONLY" >> "$GITHUB_OUTPUT"
+
+      - name: Build the image
+        if: ${{ steps.decide.outputs.action == 'build' }}
         run: |
           set -euo pipefail
-          crate_version="${CRATE_VERSION#v}"
-          podman push \
-            "${REGISTRY_IMAGE}:${crate_version}-${{ matrix.arch }}"
+          crate_version="${VERSION#v}"
+          # `REVISION` is the commit the checkout above produced: on
+          # `workflow_dispatch` `github.sha` is the dispatch commit, not the tag's.
+          revision="$(git rev-parse HEAD)"
+          podman build \
+            --platform "linux/${ARCH}" \
+            --build-arg "VERSION=${crate_version}" \
+            --build-arg "REVISION=${revision}" \
+            -t "${REGISTRY_IMAGE}:${crate_version}-${ARCH}" \
+            .
+
+      - name: Push the image and take its digest
+        if: ${{ steps.decide.outputs.action == 'build' }}
+        run: |
+          set -euo pipefail
+          crate_version="${VERSION#v}"
+          podman push --digestfile "$RUNNER_TEMP/digest" "${REGISTRY_IMAGE}:${crate_version}-${ARCH}"
+          python3 -I .github/scripts/release/images.py digest "$(cat "$RUNNER_TEMP/digest")" > /dev/null
+          mkdir -p "$RUNNER_TEMP/image-digest"
+          cp "$RUNNER_TEMP/digest" "$RUNNER_TEMP/image-digest/${ARCH}"
+
+      - name: Take the digest of the image that is already published
+        if: ${{ steps.decide.outputs.action == 'reuse' }}
+        env:
+          DIGEST: ${{ steps.decide.outputs.digest }}
+        run: |
+          set -euo pipefail
+          python3 -I .github/scripts/release/images.py digest "$DIGEST" > /dev/null
+          mkdir -p "$RUNNER_TEMP/image-digest"
+          printf '%s' "$DIGEST" > "$RUNNER_TEMP/image-digest/${ARCH}"
+
+      - name: Hand the digest to the next job
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: image-digest-${{ matrix.arch }}
+          path: ${{ runner.temp }}/image-digest/${{ matrix.arch }}
+          retention-days: 1
+          if-no-files-found: error
 
   image-manifest:
-    name: Publish multi-arch image manifest
+    name: Assemble and attest the multi-arch image
     needs: [verify, image-build]
     if: ${{ always() && needs.image-build.result == 'success' }}
     environment: release
@@ -749,148 +905,155 @@ jobs:
     permissions:
       contents: read
       packages: write
-      # Provenance is signed with the GitHub OIDC token. The
-      # `attestations: write` permission is what the workflow-run
-      # token needs to upload the signed envelope to the
-      # repository's attestations endpoint.
+      # Provenance is signed with the GitHub OIDC token. The `attestations: write`
+      # permission is what the workflow-run token needs to upload the signed
+      # envelope to the repository's attestations endpoint.
       id-token: write
       attestations: write
+    outputs:
+      digest: ${{ steps.list.outputs.digest }}
     env:
       VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
       REGISTRY_IMAGE: ghcr.io/glyndor/epistle
     steps:
+      - name: Only a release tag or main may publish an image
+        run: |
+          case "${GITHUB_EVENT_NAME}:${GITHUB_REF}" in
+            push:refs/tags/v* | workflow_dispatch:refs/heads/main | workflow_dispatch:refs/tags/v*) ;;
+            *) echo "::error::${GITHUB_EVENT_NAME} on ${GITHUB_REF} may not publish an image"; exit 1 ;;
+          esac
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The commit `verify` resolved. This job reads the scripts of the released
+          # tree, and nothing else of it.
+          ref: ${{ needs.verify.outputs.commit }}
+          persist-credentials: false
+
+      - name: Receive the amd64 digest
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: image-digest-amd64
+          path: ${{ runner.temp }}/digests/amd64
+
+      - name: Receive the arm64 digest
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: image-digest-arm64
+          path: ${{ runner.temp }}/digests/arm64
+
       - name: Log in to ghcr.io
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ACTOR: ${{ github.actor }}
         run: |
           set -euo pipefail
-          # `actions/attest-build-provenance` with `push-to-registry: true`
-          # reads `~/.docker/config.json`, the docker config file. podman's
-          # default auth file lives elsewhere under `~/.config/containers/`
-          # and is invisible to that action, so the attestation step would
-          # fail to push the signed envelope. `--compat-auth-file` writes
-          # the docker-shaped file podman's auth dir would have produced
-          # (supported on podman 4.9+) so the OIDC-signed envelope lands at
-          # the registry.
+          # `actions/attest-build-provenance` with `push-to-registry: true` reads
+          # `~/.docker/config.json`, the docker config file; podman's default auth file
+          # lives elsewhere and is invisible to that action. `--compat-auth-file` writes
+          # the docker-shaped file (podman 4.9+). skopeo reads podman's own file, so
+          # both are written.
           mkdir -p "$HOME/.docker"
-          echo "${GH_TOKEN}" | podman login ghcr.io \
-            -u "${ACTOR}" \
-            --password-stdin \
-            --compat-auth-file "$HOME/.docker/config.json"
+          echo "${GH_TOKEN}" | podman login ghcr.io -u "${ACTOR}" --password-stdin
+          echo "${GH_TOKEN}" | podman login ghcr.io -u "${ACTOR}" --password-stdin --compat-auth-file "$HOME/.docker/config.json"
 
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          # The commit `verify` resolved. This job only reads the tag gate
-          # script from the tree, and it reads it from the released one.
-          ref: ${{ needs.verify.outputs.commit }}
-          persist-credentials: false
-
-      - name: Build and push the multi-arch manifest list
-        id: tags
-        env:
-          CRATE_VERSION: ${{ env.VERSION }}
+      - name: Assemble the manifest list from the two digests
+        id: list
         run: |
           set -euo pipefail
-          crate_version="${CRATE_VERSION#v}"
-          # `.github/scripts/image_tags.py` is the gate that decides
-          # which tags a given version publishes. Prereleases like
-          # `1.0.0-rc.1` publish the exact tag only; plain versions
-          # publish the exact, the `<major>.<minor>`, and the `<major>`
-          # tags. A prerelease that produced floating tags would move
-          # `:0` onto a candidate and a consumer pinning the major
-          # would pull the candidate as if it were the next stable.
-          # The test in `.github/scripts/test_image_tags.py` pins the
-          # behaviour; the `python scripts` job of ci.yml discovers it on its own.
-          mapfile -t tags < <(python3 "$GITHUB_WORKSPACE/.github/scripts/image_tags.py" "${CRATE_VERSION}")
-          if [ "${#tags[@]}" -eq 0 ]; then
-            echo "::error::image_tags.py produced no tags for ${CRATE_VERSION}"
-            exit 1
-          fi
-          printf 'Publishing tags:'
-          printf ' %s' "${tags[@]}"
-          printf '\n'
-          # The list of tags is emitted as a `tags` output (newline-
-          # separated) so the next step can read it without re-running
-          # the gate. Quoting the joined string preserves the
-          # newlines through GitHub Actions' output encoding.
-          {
-            printf 'tags<<EOF\n'
-            printf '%s\n' "${tags[@]}"
-            printf 'EOF\n'
-          } >> "$GITHUB_OUTPUT"
-          # Each tag points at the same manifest list, so a consumer
-          # pinning `0.8` keeps getting patches and a consumer
-          # pinning `0` keeps getting minors.
-          for tag in "${tags[@]}"; do
-            podman manifest create "${REGISTRY_IMAGE}:${tag}"
-            # `manifest create` accepts references on the command
-            # line too, but pulling them in by transport here keeps
-            # the list's contents visible at the top of the job
-            # and leaves `manifest create` to handle the empty-list
-            # start state.
-            podman manifest add "${REGISTRY_IMAGE}:${tag}" \
-              "docker://${REGISTRY_IMAGE}:${crate_version}-amd64"
-            podman manifest add "${REGISTRY_IMAGE}:${tag}" \
-              "docker://${REGISTRY_IMAGE}:${crate_version}-arm64"
-            podman manifest push --all \
-              --digestfile "$RUNNER_TEMP/digest-${tag}" \
-              "${REGISTRY_IMAGE}:${tag}"
-          done
-
-      - name: Read back the manifest digest for the pinned tag
-        id: digest
-        env:
-          CRATE_VERSION: ${{ env.VERSION }}
-        run: |
-          set -euo pipefail
-          crate_version="${CRATE_VERSION#v}"
-          # `podman manifest inspect --format` does not exist on
-          # podman 5.x, so the digest is taken from the file
-          # `manifest push --digestfile` wrote. The list of tags is
-          # the one the previous step published, read back from its
-          # output: prereleases publish one tag, plain versions
-          # three, and the assertion below requires all of them to
-          # point at the same list. Any divergence means the
-          # registry is serving different lists and the attestation
-          # would land on the wrong one.
-          mapfile -t tags <<< "${{ steps.tags.outputs.tags }}"
-          # mapfile reads the trailing newline as an empty last
-          # element; drop it so the loop does not iterate over a
-          # blank tag.
-          if [ "${#tags[@]}" -gt 0 ] && [ -z "${tags[-1]}" ]; then
-            unset 'tags[-1]'
-          fi
-          if [ "${#tags[@]}" -eq 0 ]; then
-            echo "::error::no tags were published for ${CRATE_VERSION}"
-            exit 1
-          fi
-          for tag in "${tags[@]}"; do
-            f="$RUNNER_TEMP/digest-${tag}"
-            if [ ! -s "$f" ]; then
-              echo "::error::no digest was written for tag ${tag}"
-              exit 1
-            fi
-            d=$(cat "$f")
-            if [ -z "${full_digest:-}" ]; then
-              full_digest="$d"
-            elif [ "$d" != "$full_digest" ]; then
-              echo "::error::tag ${tag} digest ${d} differs from ${tags[0]} digest ${full_digest}; the published tags must point at the same list"
-              exit 1
-            fi
-          done
-          digest="$full_digest"
-          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
-          echo "Manifest digest for ${REGISTRY_IMAGE}:${crate_version}: ${digest}"
+          crate_version="${VERSION#v}"
+          amd64="$(cat "$RUNNER_TEMP/digests/amd64/amd64")"
+          arm64="$(cat "$RUNNER_TEMP/digests/arm64/arm64")"
+          python3 -I .github/scripts/release/images.py digest "$amd64" > /dev/null
+          python3 -I .github/scripts/release/images.py digest "$arm64" > /dev/null
+          # By digest: the tag a builder pushed is not read again, so an image put
+          # there afterwards is not the one that gets assembled.
+          podman manifest create "release-list"
+          podman manifest add "release-list" "docker://${REGISTRY_IMAGE}@${amd64}"
+          podman manifest add "release-list" "docker://${REGISTRY_IMAGE}@${arm64}"
+          # A name nobody consumes: the tags people pull move only after the
+          # attestation has been made and checked.
+          podman manifest push --all --digestfile "$RUNNER_TEMP/list-digest" "release-list" "docker://${REGISTRY_IMAGE}:pending-${crate_version}"
+          list="$(cat "$RUNNER_TEMP/list-digest")"
+          python3 -I .github/scripts/release/images.py digest "$list" > /dev/null
+          # Read back from the registry by digest: it holds exactly the two images.
+          skopeo inspect --raw "docker://${REGISTRY_IMAGE}@${list}" > "$RUNNER_TEMP/list.json"
+          python3 -I .github/scripts/release/images.py list "$RUNNER_TEMP/list.json" "$amd64" "$arm64"
+          echo "digest=${list}" >> "$GITHUB_OUTPUT"
+          echo "Manifest list ${REGISTRY_IMAGE}@${list}"
 
       - name: Attest the multi-arch image
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          # The same action the .deb and the binary attest; the
-          # SHA is already pinned at the top of this workflow.
-          # `subject-name` + `subject-digest` target an OCI image
-          # in the registry rather than a local file.
-          subject-name: ${{ env.REGISTRY_IMAGE }}
-          subject-digest: ${{ steps.digest.outputs.digest }}
+          # `subject-name` + `subject-digest` target an OCI image in the registry
+          # rather than a local file.
+          subject-name: ghcr.io/glyndor/epistle
+          subject-digest: ${{ steps.list.outputs.digest }}
           push-to-registry: true
 
+      - name: The attestation verifies before any tag moves
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DIGEST: ${{ steps.list.outputs.digest }}
+        run: gh attestation verify "oci://${REGISTRY_IMAGE}@${DIGEST}" --repo "$GITHUB_REPOSITORY"
+
+  # The tags people pull, moved last and one release at a time: a slow run of an
+  # older version that ends after a newer one cannot take the floating tags back.
+  image-promote:
+    name: Move the image tags
+    needs: [verify, image-manifest]
+    if: ${{ always() && needs.image-manifest.result == 'success' }}
+    environment: release
+    concurrency:
+      group: release-image-tags
+      cancel-in-progress: false
+    # Fixed on GitHub's runners, never CI_RUNNER: release job; holds secrets or write/OIDC permissions.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    env:
+      VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+      REGISTRY_IMAGE: ghcr.io/glyndor/epistle
+      DIGEST: ${{ needs.image-manifest.outputs.digest }}
+    steps:
+      - name: Only a release tag or main may publish an image
+        run: |
+          case "${GITHUB_EVENT_NAME}:${GITHUB_REF}" in
+            push:refs/tags/v* | workflow_dispatch:refs/heads/main | workflow_dispatch:refs/tags/v*) ;;
+            *) echo "::error::${GITHUB_EVENT_NAME} on ${GITHUB_REF} may not publish an image"; exit 1 ;;
+          esac
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.verify.outputs.commit }}
+          persist-credentials: false
+
+      - name: Log in to ghcr.io
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: echo "${GH_TOKEN}" | podman login ghcr.io -u "${ACTOR}" --password-stdin
+
+      - name: Move the tags this version is allowed to move
+        run: |
+          set -euo pipefail
+          crate_version="${VERSION#v}"
+          # `image_tags.py` classifies the version (a prerelease publishes its exact
+          # tag only); `images.py promote` also reads the registry and refuses to
+          # replace an exact tag or to move a floating one to a lower version. A tag
+          # has to be in both lists.
+          mapfile -t allowed < <(python3 -I .github/scripts/image_tags.py "$crate_version")
+          mapfile -t chosen < <(python3 -I .github/scripts/release/images.py promote "$REGISTRY_IMAGE" "$crate_version" "$DIGEST")
+          if [ "${#chosen[@]}" -eq 0 ]; then
+            echo "::error::no tag may be moved for $crate_version"
+            exit 1
+          fi
+          for tag in "${chosen[@]}"; do
+            printf '%s\n' "${allowed[@]}" | grep -qxF -- "$tag" || { echo "::error::$tag is not a tag this version publishes"; exit 1; }
+          done
+          for tag in "${chosen[@]}"; do
+            skopeo copy --all "docker://${REGISTRY_IMAGE}@${DIGEST}" "docker://${REGISTRY_IMAGE}:${tag}"
+            echo "moved ${REGISTRY_IMAGE}:${tag}"
+          done
