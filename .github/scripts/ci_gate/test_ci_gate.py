@@ -26,6 +26,8 @@ SUITES = {
     # Judge the whole tree and the tests of the CI itself: no plan skips them.
     "folder-limit": (),
     "python-tests": (),
+    # Reads the annotations of this run, so no plan output skips it.
+    "deprecations": (),
 }
 # The jobs of ci.yml, exactly. A job added to the workflow turns the test below
 # red until the author decides here, on purpose, whether the gate waits for it.
@@ -285,7 +287,9 @@ class GateWiring(unittest.TestCase):
 
     def test_every_suite_starts_even_when_the_plan_failed(self):
         for name in SUITES:
-            self.assertTrue(workflow()["jobs"][name]["if"].startswith("${{ !cancelled()"), name)
+            condition = workflow()["jobs"][name]["if"]
+            # The one that reads the annotations of a finished run runs whatever happened, as the gate does.
+            self.assertTrue(condition.startswith("${{ !cancelled()") or (name == "deprecations" and condition == "always()"), name)
 
     def test_a_suite_is_skipped_only_by_an_explicit_false(self):
         for name, job in workflow()["jobs"].items():
