@@ -19,7 +19,13 @@ It has no web interface: you run it through the CLI and its API.
 
 epistle needs **Podman 6.2 or newer** and **podup 6.0 or newer**. The Glyndor apt
 repository carries both for Debian 13 and Ubuntu 24.04 and 26.04, on x86_64 or
-arm64.
+arm64. To install Podman on its own on Debian or Ubuntu:
+
+```sh
+curl -fsSL https://apt.glyndor.net/install/podman | sudo sh
+```
+
+The mail server installs the same way:
 
 ```sh
 curl -fsSL https://apt.glyndor.net/install/epistle | sudo sh
