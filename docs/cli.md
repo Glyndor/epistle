@@ -254,9 +254,9 @@ becomes the host side of the generated mapping as `ADDRESS:PORT:PORT`. A
 container bind that already answers that family is left alone, so the dual-stack
 `::` survives a move to an IPv4 host address. `list` then shows that address in
 a `HOST` column, `-` where the mapping still answers on every host address. A
-wildcard renders as `PORT:PORT` in both families, because a wildcard publishes
-on every address the host owns either way, and pasta on Podman 5.4.2 refuses the
-explicit `0.0.0.0:PORT:PORT` and `[::]:PORT:PORT` forms. A generated mapping
+wildcard renders as `PORT:PORT` in both families, because that form listens on
+both (`ss` on Podman 6.2.0), while `0.0.0.0:PORT:PORT` listens on IPv4 only;
+pasta on Podman 5.4.2 refused both explicit forms. A generated mapping
 with no explicit address stays `PORT:PORT`, and the
 host address one `set` wrote survives a later `enable`, `disable`, `init` rerun
 or `stack update`, since every writer of the map reads it back first. If
@@ -1295,7 +1295,7 @@ than 5% free. An output that is a link, a hard link, or not owned by
 for the server to read, so those files must be readable by the account where
 they are.
 
-Stack requires podup 5.19.0 or newer. A failed podup command stops the
+Stack requires podup 6.0.0 or newer, which in turn requires Podman 6.2.0 or newer. A failed podup command stops the
 sequence and its exit code becomes epistle's exit code.
 
 | Command | What it does |

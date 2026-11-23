@@ -277,12 +277,14 @@ which ports each one published before it brings them together.
 
 #### Port mapping forms under pasta
 
-pasta, the rootless network mode the stack uses, refuses a port mapping that
-names an explicit address on Podman 5.4.2: `"[::]:25:25"`, alone or next to
-`"0.0.0.0:25:25"`, fails with `pasta failed ... Failed to bind port 25`, and
-`"25:25"` is the form that publishes on both families. That is why a wildcard
-is never written as an explicit address. Podman 5.7.0 accepts the explicit
-forms, so this is a floor of the engine and not a rule of the format. An
+pasta, the rootless network mode the stack uses, refused a port mapping that
+named an explicit address on Podman 5.4.2: `"[::]:25:25"`, alone or next to
+`"0.0.0.0:25:25"`, failed with `pasta failed ... Failed to bind port 25`.
+Podman 6.2.0, which the stack requires, accepts the explicit forms (measured
+on 2026-11-23 with `0.0.0.0:P:P`, `[::]:P:P` and both together). They are not
+the same mapping as `"25:25"`: that one listens on both families, while
+`0.0.0.0:P:P` listens on IPv4 only. That is why a wildcard is never written as
+an explicit address. An
 explicit IPv6 host address (`[ADDR]:PORT:PORT`) and a rootless bridge instead of
 pasta are shapes the operator writes in `compose.override.yaml`, where the
 generated map cannot reach them.

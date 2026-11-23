@@ -17,29 +17,25 @@ fn parse_version_returns_one_number_per_dotted_component() {
 
 #[test]
 fn version_at_least_is_numeric_per_component_not_lexicographic() {
-	// Each row pins a comparison the floor depends on. A
-	// lexicographic comparison would say `5.9.0 >= 5.10.10` because
-	// `9 > 1`, and the `5.9.0` row goes red. A regression that
-	// flips the helper to a string compare shows up here first.
+	// Each row pins a comparison the floor depends on. A string
+	// comparison would put `10.0.0` before `6.0.0` (`1 < 6`), and the
+	// `10.0.0` row goes red; a regression that flips the helper to one
+	// shows up here first. `5.20.0` is the last podup 5 release: the
+	// floor refuses it.
 	let rows: &[(&str, bool)] = &[
 		("5.9.0", false),
 		("5.10.9", false),
 		("5.10.10", false),
-		("5.10.13", false),
-		("5.11.0", false),
-		("5.12.0", false),
-		("5.13.0", false),
-		("5.14.0", false),
-		("5.14.1", false),
-		("5.15.0", false),
-		("5.15.3", false),
 		("5.15.4", false),
-		("5.18.0", false),
-		("5.18.9", false),
-		("5.19.0", true),
-		("5.19.1", true),
-		("5.20.0", true),
-		("6.0", true),
+		("5.19.0", false),
+		("5.20.0", false),
+		("5.99.99", false),
+		("6.0.0", true),
+		("6.0.1", true),
+		("6.1.0", true),
+		("6.10.0", true),
+		("7.0.0", true),
+		("10.0.0", true),
 	];
 	for (input, expected) in rows {
 		let actual = version_at_least(input, PODUP_FLOOR);
@@ -71,6 +67,24 @@ fn floor_constant_matches_debian_control() {
 	assert_eq!(
 		floor, PODUP_FLOOR,
 		"debian/control declares podup >= {floor}, but the runtime floor is {PODUP_FLOOR}; the two must agree"
+	);
+}
+
+#[test]
+fn control_declares_the_podman_floor_podup_needs() {
+	// podup 6.0.0 refuses a Podman older than 6.2.0, and epistle calls
+	// `podman` itself (images, volumes, `system migrate`), so the package
+	// names the same floor instead of leaving it to what podup pulls in.
+	let control = std::fs::read_to_string("debian/control").expect("read debian/control");
+	let depends = control
+		.lines()
+		.find_map(|line| line.trim_start().strip_prefix("Depends:"))
+		.expect("debian/control must have a Depends line");
+	assert!(
+		depends
+			.split(',')
+			.any(|dep| dep.trim() == "podman (>= 6.2.0)"),
+		"debian/control must declare `podman (>= 6.2.0)`; Depends is {depends:?}"
 	);
 }
 
