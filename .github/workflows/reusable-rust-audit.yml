@@ -86,22 +86,50 @@ jobs:
           echo "::error::ref must be empty, develop or main."
           exit 1
 
+      # One checkout, always the code of the event. A scheduled run audits
+      # another branch without bringing its tree: the history comes with the
+      # checkout, and the step below takes only the lockfiles and the ignore
+      # list of that branch with `git show`. Nothing of that branch is built or
+      # run, and no local action or script comes from it.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: inputs.ref == ''
         with:
           persist-credentials: false
+          fetch-depth: ${{ inputs.ref != '' && 0 || 1 }}
 
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: inputs.ref == 'develop'
-        with:
-          ref: develop
-          persist-credentials: false
-
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: inputs.ref == 'main'
-        with:
-          ref: main
-          persist-credentials: false
+      - name: Take the lockfiles of the audited branch
+        id: audited
+        if: inputs.ref != ''
+        env:
+          REF: ${{ inputs.ref }}
+          WORKDIR: ${{ inputs.working-directory }}
+          EXTRA_LOCKFILES: ${{ inputs.extra-lockfiles }}
+        # Only data leaves the branch: the lockfiles and the ignore list, into a
+        # directory made for this run outside the workspace. The audit below
+        # points at them with `--file`; nothing else of the branch is read.
+        run: |
+          set -euo pipefail
+          prefix=""
+          [ "$WORKDIR" = . ] || prefix="${WORKDIR%/}/"
+          dir="$(mktemp -d "$RUNNER_TEMP/audited.XXXXXX")"
+          take() {
+            mkdir -p "$dir/$(dirname "$1")"
+            git show "origin/${REF}:${prefix}$1" > "$dir/$1"
+          }
+          take Cargo.lock
+          while read -r lockfile; do
+            [ -n "$lockfile" ] && take "$lockfile"
+          done <<< "$EXTRA_LOCKFILES"
+          # The audit runs with this directory as its working directory, and
+          # cargo-audit reads `.cargo/audit.toml` from there. A branch without the
+          # file gets an empty list, so no list of another branch or of the runner
+          # can apply to it.
+          if git cat-file -e "origin/${REF}:${prefix}.cargo/audit.toml" 2> /dev/null; then
+            take .cargo/audit.toml
+          else
+            mkdir -p "$dir/.cargo"
+            printf '[advisories]\nignore = []\n' > "$dir/.cargo/audit.toml"
+          fi
+          echo "dir=$dir" >> "$GITHUB_OUTPUT"
 
       - name: Install toolchain
         env:
@@ -109,7 +137,6 @@ jobs:
         run: |
           rustup toolchain install "$TOOLCHAIN" --profile minimal
           rustup default "$TOOLCHAIN"
-
 
       # No cache here: the scheduled run checks out develop and main, and a
       # cache saved from a checked-out ref in a default-branch context is a
@@ -123,14 +150,26 @@ jobs:
         run: command -v cargo-audit >/dev/null || cargo install cargo-audit --version "=$TOOL_VERSION" --locked
 
       - name: Run cargo audit
+        env:
+          AUDITED_DIR: ${{ steps.audited.outputs.dir }}
         # --deny warnings so unmaintained/unsound/yanked advisories also fail,
         # not just vulnerabilities. The JSON output is captured unconditionally
         # so the report job can read the full report whether the step passed
         # or failed; the exit code is preserved on a non-zero result so the
         # step still fails the workflow.
+        # For another branch the working directory is the clean one holding only
+        # its lockfile and its ignore list, so the one list of ignores cargo-audit
+        # can see is that branch's; the report is written back to the workspace
+        # by absolute path.
         run: |
-          if ! cargo audit --json --deny warnings > audit.json 2>audit.stderr; then
-            cat audit.stderr >&2
+          out="$PWD"
+          args=()
+          if [ -n "$AUDITED_DIR" ]; then
+            cd "$AUDITED_DIR"
+            args+=(--file "$AUDITED_DIR/Cargo.lock")
+          fi
+          if ! cargo audit --json --deny warnings "${args[@]}" > "$out/audit.json" 2> "$out/audit.stderr"; then
+            cat "$out/audit.stderr" >&2
             exit 1
           fi
 
@@ -138,6 +177,7 @@ jobs:
         if: inputs.extra-lockfiles != ''
         env:
           EXTRA_LOCKFILES: ${{ inputs.extra-lockfiles }}
+          AUDITED_DIR: ${{ steps.audited.outputs.dir }}
         # Deliberately run from working-directory with --file rather than
         # cd-ing into the other workspace. `cargo audit` resolves
         # `.cargo/audit.toml` relative to the process directory, so auditing
@@ -151,9 +191,12 @@ jobs:
         # open-issue decision.
         run: |
           set -euo pipefail
+          out="$PWD"
+          run_dir="${AUDITED_DIR:-$PWD}"
           echo "$EXTRA_LOCKFILES" | while read -r lockfile; do
             [ -n "$lockfile" ] || continue
-            if [ ! -f "$lockfile" ]; then
+            source="${AUDITED_DIR:+$AUDITED_DIR/}$lockfile"
+            if [ ! -f "$source" ]; then
               echo "::error::$lockfile does not exist; the input is stale."
               exit 1
             fi
@@ -162,9 +205,9 @@ jobs:
             # becomes `audit-fuzz-Cargo.json`. Naming it after the file alone
             # gives every workspace the name `audit-Cargo.json`.
             name="$(printf '%s' "${lockfile%.lock}" | tr '/' '-')"
-            if ! cargo audit --json --deny warnings --file "$lockfile" \
-                > "audit-${name}.json" 2>"audit-${name}.stderr"; then
-              cat "audit-${name}.stderr" >&2
+            if ! (cd "$run_dir" && cargo audit --json --deny warnings --file "$source" \
+                > "$out/audit-${name}.json" 2> "$out/audit-${name}.stderr"); then
+              cat "$out/audit-${name}.stderr" >&2
               exit 1
             fi
           done
@@ -189,6 +232,10 @@ jobs:
 
   deny:
     name: cargo deny${{ inputs.ref != '' && format(' ({0})', inputs.ref) || '' }}
+    # cargo-deny reads the manifests of the tree it runs in, so it runs where the
+    # tree is the event's own (a pull request, a push) and not on a branch a
+    # scheduled run only audits by its lockfiles.
+    if: inputs.ref == ''
     runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
     timeout-minutes: 30
     defaults:
@@ -205,20 +252,7 @@ jobs:
           exit 1
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: inputs.ref == ''
         with:
-          persist-credentials: false
-
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: inputs.ref == 'develop'
-        with:
-          ref: develop
-          persist-credentials: false
-
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: inputs.ref == 'main'
-        with:
-          ref: main
           persist-credentials: false
 
       - name: Install toolchain

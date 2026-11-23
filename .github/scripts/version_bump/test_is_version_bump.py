@@ -225,16 +225,15 @@ WORKFLOW = os.path.join(
 
 def judge_step():
     """The shell of the `judge` step of reusable-version-bump.yml, as written."""
-    import yaml
+    import ci_yaml
 
-    with open(WORKFLOW, encoding="utf-8") as handle:
-        spec = yaml.safe_load(handle)
+    spec = ci_yaml.load(WORKFLOW)
     steps = spec["jobs"]["judge"]["steps"]
     return next(step["run"] for step in steps if step.get("id") == "judge")
 
 
 GATE = "${{ !cancelled() && needs.decide.outputs.run != 'false' }}"
-REQUIRED_CALLERS = ("ci.yml", "debian.yml", "dco.yml", "line-limit.yml", "supply-chain.yml")
+REQUIRED_CALLERS = ("ci.yml", "dco.yml")
 
 
 class CallerTests(unittest.TestCase):
@@ -247,13 +246,12 @@ class CallerTests(unittest.TestCase):
     """
 
     def workflows(self):
-        import yaml
+        import ci_yaml
 
-        folder = os.path.dirname(WORKFLOW)
-        for name in sorted(os.listdir(folder)):
-            if name.endswith(".yml") and not name.startswith("reusable-"):
-                with open(os.path.join(folder, name), encoding="utf-8") as handle:
-                    yield name, yaml.safe_load(handle)
+        root = os.path.abspath(WORKFLOW).rsplit(os.sep + ".github" + os.sep, 1)[0]
+        for path in ci_yaml.workflow_files(root):
+            if not path.name.startswith("reusable-"):
+                yield path.name, ci_yaml.load(path)
 
     def test_every_gated_job_runs_unless_the_answer_is_false(self):
         callers = []

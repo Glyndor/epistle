@@ -10,9 +10,12 @@ dropped at the queue timeout. `paths:` and `branches:` filters do not apply to
 `merge_group`, so a workflow that lists only `pull_request` reports nothing
 there.
 
-A required check is named `<caller job id> / <reusable job name>`. REQUIRED
-below lists the seven checks the ruleset requires, each with the reusable that
-holds the job. For each one the scan finds the caller workflow whose job has
+A required check is named `<caller job id> / <reusable job name>`, or just the
+job's `name:` when the job is not a call to a reusable. REQUIRED below lists
+the checks of the first kind and REQUIRED_DIRECT the second, each with the file
+that holds the job. The ruleset requires `CI gate` and the DCO check; the other
+five are the suites the gate replaces, listed until the ruleset stops requiring
+them, and they are still emitted afterwards. For each one the scan finds the caller workflow whose job has
 that id and `uses:` that reusable, and demands `merge_group` in its `on:`
 (with `checks_requested` in `types:` when `types:` is present). It also checks
 that the reusable really has a job with that `name:`, so a rename that the
@@ -25,11 +28,10 @@ publishing secrets), so it is refused too.
 Usage: check_merge_group_triggers.py [repo-root]
 Writes one `::error file=<path>::...` line per violation and exits 1.
 """
-import glob
 import os
 import sys
 
-import yaml
+import ci_yaml
 
 # (caller job id, reusable job name) -> reusable file that must hold the job.
 REQUIRED = {
@@ -40,6 +42,19 @@ REQUIRED = {
     ("line-limit", "line limit"): "reusable-line-limit.yml",
     ("debian", "dpkg-buildpackage"): "reusable-rust-debian.yml",
     ("sbom-and-licenses", "SBOM and license attribution"): "reusable-rust-supply-chain.yml",
+}
+
+# The name of the gate job: `CI gate` where the ruleset requires it (a pull
+# request and the merge queue) and the event in the name anywhere else.
+GATE_NAME = (
+    "${{ github.event_name == 'merge_group' && 'CI gate' || github.event_name == 'pull_request'"
+    " && (github.event.pull_request.base.ref == 'main' && 'CI gate (main)' || 'CI gate')"
+    " || format('CI gate ({0})', github.event_name) }}"
+)
+
+# (job id, job name) -> workflow file holding a job that runs its own steps.
+REQUIRED_DIRECT = {
+    ("gate", GATE_NAME): "ci.yml",
 }
 
 
@@ -74,19 +89,23 @@ def has_checks_requested(cfg):
 
 
 def load(root):
-    """Parse every workflow; a file that does not parse is warned and skipped."""
-    parsed = {}
-    pattern = os.path.join(root, ".github", "workflows", "*.y*ml")
-    for path in sorted(glob.glob(pattern)):
+    """Parse every workflow with the strict loader.
+
+    A file that does not parse, or repeats a key, is an error here: GitHub reads
+    what this check could not, so skipping it would leave a workflow unchecked.
+    """
+    parsed, broken = {}, []
+    for path in ci_yaml.workflow_files(root):
         try:
-            with open(path) as fh:
-                spec = yaml.safe_load(fh)
-        except yaml.YAMLError as err:
-            print(f"::warning file={path}::skipped: YAML parse error: {err}")
+            spec = ci_yaml.load(path)
+        except Exception as err:  # noqa: BLE001 - any parse failure is the same finding
+            broken.append((str(path), f"does not parse: {err}"))
             continue
         if isinstance(spec, dict):
-            parsed[path] = spec
-    return parsed
+            parsed[str(path)] = spec
+        else:
+            broken.append((str(path), "is not a mapping"))
+    return parsed, broken
 
 
 def job_names(spec):
@@ -129,6 +148,20 @@ def find_violations(parsed):
             elif not has_checks_requested(cfg):
                 violations.append((path, f"`{check}` is required on develop but `merge_group` here has `types: {cfg.get('types')!r}` without `checks_requested`"))
 
+    for (job_id, name), filename in sorted(REQUIRED_DIRECT.items()):
+        path = next((p for p in parsed if os.path.basename(p) == filename), None)
+        job = ((parsed.get(path) or {}).get("jobs") or {}).get(job_id) if path else None
+        shown = "CI gate" if name == GATE_NAME else name
+        if not isinstance(job, dict) or job.get("name") != name or "uses" in job:
+            violations.append((f".github/workflows/{filename}", f"required check `{shown}` is not emitted: {filename} has no job `{job_id}` named `{shown}` that runs its own steps"))
+            continue
+        emitters.add(path)
+        cfg = merge_group_cfg(triggers(parsed[path]))
+        if cfg is None:
+            violations.append((path, f"`{shown}` is required on develop but this workflow has no `merge_group` trigger; the merge queue would wait for it forever"))
+        elif not has_checks_requested(cfg):
+            violations.append((path, f"`{shown}` is required on develop but `merge_group` here has `types: {cfg.get('types')!r}` without `checks_requested`"))
+
     for path, spec in parsed.items():
         if path not in emitters and merge_group_cfg(triggers(spec)) is not None:
             violations.append((path, "carries `merge_group` but emits no check required on develop; it would run inside the queue for nothing. Remove the trigger"))
@@ -137,8 +170,9 @@ def find_violations(parsed):
 
 def main(argv):
     root = argv[1] if len(argv) > 1 else "."
-    parsed = load(root)
-    violations, emitters = find_violations(parsed)
+    parsed, violations = load(root)
+    found, emitters = find_violations(parsed)
+    violations += found
     for path, msg in violations:
         print(f"::error file={path}::{msg}")
     if violations:
