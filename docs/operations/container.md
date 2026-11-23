@@ -167,6 +167,16 @@ through that socket with `psql ... -Atc 'select 1'`, so a healthy
 state means the user, the role and the password file all line up;
 `mail` waits on it with `depends_on: {db: {condition: service_healthy}}`.
 
+When a healthcheck gives up, podup acts on `x-podman-on-failure` under it
+(podup 6.0.0; measured on Podman 6.2.0). `mail`, `clamav` and the panel carry
+`restart`: the container is restarted and, once the check passes again, it is
+healthy. Without the key an unhealthy container stays unhealthy. `db` carries
+none: its check gives up after 150 s, shorter than the crash recovery of a
+large database, and restarting the server in the middle of a recovery starts
+it over. `podup audit` reports the missing action as `no_health_action`; the
+one finding left for `db` is accepted in the test that runs `podup audit` on
+the generated file.
+
 The data directory (`<data_dir>`) and the directory holding
 `mail.toml` (`<config_dir>`, the parent of the `config_path` answer)
 are bind-mounted at the same path on both sides of the keep-id

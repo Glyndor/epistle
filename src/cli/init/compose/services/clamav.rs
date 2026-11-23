@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use super::{ComposeService, Healthcheck, VolumeMount, drop_all};
+use super::{ComposeService, Healthcheck, RESTART_WHEN_UNHEALTHY, VolumeMount, drop_all};
 use crate::cli::init::compose::Answers;
 
 /// Signature checks per day when the answers say nothing: the number the
@@ -117,6 +117,7 @@ impl ComposeService {
 				retries: 30,
 				// The initial freshclam download is about 300 MB; clamd waits for signatures.
 				start_period: Some("10m".to_string()),
+				on_failure: RESTART_WHEN_UNHEALTHY,
 			});
 		}
 		service

@@ -250,6 +250,7 @@ impl ComposeService {
 				timeout: "10s".to_string(),
 				retries: 3,
 				start_period: Some("30s".to_string()),
+				on_failure: RESTART_WHEN_UNHEALTHY,
 			}),
 		}
 	}
@@ -340,6 +341,11 @@ impl ComposeService {
 				interval: "5s".to_string(),
 				timeout: "5s".to_string(),
 				retries: 30,
+				// No health action. The check has no start period and gives
+				// up after 30 probes, 150 s, which is shorter than the crash
+				// recovery of a large database; a restart in the middle of
+				// one only starts it over.
+				on_failure: None,
 			}),
 		}
 	}
@@ -437,7 +443,18 @@ struct Healthcheck {
 	interval: String,
 	timeout: String,
 	retries: u32,
+	/// What Podman does when the check gives up (`x-podman-on-failure`,
+	/// read by podup 6.0.0): `restart` brings the container back, `kill`
+	/// leaves it exited and `stop` leaves it stopped. Measured on Podman
+	/// 6.2.0. Left out, an unhealthy container stays unhealthy and nothing
+	/// acts on it, which `podup audit` reports as `no_health_action`.
+	#[serde(rename = "x-podman-on-failure", skip_serializing_if = "Option::is_none")]
+	on_failure: Option<&'static str>,
 }
+
+/// The health action of the services that hold no state a restart can
+/// damage: the check failing for good is the case it exists for.
+const RESTART_WHEN_UNHEALTHY: Option<&str> = Some("restart");
 
 #[derive(Debug, Serialize)]
 #[serde(untagged)]

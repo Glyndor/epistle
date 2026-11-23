@@ -53,7 +53,9 @@
 
 use std::collections::BTreeMap;
 
-use super::{ComposeService, DATABASE_SECRET_MODE, Healthcheck, SecretMount, drop_all};
+use super::{
+	ComposeService, DATABASE_SECRET_MODE, Healthcheck, RESTART_WHEN_UNHEALTHY, SecretMount, drop_all,
+};
 use crate::config::{Listener, ListenerKind};
 
 /// The port the panel's own server listens on, inside its container. Its
@@ -196,6 +198,7 @@ impl ComposeService {
 				timeout: "10s".to_string(),
 				retries: 3,
 				start_period: Some("30s".to_string()),
+				on_failure: RESTART_WHEN_UNHEALTHY,
 			}),
 		}
 	}
