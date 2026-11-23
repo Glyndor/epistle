@@ -31,8 +31,9 @@ UNGATED = {"dependabot-freshness"}
 
 
 GATE_NAME = (
-    "${{ contains(fromJSON('[\"pull_request\",\"merge_group\"]'), github.event_name)"
-    " && 'CI gate' || format('CI gate ({0})', github.event_name) }}"
+    "${{ github.event_name == 'merge_group' && 'CI gate' || github.event_name == 'pull_request'"
+    " && (github.event.pull_request.base.ref == 'main' && 'CI gate (main)' || 'CI gate')"
+    " || format('CI gate ({0})', github.event_name) }}"
 )
 
 
@@ -188,14 +189,22 @@ class GateWiring(unittest.TestCase):
             self.assertIn(f'"{suite}": ({expected}),', text)
         self.assertEqual(len(re.findall(r'^\s+"[a-z-]+": \(.*\),$', text, re.M)), len(SUITES))
 
-    def test_the_name_carries_the_event_unless_the_ruleset_requires_it_there(self):
-        """The name the job gets per event, evaluated as GitHub would."""
-        def named(event):
-            return "CI gate" if event in ("pull_request", "merge_group") else f"CI gate ({event})"
+    def test_the_name_carries_the_event_and_the_base_unless_the_ruleset_requires_it_there(self):
+        """The name the job gets per event and base, as the expression reads."""
+        def named(event, base="develop"):
+            if event == "merge_group":
+                return "CI gate"
+            if event == "pull_request":
+                return "CI gate (main)" if base == "main" else "CI gate"
+            return f"CI gate ({event})"
         self.assertEqual(workflow()["jobs"]["gate"]["name"], GATE_NAME)
-        self.assertEqual({e: named(e) for e in ("pull_request", "merge_group", "push", "schedule", "workflow_dispatch")},
-                         {"pull_request": "CI gate", "merge_group": "CI gate", "push": "CI gate (push)",
-                          "schedule": "CI gate (schedule)", "workflow_dispatch": "CI gate (workflow_dispatch)"})
+        table = {(e, b): named(e, b) for e in ("pull_request", "merge_group", "push", "schedule", "workflow_dispatch")
+                 for b in ("develop", "main")}
+        self.assertEqual(table[("pull_request", "develop")], "CI gate")
+        self.assertEqual(table[("pull_request", "main")], "CI gate (main)")
+        self.assertEqual(table[("merge_group", "develop")], "CI gate")
+        for event in ("push", "schedule", "workflow_dispatch"):
+            self.assertEqual(table[(event, "main")], f"CI gate ({event})")
 
     def test_the_workflows_that_emit_a_required_check_run_on_no_push_to_develop(self):
         """A push to develop would answer, for the same commit, the check the promotion pull request requires."""

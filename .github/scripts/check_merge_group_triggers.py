@@ -47,8 +47,9 @@ REQUIRED = {
 # The name of the gate job: `CI gate` where the ruleset requires it (a pull
 # request and the merge queue) and the event in the name anywhere else.
 GATE_NAME = (
-    "${{ contains(fromJSON('[\"pull_request\",\"merge_group\"]'), github.event_name)"
-    " && 'CI gate' || format('CI gate ({0})', github.event_name) }}"
+    "${{ github.event_name == 'merge_group' && 'CI gate' || github.event_name == 'pull_request'"
+    " && (github.event.pull_request.base.ref == 'main' && 'CI gate (main)' || 'CI gate')"
+    " || format('CI gate ({0})', github.event_name) }}"
 )
 
 # (job id, job name) -> workflow file holding a job that runs its own steps.

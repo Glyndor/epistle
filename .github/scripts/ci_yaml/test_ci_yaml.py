@@ -8,7 +8,7 @@ import yaml
 
 import ci_yaml
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 
 
 class Loader(unittest.TestCase):
