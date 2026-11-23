@@ -151,7 +151,12 @@ jobs:
 
   test-suite:
     name: Workspace tests
-    if: inputs.run-tests && inputs.coverage-threshold == 0
+    # The long suites wait for the cheap one: on a pull request a failed lint
+    # ends the run here instead of after the suite. The condition names the one
+    # real gate and is not applied to a push or a queue entry, which run
+    # everything side by side. A skipped lint (not selected) does not hold it.
+    needs: lint
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.lint.result != 'failure') && inputs.run-tests && inputs.coverage-threshold == 0 }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
     # Measured 2026-10-30: the slowest of four green runs took 34 min.
     timeout-minutes: 70
@@ -213,12 +218,13 @@ jobs:
 
   test-extra:
     name: Test (${{ matrix.os }})
-    if: inputs.run-tests && inputs.extra-test-os != '[]'
+    needs: lint
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.lint.result != 'failure') && inputs.run-tests && inputs.extra-test-os != '[]' }}
     runs-on: ${{ matrix.os }}
     # Measured 2026-10-30: the slowest of four green runs took 34 min.
     timeout-minutes: 70
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         os: ${{ fromJSON(inputs.extra-test-os) }}
     defaults:
@@ -267,7 +273,7 @@ jobs:
     # name, the ruleset still requires the old one, and nothing emits it. This job
     # carries a name that cannot move, so a ruleset gates on "the extra-platform
     # tests passed" without naming which platforms those are. Glyndor/podup#1552.
-    needs: test-extra
+    needs: [lint, test-extra]
     # `needs` on its own SKIPS this job when the dependency fails, and a skipped
     # required check does not block a merge - which is the exact failure this job
     # exists to prevent. `if: always()` plus an explicit result check is what makes
@@ -280,10 +286,13 @@ jobs:
       - name: Reflect the extra-platform test result
         env:
           RESULT: ${{ needs.test-extra.result }}
+          LINT: ${{ needs.lint.result }}
         run: |
           set -euo pipefail
-          # `skipped` is a pass: test-extra is gated on `extra-test-os != '[]'`, so a
-          # caller that asks for no extra platforms has nothing to fail.
+          # `skipped` is a pass only when test-extra was not asked for: it is gated
+          # on `extra-test-os != '[]'`, so a caller that wants no extra platforms has
+          # nothing to fail. A skip because lint failed is not that.
+          [ "$LINT" != failure ] || { echo "::error::lint failed, so the extra-platform tests did not run"; exit 1; }
           case "$RESULT" in
             success | skipped) echo "extra-platform tests: $RESULT" ;;
             *) echo "::error::extra-platform tests did not pass (result: $RESULT)"; exit 1 ;;
@@ -291,7 +300,8 @@ jobs:
 
   coverage:
     name: Coverage
-    if: inputs.run-tests && inputs.coverage-threshold > 0
+    needs: lint
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.lint.result != 'failure') && inputs.run-tests && inputs.coverage-threshold > 0 }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
     # Measured 2026-10-30: the slowest of four green runs took 36 min.
     timeout-minutes: 75

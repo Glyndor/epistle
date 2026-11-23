@@ -36,13 +36,19 @@ on:
 permissions:
   contents: read
 
+# A newer push to a pull request supersedes the run in flight. Queue and branch
+# runs are never cancelled: only a pull_request event is.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   plan:
     uses: ./.github/workflows/reusable-ci-plan.yml
 
   rust:
-    needs: plan
-    if: ${{ !cancelled() }}
+    needs: [plan, line-limit]
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.line-limit.result != 'failure') }}
     uses: ./.github/workflows/reusable-rust-ci.yml
     with:
       run-lint: ${{ needs.plan.outputs.lint != 'false' }}
@@ -137,8 +143,8 @@ jobs:
   # the .deb a user installs is built by the compiler that vouched for the code.
   # Neither build subsumes the other. Coverage owns the workspace suite.
   debian:
-    needs: plan
-    if: ${{ !cancelled() }}
+    needs: [plan, line-limit]
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.line-limit.result != 'failure') }}
     uses: ./.github/workflows/reusable-rust-debian.yml
     with:
       package-name: epistle
@@ -180,8 +186,8 @@ jobs:
       run-check: ${{ needs.plan.outputs.lines != 'false' }}
 
   sbom-and-licenses:
-    needs: plan
-    if: ${{ !cancelled() }}
+    needs: [plan, line-limit]
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.line-limit.result != 'failure') }}
     uses: ./.github/workflows/reusable-rust-supply-chain.yml
     with:
       run-sbom: ${{ needs.plan.outputs.supply != 'false' }}
@@ -193,8 +199,8 @@ jobs:
   # and its steps carry the plan's answer, so a plan that failed runs them.
   wiring:
     name: wiring tests
-    needs: plan
-    if: ${{ !cancelled() }}
+    needs: [plan, line-limit]
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.line-limit.result != 'failure') }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
     timeout-minutes: 45
     steps:
@@ -255,6 +261,56 @@ jobs:
           mode: save
           cache-hit: ${{ steps.cargo-cache.outputs.cache-hit }}
           prefix: rust-wiring
+
+  # When the line limit or the Rust jobs fail, the other workflows of the same
+  # commit stop: their runs cost more than anything left to learn from them. The
+  # Rust jobs run in layers (see reusable-rust-ci.yml), so a lint failure ends
+  # `rust` within minutes and this job starts then.
+  #
+  # This is the only job here that holds `actions: write`, and it never runs a
+  # file the pull request wrote: the script is the copy in the base commit, read
+  # with `git show`, and if the base has none nothing is cancelled. Every value of
+  # the event reaches the step through `env`. The list of workflows it may cancel
+  # is written in the script and holds no security analysis, no dependency audit,
+  # no secret scan and no DCO check, and the script only touches `pull_request`
+  # runs of this pull request, branch and commit. It is not part of `CI gate`:
+  # cancelling does not change the result of any job the gate waits for.
+  cancel-others:
+    name: cancel the other runs of this commit
+    needs: [rust, line-limit]
+    if: >-
+      ${{ always() && github.event_name == 'pull_request'
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && (needs.rust.result == 'failure' || needs.line-limit.result == 'failure') }}
+    # Fixed on GitHub's runners, never CI_RUNNER: holds `actions: write`.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+
+      - name: Cancel the other runs of this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          script="$RUNNER_TEMP/others.sh"
+          if ! git show "${BASE_SHA}:.github/scripts/ci_cancel/others.sh" > "$script" 2> /dev/null; then
+            echo "::warning::the base commit has no cancel script; nothing is cancelled"
+            exit 0
+          fi
+          bash "$script"
 
   # The one check the ruleset requires from this workflow. It runs whatever
   # happened to the jobs it waits for, because a job that `needs` a failed job is

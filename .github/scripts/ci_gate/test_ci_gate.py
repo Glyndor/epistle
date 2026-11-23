@@ -24,7 +24,11 @@ SUITES = {
 # Jobs of ci.yml the gate does not wait for, each with the reason.
 OUTSIDE = {
     "dependabot-freshness": "reads the age of the newest Dependabot pull request, not the commit",
+    "cancel-others": "cancelling other runs changes the result of no job the gate waits for",
 }
+# Suites that wait for the line limit on a pull request; the line limit and the plan wait for nothing else.
+ORDERED = ("rust", "debian", "sbom-and-licenses", "wiring")
+ORDER_IF = "${{ !cancelled() && (github.event_name != 'pull_request' || needs.line-limit.result != 'failure') }}"
 
 
 def workflow():
@@ -178,8 +182,12 @@ class GateWiring(unittest.TestCase):
     def test_every_suite_starts_even_when_the_plan_failed(self):
         for name, job in workflow()["jobs"].items():
             if name in SUITES:
-                self.assertEqual(job["needs"], "plan", name)
-                self.assertEqual(job["if"], "${{ !cancelled() }}", name)
+                if name in ORDERED:
+                    self.assertEqual(job["needs"], ["plan", "line-limit"], name)
+                    self.assertEqual(job["if"], ORDER_IF, name)
+                else:
+                    self.assertEqual(job["needs"], "plan", name)
+                    self.assertEqual(job["if"], "${{ !cancelled() }}", name)
                 for step in job.get("steps", []):
                     self.assertNotIn("== 'true'", str(step.get("if", "")), name)
                     if "needs.plan.outputs" in str(step.get("if", "")):

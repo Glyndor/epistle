@@ -57,6 +57,11 @@ const PRIVILEGED: &[(&str, &str, &str)] = &[
 		"publishes and attests the image with packages, id-token and attestations: write",
 	),
 	(
+		"ci.yml",
+		"cancel-others",
+		"cancels the other runs of the commit with actions: write",
+	),
+	(
 		"codeql.yml",
 		"analyze",
 		"uploads the results with security-events: write",

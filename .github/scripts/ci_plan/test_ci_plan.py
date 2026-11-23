@@ -261,8 +261,8 @@ class WorkflowContractTests(unittest.TestCase):
             ("line-limit", {"run-check": "lines"}),
         ):
             job = jobs[job_id]
-            self.assertEqual(job["needs"], "plan")
-            self.assertEqual(job["if"], "${{ !cancelled() }}")
+            self.assertIn("plan", job["needs"])
+            self.assertTrue(job["if"].startswith("${{ !cancelled()"))
             for key, output in inputs.items():
                 self.assertEqual(job["with"][key], "${{ needs.plan.outputs." + output + " != 'false' }}")
 
@@ -278,8 +278,8 @@ class WorkflowContractTests(unittest.TestCase):
 
     def test_coverage_and_plain_suite_are_mutually_exclusive(self):
         jobs = workflow("reusable-rust-ci.yml")["jobs"]
-        self.assertEqual(jobs["test-suite"]["if"], "inputs.run-tests && inputs.coverage-threshold == 0")
-        self.assertEqual(jobs["coverage"]["if"], "inputs.run-tests && inputs.coverage-threshold > 0")
+        self.assertTrue(jobs["test-suite"]["if"].endswith("inputs.run-tests && inputs.coverage-threshold == 0 }}"))
+        self.assertTrue(jobs["coverage"]["if"].endswith("inputs.run-tests && inputs.coverage-threshold > 0 }}"))
         self.assertIn("cargo test --locked --all-features --workspace", str(jobs["test-suite"]))
         self.assertIn("cargo llvm-cov --locked --workspace --all-features", str(jobs["coverage"]))
 

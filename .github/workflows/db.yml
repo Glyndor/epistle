@@ -93,7 +93,8 @@ jobs:
       # One leg: the floor (`MIN_SERVER_VERSION = 18` in `src/db/mod.rs`),
       # which is also the major the stack runs. When a newer major ships,
       # add it as a second `include:` row with its own digest.
-      fail-fast: false
+      # A pull request stops at the first failing leg; a push reports every leg.
+      fail-fast: ${{ github.event_name == 'pull_request' }}
       matrix:
         include:
           - postgres: 18
