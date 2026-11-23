@@ -77,6 +77,48 @@ class SecurityResultsCount(unittest.TestCase):
         self.assertEqual(workflow["noreply"]["name"], "author and sign-off use a GitHub noreply address")
         self.assertEqual(workflow["secret-scan"]["name"], "no credential-shaped line is added")
 
+    def test_the_job_that_judges_executes_nothing_of_the_change_and_stops_without_a_base_scanner(self):
+        jobs = load("dco.yml")["jobs"]
+        self.assertNotIn("secret-scan-tests", jobs, "the tests are not run in dco.yml, they are a suite of ci.yml")
+        judge = jobs["secret-scan"]["steps"]
+        # Checkout, then the scan: no step runs a file of the tree before the judgment, and none after.
+        self.assertEqual(len(judge), 2, [s.get("name", s.get("uses")) for s in judge])
+        self.assertIn("actions/checkout@", judge[0]["uses"])
+        run = judge[1]["run"]
+        self.assertTrue(judge[1]["name"].startswith("Scan what this change adds"))
+        for forbidden in ("tests/", ".test.sh", "source ", "./", "export ", "PATH="):
+            self.assertNotIn(forbidden, run, forbidden)
+        self.assertEqual(run.count("bash "), 1, "the only thing it runs is the scanner")
+        # An unreadable base stops the job first; a base without a scanner stops it after; the scanner
+        # of the change is never a fallback.
+        order = [run.index(x) for x in ('git rev-parse --verify "$BASE_SHA^{commit}"', "|| { echo", 'git archive "$BASE_SHA" "$dir/$name"',
+                                        '[ -n "$scanner" ] ||', 'bash "$scanner"')]
+        self.assertEqual(order, sorted(order))
+        self.assertIn("exit 1", run[run.index('git rev-parse --verify'):run.index("scanner=\"\"")])
+        self.assertIn('[ -n "$scanner" ] || { echo "::error::the base has no secret scan, so nothing was scanned"; exit 1; }', run)
+        self.assertNotIn("this change is used", run)
+        self.assertNotIn('scanner="$dir/check-secrets.sh"', run)
+        self.assertIn("check-secrets.sh scan-credentials.sh", run)
+
+    def test_the_tests_of_the_scanner_are_a_suite_the_gate_waits_for(self):
+        ci = load("ci.yml")["jobs"]
+        job = ci["secret-scan-tests"]
+        self.assertEqual(job["name"], "the credential scan passes its own tests")
+        self.assertIn("secret-scan-tests", ci["gate"]["needs"])
+        self.assertNotIn("needs", job)
+        tests = next(s for s in job["steps"] if s.get("name") == "Test the check")["run"]
+        self.assertIn("scripts/scan-credentials/tests/*.test.sh", tests)
+        gate_script = next(s for s in ci["gate"]["steps"] if "NEEDS" in s.get("env", {}))["run"]
+        self.assertIn('"secret-scan-tests": (),', gate_script)
+        folder = ROOT / "scripts/scan-credentials"
+        self.assertTrue((folder / "check-secrets.sh").is_file())
+        self.assertFalse((folder / "scan-credentials.sh").exists(), "one scanner only")
+        names = sorted(p.name for p in (folder / "tests").glob("*.test.sh"))
+        self.assertEqual(names, ["check-secrets-attacks.test.sh", "check-secrets-history.test.sh", "check-secrets-lines.test.sh", "check-secrets.test.sh"])
+        listed = subprocess.run(["git", "ls-files", "-s", "--", "scripts/scan-credentials"], cwd=ROOT, capture_output=True, text=True, check=True).stdout
+        for line in listed.splitlines():
+            self.assertTrue(line.startswith("100755"), f"invoked directly by the tests, so it is executable in git: {line}")
+
     def test_the_security_workflows_each_have_a_group_of_their_own(self):
         """Groups with `github.workflow` read as the workflow's name, which is what the runner makes of them."""
         groups = {}

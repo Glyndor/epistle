@@ -49,16 +49,12 @@
      }
     },
     {
-     "name": "Test the check",
-     "run": "bash scripts/scan-credentials/scan-credentials.test.sh"
-    },
-    {
      "env": {
       "BASE_SHA": "${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}",
       "HEAD_SHA": "${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}"
      },
-     "name": "Scan the lines this change adds",
-     "run": "bash scripts/scan-credentials/scan-credentials.sh \"$BASE_SHA\" \"$HEAD_SHA\""
+     "name": "Scan what this change adds, every commit of it and every message",
+     "run": "set -euo pipefail\ndir=scripts/scan-credentials\ngit rev-parse --verify \"$BASE_SHA^{commit}\" > /dev/null || { echo \"::error::the base $BASE_SHA cannot be read, so nothing was scanned\"; exit 1; }\nscanner=\"\"\nfor name in check-secrets.sh scan-credentials.sh; do\n  if git cat-file -e \"$BASE_SHA:$dir/$name\" 2>/dev/null; then\n    mkdir -p \"$RUNNER_TEMP/scanner\"\n    git archive \"$BASE_SHA\" \"$dir/$name\" | tar -x -C \"$RUNNER_TEMP/scanner\"\n    scanner=\"$RUNNER_TEMP/scanner/$dir/$name\"\n    break\n  fi\ndone\n[ -n \"$scanner\" ] || { echo \"::error::the base has no secret scan, so nothing was scanned\"; exit 1; }\nbash \"$scanner\" \"$BASE_SHA\" \"$HEAD_SHA\"\n"
     }
    ],
    "timeout-minutes": 5
