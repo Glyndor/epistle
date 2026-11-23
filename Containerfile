@@ -71,7 +71,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
 #   podman image inspect --format '{{.Digest}}' gcr.io/distroless/static-debian13:nonroot
 # Bump the digest deliberately, the way db.yml documents the postgres
 # digests.
-FROM gcr.io/distroless/static-debian13:nonroot@sha256:aafe993665bf6200db38a02c11a9351e782a84b6a45e7f33b6695638c88e3931
+FROM gcr.io/distroless/static-debian13:nonroot@sha256:8ce6dd87e9823c5b48dcfb2c8604714ccb351ce59607327bcc4957448da279b5
 
 # OCI labels. `--label=...` on the `podman build` command line
 # overrides them at build time, so a release job can stamp the
