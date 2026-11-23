@@ -12,6 +12,7 @@ import subprocess
 
 JOBS = ("lint", "tests", "doc", "msrv", "debian", "supply", "freshness", "folder", "lines")
 RUST = {"lint", "tests", "doc", "msrv"}
+ALWAYS = {"lines", "folder"}
 BUILD = RUST | {"debian"}
 OWN = {".github/scripts/ci_plan/ci_plan.py", ".github/scripts/ci_plan/test_ci_plan.py",
        ".github/scripts/ci_plan/__init__.py",
@@ -65,7 +66,7 @@ def affected(path):
     if path == ".github/dependabot.yml":
         return {"freshness"}
     if path == ".github/folder-limit-exceptions.txt" or path.startswith("scripts/folder-limit/"):
-        return {"folder"}
+        return set()  # the folder gate runs on every pull request
     if path.startswith("fuzz/"):
         return {"lint"}  # lint checks the separate fuzz lockfile with metadata
     if path.startswith((".github/scripts/", "scripts/", "deploy/")):
@@ -84,14 +85,10 @@ def select(event, changes):
     if event != "pull_request" or not changes:
         return dict.fromkeys(JOBS, True)
     chosen = set()
-    for status, path in changes:
+    for _status, path in changes:
         chosen |= affected(path)
-        if path.rsplit(".", 1)[-1] in {
-            "rs", "go", "ts", "tsx", "js", "jsx", "mjs", "cjs", "py", "sh", "astro", "vue", "svelte"
-        }:
-            chosen.add("lines")
-        if status in {"A", "D"}:
-            chosen.add("folder")
+    # These two judge the whole tree and not the diff, so they always run.
+    chosen |= ALWAYS
     return {job: job in chosen for job in JOBS}
 
 

@@ -40,9 +40,14 @@ jobs:
   plan:
     uses: ./.github/workflows/reusable-ci-plan.yml
 
+  # The plan's answer is the `if` of the job that calls the reusable, so a suite
+  # the plan skips shows as `skipped` here and `CI gate` can tell it from one
+  # that ran: the result of a caller is `success` even when every job inside it
+  # was skipped. `!= 'false'` keeps an empty or missing output on the side of
+  # running.
   rust:
     needs: plan
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && (needs.plan.outputs.lint != 'false' || needs.plan.outputs.tests != 'false' || needs.plan.outputs.doc != 'false' || needs.plan.outputs.msrv != 'false') }}
     uses: ./.github/workflows/reusable-rust-ci.yml
     with:
       run-lint: ${{ needs.plan.outputs.lint != 'false' }}
@@ -138,7 +143,7 @@ jobs:
   # Neither build subsumes the other. Coverage owns the workspace suite.
   debian:
     needs: plan
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && needs.plan.outputs.debian != 'false' }}
     uses: ./.github/workflows/reusable-rust-debian.yml
     with:
       package-name: epistle
@@ -168,20 +173,18 @@ jobs:
       # without it the build fails at aws-lc-sys and the floor survives.
       apt-packages: "musl-tools fakeroot jq"
 
-  # A statement about the state of the tree, not about a diff: the reusable ends
-  # in `git ls-files -z` and counts the lines of every tracked file by extension.
-  # The plan only skips it when the changed paths cannot affect any of the
-  # extensions it scans.
+  # A statement about the state of the whole tree, not about a diff: the reusable
+  # ends in `git ls-files -z` and counts the lines of every tracked file by
+  # extension. It does not depend on the plan, because a change that touches no
+  # source file can still be the one that leaves a file over the limit (a moved
+  # exception, a new extension), and it costs seconds.
   line-limit:
-    needs: plan
     if: ${{ !cancelled() }}
     uses: ./.github/workflows/reusable-line-limit.yml
-    with:
-      run-check: ${{ needs.plan.outputs.lines != 'false' }}
 
   sbom-and-licenses:
     needs: plan
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && needs.plan.outputs.supply != 'false' }}
     uses: ./.github/workflows/reusable-rust-supply-chain.yml
     with:
       run-sbom: ${{ needs.plan.outputs.supply != 'false' }}
@@ -219,7 +222,7 @@ jobs:
           SUITES = {
               "rust": ("lint", "tests", "doc", "msrv"),
               "debian": ("debian",),
-              "line-limit": ("lines",),
+              "line-limit": (),
               "sbom-and-licenses": ("supply",),
           }
           needs = json.loads(os.environ["NEEDS"])
@@ -246,12 +249,16 @@ jobs:
               if result == "success":
                   continue
               if result == "skipped":
-                  if plan.get("result") == "success" and all(outputs.get(d) == "false" for d in dims):
+                  if plan.get("result") == "success" and dims and all(outputs.get(d) == "false" for d in dims):
                       continue
                   problems.append(f"{name} was skipped and the plan did not say it could be")
               else:
                   problems.append(f"{name} did not succeed (result: {result})")
 
+          print(f"{'suite':<20} {'plan says':<28} result")
+          for name, dims in SUITES.items():
+              says = ",".join(f"{d}={outputs.get(d)}" for d in dims) or "always runs"
+              print(f"{name:<20} {says:<28} {(needs.get(name) or {}).get('result')}")
           for problem in problems:
               print(f"::error::{problem}")
           if problems:

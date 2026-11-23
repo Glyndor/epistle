@@ -6,6 +6,7 @@ workflow cannot drift apart.
 
 import json
 import os
+import re
 import subprocess
 import unittest
 from pathlib import Path
@@ -17,13 +18,16 @@ CI = ROOT / ".github/workflows/ci.yml"
 SUITES = {
     "rust": ("lint", "tests", "doc", "msrv"),
     "debian": ("debian",),
-    "line-limit": ("lines",),
+    # Judges the whole tree, so no plan output licenses skipping it.
+    "line-limit": (),
     "sbom-and-licenses": ("supply",),
 }
-# Jobs of ci.yml the gate does not wait for, each with the reason.
-OUTSIDE = {
-    "dependabot-freshness": "reads the age of the newest Dependabot pull request, not the commit",
-}
+# The jobs of ci.yml, exactly. A job added to the workflow turns the test below
+# red until the author decides here, on purpose, whether the gate waits for it.
+JOBS = {"plan", "gate", "dependabot-freshness", *SUITES}
+# The one job the gate does not wait for: it reads the age of the newest
+# Dependabot pull request, not the commit, so it would fail unrelated work.
+UNGATED = {"dependabot-freshness"}
 
 
 def workflow():
@@ -93,12 +97,20 @@ class GateDecisions(unittest.TestCase):
 
     def test_a_suite_skipped_because_the_plan_said_so_passes(self):
         for suite, dims in SUITES.items():
+            if not dims:
+                continue
             with self.subTest(suite=suite):
                 self.passes(needs(plan_=plan(**dict.fromkeys(dims, "false")), **{suite: "skipped"}))
 
+    def test_a_suite_that_always_runs_fails_when_skipped(self):
+        for suite, dims in SUITES.items():
+            if not dims:
+                with self.subTest(suite=suite):
+                    self.fails(needs(**{suite: "skipped"}), f"{suite} was skipped and the plan did not say it could be")
+
     def test_a_plan_that_skips_everything_passes_only_with_every_suite_skipped(self):
         everything = plan(**{dim: "false" for dims in SUITES.values() for dim in dims})
-        self.passes(needs(plan_=everything, **dict.fromkeys(SUITES, "skipped")))
+        self.passes(needs(plan_=everything, **{s: "skipped" for s in SUITES if SUITES[s]}))
         self.fails(needs(plan_=everything, rust="failure", **{s: "skipped" for s in SUITES if s != "rust"}), "rust did not succeed")
 
     def test_rust_may_be_skipped_only_when_the_plan_skips_all_four_kinds_of_work(self):
@@ -146,19 +158,29 @@ class GateDecisions(unittest.TestCase):
 
 
 class GateWiring(unittest.TestCase):
-    def test_it_runs_always_and_waits_for_the_plan_and_every_suite(self):
-        jobs = workflow()["jobs"]
-        gate = jobs["gate"]
+    def test_the_jobs_of_the_workflow_are_exactly_these(self):
+        self.assertEqual(set(workflow()["jobs"]), JOBS)
+
+    def test_it_runs_always_and_waits_for_the_plan_and_every_suite_except_the_ungated_one(self):
+        gate = workflow()["jobs"]["gate"]
         self.assertEqual(gate["if"], "always()")
         self.assertEqual(gate["name"], "CI gate")
         self.assertEqual(set(gate["needs"]), {"plan", *SUITES})
-        self.assertEqual(set(jobs) - {"gate", "plan"} - set(OUTSIDE), set(SUITES))
+        self.assertEqual(JOBS - {"gate", "plan"} - UNGATED, set(SUITES))
+
+    def test_each_suite_is_gated_on_the_outputs_the_gate_table_names_for_it(self):
+        """The plan outputs a suite's own `if` reads are the ones the gate accepts a skip on."""
+        for name, dims in SUITES.items():
+            job = workflow()["jobs"][name]
+            read = tuple(sorted(set(re.findall(r"needs\.plan\.outputs\.(\w+)", str(job.get("if", ""))))))
+            self.assertEqual(read, tuple(sorted(dims)), name)
 
     def test_the_table_of_the_step_is_the_table_of_this_test(self):
         text = gate_step()
         for suite, dims in SUITES.items():
             expected = ", ".join(f'"{dim}"' for dim in dims) + ("," if len(dims) == 1 else "")
             self.assertIn(f'"{suite}": ({expected}),', text)
+        self.assertEqual(len(re.findall(r'^\s+"[a-z-]+": \(.*\),$', text, re.M)), len(SUITES))
 
     def test_it_holds_no_permission_and_checks_nothing_out(self):
         gate = workflow()["jobs"]["gate"]
@@ -174,21 +196,29 @@ class GateWiring(unittest.TestCase):
     def test_it_uses_the_runner_variable_like_every_other_job(self):
         self.assertEqual(workflow()["jobs"]["gate"]["runs-on"], "${{ fromJSON(vars.CI_RUNNER || '\"ubuntu-latest\"') }}")
 
+    def test_it_prints_the_plan_and_the_result_of_every_suite(self):
+        code, out = run_gate(needs(plan_=plan(debian="false"), debian="skipped"))
+        self.assertEqual(code, 0, out)
+        for suite in SUITES:
+            self.assertIn(suite, out)
+        self.assertRegex(out, r"debian\s+debian=false\s+skipped")
+
+    def test_a_suite_that_calls_a_reusable_carries_the_plan_condition_so_an_omission_shows_as_skipped(self):
+        jobs = workflow()["jobs"]
+        for name, dims in SUITES.items():
+            if "uses" in jobs[name] and dims:
+                for dim in dims:
+                    self.assertIn(f"needs.plan.outputs.{dim} != 'false'", jobs[name]["if"], name)
+
     def test_every_suite_starts_even_when_the_plan_failed(self):
-        for name, job in workflow()["jobs"].items():
-            if name in SUITES:
-                self.assertEqual(job["needs"], "plan", name)
-                self.assertEqual(job["if"], "${{ !cancelled() }}", name)
+        for name in SUITES:
+            self.assertTrue(workflow()["jobs"][name]["if"].startswith("${{ !cancelled()"), name)
 
     def test_a_suite_is_skipped_only_by_an_explicit_false(self):
         for name, job in workflow()["jobs"].items():
             for text in (str(job.get("if", "")), str(job.get("with", ""))):
                 self.assertNotIn("== 'true'", text, name)
                 self.assertNotIn("contains(needs", text, name)
-        for name in SUITES:
-            for key, value in (workflow()["jobs"][name].get("with") or {}).items():
-                if "needs.plan.outputs" in str(value):
-                    self.assertTrue(str(value).endswith(" != 'false' }}"), f"{name}: {key}")
 
 
 if __name__ == "__main__":
