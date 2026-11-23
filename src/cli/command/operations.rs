@@ -98,9 +98,9 @@ macro_rules! operations_commands {
 			},
 			/// Report whether the mail server is working, area by area.
 			///
-			/// Report whether the mail server is working: one line per area (config,
-			/// ports, tls, dns, db, antivirus, queue, disk). Exits 1 when any area
-			/// fails. Sends no mail and authenticates nothing.
+			/// Report whether the mail server is working: one line per area, the
+			/// areas `epistle check --help` lists. Exits 1 when any area fails.
+			/// Sends no mail and authenticates nothing.
 			Status {
 				/// Path to the configuration file.
 				#[arg(long, value_name = "FILE", default_value = DEFAULT_CONFIG)]

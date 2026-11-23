@@ -7,9 +7,8 @@ macro_rules! deployment_commands {
 			/// Drive `podup` against the compose file `epistle init` writes.
 			///
 			/// Drive the `podup` command-line against the compose file `epistle init`
-			/// writes under `<data_dir>/compose/compose.yaml`. Subcommands: `up`,
-			/// `down`, `ps [--json]`, `logs [--follow] [<service>]`, `restart
-			/// [<service>]`, `update`. Runs `podup` underneath; never replaces it.
+			/// writes under `<data_dir>/compose/compose.yaml`. Each subcommand says
+			/// what it runs. Runs `podup` underneath; never replaces it.
 			Stack {
 				/// Configuration file, defaults to the path written by packaged init.
 				/// Global so it can appear before or after the stack subcommand.
@@ -47,7 +46,7 @@ macro_rules! deployment_commands {
 				/// Print the result as one JSON object on stdout.
 				#[arg(long, global = true)]
 				json: bool,
-				/// Database action (`upgrade`).
+				/// Database action.
 				#[command(subcommand)]
 				action: db_upgrade::DbCli,
 			},
@@ -64,7 +63,7 @@ macro_rules! deployment_commands {
 				/// Print the result as one JSON object on stdout.
 				#[arg(long, global = true)]
 				json: bool,
-				/// DKIM action (`show`, `rotate`, `cleanup`, `split`).
+				/// DKIM action.
 				#[command(subcommand)]
 				action: dkim::DkimCli,
 			},
@@ -79,7 +78,7 @@ macro_rules! deployment_commands {
 				/// Print the result as one JSON object on stdout.
 				#[arg(long, global = true)]
 				json: bool,
-				/// TLS action (`show`, `renew`).
+				/// TLS action.
 				#[command(subcommand)]
 				action: crate::cli::tls::cli::TlsCli,
 			},
@@ -91,7 +90,7 @@ macro_rules! deployment_commands {
 				/// Print the result as one JSON object on stdout.
 				#[arg(long, global = true)]
 				json: bool,
-				/// API key action (`list`, `create`, `set`, `revoke`, `rotate`).
+				/// API key action.
 				#[command(subcommand)]
 				action: api_keys::ApiKeyCli,
 			},
@@ -119,8 +118,9 @@ macro_rules! deployment_commands {
 			},
 			/// Move mail and settings from another mail server into this one.
 			///
-			/// `imap` copies a remote account's folders over IMAP and can be run
-			/// again to copy only what arrived since.
+			/// Each subcommand reads one kind of source; `imap` copies a remote
+			/// account's folders over IMAP and can be run again to copy only what
+			/// arrived since.
 			Migrate(migrate::MigrateArgs),
 			/// Print a shell completion script on stdout.
 			///

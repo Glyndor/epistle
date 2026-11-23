@@ -17,7 +17,7 @@ macro_rules! account_delivery_commands {
 				/// for whichever action follows.
 				#[arg(long)]
 				json: bool,
-				/// Suppression action (`list`, `add`, `remove`).
+				/// Suppression action.
 				#[command(subcommand)]
 				action: Option<suppression::SuppressionCli>,
 				/// Older form of `suppression remove ADDRESS`.
@@ -76,7 +76,7 @@ macro_rules! account_delivery_commands {
 				/// Print the result as one JSON object on stdout.
 				#[arg(long, global = true)]
 				json: bool,
-				/// Queue action (`list`, `show`, `retry`, `hold`, `release`, `remove`).
+				/// Queue action.
 				#[command(subcommand)]
 				action: Option<queue::QueueCli>,
 			},
@@ -88,7 +88,7 @@ macro_rules! account_delivery_commands {
 				/// Path to the configuration file; accepted before or after the action.
 				#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
 				config: PathBuf,
-				/// Warm-up action (`status`, `enable`, `disable`, `pause`, `resume`, `set`, `reset`).
+				/// Warm-up action.
 				#[command(subcommand)]
 				action: warmup::WarmupCli,
 			},
@@ -100,7 +100,7 @@ macro_rules! account_delivery_commands {
 				/// Path to the configuration file; accepted before or after the action.
 				#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
 				config: PathBuf,
-				/// Deliverability action (`test`).
+				/// Deliverability action.
 				#[command(subcommand)]
 				action: deliverability::DeliverabilityCli,
 			},
@@ -117,7 +117,7 @@ macro_rules! account_delivery_commands {
 				/// Path to the configuration file; accepted before or after the action.
 				#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
 				config: PathBuf,
-				/// Evidence action (`verify`, `export`, `check`, `policy`, `timestamp`, `acknowledge`).
+				/// Evidence action.
 				#[command(subcommand)]
 				action: evidence::EvidenceCli,
 			},
@@ -132,7 +132,7 @@ macro_rules! account_delivery_commands {
 				/// Print the result as one JSON object on stdout.
 				#[arg(long, global = true)]
 				json: bool,
-				/// Ban action (`list`, `add`, `remove`, `allow`).
+				/// Ban action.
 				#[command(subcommand)]
 				action: ban::BanCli,
 			},
@@ -145,7 +145,7 @@ macro_rules! account_delivery_commands {
 				/// Path to the configuration file; accepted before or after the action.
 				#[arg(long, value_name = "FILE", global = true, default_value = DEFAULT_CONFIG)]
 				config: PathBuf,
-				/// Learning action (`status`, `enable`, `disable`, `reset`).
+				/// Learning action.
 				#[command(subcommand)]
 				action: learning::LearningCli,
 			},
@@ -160,7 +160,7 @@ macro_rules! account_delivery_commands {
 				/// Print the result as one JSON object on stdout.
 				#[arg(long, global = true)]
 				json: bool,
-				/// Masked action (`list`, `add`, `remove`, `enable`, `disable`).
+				/// Masked action.
 				#[command(subcommand)]
 				action: masked::MaskedCli,
 			},
@@ -172,7 +172,7 @@ macro_rules! account_delivery_commands {
 				/// Print the result as one JSON object on stdout.
 				#[arg(long, global = true)]
 				json: bool,
-				/// App password action (`list`, `create`, `revoke`).
+				/// App password action.
 				#[command(subcommand)]
 				action: crate::cli::app::passwords::AppPasswordCli,
 			},
@@ -194,7 +194,7 @@ macro_rules! account_delivery_commands {
 				/// Print the result as one JSON object on stdout.
 				#[arg(long, global = true)]
 				json: bool,
-				/// The archive sub-action (`list`, `restore`, `purge`).
+				/// The archive sub-action.
 				#[command(subcommand)]
 				action: archive::Subcommand,
 			},

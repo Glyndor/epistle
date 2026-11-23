@@ -14,7 +14,7 @@
 //! container (`API_BIND_ADDR` in `src/cli/init/apply/apply_config/mod.rs`), so
 //! the pasta mapping does not reach it and it gets no `ports:` entry.
 //!
-//! Measured on Podman 5.7.0 rootless on 2026-11-14, a container in a pasta
+//! Measured on Podman 5.7.0 rootless on 2026-11-14 (not repeated on 6.2.0), a container in a pasta
 //! instance of its own reaches:
 //!
 //! - nothing of the host on `127.0.0.1`;

@@ -42,7 +42,7 @@ pub(super) fn wait(host: &mut impl BootHost) -> Item {
 			"network wait",
 			Level::Warn,
 			format!(
-				"systemd cannot load {SHIM} ({state}), so the wait the unit declares does nothing; it ships with Podman 5.3.0 and later, so update Podman"
+				"systemd cannot load {SHIM} ({state}), so the wait the unit declares does nothing; it ships with Podman, and the stack needs Podman 6.2.0 or newer, so update Podman"
 			),
 		);
 	}

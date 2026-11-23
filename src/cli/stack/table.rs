@@ -41,10 +41,12 @@ pub(super) struct Publisher {
 	#[serde(rename = "TargetPort")]
 	pub(super) target_port: u16,
 	/// Port the host actually binds (may differ from `URL` after
-	/// `0:0` random allocation). podup 5.10.10 emits `null` when
-	/// the port is exposed inside the container network but has no
-	/// host binding; treating it as a plain `u16` would reject the
-	/// whole service array, so the field is optional.
+	/// `0:0` random allocation). podup 5.10.10 emitted `null` when
+	/// the port was exposed inside the container network but had no
+	/// host binding; podup 6.0.0 lists no mapping for such a port
+	/// (`Publishers` is `[]`, measured). Treating a `null` as a plain
+	/// `u16` would reject the whole service array, so the field stays
+	/// optional.
 	#[serde(rename = "PublishedPort")]
 	pub(super) published_port: Option<u16>,
 	/// Protocol: `tcp` or `udp`.
