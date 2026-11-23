@@ -77,4 +77,4 @@ asking to become the folder `<stem>/`.
 or a comment pointing at nothing. A path that only illustrates a shape is
 written with a placeholder (`src/<domain>/`), or inside a block fenced
 as ```` ```text example ````. The 500-line limit per file is checked by
-`.github/workflows/line-limit.yml`.
+`.github/workflows/ci.yml`.

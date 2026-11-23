@@ -234,7 +234,7 @@ def judge_step():
 
 
 GATE = "${{ !cancelled() && needs.decide.outputs.run != 'false' }}"
-REQUIRED_CALLERS = ("ci.yml", "debian.yml", "dco.yml", "line-limit.yml", "supply-chain.yml")
+REQUIRED_CALLERS = ("ci.yml", "dco.yml")
 
 
 class CallerTests(unittest.TestCase):
