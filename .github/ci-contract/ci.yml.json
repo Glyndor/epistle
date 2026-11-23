@@ -53,6 +53,37 @@
     "max-age-days": 15
    }
   },
+  "deprecations": {
+   "if": "always()",
+   "name": "no deprecation notice",
+   "needs": [
+    "rust",
+    "debian",
+    "line-limit",
+    "sbom-and-licenses",
+    "audit",
+    "folder-limit",
+    "python-tests"
+   ],
+   "permissions": {
+    "actions": "read",
+    "checks": "read",
+    "contents": "read"
+   },
+   "runs-on": "${{ fromJSON(vars.CI_RUNNER || '\"ubuntu-latest\"') }}",
+   "steps": [
+    {
+     "env": {
+      "GH_TOKEN": "${{ github.token }}",
+      "REPO": "${{ github.repository }}",
+      "RUN_ID": "${{ github.run_id }}"
+     },
+     "name": "Read the annotations of this run",
+     "run": "python3 -I - <<'PY'\nimport json\nimport os\nimport re\nimport subprocess\nimport sys\nimport time\n\nrepo, run_id = os.environ[\"REPO\"], os.environ[\"RUN_ID\"]\nNOTICE = re.compile(r\"deprecat\", re.I)\n\n\ndef api(path):\n    for attempt in range(3):\n        done = subprocess.run([\"gh\", \"api\", \"--paginate\", path], capture_output=True, text=True, check=False)\n        if done.returncode == 0:\n            # --paginate prints one JSON document per page, back to back\n            pages, text, at = [], done.stdout, 0\n            decoder = json.JSONDecoder()\n            while at < len(text):\n                if text[at].isspace():\n                    at += 1\n                    continue\n                page, at = decoder.raw_decode(text, at)\n                pages.append(page)\n            return pages\n        time.sleep(2 * (attempt + 1))\n    print(f\"::error::could not read {path}: {done.stderr.strip()}\")\n    sys.exit(1)\n\n\njobs = [job for page in api(f\"repos/{repo}/actions/runs/{run_id}/jobs?per_page=100\") for job in page[\"jobs\"]]\nfound = []\nfor job in jobs:\n    for page in api(f\"repos/{repo}/check-runs/{job['id']}/annotations?per_page=100\"):\n        for note in page:\n            if note.get(\"annotation_level\") in (\"warning\", \"failure\") and NOTICE.search(note.get(\"message\") or \"\"):\n                found.append((job[\"name\"], note[\"message\"].strip().splitlines()[0]))\nfor name, message in found:\n    print(f\"::error::{name}: {message}\")\nif found:\n    sys.exit(1)\nprint(f\"No deprecation notice in {len(jobs)} jobs.\")\nPY\n"
+    }
+   ],
+   "timeout-minutes": 10
+  },
   "folder-limit": {
    "if": "${{ !cancelled() }}",
    "name": "folder limit",
@@ -90,7 +121,8 @@
     "sbom-and-licenses",
     "audit",
     "folder-limit",
-    "python-tests"
+    "python-tests",
+    "deprecations"
    ],
    "permissions": {},
    "runs-on": "${{ fromJSON(vars.CI_RUNNER || '\"ubuntu-latest\"') }}",
@@ -102,7 +134,7 @@
       "NEEDS": "${{ toJSON(needs) }}"
      },
      "name": "Every suite ran or the plan said it could be skipped",
-     "run": "python3 -I - <<'PY'\nimport json\nimport os\nimport sys\n\nSUITES = {\n    \"rust\": (\"lint\", \"tests\", \"doc\", \"msrv\"),\n    \"debian\": (\"debian\",),\n    \"line-limit\": (),\n    \"audit\": (),\n    \"folder-limit\": (),\n    \"python-tests\": (),\n    \"sbom-and-licenses\": (\"supply\",),\n}\nneeds = json.loads(os.environ[\"NEEDS\"])\nproblems = []\n\n# Compared here, in code that tells `develop` from `Develop`, and not\n# only in the expression that names this job.\nif os.environ.get(\"EVENT_NAME\") == \"pull_request\" and os.environ.get(\"BASE_REF\") not in (\"develop\", \"main\"):\n    problems.append(f\"the base of this pull request is {os.environ.get('BASE_REF')!r}, not develop or main\")\n\nplan = needs.get(\"plan\") or {}\nif plan.get(\"result\") != \"success\":\n    problems.append(f\"the plan job did not succeed (result: {plan.get('result')})\")\noutputs = plan.get(\"outputs\") or {}\nfor dims in SUITES.values():\n    for dim in dims:\n        if outputs.get(dim) not in (\"true\", \"false\"):\n            problems.append(f\"plan output {dim!r} is neither true nor false: {outputs.get(dim)!r}\")\n\nfor name in needs:\n    if name != \"plan\" and name not in SUITES:\n        problems.append(f\"{name} is not in the gate table\")\nfor name, dims in SUITES.items():\n    job = needs.get(name)\n    if job is None:\n        problems.append(f\"{name} is not among the jobs the gate waits for\")\n        continue\n    result = job.get(\"result\")\n    if result == \"success\":\n        continue\n    if result == \"skipped\":\n        if plan.get(\"result\") == \"success\" and dims and all(outputs.get(d) == \"false\" for d in dims):\n            continue\n        problems.append(f\"{name} was skipped and the plan did not say it could be\")\n    else:\n        problems.append(f\"{name} did not succeed (result: {result})\")\n\nprint(f\"{'suite':<20} {'plan says':<28} result\")\nfor name, dims in SUITES.items():\n    says = \",\".join(f\"{d}={outputs.get(d)}\" for d in dims) or \"always runs\"\n    print(f\"{name:<20} {says:<28} {(needs.get(name) or {}).get('result')}\")\nfor problem in problems:\n    print(f\"::error::{problem}\")\nif problems:\n    sys.exit(1)\nprint(\"The plan succeeded and every suite passed or was skipped by the plan.\")\nPY\n"
+     "run": "python3 -I - <<'PY'\nimport json\nimport os\nimport sys\n\nSUITES = {\n    \"rust\": (\"lint\", \"tests\", \"doc\", \"msrv\"),\n    \"debian\": (\"debian\",),\n    \"line-limit\": (),\n    \"audit\": (),\n    \"folder-limit\": (),\n    \"python-tests\": (),\n    \"deprecations\": (),\n    \"sbom-and-licenses\": (\"supply\",),\n}\nneeds = json.loads(os.environ[\"NEEDS\"])\nproblems = []\n\n# Compared here, in code that tells `develop` from `Develop`, and not\n# only in the expression that names this job.\nif os.environ.get(\"EVENT_NAME\") == \"pull_request\" and os.environ.get(\"BASE_REF\") not in (\"develop\", \"main\"):\n    problems.append(f\"the base of this pull request is {os.environ.get('BASE_REF')!r}, not develop or main\")\n\nplan = needs.get(\"plan\") or {}\nif plan.get(\"result\") != \"success\":\n    problems.append(f\"the plan job did not succeed (result: {plan.get('result')})\")\noutputs = plan.get(\"outputs\") or {}\nfor dims in SUITES.values():\n    for dim in dims:\n        if outputs.get(dim) not in (\"true\", \"false\"):\n            problems.append(f\"plan output {dim!r} is neither true nor false: {outputs.get(dim)!r}\")\n\nfor name in needs:\n    if name != \"plan\" and name not in SUITES:\n        problems.append(f\"{name} is not in the gate table\")\nfor name, dims in SUITES.items():\n    job = needs.get(name)\n    if job is None:\n        problems.append(f\"{name} is not among the jobs the gate waits for\")\n        continue\n    result = job.get(\"result\")\n    if result == \"success\":\n        continue\n    if result == \"skipped\":\n        if plan.get(\"result\") == \"success\" and dims and all(outputs.get(d) == \"false\" for d in dims):\n            continue\n        problems.append(f\"{name} was skipped and the plan did not say it could be\")\n    else:\n        problems.append(f\"{name} did not succeed (result: {result})\")\n\nprint(f\"{'suite':<20} {'plan says':<28} result\")\nfor name, dims in SUITES.items():\n    says = \",\".join(f\"{d}={outputs.get(d)}\" for d in dims) or \"always runs\"\n    print(f\"{name:<20} {says:<28} {(needs.get(name) or {}).get('result')}\")\nfor problem in problems:\n    print(f\"::error::{problem}\")\nif problems:\n    sys.exit(1)\nprint(\"The plan succeeded and every suite passed or was skipped by the plan.\")\nPY\n"
     }
    ],
    "timeout-minutes": 5

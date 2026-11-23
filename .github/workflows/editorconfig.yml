@@ -35,21 +35,27 @@ jobs:
           # Pinned like every other tool this repository installs in CI. A
           # floating version turns an unrelated upstream release into a red
           # build on a pull request that changed nothing.
-          ECLINT_VERSION: "3.11.3"
+          ECLINT_VERSION: "4.0.2"
+          # The digest of the release archive, from the checksums.txt the project
+          # publishes next to it. The version alone trusts whatever the release
+          # URL serves today; the two together fix the bytes. Move them together.
+          ECLINT_SHA256: "44efaef3ed14c6ab52eb87481d78e5e5c204796dccf26e2f4598a61ba17f8003"
         # editorconfig-checker reads .editorconfig itself rather than carrying
         # its own copy of the rules. That is the point: a second list of rules
         # in this file would drift from the real one silently, which is the
         # class of defect this workflow exists to catch.
         run: |
           set -euo pipefail
-          url="https://github.com/editorconfig-checker/editorconfig-checker/releases/download/v${ECLINT_VERSION}/ec-linux-amd64.tar.gz"
+          url="https://github.com/editorconfig-checker/editorconfig-checker/releases/download/v${ECLINT_VERSION}/editorconfig-checker-linux-amd64.tar.gz"
           # GitHub answers a release download with a 504 now and then: retry,
-          # and extract only a file that arrived whole.
+          # and extract only a file that arrived whole and matches its digest.
           archive="$(mktemp)"
-          curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors -o "$archive" "$url"
-          tar -xzf "$archive"
+          curl -fsSL --proto '=https' --tlsv1.2 --retry 5 --retry-delay 5 --retry-all-errors -o "$archive" "$url"
+          echo "${ECLINT_SHA256}  ${archive}" | sha256sum --check --strict -
+          tool="$(mktemp -d)"
+          tar -xzf "$archive" -C "$tool" editorconfig-checker
           rm -f "$archive"
-          ./bin/ec-linux-amd64 --version
+          "$tool/editorconfig-checker" --version
           # Mechanical rules only: charset, line endings, final newline,
           # trailing whitespace. Indentation is deliberately not enforced here.
           #
@@ -60,4 +66,4 @@ jobs:
           # it reports the tab-indented mermaid diagram in README.md as a
           # violation, when tabs inside a fence are literal content and exactly
           # what belongs there.
-          ./bin/ec-linux-amd64 --disable-indentation --disable-indent-size
+          "$tool/editorconfig-checker" --disable-indentation --disable-indent-size

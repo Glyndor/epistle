@@ -45,7 +45,7 @@ on:
       cargo-deny-version:
         description: Exact version of cargo-deny to install; bumped via .github releases
         type: string
-        default: "0.20.2"
+        default: "0.22.0"
 
 permissions:
   contents: read
