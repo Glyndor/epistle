@@ -65,6 +65,13 @@ updates:
       images:
         patterns: ["*"]
         update-types: ["minor", "patch"]
+      # What the two groups above leave out: a bump of a digest with the same tag
+      # has no semver level, so `update-types` cannot select it. Without this
+      # group every base image digest opened its own pull request (#2021 and
+      # #2022 on the same day). It comes last, because a dependency goes to the
+      # first group that fits it.
+      images-digests:
+        patterns: ["*"]
     ignore:
       - dependency-name: "*postgres*"
         update-types: ["version-update:semver-major"]
@@ -136,5 +143,8 @@ updates:
     cooldown:
       default-days: 3
     groups:
+      # Minor and patch bumps together; a major bump of the signing library
+      # stays alone because it needs a reading of its changelog.
       signing-tooling:
         patterns: ["*"]
+        update-types: ["minor", "patch"]
