@@ -28,13 +28,8 @@ const EXPRESSION: &str = "${{ fromJSON(vars.CI_RUNNER || '\"ubuntu-latest\"') }}
 const PRIVILEGED: &[(&str, &str, &str)] = &[
 	(
 		"release.yml",
-		"build-deb",
-		"builds the .deb with id-token and attestations: write",
-	),
-	(
-		"release.yml",
-		"build",
-		"builds the release binaries with id-token and attestations: write",
+		"attest",
+		"attests the provenance of the finished files with id-token and attestations: write",
 	),
 	(
 		"release.yml",
@@ -74,11 +69,23 @@ const PRIVILEGED: &[(&str, &str, &str)] = &[
 ];
 
 /// Jobs with no secret or write scope that stay fixed anyway: `(workflow, job, why)`.
-const FIXED: &[(&str, &str, &str)] = &[(
-	"release.yml",
-	"verify",
-	"read-only gate of the release run that signs and publishes; the run stays on one kind of runner",
-)];
+const FIXED: &[(&str, &str, &str)] = &[
+	(
+		"release.yml",
+		"verify",
+		"read-only gate of the release run that signs and publishes; the run stays on one kind of runner",
+	),
+	(
+		"release.yml",
+		"build",
+		"compiles the release binary with a read of the repository only; the release stays on one kind of runner",
+	),
+	(
+		"release.yml",
+		"sign-rehearsal",
+		"signs with a throwaway key and reads the repository only; the rehearsal runs on the runner the release uses",
+	),
+];
 
 const WRITE_SCOPES: &[&str] = &[
 	"contents",

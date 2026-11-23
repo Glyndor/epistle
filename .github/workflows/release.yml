@@ -58,10 +58,17 @@ jobs:
         # and the pattern is spelled out here.
         run: |
           set -euo pipefail
+          # The glob refuses the obvious; the pattern after it is the shape, anchored,
+          # with no leading zeros and an optional prerelease of plain characters.
           case "$TAG" in
-            v[0-9]*.[0-9]*.[0-9]*) ;;
+            v[0-9]*) ;;
             *) echo "::error::$TAG is not a release tag of the form vMAJOR.MINOR.PATCH"; exit 1 ;;
           esac
+          pattern='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$'
+          if ! [[ "$TAG" =~ $pattern ]]; then
+            echo "::error::$TAG is not a release tag of the form vMAJOR.MINOR.PATCH"
+            exit 1
+          fi
 
       - name: Resolve the commit this release names
         id: resolve
@@ -200,10 +207,14 @@ jobs:
     # `rust-version`), which edition 2024 alone does not tell you. Digest-pinned
     # so a retag cannot change the build environment.
     container: docker.io/library/rust@sha256:e9d95b74296f7126a83ae3d041aeaba1ff4c478f13abc5cc034fcf7c131c3d4a # 1.100-slim-trixie
+    # This job runs the code of the dependencies (build scripts, debian/rules),
+    # so it holds nothing but a read of the repository: no OIDC token, no
+    # attestation, no secret. The attestation is made by `attest`, which only
+    # downloads what this job produced.
     permissions:
       contents: read
-      id-token: write
-      attestations: write
+    env:
+      TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
     strategy:
       fail-fast: false
       matrix:
@@ -273,24 +284,22 @@ jobs:
           ARCH: ${{ matrix.arch }}
         run: |
           set -euo pipefail
-          deb=$(find .. -maxdepth 1 -name "epistle_*_${ARCH}.deb" | sort | head -n1)
-          if [ -z "$deb" ]; then
-            echo "::error::no ${ARCH} .deb artifact was produced"
+          # One name, the one the verified tag gives it. Another package left in
+          # the build directory by a dependency is not picked up.
+          name="epistle_${TAG#v}_${ARCH}.deb"
+          if [ ! -f "../$name" ] || [ -L "../$name" ]; then
+            echo "::error::$name was not produced"
             exit 1
           fi
-          cp "$deb" "$(basename "$deb")"
-          echo "Staged $(basename "$deb")"
-
-      - name: Attest build provenance
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-path: epistle_*_${{ matrix.arch }}.deb
+          mkdir -p "$RUNNER_TEMP/stage"
+          cp "../$name" "$RUNNER_TEMP/stage/$name"
+          echo "Staged $name"
 
       - name: Upload artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: epistle-deb-${{ matrix.arch }}
-          path: epistle_*_${{ matrix.arch }}.deb
+          path: ${{ runner.temp }}/stage/epistle_*_${{ matrix.arch }}.deb
           retention-days: 1
           if-no-files-found: error
 
@@ -311,12 +320,11 @@ jobs:
     # Fixed on GitHub's runners, never CI_RUNNER: release job; holds secrets or write/OIDC permissions.
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # Compiles and runs cargo-cyclonedx, so it holds a read of the repository and
+    # nothing else. The attestation and the signature are made by jobs that only
+    # download what this one produced and check it.
     permissions:
       contents: read
-      # The provenance attestation has to be made in the job that produced
-      # the artifact, and it needs the OIDC token and this permission.
-      id-token: write
-      attestations: write
     env:
       TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
     steps:
@@ -350,46 +358,172 @@ jobs:
       - name: Collect the Debian packages
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          pattern: epistle-deb-*
-          merge-multiple: true
-          path: dist
+          name: epistle-deb-amd64
+          path: ${{ runner.temp }}/debs/amd64
+
+      - name: Collect the Debian packages (arm64)
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: epistle-deb-arm64
+          path: ${{ runner.temp }}/debs/arm64
 
       - name: Prepare artifacts
         run: |
           set -euo pipefail
-          mkdir -p dist
-          cp target/release/epistle "dist/epistle-${TAG}-x86_64-linux"
-          cp epistle.cdx.json "dist/epistle-${TAG}.cdx.json"
-          # Both architectures must have arrived. The apt archive is rebuilt
-          # from scratch and synced with --delete, so a product whose declared
-          # architecture is missing is evicted from the served archive rather
-          # than left at its previous version.
+          dist="$RUNNER_TEMP/dist"
+          mkdir -p "$dist"
+          cp target/release/epistle "$dist/epistle-${TAG}-x86_64-linux"
+          cp epistle.cdx.json "$dist/epistle-${TAG}.cdx.json"
+          # Both architectures must have arrived, each under the one name the tag
+          # gives it. The apt archive is rebuilt from scratch and synced with
+          # --delete, so a product whose declared architecture is missing is
+          # evicted from the served archive rather than left at its previous
+          # version.
           for arch in amd64 arm64; do
-            ls dist/epistle_*_"$arch".deb >/dev/null 2>&1 \
-              || { echo "::error::no ${arch} .deb reached the release job"; exit 1; }
+            name="epistle_${TAG#v}_${arch}.deb"
+            [ -f "$RUNNER_TEMP/debs/$arch/$name" ] \
+              || { echo "::error::no ${arch} .deb named $name reached the release job"; exit 1; }
+            cp "$RUNNER_TEMP/debs/$arch/$name" "$dist/$name"
           done
-          cd dist
+          cd "$dist"
           # SHA256SUMS is computed last so it covers the .debs too. The .sig
           # files do not exist yet, which is why they are not in it.
           sha256sum -- * > SHA256SUMS
 
-      - name: Attest build provenance
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-path: dist/epistle-*-x86_64-linux
-
-      - name: Hand the files to the next job
+      - name: Hand the files to the next jobs
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-dist
-          path: dist/*
+          path: ${{ runner.temp }}/dist/*
           retention-days: 1
           if-no-files-found: error
 
+  # Attests the provenance of the finished files. It holds the OIDC token and
+  # the attestation scope, so it runs nothing that came with the dependencies:
+  # it downloads the files into an empty directory outside the checkout, checks
+  # that they are exactly the ones this tag has, and attests them by name.
+  attest:
+    name: Attest build provenance
+    needs: [verify, build-deb, build]
+    if: ${{ !inputs.images-only && !inputs.dry-run }}
+    environment: release
+    # Fixed on GitHub's runners, never CI_RUNNER: release job; holds secrets or write/OIDC permissions.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    env:
+      TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+    steps:
+      - name: Only a release tag or main may attest
+        run: |
+          case "${GITHUB_EVENT_NAME}:${GITHUB_REF}" in
+            push:refs/tags/v* | workflow_dispatch:refs/heads/main | workflow_dispatch:refs/tags/v*) ;;
+            *) echo "::error::${GITHUB_EVENT_NAME} on ${GITHUB_REF} may not attest a release"; exit 1 ;;
+          esac
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The checker comes from the verified commit, never from the artifact.
+          ref: ${{ needs.verify.outputs.commit }}
+          persist-credentials: false
+
+      - name: Receive the files
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-dist
+          path: ${{ runner.temp }}/dist
+
+      - name: Check that they are exactly this release
+        run: python3 -I .github/scripts/release/release_files.py check "$RUNNER_TEMP/dist" "$TAG" built
+
+      - name: Name the files to attest
+        id: names
+        run: echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            ${{ runner.temp }}/dist/epistle-${{ env.TAG }}-x86_64-linux
+            ${{ runner.temp }}/dist/epistle_${{ steps.names.outputs.version }}_amd64.deb
+            ${{ runner.temp }}/dist/epistle_${{ steps.names.outputs.version }}_arm64.deb
+
+  # Signs the finished files with the org key. It runs in the `release`
+  # environment, which only `main` and the release tags may use, and the key is
+  # given to the signing step alone. Everything before that step is made without
+  # the key: the packages the signer needs are installed in a step of their own,
+  # in a directory of their own, and the files to sign are downloaded into an
+  # empty directory outside the checkout and checked against the exact list this
+  # tag has.
   sign:
     name: Sign
     needs: [verify, build]
-    if: ${{ !inputs.images-only }}
+    if: ${{ !inputs.images-only && !inputs.dry-run }}
+    environment: release
+    # Fixed on GitHub's runners, never CI_RUNNER: release job; holds secrets or write/OIDC permissions.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+    steps:
+      - name: Only a release tag or main may sign
+        # The environment already refuses any other ref. This is the same rule in
+        # the job, so a mistake in the environment's policy is not the only guard.
+        run: |
+          case "${GITHUB_EVENT_NAME}:${GITHUB_REF}" in
+            push:refs/tags/v* | workflow_dispatch:refs/heads/main | workflow_dispatch:refs/tags/v*) ;;
+            *) echo "::error::${GITHUB_EVENT_NAME} on ${GITHUB_REF} may not sign a release"; exit 1 ;;
+          esac
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The signing script and its requirements come from the verified
+          # commit, never from the artifact.
+          ref: ${{ needs.verify.outputs.commit }}
+          persist-credentials: false
+
+      - name: Prepare the signing environment
+        # No key here: installing packages runs code.
+        run: bash .github/scripts/release/prepare_signing_venv.sh "$RUNNER_TEMP/signing-venv"
+
+      - name: Receive the files
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-dist
+          path: ${{ runner.temp }}/dist
+
+      - name: Check what arrived
+        # Exactly the files of this tag, nothing more, as regular files, with the
+        # package fields and the hashes right, before a key is near them.
+        run: python3 -I .github/scripts/release/release_files.py check "$RUNNER_TEMP/dist" "$TAG" built
+
+      - name: Sign artifacts with the org Ed25519 key
+        env:
+          GLYNDOR_RELEASE_ED25519_KEY: ${{ secrets.GLYNDOR_RELEASE_ED25519_KEY }}
+        run: .github/scripts/sign_release.sh "$RUNNER_TEMP/signing-venv" "$RUNNER_TEMP/dist" "$TAG"
+
+      - name: Hand the signatures to the next job
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-signatures
+          path: ${{ runner.temp }}/dist/*.sig
+          retention-days: 1
+          if-no-files-found: error
+
+  # A rehearsal goes through the same checks and the same script with a key made
+  # on the spot, so it leaves nothing anyone could trust. It has no secret, no
+  # environment and no permission but to read, so it may run from any branch,
+  # with the tools of the commit that launched it: that is what lets it rehearse
+  # a tag older than the signing script.
+  sign-rehearsal:
+    name: Sign (rehearsal)
+    needs: [verify, build]
+    if: ${{ !inputs.images-only && inputs.dry-run }}
     # Fixed on GitHub's runners, never CI_RUNNER: release job; holds secrets or write/OIDC permissions.
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -400,87 +534,35 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # The signing script and its requirements come from the verified
-          # commit, never from the artifact.
-          ref: ${{ needs.verify.outputs.commit }}
+          ref: ${{ github.sha }}
           persist-credentials: false
+
+      - name: Prepare the signing environment
+        run: bash .github/scripts/release/prepare_signing_venv.sh "$RUNNER_TEMP/signing-venv"
 
       - name: Receive the files
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-dist
-          path: dist
+          path: ${{ runner.temp }}/dist
 
       - name: Check what arrived
+        run: python3 -I .github/scripts/release/release_files.py check "$RUNNER_TEMP/dist" "$TAG" built
+
+      - name: Sign artifacts with a throwaway key
         run: |
           set -euo pipefail
-          cd dist
-          # Only the files the build job makes, with the names it gives them, as
-          # plain files. Anything else is refused before a key is near it.
-          if find . -mindepth 1 \( -type l -o ! -type f \) -print -quit | grep -q .; then
-            echo "::error::the artifact holds something that is not a plain file"; exit 1
-          fi
-          for f in *; do
-            case "$f" in
-              "epistle-${TAG}-x86_64-linux"|"epistle-${TAG}.cdx.json"|SHA256SUMS) ;;
-              epistle_*_amd64.deb|epistle_*_arm64.deb) ;;
-              *) echo "::error::unexpected file in the artifact: $f"; exit 1 ;;
-            esac
-          done
-          for want in "epistle-${TAG}-x86_64-linux" "epistle-${TAG}.cdx.json" SHA256SUMS; do
-            [ -f "$want" ] || { echo "::error::missing from the artifact: $want"; exit 1; }
-          done
-          ls epistle_*_amd64.deb epistle_*_arm64.deb >/dev/null
-          # The hashes the build job wrote must still match the bytes received.
-          sha256sum --check --strict SHA256SUMS
-
-      # A rehearsal never touches the org key: it signs with a key made on the
-      # spot, so it exercises the same script and leaves nothing that anyone
-      # could trust. Two steps with their own `if`, not one expression, because
-      # `a && '' || b` falls through to `b` when `a` is true.
-      - name: Make a throwaway key for the rehearsal
-        if: ${{ inputs.dry-run }}
-        run: |
-          key=$(python3 -c 'import base64, os; print(base64.b64encode(os.urandom(32)).decode())')
-          echo "::add-mask::$key"
-          echo "REHEARSAL_KEY=$key" >> "$GITHUB_ENV"
-
-      - name: Sign artifacts with the org Ed25519 key
-        if: ${{ !inputs.dry-run }}
-        env:
-          GLYNDOR_RELEASE_ED25519_KEY: ${{ secrets.GLYNDOR_RELEASE_ED25519_KEY }}
-        run: .github/scripts/sign_release.sh dist "$TAG"
-
-      # A rehearsal may name a tag older than the signing script, so the script
-      # comes from the commit that launched the dispatch. Nothing signed here is
-      # published: the key is the throwaway one and the job after this is skipped.
-      - name: Take the signing script from the dispatch commit (rehearsal)
-        if: ${{ inputs.dry-run }}
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
-          path: rehearsal-tools
-          persist-credentials: false
-
-      - name: Sign artifacts with the throwaway key (rehearsal)
-        if: ${{ inputs.dry-run }}
-        env:
-          GLYNDOR_RELEASE_ED25519_KEY: ${{ env.REHEARSAL_KEY }}
-        run: rehearsal-tools/.github/scripts/sign_release.sh dist "$TAG"
-
-      - name: Hand the signatures to the next job
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: release-signatures
-          path: dist/*.sig
-          retention-days: 1
-          if-no-files-found: error
+          GLYNDOR_RELEASE_ED25519_KEY="$(python3 -I -c 'import base64, os; print(base64.b64encode(os.urandom(32)).decode())')"
+          export GLYNDOR_RELEASE_ED25519_KEY
+          .github/scripts/sign_release.sh "$RUNNER_TEMP/signing-venv" "$RUNNER_TEMP/dist" "$TAG"
+          python3 -I .github/scripts/release/release_files.py check "$RUNNER_TEMP/dist" "$TAG" signed
 
   publish:
     name: Publish release
-    needs: [verify, build, sign]
+    needs: [verify, build, attest, sign]
     # A rehearsal stops before this job.
     if: ${{ !inputs.images-only && !inputs.dry-run }}
+    environment: release
     # Fixed on GitHub's runners, never CI_RUNNER: release job; holds secrets or write/OIDC permissions.
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -488,61 +570,94 @@ jobs:
       contents: write
     env:
       TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+      RELEASE_COMMIT: ${{ needs.verify.outputs.commit }}
     steps:
+      - name: Only a release tag or main may publish
+        run: |
+          case "${GITHUB_EVENT_NAME}:${GITHUB_REF}" in
+            push:refs/tags/v* | workflow_dispatch:refs/heads/main | workflow_dispatch:refs/tags/v*) ;;
+            *) echo "::error::${GITHUB_EVENT_NAME} on ${GITHUB_REF} may not publish a release"; exit 1 ;;
+          esac
+
       - name: Receive the files
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-dist
-          path: dist
+          path: ${{ runner.temp }}/dist
 
       - name: Receive the signatures
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-signatures
-          path: dist
+          path: ${{ runner.temp }}/dist
 
       - name: Check what is going to be published
         run: |
           set -euo pipefail
-          cd dist
-          if find . -mindepth 1 \( -type l -o ! -type f \) -print -quit | grep -q .; then
-            echo "::error::the release files hold something that is not a plain file"; exit 1
+          dist="$RUNNER_TEMP/dist"
+          # The whole list of names, worked out from the verified tag. The
+          # directory has to equal it: nothing more, nothing less, nothing hidden,
+          # nothing that is not a regular file.
+          version="${TAG#v}"
+          expected=$(
+            for base in "epistle-${TAG}-x86_64-linux" "epistle-${TAG}.cdx.json" SHA256SUMS \
+              "epistle_${version}_amd64.deb" "epistle_${version}_arm64.deb"; do
+              printf '%s\n%s\n' "$base" "$base.sig"
+            done | LC_ALL=C sort
+          )
+          held=$(cd "$dist" && find . -mindepth 1 -printf '%y %P\n' | LC_ALL=C sort)
+          want=$(printf '%s\n' "$expected" | sed 's/^/f /')
+          if [ "$held" != "$want" ]; then
+            echo "::error::the release files are not exactly the ones this tag has"
+            printf 'held:\n%s\nexpected:\n%s\n' "$held" "$want"
+            exit 1
           fi
-          # The same allowlist the signing job applied, plus the signatures.
-          for f in *; do
-            case "$f" in
-              "epistle-${TAG}-x86_64-linux"|"epistle-${TAG}.cdx.json"|SHA256SUMS) ;;
-              epistle_*_amd64.deb|epistle_*_arm64.deb) ;;
-              "epistle-${TAG}-x86_64-linux.sig"|"epistle-${TAG}.cdx.json.sig"|SHA256SUMS.sig) ;;
-              epistle_*_amd64.deb.sig|epistle_*_arm64.deb.sig) ;;
-              *) echo "::error::unexpected file in the release: $f"; exit 1 ;;
-            esac
-          done
-          # Every file but the signatures is signed, and every signature has
-          # content.
-          for f in *; do
-            case "$f" in *.sig) [ -s "$f" ] || { echo "::error::empty signature $f"; exit 1; } ;; *) [ -f "$f.sig" ] || { echo "::error::no signature for $f"; exit 1; } ;; esac
+          # Every signature has content.
+          for f in "$dist"/*.sig; do
+            [ -s "$f" ] || { echo "::error::empty signature $f"; exit 1; }
           done
           # SHA256SUMS names exactly the files that are being published, no more
           # and no fewer, and their hashes match.
-          published=$(for f in *; do case "$f" in *.sig|SHA256SUMS) ;; *) echo "$f" ;; esac; done | sort)
-          listed=$(sed -E 's/^[0-9a-f]{64}[ *]+//' SHA256SUMS | sort)
+          published=$(printf '%s\n' "$expected" | grep -v -e '\.sig$' -e '^SHA256SUMS$')
+          listed=$(sed -E 's/^[0-9a-f]{64}[ *]+//' "$dist/SHA256SUMS" | LC_ALL=C sort)
           if [ "$published" != "$listed" ]; then
             echo "::error::SHA256SUMS does not name exactly the published files"
             printf 'files:\n%s\nlisted:\n%s\n' "$published" "$listed"
             exit 1
           fi
-          sha256sum --check --strict SHA256SUMS
+          (cd "$dist" && sha256sum --check --strict SHA256SUMS)
+
+      - name: The tag still names the commit that was verified
+        run: |
+          set -euo pipefail
+          # Between the gate and here a tag can be moved. Read it again where it
+          # lives, with no checkout: the peeled commit if the tag is annotated.
+          refs="$(git ls-remote "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" "refs/tags/$TAG" "refs/tags/$TAG^{}")"
+          peeled="$(printf '%s\n' "$refs" | awk -v r="refs/tags/$TAG^{}" '$2 == r { print $1 }')"
+          plain="$(printf '%s\n' "$refs" | awk -v r="refs/tags/$TAG" '$2 == r { print $1 }')"
+          now="${peeled:-$plain}"
+          if [ "$now" != "$RELEASE_COMMIT" ]; then
+            echo "::error::$TAG names ${now:-nothing} now, and the release was built from $RELEASE_COMMIT"
+            exit 1
+          fi
 
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
+          dist="$RUNNER_TEMP/dist"
+          version="${TAG#v}"
+          files=()
+          for base in "epistle-${TAG}-x86_64-linux" "epistle-${TAG}.cdx.json" SHA256SUMS \
+            "epistle_${version}_amd64.deb" "epistle_${version}_arm64.deb"; do
+            files+=("$dist/$base" "$dist/$base.sig")
+          done
           gh release create "$TAG" \
             --repo "$GITHUB_REPOSITORY" \
             --generate-notes \
             --verify-tag \
-            dist/*
+            "${files[@]}"
 
   # The container stack pulls ghcr.io/glyndor/epistle:<version>, so every
   # release publishes the image next to the .deb.
@@ -552,6 +667,7 @@ jobs:
     # An images-only dispatch skips publish; the image still needs verify. A
     # rehearsal skips it too and builds nothing.
     if: ${{ always() && !inputs.dry-run && needs.verify.result == 'success' && (needs.publish.result == 'success' || inputs.images-only) }}
+    environment: release
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     permissions:
@@ -606,11 +722,12 @@ jobs:
       - name: Log in to ghcr.io
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
         run: |
           set -euo pipefail
           # `podman login` accepts `--password-stdin` so the token
           # never lands on the command line or in the runner log.
-          echo "${GH_TOKEN}" | podman login ghcr.io -u "${{ github.actor }}" --password-stdin
+          echo "${GH_TOKEN}" | podman login ghcr.io -u "${ACTOR}" --password-stdin
 
       - name: Push ${{ matrix.arch }} image
         env:
@@ -625,6 +742,7 @@ jobs:
     name: Publish multi-arch image manifest
     needs: [verify, image-build]
     if: ${{ always() && needs.image-build.result == 'success' }}
+    environment: release
     # Fixed on GitHub's runners, never CI_RUNNER: release job; holds secrets or write/OIDC permissions.
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -644,6 +762,7 @@ jobs:
       - name: Log in to ghcr.io
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
         run: |
           set -euo pipefail
           # `actions/attest-build-provenance` with `push-to-registry: true`
@@ -656,7 +775,7 @@ jobs:
           # the registry.
           mkdir -p "$HOME/.docker"
           echo "${GH_TOKEN}" | podman login ghcr.io \
-            -u "${{ github.actor }}" \
+            -u "${ACTOR}" \
             --password-stdin \
             --compat-auth-file "$HOME/.docker/config.json"
 
