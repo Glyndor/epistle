@@ -114,23 +114,18 @@ pub(crate) fn pg_dump_spec(db: &Database, data_dir: &Path) -> Result<CommandSpec
 }
 
 /// Build the command spec for loading the SQL archive into the database.
-/// The host path runs `psql` directly with the SQL on stdin; the
-/// container path `podup cp`s the SQL into the `db` service (because
-/// `podup exec` does not forward stdin) and then runs `psql -f` against
-/// the copied path. `in_container_path` names the SQL file inside the
-/// `db` service when the container path is selected; the host path
-/// ignores it.
+/// Both paths run `psql` with the SQL on its standard input: the host path
+/// directly, the container path through `podup exec -T db`.
 #[allow(dead_code)]
 pub(crate) fn psql_load_spec(
 	db: &Database,
 	data_dir: &Path,
 	sql: &[u8],
-	in_container_path: &str,
 ) -> Result<CommandSpec, BackupError> {
 	let compose = compose_file_path(data_dir);
 	if compose.exists() {
 		ensure_stack_database(db)?;
-		container_psql_load_spec(&compose, in_container_path, sql)
+		container_psql_load_spec(&compose, sql)
 	} else {
 		host_psql_load_spec(db, sql)
 	}

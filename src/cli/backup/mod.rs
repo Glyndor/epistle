@@ -60,8 +60,6 @@ pub(crate) use db_dump::CapturedOutput;
 #[allow(unused_imports)]
 pub(super) use db_dump::collect_dump;
 #[allow(unused_imports)]
-pub(super) use db_dump::container_cp_into_spec;
-#[allow(unused_imports)]
 pub(super) use db_dump::container_pg_dump_spec;
 #[allow(unused_imports)]
 pub(super) use db_dump::container_psql_load_spec;

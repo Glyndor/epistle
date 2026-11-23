@@ -34,8 +34,8 @@ fn external_database_url_with_a_compose_stack_is_refused_by_the_restore() {
 		.expect_err("must not write into the stack's database");
 	assert!(matches!(error, BackupError::DatabaseNotInStack), "{error}");
 	assert!(!spawned.get(), "nothing may run before the refusal");
-	let error = psql_load_spec(&db, dir.path(), b"select 1;\n", "/tmp/x.sql")
-		.expect_err("the load spec must refuse too");
+	let error =
+		psql_load_spec(&db, dir.path(), b"select 1;\n").expect_err("the load spec must refuse too");
 	assert!(matches!(error, BackupError::DatabaseNotInStack), "{error}");
 }
 
