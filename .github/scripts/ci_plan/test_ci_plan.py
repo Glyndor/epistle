@@ -8,7 +8,7 @@ import subprocess
 import tempfile
 import unittest
 
-import yaml
+import ci_yaml
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
@@ -19,7 +19,7 @@ SCRIPT = ".github/scripts/ci_plan/ci_plan.py"
 
 
 def workflow(name):
-    return yaml.safe_load((ROOT / ".github/workflows" / name).read_text())
+    return ci_yaml.load(ROOT / ".github/workflows" / name)
 
 
 class SelectionTests(unittest.TestCase):
@@ -183,13 +183,13 @@ class GitPlanTests(unittest.TestCase):
     def chosen(plan):
         return {job for job, run in plan.items() if run == "true"}
 
-    def plan(self, event="pull_request", base=None, head=None):
+    def plan(self, event="pull_request", base=None, head=None, base_ref="develop"):
         output = self.repo / "outputs"
         output.write_text("")
         step = workflow("reusable-ci-plan.yml")["jobs"]["plan"]["steps"][-1]["run"]
         done = subprocess.run(["bash", "-c", step], cwd=self.repo,
                               env={**self.env, "EVENT_NAME": event, "BASE_SHA": base or self.base,
-                                   "HEAD_SHA": head or self.head, "GITHUB_OUTPUT": str(output),
+                                   "HEAD_SHA": head or self.head, "BASE_REF": base_ref, "GITHUB_OUTPUT": str(output),
                                    "RUNNER_TEMP": str(self.repo)}, capture_output=True, text=True)
         self.assertEqual(done.returncode, 0, done.stderr)
         return dict(line.split("=", 1) for line in output.read_text().splitlines())
@@ -254,6 +254,12 @@ class GitPlanTests(unittest.TestCase):
     def test_unreadable_history_runs_everything(self):
         self.assertEqual(set(self.plan(base="f" * 40).values()), {"true"})
         self.assertEqual(set(self.plan(head="f" * 40).values()), {"true"})
+
+    def test_a_pull_request_into_main_runs_every_job_whatever_its_diff_says(self):
+        self.write("README.md", "updated docs\n")
+        self.head = self.commit()
+        self.assertEqual(self.chosen(self.plan(base_ref="develop")), cp.ALWAYS)
+        self.assertEqual(self.chosen(self.plan(base_ref="main")), set(cp.JOBS))
 
     def test_nightly_run_selects_only_the_jobs_that_seed_the_caches(self):
         result = self.plan("schedule", base="")

@@ -1,5 +1,6 @@
 import importlib.util
 import io
+import json
 import os
 import tempfile
 import unittest
@@ -40,7 +41,7 @@ def reusable_text(names):
     return f"name: r\non:\n  workflow_call:\njobs:\n{jobs}"
 
 
-GATE = "  gate:\n    name: CI gate\n    runs-on: ubuntu-latest\n    steps: []\n"
+GATE = f"  gate:\n    name: {json.dumps(mod.GATE_NAME)}\n    runs-on: ubuntu-latest\n    steps: []\n"
 
 
 def caller_text(job_id, reusable, mg=MG, extra=None):
@@ -125,7 +126,7 @@ class MergeGroupTriggers(unittest.TestCase):
         self.assertIn("`CI gate` is required on develop", out)
 
     def test_renamed_gate_fails(self):
-        text = caller_text("rust", "reusable-rust-ci.yml", extra=dict(CALLERS["ci.yml"][1:])).replace("name: CI gate", "name: Gate")
+        text = caller_text("rust", "reusable-rust-ci.yml", extra=dict(CALLERS["ci.yml"][1:])).replace(json.dumps(mod.GATE_NAME), "Gate")
         self.tree.write("ci.yml", text)
         code, out = self.tree.run()
         self.assertEqual(code, 1)
@@ -138,11 +139,23 @@ class MergeGroupTriggers(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("that runs its own steps", out)
 
-    def test_unparsable_file_is_skipped_with_warning(self):
+    def test_an_unparsable_file_fails(self):
         self.tree.write("broken.yml", "a: [unclosed\n")
         code, out = self.tree.run()
-        self.assertEqual(code, 0, out)
-        self.assertIn("::warning", out)
+        self.assertEqual(code, 1)
+        self.assertIn("broken.yml::does not parse", out)
+
+    def test_a_repeated_key_fails(self):
+        self.tree.write("ci.yml", caller_text("rust", "reusable-rust-ci.yml", extra=dict(CALLERS["ci.yml"][1:])) + "name: again\n")
+        code, out = self.tree.run()
+        self.assertEqual(code, 1)
+        self.assertIn("duplicate key 'name'", out)
+
+    def test_a_workflow_with_the_yaml_suffix_is_read_too(self):
+        self.tree.write("extra.yaml", "name: x\non:\n  merge_group:\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps: []\n")
+        code, out = self.tree.run()
+        self.assertEqual(code, 1)
+        self.assertIn("extra.yaml", out)
 
 
 if __name__ == "__main__":

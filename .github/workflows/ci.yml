@@ -203,7 +203,11 @@ jobs:
   # The ruleset requires `CI gate` and `dco / Signed-off-by present on every
   # commit`; the names of the suites above are not required.
   gate:
-    name: CI gate
+    # `CI gate` on a pull request and in the merge queue, where the ruleset
+    # requires it, and the event in the name anywhere else: a run of this
+    # workflow on a push to main must not be able to answer for a pull request
+    # that points at the same commit.
+    name: ${{ contains(fromJSON('["pull_request","merge_group"]'), github.event_name) && 'CI gate' || format('CI gate ({0})', github.event_name) }}
     needs: [plan, rust, debian, line-limit, sbom-and-licenses]
     if: always()
     runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}

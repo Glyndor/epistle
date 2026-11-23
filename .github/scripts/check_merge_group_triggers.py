@@ -28,11 +28,10 @@ publishing secrets), so it is refused too.
 Usage: check_merge_group_triggers.py [repo-root]
 Writes one `::error file=<path>::...` line per violation and exits 1.
 """
-import glob
 import os
 import sys
 
-import yaml
+import ci_yaml
 
 # (caller job id, reusable job name) -> reusable file that must hold the job.
 REQUIRED = {
@@ -45,9 +44,16 @@ REQUIRED = {
     ("sbom-and-licenses", "SBOM and license attribution"): "reusable-rust-supply-chain.yml",
 }
 
+# The name of the gate job: `CI gate` where the ruleset requires it (a pull
+# request and the merge queue) and the event in the name anywhere else.
+GATE_NAME = (
+    "${{ contains(fromJSON('[\"pull_request\",\"merge_group\"]'), github.event_name)"
+    " && 'CI gate' || format('CI gate ({0})', github.event_name) }}"
+)
+
 # (job id, job name) -> workflow file holding a job that runs its own steps.
 REQUIRED_DIRECT = {
-    ("gate", "CI gate"): "ci.yml",
+    ("gate", GATE_NAME): "ci.yml",
 }
 
 
@@ -82,19 +88,23 @@ def has_checks_requested(cfg):
 
 
 def load(root):
-    """Parse every workflow; a file that does not parse is warned and skipped."""
-    parsed = {}
-    pattern = os.path.join(root, ".github", "workflows", "*.y*ml")
-    for path in sorted(glob.glob(pattern)):
+    """Parse every workflow with the strict loader.
+
+    A file that does not parse, or repeats a key, is an error here: GitHub reads
+    what this check could not, so skipping it would leave a workflow unchecked.
+    """
+    parsed, broken = {}, []
+    for path in ci_yaml.workflow_files(root):
         try:
-            with open(path) as fh:
-                spec = yaml.safe_load(fh)
-        except yaml.YAMLError as err:
-            print(f"::warning file={path}::skipped: YAML parse error: {err}")
+            spec = ci_yaml.load(path)
+        except Exception as err:  # noqa: BLE001 - any parse failure is the same finding
+            broken.append((str(path), f"does not parse: {err}"))
             continue
         if isinstance(spec, dict):
-            parsed[path] = spec
-    return parsed
+            parsed[str(path)] = spec
+        else:
+            broken.append((str(path), "is not a mapping"))
+    return parsed, broken
 
 
 def job_names(spec):
@@ -140,15 +150,16 @@ def find_violations(parsed):
     for (job_id, name), filename in sorted(REQUIRED_DIRECT.items()):
         path = next((p for p in parsed if os.path.basename(p) == filename), None)
         job = ((parsed.get(path) or {}).get("jobs") or {}).get(job_id) if path else None
+        shown = "CI gate" if name == GATE_NAME else name
         if not isinstance(job, dict) or job.get("name") != name or "uses" in job:
-            violations.append((f".github/workflows/{filename}", f"required check `{name}` is not emitted: {filename} has no job `{job_id}` named `{name}` that runs its own steps"))
+            violations.append((f".github/workflows/{filename}", f"required check `{shown}` is not emitted: {filename} has no job `{job_id}` named `{shown}` that runs its own steps"))
             continue
         emitters.add(path)
         cfg = merge_group_cfg(triggers(parsed[path]))
         if cfg is None:
-            violations.append((path, f"`{name}` is required on develop but this workflow has no `merge_group` trigger; the merge queue would wait for it forever"))
+            violations.append((path, f"`{shown}` is required on develop but this workflow has no `merge_group` trigger; the merge queue would wait for it forever"))
         elif not has_checks_requested(cfg):
-            violations.append((path, f"`{name}` is required on develop but `merge_group` here has `types: {cfg.get('types')!r}` without `checks_requested`"))
+            violations.append((path, f"`{shown}` is required on develop but `merge_group` here has `types: {cfg.get('types')!r}` without `checks_requested`"))
 
     for path, spec in parsed.items():
         if path not in emitters and merge_group_cfg(triggers(spec)) is not None:
@@ -158,8 +169,9 @@ def find_violations(parsed):
 
 def main(argv):
     root = argv[1] if len(argv) > 1 else "."
-    parsed = load(root)
-    violations, emitters = find_violations(parsed)
+    parsed, violations = load(root)
+    found, emitters = find_violations(parsed)
+    violations += found
     for path, msg in violations:
         print(f"::error file={path}::{msg}")
     if violations:

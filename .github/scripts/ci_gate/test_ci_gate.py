@@ -11,7 +11,7 @@ import subprocess
 import unittest
 from pathlib import Path
 
-import yaml
+import ci_yaml
 
 ROOT = Path(__file__).resolve().parents[3]
 CI = ROOT / ".github/workflows/ci.yml"
@@ -30,8 +30,14 @@ JOBS = {"plan", "gate", "dependabot-freshness", *SUITES}
 UNGATED = {"dependabot-freshness"}
 
 
+GATE_NAME = (
+    "${{ contains(fromJSON('[\"pull_request\",\"merge_group\"]'), github.event_name)"
+    " && 'CI gate' || format('CI gate ({0})', github.event_name) }}"
+)
+
+
 def workflow():
-    return yaml.safe_load(CI.read_text())
+    return ci_yaml.load(CI)
 
 
 def gate_step():
@@ -164,7 +170,7 @@ class GateWiring(unittest.TestCase):
     def test_it_runs_always_and_waits_for_the_plan_and_every_suite_except_the_ungated_one(self):
         gate = workflow()["jobs"]["gate"]
         self.assertEqual(gate["if"], "always()")
-        self.assertEqual(gate["name"], "CI gate")
+        self.assertEqual(gate["name"], GATE_NAME)
         self.assertEqual(set(gate["needs"]), {"plan", *SUITES})
         self.assertEqual(JOBS - {"gate", "plan"} - UNGATED, set(SUITES))
 
@@ -181,6 +187,36 @@ class GateWiring(unittest.TestCase):
             expected = ", ".join(f'"{dim}"' for dim in dims) + ("," if len(dims) == 1 else "")
             self.assertIn(f'"{suite}": ({expected}),', text)
         self.assertEqual(len(re.findall(r'^\s+"[a-z-]+": \(.*\),$', text, re.M)), len(SUITES))
+
+    def test_the_name_carries_the_event_unless_the_ruleset_requires_it_there(self):
+        """The name the job gets per event, evaluated as GitHub would."""
+        def named(event):
+            return "CI gate" if event in ("pull_request", "merge_group") else f"CI gate ({event})"
+        self.assertEqual(workflow()["jobs"]["gate"]["name"], GATE_NAME)
+        self.assertEqual({e: named(e) for e in ("pull_request", "merge_group", "push", "schedule", "workflow_dispatch")},
+                         {"pull_request": "CI gate", "merge_group": "CI gate", "push": "CI gate (push)",
+                          "schedule": "CI gate (schedule)", "workflow_dispatch": "CI gate (workflow_dispatch)"})
+
+    def test_the_workflows_that_emit_a_required_check_run_on_no_push_to_develop(self):
+        """A push to develop would answer, for the same commit, the check the promotion pull request requires."""
+        for name in ("ci.yml", "dco.yml"):
+            on = ci_yaml.load(CI.parent / name)[True]
+            self.assertIn("merge_group", on, name)
+            self.assertIn("pull_request", on, name)
+            for event in ("push", "schedule", "workflow_dispatch"):
+                if event in on and event == "push":
+                    self.assertEqual((on["push"] or {}).get("branches"), ["main"], name)
+
+    def test_only_one_workflow_emits_the_gate_and_the_dco_check(self):
+        gates, dcos = [], []
+        for path in ci_yaml.workflow_files(ROOT):
+            for job_id, job in ci_yaml.load(path)["jobs"].items():
+                if job.get("name") == GATE_NAME or str(job.get("name", "")).startswith("CI gate"):
+                    gates.append((path.name, job_id))
+                if job_id == "dco" and "reusable-dco.yml" in str(job.get("uses", "")):
+                    dcos.append(path.name)
+        self.assertEqual(gates, [("ci.yml", "gate")])
+        self.assertEqual(dcos, ["dco.yml"])
 
     def test_it_holds_no_permission_and_checks_nothing_out(self):
         gate = workflow()["jobs"]["gate"]
