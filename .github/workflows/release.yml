@@ -443,9 +443,22 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # The checker comes from the verified commit, never from the artifact.
-          ref: ${{ needs.verify.outputs.commit }}
           persist-credentials: false
+
+      # The checkout above is the commit of the event, never a commit read from an output:
+      # a tag push is the tagged commit, a manual run on main is main, a manual run on a
+      # tag is the tag. Scripts of any of them are code that was already promoted, and
+      # the files of the tag being released come from the builders by artifact.
+      - name: The checkout is the commit of the event
+        env:
+          VERIFIED: ${{ needs.verify.outputs.commit }}
+        run: |
+          set -euo pipefail
+          head="$(git rev-parse HEAD)"
+          test "$head" = "$GITHUB_SHA"
+          case "$GITHUB_REF" in
+            refs/tags/*) test "$head" = "$VERIFIED" ;;
+          esac
 
       - name: Receive the binary
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -528,10 +541,22 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # The signing script and its requirements come from the verified
-          # commit, never from the artifact.
-          ref: ${{ needs.verify.outputs.commit }}
           persist-credentials: false
+
+      # The checkout above is the commit of the event, never a commit read from an output:
+      # a tag push is the tagged commit, a manual run on main is main, a manual run on a
+      # tag is the tag. Scripts of any of them are code that was already promoted, and
+      # the files of the tag being released come from the builders by artifact.
+      - name: The checkout is the commit of the event
+        env:
+          VERIFIED: ${{ needs.verify.outputs.commit }}
+        run: |
+          set -euo pipefail
+          head="$(git rev-parse HEAD)"
+          test "$head" = "$GITHUB_SHA"
+          case "$GITHUB_REF" in
+            refs/tags/*) test "$head" = "$VERIFIED" ;;
+          esac
 
       - name: Prepare the signing environment
         # No key here: installing packages runs code.
@@ -640,8 +665,22 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.verify.outputs.commit }}
           persist-credentials: false
+
+      # The checkout above is the commit of the event, never a commit read from an output:
+      # a tag push is the tagged commit, a manual run on main is main, a manual run on a
+      # tag is the tag. Scripts of any of them are code that was already promoted, and
+      # the files of the tag being released come from the builders by artifact.
+      - name: The checkout is the commit of the event
+        env:
+          VERIFIED: ${{ needs.verify.outputs.commit }}
+        run: |
+          set -euo pipefail
+          head="$(git rev-parse HEAD)"
+          test "$head" = "$GITHUB_SHA"
+          case "$GITHUB_REF" in
+            refs/tags/*) test "$head" = "$VERIFIED" ;;
+          esac
 
       - name: Prepare the verifying environment
         run: bash .github/scripts/release/prepare_signing_venv.sh "$RUNNER_TEMP/signing-venv"
@@ -936,10 +975,22 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # The commit `verify` resolved. This job reads the scripts of the released
-          # tree, and nothing else of it.
-          ref: ${{ needs.verify.outputs.commit }}
           persist-credentials: false
+
+      # The checkout above is the commit of the event, never a commit read from an output:
+      # a tag push is the tagged commit, a manual run on main is main, a manual run on a
+      # tag is the tag. Scripts of any of them are code that was already promoted, and
+      # the files of the tag being released come from the builders by artifact.
+      - name: The checkout is the commit of the event
+        env:
+          VERIFIED: ${{ needs.verify.outputs.commit }}
+        run: |
+          set -euo pipefail
+          head="$(git rev-parse HEAD)"
+          test "$head" = "$GITHUB_SHA"
+          case "$GITHUB_REF" in
+            refs/tags/*) test "$head" = "$VERIFIED" ;;
+          esac
 
       - name: Receive the amd64 digest
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -1038,8 +1089,22 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.verify.outputs.commit }}
           persist-credentials: false
+
+      # The checkout above is the commit of the event, never a commit read from an output:
+      # a tag push is the tagged commit, a manual run on main is main, a manual run on a
+      # tag is the tag. Scripts of any of them are code that was already promoted, and
+      # the files of the tag being released come from the builders by artifact.
+      - name: The checkout is the commit of the event
+        env:
+          VERIFIED: ${{ needs.verify.outputs.commit }}
+        run: |
+          set -euo pipefail
+          head="$(git rev-parse HEAD)"
+          test "$head" = "$GITHUB_SHA"
+          case "$GITHUB_REF" in
+            refs/tags/*) test "$head" = "$VERIFIED" ;;
+          esac
 
       - name: Log in to ghcr.io
         env:

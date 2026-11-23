@@ -13,6 +13,7 @@ import ci_yaml
 HERE = Path(__file__).resolve().parent
 ROOT = Path(__file__).resolve().parents[3]
 WORKFLOW = ROOT / ".github/workflows/release.yml"
+SCRIPTS_ONLY = ("attest", "sign", "verify-signatures", "image-manifest", "image-promote")
 PUBLISHING = ("attest", "sign", "verify-signatures", "publish", "image-build", "image-manifest", "image-promote")
 KEY = "secrets.GLYNDOR_RELEASE_ED25519_KEY"
 
@@ -119,11 +120,38 @@ class TheKey(unittest.TestCase):
                     self.assertNotIn("pattern", step["with"])
         self.assertNotIn("merge-multiple", WORKFLOW.read_text().replace("merge-multiple`", ""))
 
-    def test_the_signer_comes_from_the_verified_commit_and_the_rehearsal_only_from_the_dispatch(self):
-        sign = jobs()["sign"]["steps"]
-        checkouts = [s for s in sign if "actions/checkout" in s.get("uses", "")]
-        self.assertEqual([c["with"]["ref"] for c in checkouts], ["${{ needs.verify.outputs.commit }}"])
+    def test_the_jobs_that_only_need_the_scripts_check_out_the_commit_of_the_event_and_say_so_in_shell(self):
+        for name in SCRIPTS_ONLY:
+            steps = jobs()[name]["steps"]
+            checkouts = [s for s in steps if "actions/checkout" in s.get("uses", "")]
+            self.assertEqual(len(checkouts), 1, name)
+            self.assertNotIn("ref", checkouts[0]["with"], name)
+            self.assertIs(checkouts[0]["with"]["persist-credentials"], False, name)
+            names = [s.get("name", s.get("uses")) for s in steps]
+            self.assertEqual(names.index("The checkout is the commit of the event"), names.index(checkouts[0]["uses"]) + 1, name)
         self.assertEqual(jobs()["sign-rehearsal"]["steps"][0]["with"]["ref"], "${{ github.sha }}")
+
+    def test_no_job_reads_a_commit_from_an_output_to_run_a_script_of_it_except_the_two_that_build(self):
+        for name, job in jobs().items():
+            refs = [s["with"].get("ref") for s in job["steps"] if "actions/checkout" in s.get("uses", "")]
+            if "${{ needs.verify.outputs.commit }}" in refs:
+                self.assertIn(name, ("build-deb", "build", "image-build"), name)
+
+    def run_checkout_guard(self, head, sha, ref, verified):
+        step = next(s for s in jobs()["sign"]["steps"] if s.get("name") == "The checkout is the commit of the event")["run"]
+        with tempfile.TemporaryDirectory() as tmp:
+            git = Path(tmp) / "git"
+            git.write_text(f'#!/bin/sh\necho {head}\n')
+            git.chmod(git.stat().st_mode | stat.S_IEXEC)
+            return sh(step, PATH=f"{tmp}:{os.environ['PATH']}", GITHUB_SHA=sha, GITHUB_REF=ref, VERIFIED=verified)[0]
+
+    def test_a_tag_run_must_be_at_the_verified_commit_and_a_run_on_main_at_its_own(self):
+        a, b = "a" * 40, "b" * 40
+        self.assertEqual(self.run_checkout_guard(a, a, "refs/tags/v1.2.3", a), 0)
+        self.assertEqual(self.run_checkout_guard(a, a, "refs/tags/v1.2.3", b), 1)
+        self.assertEqual(self.run_checkout_guard(a, a, "refs/heads/main", b), 0, "a manual run on main of an older tag")
+        self.assertEqual(self.run_checkout_guard(b, a, "refs/heads/main", b), 1, "a tree that is not the commit of the event")
+        self.assertEqual(self.run_checkout_guard(b, a, "refs/tags/v1.2.3", b), 1)
 
 
 class TheCommit(unittest.TestCase):
@@ -134,10 +162,13 @@ class TheCommit(unittest.TestCase):
         self.assertIn("^v(0|[1-9][0-9]*)", first)
         self.assertIn('[[ "$TAG" =~ $pattern ]]', first)
 
-    def test_every_job_that_builds_checks_out_the_verified_commit(self):
-        for name in ("build-deb", "build", "attest", "sign", "verify-signatures", "image-build", "image-manifest", "image-promote"):
+    def test_every_job_that_builds_checks_out_the_verified_commit_and_none_of_them_uses_a_cache(self):
+        for name in ("build-deb", "build", "image-build"):
             checkout = next(s for s in jobs()[name]["steps"] if "actions/checkout" in s.get("uses", ""))
             self.assertEqual(checkout["with"]["ref"], "${{ needs.verify.outputs.commit }}", name)
+        text = WORKFLOW.read_text()
+        for forbidden in ("actions/cache", "rust-cache", "cache:", "cache-from", "cache-to", "type=gha"):
+            self.assertNotIn(forbidden, text)
 
     def test_the_release_is_made_as_a_draft_and_the_tag_is_read_before_and_after_it_becomes_public(self):
         steps = jobs()["publish"]["steps"]
