@@ -97,3 +97,12 @@ mod queue_webhook;
 
 #[path = "cli_json/accounts/domain_disabled_use.rs"]
 mod domain_disabled_use;
+
+#[path = "cli_json/delivery/warmup_flags.rs"]
+mod warmup_flags;
+
+#[path = "cli_json/migrate/migrate_import.rs"]
+mod migrate_import;
+
+#[path = "cli_json/operator/legacy_key_reach.rs"]
+mod legacy_key_reach;
