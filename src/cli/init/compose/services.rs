@@ -448,7 +448,10 @@ struct Healthcheck {
 	/// leaves it exited and `stop` leaves it stopped. Measured on Podman
 	/// 6.2.0. Left out, an unhealthy container stays unhealthy and nothing
 	/// acts on it, which `podup audit` reports as `no_health_action`.
-	#[serde(rename = "x-podman-on-failure", skip_serializing_if = "Option::is_none")]
+	#[serde(
+		rename = "x-podman-on-failure",
+		skip_serializing_if = "Option::is_none"
+	)]
 	on_failure: Option<&'static str>,
 }
 

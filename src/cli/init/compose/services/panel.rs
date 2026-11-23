@@ -54,7 +54,8 @@
 use std::collections::BTreeMap;
 
 use super::{
-	ComposeService, DATABASE_SECRET_MODE, Healthcheck, RESTART_WHEN_UNHEALTHY, SecretMount, drop_all,
+	ComposeService, DATABASE_SECRET_MODE, Healthcheck, RESTART_WHEN_UNHEALTHY, SecretMount,
+	drop_all,
 };
 use crate::config::{Listener, ListenerKind};
 
