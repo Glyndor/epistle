@@ -36,7 +36,7 @@ PEM in `[tls]`).
 | Asset | Where | Why it matters |
 |---|---|---|
 | Message bodies | `.eml` files under `data_dir`, plus the JMAP blob pool and the outbound spool | the content of every mailbox; written `0600` under the service user |
-| Account directory and antispam corpus | `<data_dir>/accounts.toml`, `api_keys.toml`, `app_passwords.toml`, and PostgreSQL (`migrations/0001` to `0004`) | who exists, what they may do, what the Bayes filter has learned |
+| Account directory and antispam corpus | `<data_dir>/accounts.toml`, `api_keys.toml`, `app_passwords.toml`, and PostgreSQL (`migrations/`) | who exists, what they may do, what the Bayes filter has learned |
 | Credentials | argon2id PHC hashes and SCRAM verifiers in the directory; TOTP secrets beside them | a stolen hash is a slow offline attack; a stolen TOTP secret is a second factor gone |
 | DKIM private keys | the `key_file` paths in `[dkim]` (`src/config/dkim/mod.rs`) and the rotated keys the server writes | whoever holds one signs mail as the domain |
 | The at-rest master key | `encryption_key_env` or `encryption_key_file` in `[storage]` | turns a stolen disk or backup from plaintext into ciphertext, and back |
@@ -117,14 +117,14 @@ PEM in `[tls]`).
 | The at-rest key left in memory or in a log | the key bytes are read into `Zeroizing` buffers and wiped once the AEAD key is built (`src/storage/crypto/mod.rs`); `Debug` never prints key material; `zeroize` is pinned exactly (`Cargo.toml`); a message that fails to decrypt is an error, never served as ciphertext; enabling encryption without a key refuses to start | test: `decode_fails_closed_when_tampered`, `decode_fails_closed_when_encrypted_but_no_key`, `from_config_enabled_without_key_fails_closed` (`src/storage/crypto/tests/base.rs`) |
 | A restored backup exposing mail | `epistle backup` archives the on-disk bytes, so an encrypted store stays ciphertext without the key (`src/cli/backup/collect.rs::collect_files`); the key is expected off the data disk (`security.md`) | test: `src/cli/backup/tests/base.rs` |
 | Clock drift | TOTP tolerates one 30-second step either side and no more (`src/totp/mod.rs`); API key expiry and DKIM rotation read the system clock; the host's time source is the operator's | test: `verify_accepts_current_and_skewed_codes` (`src/totp/tests/base.rs`) |
-| A compromised process acting as root | with `[privileges]` the daemon drops uid and gid after binding and refuses to run if root can be regained (`src/privdrop/mod.rs`); the sample unit runs as `DynamicUser` with a read-only system, no new privileges and a `@system-service` syscall filter (`docs/epistle.service`) | test: `src/privdrop/tests/base.rs` |
+| A compromised process acting as root | with `[privileges]` the daemon drops uid and gid after binding and refuses to run if root can be regained (`src/privdrop/mod.rs`); the sample unit runs as the persistent `glyndor-epistle` account the package creates, with a read-only system, no new privileges and a `@system-service` syscall filter (`docs/epistle.service`) | test: `src/privdrop/tests/base.rs` |
 | The server calling out to an attacker-chosen host | webhook URLs must be `https` or loopback (`src/config/validate/mod.rs`); the ACME directory must be `https`, and every URL the authority names afterwards is checked before the client uses it — `https` (or plain `http` when the directory is plain `http` too), no loopback, private or metadata address unless the directory already names one of that kind, and no redirect followed (`src/acme/policy/mod.rs`); DNS tokens are zone-scoped and read from a file or the environment (`src/config/dns/mod.rs`) | test: `src/config/validate/tests/*.rs`; test: `src/acme/policy/tests/base.rs` |
 
 ### Dependencies and artifacts
 
 | Threat | Control | Evidence |
 |---|---|---|
-| A vulnerable or yanked crate | `cargo audit --deny warnings` on the main lockfile and on `fuzz/Cargo.lock`; `cargo deny` allows crates.io only and an explicit license list (`deny.toml`); Dependabot covers `/`, `/fuzz` and the signing script's pip requirements (`.github/dependabot.yml`) | gate: `rust-audit.yml`; no advisory is ignored |
+| A vulnerable or yanked crate | `cargo audit --deny warnings` on the main lockfile and on `fuzz/Cargo.lock`; `cargo deny` allows crates.io only and an explicit license list (`deny.toml`); Dependabot covers `/`, `/fuzz` and the signing script's pip requirements (`.github/dependabot.yml`) | `rust-audit.yml` runs every day and on every push to `develop`, and opens an issue when it fails (it is not a required check); no advisory is ignored |
 | Unsigned or unattested artifacts | every artifact, each `.deb` and `SHA256SUMS` get a detached Ed25519 signature; build provenance is attested for the `.deb`, the binary and the container image (verification is in [the container stack](operations/container.md)) | gate: the release fails closed when the signing key is absent |
 
 ## Not implemented
