@@ -23,6 +23,8 @@ on:
         value: ${{ jobs.plan.outputs.lines }}
       folder:
         value: ${{ jobs.plan.outputs.folder }}
+      wiring:
+        value: ${{ jobs.plan.outputs.wiring }}
 
 permissions:
   contents: read
@@ -45,6 +47,7 @@ jobs:
       freshness: ${{ steps.diff.outputs.freshness }}
       folder: ${{ steps.diff.outputs.folder }}
       lines: ${{ steps.diff.outputs.lines }}
+      wiring: ${{ steps.diff.outputs.wiring }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -53,18 +56,25 @@ jobs:
       - id: diff
         env:
           EVENT_NAME: ${{ github.event_name }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          # A queue entry is the change of one pull request on top of the branch
+          # as it is now, so it is classified by that change and not run whole.
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
         run: |
           set -euo pipefail
           script="$RUNNER_TEMP/ci_plan.py"
-          if [ "$EVENT_NAME" = pull_request ] \
+          if { [ "$EVENT_NAME" = pull_request ] || [ "$EVENT_NAME" = merge_group ]; } \
             && git show "$BASE_SHA:.github/scripts/ci_plan/ci_plan.py" > "$script" \
             && python3 -I "$script"; then
+            # The classifier is the base commit's, so one written before a job
+            # existed does not name it. A job nobody classified runs.
+            for job in lint tests doc msrv debian supply freshness folder lines wiring; do
+              grep -q "^$job=" "$GITHUB_OUTPUT" || echo "$job=true" >> "$GITHUB_OUTPUT"
+            done
             exit 0
           fi
           echo "No trusted PR plan; running all work on $EVENT_NAME"
-          for job in lint tests doc msrv debian supply freshness folder lines; do
+          for job in lint tests doc msrv debian supply freshness folder lines wiring; do
             value=true
             # The nightly run exists to seed the cargo caches, which only the
             # Rust jobs use; the rest would be a second copy of the push to main.

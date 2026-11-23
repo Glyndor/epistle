@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Select PR work without hiding required checks behind workflow path filters.
 
-Unknown paths, unavailable history and every non-PR event run all work. The
-workflow runs the base commit's copy, so a PR cannot change its own classifier.
+Unknown paths, unavailable history and every event that is not a pull request or
+a merge queue entry run all work. A queue entry is classified by the change it
+carries (the queue base to the queue head), like the pull request it came from.
+The workflow runs the base commit's copy, so a PR cannot change its own classifier.
 Renames are read as delete/add pairs: both sides can affect different jobs.
 """
 
@@ -10,7 +12,8 @@ import os
 import re
 import subprocess
 
-JOBS = ("lint", "tests", "doc", "msrv", "debian", "supply", "freshness", "folder", "lines")
+JOBS = ("lint", "tests", "doc", "msrv", "debian", "supply", "freshness", "folder", "lines", "wiring")
+CHANGE_EVENTS = {"pull_request", "merge_group"}
 RUST = {"lint", "tests", "doc", "msrv"}
 BUILD = RUST | {"debian"}
 OWN = {".github/scripts/ci_plan/ci_plan.py", ".github/scripts/ci_plan/test_ci_plan.py",
@@ -43,9 +46,19 @@ def affected(path):
     if path in OWN:
         return set(JOBS)
     if path.startswith(".github/workflows/"):
-        # Rust tests assert workflow pins, coverage exclusions and packaging
-        # contracts. Even a workflow unrelated to compilation can affect them.
-        return WORKFLOWS.get(path.rsplit("/", 1)[-1], set(JOBS)) | {"tests"}
+        # A workflow can only break what reads it: the jobs it owns and the Rust
+        # tests that read `.github` (`wiring`). One that owns no job runs by its
+        # own trigger and needs nothing else here.
+        return WORKFLOWS.get(path.rsplit("/", 1)[-1], set()) | {"wiring"}
+    if path.startswith(".github/actions/"):
+        return set(JOBS)  # the cargo cache action is used by every Rust job
+    if path == ".github/dependabot.yml":
+        return {"freshness", "wiring"}
+    if path == ".github/folder-limit-exceptions.txt":
+        return {"folder"}
+    if path.startswith(".github/"):
+        # Scripts, templates and CODEOWNERS: only the tests that read `.github`.
+        return {"wiring"}
     if path in {"Cargo.toml", "Cargo.lock"} or path.startswith(".cargo/"):
         return BUILD | {"supply", "freshness"}
     if path.startswith("rust-toolchain") or path == "build.rs":
@@ -62,26 +75,24 @@ def affected(path):
         return {"supply"}
     if path == "rustfmt.toml" or path.startswith(".clippy"):
         return {"lint"}
-    if path == ".github/dependabot.yml":
-        return {"freshness"}
-    if path == ".github/folder-limit-exceptions.txt" or path.startswith("scripts/folder-limit/"):
+    if path.startswith("scripts/folder-limit/"):
         return {"folder"}
     if path.startswith("fuzz/"):
         return {"lint"}  # lint checks the separate fuzz lockfile with metadata
-    if path.startswith((".github/scripts/", "scripts/", "deploy/")):
+    if path.startswith(("scripts/", "deploy/")):
         return {"tests"}  # repository and packaging contract tests read these
     if path.startswith("docs/"):
         return {"tests"}  # tests read docs/configuration.md, cli.md, headers.md and more
     if path.endswith(".md"):
-        return set()
+        return {"wiring"}  # repository_paths_exist reads every path the root pages cite
     if path in {".gitignore", ".editorconfig", ".containerignore", "Containerfile"}:
         return set()
     return set(JOBS)
 
 
 def select(event, changes):
-    """Return booleans keyed by job, with non-PR events deliberately ungated."""
-    if event != "pull_request" or not changes:
+    """Return booleans keyed by job, with other events deliberately ungated."""
+    if event not in CHANGE_EVENTS or not changes:
         return dict.fromkeys(JOBS, True)
     chosen = set()
     for status, path in changes:
@@ -92,6 +103,11 @@ def select(event, changes):
             chosen.add("lines")
         if status in {"A", "D"}:
             chosen.add("folder")
+    if "tests" in chosen:
+        chosen.discard("wiring")  # the whole suite already runs those tests
+    if event == "merge_group":
+        chosen.discard("freshness")  # reads repository state, not the queued commit
+        chosen.discard("folder")  # the folder gate reads a pull request's base
     return {job: job in chosen for job in JOBS}
 
 
@@ -114,7 +130,7 @@ def changed_paths(base, head):
 def main():
     event = os.environ.get("EVENT_NAME", "")
     try:
-        changes = changed_paths(os.environ.get("BASE_SHA"), os.environ.get("HEAD_SHA")) if event == "pull_request" else []
+        changes = changed_paths(os.environ.get("BASE_SHA"), os.environ.get("HEAD_SHA")) if event in CHANGE_EVENTS else []
         plan = select(event, changes)
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
         print(f"::warning::cannot narrow CI work: {error}; running everything")

@@ -186,6 +186,76 @@ jobs:
     with:
       run-sbom: ${{ needs.plan.outputs.supply != 'false' }}
 
+  # The Rust tests that read `.github`, run alone when a change reaches only
+  # files they read (a workflow, a CI script, a template, a root page). The list
+  # of tests is read from the tree by wiring_targets.py, taken from the base
+  # commit so a pull request cannot shorten its own list. The job always starts,
+  # and its steps carry the plan's answer, so a plan that failed runs them.
+  wiring:
+    name: wiring tests
+    needs: plan
+    if: ${{ !cancelled() }}
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Choose the tests
+        id: pick
+        if: ${{ needs.plan.outputs.wiring != 'false' }}
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+        run: |
+          set -euo pipefail
+          script="$RUNNER_TEMP/wiring_targets.py"
+          # The change that introduces the script, a push and the nightly run
+          # have no base copy to read, and use the one in the tree.
+          if [ -z "$BASE_SHA" ] || ! git show "$BASE_SHA:.github/scripts/ci_plan/wiring_targets.py" > "$script" 2> /dev/null; then
+            cp .github/scripts/ci_plan/wiring_targets.py "$script"
+          fi
+          python3 -I "$script" | tee -a "$GITHUB_OUTPUT"
+
+      - name: Install toolchain
+        if: ${{ needs.plan.outputs.wiring != 'false' }}
+        run: |
+          rustup toolchain install 1.100.0 --profile minimal
+          rustup default 1.100.0
+
+      - id: cargo-cache
+        if: ${{ needs.plan.outputs.wiring != 'false' }}
+        uses: ./.github/actions/rust-cache
+        with:
+          prefix: rust-wiring
+
+      - name: Integration tests that read .github
+        if: ${{ needs.plan.outputs.wiring != 'false' }}
+        env:
+          TESTS: ${{ steps.pick.outputs.tests }}
+        # The names come from a closed alphabet (see wiring_targets.py), so the
+        # word splitting is the point: one `--test name` pair per target.
+        run: |
+          # shellcheck disable=SC2086
+          cargo test --locked --all-features $TESTS
+
+      - name: Unit tests that read .github
+        if: ${{ needs.plan.outputs.wiring != 'false' && steps.pick.outputs.lib != '' }}
+        env:
+          FILTERS: ${{ steps.pick.outputs.lib }}
+        run: |
+          # shellcheck disable=SC2086
+          cargo test --locked --all-features --lib -- $FILTERS
+
+      - name: Save the cargo cache
+        if: ${{ success() && needs.plan.outputs.wiring != 'false' }}
+        uses: ./.github/actions/rust-cache
+        with:
+          mode: save
+          cache-hit: ${{ steps.cargo-cache.outputs.cache-hit }}
+          prefix: rust-wiring
+
   # The one check the ruleset requires from this workflow. It runs whatever
   # happened to the jobs it waits for, because a job that `needs` a failed job is
   # skipped and a skipped job reports success. It fails unless:
@@ -201,7 +271,7 @@ jobs:
   # commit`; the names of the suites above are not required.
   gate:
     name: CI gate
-    needs: [plan, rust, debian, line-limit, sbom-and-licenses]
+    needs: [plan, rust, debian, line-limit, sbom-and-licenses, wiring]
     if: always()
     runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
     timeout-minutes: 5
@@ -221,6 +291,7 @@ jobs:
               "debian": ("debian",),
               "line-limit": ("lines",),
               "sbom-and-licenses": ("supply",),
+              "wiring": ("wiring",),
           }
           needs = json.loads(os.environ["NEEDS"])
           problems = []

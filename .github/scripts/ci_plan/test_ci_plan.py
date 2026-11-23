@@ -27,7 +27,8 @@ class SelectionTests(unittest.TestCase):
         return {job for job, run in cp.select(event, [(status, p) for p in paths]).items() if run}
 
     def test_docs_edits_skip_unaffected_work(self):
-        self.assertEqual(self.selected("README.md"), set())
+        # The root pages are read by the test that checks every path they cite.
+        self.assertEqual(self.selected("README.md"), {"wiring"})
         self.assertEqual(self.selected("docs/operations/queue.md"), {"tests"})
 
     def test_new_docs_only_need_folder_count(self):
@@ -75,18 +76,49 @@ class SelectionTests(unittest.TestCase):
                          {"lint", "tests", "lines", "supply"})
 
     def test_classifier_and_unknown_paths_run_everything(self):
-        for path in (*cp.OWN, "a-new-build-input", ".github/workflows/new-build.yml"):
-            self.assertEqual(self.selected(path), set(cp.JOBS))
+        # The whole suite already runs the tests that `wiring` would run alone.
+        everything = set(cp.JOBS) - {"wiring"}
+        for path in (*cp.OWN, "a-new-build-input", ".github/actions/rust-cache/action.yml"):
+            self.assertEqual(self.selected(path), everything)
 
-    def test_non_pr_events_and_empty_diff_run_everything(self):
-        for event in ("merge_group", "push", "schedule", "workflow_dispatch", ""):
+    def test_a_workflow_that_owns_no_job_only_reaches_the_tests_that_read_it(self):
+        for name in ("e2e.yml", "db.yml", "fuzz.yml", "release.yml", "new-build.yml", "reusable-version-bump.yml"):
+            self.assertEqual(self.selected(f".github/workflows/{name}"), {"wiring"}, name)
+
+    def test_ci_files_that_no_job_owns_only_reach_the_tests_that_read_them(self):
+        for path in (".github/CODEOWNERS", ".github/PULL_REQUEST_TEMPLATE.md", ".github/ISSUE_TEMPLATE/bug_report.yml"):
+            self.assertEqual(self.selected(path), {"wiring"}, path)
+        # A Python or shell script also counts toward the line limit.
+        for path in (".github/scripts/fuzz_targets.py", ".github/scripts/sign.py"):
+            self.assertEqual(self.selected(path), {"wiring", "lines"}, path)
+
+    def test_every_file_under_github_selects_something_and_few_select_the_suite(self):
+        listing = subprocess.check_output(["git", "ls-files", ".github"], cwd=ROOT, text=True).split()
+        for path in listing:
+            if path in cp.OWN or path.startswith(".github/actions/"):
+                continue
+            chosen = self.selected(path)
+            self.assertTrue(chosen, f"{path} selects nothing, so no suite would read it")
+            owned = cp.WORKFLOWS.get(path.rsplit("/", 1)[-1], set())
+            self.assertFalse({"tests", "lint", "doc", "msrv", "debian"} & (chosen - owned), path)
+
+    def test_other_events_and_empty_diff_run_everything(self):
+        for event in ("push", "schedule", "workflow_dispatch", ""):
             self.assertEqual(self.selected("README.md", event=event), set(cp.JOBS))
         self.assertEqual(self.selected(), set(cp.JOBS))
 
+    def test_a_queue_entry_is_classified_by_the_change_it_carries(self):
+        self.assertEqual(self.selected("README.md", event="merge_group"), {"wiring"})
+        self.assertEqual(self.selected(".github/workflows/e2e.yml", event="merge_group"), {"wiring"})
+        # Two jobs read the pull request itself and have nothing to say in a queue.
+        self.assertEqual(self.selected("docs/new.md", status="A", event="merge_group"), {"tests"})
+        self.assertEqual(self.selected("Cargo.toml", event="merge_group"),
+                         cp.BUILD | {"supply"})
+
     def test_workflows_and_dependency_config_select_their_consumers(self):
         for filename, jobs in cp.WORKFLOWS.items():
-            self.assertTrue(jobs | {"tests"} <= self.selected(f".github/workflows/{filename}"))
-        self.assertEqual(self.selected(".github/dependabot.yml"), {"freshness"})
+            self.assertTrue(jobs <= self.selected(f".github/workflows/{filename}"), filename)
+        self.assertEqual(self.selected(".github/dependabot.yml"), {"freshness", "wiring"})
 
 
 class GitPlanTests(unittest.TestCase):
@@ -117,6 +149,10 @@ class GitPlanTests(unittest.TestCase):
         self.git("commit", "-qsm", "test: prepare fixture")
         return self.git("rev-parse", "HEAD")
 
+    @staticmethod
+    def chosen(plan):
+        return {job for job, run in plan.items() if run == "true"}
+
     def plan(self, event="pull_request", base=None, head=None):
         output = self.repo / "outputs"
         output.write_text("")
@@ -131,7 +167,7 @@ class GitPlanTests(unittest.TestCase):
     def test_docs_diff_through_actual_workflow_step(self):
         self.write("README.md", "updated docs\n")
         self.head = self.commit()
-        self.assertEqual(set(self.plan().values()), {"false"})
+        self.assertEqual(self.chosen(self.plan()), {"wiring"})
 
     def test_rename_keeps_old_production_path_and_new_doc_path(self):
         self.git("mv", "src/service.rs", "service.md")
@@ -161,12 +197,12 @@ class GitPlanTests(unittest.TestCase):
         self.git("checkout", "-q", self.base)
         self.write("src/service.rs", "fn changed_on_base() {}\n")
         self.base = self.commit()
-        self.assertEqual(set(self.plan().values()), {"false"})
+        self.assertEqual(self.chosen(self.plan()), {"wiring"})
 
     def test_head_cannot_replace_the_classifier(self):
         self.write(SCRIPT, "raise RuntimeError('must not execute head classifier')\n")
         self.head = self.commit()
-        self.assertEqual(set(self.plan().values()), {"true"})
+        self.assertEqual(self.chosen(self.plan()), set(cp.JOBS) - {"wiring"})
 
     def test_missing_or_broken_base_classifier_runs_everything(self):
         for content in (None, "raise RuntimeError('broken base classifier')\n"):
@@ -186,7 +222,22 @@ class GitPlanTests(unittest.TestCase):
     def test_nightly_run_selects_only_the_jobs_that_seed_the_caches(self):
         result = self.plan("schedule", base="")
         self.assertEqual({job for job, run in result.items() if run == "true"},
-                         {"lint", "tests", "doc", "msrv", "freshness"})
+                         {"lint", "tests", "doc", "msrv", "freshness", "wiring"})
+
+    def test_a_queue_entry_with_a_readable_diff_is_narrowed_like_its_pull_request(self):
+        self.write("README.md", "updated docs\n")
+        self.head = self.commit()
+        self.assertEqual(self.chosen(self.plan("merge_group")), {"wiring"})
+
+    def test_a_job_the_base_classifier_does_not_know_runs(self):
+        # A classifier written before `wiring` existed prints no line for it.
+        self.write(SCRIPT, "import os\nopen(os.environ['GITHUB_OUTPUT'], 'a').write('lint=false\\n')\n")
+        self.base = self.commit()
+        self.write("README.md", "updated docs\n")
+        self.head = self.commit()
+        result = self.plan()
+        self.assertEqual(result["lint"], "false")
+        self.assertEqual(result["wiring"], "true")
 
     def test_queue_and_push_do_not_need_a_diff(self):
         for event in ("merge_group", "push"):

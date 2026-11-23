@@ -19,6 +19,7 @@ SUITES = {
     "debian": ("debian",),
     "line-limit": ("lines",),
     "sbom-and-licenses": ("supply",),
+    "wiring": ("wiring",),
 }
 # Jobs of ci.yml the gate does not wait for, each with the reason.
 OUTSIDE = {
@@ -179,6 +180,10 @@ class GateWiring(unittest.TestCase):
             if name in SUITES:
                 self.assertEqual(job["needs"], "plan", name)
                 self.assertEqual(job["if"], "${{ !cancelled() }}", name)
+                for step in job.get("steps", []):
+                    self.assertNotIn("== 'true'", str(step.get("if", "")), name)
+                    if "needs.plan.outputs" in str(step.get("if", "")):
+                        self.assertIn("needs.plan.outputs.wiring != 'false'", step["if"], name)
 
     def test_a_suite_is_skipped_only_by_an_explicit_false(self):
         for name, job in workflow()["jobs"].items():

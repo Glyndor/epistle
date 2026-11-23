@@ -172,7 +172,7 @@ you did not mean.
 A pull request into `develop` has to pass `CI gate` and
 `dco / Signed-off-by present on every commit`. `CI gate` is the last job of
 `.github/workflows/ci.yml`: it fails unless the plan succeeded and every suite
-(`rust`, `debian`, `line-limit`, `sbom-and-licenses`) either succeeded or was
+(`rust`, `debian`, `line-limit`, `sbom-and-licenses`, `wiring`) either succeeded or was
 skipped because the plan said its inputs did not change. The workflow files are
 in `.github/workflows/`.
 
