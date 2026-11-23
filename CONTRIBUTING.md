@@ -94,7 +94,7 @@ The checks a pull request runs are:
 ```sh
 cargo fmt --all --check
 cargo clippy --locked --all-targets --all-features -- -D warnings
-cargo test --locked --all-features --workspace
+RUST_MIN_STACK=8388608 cargo test --locked --all-features --workspace   # the stack CI gives test threads
 cargo test --locked --test database    # needs a live Postgres; CI provides one
 cargo test --locked --test interop     # needs a live Postfix on :1025; CI provides one
 cargo test --locked --test e2e         # needs a live epistle under systemd on real ports

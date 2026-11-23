@@ -60,6 +60,16 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# Tests that build the whole command line (`Cli::try_parse_from`) run on a test
+# thread, whose stack is 2 MiB unless this says otherwise. clap 4.6.7 needed about
+# 1.75 MiB of it for that in an unoptimised build, which left no room, and 4.6.8
+# needs between 2 and 3 MiB: `account::switches::tests::parse` overflowed and
+# aborted the whole run. The value is the 8 MiB a main thread has. A file under
+# `.cargo/` cannot carry it: debian/rules reads the presence of
+# `.cargo/config.toml` as "the vendored configuration is already written".
+env:
+  RUST_MIN_STACK: "8388608"
+
 permissions:
   contents: read
 

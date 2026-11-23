@@ -89,6 +89,9 @@
   "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
   "group": "rust-ci-${{ github.workflow }}-${{ github.ref }}-${{ inputs.working-directory }}"
  },
+ "env": {
+  "RUST_MIN_STACK": "8388608"
+ },
  "jobs": {
   "coverage": {
    "defaults": {
