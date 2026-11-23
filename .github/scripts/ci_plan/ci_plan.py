@@ -68,6 +68,8 @@ def affected(path):
         return set()  # the folder gate runs on every pull request
     if path.startswith("fuzz/"):
         return {"lint"}  # lint checks the separate fuzz lockfile with metadata
+    if path.startswith((".github/codeql/", ".github/scripts/ci_codeql/")):
+        return {"lint", "tests"}  # the lint job judges the CodeQL configuration with the compiler's dep-info
     if path.startswith((".github/scripts/", "scripts/", "deploy/")):
         return {"tests"}  # repository and packaging contract tests read these
     if path.startswith("docs/"):
