@@ -255,11 +255,13 @@ class GitPlanTests(unittest.TestCase):
         self.assertEqual(set(self.plan(base="f" * 40).values()), {"true"})
         self.assertEqual(set(self.plan(head="f" * 40).values()), {"true"})
 
-    def test_a_pull_request_into_main_runs_every_job_whatever_its_diff_says(self):
+    def test_only_a_base_of_exactly_develop_is_planned_from_its_diff(self):
         self.write("README.md", "updated docs\n")
         self.head = self.commit()
         self.assertEqual(self.chosen(self.plan(base_ref="develop")), cp.ALWAYS)
         self.assertEqual(self.chosen(self.plan(base_ref="main")), set(cp.JOBS))
+        for base in ("feature", "release/1", "Develop", "develop-2", ""):
+            self.assertEqual(self.chosen(self.plan(base_ref=base)), set(cp.JOBS), base)
 
     def test_nightly_run_selects_only_the_jobs_that_seed_the_caches(self):
         result = self.plan("schedule", base="")

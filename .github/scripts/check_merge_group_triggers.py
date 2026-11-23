@@ -48,7 +48,9 @@ REQUIRED = {
 # request and the merge queue) and the event in the name anywhere else.
 GATE_NAME = (
     "${{ github.event_name == 'merge_group' && 'CI gate' || github.event_name == 'pull_request'"
-    " && (github.event.pull_request.base.ref == 'main' && 'CI gate (main)' || 'CI gate')"
+    " && (github.event.pull_request.base.ref == 'develop' && 'CI gate'"
+    " || github.event.pull_request.base.ref == 'main' && 'CI gate (main)'"
+    " || format('CI gate (pr into {0})', github.event.pull_request.base.ref))"
     " || format('CI gate ({0})', github.event_name) }}"
 )
 

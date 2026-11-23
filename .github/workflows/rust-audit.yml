@@ -21,6 +21,11 @@ on:
     # other if either fires.
     - cron: "37 5 * * *"
   workflow_dispatch:
+  # Every push to develop is audited, with cargo-deny, on the tree it carries.
+  # A pull request into main (the promotion) matches the paths below because
+  # every release changes Cargo.toml.
+  push:
+    branches: [develop]
   pull_request:
     paths:
       # This file is in its own filter on purpose. A workflow whose path
@@ -62,7 +67,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        ref: ${{ fromJSON(github.event_name == 'pull_request' && '[""]' || '["develop","main"]') }}
+        ref: ${{ fromJSON((github.event_name == 'pull_request' || github.event_name == 'push') && '[""]' || '["develop","main"]') }}
     uses: ./.github/workflows/reusable-rust-audit.yml
     with:
       ref: ${{ matrix.ref }}
@@ -84,7 +89,7 @@ jobs:
     # matrix on PR is for the per-PR required check, the open-issue
     # behaviour is for the daily cadence.
     needs: audit
-    if: failure() && github.event_name != 'pull_request'
+    if: failure() && github.event_name != 'pull_request' && github.event_name != 'push'
     # Fixed on GitHub's runners, never CI_RUNNER: holds `issues: write`.
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -164,7 +169,7 @@ jobs:
     # close signal belongs to the daily cadence, not the per-PR
     # required check.
     needs: audit
-    if: success() && github.event_name != 'pull_request'
+    if: success() && github.event_name != 'pull_request' && github.event_name != 'push'
     # Fixed on GitHub's runners, never CI_RUNNER: holds `issues: write`.
     runs-on: ubuntu-latest
     timeout-minutes: 15

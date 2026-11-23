@@ -203,12 +203,12 @@ jobs:
   # The ruleset requires `CI gate` and `dco / Signed-off-by present on every
   # commit`; the names of the suites above are not required.
   gate:
-    # `CI gate` on a pull request into develop and in the merge queue, `CI gate
-    # (main)` on a pull request into main, which plans differently, and the event
-    # in the name anywhere else. A job that is skipped emits its name too, and a
-    # skipped job counts as passed, so a run on another event must never carry
-    # the name a ruleset requires.
-    name: ${{ github.event_name == 'merge_group' && 'CI gate' || github.event_name == 'pull_request' && (github.event.pull_request.base.ref == 'main' && 'CI gate (main)' || 'CI gate') || format('CI gate ({0})', github.event_name) }}
+    # `CI gate` only in the merge queue and on a pull request whose base is
+    # exactly develop; `CI gate (main)` on a pull request into main, which plans
+    # differently; and a name no ruleset requires for any other base or event. A
+    # job that is skipped emits its name too, and a skipped job counts as passed,
+    # so nothing else may carry the name a ruleset requires.
+    name: ${{ github.event_name == 'merge_group' && 'CI gate' || github.event_name == 'pull_request' && (github.event.pull_request.base.ref == 'develop' && 'CI gate' || github.event.pull_request.base.ref == 'main' && 'CI gate (main)' || format('CI gate (pr into {0})', github.event.pull_request.base.ref)) || format('CI gate ({0})', github.event_name) }}
     needs: [plan, rust, debian, line-limit, sbom-and-licenses]
     if: always()
     runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}

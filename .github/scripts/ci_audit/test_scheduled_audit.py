@@ -44,6 +44,22 @@ class Shape(unittest.TestCase):
         self.assertEqual(step("audit", "Take the lockfiles")["if"], "inputs.ref != ''")
 
 
+class Triggers(unittest.TestCase):
+    def test_cargo_deny_and_the_audit_also_run_on_every_push_to_develop_on_its_own_tree(self):
+        workflow = ci_yaml.load(ROOT / ".github/workflows/rust-audit.yml")
+        self.assertEqual(workflow[True]["push"], {"branches": ["develop"]})
+        matrix = workflow["jobs"]["audit"]["strategy"]["matrix"]["ref"]
+        self.assertIn("github.event_name == 'push'", matrix)
+        self.assertIn("'[\"\"]'", matrix)
+        self.assertIn("pull_request", workflow[True])
+
+    def test_a_push_never_opens_or_closes_an_issue(self):
+        jobs = ci_yaml.load(ROOT / ".github/workflows/rust-audit.yml")["jobs"]
+        for name in ("report", "close"):
+            self.assertIn("github.event_name != 'push'", jobs[name]["if"], name)
+            self.assertIn("github.event_name != 'pull_request'", jobs[name]["if"], name)
+
+
 class Behaviour(unittest.TestCase):
     """The two steps, as written, in a repository that has a main and a develop."""
 
@@ -79,7 +95,7 @@ class Behaviour(unittest.TestCase):
         self.bin = self.root / "bin"
         self.bin.mkdir()
         cargo = self.bin / "cargo"
-        cargo.write_text("#!/bin/sh\necho \"$* :: $(cat \"$AUDITED_FILE\" 2>/dev/null)\" >> \"$CARGO_LOG\"\n"
+        cargo.write_text("#!/bin/sh\necho \"cwd=$PWD $*\" >> \"$CARGO_LOG\"\n"
                          "echo '{}'\n")
         cargo.chmod(0o755)
         self.temp = self.root / "runner-temp"
@@ -103,27 +119,34 @@ class Behaviour(unittest.TestCase):
         self.assertFalse(audited.startswith(str(self.repo)))
         self.assertEqual((Path(audited) / "Cargo.lock").read_text(), "develop\n")
         self.assertEqual((Path(audited) / "fuzz/Cargo.lock").read_text(), "develop fuzz\n")
-        self.assertFalse((Path(audited) / ".cargo/audit.toml").exists(), "develop has no ignore list")
+        self.assertEqual((Path(audited) / ".cargo/audit.toml").read_text(), "[advisories]\nignore = []\n",
+                         "develop has no ignore list, so it gets an empty one and no other can apply")
         self.assertEqual((self.repo / "Cargo.lock").read_text(), "main\n", "the workspace is not touched")
         (self.repo / "audit.log").write_text("")
         done = self.run_block(step("audit", "Run cargo audit")["run"], AUDITED_DIR=audited)
         self.assertEqual(done.returncode, 0, done.stderr)
         calls = (self.root / "cargo.log").read_text()
         self.assertIn(f"--file {audited}/Cargo.lock", calls)
+        self.assertIn(f"cwd={audited} ", calls, "the audit runs inside the clean directory")
         self.assertNotIn("--config", calls)
 
-    def test_the_ignore_list_of_the_audited_branch_is_passed_when_it_has_one(self):
+    def test_the_ignore_list_of_the_audited_branch_is_found_by_the_working_directory_when_it_has_one(self):
         audited, _ = self.audit("main")
         self.assertEqual((Path(audited) / ".cargo/audit.toml").read_text(), "main ignores\n")
         done = self.run_block(step("audit", "Run cargo audit")["run"], AUDITED_DIR=audited)
         self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertIn(f"--config {audited}/.cargo/audit.toml", (self.root / "cargo.log").read_text())
+        calls = (self.root / "cargo.log").read_text()
+        self.assertIn(f"cwd={audited} ", calls)
+        self.assertNotIn("--config", calls, "the flag is not trusted: the working directory decides")
+        self.assertEqual((self.repo / "audit.json").read_text().strip(), "{}")
 
     def test_extra_lockfiles_are_audited_from_the_taken_copy(self):
         audited, env = self.audit("develop")
         done = self.run_block(step("audit", "extra lockfiles")["run"], AUDITED_DIR=audited, EXTRA_LOCKFILES=env["EXTRA_LOCKFILES"])
         self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertIn(f"--file {audited}/fuzz/Cargo.lock", (self.root / "cargo.log").read_text())
+        calls = (self.root / "cargo.log").read_text()
+        self.assertIn(f"--file {audited}/fuzz/Cargo.lock", calls)
+        self.assertIn(f"cwd={audited} ", calls)
 
     def test_a_pull_request_audits_its_own_tree_with_no_taken_copy(self):
         done = self.run_block(step("audit", "Run cargo audit")["run"], AUDITED_DIR="")

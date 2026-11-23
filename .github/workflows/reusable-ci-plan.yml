@@ -53,15 +53,16 @@ jobs:
       - id: diff
         env:
           EVENT_NAME: ${{ github.event_name }}
-          # A pull request into main is the promotion of develop: it runs every
-          # job, with no plan, whatever the plan would have said about its diff.
+          # The planner of the base is trusted for a base that is exactly develop.
+          # A pull request into main is the promotion of develop, and one into any
+          # other branch has no planner this workflow knows: both run every job.
           BASE_REF: ${{ github.event.pull_request.base.ref }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
           script="$RUNNER_TEMP/ci_plan.py"
-          if [ "$EVENT_NAME" = pull_request ] && [ "$BASE_REF" != main ] \
+          if [ "$EVENT_NAME" = pull_request ] && [ "$BASE_REF" = develop ] \
             && git show "$BASE_SHA:.github/scripts/ci_plan/ci_plan.py" > "$script" \
             && python3 -I "$script"; then
             exit 0

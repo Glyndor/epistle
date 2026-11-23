@@ -119,8 +119,15 @@ jobs:
           while read -r lockfile; do
             [ -n "$lockfile" ] && take "$lockfile"
           done <<< "$EXTRA_LOCKFILES"
+          # The audit runs with this directory as its working directory, and
+          # cargo-audit reads `.cargo/audit.toml` from there. A branch without the
+          # file gets an empty list, so no list of another branch or of the runner
+          # can apply to it.
           if git cat-file -e "origin/${REF}:${prefix}.cargo/audit.toml" 2> /dev/null; then
             take .cargo/audit.toml
+          else
+            mkdir -p "$dir/.cargo"
+            printf '[advisories]\nignore = []\n' > "$dir/.cargo/audit.toml"
           fi
           echo "dir=$dir" >> "$GITHUB_OUTPUT"
 
@@ -150,14 +157,19 @@ jobs:
         # so the report job can read the full report whether the step passed
         # or failed; the exit code is preserved on a non-zero result so the
         # step still fails the workflow.
+        # For another branch the working directory is the clean one holding only
+        # its lockfile and its ignore list, so the one list of ignores cargo-audit
+        # can see is that branch's; the report is written back to the workspace
+        # by absolute path.
         run: |
+          out="$PWD"
           args=()
           if [ -n "$AUDITED_DIR" ]; then
+            cd "$AUDITED_DIR"
             args+=(--file "$AUDITED_DIR/Cargo.lock")
-            [ ! -f "$AUDITED_DIR/.cargo/audit.toml" ] || args+=(--config "$AUDITED_DIR/.cargo/audit.toml")
           fi
-          if ! cargo audit --json --deny warnings "${args[@]}" > audit.json 2>audit.stderr; then
-            cat audit.stderr >&2
+          if ! cargo audit --json --deny warnings "${args[@]}" > "$out/audit.json" 2> "$out/audit.stderr"; then
+            cat "$out/audit.stderr" >&2
             exit 1
           fi
 
@@ -179,6 +191,8 @@ jobs:
         # open-issue decision.
         run: |
           set -euo pipefail
+          out="$PWD"
+          run_dir="${AUDITED_DIR:-$PWD}"
           echo "$EXTRA_LOCKFILES" | while read -r lockfile; do
             [ -n "$lockfile" ] || continue
             source="${AUDITED_DIR:+$AUDITED_DIR/}$lockfile"
@@ -191,9 +205,9 @@ jobs:
             # becomes `audit-fuzz-Cargo.json`. Naming it after the file alone
             # gives every workspace the name `audit-Cargo.json`.
             name="$(printf '%s' "${lockfile%.lock}" | tr '/' '-')"
-            if ! cargo audit --json --deny warnings --file "$source" \
-                > "audit-${name}.json" 2>"audit-${name}.stderr"; then
-              cat "audit-${name}.stderr" >&2
+            if ! (cd "$run_dir" && cargo audit --json --deny warnings --file "$source" \
+                > "$out/audit-${name}.json" 2> "$out/audit-${name}.stderr"); then
+              cat "$out/audit-${name}.stderr" >&2
               exit 1
             fi
           done
