@@ -20,6 +20,8 @@ SUITES = {
     "line-limit": ("lines",),
     "sbom-and-licenses": ("supply",),
     "wiring": ("wiring",),
+    # No plan output licenses skipping it: it reads the run, not the change.
+    "deprecations": (),
 }
 # Jobs of ci.yml the gate does not wait for, each with the reason.
 OUTSIDE = {
@@ -85,7 +87,7 @@ class GateDecisions(unittest.TestCase):
         self.fails(failed, "the plan job did not succeed (result: failure)")
 
     def test_a_failed_plan_fails_when_the_suites_were_skipped_behind_it(self):
-        behind = needs(plan_={"result": "failure", "outputs": {}}, **dict.fromkeys(SUITES, "skipped"))
+        behind = needs(plan_={"result": "failure", "outputs": {}}, **{s: "skipped" for s in SUITES if SUITES[s]})
         self.fails(behind, "the plan job did not succeed")
 
     def test_a_cancelled_plan_fails(self):
@@ -96,15 +98,22 @@ class GateDecisions(unittest.TestCase):
             with self.subTest(suite=suite):
                 self.fails(needs(**{suite: "skipped"}), f"{suite} was skipped and the plan did not say it could be")
 
+    def test_the_deprecation_check_is_never_allowed_to_be_skipped(self):
+        everything = plan(**{dim: "false" for dims in SUITES.values() for dim in dims})
+        self.fails(needs(plan_=everything, deprecations="skipped"), "deprecations was skipped and the plan did not say it could be")
+
     def test_a_suite_skipped_because_the_plan_said_so_passes(self):
         for suite, dims in SUITES.items():
+            if not dims:
+                continue
             with self.subTest(suite=suite):
                 self.passes(needs(plan_=plan(**dict.fromkeys(dims, "false")), **{suite: "skipped"}))
 
     def test_a_plan_that_skips_everything_passes_only_with_every_suite_skipped(self):
         everything = plan(**{dim: "false" for dims in SUITES.values() for dim in dims})
-        self.passes(needs(plan_=everything, **dict.fromkeys(SUITES, "skipped")))
-        self.fails(needs(plan_=everything, rust="failure", **{s: "skipped" for s in SUITES if s != "rust"}), "rust did not succeed")
+        skipped = {s: "skipped" for s in SUITES if SUITES[s]}
+        self.passes(needs(plan_=everything, **skipped))
+        self.fails(needs(plan_=everything, **{**skipped, "rust": "failure"}), "rust did not succeed")
 
     def test_rust_may_be_skipped_only_when_the_plan_skips_all_four_kinds_of_work(self):
         for kept in SUITES["rust"]:
@@ -181,7 +190,7 @@ class GateWiring(unittest.TestCase):
 
     def test_every_suite_starts_even_when_the_plan_failed(self):
         for name, job in workflow()["jobs"].items():
-            if name in SUITES:
+            if name in SUITES and name != "deprecations":
                 if name in ORDERED:
                     self.assertEqual(job["needs"], ["plan", "line-limit"], name)
                     self.assertEqual(job["if"], ORDER_IF, name)

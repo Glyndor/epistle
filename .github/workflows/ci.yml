@@ -312,6 +312,75 @@ jobs:
           fi
           bash "$script"
 
+  # A warning that something this workflow uses is deprecated (a runtime an
+  # action runs on, a command, an image) is an annotation on the job that hit
+  # it, and nobody reads annotations. This job reads them: it lists the jobs of
+  # this run, fetches the annotations of each and fails when a warning or an
+  # error says "deprecated". Compilers and linters already fail on theirs
+  # (`-D warnings`). It waits for every suite so the annotations exist, runs on
+  # every event, and is a need of `CI gate`.
+  deprecations:
+    name: no deprecation notice
+    needs: [rust, debian, line-limit, sbom-and-licenses, wiring]
+    if: always()
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      checks: read
+    steps:
+      - name: Read the annotations of this run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          python3 -I - <<'PY'
+          import json
+          import os
+          import re
+          import subprocess
+          import sys
+          import time
+
+          repo, run_id = os.environ["REPO"], os.environ["RUN_ID"]
+          NOTICE = re.compile(r"deprecat", re.I)
+
+
+          def api(path):
+              for attempt in range(3):
+                  done = subprocess.run(["gh", "api", "--paginate", path], capture_output=True, text=True, check=False)
+                  if done.returncode == 0:
+                      # --paginate prints one JSON document per page, back to back
+                      pages, text, at = [], done.stdout, 0
+                      decoder = json.JSONDecoder()
+                      while at < len(text):
+                          if text[at].isspace():
+                              at += 1
+                              continue
+                          page, at = decoder.raw_decode(text, at)
+                          pages.append(page)
+                      return pages
+                  time.sleep(2 * (attempt + 1))
+              print(f"::error::could not read {path}: {done.stderr.strip()}")
+              sys.exit(1)
+
+
+          jobs = [job for page in api(f"repos/{repo}/actions/runs/{run_id}/jobs?per_page=100") for job in page["jobs"]]
+          found = []
+          for job in jobs:
+              for page in api(f"repos/{repo}/check-runs/{job['id']}/annotations?per_page=100"):
+                  for note in page:
+                      if note.get("annotation_level") in ("warning", "failure") and NOTICE.search(note.get("message") or ""):
+                          found.append((job["name"], note["message"].strip().splitlines()[0]))
+          for name, message in found:
+              print(f"::error::{name}: {message}")
+          if found:
+              sys.exit(1)
+          print(f"No deprecation notice in {len(jobs)} jobs.")
+          PY
+
   # The one check the ruleset requires from this workflow. It runs whatever
   # happened to the jobs it waits for, because a job that `needs` a failed job is
   # skipped and a skipped job reports success. It fails unless:
@@ -327,7 +396,7 @@ jobs:
   # commit`; the names of the suites above are not required.
   gate:
     name: CI gate
-    needs: [plan, rust, debian, line-limit, sbom-and-licenses, wiring]
+    needs: [plan, rust, debian, line-limit, sbom-and-licenses, wiring, deprecations]
     if: always()
     runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
     timeout-minutes: 5
@@ -348,6 +417,7 @@ jobs:
               "line-limit": ("lines",),
               "sbom-and-licenses": ("supply",),
               "wiring": ("wiring",),
+              "deprecations": (),
           }
           needs = json.loads(os.environ["NEEDS"])
           problems = []
@@ -373,7 +443,7 @@ jobs:
               if result == "success":
                   continue
               if result == "skipped":
-                  if plan.get("result") == "success" and all(outputs.get(d) == "false" for d in dims):
+                  if plan.get("result") == "success" and dims and all(outputs.get(d) == "false" for d in dims):
                       continue
                   problems.append(f"{name} was skipped and the plan did not say it could be")
               else:
