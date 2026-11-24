@@ -25,7 +25,7 @@ on:
         # debian:trixie as of 2026-07-17. Digest-pinned so a retag of the
         # trixie tag can't silently change the build environment; bump this
         # via a new .github release when a newer trixie snapshot is needed.
-        default: "debian:trixie@sha256:9c6e381421d0f48d1b8133e573f33c185ee16cbf505eda9c4a8a4791b25ea8a6"
+        default: "debian:trixie@sha256:3cda3ca472ce45507a5109c6a3907093e24d9ae67d55954c9a07a45665dafba2"
       arch:
         description: Architecture to verify/stage (empty matches any)
         type: string

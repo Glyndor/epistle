@@ -225,7 +225,7 @@ jobs:
     # trixie ships 1.85 and the dependency floor is 1.94 (set by sqlx 0.9's
     # `rust-version`), which edition 2024 alone does not tell you. Digest-pinned
     # so a retag cannot change the build environment.
-    container: docker.io/library/rust@sha256:e9d95b74296f7126a83ae3d041aeaba1ff4c478f13abc5cc034fcf7c131c3d4a # 1.100-slim-trixie
+    container: docker.io/library/rust@sha256:3b199fd6db7d709274df56565b8f4003f9e30d7bfcff9d53148c86053b7855e2 # 1.100-slim-trixie
     # This job runs the code of the dependencies (build scripts, debian/rules),
     # so it holds nothing but a read of the repository: no OIDC token, no
     # attestation, no secret. The attestation is made by `attest`, which only
