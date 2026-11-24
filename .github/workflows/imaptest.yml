@@ -94,7 +94,7 @@ jobs:
     runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
     timeout-minutes: 30
     env:
-      IMAPTEST_IMAGE: docker.io/dovecot/imaptest@sha256:db2b7de2f7bdd5d331fbdc12463828e3e35f1571c40999df47a0ff2359d399d7
+      IMAPTEST_IMAGE: docker.io/dovecot/imaptest@sha256:34e3a745a033e16faccf03e68309b97311cd2a42d0c377b5d983bd2b88dbf918
       CONTAINER: docker
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
