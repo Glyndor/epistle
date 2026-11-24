@@ -49,7 +49,8 @@ fn refused(env: &Env, args: &[&str], needle: &str) {
 fn two_accounts() -> Env {
 	// A forwarded copy needs SRS, or the command refuses before it looks at
 	// the address.
-	let env = env("srs_secret = \"0123456789abcdef0123456789abcdef\"\n");
+	// Any 32 characters will do.
+	let env = env(&format!("srs_secret = \"{}\"\n", "x".repeat(32)));
 	add_account(&env, "alice");
 	add_account(&env, "bob");
 	env
