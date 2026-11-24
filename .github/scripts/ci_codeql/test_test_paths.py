@@ -18,7 +18,7 @@ import unittest
 from pathlib import Path
 
 import ci_yaml
-from ci_codeql import check_paths, dep_info, globs
+from ci_codeql import check_paths, dep_info, globs, workflow_paths
 
 ROOT = Path(__file__).resolve().parents[3]
 CONFIG = ROOT / ".github/codeql/codeql-config.yml"
@@ -78,6 +78,8 @@ class Configuration(unittest.TestCase):
         judge = steps["The CodeQL configuration leaves out only files that only the tests read"]["run"]
         self.assertIn("ci_codeql/check_paths.py .github/codeql/codeql-config.yml", judge)
         self.assertLess(judge.index("--production"), judge.index("--tests"))
+        for workflow in ("e2e.yml", "upgrade.yml", "container.yml", "db.yml"):
+            self.assertIn(f".github/workflows/{workflow}", judge.split("--watch-all", 1)[1])
         # Nothing of this is in the lint job any more, which the later jobs wait for.
         self.assertNotIn("check_paths", str(reusable["lint"]))
         self.assertEqual(reusable["lint"]["timeout-minutes"], 15)
@@ -94,6 +96,47 @@ class TheGlobs(unittest.TestCase):
         self.assertFalse(globs.matches("src/*.rs", "src/a/b.rs"))
         self.assertTrue(globs.matches("tests/**", "tests/smtp/hostile.rs"))
         self.assertFalse(globs.matches("tests/**", "src/tests/hostile.rs"))
+
+
+class WorkflowPaths(unittest.TestCase):
+    """A `paths:` filter, read in order, with the last matching pattern deciding."""
+
+    def test_the_last_pattern_that_matches_decides_and_a_negation_can_be_brought_back(self):
+        f = ["src/**", "!src/**/tests/**", "src/a/tests/keep.rs"]
+        self.assertTrue(workflow_paths.matches(f, "src/a/b.rs"))
+        self.assertFalse(workflow_paths.matches(f, "src/a/tests/x.rs"))
+        self.assertTrue(workflow_paths.matches(f, "src/a/tests/keep.rs"))
+        self.assertFalse(workflow_paths.matches(f, "docs/a.md"))
+        self.assertFalse(workflow_paths.matches(["!src/**"], "src/a.rs"), "a filter of negations alone matches nothing")
+
+    def test_star_stops_at_a_slash_and_double_star_does_not(self):
+        self.assertTrue(workflow_paths.matches(["src/*.rs"], "src/a.rs"))
+        self.assertFalse(workflow_paths.matches(["src/*.rs"], "src/a/b.rs"))
+        self.assertTrue(workflow_paths.matches(["src/**/b.rs"], "src/b.rs"))
+        self.assertTrue(workflow_paths.matches(["src/**/b.rs"], "src/x/y/b.rs"))
+        self.assertTrue(workflow_paths.matches(["src/?.rs"], "src/a.rs"))
+        self.assertFalse(workflow_paths.matches(["src/?.rs"], "src/ab.rs"))
+
+    def test_a_workflow_that_misses_a_production_file_is_reported_per_event_and_one_that_sees_all_is_not(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workflow = Path(tmp) / "w.yml"
+            workflow.write_text("on:\n  push:\n    paths: ['src/**', '!src/skip/**']\n  pull_request:\n    paths: ['src/**']\njobs: {}\n")
+            files = {"src/a.rs", "src/skip/b.rs"}
+            self.assertEqual(workflow_paths.missed(workflow, files), {"push": ["src/skip/b.rs"], "pull_request": []})
+            found = check_paths.watch_problems([workflow], files | {"Cargo.toml"})
+            self.assertEqual(len(found), 1, found)
+            self.assertIn("does not run on a push that changes 1 production file(s) of src/, such as src/skip/b.rs", found[0])
+            nofilter = Path(tmp) / "n.yml"
+            nofilter.write_text("on:\n  push:\n    branches: [main]\njobs: {}\n")
+            with self.assertRaises(ValueError):
+                workflow_paths.missed(nofilter, files)
+
+    def test_the_workflows_that_watch_the_product_exist_and_have_a_filter_for_each_event_they_run_on(self):
+        for name in ("e2e.yml", "upgrade.yml", "container.yml", "db.yml"):
+            events = workflow_paths.filters(ROOT / ".github/workflows" / name)
+            self.assertTrue(events, name)
+            self.assertIn("pull_request", events, name)
+            self.assertIn("push", events, name)
 
 
 class DepInfoReading(unittest.TestCase):
@@ -151,7 +194,8 @@ class Judgment(unittest.TestCase):
     def test_a_file_that_is_not_rust_needs_no_proof_and_the_arguments_are_split_by_flag(self):
         files = ["tests/fixtures/key.pem", "tests/t.rs"]
         self.assertEqual(check_paths.problems(["tests/**"], set(), {"tests/t.rs"}, files), [])
-        self.assertEqual(check_paths.split(["--production", "a", "b", "--tests", "c"]), {"--production": ["a", "b"], "--tests": ["c"]})
+        self.assertEqual(check_paths.split(["--production", "a", "b", "--tests", "c"]), {"--production": ["a", "b"], "--tests": ["c"], "--watch-all": []})
+        self.assertEqual(check_paths.split(["--production", "a", "--tests", "c", "--watch-all", "w", "x"])["--watch-all"], ["w", "x"])
         for bad in (["a"], ["--production", "a"], ["--tests", "c"]):
             self.assertIsNone(check_paths.split(bad))
 
