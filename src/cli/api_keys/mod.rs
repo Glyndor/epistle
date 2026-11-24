@@ -64,6 +64,13 @@ pub(super) fn create(
 			"--scope is required (repeat to grant more than one: read, write, send, scim)",
 		);
 	}
+	// Checked before the class is bound or the store is touched, so a bad
+	// network leaves nothing behind.
+	if let Some(spec) = &ip_cidr
+		&& crate::cidr::Cidr::parse(spec).is_none()
+	{
+		return super::exit::refused(crate::cidr::Cidr::refusal(spec));
+	}
 	if let Some(name) = account {
 		match account_known(config, name) {
 			Ok(true) => {}

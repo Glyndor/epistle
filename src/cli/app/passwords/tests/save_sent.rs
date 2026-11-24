@@ -138,8 +138,8 @@ fn create_with_a_garbled_save_sent_value_is_refused() {
 			false,
 			&mut out,
 		),
-		ExitCode::FAILURE,
-		"a typo on --save-sent is refused without writing the credential"
+		ExitCode::from(2),
+		"a typo on --save-sent is a usage error, refused without writing the credential"
 	);
 	let store = AppPasswordStore::open(dir.path()).expect("open");
 	assert!(
