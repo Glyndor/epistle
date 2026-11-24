@@ -24,6 +24,8 @@ WORKFLOWS = {
     "reusable-rust-supply-chain.yml": {"supply"},
     "reusable-dependabot-freshness.yml": {"freshness"},
     "reusable-line-limit.yml": {"lines"},
+    # Read on every run by the check it defines; no suite of the plan consumes it.
+    "reusable-deprecation-notices.yml": set(),
 }
 TEST_FILE = re.compile(r"(?:^tests?(?:_[a-z0-9_]+)?$|_tests(?:_[a-z0-9_]+)?$|^test_support$)")
 

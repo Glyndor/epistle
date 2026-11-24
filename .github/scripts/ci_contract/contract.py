@@ -28,6 +28,7 @@ FILES = (
     ".github/workflows/main-guard.yml",
     ".github/workflows/reusable-ci-plan.yml",
     ".github/workflows/reusable-dco.yml",
+    ".github/workflows/reusable-deprecation-notices.yml",
     ".github/workflows/reusable-dependabot-freshness.yml",
     ".github/workflows/reusable-line-limit.yml",
     ".github/workflows/reusable-main-guard.yml",
