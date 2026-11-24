@@ -133,3 +133,9 @@ mod evidence_policy;
 
 #[path = "cli_json/operator/rotate_scope.rs"]
 mod rotate_scope;
+
+#[path = "cli_json/delivery/delivery_export_window.rs"]
+mod delivery_export_window;
+
+#[path = "cli_json/operator/move_subids_refusal.rs"]
+mod move_subids_refusal;
