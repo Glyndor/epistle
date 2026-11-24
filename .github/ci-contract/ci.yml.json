@@ -22,6 +22,10 @@
    }
   ]
  },
+ "concurrency": {
+  "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
+  "group": "${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}"
+ },
  "jobs": {
   "audit": {
    "if": "${{ !cancelled() }}",
@@ -32,8 +36,11 @@
    }
   },
   "debian": {
-   "if": "${{ !cancelled() && needs.plan.outputs.debian != 'false' }}",
-   "needs": "plan",
+   "if": "${{ !cancelled() && (github.event_name != 'pull_request' || needs.line-limit.result != 'failure') && needs.plan.outputs.debian != 'false' }}",
+   "needs": [
+    "plan",
+    "line-limit"
+   ],
    "uses": "./.github/workflows/reusable-rust-debian.yml",
    "with": {
     "apt-packages": "musl-tools fakeroot jq",
@@ -173,8 +180,11 @@
    "timeout-minutes": 15
   },
   "rust": {
-   "if": "${{ !cancelled() && (needs.plan.outputs.lint != 'false' || needs.plan.outputs.tests != 'false' || needs.plan.outputs.doc != 'false' || needs.plan.outputs.msrv != 'false') }}",
-   "needs": "plan",
+   "if": "${{ !cancelled() && (github.event_name != 'pull_request' || needs.line-limit.result != 'failure') && (needs.plan.outputs.lint != 'false' || needs.plan.outputs.tests != 'false' || needs.plan.outputs.doc != 'false' || needs.plan.outputs.msrv != 'false') }}",
+   "needs": [
+    "plan",
+    "line-limit"
+   ],
    "uses": "./.github/workflows/reusable-rust-ci.yml",
    "with": {
     "apt-packages": "fakeroot",
@@ -189,8 +199,11 @@
    }
   },
   "sbom-and-licenses": {
-   "if": "${{ !cancelled() && needs.plan.outputs.supply != 'false' }}",
-   "needs": "plan",
+   "if": "${{ !cancelled() && (github.event_name != 'pull_request' || needs.line-limit.result != 'failure') && needs.plan.outputs.supply != 'false' }}",
+   "needs": [
+    "plan",
+    "line-limit"
+   ],
    "uses": "./.github/workflows/reusable-rust-supply-chain.yml",
    "with": {
     "run-sbom": "${{ needs.plan.outputs.supply != 'false' }}"

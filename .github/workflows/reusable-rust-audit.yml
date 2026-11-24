@@ -31,9 +31,13 @@ on:
         type: string
         default: "1.100.0"
       cargo-audit-version:
-        description: Exact version of cargo-audit to install; bumped via .github releases
+        description: Exact version of cargo-audit to download from its release
         type: string
         default: "0.23.0"
+      cargo-audit-sha256:
+        description: SHA-256 of the x86_64 musl archive of that release; moves with the version
+        type: string
+        default: "4f01c74ed84b2dffd0b1d37012a62cdf2a92c96e25bdf8eec7fcc0d4d3eb7811"
       extra-lockfiles:
         description: >
           Newline-separated lockfiles to audit in addition to the one in
@@ -43,9 +47,13 @@ on:
         type: string
         default: ""
       cargo-deny-version:
-        description: Exact version of cargo-deny to install; bumped via .github releases
+        description: Exact version of cargo-deny to download from its release
         type: string
         default: "0.22.0"
+      cargo-deny-sha256:
+        description: SHA-256 of the x86_64 musl archive of that release; moves with the version
+        type: string
+        default: "98c56e6a408bfa5c3c60744b6015aaa6aa08f743fdeb88386d06fca035bb1786"
 
 permissions:
   contents: read
@@ -73,6 +81,7 @@ jobs:
         working-directory: ${{ inputs.working-directory }}
     env:
       TOOL_VERSION: ${{ inputs.cargo-audit-version }}
+      TOOL_SHA256: ${{ inputs.cargo-audit-sha256 }}
     steps:
       # The ref is checked against a fixed list and each branch is spelled
       # out literally. The scheduled run executes cargo on the tree it
@@ -138,16 +147,26 @@ jobs:
           rustup toolchain install "$TOOLCHAIN" --profile minimal
           rustup default "$TOOLCHAIN"
 
-      # No cache here: the scheduled run checks out develop and main, and a
-      # cache saved from a checked-out ref in a default-branch context is a
-      # poisoning path CodeQL flags. Installing the pinned tools takes a
-      # couple of minutes once a day.
+      # The tools that judge the code are downloaded on every run from the
+      # project's own release, pinned by version in the URL and by SHA-256 here,
+      # and checked before anything of the archive is read. They are not compiled
+      # on the runner, not restored from a cache (a cache can be written by a run
+      # nobody trusted), and not taken from a script of the tree the audit reads.
       - name: Install cargo-audit
-        # A bare "X.Y.Z" passed to `cargo install --version` already installs
-        # that exact release — caret ("^") matching is a Cargo.toml dependency
-        # rule, not a `cargo install` one. The leading "=" here is redundant,
-        # kept only to make the exact pin explicit at a glance.
-        run: command -v cargo-audit >/dev/null || cargo install cargo-audit --version "=$TOOL_VERSION" --locked
+        run: |
+          set -euo pipefail
+          [[ "$TOOL_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::the version is not a plain X.Y.Z"; exit 1; }
+          [[ "$TOOL_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::the digest is not a lowercase SHA-256"; exit 1; }
+          work="$(mktemp -d "$RUNNER_TEMP/cargo-audit.XXXXXX")"
+          curl --fail --silent --show-error --location --retry 5 --retry-delay 5 --retry-all-errors \
+            --proto '=https' --tlsv1.2 --output "$work/archive.tgz" \
+            "https://github.com/rustsec/rustsec/releases/download/cargo-audit%2Fv${TOOL_VERSION}/cargo-audit-x86_64-unknown-linux-musl-v${TOOL_VERSION}.tgz"
+          echo "${TOOL_SHA256}  $work/archive.tgz" | sha256sum --check --strict --status - \
+            || { echo "::error::the cargo-audit archive does not match the pinned SHA-256"; exit 1; }
+          tar -xzf "$work/archive.tgz" -C "$work"
+          install -d "$RUNNER_TEMP/tools/cargo-audit"
+          install -m 0755 "$work/cargo-audit-x86_64-unknown-linux-musl-v${TOOL_VERSION}/cargo-audit" "$RUNNER_TEMP/tools/cargo-audit/cargo-audit"
+          echo "$RUNNER_TEMP/tools/cargo-audit" >> "$GITHUB_PATH"
 
       - name: Run cargo audit
         env:
@@ -243,6 +262,7 @@ jobs:
         working-directory: ${{ inputs.working-directory }}
     env:
       TOOL_VERSION: ${{ inputs.cargo-deny-version }}
+      TOOL_SHA256: ${{ inputs.cargo-deny-sha256 }}
     steps:
       # Same fixed list as the audit job.
       - name: Reject an unknown ref
@@ -263,10 +283,22 @@ jobs:
           rustup default "$TOOLCHAIN"
 
 
+      # Downloaded and checked on every run, like cargo-audit above.
       - name: Install cargo-deny
-        # Same exact-pin reasoning as cargo-audit above: the bare version is
-        # already exact, not caret-matched.
-        run: command -v cargo-deny >/dev/null || cargo install cargo-deny --version "=$TOOL_VERSION" --locked
+        run: |
+          set -euo pipefail
+          [[ "$TOOL_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::the version is not a plain X.Y.Z"; exit 1; }
+          [[ "$TOOL_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::the digest is not a lowercase SHA-256"; exit 1; }
+          work="$(mktemp -d "$RUNNER_TEMP/cargo-deny.XXXXXX")"
+          curl --fail --silent --show-error --location --retry 5 --retry-delay 5 --retry-all-errors \
+            --proto '=https' --tlsv1.2 --output "$work/archive.tgz" \
+            "https://github.com/EmbarkStudios/cargo-deny/releases/download/${TOOL_VERSION}/cargo-deny-${TOOL_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+          echo "${TOOL_SHA256}  $work/archive.tgz" | sha256sum --check --strict --status - \
+            || { echo "::error::the cargo-deny archive does not match the pinned SHA-256"; exit 1; }
+          tar -xzf "$work/archive.tgz" -C "$work"
+          install -d "$RUNNER_TEMP/tools/cargo-deny"
+          install -m 0755 "$work/cargo-deny-${TOOL_VERSION}-x86_64-unknown-linux-musl/cargo-deny" "$RUNNER_TEMP/tools/cargo-deny/cargo-deny"
+          echo "$RUNNER_TEMP/tools/cargo-deny" >> "$GITHUB_PATH"
 
       - name: Run cargo deny
         run: cargo deny check

@@ -298,18 +298,19 @@ class WorkflowContractTests(unittest.TestCase):
         """No presence check: crossing two suites, a fixed `false`, or an extra input turns this red."""
         out = "needs.plan.outputs."
         skip = lambda dim: f"{out}{dim} != 'false'"  # noqa: E731
+        first = "(github.event_name != 'pull_request' || needs.line-limit.result != 'failure')"
         spec = {
             "rust": ("reusable-rust-ci.yml",
-                     "${{ !cancelled() && (" + " || ".join(skip(d) for d in ("lint", "tests", "doc", "msrv")) + ") }}",
+                     "${{ !cancelled() && " + first + " && (" + " || ".join(skip(d) for d in ("lint", "tests", "doc", "msrv")) + ") }}",
                      {"run-lint": "${{ " + skip("lint") + " }}", "run-tests": "${{ " + skip("tests") + " }}",
                       "run-msrv": "${{ " + skip("msrv") + " }}", "doc-warnings": "${{ " + skip("doc") + " }}",
                       "toolchain": "1.100.0", "msrv": "1.98", "apt-packages": "fakeroot", "coverage-threshold": 88}),
-            "debian": ("reusable-rust-debian.yml", "${{ !cancelled() && " + skip("debian") + " }}",
+            "debian": ("reusable-rust-debian.yml", "${{ !cancelled() && " + first + " && " + skip("debian") + " }}",
                        {"package-name": "epistle", "run-build": "${{ " + skip("debian") + " }}",
                         "run-tests": "${{ (github.event_name != 'pull_request' && github.event_name != 'merge_group') || github.base_ref == 'main' }}",
                         "rust-toolchain": "1.100.0", "rust-target": "x86_64-unknown-linux-musl",
                         "apt-packages": "musl-tools fakeroot jq"}),
-            "sbom-and-licenses": ("reusable-rust-supply-chain.yml", "${{ !cancelled() && " + skip("supply") + " }}",
+            "sbom-and-licenses": ("reusable-rust-supply-chain.yml", "${{ !cancelled() && " + first + " && " + skip("supply") + " }}",
                                   {"run-sbom": "${{ " + skip("supply") + " }}"}),
             "line-limit": ("reusable-line-limit.yml", "${{ !cancelled() }}", None),
             "audit": ("reusable-rust-audit.yml", "${{ !cancelled() }}", {"ref": "", "extra-lockfiles": "fuzz/Cargo.lock"}),
@@ -327,7 +328,7 @@ class WorkflowContractTests(unittest.TestCase):
                 else:
                     self.assertEqual(job["with"], inputs, job_id)
                 continue
-            self.assertEqual(job["needs"], "plan", job_id)
+            self.assertEqual(job["needs"], ["plan", "line-limit"], job_id)
             with_ = dict(job["with"])
             # Checked by their own tests: the long exclusion regex and the pinned image.
             with_.pop({"rust": "coverage-ignore-regex", "debian": "debian-image"}.get(job_id, ""), None)
@@ -346,8 +347,12 @@ class WorkflowContractTests(unittest.TestCase):
 
     def test_coverage_and_plain_suite_are_mutually_exclusive(self):
         jobs = workflow("reusable-rust-ci.yml")["jobs"]
-        self.assertEqual(jobs["test-suite"]["if"], "inputs.run-tests && inputs.coverage-threshold == 0")
-        self.assertEqual(jobs["coverage"]["if"], "inputs.run-tests && inputs.coverage-threshold > 0")
+        wait = "!cancelled() && (github.event_name != 'pull_request' || needs.lint.result != 'failure') && "
+        self.assertEqual(jobs["test-suite"]["if"], "${{ " + wait + "inputs.run-tests && inputs.coverage-threshold == 0 }}")
+        self.assertEqual(jobs["coverage"]["if"], "${{ " + wait + "inputs.run-tests && inputs.coverage-threshold > 0 }}")
+        self.assertEqual(jobs["test-extra"]["if"], "${{ " + wait + "inputs.run-tests && inputs.extra-test-os != '[]' }}")
+        for name in ("test-suite", "coverage", "test-extra"):
+            self.assertEqual(jobs[name]["needs"], "lint", name)
         self.assertIn("cargo test --locked --all-features --workspace", str(jobs["test-suite"]))
         self.assertIn("cargo llvm-cov --locked --workspace --all-features", str(jobs["coverage"]))
 

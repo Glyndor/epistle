@@ -98,7 +98,8 @@ jobs:
     # Measured 2026-10-30: the slowest of four green runs took 8 min.
     timeout-minutes: 20
     strategy:
-      fail-fast: false
+      # A pull request stops at the first failing leg; a push reports every leg.
+      fail-fast: ${{ github.event_name == 'pull_request' }}
       matrix:
         os: [ubuntu-22.04, ubuntu-24.04]
     env:

@@ -51,7 +51,9 @@ class Triggers(unittest.TestCase):
         matrix = workflow["jobs"]["audit"]["strategy"]["matrix"]["ref"]
         self.assertIn("github.event_name == 'push'", matrix)
         self.assertIn("'[\"\"]'", matrix)
-        self.assertIn("pull_request", workflow[True])
+        # The pull request is audited by the gate in ci.yml, on every change.
+        self.assertNotIn("pull_request", workflow[True])
+        self.assertNotIn("paths", str(workflow[True]))
 
     def test_a_push_never_opens_or_closes_an_issue(self):
         jobs = ci_yaml.load(ROOT / ".github/workflows/rust-audit.yml")["jobs"]

@@ -35,19 +35,6 @@ const PR_KEY: &str = "pull_request:";
 /// regression the 2026-09-28 incident was, just on a smaller scale.
 const REQUIRED_REFS: &[&str] = &["develop", "main"];
 
-/// Path entries the pull_request trigger must list. The workflow itself
-/// is in its own filter on purpose: a workflow whose path list omits
-/// itself does not run on the pull request that changes it, so a broken
-/// edit merges without ever having been executed. The reusable and the
-/// Python scripts the report job runs belong to the same family: a
-/// pull request that changes what the audit accepts has to run it.
-const REQUIRED_PATHS: &[&str] = &[
-	".github/workflows/rust-audit.yml",
-	".github/workflows/reusable-rust-audit.yml",
-	".github/scripts/rust_audit_combine.py",
-	".github/scripts/test_rust_audit_lookup.py",
-];
-
 /// Job ids the workflow must define. The `audit` job is the matrix entry
 /// that runs the reusable; `report` and `close` are the two siblings
 /// that turn findings into an issue. A rename of either side would
@@ -96,11 +83,15 @@ fn rust_audit_workflow_pins_daily_matrix_and_open_issue_path() {
          before the next scheduled run lands.",
 	);
 
+	// The audit of a pull request is a suite of the CI gate in ci.yml, which runs
+	// on every pull request and queue entry whatever changed. A second run here,
+	// behind a path filter, would audit the same commit twice and could be the
+	// one a required check pointed at.
 	assert!(
-		has_pr,
-		"rust-audit.yml has no `pull_request:` trigger.\n\
-         PR-time audits are how a bump that introduces a vulnerability \
-         is caught before it merges.",
+		!has_pr,
+		"rust-audit.yml has a `pull_request:` trigger.\n\
+         The audit of a pull request is a suite of the gate in ci.yml; the \
+         workflow here runs on schedule, on dispatch and on a push to develop.",
 	);
 
 	let matrix_section = extract_block(&text, "matrix:")
@@ -115,20 +106,11 @@ fn rust_audit_workflow_pins_daily_matrix_and_open_issue_path() {
 		);
 	}
 
-	let pr_paths_section = extract_block(&text, "paths:")
-		.unwrap_or_else(|| panic!("rust-audit.yml has no `paths:` block under `pull_request:`"));
-	for required_path in REQUIRED_PATHS {
-		assert!(
-			pr_paths_section.contains(required_path),
-			"rust-audit.yml `pull_request.paths` is missing `{required_path}`.\n\
-             The workflow must list itself in its own filter: a workflow \
-             whose path list omits itself does not run on the pull request \
-             that changes it, so a broken edit merges without ever \
-             having been executed. Other entries here (the reusable, \
-             the Python scripts) are part of the same contract: a pull \
-             request that changes what the audit accepts has to run it.",
-		);
-	}
+	assert!(
+		extract_block(&text, "paths:").is_none(),
+		"rust-audit.yml has a `paths:` filter. A new advisory appears without any \
+         file changing, so no run of the audit may depend on which files changed.",
+	);
 
 	for required_job in REQUIRED_JOBS {
 		assert!(

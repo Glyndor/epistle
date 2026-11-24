@@ -93,6 +93,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       targets: ${{ steps.pick.outputs.targets }}
+      groups: ${{ steps.pick.outputs.groups }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -116,17 +117,24 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: python3 .github/scripts/fuzz_targets.py
 
+  # One job builds the whole dependency graph once (the bulk of the time) and
+  # then runs its share of the targets one after the other: each next one only
+  # links. A job per target compiled the same graph thirty-five times and spent
+  # about ninety percent of its minutes on it.
   fuzz:
-    name: cargo fuzz
+    name: cargo fuzz (group ${{ matrix.group.id }})
     needs: plan
     if: needs.plan.outputs.targets != '[]'
     runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
-    # Measured 2026-10-30: the slowest of four green runs took 16 min.
-    timeout-minutes: 30
+    # A group builds once (about fifteen minutes) and runs seven targets of a
+    # minute each with a link between them.
+    timeout-minutes: 60
     strategy:
-      fail-fast: false
+      # A pull request stops at the first failing group; a push and the nightly
+      # run report every group.
+      fail-fast: ${{ github.event_name == 'pull_request' }}
       matrix:
-        target: ${{ fromJSON(needs.plan.outputs.targets) }}
+        group: ${{ fromJSON(needs.plan.outputs.groups) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -168,10 +176,25 @@ jobs:
       - name: Show the tree under test
         run: git log -1 --format='%H %s'
 
-      - name: Fuzz ${{ matrix.target }}
+      - name: Fuzz the targets of the group
         env:
-          FUZZ_TARGET: ${{ matrix.target }}
-        run: cargo fuzz run "$FUZZ_TARGET" -- -max_total_time=60 -timeout=10
+          TARGETS: ${{ matrix.group.targets }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -u
+          status=0
+          for target in $TARGETS; do
+            echo "::group::fuzz $target"
+            if ! cargo fuzz run "$target" -- -max_total_time=60 -timeout=10; then
+              echo "::error::the fuzz target $target failed"
+              status=1
+              # A pull request stops at the first failing target; a push and the
+              # nightly run report every target of the group.
+              [ "$EVENT_NAME" = pull_request ] && { echo "::endgroup::"; break; }
+            fi
+            echo "::endgroup::"
+          done
+          exit "$status"
 
       - if: >-
           ${{ !cancelled()
