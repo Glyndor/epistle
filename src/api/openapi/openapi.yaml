@@ -27,7 +27,7 @@ info:
     JMAP also accepts locally issued OAuth access tokens, confined to the
     signed `sub` account and explicit `read`, `write`, `send` scopes. These
     tokens never authenticate `/api/v1` or SCIM.
-    A key carries scopes (`read`, `write`, `send`, `scim`); a request the
+    A key carries scopes (`read`, `write`, `send`, `scim`, `alias`); a request the
     scopes do not cover is answered `403 forbidden` and does not count as a
     failed authentication; an unknown token is `401 unauthenticated`.
     `x-epistle-scope` on each operation names the
@@ -66,6 +66,8 @@ tags:
     description: Accounts, passwords, two-factor, mailboxes, masked addresses and the archive.
   - name: Domains
     description: Hosted-domain reads and atomic writes shared with `epistle domain`.
+  - name: Aliases
+    description: Address aliases, written through the same rules as `epistle alias`.
   - name: Queue
     description: The outbound queue, the suppression list and the delivery log.
   - name: Send
@@ -531,6 +533,172 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiError"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
+  /api/v1/aliases:
+    get:
+      operationId: listAliases
+      tags: [Aliases]
+      summary: List the address aliases
+      description: |-
+        Needs the `alias` scope, and only that: `read` does not open it. Ordered
+        by address and keyset-paged by it. A key confined to some domains sees
+        the aliases whose address and every member lie in them. `domain` and
+        `account` filter; a domain or an account outside the key's reach
+        answers exactly like one that does not exist.
+      x-epistle-scope: [alias]
+      parameters:
+        - name: domain
+          in: query
+          required: false
+          description: Only the aliases at this domain.
+          schema:
+            type: string
+        - name: account
+          in: query
+          required: false
+          description: Only the aliases that deliver to this account.
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          description: Page size. Above 100 it is cut to 100; 0 is refused.
+          schema:
+            type: integer
+            minimum: 1
+            default: 50
+        - name: cursor
+          in: query
+          required: false
+          description: The `next_cursor` of the previous page.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: A page of aliases.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AliasPage"
+        "400":
+          $ref: "#/components/responses/InvalidInput"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/AccountBoundKey"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
+    post:
+      operationId: createAlias
+      tags: [Aliases]
+      summary: Make an address alias
+      description: |-
+        Needs the `alias` scope. The rules are those of `epistle alias add`:
+        the address is in a hosted domain, no account, masked address or other
+        alias holds it, and the caps of the domain (`max_aliases_per_domain`,
+        `max_members_per_list`) apply. What differs is for the key: every
+        member is the address of an account that exists, never an outside
+        address, and a key confined to some domains needs the alias and every
+        member in them. Role addresses (`postmaster`, `abuse`, `hostmaster`,
+        `webmaster`, `security`, `noc`) are the operator's. A domain, a member
+        or an account that does not exist and one that is not the key's get
+        the same 400, so the answer teaches a confined key nothing about the
+        others. Give `members`, or `target_account` for one account. An alias
+        that exists is 409 with the text of the command. With `dry_run` the
+        request is checked as it would be written and nothing is. The write
+        is durable; the watcher applies it to the running server.
+      x-epistle-scope: [alias]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAlias"
+      responses:
+        "200":
+          description: "A dry run, so nothing was written: this is what would be made."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AliasCreated"
+        "201":
+          description: The alias was made.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AliasCreated"
+        "400":
+          $ref: "#/components/responses/InvalidInput"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/AccountBoundKey"
+        "409":
+          description: The alias exists, or a cap of the domain is reached (`limit_reached`); the message is the command's.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "413":
+          description: The body is over 16 KiB. `text/plain`.
+          content:
+            text/plain:
+              schema:
+                type: string
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "422":
+          $ref: "#/components/responses/UnprocessableBody"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
+  /api/v1/aliases/{alias}:
+    delete:
+      operationId: removeAlias
+      tags: [Aliases]
+      summary: Remove an address alias
+      description: |-
+        Needs the `alias` scope. An alias outside the domains of a confined key
+        answers exactly like one that does not exist: 404
+        `alias ADDRESS not found`. With `dry_run=true` nothing is removed.
+      x-epistle-scope: [alias]
+      parameters:
+        - name: alias
+          in: path
+          required: true
+          description: The alias address, percent-encoded; ASCII case is ignored.
+          schema:
+            type: string
+        - name: dry_run
+          in: query
+          required: false
+          description: Check the removal and change nothing.
+          schema:
+            type: boolean
+            default: false
+      responses:
+        "200":
+          description: The durable result; a changed state is applied by the file watcher.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AliasRemoved"
+        "400":
+          $ref: "#/components/responses/InvalidInput"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/AccountBoundKey"
+        "404":
+          $ref: "#/components/responses/NotFound"
         "429":
           $ref: "#/components/responses/AuthRateLimited"
         "500":
@@ -3017,6 +3185,87 @@ components:
           minimum: 1
           maximum: 4294967295
           description: Recipients per minute; null clears the domain override, omitted keeps it.
+    AliasRow:
+      type: object
+      required: [address, members, senders, hidden, list_id, enabled]
+      properties:
+        address:
+          type: string
+        members:
+          type: array
+          items:
+            type: string
+        senders:
+          type: array
+          items:
+            type: string
+          description: Addresses allowed to send as the alias; empty means any member.
+        hidden:
+          type: boolean
+          description: Whether the membership stays out of directory queries.
+        list_id:
+          type: [string, "null"]
+        enabled:
+          type: boolean
+          description: false when `epistle alias disable` switched it off.
+    AliasPage:
+      type: object
+      required: [aliases]
+      properties:
+        aliases:
+          type: array
+          items:
+            $ref: "#/components/schemas/AliasRow"
+        next_cursor:
+          type: string
+          description: Present when more aliases remain; absent on the last page.
+    CreateAlias:
+      type: object
+      additionalProperties: false
+      required: [alias]
+      properties:
+        alias:
+          type: string
+          maxLength: 320
+        members:
+          type: array
+          maxItems: 100
+          items:
+            type: string
+            maxLength: 320
+          description: Addresses of accounts of this server. Not with `target_account`.
+        target_account:
+          type: string
+          description: An account the alias is for; its address in the alias's domain is the member. Not with `members`.
+        dry_run:
+          type: boolean
+          default: false
+    AliasCreated:
+      type: object
+      required: [alias, changed, dry_run, reload]
+      properties:
+        alias:
+          $ref: "#/components/schemas/AliasRow"
+        changed:
+          type: boolean
+        dry_run:
+          type: boolean
+        reload:
+          type: string
+          enum: [watcher, none]
+    AliasRemoved:
+      type: object
+      required: [alias, changed, dry_run, reload]
+      properties:
+        alias:
+          type: string
+        changed:
+          type: boolean
+        dry_run:
+          type: boolean
+        reload:
+          type: string
+          enum: [watcher, none]
     AddDomainAlias:
       type: object
       additionalProperties: false

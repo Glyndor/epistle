@@ -2626,7 +2626,7 @@ Addresses and domains here are used in lowercase (`config-check` names any writt
 | `save_sent` | Dynamic accounts only (`epistle account save-sent`); a `[[accounts]]` block in the file does not take it and the file is refused with it. Whether the server saves a copy of every message the account submits into its `Sent` folder. Absent or unset means "on" (the default); `true` enables the save explicitly, `false` opts the account out. Per-request overrides (`POST /api/v1/send`'s `save_sent` field, JMAP `EmailSubmission/saveSent`) and per-credential overrides (an app password's `save_sent`) win over this setting. |
 
 ### `[[alias]]`
-A multi-target alias: one address that delivers to several local accounts.
+A multi-target alias: one address that delivers to several local accounts. These tables are the seed of `<data_dir>/address-aliases.toml`: the file is made from them at the first write by `epistle alias` or `POST /api/v1/aliases`, or at the first start of `serve`, and replaces them from then on. A later edit here is reported when the configuration is loaded and is not applied.
 
 | Key | Meaning |
 |---|---|

@@ -31,7 +31,7 @@ pub(super) enum Domain {
 pub(super) struct Rule {
 	/// The full path pattern as the router registers it.
 	pub(super) pattern: &'static str,
-	/// The key scope the route needs: `read`, `write`, `send`, `scim` or `none`.
+	/// The key scope the route needs: `read`, `write`, `send`, `scim`, `alias` or `none`.
 	pub(super) scope: &'static str,
 	pub(super) domain: Domain,
 	/// The test that proves the rule. `-` only for `Open` routes.
@@ -165,6 +165,18 @@ pub(super) const RULES: &[Rule] = &[
 		"write",
 		Domain::HostedParam,
 		"domain_aliases_require_both_names_in_scope",
+	),
+	rule(
+		"/api/v1/aliases",
+		"alias",
+		Domain::Filtered,
+		"a_listing_shows_a_key_its_own_domains_and_the_configured_token_everything",
+	),
+	rule(
+		"/api/v1/aliases/{alias}",
+		"alias",
+		Domain::Filtered,
+		"a_remove_of_another_tenants_alias_is_as_absent_as_one_that_does_not_exist",
 	),
 	rule(
 		"/api/v1/accounts",

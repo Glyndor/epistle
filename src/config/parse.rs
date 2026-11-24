@@ -47,8 +47,12 @@ impl Config {
 			config
 				.overlay_domains_file()
 				.map_err(ConfigError::Invalid)?;
+			config
+				.overlay_aliases_file()
+				.map_err(ConfigError::Invalid)?;
 		} else {
 			config.domain_seed = crate::domain::state::DomainSeed::capture(&config);
+			config.alias_seed = Some(config.alias.clone());
 		}
 		Ok(config)
 	}

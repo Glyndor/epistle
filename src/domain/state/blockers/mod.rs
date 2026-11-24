@@ -23,8 +23,10 @@ pub fn removal_blockers(config: &Config, domain: &str) -> Result<(), String> {
 			}
 		}
 	}
-	// Aliases (their address, members and senders).
-	for alias in &config.alias {
+	// Aliases (their address, members and senders), as the alias state file
+	// holds them now: a write that was made after this configuration was
+	// loaded is a reason too.
+	for alias in &crate::aliases::current(config) {
 		if address_domain_matches(&alias.address, domain) {
 			offenders.push(format!("alias {} uses the domain", alias.address));
 		}

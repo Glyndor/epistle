@@ -12,6 +12,7 @@
 
 pub mod acme;
 pub mod alerts;
+pub mod aliases;
 pub mod antispam;
 pub mod api;
 pub mod arc;

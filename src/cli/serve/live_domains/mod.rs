@@ -24,8 +24,17 @@ pub(super) fn start(config: &Config) -> Arc<LiveConfig> {
 		// creates the file.
 		Err(error) => tracing::warn!(%error, "cannot write the domain state file"),
 	}
+	match crate::aliases::edit::seed(config) {
+		Ok(true) => tracing::info!(
+			file = %crate::aliases::path(&config.data_dir).display(),
+			"wrote the aliases of the configuration file to the alias state file"
+		),
+		Ok(false) => {}
+		Err(error) => tracing::warn!(%error, "cannot write the alias state file"),
+	}
 	let live = LiveConfig::new(config.clone());
 	live.track::<DomainsFile>();
+	live.track::<crate::aliases::AliasesFile>();
 	live
 }
 
@@ -49,6 +58,7 @@ pub(super) fn follow(live: &LiveConfig, followers: Followers) {
 	} = followers;
 	live.on_change(move |config| {
 		account_store.reload_domains(HostedDomains::of(config));
+		account_store.reload_aliases(config.alias.clone());
 	});
 	live.on_change(move |config| {
 		let keys = config

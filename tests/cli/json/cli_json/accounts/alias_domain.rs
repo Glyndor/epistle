@@ -11,11 +11,7 @@ fn run(config: &str, resource: &str, args: &[&str]) -> (i32, Value) {
 	json(&epistle(&full, b""))
 }
 
-fn restart_needed(action: &str, key: &str, value: &str) -> Value {
-	json!({ "result": "saved", "action": action, key: value, "reload": "restart-needed" })
-}
-
-/// A domain change goes to the domain state file, which a running server
+/// A domain or alias change goes to its state file, which a running server
 /// reloads; with none running there is nothing to wait for.
 fn no_server(action: &str, key: &str, value: &str) -> Value {
 	json!({ "result": "saved", "action": action, key: value, "reload": "no-server" })
@@ -30,23 +26,23 @@ fn alias_lifecycle() {
 	let cases = [
 		(
 			vec!["add", team, "alice@example.org"],
-			restart_needed("add", "alias", team),
+			no_server("add", "alias", team),
 		),
 		(
 			vec!["member", "add", team, "bob@example.org"],
-			restart_needed("member add", "alias", team),
+			no_server("member add", "alias", team),
 		),
 		(
 			vec!["member", "remove", team, "bob@example.org"],
-			restart_needed("member remove", "alias", team),
+			no_server("member remove", "alias", team),
 		),
 		(
 			vec!["sender", "add", team, "bob@example.org"],
-			restart_needed("sender add", "alias", team),
+			no_server("sender add", "alias", team),
 		),
 		(
 			vec!["sender", "remove", team, "bob@example.org"],
-			restart_needed("sender remove", "alias", team),
+			no_server("sender remove", "alias", team),
 		),
 		(
 			vec!["disable", team],
@@ -62,7 +58,7 @@ fn alias_lifecycle() {
 		),
 		(
 			vec!["remove", team, "--yes"],
-			restart_needed("remove", "alias", team),
+			no_server("remove", "alias", team),
 		),
 	];
 	for (args, expected) in cases {

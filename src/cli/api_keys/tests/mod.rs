@@ -1,5 +1,6 @@
 pub use super::*;
 
+mod alias_scope;
 mod arguments;
 mod base;
 mod caps;

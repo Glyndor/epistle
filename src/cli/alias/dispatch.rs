@@ -1,21 +1,18 @@
 //! `epistle alias`: the dispatch that turns an [`AliasCli`] into an
-//! [`Outcome`]. Split out of `src/cli/alias/mod.rs` only to keep the umbrella under
-//! the per-file code-line budget; the dispatch sees every helper the
-//! umbrella exposes (`find_alias`, `set_enabled`, the validation and
-//! mutators) and the `Outcome` type that carries its decisions back.
+//! [`Outcome`]. Split out of `src/cli/alias/mod.rs` only to keep the umbrella
+//! under the per-file code-line budget. Every change to the aliases goes
+//! through [`crate::aliases::edit`], the layer the `/api/v1/aliases` routes use.
 
 use std::path::Path;
 use std::process::ExitCode;
 
+use crate::aliases::{AliasError, Change, edit};
 use crate::config::Config;
-use crate::util::address::normalize;
 
 use super::helpers::find_alias;
-use super::writers::{commit_reporting, set_enabled_reporting};
-use super::{
-	AliasCli, MemberSubcommand, SenderSubcommand, add_alias, list, member_edit, open, remove_alias,
-	sender_edit, show,
-};
+use super::state::{Mode, commit_state};
+use super::writers::set_enabled_reporting;
+use super::{AliasCli, MemberSubcommand, SenderSubcommand, list, show};
 use crate::cli::prompt;
 
 /// The discriminated result of [`execute`]. Returning a structured
@@ -39,22 +36,36 @@ impl From<ExitCode> for Outcome {
 	}
 }
 
-impl From<&str> for Outcome {
-	fn from(value: &str) -> Self {
-		Outcome::Error(value.to_string())
-	}
-}
-
-impl From<String> for Outcome {
-	fn from(value: String) -> Self {
-		Outcome::Error(value)
-	}
-}
-
 /// A refusal the dispatch can return directly, so the call site keeps
 /// the message and the exit-code mapping in one place.
 fn refused(message: impl Into<String>) -> Outcome {
 	Outcome::Refusal(message.into())
+}
+
+/// How a refused change maps to the command's exit codes: an unknown alias
+/// is a usage error (2), a cap of the server is exit code 3, and everything
+/// else is a failure (1).
+fn from_edit(error: AliasError) -> Outcome {
+	match error {
+		AliasError::NotFound(message) => Outcome::Refusal(message),
+		AliasError::Capped(reached) => Outcome::Code(crate::cli::exit::policy(reached.to_string())),
+		other => Outcome::Error(other.to_string()),
+	}
+}
+
+/// Commit `change` and report it.
+fn change(
+	config: &Config,
+	change: Change,
+	verb: &str,
+	mode: Mode,
+	out: &mut impl std::io::Write,
+	err: &mut impl std::io::Write,
+) -> Outcome {
+	match commit_state(config, &change, verb, mode, out, err) {
+		Ok(code) => Outcome::Code(code),
+		Err(error) => from_edit(error),
+	}
 }
 
 /// Run the chosen alias action and produce an [`Outcome`] the umbrella's
@@ -66,6 +77,7 @@ pub(super) fn execute(path: &Path, action: AliasCli, dry_run: bool, json: bool) 
 		Ok(config) => config,
 		Err(error) => return Outcome::Error(error.to_string()),
 	};
+	let mode = Mode { dry_run, json };
 	match action {
 		AliasCli::List { json: leaf } => match list(&config, leaf || json, &mut out) {
 			Ok(()) => Outcome::Code(ExitCode::SUCCESS),
@@ -84,188 +96,99 @@ pub(super) fn execute(path: &Path, action: AliasCli, dry_run: bool, json: bool) 
 			}
 		}
 		AliasCli::Add(args) => {
-			let mut document = match open(path) {
-				Ok(document) => document,
-				Err(error) => return Outcome::Error(error),
-			};
-			if let Err(error) = super::caps::check_add(&document, &args) {
-				return Outcome::Code(crate::cli::exit::policy(error));
-			}
-			if let Err(error) = add_alias(&config, &mut document, &args) {
-				return Outcome::Error(error);
-			}
 			if let Some(warning) = crate::cli::disabled_domain::warning(&config, &args.address) {
 				super::style::warn_to(&mut err, warning);
 			}
-			match commit_reporting(
-				document,
-				&normalize(&args.address),
-				"added",
-				(dry_run, json),
-				&mut out,
-				&mut err,
-			) {
-				Ok(code) => Outcome::Code(code),
-				Err(error) => match error {
-					crate::cli::resource::ResourceError::Refusal(message) => {
-						Outcome::Refusal(message)
-					}
-					crate::cli::resource::ResourceError::Failure(message) => {
-						Outcome::Error(message)
-					}
-				},
-			}
+			let new = crate::aliases::edit::NewAlias {
+				address: args.address,
+				members: args.members,
+				senders: args.senders,
+				list_id: args.list_id,
+				hidden: !args.visible,
+			};
+			change(&config, Change::Add(new), "added", mode, &mut out, &mut err)
 		}
 		AliasCli::Remove { address, yes } => {
 			if find_alias(&config, &address).is_none() {
 				return refused(format!("alias {address} not found"));
 			}
-			let owned_address = address.clone();
-			let mut document = match open(path) {
-				Ok(document) => document,
-				Err(error) => return Outcome::Error(error),
-			};
-			if let Err(error) = remove_alias(&config, &mut document, &address) {
-				return Outcome::Error(error);
-			}
 			// Asked after the edit is validated; a dry run destroys nothing.
+			let removal = Change::Remove {
+				address: address.clone(),
+			};
+			if let Err(error) = edit::preview(&config, &removal, &crate::aliases::Origin::Operator)
+			{
+				return from_edit(error);
+			}
 			let question = format!("Remove alias \"{address}\"? [y/N]");
 			if !dry_run
 				&& let Err(code) = prompt::confirm_destructive("alias remove", &question, yes)
 			{
 				return code.into();
 			}
-			match commit_reporting(
-				document,
-				&owned_address,
-				"removed",
-				(dry_run, json),
-				&mut out,
-				&mut err,
-			) {
-				Ok(code) => Outcome::Code(code),
-				Err(error) => match error {
-					crate::cli::resource::ResourceError::Refusal(message) => {
-						Outcome::Refusal(message)
-					}
-					crate::cli::resource::ResourceError::Failure(message) => {
-						Outcome::Error(message)
-					}
-				},
-			}
+			change(&config, removal, "removed", mode, &mut out, &mut err)
 		}
 		AliasCli::Member(args) => {
-			let address = match &args.action {
-				MemberSubcommand::Add { address, .. }
-				| MemberSubcommand::Remove { address, .. } => address.clone(),
+			let (address, edit, verb) = match args.action {
+				MemberSubcommand::Add { address, member } => (
+					address.clone(),
+					Change::MemberAdd { address, member },
+					"member added",
+				),
+				MemberSubcommand::Remove { address, member } => (
+					address.clone(),
+					Change::MemberRemove { address, member },
+					"member removed",
+				),
 			};
 			if find_alias(&config, &address).is_none() {
 				return refused(format!("alias {address} not found"));
 			}
-			let mut document = match open(path) {
-				Ok(document) => document,
-				Err(error) => return Outcome::Error(error),
-			};
-			let verb = match &args.action {
-				MemberSubcommand::Add { .. } => "member added",
-				MemberSubcommand::Remove { .. } => "member removed",
-			};
-			if let MemberSubcommand::Add { .. } = &args.action
-				&& let Err(error) = super::caps::check_member_add(&document, &address)
-			{
-				return Outcome::Code(crate::cli::exit::policy(error));
-			}
-			if let Err(error) = member_edit(&config, &mut document, args) {
-				return Outcome::Error(error);
-			}
-			match commit_reporting(
-				document,
-				&address,
-				verb,
-				(dry_run, json),
-				&mut out,
-				&mut err,
-			) {
-				Ok(code) => Outcome::Code(code),
-				Err(error) => match error {
-					crate::cli::resource::ResourceError::Refusal(message) => {
-						Outcome::Refusal(message)
-					}
-					crate::cli::resource::ResourceError::Failure(message) => {
-						Outcome::Error(message)
-					}
-				},
-			}
+			change(&config, edit, verb, mode, &mut out, &mut err)
 		}
 		AliasCli::Sender(args) => {
-			let address = match &args.action {
-				SenderSubcommand::Add { address, .. }
-				| SenderSubcommand::Remove { address, .. } => address.clone(),
+			let (address, edit, verb) = match args.action {
+				SenderSubcommand::Add { address, sender } => (
+					address.clone(),
+					Change::SenderAdd { address, sender },
+					"sender added",
+				),
+				SenderSubcommand::Remove { address, sender } => (
+					address.clone(),
+					Change::SenderRemove { address, sender },
+					"sender removed",
+				),
 			};
 			if find_alias(&config, &address).is_none() {
 				return refused(format!("alias {address} not found"));
 			}
-			let mut document = match open(path) {
-				Ok(document) => document,
-				Err(error) => return Outcome::Error(error),
-			};
-			let verb = match &args.action {
-				SenderSubcommand::Add { .. } => "sender added",
-				SenderSubcommand::Remove { .. } => "sender removed",
-			};
-			if let Err(error) = sender_edit(&config, &mut document, args) {
-				return Outcome::Error(error);
-			}
-			match commit_reporting(
-				document,
-				&address,
-				verb,
-				(dry_run, json),
-				&mut out,
-				&mut err,
-			) {
-				Ok(code) => Outcome::Code(code),
-				Err(error) => match error {
-					crate::cli::resource::ResourceError::Refusal(message) => {
-						Outcome::Refusal(message)
-					}
-					crate::cli::resource::ResourceError::Failure(message) => {
-						Outcome::Error(message)
-					}
-				},
-			}
+			change(&config, edit, verb, mode, &mut out, &mut err)
 		}
 		AliasCli::Enable { address } => {
-			if find_alias(&config, &address).is_none() {
-				return refused(format!("alias {address} not found"));
-			}
-			match set_enabled_reporting(&config, &address, true, json, &mut out, &mut err) {
-				Ok(code) => Outcome::Code(code),
-				Err(error) => match error {
-					crate::cli::resource::ResourceError::Refusal(message) => {
-						Outcome::Refusal(message)
-					}
-					crate::cli::resource::ResourceError::Failure(message) => {
-						Outcome::Error(message)
-					}
-				},
-			}
+			set_enabled(&config, &address, true, json, &mut out, &mut err)
 		}
 		AliasCli::Disable { address } => {
-			if find_alias(&config, &address).is_none() {
-				return refused(format!("alias {address} not found"));
-			}
-			match set_enabled_reporting(&config, &address, false, json, &mut out, &mut err) {
-				Ok(code) => Outcome::Code(code),
-				Err(error) => match error {
-					crate::cli::resource::ResourceError::Refusal(message) => {
-						Outcome::Refusal(message)
-					}
-					crate::cli::resource::ResourceError::Failure(message) => {
-						Outcome::Error(message)
-					}
-				},
-			}
+			set_enabled(&config, &address, false, json, &mut out, &mut err)
 		}
+	}
+}
+
+fn set_enabled(
+	config: &Config,
+	address: &str,
+	enabled: bool,
+	json: bool,
+	out: &mut impl std::io::Write,
+	err: &mut impl std::io::Write,
+) -> Outcome {
+	if find_alias(config, address).is_none() {
+		return refused(format!("alias {address} not found"));
+	}
+	match set_enabled_reporting(config, address, enabled, json, out, err) {
+		Ok(code) => Outcome::Code(code),
+		Err(error) => match error {
+			crate::cli::resource::ResourceError::Refusal(message) => Outcome::Refusal(message),
+			crate::cli::resource::ResourceError::Failure(message) => Outcome::Error(message),
+		},
 	}
 }

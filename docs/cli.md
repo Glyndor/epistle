@@ -1132,7 +1132,7 @@ writes `address`, `members`, `senders`, `hidden`, `list_id` and
 `enabled`. When `senders` is empty, `show` prints `(any member)` instead
 of an empty string so the operator is not misled.
 
-`add` writes one `[[alias]]` row. The address must not already be used
+`add` writes one alias. The address must not already be used
 by another alias, by an account (static `[accounts]` or `<data_dir>/accounts.toml`),
 or by a masked address (`<data_dir>/masked.json`). The address must also
 live in a configured domain. Members and senders must be valid email
@@ -1146,11 +1146,16 @@ refuses to leave an alias with no members (use `alias remove` for that).
 the 2 s file watcher, so the change takes effect without a restart and
 without going through the config engine.
 
-Edits to `[alias]` go through the same config-edit engine as `service`
-and `limits` (validated, atomic, comment-preserving, restart-on-change
-when compose exists). `enable`/`disable` do not touch `mail.toml` and
-do not request a restart. `--dry-run` on the config edits prints the
-validated unified diff without writing.
+Aliases are kept in `<data_dir>/address-aliases.toml`, written with the same
+rules and the same lock as `POST /api/v1/aliases`, and the running server
+reloads the file within seconds. The `[[alias]]` tables of the configuration
+file are the seed: they are copied into the file at the first write or the
+first start of `serve`, and edits to them afterwards are reported and not
+applied. Through the command the members may be addresses the directory
+cannot route to; the API takes only accounts of this server.
+
+`enable` and `disable` write `<data_dir>/aliases.json` and do not touch the
+alias file. `--dry-run` prints the diff of the alias file without writing.
 
 ## Antispam (`epistle antispam`)
 

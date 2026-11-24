@@ -103,8 +103,10 @@ pub struct AccountStore {
 	/// domain state file is reloaded ([`AccountStore::reload_domains`]).
 	hosted: RwLock<hosted::HostedDomains>,
 	static_accounts: Vec<Account>,
-	/// Multi-target aliases from the static configuration.
-	aliases: Vec<crate::config::Alias>,
+	/// Multi-target aliases: the configuration file's, or the alias state
+	/// file's once it exists. Replaced when that file is reloaded
+	/// ([`AccountStore::reload_aliases`]).
+	aliases: RwLock<Vec<crate::config::Alias>>,
 	/// App passwords (secondary mail credentials) keyed by account; the
 	/// in-memory mirror of `app_passwords.toml`. Mutators keep disk and
 	/// memory in sync, so a removal takes effect on the next rebuild
@@ -340,7 +342,8 @@ impl AccountStore {
 		let save_sent = build::save_sent(&dynamic);
 		let forwards = build::forwards(&self.static_accounts, &dynamic);
 		let disabled_lock = self.aliases_disabled.read().expect("aliases lock");
-		let aliases = self.aliases.iter().map(|alias| {
+		let held = self.aliases.read().expect("aliases lock");
+		let aliases = held.iter().map(|alias| {
 			(
 				alias.address.clone(),
 				crate::smtp::directory::AliasSpec {

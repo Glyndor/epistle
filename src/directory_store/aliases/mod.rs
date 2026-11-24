@@ -126,6 +126,20 @@ impl AliasStore {
 mod tests;
 
 impl AccountStore {
+	/// Replace the multi-target aliases with `aliases` and rebuild the
+	/// directory, so the next recipient or sender check sees them. Called
+	/// when the alias state file changes; nothing is written.
+	pub fn reload_aliases(&self, aliases: Vec<crate::config::Alias>) {
+		{
+			let mut current = self.aliases.write().expect("aliases lock");
+			if *current == aliases {
+				return;
+			}
+			*current = aliases;
+		}
+		self.handle.replace(self.build_directory());
+	}
+
 	/// Toggle the disabled flag on the multi-target alias at `address`. A
 	/// disabled alias is absent from the directory's `aliases` map, so it
 	/// falls through to the next step of `Directory::resolve` and rejects

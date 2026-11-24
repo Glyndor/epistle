@@ -252,6 +252,7 @@ fn a_hand_written_mixed_case_alias_is_edited_and_removed_by_any_spelling() {
 		"\n[[alias]]\naddress = \"Team@Example.ORG\"\nmembers = [\"alice@example.org\"]\n",
 	);
 	std::fs::write(&config, file).expect("write");
+	let state = dir.path().join("data").join("address-aliases.toml");
 	let member = epistle(
 		&[
 			"alias",
@@ -265,8 +266,13 @@ fn a_hand_written_mixed_case_alias_is_edited_and_removed_by_any_spelling() {
 		b"",
 	);
 	assert!(member.status.success(), "{}", stderr(&member));
-	let after = std::fs::read_to_string(&config).expect("config");
-	assert_eq!(after.matches("[[alias]]").count(), 1, "{after}");
+	let after = std::fs::read_to_string(&state).expect("alias state file");
+	assert_eq!(
+		after.lines().filter(|line| *line == "[[alias]]").count(),
+		1,
+		"{after}"
+	);
+	assert!(after.contains("bob@example.org"), "{after}");
 	let removed = epistle(
 		&[
 			"alias",
@@ -279,8 +285,8 @@ fn a_hand_written_mixed_case_alias_is_edited_and_removed_by_any_spelling() {
 		b"",
 	);
 	assert!(removed.status.success(), "{}", stderr(&removed));
-	let after = std::fs::read_to_string(&config).expect("config");
-	assert!(!after.contains("[[alias]]"), "{after}");
+	let after = std::fs::read_to_string(&state).expect("alias state file");
+	assert!(!after.lines().any(|line| line == "[[alias]]"), "{after}");
 }
 
 #[test]

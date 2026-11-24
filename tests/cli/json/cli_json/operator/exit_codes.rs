@@ -81,7 +81,7 @@ fn rules_the_server_enforces_are_refused_by_policy() {
 				"--account",
 				"bob",
 			],
-			"error: account-bound API keys cannot hold the scim scope (scim is administrative)\n",
+			"error: account-bound API keys cannot hold the scim or alias scope (both are administrative)\n",
 		),
 		(
 			vec![

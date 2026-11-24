@@ -61,7 +61,7 @@ pub(super) fn create(
 	}
 	if scopes.is_empty() {
 		return super::exit::refused(
-			"--scope is required (repeat to grant more than one: read, write, send, scim)",
+			"--scope is required (repeat to grant more than one: read, write, send, scim, alias)",
 		);
 	}
 	// Checked before the class is bound or the store is touched, so a bad
@@ -79,9 +79,12 @@ pub(super) fn create(
 			}
 			Err(code) => return code,
 		}
-		if scopes.iter().any(|scope| scope == "scim") {
+		if scopes
+			.iter()
+			.any(|scope| scope == "scim" || scope == "alias")
+		{
 			return super::exit::policy(
-				"account-bound API keys cannot hold the scim scope (scim is administrative)",
+				"account-bound API keys cannot hold the scim or alias scope (both are administrative)",
 			);
 		}
 	}
@@ -532,7 +535,7 @@ pub(super) fn parse_scope(value: &str) -> Result<String, String> {
 	match value.parse::<Scope>() {
 		Ok(_) => Ok(value.to_string()),
 		Err(_) => Err(format!(
-			"unknown scope \"{value}\" (expected read, write, send or scim)"
+			"unknown scope \"{value}\" (expected read, write, send, scim or alias)"
 		)),
 	}
 }

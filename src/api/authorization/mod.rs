@@ -71,6 +71,10 @@ pub struct Principal {
 	/// by design.
 	credential: Option<Credential>,
 	auto_submitted: bool,
+	/// The label of the key, when the principal came from one: what an audit
+	/// line names so the key that made a change can be told from the others.
+	/// Never the bearer.
+	label: Option<String>,
 }
 
 impl std::fmt::Debug for Principal {
@@ -99,6 +103,7 @@ impl Principal {
 			domains: None,
 			credential: Some(credential),
 			auto_submitted: false,
+			label: None,
 		}
 	}
 	/// The reach of the configured static token: every scope, every account,
@@ -110,6 +115,7 @@ impl Principal {
 			domains: None,
 			credential: None,
 			auto_submitted: false,
+			label: None,
 		}
 	}
 
@@ -122,6 +128,7 @@ impl Principal {
 			domains: Some(Vec::new()),
 			credential,
 			auto_submitted: false,
+			label: None,
 		}
 	}
 
@@ -161,6 +168,7 @@ impl Principal {
 			domains,
 			credential,
 			auto_submitted: key.auto_submitted,
+			label: Some(key.label.clone()),
 		}
 	}
 
@@ -196,7 +204,13 @@ impl Principal {
 		// authenticates the caller is the same key whether the route wants
 		// `read`, `write`, `send` or `scim`. The scopes it holds ride on the
 		// principal, and the route that needs one asks for it.
-		const EVERY_SCOPE: &[Scope] = &[Scope::Read, Scope::Write, Scope::Send, Scope::Scim];
+		const EVERY_SCOPE: &[Scope] = &[
+			Scope::Read,
+			Scope::Write,
+			Scope::Send,
+			Scope::Scim,
+			Scope::Alias,
+		];
 		let credential = Credential {
 			token: token.to_string(),
 			client_ip: auth.client_ip,
@@ -211,6 +225,17 @@ impl Principal {
 			// cannot be told from the other and no reach is safe to pick.
 			_ => Principal::unreachable(Some(credential)),
 		}
+	}
+
+	/// The label of the key this principal came from, for an audit line.
+	pub fn key_label(&self) -> Option<&str> {
+		self.label.as_deref()
+	}
+
+	/// The domains the credential is confined to, lowercased, or `None` when
+	/// it declares no domain restriction.
+	pub fn confined_domains(&self) -> Option<&[String]> {
+		self.domains.as_deref()
 	}
 
 	/// The account the credential is bound to, if any.
