@@ -35,6 +35,21 @@
     "ref": ""
    }
   },
+  "cancel-others": {
+   "if": "${{ failure() && github.event_name == 'pull_request' }}",
+   "needs": [
+    "rust",
+    "line-limit",
+    "folder-limit",
+    "python-tests",
+    "secret-scan-tests"
+   ],
+   "permissions": {
+    "actions": "write",
+    "contents": "read"
+   },
+   "uses": "./.github/workflows/reusable-cancel-others.yml"
+  },
   "debian": {
    "if": "${{ !cancelled() && (github.event_name != 'pull_request' || needs.line-limit.result != 'failure') && needs.plan.outputs.debian != 'false' }}",
    "needs": [

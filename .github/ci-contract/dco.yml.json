@@ -12,6 +12,19 @@
   "group": "${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}"
  },
  "jobs": {
+  "cancel-others": {
+   "if": "${{ failure() && github.event_name == 'pull_request' }}",
+   "needs": [
+    "dco",
+    "noreply",
+    "secret-scan"
+   ],
+   "permissions": {
+    "actions": "write",
+    "contents": "read"
+   },
+   "uses": "./.github/workflows/reusable-cancel-others.yml"
+  },
   "dco": {
    "uses": "./.github/workflows/reusable-dco.yml"
   },

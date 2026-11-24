@@ -99,7 +99,7 @@ class TheWiring(unittest.TestCase):
         self.assertEqual(job["uses"], "./.github/workflows/reusable-deprecation-notices.yml")
         self.assertEqual(job["if"], "always()")
         self.assertEqual(job["permissions"], {"contents": "read", "actions": "read", "checks": "read"})
-        suites = set(ci) - {"plan", "gate", "deprecations", "dependabot-freshness"}
+        suites = set(ci) - {"plan", "gate", "deprecations", "dependabot-freshness", "cancel-others"}
         self.assertEqual(set(job["needs"]), suites)
         self.assertIn("deprecations", ci["gate"]["needs"])
 

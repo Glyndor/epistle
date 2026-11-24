@@ -27,6 +27,11 @@ const EXPRESSION: &str = "${{ fromJSON(vars.CI_RUNNER || '\"ubuntu-latest\"') }}
 /// Jobs that stay on GitHub's runners: `(workflow, job, why)`.
 const PRIVILEGED: &[(&str, &str, &str)] = &[
 	(
+		"reusable-cancel-others.yml",
+		"cancel",
+		"cancels the unfinished runs of a failed commit with actions: write",
+	),
+	(
 		"release.yml",
 		"attest",
 		"attests the provenance of the finished files with id-token and attestations: write",
@@ -193,7 +198,12 @@ fn linux_jobs_read_the_runner_variable() {
 			let name = name.as_str().expect("job id");
 			let secret_or_write = privileged(&workflow, job);
 			if job["uses"].as_str().is_some() {
-				if secret_or_write {
+				// The one reusable allowed to be called with a write token: the job that cancels the
+				// other runs of a failed commit. Its own job is listed in PRIVILEGED, on a fixed runner,
+				// and `test_cancel_others.py` holds who may call it.
+				let cancels =
+					job["uses"].as_str() == Some("./.github/workflows/reusable-cancel-others.yml");
+				if secret_or_write && !cancels {
 					problems.push(format!(
 						"{file}: job {name} calls a reusable workflow with secrets or write permissions; its runner cannot be fixed from here"
 					));
