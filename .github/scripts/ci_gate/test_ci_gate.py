@@ -28,6 +28,9 @@ SUITES = {
     "python-tests": (),
     # Reads the annotations of this run, so no plan output skips it.
     "deprecations": (),
+    # The tests of the credential scan run on every pull request: executing files of the change
+    # is kept out of the job that judges, so they are a suite of their own.
+    "secret-scan-tests": (),
 }
 # The jobs of ci.yml, exactly. A job added to the workflow turns the test below
 # red until the author decides here, on purpose, whether the gate waits for it.

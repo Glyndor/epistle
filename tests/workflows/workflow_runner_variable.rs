@@ -115,6 +115,15 @@ fn grants_write(perms: &Yaml) -> bool {
 fn uses_secret(y: &Yaml) -> bool {
 	let named = |s: &str| {
 		s.match_indices("secrets.").any(|(i, _)| {
+			// `check-secrets.sh` is a file name, not the `secrets` context: the context is
+			// never glued to a word, a hyphen or an underscore before it.
+			let glued = s[..i]
+				.chars()
+				.next_back()
+				.is_some_and(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+			if glued {
+				return false;
+			}
 			let rest = &s[i + 8..];
 			let end = rest
 				.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
@@ -213,4 +222,16 @@ fn linux_jobs_read_the_runner_variable() {
 		with_variable >= 30,
 		"expected at least 30 jobs on the CI_RUNNER expression, found {with_variable}"
 	);
+}
+
+#[test]
+fn a_file_name_that_ends_in_secrets_is_not_the_secrets_context() {
+	let text = |s: &str| Yaml::String(s.to_string());
+	assert!(!uses_secret(&text(
+		"bash scripts/scan-credentials/check-secrets.sh"
+	)));
+	assert!(!uses_secret(&text("${{ secrets.GITHUB_TOKEN }}")));
+	assert!(uses_secret(&text("${{ secrets.RELEASE_KEY }}")));
+	assert!(uses_secret(&text("${{secrets.RELEASE_KEY}}")));
+	assert!(uses_secret(&text("env: (secrets.RELEASE_KEY)")));
 }

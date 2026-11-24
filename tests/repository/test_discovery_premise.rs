@@ -53,8 +53,8 @@ const WORKFLOW_INVOKED_DIRS: &[(&str, &str, &str)] = &[
 	),
 	(
 		"scripts/scan-credentials",
-		".github/workflows/dco.yml",
-		"scan-credentials.test.sh",
+		".github/workflows/ci.yml",
+		"scripts/scan-credentials/tests/*.test.sh",
 	),
 ];
 

@@ -269,6 +269,27 @@ jobs:
       - name: Every required check is reachable from a merge queue
         run: python3 .github/scripts/check_merge_group_triggers.py
 
+  # The tests of the credential scan, on a runner of their own: they execute files
+  # of the change, which the job `no credential-shaped line is added` (dco.yml) never
+  # does. They run on every pull request and queue entry (the run is seconds) and
+  # `CI gate` waits for them, so no further name has to be required.
+  secret-scan-tests:
+    name: the credential scan passes its own tests
+    if: ${{ !cancelled() }}
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Test the check
+        run: |
+          set -euo pipefail
+          for test in scripts/scan-credentials/tests/*.test.sh; do
+            bash "$test"
+          done
+
   # Dependency advisories and the cargo-deny policy of the tree under test. They
   # run on every pull request and in the merge queue, whatever changed, because a
   # new advisory appears without any file changing, and a failure here stops the
@@ -370,7 +391,7 @@ jobs:
     # too, and a skipped job counts as passed, so nothing else may carry the name a
     # ruleset requires.
     name: ${{ github.event_name == 'merge_group' && 'CI gate' || github.event_name == 'pull_request' && (github.event.pull_request.base.ref == 'main' && 'CI gate (main)' || 'CI gate') || format('CI gate ({0})', github.event_name) }}
-    needs: [plan, rust, debian, line-limit, sbom-and-licenses, audit, folder-limit, python-tests, deprecations]
+    needs: [plan, rust, debian, line-limit, sbom-and-licenses, audit, folder-limit, python-tests, deprecations, secret-scan-tests]
     if: always()
     runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
     timeout-minutes: 5
@@ -395,6 +416,7 @@ jobs:
               "folder-limit": (),
               "python-tests": (),
               "deprecations": (),
+              "secret-scan-tests": (),
               "sbom-and-licenses": ("supply",),
           }
           needs = json.loads(os.environ["NEEDS"])
