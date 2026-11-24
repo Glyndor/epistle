@@ -130,7 +130,7 @@
     },
     {
      "name": "The CodeQL configuration leaves out only files that only the tests read",
-     "run": "python3 -I .github/scripts/ci_codeql/check_paths.py .github/codeql/codeql-config.yml --production \"$RUNNER_TEMP\"/codeql-paths/production-*.json --tests \"$RUNNER_TEMP/codeql-paths/tests.json\""
+     "run": "python3 -I .github/scripts/ci_codeql/check_paths.py .github/codeql/codeql-config.yml --production \"$RUNNER_TEMP\"/codeql-paths/production-*.json --tests \"$RUNNER_TEMP/codeql-paths/tests.json\" --watch-all .github/workflows/e2e.yml .github/workflows/upgrade.yml .github/workflows/container.yml .github/workflows/db.yml"
     },
     {
      "if": "${{ success() }}",

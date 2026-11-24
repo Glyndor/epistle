@@ -188,11 +188,15 @@ jobs:
           cargo check --locked --lib --bins --release --all-features --message-format=json > "$out/production-release-all.json"
           cargo check --locked --tests --all-features --message-format=json > "$out/tests.json"
 
+      # The same dep-info judges the other list of paths: the workflows that run on any change to the
+      # product (end-to-end, upgrade, container, database) have to be triggered by every source file a
+      # production build reads, or a change to it would skip them.
       - name: The CodeQL configuration leaves out only files that only the tests read
         run: >-
           python3 -I .github/scripts/ci_codeql/check_paths.py .github/codeql/codeql-config.yml
           --production "$RUNNER_TEMP"/codeql-paths/production-*.json
           --tests "$RUNNER_TEMP/codeql-paths/tests.json"
+          --watch-all .github/workflows/e2e.yml .github/workflows/upgrade.yml .github/workflows/container.yml .github/workflows/db.yml
 
       - name: Save the cargo cache
         if: ${{ success() }}
