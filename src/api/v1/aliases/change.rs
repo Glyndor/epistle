@@ -9,7 +9,7 @@ use crate::aliases::edit::{self, NewAlias};
 use crate::aliases::view::AliasRow;
 use crate::aliases::{Change, Committed};
 use crate::api::Principal;
-use crate::api::audit::{AliasEvent, log_alias_change};
+use crate::api::audit::{AliasEvent, Carried, log_alias_change};
 use crate::api::error::ApiError;
 use crate::api::state::{ApiState, ClientIp, MatchedAuth};
 use crate::util::address::normalize;
@@ -107,19 +107,40 @@ fn target_member(
 		.ok_or_else(unavailable)
 }
 
+/// What the audit line of a change says, carried to the blocking thread that
+/// makes it.
+struct Trail {
+	event: AliasEvent,
+	/// The normalized alias address.
+	alias: String,
+	/// The label of the key, `None` for the configured token.
+	key: Option<String>,
+	ip: Option<std::net::IpAddr>,
+}
+
 /// Run `change` on a blocking thread: the rules read files and take locks.
+/// The audit line of a durable change is written there too, right after the
+/// commit: the thread runs to the end even when the client drops the request,
+/// and a line left to the handler would be lost with it.
 async fn run(
 	config: std::sync::Arc<crate::config::Config>,
 	change: Change,
 	origin: crate::aliases::Origin,
 	dry_run: bool,
+	trail: Trail,
 ) -> Result<Committed, ApiError> {
+	let carried = Carried::capture();
 	tokio::task::spawn_blocking(move || {
 		if dry_run {
-			edit::preview(&config, &change, &origin)
-		} else {
-			edit::commit(&config, &change, &origin)
+			return edit::preview(&config, &change, &origin);
 		}
+		let done = edit::commit(&config, &change, &origin)?;
+		if done.changed {
+			carried.run(|| {
+				log_alias_change(trail.event, &trail.alias, trail.key.as_deref(), trail.ip);
+			});
+		}
+		Ok(done)
 	})
 	.await
 	.map_err(|_| ApiError::internal())?
@@ -161,6 +182,12 @@ pub async fn create(
 		change,
 		origin_of(&principal),
 		request.dry_run,
+		Trail {
+			event: AliasEvent::Added,
+			alias: normalize(&request.alias),
+			key: principal.key_label().map(str::to_string),
+			ip: ip.0,
+		},
 	)
 	.await?;
 	let alias = done
@@ -168,14 +195,6 @@ pub async fn create(
 		.alias(&request.alias)
 		.map(|alias| AliasRow::of(alias, &std::collections::HashSet::new()))
 		.ok_or_else(ApiError::internal)?;
-	if done.changed && !request.dry_run {
-		log_alias_change(
-			AliasEvent::Added,
-			&normalize(&request.alias),
-			principal.key_label(),
-			ip.0,
-		);
-	}
 	let status = if request.dry_run {
 		StatusCode::OK
 	} else {
@@ -213,16 +232,14 @@ pub async fn remove(
 		change,
 		origin_of(&principal),
 		query.dry_run,
+		Trail {
+			event: AliasEvent::Removed,
+			alias: normalize(&alias),
+			key: principal.key_label().map(str::to_string),
+			ip: ip.0,
+		},
 	)
 	.await?;
-	if done.changed && !query.dry_run {
-		log_alias_change(
-			AliasEvent::Removed,
-			&normalize(&alias),
-			principal.key_label(),
-			ip.0,
-		);
-	}
 	Ok(Json(Removed {
 		alias: normalize(&alias),
 		changed: done.changed && !query.dry_run,

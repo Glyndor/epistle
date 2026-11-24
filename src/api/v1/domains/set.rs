@@ -55,8 +55,8 @@ pub async fn set(
 			submission_rate: request.submission_rate,
 		},
 		None,
+		change::Trail::new(DomainEvent::Updated, &domain, ip),
 	)
 	.await?;
-	change::audit(&done, DomainEvent::Updated, &domain, ip);
 	Ok(Json(Changed::of(&done, domain)))
 }

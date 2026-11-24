@@ -787,7 +787,7 @@ last-enabled-domain refusals are also `409`, preserving the CLI message;
 malformed names or invalid limits are `400 invalid_input`, unknown names
 are `404 not_found`, and storage failures are `500 internal`.
 
-Each durable change emits one structured event on `epistle::api::audit`:
+Each durable change emits one structured event on `epistle::api::audit`, written by the same thread that makes the change, so a client that drops the connection after the write still leaves the line:
 `domain.added`, `domain.removed`, `domain.enabled`, `domain.disabled`,
 `domain.updated`, `domain.alias_added` or `domain.alias_removed`, with `domain`
 (the alias name for alias events) and `client_ip`. Refusals and no-ops emit no
