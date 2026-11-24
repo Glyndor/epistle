@@ -530,9 +530,15 @@ fn the_names_a_certificate_authority_mails_are_role_addresses_with_or_without_a_
 }
 
 #[test]
-fn a_tagged_form_of_an_account_address_is_not_for_a_key() {
+fn an_alias_address_with_a_tag_is_not_for_a_key_whether_or_not_the_account_exists() {
 	let (_dir, config) = setup("");
-	for address in ["alice+shop@example.org", "ALICE+x+y@example.org"] {
+	for address in [
+		"alice+shop@example.org",
+		"ALICE+x+y@example.org",
+		"zed+shop@example.org",
+		"+lead@example.org",
+		"a+@example.org",
+	] {
 		let error = refused(&config, &new(address, &["bob@example.org"]), &key(None));
 		assert!(
 			error.to_string().contains("tagged form"),
@@ -553,12 +559,6 @@ fn a_tagged_form_of_an_account_address_is_not_for_a_key() {
 		)
 		.expect("the operator may");
 	}
-	edit::preview(
-		&config,
-		&new("zed+shop@example.org", &["bob@example.org"]),
-		&key(None),
-	)
-	.expect("a tag on a name no account uses takes no one's mail");
 }
 
 /// An account with an address inside and one outside a key's domains.
@@ -698,4 +698,72 @@ fn a_confined_key_cannot_make_an_alias_it_could_no_longer_reach() {
 		&key(Some(&["example.org"])),
 	);
 	assert!(error.to_string().contains("sender"), "{error}");
+}
+
+#[test]
+fn an_alias_whose_member_account_reaches_outside_the_key_s_domains_is_as_absent_as_a_missing_one() {
+	let (_dir, config) = setup("");
+	with_split_account(&config);
+	operator_made(&config, "team@example.org", &["dave@example.org"]);
+	operator_made(&config, "sent@example.org", &["alice@example.org"]);
+	edit::commit(
+		&config,
+		&Change::SenderAdd {
+			address: "sent@example.org".into(),
+			sender: "dave@example.org".into(),
+		},
+		&Origin::Operator,
+	)
+	.unwrap();
+	let confined = key(Some(&["example.org"]));
+	let expected = refused(
+		&config,
+		&Change::Remove {
+			address: "ghost@example.org".into(),
+		},
+		&confined,
+	)
+	.to_string()
+	.replace("ghost@example.org", "ADDRESS");
+	for address in ["team@example.org", "sent@example.org"] {
+		let changes = [
+			Change::Remove {
+				address: address.into(),
+			},
+			Change::MemberAdd {
+				address: address.into(),
+				member: "bob@example.org".into(),
+			},
+			Change::MemberRemove {
+				address: address.into(),
+				member: "alice@example.org".into(),
+			},
+			Change::SenderAdd {
+				address: address.into(),
+				sender: "bob@example.org".into(),
+			},
+			Change::SenderRemove {
+				address: address.into(),
+				sender: "dave@example.org".into(),
+			},
+		];
+		for change in changes {
+			let error = refused(&config, &change, &confined);
+			assert!(
+				matches!(error, AliasError::NotFound(_)),
+				"{change:?}: {error}"
+			);
+			assert_eq!(error.to_string().replace(address, "ADDRESS"), expected);
+		}
+	}
+	edit::commit(
+		&config,
+		&Change::Remove {
+			address: "team@example.org".into(),
+		},
+		&Origin::Api {
+			confined_to: Some(vec!["example.org".into(), "example.net".into()]),
+		},
+	)
+	.expect("a key that reaches the whole account may");
 }

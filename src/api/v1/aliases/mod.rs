@@ -17,6 +17,7 @@ use axum::extract::{Query, State};
 use axum::{Extension, Json};
 use serde::{Deserialize, Serialize};
 
+use crate::aliases::edit::rules::all_inside;
 use crate::aliases::view::{self, AliasRow};
 use crate::aliases::{AliasError, Origin};
 use crate::api::Principal;
@@ -86,18 +87,21 @@ pub struct Page {
 }
 
 /// Whether the key may see `row`: its address, every member and every sender
-/// are inside the domains the key is confined to. An alias with an address
-/// the key could not have named is not shown, so a listing cannot name an
-/// address of another tenant.
-fn visible(principal: &Principal, row: &AliasRow) -> bool {
-	let inside = |address: &str| {
-		crate::util::address_reason::parse(address)
-			.map(|parsed| principal.admits_domain(parsed.domain()))
-			.unwrap_or(false)
-	};
-	inside(&row.address)
-		&& row.members.iter().all(|member| inside(member))
-		&& row.senders.iter().all(|sender| inside(sender))
+/// are inside the domains the key is confined to, and so is every address of
+/// the account of a member or sender. An alias with an address the key could
+/// not have named is not shown, so a listing cannot name an address of
+/// another tenant.
+fn visible(
+	principal: &Principal,
+	accounts: &std::collections::HashMap<String, Vec<String>>,
+	row: &AliasRow,
+) -> bool {
+	let admits = |domain: &str| principal.admits_domain(domain);
+	let account_of = |address: &str| accounts.get(address).cloned();
+	let own = [row.address.clone()];
+	all_inside(own.iter(), &admits, &|_| None)
+		&& all_inside(&row.members, &admits, &account_of)
+		&& all_inside(&row.senders, &admits, &account_of)
 }
 
 pub async fn list(
@@ -146,9 +150,20 @@ pub async fn list(
 	let config = config(&state)?;
 	let mut now = (*config).clone();
 	now.alias = crate::aliases::current(&config);
+	let accounts: std::collections::HashMap<String, Vec<String>> = state
+		.store()
+		.account_views()
+		.into_iter()
+		.flat_map(|(_, addresses, _)| {
+			addresses
+				.iter()
+				.map(|address| (normalize(address), addresses.clone()))
+				.collect::<Vec<_>>()
+		})
+		.collect();
 	let mut rows: Vec<AliasRow> = view::rows(&now)
 		.into_iter()
-		.filter(|row| visible(&principal, row))
+		.filter(|row| visible(&principal, &accounts, row))
 		.filter(|row| {
 			domain.as_deref().is_none_or(|wanted| {
 				row.address

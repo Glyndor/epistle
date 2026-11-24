@@ -21,19 +21,23 @@ pub(super) const ALL: &str = "alias-everywhere-secret";
 /// `read` and `write`, not confined: every scope but the one that matters.
 pub(super) const READ_WRITE: &str = "read-write-secret";
 /// `alias` and `read`, confined to a domain the server does not host.
+/// `alias`, confined to `bücher.example` written as Unicode.
+pub(super) const IDN_UNICODE: &str = "alias-idn-unicode-secret";
+/// `alias`, confined to the same domain written as `xn--bcher-kva.example`.
+pub(super) const IDN_ASCII: &str = "alias-idn-ascii-secret";
 pub(super) const ELSEWHERE: &str = "alias-elsewhere-secret";
 /// `alias`, not confined, expired.
 pub(super) const EXPIRED: &str = "alias-expired-secret";
 /// `alias`, bound to the account `ann`.
 pub(super) const BOUND: &str = "alias-bound-secret";
 
-const HASH: &str = "$argon2id$v=19$m=65536,t=2,p=1$YWFhYWFhYWFhYWFhYWFhYQ$0000000000000000000000000000000000000000000";
+pub(super) const HASH: &str = "$argon2id$v=19$m=65536,t=2,p=1$YWFhYWFhYWFhYWFhYWFhYQ$0000000000000000000000000000000000000000000";
 
 fn config_text(data_dir: &std::path::Path, extra: &str) -> String {
 	format!(
 		"hostname = \"mail.a.example\"\n\
 		 data_dir = {data_dir:?}\n\
-		 domains = [\"a.example\", \"b.example\"]\n\
+		 domains = [\"a.example\", \"b.example\", \"xn--bcher-kva.example\"]\n\
 		 {extra}\n\
 		 [domain_aliases]\n\
 		 \"alias.example\" = \"a.example\"\n\
@@ -46,6 +50,11 @@ fn config_text(data_dir: &std::path::Path, extra: &str) -> String {
 		 [[accounts]]\n\
 		 name = \"abe\"\n\
 		 addresses = [\"abe@a.example\"]\n\
+		 password_hash = \"{HASH}\"\n\
+		 \n\
+		 [[accounts]]\n\
+		 name = \"ida\"\n\
+		 addresses = [\"ida@xn--bcher-kva.example\"]\n\
 		 password_hash = \"{HASH}\"\n\
 		 \n\
 		 [[accounts]]\n\
@@ -129,6 +138,18 @@ pub(super) fn world_with(extra: &str) -> World {
 		key("tenant-b", TENANT_B, &["alias"], &["b.example"]),
 		key("all", ALL, &["alias"], &[]),
 		key("read-write", READ_WRITE, &["read", "write"], &[]),
+		key(
+			"idn-unicode",
+			IDN_UNICODE,
+			&["alias"],
+			&["b\u{fc}cher.example"],
+		),
+		key(
+			"idn-ascii",
+			IDN_ASCII,
+			&["alias"],
+			&["xn--bcher-kva.example"],
+		),
 		key("elsewhere", ELSEWHERE, &["alias", "read"], &["c.example"]),
 		expired,
 		bound,
@@ -200,6 +221,20 @@ pub(super) async fn call_text(
 	key: &str,
 	body: String,
 ) -> (StatusCode, Vec<u8>) {
+	let (status, _, bytes) = call_full(world, method, path, key, body).await;
+	(status, bytes)
+}
+
+/// Status, headers and body bytes of one request, for comparing two answers
+/// as a client would see them. The headers whose value changes with every
+/// answer are left out.
+pub(super) async fn call_full(
+	world: &World,
+	method: &str,
+	path: &str,
+	key: &str,
+	body: String,
+) -> (StatusCode, Vec<(String, String)>, Vec<u8>) {
 	use axum::body::Body;
 	use axum::http::{Request, header};
 	use tower::ServiceExt;
@@ -213,8 +248,15 @@ pub(super) async fn call_text(
 		.expect("request");
 	let response = app.oneshot(request).await.expect("response");
 	let status = response.status();
+	let mut headers: Vec<(String, String)> = response
+		.headers()
+		.iter()
+		.filter(|(name, _)| !matches!(name.as_str(), "date" | "x-request-id"))
+		.map(|(name, value)| (name.to_string(), value.to_str().unwrap_or("?").to_string()))
+		.collect();
+	headers.sort();
 	let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
 		.await
 		.expect("body");
-	(status, bytes.to_vec())
+	(status, headers, bytes.to_vec())
 }

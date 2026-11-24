@@ -5,6 +5,17 @@
 //! exist from what is not its own.
 
 use super::fixture::*;
+
+fn account_of(name: &str, addresses: &[&str]) -> String {
+	let list: Vec<String> = addresses
+		.iter()
+		.map(|address| format!("{address:?}"))
+		.collect();
+	format!(
+		"[[accounts]]\nname = {name:?}\naddresses = [{}]\npassword_hash = \"{HASH}\"\n\n",
+		list.join(", ")
+	)
+}
 use axum::http::StatusCode;
 use serde_json::{Value, json};
 
@@ -365,16 +376,18 @@ async fn the_senders_of_an_alias_are_inside_the_key_s_domains_or_the_alias_is_no
 }
 
 #[tokio::test]
-async fn a_tagged_form_of_an_account_address_is_refused_through_the_route() {
+async fn a_tag_in_an_alias_address_is_refused_through_the_route_with_or_without_the_account() {
 	let world = world();
-	let (status, body) = create(
-		&world,
-		TENANT_A,
-		json!({"alias":"ann+shop@a.example","members":["abe@a.example"]}),
-	)
-	.await;
-	assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
-	assert!(message(&body).contains("tagged form"), "{body}");
+	for alias in ["ann+shop@a.example", "nobody+shop@a.example"] {
+		let (status, body) = create(
+			&world,
+			TENANT_A,
+			json!({"alias":alias,"members":["abe@a.example"]}),
+		)
+		.await;
+		assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+		assert!(message(&body).contains("tagged form"), "{body}");
+	}
 	let (status, body) = create(
 		&world,
 		TENANT_A,
@@ -384,4 +397,28 @@ async fn a_tagged_form_of_an_account_address_is_refused_through_the_route() {
 	assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
 	assert!(message(&body).contains("role address"), "{body}");
 	assert!(world.disk().is_none());
+}
+
+#[tokio::test]
+async fn an_alias_whose_member_account_reaches_outside_the_key_s_domains_is_neither_listed_nor_removable()
+ {
+	let world = world_with(&format!(
+		"{}[[alias]]\naddress = \"split@a.example\"\nmembers = [\"dave@a.example\"]\n",
+		account_of("dave", &["dave@a.example", "dave@b.example"])
+	));
+	let (_, body) = call(&world, "GET", "/api/v1/aliases", TENANT_A, None).await;
+	assert!(!body.to_string().contains("split@a.example"), "{body}");
+	assert!(!body.to_string().contains("dave@b.example"), "{body}");
+	let (status, _) = call(
+		&world,
+		"DELETE",
+		"/api/v1/aliases/split@a.example",
+		TENANT_A,
+		None,
+	)
+	.await;
+	assert_eq!(status, StatusCode::NOT_FOUND);
+	assert!(world.disk().is_none());
+	let (_, body) = call(&world, "GET", "/api/v1/aliases", ALL, None).await;
+	assert!(body.to_string().contains("split@a.example"));
 }

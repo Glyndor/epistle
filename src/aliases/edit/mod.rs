@@ -45,6 +45,16 @@ impl Origin {
 		matches!(self, Origin::Api { .. })
 	}
 
+	/// Whether this is a key of the API that is confined to some domains.
+	pub fn is_confined(&self) -> bool {
+		matches!(
+			self,
+			Origin::Api {
+				confined_to: Some(_)
+			}
+		)
+	}
+
 	/// Whether `domain` is one the origin may act in.
 	pub fn admits_domain(&self, domain: &str) -> bool {
 		match self {

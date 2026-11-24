@@ -62,12 +62,4 @@ impl Known {
 			.find(|(_, addresses, _)| addresses.iter().any(|existing| normalize(existing) == raw))
 			.map(|(_, addresses, _)| addresses)
 	}
-
-	/// Whether `raw` (normalized) is an address of an account that exists.
-	pub(super) fn is_account_address(&self, raw: &str) -> bool {
-		self.store
-			.account_views()
-			.iter()
-			.any(|(_, addresses, _)| addresses.iter().any(|existing| normalize(existing) == raw))
-	}
 }

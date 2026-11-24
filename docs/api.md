@@ -824,13 +824,19 @@ and writes nothing. What differs from the command is stricter, not looser:
   and `mailer-daemon` are the operator's, with or without a sub-address tag
   (`postmaster+x`): a key may not make an alias on one, and may not remove
   or edit one the operator made (`400`);
-- an alias address that is the tagged form of an account's address
-  (`ann+shop@example.org` when `ann@example.org` is an account) is refused,
-  since an alias is looked up before the tag is stripped and it would take
-  that account's mail;
+- an alias address whose local part carries a sub-address tag (`shop+x@example.org`,
+  with the separators the directory strips, today `+`) is refused whether or
+  not an account of the base address exists: an alias is looked up before the
+  tag is stripped, so it would take that account's mail, now or once the
+  account is made. The command keeps the choice;
 - a member is an account that lies entirely inside the key's domains: an
   account with one address inside and one outside is as unavailable as one
   that does not exist.
+
+A key's domains are compared as they are written, in ASCII lowercase. A key
+made with `--domain bücher.example` does not reach `xn--bcher-kva.example`;
+list the domain as punycode. An alias address written in Unicode is stored as
+punycode and judged as such.
 
 The rest is the command's: the address is in a hosted domain and no account,
 masked address or other alias holds it, the caps of the domain
@@ -842,7 +848,7 @@ plain private alias: senders, `list_id` and visibility stay with the command.
 `GET /api/v1/aliases` lists the aliases ordered by address, with `limit`
 (default 50, at most 100) and `cursor`, filtered by `domain` and `account`.
 A key confined to some domains sees the aliases whose address, members and
-senders all lie in them, and removes or edits only those; any other is `404`
+senders all lie in them (and every address of the account of a member or sender), and removes or edits only those; any other is `404`
 like one that is not there. `DELETE /api/v1/aliases/{alias}` takes `dry_run=true` as a
 query. Each durable change emits `alias.added` or `alias.removed` on
 `epistle::api::audit`, with the label of the key (never the key), the domain,

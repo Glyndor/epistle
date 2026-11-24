@@ -63,13 +63,26 @@ pub fn apply(
 	origin: &Origin,
 ) -> Result<(), AliasError> {
 	refuse_role_address(change.address(), origin)?;
+	// What a confined key may reach depends on the accounts as they are now.
+	let known = if origin.is_confined() && !matches!(change, Change::Add(_)) {
+		Some(Known::open(current).map_err(AliasError::Io)?)
+	} else {
+		None
+	};
+	let known = known.as_ref();
 	match change {
 		Change::Add(new) => add(current, file, new, origin),
-		Change::Remove { address } => remove(file, address, origin),
-		Change::MemberAdd { address, member } => member_add(current, file, address, member, origin),
-		Change::MemberRemove { address, member } => member_remove(file, address, member, origin),
-		Change::SenderAdd { address, sender } => sender_add(file, address, sender, origin),
-		Change::SenderRemove { address, sender } => sender_remove(file, address, sender, origin),
+		Change::Remove { address } => remove(file, address, origin, known),
+		Change::MemberAdd { address, member } => {
+			member_add(current, file, address, member, origin, known)
+		}
+		Change::MemberRemove { address, member } => {
+			member_remove(file, address, member, origin, known)
+		}
+		Change::SenderAdd { address, sender } => sender_add(file, address, sender, origin, known),
+		Change::SenderRemove { address, sender } => {
+			sender_remove(file, address, sender, origin, known)
+		}
 	}
 }
 
@@ -109,6 +122,23 @@ fn refuse_role_address(address: &str, origin: &Origin) -> Result<(), AliasError>
 		)));
 	}
 	Ok(())
+}
+
+/// Whether every address in `addresses` is inside the reach of `admits`, and
+/// so is every other address of the account that holds it: an address in an
+/// admitted domain whose account also has one outside is not inside. An
+/// address no account holds is judged by its own domain.
+pub fn all_inside<'a>(
+	addresses: impl IntoIterator<Item = &'a String>,
+	admits: &dyn Fn(&str) -> bool,
+	account_of: &dyn Fn(&str) -> Option<Vec<String>>,
+) -> bool {
+	let inside = |address: &str| domain_of(address).is_some_and(|domain| admits(&domain));
+	addresses.into_iter().all(|address| {
+		inside(address)
+			&& account_of(&normalize(address))
+				.is_none_or(|siblings| siblings.iter().all(|sibling| inside(sibling)))
+	})
 }
 
 /// The domain of `address` when it parses.
@@ -197,7 +227,7 @@ fn add(
 		return Err(invalid(why));
 	}
 	if origin.is_api() {
-		intercepts_an_account(&known, &address)?;
+		refuse_tagged(&address)?;
 	}
 	if new.members.is_empty() {
 		return Err(invalid(format!("alias {} has no members", new.address)));
@@ -237,21 +267,21 @@ fn add(
 	Ok(())
 }
 
-/// An alias address with a sub-address tag takes the mail that would go to
-/// the account of the base address (`bob+x@d` to `bob@d`), because an alias is
-/// looked up before the tag is stripped. A key may not make one.
-fn intercepts_an_account(known: &Known, address: &str) -> Result<(), AliasError> {
-	let Ok(parsed) = address_reason::parse(address) else {
-		return Ok(());
-	};
-	let base = base_local(parsed.local_part());
-	if base == parsed.local_part() {
-		return Ok(());
-	}
-	let base = normalize(&format!("{base}@{}", parsed.domain()));
-	if known.is_account_address(&base) {
+/// An alias is looked up before the sub-address tag of a recipient is
+/// stripped, so an alias on `bob+x@d` takes what would go to `bob@d`, and one
+/// made before the account `bob` exists takes its mail once it does. A key
+/// may not make an alias address with a tag at all, whether or not an account
+/// of that base exists; the command keeps the choice.
+fn refuse_tagged(address: &str) -> Result<(), AliasError> {
+	let tagged = address_reason::parse(address).is_ok_and(|parsed| {
+		parsed
+			.local_part()
+			.contains(crate::smtp::directory::DEFAULT_SUBADDRESS_SEPARATORS.as_slice())
+	});
+	if tagged {
 		return Err(invalid(format!(
-			"alias address {address} is a tagged form of an address that an account uses"
+			"alias address {} is a tagged form of another address, which is not available to the API",
+			normalize(address)
 		)));
 	}
 	Ok(())
@@ -274,24 +304,34 @@ fn find<'a>(
 	file: &'a mut AliasesFile,
 	address: &str,
 	origin: &Origin,
+	known: Option<&Known>,
 ) -> Result<&'a mut Alias, AliasError> {
 	let absent = || AliasError::NotFound(format!("alias {address} not found"));
 	if !domain_of(address).is_some_and(|domain| origin.admits_domain(&domain)) {
 		return Err(absent());
 	}
 	let alias = file.alias_mut(address).ok_or_else(absent)?;
-	// An alias with an address outside the key's domains, a member or a
-	// sender, is another tenant's as far as the key can tell.
-	let inside =
-		|each: &String| domain_of(each).is_some_and(|domain| origin.admits_domain(&domain));
-	if !alias.members.iter().all(inside) || !alias.senders.iter().all(inside) {
+	// An alias with a member or a sender outside the key's domains, or whose
+	// account reaches outside them, is another tenant's as far as the key can
+	// tell.
+	let admits = |domain: &str| origin.admits_domain(domain);
+	let account_of =
+		|address: &str| known.and_then(|known| known.addresses_of_account_holding(address));
+	if !all_inside(&alias.members, &admits, &account_of)
+		|| !all_inside(&alias.senders, &admits, &account_of)
+	{
 		return Err(absent());
 	}
 	Ok(alias)
 }
 
-fn remove(file: &mut AliasesFile, address: &str, origin: &Origin) -> Result<(), AliasError> {
-	find(file, address, origin)?;
+fn remove(
+	file: &mut AliasesFile,
+	address: &str,
+	origin: &Origin,
+	known: Option<&Known>,
+) -> Result<(), AliasError> {
+	find(file, address, origin, known)?;
 	let wanted = normalize(address);
 	file.aliases
 		.retain(|alias| normalize(&alias.address) != wanted);
@@ -304,8 +344,9 @@ fn member_add(
 	address: &str,
 	member: &str,
 	origin: &Origin,
+	known: Option<&Known>,
 ) -> Result<(), AliasError> {
-	find(file, address, origin)?;
+	find(file, address, origin, known)?;
 	member_or_sender("member", member)?;
 	if origin.is_api() {
 		let known = Known::open(current).map_err(AliasError::Io)?;
@@ -313,7 +354,7 @@ fn member_add(
 	}
 	let member = normalize(member);
 	caps::check_member_add(current, address)?;
-	let alias = find(file, address, origin)?;
+	let alias = find(file, address, origin, known)?;
 	if alias
 		.members
 		.iter()
@@ -332,8 +373,9 @@ fn member_remove(
 	address: &str,
 	member: &str,
 	origin: &Origin,
+	known: Option<&Known>,
 ) -> Result<(), AliasError> {
-	let alias = find(file, address, origin)?;
+	let alias = find(file, address, origin, known)?;
 	if alias.members.len() == 1 {
 		return Err(invalid(format!(
 			"alias {address} would have no members; use `alias remove` instead"
@@ -356,13 +398,14 @@ fn sender_add(
 	address: &str,
 	sender: &str,
 	origin: &Origin,
+	known: Option<&Known>,
 ) -> Result<(), AliasError> {
 	member_or_sender("sender", sender)?;
 	if !domain_of(sender).is_some_and(|domain| origin.admits_domain(&domain)) {
 		return Err(outside("sender"));
 	}
 	let sender = normalize(sender);
-	let alias = find(file, address, origin)?;
+	let alias = find(file, address, origin, known)?;
 	if alias
 		.senders
 		.iter()
@@ -381,8 +424,9 @@ fn sender_remove(
 	address: &str,
 	sender: &str,
 	origin: &Origin,
+	known: Option<&Known>,
 ) -> Result<(), AliasError> {
-	let alias = find(file, address, origin)?;
+	let alias = find(file, address, origin, known)?;
 	let wanted = normalize(sender);
 	let before = alias.senders.len();
 	alias
