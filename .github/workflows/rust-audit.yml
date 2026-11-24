@@ -21,12 +21,10 @@ on:
     # other if either fires.
     - cron: "37 5 * * *"
   workflow_dispatch:
-  # Every push to develop is audited, with cargo-deny, on the tree it carries. A
-  # pull request is audited by the gate in ci.yml, on every pull request and queue
-  # entry and whatever changed, so this workflow has no pull_request trigger and no
-  # path filter: a new advisory appears without any file changing.
-  push:
-    branches: [develop]
+  # No push and no pull_request trigger: the gate in ci.yml audits every pull request and every
+  # queue entry, whatever changed, and the queue entry is the tree that lands on develop, so a
+  # push to develop would audit the same commit a second time. A new advisory appears without any
+  # file changing, which is what the daily run is for.
 
 # A newer push to a pull request supersedes the run in flight. Queue and
 # branch runs are never cancelled: only a pull_request event is.
@@ -39,16 +37,14 @@ permissions:
 
 jobs:
   audit:
-    # Two shapes. On schedule and workflow_dispatch the matrix is
-    # `[develop, main]` so a finding on either branch opens an issue the day it
-    # appears, and each branch is audited by its lockfiles alone. On a push to
-    # develop the matrix is `[""]`: the reusable audits the tree that was pushed.
+    # The matrix is `[develop, main]` so a finding on either branch opens an issue the day it
+    # appears, and each branch is audited by its lockfiles alone.
     # `fail-fast: false` keeps both halves independent: a slow or dirty ref's
     # report still publishes.
     strategy:
       fail-fast: false
       matrix:
-        ref: ${{ fromJSON(github.event_name == 'push' && '[""]' || '["develop","main"]') }}
+        ref: [develop, main]
     uses: ./.github/workflows/reusable-rust-audit.yml
     with:
       ref: ${{ matrix.ref }}

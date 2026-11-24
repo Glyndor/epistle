@@ -45,24 +45,20 @@ fn extract_block(text: &str, key: &str) -> Option<String> {
 }
 
 #[test]
-fn rust_audit_matrix_audits_the_pushed_tree_when_event_is_push() {
+fn rust_audit_matrix_audits_both_branches_and_does_not_run_on_a_push() {
 	let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(".github/workflows/rust-audit.yml");
 	let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
 
 	let matrix_section = extract_block(&text, "matrix:")
 		.unwrap_or_else(|| panic!("rust-audit.yml has no `strategy.matrix` for the audit matrix"));
 
-	// The push branch of the expression: `github.event_name == 'push'` gates an
-	// audit of just the tree that was pushed (empty ref -> the checkout of the
-	// event). The pull request is audited by the gate in ci.yml.
-	let audits_push =
-		matrix_section.contains("github.event_name == 'push'") && matrix_section.contains("\"\"");
+	// A push to develop would audit the commit the merge queue just audited in ci.yml; the
+	// workflow runs on schedule and on dispatch, over both branches.
 	assert!(
-		audits_push,
-		"rust-audit.yml matrix does not branch on push with an empty ref.\n\
-         On a push to develop the workflow must audit the tree it carries; \
-         a literal `[develop, main]` matrix would audit the other branches \
-         from a checkout of the pushed one.\n\
+		!text.contains("\n  push:") && !matrix_section.contains("github.event_name == 'push'"),
+		"rust-audit.yml runs on a push or branches on one.\n\
+         The queue entry is the tree that lands on develop and ci.yml audits it, so a push \
+         to develop is a second audit of the same commit.\n\
          Matrix section was:\n{matrix_section}",
 	);
 
