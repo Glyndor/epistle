@@ -196,6 +196,31 @@ def sh(text, **env):
     return done.returncode, done.stdout + done.stderr
 
 
+class TheAuditOfARehearsal(unittest.TestCase):
+    """The audit stops a release and only warns in a rehearsal, which publishes nothing."""
+
+    def run_audit(self, dry_run):
+        step = next(s for s in jobs()["verify"]["steps"] if s.get("name") == "Audit dependencies at release time")
+        with tempfile.TemporaryDirectory() as tmp:
+            for name in ("cargo", "cargo-audit"):
+                path = Path(tmp) / name
+                path.write_text("#!/bin/sh\nexit 1\n")
+                path.chmod(path.stat().st_mode | stat.S_IEXEC)
+            return sh(step["run"], PATH=f"{tmp}:{os.environ['PATH']}", DRY_RUN=dry_run, TAG="v1.2.3")
+
+    def test_a_failing_audit_stops_a_release_and_only_warns_in_a_rehearsal(self):
+        code, out = self.run_audit("false")
+        self.assertEqual(code, 1, out)
+        code, out = self.run_audit("true")
+        self.assertEqual(code, 0, out)
+        self.assertIn("::warning::cargo audit fails on v1.2.3", out)
+
+    def test_the_rehearsal_flag_comes_from_the_input_and_nothing_else(self):
+        step = next(s for s in jobs()["verify"]["steps"] if s.get("name") == "Audit dependencies at release time")
+        self.assertEqual(step["env"], {"DRY_RUN": "${{ inputs.dry-run && 'true' || 'false' }}"})
+        self.assertNotIn("continue-on-error", step)
+
+
 class WhoMayRun(unittest.TestCase):
     """The steps run as written, with the events and refs a real run could have."""
 
