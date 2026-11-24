@@ -143,7 +143,12 @@ impl AccountStore {
 			)
 			.any(same);
 		let used_by_directory = self.directory_addresses().any(|address| same(&address));
-		let used_by_alias = self.aliases.iter().any(|alias| same(&alias.address));
+		let used_by_alias = self
+			.aliases
+			.read()
+			.expect("aliases lock")
+			.iter()
+			.any(|alias| same(&alias.address));
 		let used_by_masked = self
 			.masked
 			.read()

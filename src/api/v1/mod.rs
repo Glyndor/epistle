@@ -1,6 +1,7 @@
 //! `/api/v1` routes. Each route module mirrors its path.
 
 mod accounts;
+mod aliases;
 mod archive;
 mod auth;
 mod deliveries;
@@ -47,6 +48,13 @@ pub fn router(max_message_size: usize) -> Router<ApiState> {
 			"/domains/{domain}/aliases/{alias}",
 			axum::routing::delete(domains::aliases::remove),
 		)
+		.route(
+			"/aliases",
+			get(aliases::list)
+				.post(aliases::create)
+				.layer(DefaultBodyLimit::max(16 * 1024)),
+		)
+		.route("/aliases/{alias}", axum::routing::delete(aliases::remove))
 		.route("/accounts", get(accounts::list).post(accounts::create))
 		.route("/accounts/{name}", axum::routing::delete(accounts::remove))
 		.route(

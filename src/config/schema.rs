@@ -489,6 +489,12 @@ pub struct Config {
 	/// from it.
 	#[serde(skip)]
 	pub domain_seed: crate::domain::state::DomainSeed,
+	/// The `[[alias]]` entries the configuration file itself declares, kept
+	/// when `<data_dir>/address-aliases.toml` replaces them (see
+	/// [`crate::aliases`]). `None` for a configuration built in code. Filled
+	/// when the file is loaded, never read from it.
+	#[serde(skip)]
+	pub alias_seed: Option<Vec<Alias>>,
 	/// Why validation refused the file, when `epistle status` loaded it with
 	/// `Config::load_lenient`. Always `None` after [`Config::load`], which
 	/// fails instead. Filled when the file is loaded, never read from it.

@@ -3,8 +3,10 @@
 use std::io::Write;
 use std::path::Path;
 
-use super::writers::commit_and_restart;
+use super::super::helpers::find_alias;
 use super::*;
+use crate::aliases::edit::NewAlias;
+use crate::aliases::{AliasError, Change, Origin, edit};
 use crate::config::Config;
 
 fn fixture(extra: &str) -> (tempfile::TempDir, tempfile::NamedTempFile) {
@@ -107,41 +109,56 @@ fn find_alias_matches_case_insensitively() {
 	assert!(find_alias(&config, "missing@example.org").is_none());
 }
 
+/// Commit `change` for the operator against the configuration at `path`.
+fn commit(path: &Path, change: Change) -> Result<edit::Committed, AliasError> {
+	edit::commit(&load(path), &change, &Origin::Operator)
+}
+
+fn new_alias(address: &str, members: &[&str]) -> NewAlias {
+	NewAlias {
+		address: address.to_string(),
+		members: members.iter().map(|member| member.to_string()).collect(),
+		senders: Vec::new(),
+		list_id: None,
+		hidden: true,
+	}
+}
+
 #[test]
 fn add_writes_a_new_alias_with_optional_fields() {
-	let (_dir, file) = fixture("");
-	let config = load(file.path());
-	let mut document = crate::cli::config_edit::ConfigDocument::open(file.path()).unwrap();
-	let args = AddArgs {
-		address: "team@example.org".to_string(),
-		members: vec![
-			"alice@example.org".to_string(),
-			"bob@example.org".to_string(),
-		],
+	let (dir, file) = fixture("");
+	let new = NewAlias {
 		senders: vec!["ceo@example.org".to_string()],
 		list_id: Some("team.example.org".to_string()),
-		visible: true,
+		hidden: false,
+		..new_alias(
+			"team@example.org",
+			&["alice@example.org", "bob@example.org"],
+		)
 	};
-	let _ = config;
-	add_alias(&load(file.path()), &mut document, &args).expect("add must succeed");
-	let _ = commit_and_restart(
-		document,
-		&args.address,
-		"added",
-		false,
-		&mut Vec::new(),
-		&mut Vec::new(),
-	)
-	.expect("commit must succeed");
-	let after = std::fs::read_to_string(file.path()).unwrap();
+	let done = commit(file.path(), Change::Add(new)).expect("add must succeed");
+	assert!(done.changed);
+	let state = std::fs::read_to_string(dir.path().join("address-aliases.toml")).unwrap();
+	for needle in [
+		"team@example.org",
+		"alice@example.org",
+		"ceo@example.org",
+		"team.example.org",
+		"hidden = false",
+	] {
+		assert!(
+			state.contains(needle),
+			"the state file lacks {needle}: {state}"
+		);
+	}
+	let config = load(file.path());
+	assert_eq!(config.alias.len(), 1);
+	assert_eq!(config.alias[0].address, "team@example.org");
+	let text = std::fs::read_to_string(file.path()).unwrap();
 	assert!(
-		after.contains("team@example.org"),
-		"file must contain the alias"
+		!text.contains("team@example.org"),
+		"the configuration file is not written"
 	);
-	assert!(after.contains("alice@example.org"));
-	assert!(after.contains("ceo@example.org"));
-	assert!(after.contains("team.example.org"));
-	assert!(after.contains("hidden = false"));
 }
 
 /// An alias address is an address, not an account name: a dot in the local
@@ -149,24 +166,8 @@ fn add_writes_a_new_alias_with_optional_fields() {
 #[test]
 fn add_accepts_a_dotted_alias_address() {
 	let (_dir, file) = fixture("");
-	let mut document = crate::cli::config_edit::ConfigDocument::open(file.path()).unwrap();
-	let args = AddArgs {
-		address: "Name.Surname@example.org".to_string(),
-		members: vec!["alice.jones@example.org".to_string()],
-		senders: Vec::new(),
-		list_id: None,
-		visible: false,
-	};
-	add_alias(&load(file.path()), &mut document, &args).expect("add must succeed");
-	let _ = commit_and_restart(
-		document,
-		&args.address,
-		"added",
-		false,
-		&mut Vec::new(),
-		&mut Vec::new(),
-	)
-	.expect("commit must succeed");
+	let new = new_alias("Name.Surname@example.org", &["alice.jones@example.org"]);
+	commit(file.path(), Change::Add(new)).expect("add must succeed");
 	let config = load(file.path());
 	assert!(find_alias(&config, "name.surname@EXAMPLE.org").is_some());
 }
@@ -175,34 +176,27 @@ fn add_accepts_a_dotted_alias_address() {
 fn add_refuses_a_duplicate_alias() {
 	let (_dir, file) =
 		fixture("[[alias]]\naddress = \"team@example.org\"\nmembers = [\"alice@example.org\"]\n");
-	let config = load(file.path());
-	let mut document = crate::cli::config_edit::ConfigDocument::open(file.path()).unwrap();
-	let args = AddArgs {
-		address: "team@example.org".to_string(),
-		members: vec!["bob@example.org".to_string()],
-		senders: Vec::new(),
-		list_id: None,
-		visible: false,
-	};
-	let err = add_alias(&config, &mut document, &args).unwrap_err();
-	assert!(err.contains("already exists"), "unexpected message: {err}");
+	let err = commit(
+		file.path(),
+		Change::Add(new_alias("team@example.org", &["bob@example.org"])),
+	)
+	.unwrap_err();
+	assert_eq!(
+		err,
+		AliasError::Exists("alias team@example.org already exists".into())
+	);
 }
 
 #[test]
 fn add_refuses_an_alias_address_outside_configured_domains() {
 	let (_dir, file) = fixture("");
-	let config = load(file.path());
-	let mut document = crate::cli::config_edit::ConfigDocument::open(file.path()).unwrap();
-	let args = AddArgs {
-		address: "team@other.org".to_string(),
-		members: vec!["alice@example.org".to_string()],
-		senders: Vec::new(),
-		list_id: None,
-		visible: false,
-	};
-	let err = add_alias(&config, &mut document, &args).unwrap_err();
+	let err = commit(
+		file.path(),
+		Change::Add(new_alias("team@other.org", &["alice@example.org"])),
+	)
+	.unwrap_err();
 	assert_eq!(
-		err,
+		err.to_string(),
 		"alias address: other.org is not a domain this server handles"
 	);
 }
@@ -214,37 +208,15 @@ fn add_refuses_an_address_used_by_a_static_account() {
 	let (_dir, file) = fixture(
 		"[[accounts]]\nname = \"alice\"\naddresses = [\"alice@example.org\"]\npassword_hash = \"$argon2id$v=19$m=65536,t=2,p=1$YWFhYWFhYWFhYWFhYWFhYQ$0000000000000000000000000000000000000000000\"\n",
 	);
-	let config = load(file.path());
-	let mut document = crate::cli::config_edit::ConfigDocument::open(file.path()).unwrap();
-	let args = AddArgs {
-		address: "alice@example.org".to_string(),
-		members: vec!["bob@example.org".to_string()],
-		senders: Vec::new(),
-		list_id: None,
-		visible: false,
-	};
-	let err = add_alias(&config, &mut document, &args).unwrap_err();
+	let err = commit(
+		file.path(),
+		Change::Add(new_alias("alice@example.org", &["bob@example.org"])),
+	)
+	.unwrap_err();
 	assert!(
-		err.contains("already used by an account"),
+		err.to_string().contains("already used by an account"),
 		"unexpected message: {err}"
 	);
-}
-
-#[test]
-fn add_refuses_an_address_used_by_another_alias() {
-	let (_dir, file) =
-		fixture("[[alias]]\naddress = \"team@example.org\"\nmembers = [\"alice@example.org\"]\n");
-	let config = load(file.path());
-	let mut document = crate::cli::config_edit::ConfigDocument::open(file.path()).unwrap();
-	let args = AddArgs {
-		address: "team@example.org".to_string(),
-		members: vec!["bob@example.org".to_string()],
-		senders: Vec::new(),
-		list_id: None,
-		visible: false,
-	};
-	let err = add_alias(&config, &mut document, &args).unwrap_err();
-	assert!(err.contains("already exists"), "unexpected message: {err}");
 }
 
 #[test]
@@ -252,58 +224,52 @@ fn remove_drops_an_existing_alias() {
 	let (_dir, file) = fixture(
 		"[[alias]]\naddress = \"team@example.org\"\nmembers = [\"alice@example.org\"]\n\n[[alias]]\naddress = \"ops@example.org\"\nmembers = [\"alice@example.org\"]\n",
 	);
-	let config = load(file.path());
-	let mut document = crate::cli::config_edit::ConfigDocument::open(file.path()).unwrap();
-	remove_alias(&config, &mut document, "team@example.org").expect("remove must succeed");
-	let _ = commit_and_restart(
-		document,
-		"team@example.org",
-		"removed",
-		false,
-		&mut Vec::new(),
-		&mut Vec::new(),
+	commit(
+		file.path(),
+		Change::Remove {
+			address: "team@example.org".to_string(),
+		},
 	)
-	.expect("commit must succeed");
-	let after = std::fs::read_to_string(file.path()).unwrap();
-	assert!(!after.contains("team@example.org"));
-	assert!(after.contains("ops@example.org"));
+	.expect("remove must succeed");
+	let addresses: Vec<String> = load(file.path())
+		.alias
+		.iter()
+		.map(|alias| alias.address.clone())
+		.collect();
+	assert_eq!(addresses, ["ops@example.org"]);
 }
 
 #[test]
 fn remove_refuses_an_unknown_alias() {
 	let (_dir, file) = fixture("");
-	let config = load(file.path());
-	let mut document = crate::cli::config_edit::ConfigDocument::open(file.path()).unwrap();
-	let err = remove_alias(&config, &mut document, "team@example.org").unwrap_err();
-	assert!(err.contains("not found"), "unexpected message: {err}");
+	let err = commit(
+		file.path(),
+		Change::Remove {
+			address: "team@example.org".to_string(),
+		},
+	)
+	.unwrap_err();
+	assert_eq!(
+		err,
+		AliasError::NotFound("alias team@example.org not found".into())
+	);
 }
+
+const TEAM: &str = "[[alias]]\naddress = \"team@example.org\"\nmembers = [\"alice@example.org\"]\n";
 
 #[test]
 fn member_add_appends_to_the_alias_members_list() {
-	let (_dir, file) =
-		fixture("[[alias]]\naddress = \"team@example.org\"\nmembers = [\"alice@example.org\"]\n");
-	let config = load(file.path());
-	let mut document = crate::cli::config_edit::ConfigDocument::open(file.path()).unwrap();
-	let args = MemberArgs {
-		action: MemberSubcommand::Add {
+	let (_dir, file) = fixture(TEAM);
+	commit(
+		file.path(),
+		Change::MemberAdd {
 			address: "team@example.org".to_string(),
 			member: "bob@example.org".to_string(),
 		},
-	};
-	member_edit(&config, &mut document, args).expect("add member must succeed");
-	let _ = commit_and_restart(
-		document,
-		"team@example.org",
-		"member added",
-		false,
-		&mut Vec::new(),
-		&mut Vec::new(),
 	)
-	.expect("commit must succeed");
-	let config = load(file.path());
-	let alias = &config.alias[0];
+	.expect("add member must succeed");
 	assert_eq!(
-		alias.members,
+		load(file.path()).alias[0].members,
 		vec![
 			"alice@example.org".to_string(),
 			"bob@example.org".to_string()
@@ -316,160 +282,110 @@ fn member_remove_drops_the_member_and_keeps_one() {
 	let (_dir, file) = fixture(
 		"[[alias]]\naddress = \"team@example.org\"\nmembers = [\"alice@example.org\", \"bob@example.org\"]\n",
 	);
-	let config = load(file.path());
-	let mut document = crate::cli::config_edit::ConfigDocument::open(file.path()).unwrap();
-	let args = MemberArgs {
-		action: MemberSubcommand::Remove {
+	commit(
+		file.path(),
+		Change::MemberRemove {
 			address: "team@example.org".to_string(),
 			member: "bob@example.org".to_string(),
 		},
-	};
-	member_edit(&config, &mut document, args).expect("remove member must succeed");
-	let _ = commit_and_restart(
-		document,
-		"team@example.org",
-		"member removed",
-		false,
-		&mut Vec::new(),
-		&mut Vec::new(),
 	)
-	.expect("commit must succeed");
-	let config = load(file.path());
-	let alias = &config.alias[0];
-	assert_eq!(alias.members, vec!["alice@example.org".to_string()]);
+	.expect("remove member must succeed");
+	assert_eq!(
+		load(file.path()).alias[0].members,
+		vec!["alice@example.org".to_string()]
+	);
 }
 
 #[test]
 fn member_remove_refuses_to_leave_an_alias_empty() {
-	let (_dir, file) =
-		fixture("[[alias]]\naddress = \"team@example.org\"\nmembers = [\"alice@example.org\"]\n");
-	let config = load(file.path());
-	let mut document = crate::cli::config_edit::ConfigDocument::open(file.path()).unwrap();
-	let args = MemberArgs {
-		action: MemberSubcommand::Remove {
+	let (_dir, file) = fixture(TEAM);
+	let err = commit(
+		file.path(),
+		Change::MemberRemove {
 			address: "team@example.org".to_string(),
 			member: "alice@example.org".to_string(),
 		},
-	};
-	let err = member_edit(&config, &mut document, args).unwrap_err();
-	assert!(err.contains("no members"), "unexpected message: {err}");
+	)
+	.unwrap_err();
+	assert!(
+		err.to_string().contains("no members"),
+		"unexpected message: {err}"
+	);
 }
 
 #[test]
 fn sender_add_and_remove_round_trip() {
-	let (_dir, file) =
-		fixture("[[alias]]\naddress = \"team@example.org\"\nmembers = [\"alice@example.org\"]\n");
-	let config = load(file.path());
-	let mut document = crate::cli::config_edit::ConfigDocument::open(file.path()).unwrap();
-	let args = SenderArgs {
-		action: SenderSubcommand::Add {
+	let (_dir, file) = fixture(TEAM);
+	commit(
+		file.path(),
+		Change::SenderAdd {
 			address: "team@example.org".to_string(),
 			sender: "ceo@example.org".to_string(),
 		},
-	};
-	sender_edit(&config, &mut document, args).expect("add sender must succeed");
-	let _ = commit_and_restart(
-		document,
-		"team@example.org",
-		"sender added",
-		false,
-		&mut Vec::new(),
-		&mut Vec::new(),
 	)
-	.expect("commit must succeed");
-	let config = load(file.path());
-	assert_eq!(config.alias[0].senders, vec!["ceo@example.org".to_string()]);
-
-	let mut document = crate::cli::config_edit::ConfigDocument::open(file.path()).unwrap();
-	let args = SenderArgs {
-		action: SenderSubcommand::Remove {
+	.expect("add sender must succeed");
+	assert_eq!(
+		load(file.path()).alias[0].senders,
+		vec!["ceo@example.org".to_string()]
+	);
+	commit(
+		file.path(),
+		Change::SenderRemove {
 			address: "team@example.org".to_string(),
 			sender: "ceo@example.org".to_string(),
 		},
-	};
-	sender_edit(&config, &mut document, args).expect("remove sender must succeed");
-	let _ = commit_and_restart(
-		document,
-		"team@example.org",
-		"sender removed",
-		false,
-		&mut Vec::new(),
-		&mut Vec::new(),
 	)
-	.expect("commit must succeed");
-	let config = load(file.path());
-	assert!(config.alias[0].senders.is_empty());
+	.expect("remove sender must succeed");
+	assert!(load(file.path()).alias[0].senders.is_empty());
 }
 
 #[test]
-fn add_alias_address_validates_against_the_store() {
+fn an_alias_address_and_its_people_are_checked_as_before() {
 	let (_dir, file) = fixture("");
-	let config = load(file.path());
-	let store = open_store(&config).expect("store must open");
-	assert!(validate_alias_address(&config, "alice@example.org", &store).is_ok());
+	let refused = |address: &str, members: &[&str]| {
+		commit(file.path(), Change::Add(new_alias(address, members)))
+			.expect_err("refused")
+			.to_string()
+	};
 	assert_eq!(
-		validate_alias_address(&config, "team@other.org", &store).unwrap_err(),
-		"alias address: other.org is not a domain this server handles",
-		"address outside configured domains must be refused"
+		refused("not-an-email", &["alice@example.org"]),
+		"alias address: not-an-email has no @"
 	);
 	assert_eq!(
-		validate_alias_address(&config, "not-an-email", &store).unwrap_err(),
-		"alias address: not-an-email has no @",
-		"a malformed address must be refused"
-	);
-}
-
-#[test]
-fn invalid_member_or_sender_address_is_refused() {
-	assert!(validate_member_or_sender("member", "alice@example.org").is_ok());
-	assert_eq!(
-		validate_member_or_sender("member", "bad").unwrap_err(),
+		refused("team@example.org", &["bad"]),
 		"member address: bad has no @"
+	);
+	assert_eq!(
+		refused("team@example.org", &[]),
+		"alias team@example.org has no members"
 	);
 }
 
 #[test]
 fn dry_run_prints_a_diff_and_does_not_write() {
-	let (_dir, file) = fixture("");
-	let config = load(file.path());
-	let mut document = crate::cli::config_edit::ConfigDocument::open(file.path()).unwrap();
+	let (dir, file) = fixture("");
 	let before = std::fs::read_to_string(file.path()).unwrap();
 	let mut out: Vec<u8> = Vec::new();
-	let status: Vec<u8> = Vec::new();
-	let args = AddArgs {
-		address: "team@example.org".to_string(),
-		members: vec!["alice@example.org".to_string()],
-		senders: Vec::new(),
-		list_id: None,
-		visible: false,
-	};
-	let _ = args;
-	let _ = config;
-	// Re-implement the dry-run commit because the helper hard-codes the
-	// restart closure.
-	let mut members = toml_edit::Array::new();
-	members.push(toml_edit::Value::from("alice@example.org".to_string()));
-	document
-		.upsert_element(
-			"alias",
-			"address",
-			"team@example.org",
-			&[
-				(
-					"address",
-					toml_edit::Value::from("team@example.org".to_string()),
-				),
-				("members", toml_edit::Value::Array(members)),
-			],
-		)
-		.unwrap();
-	let rendered = document.dry_run().unwrap();
-	let _ = write!(out, "{rendered}");
-	assert!(!out.is_empty(), "dry-run must emit the diff");
-	assert_eq!(
-		std::fs::read_to_string(file.path()).unwrap(),
-		before,
-		"dry-run must leave the file untouched"
+	let mut status: Vec<u8> = Vec::new();
+	let change = Change::Add(new_alias("team@example.org", &["alice@example.org"]));
+	let code = super::state::commit_state(
+		&load(file.path()),
+		&change,
+		"added",
+		super::state::Mode {
+			dry_run: true,
+			json: false,
+		},
+		&mut out,
+		&mut status,
+	)
+	.expect("a dry run succeeds");
+	assert_eq!(code, std::process::ExitCode::SUCCESS);
+	let diff = String::from_utf8(out).unwrap();
+	assert!(
+		diff.contains("team@example.org"),
+		"the diff names the alias: {diff}"
 	);
-	let _ = status;
+	assert_eq!(std::fs::read_to_string(file.path()).unwrap(), before);
+	assert!(!dir.path().join("address-aliases.toml").exists());
 }

@@ -33,7 +33,8 @@ impl AccountStore {
 				.iter()
 				.map(move |a| (a.clone(), owner.clone()))
 		});
-		let alias_claims = self.aliases.iter().map(|alias| {
+		let held = self.aliases.read().expect("aliases lock");
+		let alias_claims = held.iter().map(|alias| {
 			(
 				alias.address.clone(),
 				format!("alias {} (mail.toml)", alias.address),

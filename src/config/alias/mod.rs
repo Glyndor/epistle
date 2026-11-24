@@ -1,9 +1,9 @@
 //! Multi-target alias definitions: one address fanning out to several accounts.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// An alias address delivering to multiple local accounts.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Alias {
 	/// The alias address (e.g. `team@example.org`).
@@ -12,7 +12,7 @@ pub struct Alias {
 	pub members: Vec<String>,
 	/// Addresses permitted to send *as* this alias (From / MAIL FROM). Empty
 	/// means any member may; a non-member is always refused.
-	#[serde(default)]
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub senders: Vec<String>,
 	/// Keep the membership private: when true (the default) the member list is
 	/// not disclosed through directory queries. Set false to make it visible.
@@ -25,7 +25,7 @@ pub struct Alias {
 	/// has to be an identifier those brackets can carry: a dot-atom of
 	/// non-empty `atext` atoms joined by single dots. Anything else is
 	/// refused at load.
-	#[serde(default)]
+	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub list_id: Option<String>,
 }
 

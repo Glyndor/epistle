@@ -51,12 +51,14 @@ fn evaluate(store: &ApiKeyStore, data_dir: &std::path::Path, now: u64) -> AreaRe
 		if let Some(detail) = broad_reach(key, clause.is_none()) {
 			items.push(Item::new(&name, Level::Warn, detail));
 		}
-		if key.scopes.iter().any(|scope| scope == "scim") && key.domains.is_empty() {
-			items.push(Item::new(
-				&name,
-				Level::Warn,
-				"scim key has no associated domain",
-			));
+		for scope in ["scim", "alias"] {
+			if key.scopes.iter().any(|held| held == scope) && key.domains.is_empty() {
+				items.push(Item::new(
+					&name,
+					Level::Warn,
+					format!("{scope} key has no associated domain"),
+				));
+			}
 		}
 		if let (Some(cidr), Some(clause)) = (&key.ip_cidr, &clause) {
 			items.push(Item::new(

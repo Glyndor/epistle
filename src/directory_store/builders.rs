@@ -43,7 +43,7 @@ impl AccountStore {
 				..super::HostedDomains::default()
 			}),
 			static_accounts,
-			aliases: Vec::new(),
+			aliases: RwLock::new(Vec::new()),
 			app_passwords,
 			dynamic: RwLock::new(dynamic.accounts),
 			sql_accounts: RwLock::new(Vec::new()),
@@ -110,7 +110,7 @@ impl AccountStore {
 
 	/// Set the multi-target aliases and rebuild the directory.
 	pub fn with_aliases(mut self, aliases: Vec<crate::config::Alias>) -> Self {
-		self.aliases = aliases;
+		*self.aliases.get_mut().expect("aliases lock") = aliases;
 		self.handle.replace(self.build_directory());
 		self
 	}
