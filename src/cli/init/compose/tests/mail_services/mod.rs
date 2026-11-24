@@ -4,6 +4,7 @@ pub(super) mod antivirus;
 pub(super) mod certs;
 pub(super) mod clamav;
 pub(super) mod freshclam_checks;
+pub(super) mod health_action;
 pub(super) mod mail;
 pub(super) mod mail_ports;
 pub(super) mod mail_probes;
