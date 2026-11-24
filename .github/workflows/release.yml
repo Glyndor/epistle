@@ -164,9 +164,19 @@ jobs:
           fi
 
       - name: Audit dependencies at release time
+        env:
+          DRY_RUN: ${{ inputs.dry-run && 'true' || 'false' }}
+        # A release stops here when the lockfile of the tag has an advisory. A rehearsal
+        # publishes nothing and exists to run the stages after this one, and the only tags
+        # it can name were cut before the advisories published since, so it reports the
+        # failure as a warning and goes on.
         run: |
           command -v cargo-audit >/dev/null || cargo install cargo-audit --locked --version "^0.23"
-          cargo audit
+          if [ "$DRY_RUN" = true ]; then
+            cargo audit || echo "::warning::cargo audit fails on $TAG; a release of this tree would stop here, and the rehearsal goes on to the stages after it"
+          else
+            cargo audit
+          fi
 
       - name: Tag has no published release yet
         # An images-only dispatch exists to finish the images of a release
