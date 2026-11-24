@@ -32,8 +32,13 @@ fn stored(env: &Env) -> Vec<epistle::api::ApiKey> {
 	set.snapshot().to_vec()
 }
 
+/// A known divergence, kept on purpose: the flat command has taken both since
+/// before `--account` existed, the key it makes reaches no more than an
+/// account-bound key, and refusing the pair now would break the scripts that
+/// use it.
 #[test]
-fn the_flat_command_takes_an_account_and_a_domain_that_the_resource_form_refuses() {
+fn known_divergence_the_flat_command_takes_an_account_and_a_domain_that_the_resource_form_refuses()
+{
 	let env = env("");
 	add_account(&env, "alice");
 	let output = epistle(

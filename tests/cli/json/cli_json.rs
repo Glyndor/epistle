@@ -106,3 +106,21 @@ mod migrate_import;
 
 #[path = "cli_json/operator/legacy_key_reach.rs"]
 mod legacy_key_reach;
+
+#[path = "cli_json/migrate/migrate_merge.rs"]
+mod migrate_merge;
+
+#[path = "cli_json/migrate/migrate_imap_port.rs"]
+mod migrate_imap_port;
+
+#[path = "cli_json/accounts/archive_purge.rs"]
+mod archive_purge;
+
+#[path = "cli_json/operator/destructive_confirmation.rs"]
+mod destructive_confirmation;
+
+#[path = "cli_json/snapshot.rs"]
+mod snapshot;
+
+#[path = "cli_json/accounts/forward_catch_all_refusals.rs"]
+mod forward_catch_all_refusals;
