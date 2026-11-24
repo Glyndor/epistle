@@ -13,7 +13,7 @@ import ci_yaml
 
 ROOT = Path(__file__).resolve().parents[3]
 REUSABLE = ROOT / ".github/workflows/reusable-rust-ci.yml"
-NAMES = ("LINT", "TEST", "COVERAGE", "SUITE", "MSRV", "DOC", "PACKAGE", "SEMVER")
+NAMES = ("LINT", "PATHS", "TEST", "COVERAGE", "SUITE", "MSRV", "DOC", "PACKAGE", "SEMVER")
 
 
 def jobs():
@@ -29,8 +29,8 @@ def run(want, got, extra="success"):
     return done.returncode, done.stdout + done.stderr
 
 
-EVERYTHING = {"LINT": "true", "TEST": "true", "COVERAGE": "true", "MSRV": "true", "DOC": "true"}
-ALL_OK = {"LINT": "success", "TEST": "success", "COVERAGE": "success", "MSRV": "success", "DOC": "success"}
+EVERYTHING = {"LINT": "true", "PATHS": "true", "TEST": "true", "COVERAGE": "true", "MSRV": "true", "DOC": "true"}
+ALL_OK = {"LINT": "success", "PATHS": "success", "TEST": "success", "COVERAGE": "success", "MSRV": "success", "DOC": "success"}
 
 
 class Decisions(unittest.TestCase):
@@ -41,7 +41,7 @@ class Decisions(unittest.TestCase):
         self.assertEqual(run({}, {})[0], 0)
 
     def test_a_selected_job_that_was_skipped_fails_for_each_job(self):
-        for name in ("LINT", "TEST", "COVERAGE", "MSRV", "DOC"):
+        for name in ("LINT", "PATHS", "TEST", "COVERAGE", "MSRV", "DOC"):
             with self.subTest(name=name):
                 code, out = run(EVERYTHING, {**ALL_OK, name: "skipped"})
                 self.assertEqual(code, 1, out)
@@ -84,11 +84,12 @@ class Wiring(unittest.TestCase):
 
     def test_what_it_reads_is_what_the_inputs_and_the_needs_say(self):
         env = jobs()["sentinel"]["steps"][0]["env"]
-        for name, job in (("LINT", "lint"), ("TEST", "test"), ("COVERAGE", "coverage"), ("SUITE", "test-suite"),
+        for name, job in (("LINT", "lint"), ("PATHS", "codeql-paths"), ("TEST", "test"), ("COVERAGE", "coverage"), ("SUITE", "test-suite"),
                           ("MSRV", "msrv"), ("DOC", "doc"), ("PACKAGE", "package"), ("SEMVER", "semver"),
                           ("EXTRA", "test-extra")):
             self.assertEqual(env[f"GOT_{name}"], "${{ needs." + job + ".result }}")
         self.assertEqual(env["WANT_LINT"], "${{ inputs.run-lint }}")
+        self.assertEqual(env["WANT_PATHS"], "${{ inputs.run-lint }}")
         self.assertEqual(env["WANT_TEST"], "${{ inputs.run-tests }}")
         self.assertEqual(env["WANT_COVERAGE"], "${{ inputs.run-tests && inputs.coverage-threshold > 0 }}")
         self.assertEqual(env["WANT_SUITE"], "${{ inputs.run-tests && inputs.coverage-threshold == 0 }}")

@@ -93,6 +93,59 @@
   "RUST_MIN_STACK": "8388608"
  },
  "jobs": {
+  "codeql-paths": {
+   "defaults": {
+    "run": {
+     "working-directory": "${{ inputs.working-directory }}"
+    }
+   },
+   "if": "inputs.run-lint",
+   "name": "CodeQL leaves out only test code",
+   "runs-on": "${{ fromJSON(vars.CI_RUNNER || '\"ubuntu-latest\"') }}",
+   "steps": [
+    {
+     "uses": "actions/checkout@PIN",
+     "with": {
+      "persist-credentials": false
+     }
+    },
+    {
+     "env": {
+      "TOOLCHAIN": "${{ inputs.toolchain }}"
+     },
+     "name": "Install toolchain",
+     "run": "rustup toolchain install \"$TOOLCHAIN\" --profile minimal\nrustup default \"$TOOLCHAIN\"\n"
+    },
+    {
+     "id": "cargo-cache",
+     "uses": "./.github/actions/rust-cache",
+     "with": {
+      "prefix": "rust-codeql-paths",
+      "working-directory": "${{ inputs.working-directory }}"
+     }
+    },
+    {
+     "name": "Check the production targets and the tests",
+     "run": "set -euo pipefail\nout=\"$RUNNER_TEMP/codeql-paths\"\nmkdir -p \"$out\"\ncargo check --locked --lib --bins --message-format=json > \"$out/production-debug.json\"\ncargo check --locked --lib --bins --all-features --message-format=json > \"$out/production-debug-all.json\"\ncargo check --locked --lib --bins --release --message-format=json > \"$out/production-release.json\"\ncargo check --locked --lib --bins --release --all-features --message-format=json > \"$out/production-release-all.json\"\ncargo check --locked --tests --all-features --message-format=json > \"$out/tests.json\"\n"
+    },
+    {
+     "name": "The CodeQL configuration leaves out only files that only the tests read",
+     "run": "python3 -I .github/scripts/ci_codeql/check_paths.py .github/codeql/codeql-config.yml --production \"$RUNNER_TEMP\"/codeql-paths/production-*.json --tests \"$RUNNER_TEMP/codeql-paths/tests.json\""
+    },
+    {
+     "if": "${{ success() }}",
+     "name": "Save the cargo cache",
+     "uses": "./.github/actions/rust-cache",
+     "with": {
+      "cache-hit": "${{ steps.cargo-cache.outputs.cache-hit }}",
+      "mode": "save",
+      "prefix": "rust-codeql-paths",
+      "working-directory": "${{ inputs.working-directory }}"
+     }
+    }
+   ],
+   "timeout-minutes": 45
+  },
   "coverage": {
    "defaults": {
     "run": {
@@ -419,6 +472,7 @@
    "name": "Selected suites ran",
    "needs": [
     "lint",
+    "codeql-paths",
     "test",
     "test-suite",
     "coverage",
@@ -438,6 +492,7 @@
       "GOT_LINT": "${{ needs.lint.result }}",
       "GOT_MSRV": "${{ needs.msrv.result }}",
       "GOT_PACKAGE": "${{ needs.package.result }}",
+      "GOT_PATHS": "${{ needs.codeql-paths.result }}",
       "GOT_SEMVER": "${{ needs.semver.result }}",
       "GOT_SUITE": "${{ needs.test-suite.result }}",
       "GOT_TEST": "${{ needs.test.result }}",
@@ -446,12 +501,13 @@
       "WANT_LINT": "${{ inputs.run-lint }}",
       "WANT_MSRV": "${{ inputs.run-msrv && inputs.msrv != '' }}",
       "WANT_PACKAGE": "${{ inputs.package-check }}",
+      "WANT_PATHS": "${{ inputs.run-lint }}",
       "WANT_SEMVER": "${{ inputs.semver-check }}",
       "WANT_SUITE": "${{ inputs.run-tests && inputs.coverage-threshold == 0 }}",
       "WANT_TEST": "${{ inputs.run-tests }}"
      },
      "name": "Every selected job ended in success",
-     "run": "set -u\nfailed=0\nfor name in LINT TEST COVERAGE SUITE MSRV DOC PACKAGE SEMVER; do\n  want=\"WANT_$name\"\n  got=\"GOT_$name\"\n  case \"${!want}\" in\n    true) [ \"${!got}\" = success ] || { echo \"::error::$name was selected and ended in ${!got}\"; failed=1; } ;;\n    false) case \"${!got}\" in failure | cancelled) echo \"::error::$name ended in ${!got}\"; failed=1 ;; esac ;;\n    *) echo \"::error::$name: the selection is neither true nor false (${!want})\"; failed=1 ;;\n  esac\ndone\ncase \"$GOT_EXTRA\" in failure | cancelled) echo \"::error::the extra-platform tests ended in $GOT_EXTRA\"; failed=1 ;; esac\nexit \"$failed\"\n"
+     "run": "set -u\nfailed=0\nfor name in LINT PATHS TEST COVERAGE SUITE MSRV DOC PACKAGE SEMVER; do\n  want=\"WANT_$name\"\n  got=\"GOT_$name\"\n  case \"${!want}\" in\n    true) [ \"${!got}\" = success ] || { echo \"::error::$name was selected and ended in ${!got}\"; failed=1; } ;;\n    false) case \"${!got}\" in failure | cancelled) echo \"::error::$name ended in ${!got}\"; failed=1 ;; esac ;;\n    *) echo \"::error::$name: the selection is neither true nor false (${!want})\"; failed=1 ;;\n  esac\ndone\ncase \"$GOT_EXTRA\" in failure | cancelled) echo \"::error::the extra-platform tests ended in $GOT_EXTRA\"; failed=1 ;; esac\nexit \"$failed\"\n"
     }
    ],
    "timeout-minutes": 5
