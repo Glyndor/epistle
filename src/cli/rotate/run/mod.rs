@@ -90,6 +90,14 @@ fn drive(
 	let _lock = lock(&config.data_dir)?.ok_or(
 		"another `epistle rotate` or an `epistle backup` is running on this server".to_string(),
 	)?;
+	// A run that ends before it saves its journal (refused, not confirmed,
+	// answered no) leaves the lock file and the directory it made as it
+	// found them. This is dropped before the lock, so the file goes while
+	// it is still held.
+	let mut tidy = Tidy {
+		dir: &dir,
+		armed: true,
+	};
 	let context = Context {
 		path,
 		config: &config,
@@ -121,6 +129,7 @@ fn drive(
 	)
 	.map_err(Stop::Cancelled)?;
 	journal.save(&dir)?;
+	tidy.armed = false;
 	let mut secrets = Secrets::open(&dir)?;
 	let mut restart = Some(restart);
 	let mut reload = None;
@@ -146,6 +155,23 @@ fn drive(
 	secrets.remove()?;
 	journal.archive(&dir, options.now)?;
 	Ok(ExitCode::SUCCESS)
+}
+
+/// Removes the lock file, and the directory when nothing else is in it, if
+/// the run ends before it has anything to keep there.
+struct Tidy<'a> {
+	dir: &'a Path,
+	armed: bool,
+}
+
+impl Drop for Tidy<'_> {
+	fn drop(&mut self) {
+		if self.armed {
+			let _ = std::fs::remove_file(self.dir.join("lock"));
+			// Fails, and leaves the directory, when a journal is in it.
+			let _ = std::fs::remove_dir(self.dir);
+		}
+	}
 }
 
 /// One step's work, with what it borrows from the run.
