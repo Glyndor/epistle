@@ -1,0 +1,49 @@
+{
+ "True": {
+  "workflow_call": null
+ },
+ "jobs": {
+  "notices": {
+   "name": "no deprecation notices${{ github.event_name == 'pull_request' && github.base_ref == 'main' && ' (promotion)' || !(github.event_name == 'merge_group' || github.event_name == 'pull_request' && github.base_ref == 'develop') && format(' ({0})', github.event_name) || '' }}",
+   "permissions": {
+    "actions": "read",
+    "checks": "read",
+    "contents": "read"
+   },
+   "runs-on": "${{ fromJSON(vars.CI_RUNNER || '\"ubuntu-latest\"') }}",
+   "steps": [
+    {
+     "uses": "actions/checkout@PIN",
+     "with": {
+      "path": "base",
+      "persist-credentials": false,
+      "ref": "${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.sha }}"
+     }
+    },
+    {
+     "uses": "actions/checkout@PIN",
+     "with": {
+      "path": "head",
+      "persist-credentials": false
+     }
+    },
+    {
+     "name": "Take the check from the base commit",
+     "run": "f=.github/scripts/ci/no-deprecation-notices.sh\nmkdir -p \"$RUNNER_TEMP/judge\"\nlisting=\"$(git -C base ls-tree --name-only HEAD -- \"$f\")\" || exit 1\nif [ -n \"$listing\" ]; then\n  git -C base show \"HEAD:$f\" >\"$RUNNER_TEMP/judge/no-deprecation-notices.sh\" || exit 1\nelse\n  echo \"::notice::$f is not in the base commit; the copy of the change is used\"\n  cp \"head/$f\" \"$RUNNER_TEMP/judge/no-deprecation-notices.sh\"\nfi\n"
+    },
+    {
+     "env": {
+      "GH_TOKEN": "${{ github.token }}",
+      "REPO": "${{ github.repository }}",
+      "RUN_ID": "${{ github.run_id }}"
+     },
+     "name": "Read the annotations of every job of this run",
+     "run": "bash \"$RUNNER_TEMP/judge/no-deprecation-notices.sh\""
+    }
+   ],
+   "timeout-minutes": 10
+  }
+ },
+ "name": "Deprecation notices (reusable)",
+ "permissions": {}
+}

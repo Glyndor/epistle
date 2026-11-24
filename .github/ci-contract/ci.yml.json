@@ -62,7 +62,6 @@
   },
   "deprecations": {
    "if": "always()",
-   "name": "no deprecation notice",
    "needs": [
     "rust",
     "debian",
@@ -70,26 +69,15 @@
     "sbom-and-licenses",
     "audit",
     "folder-limit",
-    "python-tests"
+    "python-tests",
+    "secret-scan-tests"
    ],
    "permissions": {
     "actions": "read",
     "checks": "read",
     "contents": "read"
    },
-   "runs-on": "${{ fromJSON(vars.CI_RUNNER || '\"ubuntu-latest\"') }}",
-   "steps": [
-    {
-     "env": {
-      "GH_TOKEN": "${{ github.token }}",
-      "REPO": "${{ github.repository }}",
-      "RUN_ID": "${{ github.run_id }}"
-     },
-     "name": "Read the annotations of this run",
-     "run": "python3 -I - <<'PY'\nimport json\nimport os\nimport re\nimport subprocess\nimport sys\nimport time\n\nrepo, run_id = os.environ[\"REPO\"], os.environ[\"RUN_ID\"]\nNOTICE = re.compile(r\"deprecat\", re.I)\n\n\ndef api(path):\n    for attempt in range(3):\n        done = subprocess.run([\"gh\", \"api\", \"--paginate\", path], capture_output=True, text=True, check=False)\n        if done.returncode == 0:\n            # --paginate prints one JSON document per page, back to back\n            pages, text, at = [], done.stdout, 0\n            decoder = json.JSONDecoder()\n            while at < len(text):\n                if text[at].isspace():\n                    at += 1\n                    continue\n                page, at = decoder.raw_decode(text, at)\n                pages.append(page)\n            return pages\n        time.sleep(2 * (attempt + 1))\n    print(f\"::error::could not read {path}: {done.stderr.strip()}\")\n    sys.exit(1)\n\n\njobs = [job for page in api(f\"repos/{repo}/actions/runs/{run_id}/jobs?per_page=100\") for job in page[\"jobs\"]]\nfound = []\nfor job in jobs:\n    for page in api(f\"repos/{repo}/check-runs/{job['id']}/annotations?per_page=100\"):\n        for note in page:\n            if note.get(\"annotation_level\") in (\"warning\", \"failure\") and NOTICE.search(note.get(\"message\") or \"\"):\n                found.append((job[\"name\"], note[\"message\"].strip().splitlines()[0]))\nfor name, message in found:\n    print(f\"::error::{name}: {message}\")\nif found:\n    sys.exit(1)\nprint(f\"No deprecation notice in {len(jobs)} jobs.\")\nPY\n"
-    }
-   ],
-   "timeout-minutes": 10
+   "uses": "./.github/workflows/reusable-deprecation-notices.yml"
   },
   "folder-limit": {
    "if": "${{ !cancelled() }}",

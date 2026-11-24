@@ -21,6 +21,11 @@ KNOWN = {
     ("e2e.yml", "e2e"): "full-server e2e (${{ matrix.os }})",  # ubuntu-22.04, ubuntu-24.04
     ("release.yml", "build-deb"): "Build Debian package (${{ matrix.arch }})",
     ("release.yml", "image-build"): "Build and push image (${{ matrix.arch }})",
+    ("reusable-deprecation-notices.yml", "notices"): (
+        "no deprecation notices${{ github.event_name == 'pull_request' && github.base_ref == 'main' && ' (promotion)'"
+        " || !(github.event_name == 'merge_group' || github.event_name == 'pull_request' && github.base_ref == 'develop')"
+        " && format(' ({0})', github.event_name) || '' }}"
+    ),
     ("reusable-rust-audit.yml", "audit"): "cargo audit${{ inputs.ref != '' && format(' ({0})', inputs.ref) || '' }}",
     ("reusable-rust-audit.yml", "deny"): "cargo deny${{ inputs.ref != '' && format(' ({0})', inputs.ref) || '' }}",
     ("reusable-rust-ci.yml", "test-extra"): "Test (${{ matrix.os }})",
