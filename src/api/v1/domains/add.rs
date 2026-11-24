@@ -6,7 +6,7 @@ use axum::{Extension, Json};
 use serde::Deserialize;
 
 use super::change::{self, Changed};
-use crate::api::audit::DomainEvent;
+use crate::api::audit::{Carried, DomainEvent};
 use crate::api::state::{ApiState, ClientIp, MatchedAuth};
 use crate::api::{Principal, error::ApiError};
 use crate::domain::state::edit::{
@@ -36,6 +36,8 @@ pub async fn add(
 	let domain = change::canonical("domain", &request.domain)?;
 	let config = change::config(&state)?;
 	let name = request.domain.clone();
+	let trail = change::Trail::new(DomainEvent::Added, &domain, ip);
+	let carried = Carried::capture();
 	let done = tokio::task::spawn_blocking(move || {
 		// Preparation must see writes that the watcher has not observed yet.
 		let path = crate::domain::state::path(&config.data_dir);
@@ -79,11 +81,13 @@ pub async fn add(
 				crate::dkim::domain_keys::remove(&unused);
 			}
 		}
+		if let Ok(done) = &result {
+			trail.log(&carried, done);
+		}
 		result
 	})
 	.await
 	.map_err(|_| ApiError::internal())?
 	.map_err(change::refusal)?;
-	change::audit(&done, DomainEvent::Added, &domain, ip);
 	Ok((StatusCode::CREATED, Json(Changed::of(&done, domain))))
 }

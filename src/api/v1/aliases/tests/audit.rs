@@ -91,3 +91,68 @@ async fn every_change_is_audited_once_with_its_key_and_the_rest_is_silent() {
 		assert!(!text.contains(secret), "the audit carries {secret}");
 	}
 }
+
+/// The commit runs on a blocking thread that outlives the request. A client
+/// that goes away after the commit started must still leave the audit line:
+/// the line is written on that thread, not by the handler after `.await`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_request_dropped_while_the_commit_runs_still_leaves_its_audit_line() {
+	crate::cli::trace::capture::keep_callsites_live();
+	for (method, path, body, event) in [
+		(
+			"POST",
+			"/api/v1/aliases",
+			Some(json!({"alias":"new@a.example","members":["ann@a.example"]})),
+			"alias.added",
+		),
+		(
+			"DELETE",
+			"/api/v1/aliases/team@a.example",
+			None,
+			"alias.removed",
+		),
+	] {
+		let world = world();
+		let capture = Capture::default();
+		let subscriber = Registry::default().with(capture.clone());
+		// The commit takes the lock of `domains.toml` first: holding it keeps
+		// the blocking thread waiting while the request is dropped.
+		let domains = crate::domain::state::path(world.data_dir());
+		let held =
+			crate::storage::lock::FileLock::acquire(&crate::storage::locked::lock_path(&domains))
+				.expect("lock");
+		let state = world.state.clone();
+		let request = tokio::spawn(
+			async move {
+				crate::api::tests::base::request_with_body(
+					&crate::api::router(state),
+					method,
+					path,
+					Some(TENANT_A),
+					body,
+				)
+				.await
+			}
+			.with_subscriber(subscriber),
+		);
+		tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+		request.abort();
+		assert!(request.await.expect_err("dropped").is_cancelled());
+		assert!(world.disk().is_none(), "{path}: nothing was committed yet");
+		assert!(capture.0.lock().unwrap().is_empty());
+		drop(held);
+		let mut written = false;
+		for _ in 0..100 {
+			if world.disk().is_some() && capture.0.lock().unwrap().len() == 1 {
+				written = true;
+				break;
+			}
+			tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+		}
+		assert!(written, "{path}: the change and its line both arrive");
+		let events = capture.0.lock().unwrap().clone();
+		assert_eq!(events[0]["event"], event, "{events:?}");
+		assert_eq!(events[0]["key"], "tenant-a");
+		assert_eq!(events[0]["domain"], "a.example");
+	}
+}

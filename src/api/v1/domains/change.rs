@@ -4,7 +4,7 @@ use axum::extract::{Path, State};
 use axum::{Extension, Json};
 use serde::Serialize;
 
-use crate::api::audit::{DomainEvent, log_domain_change};
+use crate::api::audit::{Carried, DomainEvent, log_domain_change};
 use crate::api::state::{ApiState, ClientIp, MatchedAuth};
 use crate::api::{Principal, error::ApiError};
 use crate::domain::state::{Change, Committed, EditError};
@@ -62,12 +62,39 @@ pub(super) fn config(state: &ApiState) -> Result<std::sync::Arc<crate::config::C
 		.ok_or_else(ApiError::internal)
 }
 
+/// What the audit line of a domain change says. It is written on the
+/// blocking thread that commits, so a client that drops the request after the
+/// commit still leaves the line (see [`crate::api::audit::Carried`]).
+pub(super) struct Trail {
+	pub(super) event: DomainEvent,
+	pub(super) domain: String,
+	pub(super) ip: ClientIp,
+}
+
+impl Trail {
+	pub(super) fn new(event: DomainEvent, domain: &str, ip: ClientIp) -> Self {
+		Self {
+			event,
+			domain: domain.to_string(),
+			ip,
+		}
+	}
+
+	/// Write the line of a change that was made.
+	pub(super) fn log(&self, carried: &Carried, done: &Committed) {
+		if done.changed {
+			carried.run(|| log_domain_change(self.event, &self.domain, self.ip.0));
+		}
+	}
+}
+
 pub(super) async fn commit(
 	state: &ApiState,
 	change: Change,
 	alias_target: Option<String>,
+	trail: Trail,
 ) -> Result<Committed, ApiError> {
-	commit_with(state, change, alias_target, false).await
+	commit_with(state, change, alias_target, false, trail).await
 }
 
 /// The in-use refusal names other tenants' aliases, accounts and tenants.
@@ -78,10 +105,12 @@ pub(super) async fn commit_with(
 	change: Change,
 	alias_target: Option<String>,
 	redact_in_use: bool,
+	trail: Trail,
 ) -> Result<Committed, ApiError> {
 	let config = config(state)?;
+	let carried = Carried::capture();
 	tokio::task::spawn_blocking(move || {
-		crate::domain::state::edit::commit_checked(&config, &change, |_, file| {
+		let done = crate::domain::state::edit::commit_checked(&config, &change, |_, file| {
 			if let Some(target) = &alias_target {
 				if file.domain(target).is_none() {
 					return Err(EditError::NotFound(format!(
@@ -99,7 +128,9 @@ pub(super) async fn commit_with(
 				}
 			}
 			Ok(())
-		})
+		})?;
+		trail.log(&carried, &done);
+		Ok(done)
 	})
 	.await
 	.map_err(|_| ApiError::internal())?
@@ -107,12 +138,6 @@ pub(super) async fn commit_with(
 		EditError::InUse(_) if redact_in_use => ApiError::conflict("domain is still in use"),
 		other => refusal(other),
 	})
-}
-
-pub(super) fn audit(done: &Committed, event: DomainEvent, domain: &str, ip: ClientIp) {
-	if done.changed {
-		log_domain_change(event, domain, ip.0);
-	}
 }
 
 pub async fn remove(
@@ -125,7 +150,7 @@ pub async fn remove(
 	let principal = Principal::for_token(&state, &auth);
 	in_scope(&principal, &domain)?;
 	let redact = !principal.is_unrestricted();
-	let done = commit_with(&state, Change::Remove { name: raw }, None, redact).await?;
-	audit(&done, DomainEvent::Removed, &domain, ip);
+	let trail = Trail::new(DomainEvent::Removed, &domain, ip);
+	let done = commit_with(&state, Change::Remove { name: raw }, None, redact, trail).await?;
 	Ok(Json(Changed::of(&done, domain)))
 }

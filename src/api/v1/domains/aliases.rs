@@ -45,9 +45,9 @@ pub async fn add(
 			target: raw_domain,
 		},
 		None,
+		change::Trail::new(DomainEvent::AliasAdded, &alias, ip),
 	)
 	.await?;
-	change::audit(&done, DomainEvent::AliasAdded, &alias, ip);
 	Ok((StatusCode::CREATED, Json(Changed::of(&done, domain))))
 }
 
@@ -62,8 +62,8 @@ pub async fn remove(
 		&state,
 		Change::AliasRemove { alias: raw_alias },
 		Some(domain.clone()),
+		change::Trail::new(DomainEvent::AliasRemoved, &alias, ip),
 	)
 	.await?;
-	change::audit(&done, DomainEvent::AliasRemoved, &alias, ip);
 	Ok(Json(Changed::of(&done, domain)))
 }
