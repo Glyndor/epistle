@@ -820,7 +820,17 @@ and writes nothing. What differs from the command is stricter, not looser:
   not the key's get the same `400`, and the alias of another tenant is `404
   alias ... not found` like one that is not there;
 - the role addresses `postmaster`, `abuse`, `hostmaster`, `webmaster`,
-  `security` and `noc` are the operator's and are refused to a key.
+  `security`, `noc`, `admin`, `administrator`, `root`, `ssladmin`, `tlsrpt`
+  and `mailer-daemon` are the operator's, with or without a sub-address tag
+  (`postmaster+x`): a key may not make an alias on one, and may not remove
+  or edit one the operator made (`400`);
+- an alias address that is the tagged form of an account's address
+  (`ann+shop@example.org` when `ann@example.org` is an account) is refused,
+  since an alias is looked up before the tag is stripped and it would take
+  that account's mail;
+- a member is an account that lies entirely inside the key's domains: an
+  account with one address inside and one outside is as unavailable as one
+  that does not exist.
 
 The rest is the command's: the address is in a hosted domain and no account,
 masked address or other alias holds it, the caps of the domain
@@ -831,8 +841,9 @@ plain private alias: senders, `list_id` and visibility stay with the command.
 
 `GET /api/v1/aliases` lists the aliases ordered by address, with `limit`
 (default 50, at most 100) and `cursor`, filtered by `domain` and `account`.
-A key confined to some domains sees the aliases whose address and members
-all lie in them. `DELETE /api/v1/aliases/{alias}` takes `dry_run=true` as a
+A key confined to some domains sees the aliases whose address, members and
+senders all lie in them, and removes or edits only those; any other is `404`
+like one that is not there. `DELETE /api/v1/aliases/{alias}` takes `dry_run=true` as a
 query. Each durable change emits `alias.added` or `alias.removed` on
 `epistle::api::audit`, with the label of the key (never the key), the domain,
 a pseudonym of the alias and `client_ip`.

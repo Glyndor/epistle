@@ -278,3 +278,110 @@ async fn a_target_account_of_another_tenant_looks_like_one_that_does_not_exist()
 	assert_eq!((other_status, &other), (missing_status, &missing));
 	assert!(world.disk().is_none());
 }
+
+#[tokio::test]
+async fn the_alias_of_a_role_address_cannot_be_removed_through_the_route() {
+	let world = world_with(
+		"[[alias]]\naddress = \"postmaster@a.example\"\nmembers = [\"ann@a.example\"]\n",
+	);
+	for key in [TENANT_A, ALL] {
+		let (status, body) = call(
+			&world,
+			"DELETE",
+			"/api/v1/aliases/postmaster@a.example",
+			key,
+			None,
+		)
+		.await;
+		assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+		assert!(message(&body).contains("role address"), "{body}");
+	}
+	assert!(world.disk().is_none(), "nothing was written");
+	let (_, listed) = call(&world, "GET", "/api/v1/aliases", ALL, None).await;
+	assert!(
+		listed["aliases"]
+			.as_array()
+			.unwrap()
+			.iter()
+			.any(|row| row["address"] == "postmaster@a.example")
+	);
+}
+
+#[tokio::test]
+async fn an_alias_of_another_tenant_in_part_is_removed_with_the_answer_of_a_missing_one() {
+	let world = world_with(
+		"[[alias]]\naddress = \"mixed@a.example\"\nmembers = [\"ann@a.example\", \"bob@b.example\"]\n\n\
+		 [[alias]]\naddress = \"sent@a.example\"\nmembers = [\"ann@a.example\"]\nsenders = [\"bob@b.example\"]\n",
+	);
+	let (missing_status, missing) = call(
+		&world,
+		"DELETE",
+		"/api/v1/aliases/ghost@a.example",
+		TENANT_A,
+		None,
+	)
+	.await;
+	assert_eq!(missing_status, StatusCode::NOT_FOUND);
+	for address in ["mixed@a.example", "sent@a.example"] {
+		let (status, body) = call(
+			&world,
+			"DELETE",
+			&format!("/api/v1/aliases/{address}"),
+			TENANT_A,
+			None,
+		)
+		.await;
+		assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+		assert_eq!(
+			message(&body).replace(address, "x"),
+			message(&missing).replace("ghost@a.example", "x")
+		);
+	}
+	assert!(world.disk().is_none(), "nothing was written");
+	let (status, _) = call(
+		&world,
+		"DELETE",
+		"/api/v1/aliases/mixed@a.example",
+		ALL,
+		None,
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn the_senders_of_an_alias_are_inside_the_key_s_domains_or_the_alias_is_not_listed() {
+	let world = world_with(
+		"[[alias]]\naddress = \"sent@a.example\"\nmembers = [\"ann@a.example\"]\nsenders = [\"bob@b.example\"]\n",
+	);
+	let (_, body) = call(&world, "GET", "/api/v1/aliases", TENANT_A, None).await;
+	let text = body.to_string();
+	assert!(
+		!text.contains("sent@a.example") && !text.contains("bob@b.example"),
+		"{text}"
+	);
+	let (_, body) = call(&world, "GET", "/api/v1/aliases", ALL, None).await;
+	assert!(body.to_string().contains("sent@a.example"));
+}
+
+#[tokio::test]
+async fn a_tagged_form_of_an_account_address_is_refused_through_the_route() {
+	let world = world();
+	let (status, body) = create(
+		&world,
+		TENANT_A,
+		json!({"alias":"ann+shop@a.example","members":["abe@a.example"]}),
+	)
+	.await;
+	assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+	assert!(message(&body).contains("tagged form"), "{body}");
+	let (status, body) = create(
+		&world,
+		TENANT_A,
+		json!({"alias":"admin+x@a.example","members":["abe@a.example"]}),
+	)
+	.await;
+	assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+	assert!(message(&body).contains("role address"), "{body}");
+	assert!(world.disk().is_none());
+}

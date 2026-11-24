@@ -220,7 +220,7 @@ impl Directory {
 				.collect(),
 			password_hashes: HashMap::new(),
 			// The `+` separator is the de-facto standard, enabled by default.
-			subaddress_separators: vec!['+'],
+			subaddress_separators: DEFAULT_SUBADDRESS_SEPARATORS.to_vec(),
 			catch_all: HashMap::new(),
 			domain_aliases: HashMap::new(),
 			disabled_domains: HashSet::new(),
@@ -413,6 +413,11 @@ impl Directory {
 		false
 	}
 }
+
+/// The sub-address separators a directory starts with: `user+tag@domain`
+/// is delivered to `user@domain`. The alias rules refuse a key an address
+/// that would intercept such mail, so they read this list too.
+pub const DEFAULT_SUBADDRESS_SEPARATORS: [char; 1] = ['+'];
 
 mod access;
 mod builder;

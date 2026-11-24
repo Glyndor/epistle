@@ -427,3 +427,275 @@ fn a_domain_hosted_after_the_configuration_was_loaded_takes_aliases() {
 	)
 	.expect("the alias goes to the domain as it is now");
 }
+
+fn operator_made(config: &Config, address: &str, members: &[&str]) {
+	edit::commit(config, &new(address, members), &Origin::Operator).expect("operator");
+}
+
+#[test]
+fn a_key_cannot_remove_or_edit_the_alias_of_a_role_address() {
+	let (_dir, config) = setup("");
+	operator_made(
+		&config,
+		"postmaster@example.org",
+		&["alice@example.org", "bob@example.org"],
+	);
+	let before = std::fs::read_to_string(crate::aliases::path(&config.data_dir)).unwrap();
+	let changes = [
+		Change::Remove {
+			address: "postmaster@example.org".into(),
+		},
+		Change::MemberAdd {
+			address: "postmaster@example.org".into(),
+			member: "bob@example.org".into(),
+		},
+		Change::MemberRemove {
+			address: "postmaster@example.org".into(),
+			member: "bob@example.org".into(),
+		},
+		Change::SenderAdd {
+			address: "postmaster@example.org".into(),
+			sender: "alice@example.org".into(),
+		},
+		Change::SenderRemove {
+			address: "postmaster@example.org".into(),
+			sender: "alice@example.org".into(),
+		},
+	];
+	for change in changes {
+		for origin in [key(None), key(Some(&["example.org"]))] {
+			let error = refused(&config, &change, &origin);
+			assert!(
+				error.to_string().contains("role address"),
+				"{change:?}: {error}"
+			);
+			assert!(
+				matches!(
+					edit::commit(&config, &change, &origin),
+					Err(AliasError::Invalid(_))
+				),
+				"{change:?}"
+			);
+		}
+	}
+	assert_eq!(
+		std::fs::read_to_string(crate::aliases::path(&config.data_dir)).unwrap(),
+		before,
+		"nothing was written"
+	);
+	edit::commit(
+		&config,
+		&Change::MemberRemove {
+			address: "postmaster@example.org".into(),
+			member: "bob@example.org".into(),
+		},
+		&Origin::Operator,
+	)
+	.expect("the operator may edit it");
+}
+
+#[test]
+fn the_names_a_certificate_authority_mails_are_role_addresses_with_or_without_a_tag() {
+	let (_dir, config) = setup("");
+	for local in [
+		"admin",
+		"Administrator",
+		"root",
+		"ssladmin",
+		"tlsrpt",
+		"mailer-daemon",
+		"postmaster+x",
+		"admin+anything",
+		"HOSTMASTER+a+b",
+	] {
+		let address = format!("{local}@example.org");
+		let error = refused(&config, &new(&address, &["alice@example.org"]), &key(None));
+		assert!(
+			error.to_string().contains("role address"),
+			"{address}: {error}"
+		);
+		edit::preview(
+			&config,
+			&new(&address, &["alice@example.org"]),
+			&Origin::Operator,
+		)
+		.expect("the operator may");
+	}
+	edit::preview(
+		&config,
+		&new("administration@example.org", &["alice@example.org"]),
+		&key(None),
+	)
+	.expect("a name that only starts like a role is an ordinary one");
+}
+
+#[test]
+fn a_tagged_form_of_an_account_address_is_not_for_a_key() {
+	let (_dir, config) = setup("");
+	for address in ["alice+shop@example.org", "ALICE+x+y@example.org"] {
+		let error = refused(&config, &new(address, &["bob@example.org"]), &key(None));
+		assert!(
+			error.to_string().contains("tagged form"),
+			"{address}: {error}"
+		);
+		assert_eq!(
+			refused(
+				&config,
+				&new(address, &["bob@example.org"]),
+				&key(Some(&["example.org"]))
+			),
+			error
+		);
+		edit::preview(
+			&config,
+			&new(address, &["bob@example.org"]),
+			&Origin::Operator,
+		)
+		.expect("the operator may");
+	}
+	edit::preview(
+		&config,
+		&new("zed+shop@example.org", &["bob@example.org"]),
+		&key(None),
+	)
+	.expect("a tag on a name no account uses takes no one's mail");
+}
+
+/// An account with an address inside and one outside a key's domains.
+fn with_split_account(config: &Config) {
+	let path = config.data_dir.join("accounts.toml");
+	let mut text = std::fs::read_to_string(&path).unwrap();
+	text.push_str(
+		"\n[[accounts]]\nname = \"dave\"\naddresses = [\"dave@example.org\", \"dave@example.net\"]\npassword_hash = \"stub\"\n",
+	);
+	std::fs::write(path, text).unwrap();
+}
+
+#[test]
+fn a_member_whose_account_reaches_outside_the_key_s_domains_is_not_a_local_account() {
+	let (_dir, config) = setup("");
+	with_split_account(&config);
+	let confined = key(Some(&["example.org"]));
+	let split = refused(
+		&config,
+		&new("team@example.org", &["dave@example.org"]),
+		&confined,
+	);
+	let absent = refused(
+		&config,
+		&new("team@example.org", &["nobody@example.org"]),
+		&confined,
+	);
+	assert_eq!(
+		split.to_string().replace("dave", "x"),
+		absent.to_string().replace("nobody", "x")
+	);
+	assert!(matches!(split, AliasError::Invalid(_)));
+	assert!(matches!(
+		refused(
+			&config,
+			&Change::MemberAdd {
+				address: "team@example.org".into(),
+				member: "dave@example.org".into(),
+			},
+			&confined,
+		),
+		AliasError::Invalid(_) | AliasError::NotFound(_)
+	));
+	edit::preview(
+		&config,
+		&new("team@example.org", &["dave@example.org"]),
+		&key(None),
+	)
+	.expect("an unconfined key may name the account");
+	edit::preview(
+		&config,
+		&new("team@example.org", &["dave@example.org"]),
+		&Origin::Api {
+			confined_to: Some(vec!["example.org".into(), "example.net".into()]),
+		},
+	)
+	.expect("a key that reaches the whole account may");
+}
+
+#[test]
+fn an_alias_with_a_member_or_a_sender_outside_the_key_s_domains_is_as_absent_as_a_missing_one() {
+	let (_dir, config) = setup("");
+	operator_made(
+		&config,
+		"mixed@example.org",
+		&["alice@example.org", "carol@example.net"],
+	);
+	operator_made(&config, "sent@example.org", &["alice@example.org"]);
+	edit::commit(
+		&config,
+		&Change::SenderAdd {
+			address: "sent@example.org".into(),
+			sender: "carol@example.net".into(),
+		},
+		&Origin::Operator,
+	)
+	.unwrap();
+	let confined = key(Some(&["example.org"]));
+	let missing = Change::Remove {
+		address: "ghost@example.org".into(),
+	};
+	let expected = refused(&config, &missing, &confined)
+		.to_string()
+		.replace("ghost@example.org", "ADDRESS");
+	assert_eq!(expected, "alias ADDRESS not found");
+	for address in ["mixed@example.org", "sent@example.org"] {
+		let changes = [
+			Change::Remove {
+				address: address.into(),
+			},
+			Change::MemberAdd {
+				address: address.into(),
+				member: "bob@example.org".into(),
+			},
+			Change::MemberRemove {
+				address: address.into(),
+				member: "alice@example.org".into(),
+			},
+			Change::SenderAdd {
+				address: address.into(),
+				sender: "bob@example.org".into(),
+			},
+			Change::SenderRemove {
+				address: address.into(),
+				sender: "carol@example.net".into(),
+			},
+		];
+		for change in changes {
+			let error = refused(&config, &change, &confined);
+			assert!(
+				matches!(error, AliasError::NotFound(_)),
+				"{change:?}: {error}"
+			);
+			assert_eq!(error.to_string().replace(address, "ADDRESS"), expected);
+		}
+	}
+	edit::commit(
+		&config,
+		&Change::Remove {
+			address: "mixed@example.org".into(),
+		},
+		&key(None),
+	)
+	.expect("an unconfined key reaches it");
+}
+
+#[test]
+fn a_confined_key_cannot_make_an_alias_it_could_no_longer_reach() {
+	let (_dir, config) = setup("");
+	operator_made(&config, "team@example.org", &["alice@example.org"]);
+	let error = refused(
+		&config,
+		&Change::SenderAdd {
+			address: "team@example.org".into(),
+			sender: "carol@example.net".into(),
+		},
+		&key(Some(&["example.org"])),
+	);
+	assert!(error.to_string().contains("sender"), "{error}");
+}

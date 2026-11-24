@@ -53,6 +53,16 @@ impl Known {
 		None
 	}
 
+	/// Every address of the account that holds `raw` (normalized), or `None`
+	/// when no account does.
+	pub(super) fn addresses_of_account_holding(&self, raw: &str) -> Option<Vec<String>> {
+		self.store
+			.account_views()
+			.into_iter()
+			.find(|(_, addresses, _)| addresses.iter().any(|existing| normalize(existing) == raw))
+			.map(|(_, addresses, _)| addresses)
+	}
+
 	/// Whether `raw` (normalized) is an address of an account that exists.
 	pub(super) fn is_account_address(&self, raw: &str) -> bool {
 		self.store

@@ -85,17 +85,19 @@ pub struct Page {
 	next_cursor: Option<String>,
 }
 
-/// Whether the key may see `row`: its address and every member are inside the
-/// domains the key is confined to. An alias with a member the key could not
-/// have named is not shown, so a listing cannot name an address of another
-/// tenant.
+/// Whether the key may see `row`: its address, every member and every sender
+/// are inside the domains the key is confined to. An alias with an address
+/// the key could not have named is not shown, so a listing cannot name an
+/// address of another tenant.
 fn visible(principal: &Principal, row: &AliasRow) -> bool {
 	let inside = |address: &str| {
 		crate::util::address_reason::parse(address)
 			.map(|parsed| principal.admits_domain(parsed.domain()))
 			.unwrap_or(false)
 	};
-	inside(&row.address) && row.members.iter().all(|member| inside(member))
+	inside(&row.address)
+		&& row.members.iter().all(|member| inside(member))
+		&& row.senders.iter().all(|sender| inside(sender))
 }
 
 pub async fn list(
