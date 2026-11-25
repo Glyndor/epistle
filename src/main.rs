@@ -16,3 +16,4 @@ use std::process::ExitCode;
 fn main() -> ExitCode {
 	epistle::cli::run_from_env()
 }
+// controlled failure: path filters see a change to src/
