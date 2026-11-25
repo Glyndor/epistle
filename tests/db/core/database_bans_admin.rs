@@ -46,16 +46,26 @@ fn policy() -> BanPolicy {
 	}
 }
 
-async fn connect() -> Option<(sqlx::PgPool, PgBanStore)> {
+/// The tests of this file share the ban tables and the room a count is taken
+/// against, so they run one at a time: a test that lifts its own network while
+/// another counts would make room the other did not see.
+static ONE_AT_A_TIME: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+async fn connect() -> Option<(
+	sqlx::PgPool,
+	PgBanStore,
+	tokio::sync::MutexGuard<'static, ()>,
+)> {
 	let url = database_url().or_else(|| {
 		eprintln!("skipping: DATABASE_URL not set");
 		None
 	})?;
+	let serial = ONE_AT_A_TIME.lock().await;
 	let pool = epistle::db::connect(&url, DatabaseTls::Insecure, 5, None)
 		.await
 		.expect("connect and migrate");
 	let store = PgBanStore::with_policy(pool.clone(), None, policy());
-	Some((pool, store))
+	Some((pool, store, serial))
 }
 
 /// Clear what a test left on `subject`. A success cannot lift an active ban,
@@ -82,7 +92,7 @@ async fn failure_rows(pool: &sqlx::PgPool, subject: &str) -> i64 {
 
 #[tokio::test]
 async fn an_allow_listed_address_is_never_counted_or_banned() {
-	let Some((pool, store)) = connect().await else {
+	let Some((pool, store, _serial)) = connect().await else {
 		return;
 	};
 	let block = fresh_block();
@@ -116,7 +126,7 @@ async fn an_allow_listed_address_is_never_counted_or_banned() {
 
 #[tokio::test]
 async fn the_allow_list_overrides_a_ban_and_a_removal_restores_it_without_restart() {
-	let Some((_pool, store)) = connect().await else {
+	let Some((_pool, store, _serial)) = connect().await else {
 		return;
 	};
 	let block = fresh_block();
@@ -153,7 +163,7 @@ async fn the_allow_list_overrides_a_ban_and_a_removal_restores_it_without_restar
 
 #[tokio::test]
 async fn a_network_ban_covers_every_address_in_it_and_no_other() {
-	let Some((_pool, store)) = connect().await else {
+	let Some((_pool, store, _serial)) = connect().await else {
 		return;
 	};
 	let block = fresh_block();
@@ -181,7 +191,7 @@ async fn a_network_ban_covers_every_address_in_it_and_no_other() {
 
 #[tokio::test]
 async fn unbanning_an_address_also_clears_its_failure_counter() {
-	let Some((pool, store)) = connect().await else {
+	let Some((pool, store, _serial)) = connect().await else {
 		return;
 	};
 	let block = fresh_block();
@@ -202,7 +212,7 @@ async fn unbanning_an_address_also_clears_its_failure_counter() {
 
 #[tokio::test]
 async fn list_shows_active_manual_bans_and_skips_expired_ones() {
-	let Some((_pool, store)) = connect().await else {
+	let Some((_pool, store, _serial)) = connect().await else {
 		return;
 	};
 	let block = fresh_block();
@@ -240,7 +250,7 @@ async fn list_shows_active_manual_bans_and_skips_expired_ones() {
 
 #[tokio::test]
 async fn removing_an_account_drops_its_pair_rows_and_nobody_elses() {
-	let Some((_pool, store)) = connect().await else {
+	let Some((_pool, store, _serial)) = connect().await else {
 		return;
 	};
 	let tag = uuid::Uuid::now_v7().simple().to_string();
@@ -277,7 +287,7 @@ async fn removing_an_account_drops_its_pair_rows_and_nobody_elses() {
 
 #[tokio::test]
 async fn unbanning_an_ipv6_address_lifts_the_slash_64_it_is_counted_under() {
-	let Some((_pool, store)) = connect().await else {
+	let Some((_pool, store, _serial)) = connect().await else {
 		return;
 	};
 	let block = fresh_block();
@@ -295,7 +305,7 @@ async fn unbanning_an_ipv6_address_lifts_the_slash_64_it_is_counted_under() {
 
 #[tokio::test]
 async fn an_account_needs_four_times_the_failures_of_a_client_to_be_banned() {
-	let Some((_pool, store)) = connect().await else {
+	let Some((_pool, store, _serial)) = connect().await else {
 		return;
 	};
 	let tag = uuid::Uuid::now_v7().simple().to_string();
@@ -318,7 +328,7 @@ async fn an_account_needs_four_times_the_failures_of_a_client_to_be_banned() {
 
 #[tokio::test]
 async fn the_store_reports_whether_the_allow_list_covers_an_address() {
-	let Some((_pool, store)) = connect().await else {
+	let Some((_pool, store, _serial)) = connect().await else {
 		return;
 	};
 	let block = fresh_block();
@@ -341,7 +351,7 @@ async fn the_store_reports_whether_the_allow_list_covers_an_address() {
 async fn the_shared_operations_run_on_the_database() {
 	use epistle::antispam::bans::operator::{self as admin, BanAdmin, Limits, Refusal};
 
-	let Some((_pool, store)) = connect().await else {
+	let Some((_pool, store, _serial)) = connect().await else {
 		return;
 	};
 	let store: &dyn BanAdmin = &store;
@@ -394,7 +404,7 @@ async fn the_shared_operations_run_on_the_database() {
 async fn bans_and_allow_entries_at_the_edge_of_the_room_are_taken_atomically() {
 	use epistle::antispam::bans::operator::{AllowPlaced, AllowRoom, BanAdmin, BanRoom, Placed};
 
-	let Some((_pool, store)) = connect().await else {
+	let Some((_pool, store, _serial)) = connect().await else {
 		return;
 	};
 	let store = std::sync::Arc::new(store);
