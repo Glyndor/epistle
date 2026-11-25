@@ -1,6 +1,15 @@
 {
  "True": {
-  "workflow_call": null
+  "workflow_call": {
+   "inputs": {
+    "cancel-own": {
+     "default": false,
+     "description": "Also cancel the run this job belongs to, which ends its unfinished jobs at the first failure",
+     "required": false,
+     "type": "boolean"
+    }
+   }
+  }
  },
  "concurrency": {
   "cancel-in-progress": false,
@@ -8,8 +17,8 @@
  },
  "jobs": {
   "cancel": {
-   "if": "github.event_name == 'pull_request'",
-   "name": "cancel the other runs of this commit",
+   "if": "github.event_name == 'pull_request' || github.event_name == 'merge_group'",
+   "name": "cancel the rest of the runs of this commit",
    "permissions": {
     "actions": "write",
     "contents": "read"
@@ -25,7 +34,9 @@
     },
     {
      "env": {
-      "BASE_SHA": "${{ github.event.pull_request.base.sha }}",
+      "BASE_SHA": "${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}",
+      "CANCEL_OWN": "${{ inputs.cancel-own && 'true' || 'false' }}",
+      "EVENT_NAME": "${{ github.event_name }}",
       "GH_TOKEN": "${{ github.token }}",
       "HEAD_BRANCH": "${{ github.event.pull_request.head.ref }}",
       "HEAD_SHA": "${{ github.event.pull_request.head.sha }}",
