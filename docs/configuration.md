@@ -582,17 +582,22 @@ follows, and fails when a route is added without one.
 
 Scopes are independent: holding one does not grant another.
 
-- `read`: the JMAP Session, every JMAP method that returns account data
+- `mail:read`: the JMAP Session, every JMAP method that returns account data
   (`*/get`, `*/query`, `*/changes`, `*/queryChanges`, `Identity/get`,
-  `Quota/get`, `SieveScript/validate`), downloads, the WebSocket and the event source, and the
-  `GET` routes of the management API.
-- `write`: JMAP `*/set` and `Email/copy`, uploads, and the mutating routes
-  of the management API.
+  `Quota/get`, `SieveScript/validate`), downloads, the WebSocket and the event
+  source.
+- `mail:write`: JMAP `*/set` and `Email/copy`, and uploads.
+- `manage:read`: the `GET` routes of the management API.
+- `manage:write`: the mutating routes of the management API.
 - `send`: JMAP `EmailSubmission/set` and `POST /api/v1/send`.
 - `scim`: `/scim/v2`.
 
-A key that only sends or only writes therefore cannot read the mailbox; give
-it `read` too if the client needs to.
+A management scope never opens JMAP and a mail scope never opens the management
+API (the delivery log and the suppression list take either). A key that only
+sends or only writes therefore cannot read the mailbox; give it `mail:read` too
+if the client needs to. Keys made before 0.15.0 with `read` or `write` hold both
+the management and the mail scope of their kind until they are changed with
+`epistle api-key set LABEL --scope ...`.
 
 ### `POST /api/v1/send`
 
@@ -786,8 +791,8 @@ and `.jmap_lock`); it is trimmed to its newer half past 1 MiB.
 ### `/scim/v2` (SCIM 2.0 provisioning)
 Mounted under `/scim/v2` when the management API listener is enabled.
 Authenticates against the same bearer token plus the labeled keys in
-`api_keys.toml`, but requires the dedicated `Scim` scope: a `read`- or
-`write`-only key cannot enumerate or mutate users here, so an IdP
+`api_keys.toml`, but requires the dedicated `Scim` scope: a `manage:read`-,
+`manage:write`-, `mail:read`- or `mail:write`-only key cannot enumerate or mutate users here, so an IdP
 integration can be scoped tighter than the operator's own panel access.
 
 The implementation is the minimum that Entra ID, Okta and Keycloak
@@ -3095,7 +3100,7 @@ session value names the implementation and version. Each account's value
 carries the limits below and the extension list, and the Sieve account is a
 primary account. The methods are `SieveScript/get`, `SieveScript/query`,
 `SieveScript/set` and `SieveScript/validate`. `/get`, `/query` and
-`/validate` need the `read` scope and `/set` the `write` scope, and `/set`
+`/validate` need the `mail:read` scope and `/set` the `mail:write` scope, and `/set`
 also the `send` scope for a script that sends mail (below). The account check
 is the one every JMAP method uses. There is no `SieveScript/changes` (the RFC
 defines none): a client re-reads with `/get`, which an account can always
@@ -3172,16 +3177,16 @@ removes it. The active script cannot be destroyed: deactivate it in a call of
 its own first.
 
 **Scopes.** A script that redirects, replies (`vacation`) or rejects (`reject`,
-`ereject`) makes the server send mail when mail arrives, and `write` does not
+`ereject`) makes the server send mail when mail arrives, and `mail:write` does not
 originate mail. Creating such a script, replacing the content of one, or
 activating one that exists takes the `send` scope as well; without it the
 answer is `forbidden`, and an activation is refused before the call changes
-anything. Renaming and deactivating need only `write`. The action names are
+anything. Renaming and deactivating need only `mail:write`. The action names are
 read without regard to case, as Sieve does. The same rule holds for the JMAP
 `VacationResponse`, which also answers mail: `VacationResponse/set` that
 switches the reply on, or changes one that is on, needs `send` as well
 (`notUpdated` `forbidden` without it); switching it off, or editing one that
-stays off, needs only `write`. Upgrading: a key with `read` and `write` only
+stays off, needs only `mail:write`. Upgrading: a key with `read` and `write` only
 that used to switch the reply on now gets `forbidden`. ManageSieve is reached
 with the account's password and has no scopes.
 
