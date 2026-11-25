@@ -18,6 +18,7 @@ pub(crate) mod openapi;
 mod quota;
 pub mod scim;
 mod state;
+pub mod surface;
 pub mod tenant_limits;
 pub mod v1;
 
@@ -29,6 +30,7 @@ pub use authorization::{Credential, Principal};
 pub use events::EventLimits;
 pub use jmap::reclaim_blobs;
 pub use state::{ApiState, ClientIp, HealthGate};
+pub use surface::{Surface, Surfaces};
 pub use tenant_limits::TenantLimits;
 
 use axum::Router;
@@ -37,20 +39,21 @@ use axum::middleware;
 use axum::routing::{get, post};
 use tower_http::cors::CorsLayer;
 
-/// Build the API router with authentication applied to every route.
+/// Build the API router with authentication applied to every route, serving
+/// every surface: what a listener of kind `api` served in 0.14.0.
 pub fn router(state: ApiState) -> Router {
-	// The configured per-instance message-size cap, applied consistently
-	// to SMTP, the JMAP upload body limit, the JMAP `Email/set` build,
-	// and the REST `POST /api/v1/send` builder.
-	let max_message_size = state.max_message_size();
-	// Authenticated surface: every route requires the bearer token.
-	let authenticated = Router::new()
-		.nest("/api/v1", v1::router(max_message_size))
-		// SCIM 2.0 provisioning (RFC 7644). The dedicated `Scope::Scim`
-		// gates every route, set in `acceptable_scopes_for` for any path
-		// starting with `/scim/v2`. A `read`/`write`-only key cannot
-		// enumerate or mutate users here.
-		.nest("/scim/v2", scim::router())
+	router_for(state, &Surfaces::all())
+}
+
+/// The management routes: `/api/v1`.
+fn manage_routes(max_message_size: usize) -> Router<ApiState> {
+	Router::new().nest("/api/v1", v1::router(max_message_size))
+}
+
+/// The JMAP routes: Session discovery, the request envelope, the WebSocket and
+/// event source, downloads and uploads.
+fn jmap_routes(max_message_size: usize) -> Router<ApiState> {
+	Router::new()
 		// JMAP (RFC 8620): Session discovery and the request-envelope endpoint.
 		// `.well-known/jmap` is the standard autodiscovery path (§2.2).
 		.route("/.well-known/jmap", get(jmap::session))
@@ -79,6 +82,35 @@ pub fn router(state: ApiState) -> Router {
 			"/jmap/upload/{account_id}",
 			post(jmap::upload).layer(DefaultBodyLimit::max(max_message_size)),
 		)
+}
+
+/// SCIM 2.0 provisioning (RFC 7644). The dedicated `Scope::Scim` gates every
+/// route, set in `acceptable_scopes_for` for any path starting with
+/// `/scim/v2`. A key with a management or mail scope only cannot enumerate or
+/// mutate users here.
+fn scim_routes() -> Router<ApiState> {
+	Router::new().nest("/scim/v2", scim::router())
+}
+
+/// Build the API router for the surfaces one listener serves. The middleware
+/// stack is the same for every surface, and `/healthz` is on every listener.
+pub fn router_for(state: ApiState, surfaces: &Surfaces) -> Router {
+	// The configured per-instance message-size cap, applied consistently
+	// to SMTP, the JMAP upload body limit, the JMAP `Email/set` build,
+	// and the REST `POST /api/v1/send` builder.
+	let max_message_size = state.max_message_size();
+	let mut routes = Router::new();
+	if surfaces.contains(Surface::Manage) {
+		routes = routes.merge(manage_routes(max_message_size));
+	}
+	if surfaces.contains(Surface::Jmap) {
+		routes = routes.merge(jmap_routes(max_message_size));
+	}
+	if surfaces.contains(Surface::Scim) {
+		routes = routes.merge(scim_routes());
+	}
+	// Authenticated surface: every route requires the bearer token.
+	let authenticated = routes
 		// Runs after the bearer check below (layers wrap outward), so the
 		// matched credentials are already in the request.
 		.layer(middleware::from_fn_with_state(
@@ -108,7 +140,7 @@ pub fn router(state: ApiState) -> Router {
 	// self-authenticate (codes / account credentials), so they sit OUTSIDE the
 	// API bearer middleware. With no signing key, the routes are absent entirely
 	// (fail closed — no path can issue an unsigned token).
-	if state.authz().is_some() {
+	if surfaces.contains(Surface::Oauth) && state.authz().is_some() {
 		public = public
 			.merge(oauth::public_router())
 			.merge(oauth::authenticated_router());

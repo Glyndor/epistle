@@ -101,7 +101,9 @@ impl SrvService {
 			ListenerKind::Imaps => &[SrvService::Imaps],
 			ListenerKind::Pop3s => &[SrvService::Pop3],
 			ListenerKind::ManageSieve => &[SrvService::Sieve],
-			ListenerKind::Api => &[SrvService::Jmap],
+			// `api` carries JMAP unless `[api] surfaces` left it out;
+			// `from_config` drops it then.
+			ListenerKind::Api | ListenerKind::Jmap => &[SrvService::Jmap],
 			// Both DAV services share the listener; there is no flag that
 			// turns one of them off.
 			ListenerKind::WebDav => &[SrvService::Caldav, SrvService::Carddav],
@@ -114,6 +116,8 @@ impl SrvService {
 			ListenerKind::Smtp
 			| ListenerKind::Metrics
 			| ListenerKind::Acme
+			| ListenerKind::Scim
+			| ListenerKind::Oauth
 			| ListenerKind::Autoconfig => &[],
 		}
 	}
@@ -186,10 +190,15 @@ impl ServiceRecords {
 			// client at. A configuration that names the listener without
 			// the section is one the loader refuses, and one that names no
 			// API has no JMAP session to publish.
-			if listener.kind == ListenerKind::Api && config.api.is_none() {
+			if listener.kind.serves_api() && config.api.is_none() {
 				continue;
 			}
+			let jmap_here = crate::api::Surfaces::for_listener(config, listener.kind)
+				.contains(crate::api::Surface::Jmap);
 			for service in SrvService::of_listener(listener.kind) {
+				if *service == SrvService::Jmap && !jmap_here {
+					continue;
+				}
 				locators
 					.entry(*service)
 					.or_default()

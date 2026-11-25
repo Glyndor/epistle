@@ -224,6 +224,9 @@ async fn probe_kind(
 		ListenerKind::Autoconfigs => probe_https(stream, pinned).await,
 		ListenerKind::ManageSieve => probe_sieve(stream).await,
 		ListenerKind::Api
+		| ListenerKind::Jmap
+		| ListenerKind::Scim
+		| ListenerKind::Oauth
 		| ListenerKind::WebDav
 		| ListenerKind::Acme
 		| ListenerKind::Autoconfig

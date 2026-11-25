@@ -131,6 +131,26 @@ fn the_api_listener_brings_jmap() {
 }
 
 #[test]
+fn the_jmap_locator_follows_the_listener_that_serves_jmap() {
+	// A `jmap` listener brings the locator, and the `api` listener beside it no
+	// longer does: JMAP is served in one place.
+	let config = config_with_api(&["kind = 'api'", "kind = 'jmap'"]);
+	assert_eq!(published_srv(&config).len(), 1, "one locator, not two");
+	// An `api` listener that leaves JMAP out of `[api] surfaces` brings none.
+	let mut off = String::from(
+		"[api]
+surfaces = []
+",
+	);
+	off.push_str("\n[[listeners]]\nkind = 'api'\n");
+	let config = toml::from_str::<crate::config::Config>(&format!(
+		"hostname = 'mail.example.org'\ndata_dir = '/var/lib/mail'\ndomains = ['example.org']\n{off}"
+	))
+	.expect("config");
+	assert!(published_srv(&config).is_empty(), "JMAP is off");
+}
+
+#[test]
 fn the_api_listener_without_an_api_publishes_no_jmap() {
 	// The listener names the port the API router binds, but a
 	// configuration that carries no API has no JMAP session to point a

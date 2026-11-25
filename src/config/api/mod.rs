@@ -33,6 +33,13 @@ pub struct Api {
 	/// reconnect. Absent means 3600.
 	#[serde(default, deserialize_with = "stream_lifetime")]
 	pub event_stream_max_secs: Option<u64>,
+	/// The surfaces besides management that the `api` listener serves:
+	/// `"jmap"`, `"oauth"` and `"scim"`. Absent serves every surface that has
+	/// no listener of its own, which is what 0.14.0 did; `[]` serves
+	/// management only. A surface that has a listener of its own cannot be
+	/// listed.
+	#[serde(default)]
+	pub surfaces: Option<Vec<String>>,
 }
 
 /// Read an optional whole number that must lie in `range`.
