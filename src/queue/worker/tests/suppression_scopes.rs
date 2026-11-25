@@ -16,20 +16,36 @@ const SENDER: &str = "alice@sender.example";
 const TARGET: &str = "bob@remote.example";
 
 fn queue_one(dir: &std::path::Path, sender: &str) -> FsSpool {
+	queue_from(dir, sender, None, b"Subject: hi\r\n\r\nbody\r\n", None)
+}
+
+/// One message under `sender`, written under `author` when given, queued by
+/// `account` when given.
+fn queue_from(
+	dir: &std::path::Path,
+	sender: &str,
+	author: Option<&str>,
+	body: &[u8],
+	account: Option<&str>,
+) -> FsSpool {
 	let spool = FsSpool::open(dir).expect("spool");
+	let mut data = author
+		.map(|author| format!("From: {author}\r\n").into_bytes())
+		.unwrap_or_default();
+	data.extend_from_slice(body);
 	spool
 		.store(
 			&AcceptedMessage {
 				reverse_path: sender.into(),
 				recipients: vec![TARGET.into()],
-				data: b"Subject: hi\r\n\r\nbody\r\n".to_vec(),
+				data,
 				require_tls: false,
 				mailbox: None,
 				tlsrpt_verified: false,
 				sender_verified: false,
 				no_dsn: Vec::new(),
 			},
-			None,
+			account,
 			&BTreeMap::new(),
 		)
 		.expect("store");
@@ -37,16 +53,16 @@ fn queue_one(dir: &std::path::Path, sender: &str) -> FsSpool {
 }
 
 async fn outcome(dir: &std::path::Path, sender: &str) -> (DeliveryOutcome, usize) {
+	outcome_of(dir, queue_one(dir, sender)).await
+}
+
+async fn outcome_of(dir: &std::path::Path, spool: FsSpool) -> (DeliveryOutcome, usize) {
 	let remote = FakeRemote::default();
 	remote.script("remote.example", Script::rcpt(TARGET, "250 OK"));
-	let worker = Worker::new(
-		queue_one(dir, sender),
-		Arc::new(remote.clone()),
-		"mail.sender.example",
-	)
-	.with_bounce_sink(Arc::new(MemorySink::new()) as Arc<dyn MessageSink>)
-	.with_suppression(SuppressionList::open(dir).expect("suppression"))
-	.with_delivery_log(DeliveryLog::open(dir, 30));
+	let worker = Worker::new(spool, Arc::new(remote.clone()), "mail.sender.example")
+		.with_bounce_sink(Arc::new(MemorySink::new()) as Arc<dyn MessageSink>)
+		.with_suppression(SuppressionList::open(dir).expect("suppression"))
+		.with_delivery_log(DeliveryLog::open(dir, 30));
 	worker.pass().await.expect("pass");
 	let records = super::delivery_log::load_records(dir);
 	assert_eq!(records.len(), 1);
@@ -92,6 +108,46 @@ async fn an_entry_past_its_lifetime_lets_the_address_be_tried_again() {
 		.expect("record");
 	assert_eq!(
 		outcome(dir.path(), SENDER).await,
+		(DeliveryOutcome::Delivered, 1)
+	);
+}
+
+/// An account that submits under one address and gives another as the
+/// envelope sender is still held to the lists of the address it writes as.
+#[tokio::test]
+async fn a_submitted_message_is_held_to_the_lists_of_the_address_it_is_written_under() {
+	let list = |dir: &std::path::Path| {
+		SuppressionList::open(dir)
+			.expect("suppression")
+			.record_bounce(&SuppressionRules::default(), SENDER, TARGET, "550 5.1.1", 1)
+			.expect("record");
+	};
+	let body = b"Subject: hi\r\n\r\nbody\r\n";
+	let dir = tempfile::tempdir().expect("tempdir");
+	list(dir.path());
+	let spool = queue_from(
+		dir.path(),
+		"bounces@sender.example",
+		Some(SENDER),
+		body,
+		Some("alice"),
+	);
+	assert_eq!(
+		outcome_of(dir.path(), spool).await,
+		(DeliveryOutcome::Suppressed, 0)
+	);
+	// Mail that no account submitted is not asked about its From, which anyone can write.
+	let relayed = tempfile::tempdir().expect("tempdir");
+	list(relayed.path());
+	let spool = queue_from(
+		relayed.path(),
+		"bounces@sender.example",
+		Some(SENDER),
+		body,
+		None,
+	);
+	assert_eq!(
+		outcome_of(relayed.path(), spool).await,
 		(DeliveryOutcome::Delivered, 1)
 	);
 }

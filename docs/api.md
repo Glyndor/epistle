@@ -480,6 +480,7 @@ given for it is the one written in the header.
 | `to`, `cc`, `bcc` | arrays of recipients | A recipient is a bare address or `{"name": "Ana Pérez", "address": "ana@example.org"}`; see below. `to` is required but may be empty if `cc` or `bcc` has someone. Together at most 100 distinct addresses by default (`max_recipients`). `bcc` is envelope only. With `to` and `cc` both empty the message carries `To: undisclosed-recipients:;`, an empty group, so no header names a recipient |
 | `reply_to` | recipient or array of recipients | A bare address or the same object, or a list of them (at most 10), written as one `Reply-To` header. An empty list writes none |
 | `sender` | string | A bare address; it must be one the account owns, like `from` |
+| `envelope_from` | string | The address bounces and delivery reports go back to (`MAIL FROM`), where `from` is what the reader sees. A bare address the account owns, like `from`; absent is `from`. An empty string is refused: the null sender is not offered here. The `From` header, the DKIM signature and the `Message-ID` keep following `from`; see below for what else follows which address |
 | `subject` | string | Default empty. A request with no subject, no `text`, no `html`, no `attachments` and no `inline` is an empty message and is refused with `400 invalid_input` on `text` |
 | `text`, `html` | string | With both, a `multipart/alternative`, text first |
 | `attachments`, `inline` | arrays of `{name, content_type, data, content_id}` | `data` is base64 (standard alphabet, padded). An empty `content_type` is detected. Every `inline` part needs a `content_id`; the HTML refers to it as `cid:<content_id>`. At most 100 parts together |
@@ -508,7 +509,9 @@ owns. A key bound to one account acts for that account. Any other key acts
 for the account that owns `from`, provided the key reaches it. In every other
 case the answer is `403 forbidden_from`, the same whether the address belongs
 to another account or to nobody, so it says nothing about which addresses
-exist. The envelope sender is the `from` as written; its letter case is kept.
+exist. The envelope sender is `envelope_from` when the request has it and the `from` as written otherwise; the same rule and the same `403 forbidden_from` hold for `sender` and `envelope_from`.
+
+**Which address counts for what.** `from`, `sender` and `envelope_from` may be three different addresses, and each is held to the account and to the key: a key confined to some domains is refused (`403 forbidden_from`) when any of the three is outside them, even when the account owns it as a member of a list in another domain. The sending rate limit of every tenant that owns one of the three is checked and charged. The suppression lists, which are kept per sender, are asked about the envelope sender and about the address in `From`, and the queue asks again before delivering. The evidence tenant and its retention follow the `From` address, not the envelope sender.
 
 **An account that does not send.** An account whose `send` switch is off
 (`epistle account set NAME --send off`) sends nothing through the API: a key

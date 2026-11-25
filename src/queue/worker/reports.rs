@@ -109,11 +109,16 @@ impl Worker {
 		let Some(suppression) = &self.suppression else {
 			return Ok(due);
 		};
-		let account = &envelope.reverse_path;
 		let now = self.now_epoch();
-		let (skipped, due): (Vec<String>, Vec<String>) = due
-			.into_iter()
-			.partition(|recipient| suppression.is_blocked(account, recipient, now));
+		// The lists are keyed by sender: the envelope sender and, for a message
+		// an account submitted, the addresses it is written under.
+		let senders = std::iter::once(&envelope.reverse_path).chain(&envelope.authors);
+		let senders: Vec<&String> = senders.collect();
+		let (skipped, due): (Vec<String>, Vec<String>) = due.into_iter().partition(|recipient| {
+			senders
+				.iter()
+				.any(|sender| suppression.is_blocked(sender, recipient, now))
+		});
 		if !skipped.is_empty() {
 			tracing::debug!(%id, ?skipped, "not delivering to suppressed recipients");
 			self.spool.update_envelope(id, |envelope| {

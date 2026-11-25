@@ -57,6 +57,14 @@ pub struct Envelope {
 	/// as "submitted by an unknown account".
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub account: Option<String>,
+	/// The addresses the message is written under (its From field) when they
+	/// are not the envelope sender, for a message an account submitted. The
+	/// suppression lists are keyed by sender, so the worker asks them about
+	/// these too: choosing the envelope sender does not leave a list behind.
+	/// Empty when the envelope sender is the author and in every envelope
+	/// written before the field existed.
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub authors: Vec<String>,
 	/// The caller-supplied correlation map the API allows on a `send`. Kept
 	/// alongside the message in the envelope so the delivery log and the
 	/// delivery webhooks can copy it onto every record they emit, but never

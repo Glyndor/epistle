@@ -65,7 +65,10 @@ pub async fn send(
 		let address = recipient.address_mut();
 		*address = crate::util::address::normalize(address);
 	}
-	if let Some(address) = request.sender.as_mut() {
+	for address in [request.sender.as_mut(), request.envelope_from.as_mut()]
+		.into_iter()
+		.flatten()
+	{
 		*address = crate::util::address::normalize(address);
 	}
 	let explicit_class = request.class()?;
@@ -106,6 +109,16 @@ pub async fn send(
 			&format!("Invalid sender address: {why}."),
 		));
 	}
+	// The null sender is not offered here: every message this endpoint sends
+	// answers to an address the account owns.
+	if let Some(address) = &request.envelope_from
+		&& let Err(why) = address_reason::parse(address)
+	{
+		return Err(ApiError::value_not_allowed(
+			"envelope_from",
+			&format!("Invalid envelope_from: {why}."),
+		));
+	}
 	if let Some(why) = recipients
 		.iter()
 		.map(String::as_str)
@@ -131,12 +144,17 @@ pub async fn send(
 	if !state.can_send(&account) {
 		return Err(ApiError::sending_off());
 	}
-	crate::api::mail_from::check_mail_from(&state, &account, &request.from)
-		.map_err(|_| ApiError::forbidden_from())?;
-	// `Sender` names who actually sent the message: the same rule as From.
-	if let Some(sender) = &request.sender {
+	// `Sender` names who actually sent the message and `envelope_from` is the
+	// address bounces return to: the same rule as From for all three. An
+	// address an account owns through a list can sit in a domain a confined
+	// key does not reach, so the key's domains are asked for each of them.
+	let senders = senders(&request);
+	for sender in &senders {
 		crate::api::mail_from::check_mail_from(&state, &account, sender)
 			.map_err(|_| ApiError::forbidden_from())?;
+		if !principal.admits_sender(sender) {
+			return Err(ApiError::forbidden_from());
+		}
 	}
 
 	// The optional headers are read now, and a message with nothing in it is
@@ -153,7 +171,9 @@ pub async fn send(
 		.duration_since(std::time::UNIX_EPOCH)
 		.map(|d| d.as_secs())
 		.unwrap_or(0);
-	let budget = state.submission_budget(&account, std::slice::from_ref(&request.from));
+	// Every tenant whose domain the message is sent under is asked and charged:
+	// the sender, the `Sender` and the envelope sender may all differ.
+	let budget = state.submission_budget(&account, &senders);
 	if !budget.has_room(now) {
 		return Err(rate_limited());
 	}
@@ -236,7 +256,7 @@ pub async fn send(
 	// spool / delivery log carry it without ever writing it into the message.
 	let extra = request.validated_extra()?;
 	let message = AcceptedMessage {
-		reverse_path: request.from,
+		reverse_path: request.envelope_from.take().unwrap_or(request.from),
 		recipients,
 		data,
 		require_tls: false,
@@ -304,6 +324,23 @@ fn rate_limited() -> ApiError {
 		crate::smtp::submission_budget::RATE_LIMITED,
 		SEND_LIMIT_RETRY_AFTER,
 	)
+}
+
+/// The addresses a request sends under: `from`, `sender` and `envelope_from`,
+/// each once.
+fn senders(request: &SendRequest) -> Vec<String> {
+	let mut out: Vec<String> = Vec::new();
+	let named = [
+		Some(&request.from),
+		request.sender.as_ref(),
+		request.envelope_from.as_ref(),
+	];
+	for address in named.into_iter().flatten() {
+		if !out.contains(address) {
+			out.push(address.clone());
+		}
+	}
+	out
 }
 
 /// The account a send request acts for. An account-bound credential acts
