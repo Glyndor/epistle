@@ -24,6 +24,8 @@ pub(super) struct Inputs<'a> {
 	)>,
 	/// The hosted-domain state the routes answer with and write through.
 	pub live: &'a Arc<crate::editable::LiveConfig>,
+	/// The ban store the ban routes manage, with a `[database]`.
+	pub ban_admin: &'a Option<Arc<dyn crate::antispam::bans::operator::BanAdmin>>,
 }
 
 pub(super) fn build(config: &Config, inputs: Inputs<'_>) -> std::io::Result<crate::api::ApiState> {
@@ -43,6 +45,7 @@ pub(super) fn build(config: &Config, inputs: Inputs<'_>) -> std::io::Result<crat
 		tenant_limits,
 		bayes,
 		live,
+		ban_admin,
 	} = inputs;
 	// Validation guarantees [api] exists for api listeners.
 	let api = config
@@ -91,6 +94,9 @@ pub(super) fn build(config: &Config, inputs: Inputs<'_>) -> std::io::Result<crat
 	.with_new_recipients_per_day(daily_new_recipients)
 	.with_outbound(Arc::clone(sink));
 	state = ratelimit::wire_api_submission_limits(state, config, send_limiter, tenant_limits);
+	if let Some(admin) = ban_admin {
+		state = state.with_ban_admin(Arc::clone(admin));
+	}
 	if let Some((store, queue)) = bayes {
 		state = state
 			.with_training(queue.clone())

@@ -61,7 +61,7 @@ pub(super) fn create(
 	}
 	if scopes.is_empty() {
 		return super::exit::refused(
-			"--scope is required (repeat to grant more than one: read, write, send, scim, alias)",
+			"--scope is required (repeat to grant more than one: read, write, send, scim, alias, ban)",
 		);
 	}
 	// Checked before the class is bound or the store is touched, so a bad
@@ -81,12 +81,17 @@ pub(super) fn create(
 		}
 		if scopes
 			.iter()
-			.any(|scope| scope == "scim" || scope == "alias")
+			.any(|scope| scope == "scim" || scope == "alias" || scope == "ban")
 		{
 			return super::exit::policy(
-				"account-bound API keys cannot hold the scim or alias scope (both are administrative)",
+				"account-bound API keys cannot hold the scim, alias or ban scope (all are administrative)",
 			);
 		}
+	}
+	if !domains.is_empty() && scopes.iter().any(|scope| scope == "ban") {
+		return super::exit::policy(
+			"the ban scope covers the whole server and cannot be confined with --domain",
+		);
 	}
 	let secret = match super::generate_secret() {
 		Some(secret) => secret,
@@ -535,7 +540,7 @@ pub(super) fn parse_scope(value: &str) -> Result<String, String> {
 	match value.parse::<Scope>() {
 		Ok(_) => Ok(value.to_string()),
 		Err(_) => Err(format!(
-			"unknown scope \"{value}\" (expected read, write, send, scim or alias)"
+			"unknown scope \"{value}\" (expected read, write, send, scim, alias or ban)"
 		)),
 	}
 }

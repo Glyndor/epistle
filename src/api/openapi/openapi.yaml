@@ -27,7 +27,7 @@ info:
     JMAP also accepts locally issued OAuth access tokens, confined to the
     signed `sub` account and explicit `read`, `write`, `send` scopes. These
     tokens never authenticate `/api/v1` or SCIM.
-    A key carries scopes (`read`, `write`, `send`, `scim`, `alias`); a request the
+    A key carries scopes (`read`, `write`, `send`, `scim`, `alias`, `ban`); a request the
     scopes do not cover is answered `403 forbidden` and does not count as a
     failed authentication; an unknown token is `401 unauthenticated`.
     `x-epistle-scope` on each operation names the
@@ -68,6 +68,8 @@ tags:
     description: Hosted-domain reads and atomic writes shared with `epistle domain`.
   - name: DNS
     description: The records the hosted domains need in DNS, and a check of the live DNS against them.
+  - name: Bans
+    description: The bans in force, banning and lifting, and the allow list, through the same code as `epistle ban`.
   - name: Aliases
     description: Address aliases, written through the same rules as `epistle alias`.
   - name: Queue
@@ -288,6 +290,259 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiError"
+  /api/v1/bans:
+    get:
+      operationId: listBans
+      tags: [Bans]
+      summary: List the bans in force
+      description: |-
+        Needs the `ban` scope, and only that: `read` does not open it. Ordered
+        by subject and keyset-paged by it, 100 to a page by default and 500 at
+        most. The rows are those `epistle ban list --json` prints. The bans are
+        the server's, so a key confined to domains is refused with `403`, as is
+        a key bound to an account. Without a `[database]` the answer is `404`:
+        bans are not manageable.
+      x-epistle-scope: [ban]
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: Page size. Above 500 it is cut to 500; 0 is refused.
+          schema:
+            type: integer
+        - name: cursor
+          in: query
+          required: false
+          description: The `next_cursor` of the page before.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: A page of bans.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BanPage"
+        "400":
+          $ref: "#/components/responses/InvalidInput"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/BanForbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
+    post:
+      operationId: addBan
+      tags: [Bans]
+      summary: Ban an address or a network
+      description: |-
+        The ban `epistle ban add` makes, by the same code. The target is an
+        address or a network; `for` is a number and a unit (`s`, `m`, `h`, `d`,
+        `w`), a day when absent and at most ten years. A ban of the same target
+        moves to the new end. Refused with `409` for an address on the allow
+        list, and with `400` for a network wider than a /16 of IPv4 or a /32 of
+        IPv6, which a key may not name (the command may). A key may leave at most
+        10000 manual bans in force (automatic bans are not counted) and 100
+        banned networks (`409`). The body is at most 4 KiB. Audited as
+        `ban.added`.
+      x-epistle-scope: [ban]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddBan"
+      responses:
+        "201":
+          description: The ban, and when it ends.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BanAdded"
+        "400":
+          $ref: "#/components/responses/InvalidInput"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/BanForbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: The address is on the allow list, or the key has as many manual bans or banned networks in force as it may keep.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "413":
+          description: The body is over 4 KiB. `text/plain`.
+          content:
+            text/plain:
+              schema:
+                type: string
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "422":
+          $ref: "#/components/responses/UnprocessableBody"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
+  /api/v1/bans/{subject}:
+    delete:
+      operationId: removeBan
+      tags: [Bans]
+      summary: Lift a ban
+      description: |-
+        The lift `epistle ban remove` makes, by the same code: the ban on the
+        subject goes and so do its failure records, so the next failure starts
+        from zero. Name the subject as the listing prints it, percent-encoded:
+        an address or a network (`203.0.113.9`, `cidr:203.0.113.0/24`), or one
+        an automatic ban made (`pair:alice@example.org|203.0.113.9`,
+        `account:alice@example.org`). A subject with no ban and no failure
+        record is `404`. Audited as `ban.removed`.
+      x-epistle-scope: [ban]
+      parameters:
+        - $ref: "#/components/parameters/BanSubject"
+      responses:
+        "200":
+          description: What was lifted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BanLifted"
+        "400":
+          $ref: "#/components/responses/InvalidInput"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/BanForbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
+  /api/v1/bans/allow:
+    get:
+      operationId: listBanAllow
+      tags: [Bans]
+      summary: The allow list
+      description: |-
+        The blocks that are never banned and never counted, canonical and
+        sorted, as `epistle ban allow list --json` prints them. At most 1000.
+        Needs the `ban` scope.
+      x-epistle-scope: [ban]
+      responses:
+        "200":
+          description: The blocks.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BanAllowList"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/BanForbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
+    post:
+      operationId: addBanAllow
+      tags: [Bans]
+      summary: Never ban an address or a network
+      description: |-
+        The entry `epistle ban allow add` makes, by the same code. A network
+        wider than a /16 of IPv4 or a /32 of IPv6 is refused with `400` (the
+        command accepts any), and a key may leave at most 1000 blocks, 100 of them
+        networks, on the list (`409`).
+        A block already on the list answers `200` with `changed` false. The
+        body is at most 4 KiB. Audited as `ban.allow_added`.
+      x-epistle-scope: [ban]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddBanAllow"
+      responses:
+        "200":
+          description: The block was already on the list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BanAllowChanged"
+        "201":
+          description: The block joined the list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BanAllowChanged"
+        "400":
+          $ref: "#/components/responses/InvalidInput"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/BanForbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: The key has left as many allow-list entries or allowed networks as it may keep.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "413":
+          description: The body is over 4 KiB. `text/plain`.
+          content:
+            text/plain:
+              schema:
+                type: string
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "422":
+          $ref: "#/components/responses/UnprocessableBody"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
+  /api/v1/bans/allow/{cidr}:
+    delete:
+      operationId: removeBanAllow
+      tags: [Bans]
+      summary: Take a block off the allow list
+      description: |-
+        The removal `epistle ban allow remove` makes, by the same code. Name the
+        block as it was added, percent-encoded (`10.1.0.0%2F16`). A block that
+        is not on the list is `404`. Audited as `ban.allow_removed`.
+      x-epistle-scope: [ban]
+      parameters:
+        - $ref: "#/components/parameters/BanCidr"
+      responses:
+        "200":
+          description: The block that was removed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BanAllowChanged"
+        "400":
+          $ref: "#/components/responses/InvalidInput"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/BanForbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
   /api/v1/domains:
     get:
       operationId: listDomains
@@ -3047,6 +3302,22 @@ components:
         domains are both `404`. Naming a domain leaves out the mail host.
       schema:
         type: string
+    BanSubject:
+      name: subject
+      in: path
+      required: true
+      description: |-
+        What to lift, as `GET /api/v1/bans` lists it, percent-encoded: an
+        address, `cidr:<network>`, `pair:<login>|<client>` or `account:<login>`.
+      schema:
+        type: string
+    BanCidr:
+      name: cidr
+      in: path
+      required: true
+      description: The allowed block as it was added, percent-encoded (`10.1.0.0%2F16`).
+      schema:
+        type: string
     AccountName:
       name: name
       in: path
@@ -3103,6 +3374,15 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/ApiError"
+    BanForbidden:
+      description: |-
+        `forbidden`: the key does not hold the `ban` scope, is confined to some
+        domains (the bans belong to the whole server), or is bound to one
+        account.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
     AuthRateLimited:
       description: |-
         `rate_limited`: this client address already made 20 requests with
@@ -3129,7 +3409,9 @@ components:
         `not_found`. The message says what is missing: `no such account`,
         `no such dynamic account` (the account exists but is declared in the
         configuration file), `no such masked address`, `no such queue entry`,
-        `no such domain`, `the delivery log is disabled`. An account or a
+        `no such domain`, `the delivery log is disabled`, `bans are not manageable`
+        (no `[database]`), `no ban or failure record`, `not on the allow list`. Lifting a network ban or removing an allow-list block
+        wider than a key may name is `400`. An account or a
         domain outside a confined key's domains answers exactly like one that
         does not exist.
       content:
@@ -3558,6 +3840,92 @@ components:
                     detail:
                       type: string
                       description: What was found.
+    BanRow:
+      type: object
+      required: [subject, reason, until]
+      properties:
+        subject:
+          type: string
+          description: "`ip:<address>`, `cidr:<network>`, `pair:<login>|<client>` or `account:<login>`."
+        reason:
+          type: string
+          description: The rule that raised the ban, or `manual ban`.
+        until:
+          type: integer
+          description: Unix seconds the ban ends.
+    BanPage:
+      type: object
+      required: [bans]
+      properties:
+        bans:
+          type: array
+          items:
+            $ref: "#/components/schemas/BanRow"
+        next_cursor:
+          type: string
+          description: Pass as `cursor` to fetch the next page; absent on the last page.
+    AddBan:
+      type: object
+      required: [target]
+      additionalProperties: false
+      properties:
+        target:
+          type: string
+          description: An address (`203.0.113.9`) or a network (`203.0.113.0/24`).
+        for:
+          type: string
+          description: How long the ban lasts, a number and a unit `s`, `m`, `h`, `d` or `w`. A day when absent.
+    BanAdded:
+      type: object
+      required: [changed, target, until]
+      properties:
+        changed:
+          type: boolean
+        target:
+          type: string
+        until:
+          type: integer
+          description: Unix seconds the ban ends.
+    BanLifted:
+      type: object
+      required: [changed, target, bans, failures]
+      properties:
+        changed:
+          type: boolean
+        target:
+          type: string
+        bans:
+          type: integer
+          description: Bans removed.
+        failures:
+          type: integer
+          description: Failure records cleared.
+    BanAllowList:
+      type: object
+      required: [allow]
+      properties:
+        allow:
+          type: array
+          items:
+            type: string
+    AddBanAllow:
+      type: object
+      required: [cidr]
+      additionalProperties: false
+      properties:
+        cidr:
+          type: string
+          description: An address or a network.
+    BanAllowChanged:
+      type: object
+      required: [changed, cidr]
+      properties:
+        changed:
+          type: boolean
+          description: False when the block was already on the list.
+        cidr:
+          type: string
+          description: The block in its canonical form.
     Domains:
       type: object
       required: [domains, disabled, details]

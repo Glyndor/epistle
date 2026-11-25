@@ -210,6 +210,7 @@ impl Principal {
 			Scope::Send,
 			Scope::Scim,
 			Scope::Alias,
+			Scope::Ban,
 		];
 		let credential = Credential {
 			token: token.to_string(),

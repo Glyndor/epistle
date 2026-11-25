@@ -86,6 +86,9 @@ async fn serve(config: Config, role: ServeRole) -> std::io::Result<()> {
 	if let Some(pool) = &reputation_pool {
 		store = store.with_ban_store(ban_policy::pg_ban_store(pool, &metrics, policy));
 	}
+	let ban_admin = reputation_pool
+		.as_ref()
+		.map(|pool| ban_policy::pg_ban_admin(pool, &metrics, policy));
 	let account_store = store
 		.with_scram_enabled(config.auth.scram)
 		.with_password_policy(crate::password::Policy::from_config(&config.auth))
@@ -251,6 +254,7 @@ async fn serve(config: Config, role: ServeRole) -> std::io::Result<()> {
 						tenant_limits: &tenant_limits,
 						bayes: &bayes,
 						live: &live,
+						ban_admin: &ban_admin,
 					},
 				)?;
 				let listener = tasks::bind(listener_config, &ipv4_any_ports).await?;

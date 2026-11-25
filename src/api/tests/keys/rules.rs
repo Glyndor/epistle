@@ -131,6 +131,30 @@ pub(super) const RULES: &[Rule] = &[
 		"credential_verification_does_not_confirm_another_tenants_password",
 	),
 	rule(
+		"/api/v1/bans",
+		"ban",
+		Domain::Unconfined,
+		"a_confined_or_bound_key_is_refused_on_every_route",
+	),
+	rule(
+		"/api/v1/bans/{subject}",
+		"ban",
+		Domain::Unconfined,
+		"a_confined_or_bound_key_is_refused_on_every_route",
+	),
+	rule(
+		"/api/v1/bans/allow",
+		"ban",
+		Domain::Unconfined,
+		"a_confined_or_bound_key_is_refused_on_every_route",
+	),
+	rule(
+		"/api/v1/bans/allow/{cidr}",
+		"ban",
+		Domain::Unconfined,
+		"a_confined_or_bound_key_is_refused_on_every_route",
+	),
+	rule(
 		"/api/v1/domains",
 		"read/write",
 		Domain::Filtered,

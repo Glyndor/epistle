@@ -151,6 +151,8 @@ struct Inner {
 	events: super::events::Hub,
 	/// The resolver and the limit of the DNS routes.
 	dns: dns::DnsChecks,
+	/// The ban store the ban routes manage, when the server has a database.
+	ban_admin: Option<Arc<dyn crate::antispam::bans::operator::BanAdmin>>,
 }
 
 mod limiter;
@@ -158,6 +160,7 @@ use limiter::{AUTH_WINDOW, ClientLimiters};
 
 pub use super::account_view::AccountView;
 
+mod bans;
 mod construction;
 mod dns;
 mod event_stream;

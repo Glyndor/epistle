@@ -2327,6 +2327,10 @@ connection (three failed attempts close it), which keeps no state between
 connections. A network ban (`add 203.0.113.0/24`) covers every address in it;
 `add 203.0.113.9/32` is the same ban as `add 203.0.113.9`.
 
+The management API does the same through `/api/v1/bans` and `/api/v1/bans/allow`, with the
+`ban` scope and a narrower reach (see [Bans in the API guide](api.md#bans)). The command has no
+count and no limit on how wide a block is; a key has both.
+
 ## Learning from the user's moves (`epistle learning`)
 
 An account's Bayesian corpus learns from what its user does: a message moved

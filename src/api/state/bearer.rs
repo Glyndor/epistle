@@ -37,6 +37,11 @@ pub(in crate::api) fn acceptable_scopes_for(method: &axum::http::Method, path: &
 	if path == "/api/v1/aliases" || path.starts_with("/api/v1/aliases/") {
 		return vec![Scope::Alias];
 	}
+	// The ban routes lock clients out and exempt them from every ban: only the
+	// `ban` scope opens them, whatever the method.
+	if path == "/api/v1/bans" || path.starts_with("/api/v1/bans/") {
+		return vec![Scope::Ban];
+	}
 	match *method {
 		axum::http::Method::GET | axum::http::Method::HEAD => vec![Scope::Read],
 		axum::http::Method::POST
