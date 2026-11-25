@@ -27,8 +27,10 @@ pub(super) fn account(name: &str, address: &str) -> DynamicAccount {
 }
 
 pub(super) fn queue_message(spool: &FsSpool, reverse_path: &str) -> uuid::Uuid {
+	// The server decides the owner; here it is the domain the sender writes.
+	let owner = reverse_path.rsplit_once('@').map(|(_, domain)| domain);
 	spool
-		.store(
+		.store_owned(
 			&AcceptedMessage {
 				reverse_path: reverse_path.to_string(),
 				recipients: vec!["someone@elsewhere.test".to_string()],
@@ -39,7 +41,7 @@ pub(super) fn queue_message(spool: &FsSpool, reverse_path: &str) -> uuid::Uuid {
 				sender_verified: false,
 				no_dsn: Vec::new(),
 			},
-			None,
+			owner,
 			&BTreeMap::new(),
 		)
 		.expect("queue message")

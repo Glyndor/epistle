@@ -1844,7 +1844,76 @@ paths:
           $ref: "#/components/responses/AuthRateLimited"
         "500":
           $ref: "#/components/responses/Internal"
+  /api/v1/queue/destinations:
+    get:
+      operationId: listQueueDestinations
+      tags: [Queue]
+      summary: The destinations the queue holds off
+      description: |-
+        The rows `epistle queue destinations --json` prints: each recipient domain
+        or exchanger on hold (with `until`, `deferrals` and the remote `reason`),
+        then each receiver group at its warm-up cap. At most 1000 rows; `truncated`
+        says there were more. The holds are shared by every tenant, so a key
+        confined to some domains is refused with `403`.
+      x-epistle-scope: [manage:read]
+      responses:
+        "200":
+          description: The destinations.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QueueDestinations"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/AccountBoundKey"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
   /api/v1/queue/{id}:
+    get:
+      operationId: showQueueEntry
+      tags: [Queue]
+      summary: One message in the queue
+      description: |-
+        What `epistle queue show --json` prints: the envelope and its retry state
+        (`attempts`, `next_attempt`, `held`, `last_error`), never the message. With
+        `headers=true` the header fields of the message are returned too, up to 200
+        of them with a value cut at 1000 characters (`headers_truncated` says when
+        something was left out); the body is never read past the blank line. An
+        entry of another tenant answers like one that is not there. An entry
+        belongs to the domain the server decided when it queued it, not to the
+        sender the message names; one with no owner is for a key with no
+        confinement only.
+      x-epistle-scope: [manage:read]
+      parameters:
+        - $ref: "#/components/parameters/QueueId"
+        - name: headers
+          in: query
+          required: false
+          description: Also return the header fields of the message.
+          schema:
+            type: boolean
+      responses:
+        "200":
+          description: The entry.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QueueEntry"
+        "400":
+          $ref: "#/components/responses/UnreadableRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/AccountBoundKey"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
     delete:
       operationId: cancelQueueEntry
       tags: [Queue]
@@ -1856,7 +1925,8 @@ paths:
         cannot be done. Each pending recipient gets a delivery-log record with
         outcome `canceled`; when the delivery log is enabled, the configured
         webhook receives a `canceled` event with the message's `extra`. An
-        entry of another tenant answers like one that is not there.
+        entry of another tenant answers like one that is not there. A key confined to
+        some domains does not remove an entry the operator holds.
       x-epistle-scope: [manage:write]
       parameters:
         - name: id
@@ -1883,13 +1953,127 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthenticated"
         "403":
-          $ref: "#/components/responses/AccountBoundKey"
+          description: |-
+            `forbidden`: the key is bound to one account, or the entry is on hold and the
+            hold was put by the operator or by a key outside the reach of this one. The
+            entry stays.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
           description: |-
             `conflict`: the entry has evidence outcomes waiting to be written
             and stays until they are. Retrying later works.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
+  /api/v1/queue/{id}/retry:
+    post:
+      operationId: retryQueueEntry
+      tags: [Queue]
+      summary: Attempt a message now
+      description: |-
+        Makes the next delivery attempt happen now, skipping the backoff, as `epistle queue retry` does. A retry does not lift a hold. An entry of another tenant answers like one that is not there
+        (`404`). Audited as `queue.retried` when it changed the entry; a request that
+        found it as asked answers `200` with `changed` false and writes no line. A
+        confined key lifts only a hold put by a key confined inside its domains.
+      x-epistle-scope: [manage:write]
+      parameters:
+        - $ref: "#/components/parameters/QueueId"
+      responses:
+        "200":
+          description: What the entry is now.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QueueSteered"
+        "400":
+          $ref: "#/components/responses/UnreadableRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/AccountBoundKey"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
+  /api/v1/queue/{id}/hold:
+    post:
+      operationId: holdQueueEntry
+      tags: [Queue]
+      summary: Hold a message
+      description: |-
+        The entry is not attempted until it is released, as `epistle queue hold` does. Holding an entry already held keeps the original start. An entry of another tenant answers like one that is not there
+        (`404`). Audited as `queue.held` when it changed the entry; a request that
+        found it as asked answers `200` with `changed` false and writes no line.
+      x-epistle-scope: [manage:write]
+      parameters:
+        - $ref: "#/components/parameters/QueueId"
+      responses:
+        "200":
+          description: What the entry is now.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QueueSteered"
+        "400":
+          $ref: "#/components/responses/UnreadableRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/AccountBoundKey"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
+  /api/v1/queue/{id}/release:
+    post:
+      operationId: releaseQueueEntry
+      tags: [Queue]
+      summary: Release a held message
+      description: |-
+        A held entry is attempted again, as `epistle queue release` does. An entry of another tenant answers like one that is not there
+        (`404`). Audited as `queue.released` when it changed the entry; a request that
+        found it as asked answers `200` with `changed` false and writes no line.
+      x-epistle-scope: [manage:write]
+      parameters:
+        - $ref: "#/components/parameters/QueueId"
+      responses:
+        "200":
+          description: What the entry is now.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QueueSteered"
+        "400":
+          $ref: "#/components/responses/UnreadableRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          description: |-
+            `forbidden`: the key is bound to one account, or the hold was put by the
+            operator or by a key outside the reach of this one, and stays.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: |-
+            `conflict`: the entry's removal began, so it stays on hold until it is gone.
           content:
             application/json:
               schema:
@@ -3425,6 +3609,14 @@ components:
       description: The allowed block as it was added, percent-encoded (`10.1.0.0%2F16`).
       schema:
         type: string
+    QueueId:
+      name: id
+      in: path
+      required: true
+      description: The queue id.
+      schema:
+        type: string
+        format: uuid
     AccountName:
       name: name
       in: path
@@ -3982,6 +4174,68 @@ components:
                   enum: [ok, warn, fail]
                 detail:
                   type: string
+    QueueEntry:
+      type: object
+      required: [id, reverse_path, recipients, attempts, next_attempt, held, require_tls]
+      properties:
+        id:
+          type: string
+          format: uuid
+        reverse_path:
+          type: string
+        recipients:
+          type: array
+          items:
+            type: string
+        attempts:
+          type: integer
+        next_attempt:
+          type: integer
+          description: Epoch seconds; 0 is now.
+        held:
+          type: boolean
+        held_since:
+          type: [integer, "null"]
+        require_tls:
+          type: boolean
+        last_error:
+          type: [string, "null"]
+        headers:
+          type: array
+          description: Present only with `headers=true`.
+          items:
+            type: object
+            required: [name, value]
+            properties:
+              name:
+                type: string
+              value:
+                type: string
+        headers_truncated:
+          type: boolean
+    QueueSteered:
+      type: object
+      required: [changed, id, held]
+      properties:
+        changed:
+          type: boolean
+          description: False when the entry already was as the change leaves it.
+        id:
+          type: string
+          format: uuid
+        held:
+          type: boolean
+    QueueDestinations:
+      type: object
+      required: [destinations, truncated]
+      properties:
+        destinations:
+          type: array
+          items:
+            type: object
+            description: "A hold (`kind` domain or exchanger: `name`, `until`, `deferrals`, `reason`) or a group at its warm-up cap (`kind` warmup: `name`, `until`, `waiting`, `reason`)."
+        truncated:
+          type: boolean
     BanRow:
       type: object
       required: [subject, reason, until]

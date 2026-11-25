@@ -15,7 +15,30 @@ pub fn remove(
 	now: u64,
 	webhook: Option<&Arc<crate::webhook::Webhook>>,
 ) -> std::io::Result<Envelope> {
-	let envelope = crate::evidence::cancel::remove(spool, evidence_root, id)?;
+	remove_if(
+		spool,
+		evidence_root,
+		(data_dir, retention_days),
+		id,
+		now,
+		webhook,
+		|_| Ok(()),
+	)
+}
+
+/// [`remove`] for a caller that may be refused: `allowed` is asked about the
+/// entry as it is under the spool's lock, and an error from it leaves the
+/// entry as it was and records nothing.
+pub fn remove_if(
+	spool: &FsSpool,
+	evidence_root: &Path,
+	(data_dir, retention_days): (&Path, u64),
+	id: uuid::Uuid,
+	now: u64,
+	webhook: Option<&Arc<crate::webhook::Webhook>>,
+	allowed: impl FnOnce(&Envelope) -> std::io::Result<()>,
+) -> std::io::Result<Envelope> {
+	let envelope = crate::evidence::cancel::remove_if(spool, evidence_root, id, allowed)?;
 	let log = DeliveryLog::open(data_dir, retention_days);
 	if log.is_enabled() {
 		for recipient in &envelope.recipients {
