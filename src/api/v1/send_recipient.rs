@@ -23,6 +23,70 @@ pub struct NamedRecipient {
 	address: String,
 }
 
+/// Most addresses in `reply_to`.
+pub(super) const MAX_REPLY_TO: usize = 10;
+
+/// The `reply_to` field: one recipient, or a list of them, since `Reply-To`
+/// is an address list (RFC 5322 section 3.6.2). Absent is an empty list.
+#[derive(Deserialize, Clone, Debug, Default)]
+#[serde(from = "ReplyToWire")]
+pub struct ReplyTo {
+	list: Vec<Recipient>,
+	/// Whether the request wrote a list, which decides how an error names
+	/// the entry: `reply_to.name` for one recipient, `reply_to[1].name` in a list.
+	listed: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum ReplyToWire {
+	One(Recipient),
+	Many(Vec<Recipient>),
+}
+
+impl From<ReplyToWire> for ReplyTo {
+	fn from(wire: ReplyToWire) -> Self {
+		match wire {
+			ReplyToWire::One(one) => Self {
+				list: vec![one],
+				listed: false,
+			},
+			ReplyToWire::Many(list) => Self { list, listed: true },
+		}
+	}
+}
+
+impl ReplyTo {
+	pub(super) fn is_empty(&self) -> bool {
+		self.list.is_empty()
+	}
+
+	pub(super) fn recipients(&self) -> &[Recipient] {
+		&self.list
+	}
+
+	pub(super) fn recipients_mut(&mut self) -> &mut [Recipient] {
+		&mut self.list
+	}
+
+	/// Refuse a list over [`MAX_REPLY_TO`] and every entry [`Recipient::check`] refuses.
+	pub(super) fn check(&self) -> Result<(), ApiError> {
+		if self.list.len() > MAX_REPLY_TO {
+			return Err(ApiError::field_out_of_range(
+				"reply_to",
+				&format!("Too many reply_to addresses; the maximum is {MAX_REPLY_TO}."),
+			));
+		}
+		for (index, recipient) in self.list.iter().enumerate() {
+			match self.listed {
+				true => recipient.check(&format!("reply_to[{index}]"))?,
+				false => recipient.check("reply_to")?,
+			}
+		}
+		Ok(())
+	}
+}
+
 impl Recipient {
 	pub(super) fn address(&self) -> &str {
 		match self {

@@ -466,7 +466,8 @@ line break. It is written as a quoted string when it holds a comma, a quote,
 a backslash, parentheses, angle brackets or an at sign, and as RFC 2047
 encoded-words when it holds non-ASCII text. A name that cannot be written
 safely is refused with `400 invalid_input` and the field `to[2].name`
-(`reply_to.name` for the reply address); it is never dropped or altered.
+(`reply_to.name` for a single reply address, `reply_to[1].name` inside a list);
+it is never dropped or altered.
 Names in `bcc` are checked but appear in no header. The envelope, the
 delivery records and the webhook events identify a recipient by its address
 only. An address given more than once is one recipient, and the first name
@@ -476,10 +477,10 @@ given for it is the one written in the header.
 |---|---|---|
 | `from` | string, required | A bare address, no display name. Must be one the acting account owns |
 | `from_name` | string | The phrase of `From`. Absent uses the account's display name. At most 128 characters |
-| `to`, `cc`, `bcc` | arrays of recipients | A recipient is a bare address or `{"name": "Ana Pérez", "address": "ana@example.org"}`; see below. `to` is required but may be empty if `cc` or `bcc` has someone. Together at most 100 distinct addresses by default (`max_recipients`). `bcc` is envelope only |
-| `reply_to` | recipient | A bare address or the same object |
+| `to`, `cc`, `bcc` | arrays of recipients | A recipient is a bare address or `{"name": "Ana Pérez", "address": "ana@example.org"}`; see below. `to` is required but may be empty if `cc` or `bcc` has someone. Together at most 100 distinct addresses by default (`max_recipients`). `bcc` is envelope only. With `to` and `cc` both empty the message carries `To: undisclosed-recipients:;`, an empty group, so no header names a recipient |
+| `reply_to` | recipient or array of recipients | A bare address or the same object, or a list of them (at most 10), written as one `Reply-To` header. An empty list writes none |
 | `sender` | string | A bare address; it must be one the account owns, like `from` |
-| `subject` | string | Default empty |
+| `subject` | string | Default empty. A request with no subject, no `text`, no `html`, no `attachments` and no `inline` is an empty message and is refused with `400 invalid_input` on `text` |
 | `text`, `html` | string | With both, a `multipart/alternative`, text first |
 | `attachments`, `inline` | arrays of `{name, content_type, data, content_id}` | `data` is base64 (standard alphabet, padded). An empty `content_type` is detected. Every `inline` part needs a `content_id`; the HTML refers to it as `cid:<content_id>`. At most 100 parts together |
 | `in_reply_to`, `references` | string | `<id@domain>` ids, space separated: one for `in_reply_to`, up to 100 for `references` (in practice about 50, because each header value is at most 1000 bytes) |
@@ -492,6 +493,8 @@ given for it is the one written in the header.
 | `save_sent` | boolean | Whether a copy goes to the account's Sent folder. Absent follows the account setting. Transactional mail is never copied |
 | `extra` | object of strings | Correlation data, up to 10 keys (printable ASCII, no spaces, at most 64 bytes) with values of at most 256 bytes. It comes back on `/api/v1/deliveries` and in the webhook events of the message and is never written into the message |
 | `class` | `transactional`, `marketing`, `personal` | See below |
+
+A refusal for a limit names the limit: `Too many recipients; the maximum is 100.`, the same for attachments, custom headers, `reply_to`, `list_unsubscribe`, `references` and the `extra` map.
 
 Fields the server does not know are ignored. Every value that ends up on a
 header line, attachment names and types included, may not hold a control
