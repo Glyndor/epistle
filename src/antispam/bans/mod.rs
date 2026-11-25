@@ -280,6 +280,7 @@ pub fn subject_account(account: &str) -> String {
 	format!("account:{}", account.to_ascii_lowercase())
 }
 
+pub mod operator;
 mod sql;
 pub use sql::{
 	BanRow, BanTarget, MANUAL_REASON, PgBanStore, UnbanTarget, parse_allow, parse_login,

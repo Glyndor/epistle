@@ -7,6 +7,7 @@
 //! when nothing was written.
 
 use super::*;
+use crate::antispam::bans::operator::{AllowPlaced, AllowRoom, BanRoom, Placed};
 use crate::cidr::Cidr;
 
 /// Subject prefix for a ban on a whole network.
@@ -57,6 +58,15 @@ impl std::fmt::Display for BanTarget {
 			Self::Cidr(cidr) => write!(f, "{cidr}"),
 		}
 	}
+}
+
+/// The advisory lock every write that counts before it writes takes, so two
+/// of them never count the same room.
+const ADMIN_WRITE_LOCK: i64 = 0x6570_6973_7462_616e;
+
+/// A cap as the signed number the database counts in.
+fn count_of(cap: usize) -> i64 {
+	i64::try_from(cap).unwrap_or(i64::MAX)
 }
 
 /// Subject prefix for a ban on one account as seen from one client.
@@ -123,7 +133,7 @@ impl UnbanTarget {
 	/// The `auth_ban` and `auth_failure` subjects this target clears. For an
 	/// address that includes the /64 an IPv6 client is counted under (see
 	/// [`subject_client`]).
-	fn subjects(&self) -> Vec<String> {
+	pub(crate) fn subjects(&self) -> Vec<String> {
 		match self {
 			Self::Address(target @ BanTarget::Ip(ip)) => {
 				vec![target.subject(), subject_client(*ip)]
@@ -247,6 +257,112 @@ impl PgBanStore {
 		.execute(&self.pool)
 		.await?;
 		Ok(())
+	}
+
+	/// Ban `target` until `until_secs` unless `room` is used up. The counts
+	/// and the write are one transaction under a lock every such write
+	/// takes, so requests that arrive together cannot each pass a count
+	/// the others fill. A manual ban being renewed needs no room; a ban the
+	/// listeners raised that this makes manual counts against it.
+	pub async fn add_ban_within(
+		&self,
+		target: BanTarget,
+		now_secs: u64,
+		until_secs: u64,
+		room: BanRoom,
+	) -> Result<Placed, sqlx::Error> {
+		let mut tx = self.pool.begin().await?;
+		sqlx::query("SELECT pg_advisory_xact_lock($1)")
+			.bind(ADMIN_WRITE_LOCK)
+			.execute(&mut *tx)
+			.await?;
+		let renews: Option<bool> = sqlx::query_scalar(
+			"SELECT reason = $2 FROM auth_ban WHERE subject = $1 AND until > to_timestamp($3)",
+		)
+		.bind(target.subject())
+		.bind(MANUAL_REASON)
+		.bind(now_secs as i64)
+		.fetch_optional(&mut *tx)
+		.await?;
+		if renews != Some(true) {
+			let (manual, networks): (i64, i64) = sqlx::query_as(
+				"SELECT count(*) FILTER (WHERE reason = $1), \
+				 count(*) FILTER (WHERE reason = $1 AND subject LIKE 'cidr:%') \
+				 FROM auth_ban WHERE until > to_timestamp($2)",
+			)
+			.bind(MANUAL_REASON)
+			.bind(now_secs as i64)
+			.fetch_one(&mut *tx)
+			.await?;
+			if manual >= count_of(room.max_manual) {
+				return Ok(Placed::Full("manual bans"));
+			}
+			if matches!(target, BanTarget::Cidr(_)) && networks >= count_of(room.max_networks) {
+				return Ok(Placed::Full("banned networks"));
+			}
+		}
+		sqlx::query(
+			"INSERT INTO auth_ban (subject, strikes, until, reason, created_at, updated_at) \
+			 VALUES ($1, 1, to_timestamp($2), $3, to_timestamp($4), to_timestamp($4)) \
+			 ON CONFLICT (subject) DO UPDATE SET \
+			 until = EXCLUDED.until, reason = EXCLUDED.reason, \
+			 updated_at = EXCLUDED.updated_at",
+		)
+		.bind(target.subject())
+		.bind(until_secs as i64)
+		.bind(MANUAL_REASON)
+		.bind(now_secs as i64)
+		.execute(&mut *tx)
+		.await?;
+		tx.commit().await?;
+		Ok(Placed::Done)
+	}
+
+	/// Add a block to the allow list unless `room` is used up, counting and
+	/// writing in one transaction under the lock of
+	/// [`PgBanStore::add_ban_within`].
+	pub async fn allow_add_within(
+		&self,
+		cidr: Cidr,
+		room: AllowRoom,
+	) -> Result<AllowPlaced, sqlx::Error> {
+		let mut tx = self.pool.begin().await?;
+		sqlx::query("SELECT pg_advisory_xact_lock($1)")
+			.bind(ADMIN_WRITE_LOCK)
+			.execute(&mut *tx)
+			.await?;
+		let held: bool =
+			sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM auth_allow WHERE cidr = $1)")
+				.bind(cidr.to_string())
+				.fetch_one(&mut *tx)
+				.await?;
+		if held {
+			return Ok(AllowPlaced::Already);
+		}
+		let (entries, networks): (i64, i64) = sqlx::query_as(
+			"SELECT count(*), \
+			 count(*) FILTER (WHERE NOT ((cidr NOT LIKE '%:%' AND cidr LIKE '%/32') \
+			 OR cidr LIKE '%/128')) FROM auth_allow",
+		)
+		.fetch_one(&mut *tx)
+		.await?;
+		if entries >= count_of(room.max_entries) {
+			return Ok(AllowPlaced::Full("allow-list entries"));
+		}
+		if !cidr.is_host() && networks >= count_of(room.max_networks) {
+			return Ok(AllowPlaced::Full("allowed networks"));
+		}
+		let result =
+			sqlx::query("INSERT INTO auth_allow (cidr) VALUES ($1) ON CONFLICT DO NOTHING")
+				.bind(cidr.to_string())
+				.execute(&mut *tx)
+				.await?;
+		tx.commit().await?;
+		Ok(if result.rows_affected() > 0 {
+			AllowPlaced::Added
+		} else {
+			AllowPlaced::Already
+		})
 	}
 
 	/// Lift the ban on `target` and forget its failure counter, so the next

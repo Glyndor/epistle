@@ -334,3 +334,135 @@ async fn the_store_reports_whether_the_allow_list_covers_an_address() {
 	);
 	store.allow_remove(entry).await.expect("unallow");
 }
+
+/// The operations `epistle ban` and the `/api/v1/bans` routes share, run on
+/// the database through the trait the routes hold.
+#[tokio::test]
+async fn the_shared_operations_run_on_the_database() {
+	use epistle::antispam::bans::operator::{self as admin, BanAdmin, Limits, Refusal};
+
+	let Some((_pool, store)) = connect().await else {
+		return;
+	};
+	let store: &dyn BanAdmin = &store;
+	let block = fresh_block();
+	let spec = format!("{block}::30");
+	let subject = format!("ip:{spec}");
+	let target = BanTarget::parse(&spec).expect("ip");
+	let net = parse_allow(&format!("{block}::/64")).expect("cidr");
+	let at = now();
+
+	let banned = admin::ban(store, target, Some(600), at, Limits::api())
+		.await
+		.expect("ban");
+	assert_eq!(banned.until, at + 600);
+	let rows = store.list_bans(at).await.expect("list");
+	assert!(rows.iter().any(|row| row.subject == subject), "{rows:?}");
+
+	assert!(
+		admin::allow(store, net, Limits::api())
+			.await
+			.expect("allow")
+	);
+	let refusal = admin::ban(store, target, None, at, Limits::api())
+		.await
+		.expect_err("an allow-listed address is not banned");
+	assert!(matches!(refusal, Refusal::AllowListed(_)), "{refusal}");
+	admin::disallow(store, net, Limits::api())
+		.await
+		.expect("disallow");
+	let refusal = admin::disallow(store, net, Limits::api())
+		.await
+		.expect_err("not there");
+	assert!(matches!(refusal, Refusal::NotAllowed(_)), "{refusal}");
+
+	let lifted = admin::unban(store, target.into(), Limits::api())
+		.await
+		.expect("unban");
+	assert_eq!(lifted.bans, 1);
+	let refusal = admin::unban(store, target.into(), Limits::api())
+		.await
+		.expect_err("nothing left");
+	assert!(matches!(refusal, Refusal::NoBan(_)), "{refusal}");
+}
+
+/// Requests that arrive together at the edge of the room take no more than
+/// what is left: the store counts and writes as one step. The tables are
+/// shared with the other tests, so the room is set from what is there, and the
+/// invariant is that no more than the one place left is taken.
+#[tokio::test]
+async fn bans_and_allow_entries_at_the_edge_of_the_room_are_taken_atomically() {
+	use epistle::antispam::bans::operator::{AllowPlaced, AllowRoom, BanAdmin, BanRoom, Placed};
+
+	let Some((_pool, store)) = connect().await else {
+		return;
+	};
+	let store = std::sync::Arc::new(store);
+	let block = fresh_block();
+	let at = now();
+	let held = store
+		.list_bans(at)
+		.await
+		.expect("list")
+		.iter()
+		.filter(|row| row.reason == epistle::antispam::bans::MANUAL_REASON)
+		.filter(|row| row.subject.starts_with("cidr:"))
+		.count();
+	let room = BanRoom {
+		max_manual: usize::MAX,
+		max_networks: held + 1,
+	};
+	let mut tasks = tokio::task::JoinSet::new();
+	let mut targets = Vec::new();
+	for n in 0..16 {
+		let target = BanTarget::parse(&format!("{block}:{n:x}::/64")).expect("network");
+		targets.push(target);
+		let store = store.clone();
+		tasks.spawn(async move {
+			let store: &dyn BanAdmin = &*store;
+			store.add_ban_within(target, at, at + 600, room).await
+		});
+	}
+	let mut placed = 0;
+	while let Some(done) = tasks.join_next().await {
+		if done.expect("task").expect("store") == Placed::Done {
+			placed += 1;
+		}
+	}
+	assert!(placed <= 1, "{placed} networks took the one place left");
+	for target in targets {
+		let _ = store.remove_ban(target).await;
+	}
+
+	let allowed = store.allow_list().await.expect("list");
+	let networks = allowed
+		.iter()
+		.filter_map(|entry| parse_allow(entry).ok())
+		.filter(|entry| !entry.is_host())
+		.count();
+	let room = AllowRoom {
+		max_entries: usize::MAX,
+		max_networks: networks + 1,
+	};
+	let mut tasks = tokio::task::JoinSet::new();
+	let mut blocks = Vec::new();
+	for n in 0..16 {
+		let cidr = parse_allow(&format!("{block}:{n:x}::/64")).expect("block");
+		blocks.push(cidr);
+		let store = store.clone();
+		tasks.spawn(async move {
+			let store: &dyn BanAdmin = &*store;
+			store.allow_add_within(cidr, room).await
+		});
+	}
+	let mut added = 0;
+	while let Some(done) = tasks.join_next().await {
+		if done.expect("task").expect("store") == AllowPlaced::Added {
+			added += 1;
+		}
+	}
+	assert!(added <= 1, "{added} blocks took the one place left");
+	for cidr in blocks {
+		let _ = store.allow_remove(cidr).await;
+	}
+}
