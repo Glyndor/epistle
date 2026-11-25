@@ -8,12 +8,13 @@ fn ip(text: &str) -> IpAddr {
 
 fn key(label: &str, secret: &str) -> ApiKey {
 	ApiKey {
+		grants: Vec::new(),
 		label: label.to_string(),
 		hash: sha256_hash(secret),
 		expires_at: None,
 		ip_cidr: None,
 		// `add()` rejects empty scopes, so every test-built key carries one.
-		scopes: vec![Scope::Read.as_str().to_string()],
+		scopes: vec!["read".to_string()],
 		domains: Vec::new(),
 		account: None,
 		auto_submitted: false,
@@ -23,38 +24,53 @@ fn key(label: &str, secret: &str) -> ApiKey {
 #[test]
 fn valid_key_admitted() {
 	let k = key("ci", "supersecret");
-	assert!(k.admits_any("supersecret", None, 1000, &[Scope::Read]));
+	assert!(k.admits_any("supersecret", None, 1000, &[Scope::ManageRead]));
 }
 
 #[test]
 fn wrong_key_rejected() {
 	let k = key("ci", "supersecret");
-	assert!(!k.admits_any("wrong", None, 1000, &[Scope::Read]));
+	assert!(!k.admits_any("wrong", None, 1000, &[Scope::ManageRead]));
 }
 
 #[test]
 fn expired_key_rejected() {
 	let mut k = key("ci", "supersecret");
 	k.expires_at = Some(2000);
-	assert!(k.admits_any("supersecret", None, 1999, &[Scope::Read]));
-	assert!(!k.admits_any("supersecret", None, 2000, &[Scope::Read]));
+	assert!(k.admits_any("supersecret", None, 1999, &[Scope::ManageRead]));
+	assert!(!k.admits_any("supersecret", None, 2000, &[Scope::ManageRead]));
 }
 
 #[test]
 fn ip_mismatch_rejected_match_accepted() {
 	let mut k = key("ci", "supersecret");
 	k.ip_cidr = Some("10.0.0.0/8".to_string());
-	assert!(k.admits_any("supersecret", Some(ip("10.1.2.3")), 1000, &[Scope::Read]));
-	assert!(!k.admits_any("supersecret", Some(ip("11.0.0.1")), 1000, &[Scope::Read]));
+	assert!(k.admits_any(
+		"supersecret",
+		Some(ip("10.1.2.3")),
+		1000,
+		&[Scope::ManageRead]
+	));
+	assert!(!k.admits_any(
+		"supersecret",
+		Some(ip("11.0.0.1")),
+		1000,
+		&[Scope::ManageRead]
+	));
 	// A CIDR with no client IP cannot be satisfied.
-	assert!(!k.admits_any("supersecret", None, 1000, &[Scope::Read]));
+	assert!(!k.admits_any("supersecret", None, 1000, &[Scope::ManageRead]));
 }
 
 #[test]
 fn malformed_cidr_rejected() {
 	let mut k = key("ci", "supersecret");
 	k.ip_cidr = Some("nonsense".to_string());
-	assert!(!k.admits_any("supersecret", Some(ip("10.1.2.3")), 1000, &[Scope::Read]));
+	assert!(!k.admits_any(
+		"supersecret",
+		Some(ip("10.1.2.3")),
+		1000,
+		&[Scope::ManageRead]
+	));
 }
 
 /// A read-scoped key cannot perform a write — the whole point of scopes.
@@ -62,8 +78,8 @@ fn malformed_cidr_rejected() {
 fn write_scope_rejected_for_read_only_key() {
 	let mut k = key("ci", "supersecret");
 	k.scopes = vec!["read".to_string()];
-	assert!(k.admits_any("supersecret", None, 1000, &[Scope::Read]));
-	assert!(!k.admits_any("supersecret", None, 1000, &[Scope::Write]));
+	assert!(k.admits_any("supersecret", None, 1000, &[Scope::ManageRead]));
+	assert!(!k.admits_any("supersecret", None, 1000, &[Scope::ManageWrite]));
 	assert!(!k.admits_any("supersecret", None, 1000, &[Scope::Send]));
 }
 
@@ -73,8 +89,8 @@ fn write_scope_rejected_for_read_only_key() {
 fn write_scope_does_not_imply_read_or_send() {
 	let mut k = key("ci", "supersecret");
 	k.scopes = vec!["write".to_string()];
-	assert!(!k.admits_any("supersecret", None, 1000, &[Scope::Read]));
-	assert!(k.admits_any("supersecret", None, 1000, &[Scope::Write]));
+	assert!(!k.admits_any("supersecret", None, 1000, &[Scope::ManageRead]));
+	assert!(k.admits_any("supersecret", None, 1000, &[Scope::ManageWrite]));
 	assert!(!k.admits_any("supersecret", None, 1000, &[Scope::Send]));
 }
 
@@ -86,7 +102,7 @@ fn write_scope_does_not_imply_read_or_send() {
 fn admits_any_against_multi_scope_slice() {
 	let mut write_only = key("ci", "supersecret");
 	write_only.scopes = vec!["write".to_string()];
-	let set = [Scope::Read, Scope::Write, Scope::Send];
+	let set = [Scope::ManageRead, Scope::ManageWrite, Scope::Send];
 	assert!(write_only.admits_any("supersecret", None, 1000, &set));
 }
 
@@ -99,7 +115,7 @@ fn legacy_key_admits_every_scope() {
 	let secret = crate::test_support::fixtures::fresh_secret();
 	let mut k = key("ci", &secret);
 	k.scopes = Vec::new();
-	let set = [Scope::Read, Scope::Write, Scope::Send];
+	let set = [Scope::ManageRead, Scope::ManageWrite, Scope::Send];
 	assert!(
 		k.admits_any(&secret, None, 1000, &set),
 		"legacy key must admit any scope"

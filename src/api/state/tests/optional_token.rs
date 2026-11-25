@@ -45,6 +45,7 @@ async fn every_scope_key_is_not_the_static_identity() {
 	let token = crate::test_support::fixtures::api_key();
 	let mut keys = ApiKeyStore::open(dir.path()).unwrap();
 	keys.add(ApiKey {
+		grants: Vec::new(),
 		label: "all-scopes".into(),
 		hash: sha256_hash(token),
 		expires_at: None,
@@ -60,7 +61,14 @@ async fn every_scope_key_is_not_the_static_identity() {
 	state = state.with_api_keys(std::sync::Arc::new(
 		crate::api::ApiKeySet::open(dir.path()).unwrap(),
 	));
-	for scope in [Scope::Read, Scope::Write, Scope::Send, Scope::Scim] {
+	for scope in [
+		Scope::ManageRead,
+		Scope::ManageWrite,
+		Scope::MailRead,
+		Scope::MailWrite,
+		Scope::Send,
+		Scope::Scim,
+	] {
 		assert!(state.key_authorizes(token, None, &[scope]));
 	}
 	assert!(!state.bearer_is_configured_async(token, None).await.unwrap());

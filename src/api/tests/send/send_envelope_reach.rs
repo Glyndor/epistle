@@ -45,6 +45,7 @@ fn add_confined_key(dir: &std::path::Path) {
 		expires_at: None,
 		ip_cidr: None,
 		scopes: vec!["send".to_string()],
+		grants: Vec::new(),
 		domains: vec!["example.org".to_string()],
 		account: None,
 		auto_submitted: false,

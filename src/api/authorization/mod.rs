@@ -139,19 +139,10 @@ impl Principal {
 	/// one restriction, not one of them replacing the other. An account that
 	/// is present but empty names no account, so it reaches none.
 	pub fn of_key(key: &ApiKey, credential: Option<Credential>) -> Self {
-		let scopes = match key
-			.scopes
-			.iter()
-			.map(|scope| scope.parse::<Scope>())
-			.collect::<Result<Vec<Scope>, _>>()
-		{
-			// No scope declared is the legacy key: it holds every scope.
-			Ok(scopes) if scopes.is_empty() => None,
-			Ok(scopes) => Some(scopes),
-			// A scope this build cannot read is a scope the key does not
-			// hold. Refusing the whole key is the only fail-closed reading.
-			Err(_) => Some(Vec::new()),
-		};
+		// No scope declared is the legacy key: it holds every scope. A scope
+		// this build cannot read is a scope the key does not hold, and refusing
+		// the whole key is the only fail-closed reading.
+		let scopes = key.reach();
 		let domains = if key.domains.is_empty() {
 			None
 		} else {
@@ -202,11 +193,13 @@ impl Principal {
 			.unwrap_or(0);
 		// The principal is independent of any specific scope: the key that
 		// authenticates the caller is the same key whether the route wants
-		// `read`, `write`, `send` or `scim`. The scopes it holds ride on the
+		// `manage:read`, `mail:write`, `send` or `scim`. The scopes it holds ride on the
 		// principal, and the route that needs one asks for it.
 		const EVERY_SCOPE: &[Scope] = &[
-			Scope::Read,
-			Scope::Write,
+			Scope::ManageRead,
+			Scope::ManageWrite,
+			Scope::MailRead,
+			Scope::MailWrite,
 			Scope::Send,
 			Scope::Scim,
 			Scope::Alias,

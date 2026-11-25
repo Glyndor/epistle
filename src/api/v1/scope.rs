@@ -3,6 +3,7 @@
 //! live in one place; `route_rules` lists which routes use which.
 
 use crate::api::Principal;
+use crate::api::api_keys::Scope;
 use crate::api::error::ApiError;
 use crate::api::state::ApiState;
 
@@ -29,6 +30,28 @@ pub(super) fn account_in_scope(
 		Ok(())
 	} else {
 		Err(ApiError::not_found("no such account"))
+	}
+}
+
+/// The routes an account-bound key reaches under a mail scope (the delivery
+/// log, the suppression lists) take `scope`, a management scope, from every key
+/// that is not bound to one account. The coarse check lets a mail scope in
+/// for them because the bound key needs it, and a key that only holds a mail
+/// scope must not use that way in to a list that is the server's or a
+/// tenant's, or to another account's. A bound key reaches only its own
+/// account, which the route resolves.
+pub(super) fn require_manage_unless_bound(
+	principal: &Principal,
+	scope: Scope,
+	what: &str,
+) -> Result<(), ApiError> {
+	if principal.bound_account().is_some() || principal.admits_scope(scope) {
+		Ok(())
+	} else {
+		Err(ApiError::forbidden(&format!(
+			"{what} needs the {} scope unless the key is bound to one account.",
+			scope.as_str()
+		)))
 	}
 }
 

@@ -15,7 +15,6 @@
 
 use std::thread;
 
-use crate::api::api_keys::Scope;
 use crate::api::api_keys::{ApiKey, ApiKeyStore};
 use crate::directory_store::{
 	AccountStore, AppPassword, AppPasswordStore, DynamicAccount, MaskedAddressStore,
@@ -165,11 +164,12 @@ fn two_api_key_handles_lose_no_writes() {
 	let cli_thread = thread::spawn(move || {
 		let mut cli = ApiKeyStore::open(&cli_dir).expect("cli open");
 		cli.add(ApiKey {
+			grants: Vec::new(),
 			label: "reader".to_string(),
 			hash: "sha256:$1".to_string(),
 			expires_at: None,
 			ip_cidr: None,
-			scopes: vec![Scope::Read.as_str().to_string()],
+			scopes: vec!["read".to_string()],
 			domains: Vec::new(),
 			account: None,
 			auto_submitted: false,
@@ -180,11 +180,12 @@ fn two_api_key_handles_lose_no_writes() {
 
 	cli_state
 		.add(ApiKey {
+			grants: Vec::new(),
 			label: "writer".to_string(),
 			hash: "sha256:$2".to_string(),
 			expires_at: None,
 			ip_cidr: None,
-			scopes: vec![Scope::Write.as_str().to_string()],
+			scopes: vec!["write".to_string()],
 			domains: Vec::new(),
 			account: None,
 			auto_submitted: false,

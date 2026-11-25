@@ -53,6 +53,7 @@ pub(super) fn rig(delay_secs: u32, scopes: &[&str]) -> Rig {
 		("ann-read", vec!["read"]),
 	] {
 		keys.add(crate::api::api_keys::ApiKey {
+			grants: Vec::new(),
 			label: format!("{name}-only"),
 			hash: crate::api::api_keys::sha256_hash(&secret(name)),
 			expires_at: None,

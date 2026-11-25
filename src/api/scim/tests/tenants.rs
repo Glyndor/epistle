@@ -60,6 +60,7 @@ pub(in super::super) fn tenants() -> (tempfile::TempDir, ApiState, Arc<AccountSt
 		("scim-all", unconfined_key(), Vec::new()),
 	] {
 		keys.add(ApiKey {
+			grants: Vec::new(),
 			label: label.to_string(),
 			hash: api_keys::sha256_hash(secret),
 			expires_at: None,

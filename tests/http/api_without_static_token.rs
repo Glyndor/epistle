@@ -41,6 +41,7 @@ async fn send_key_posts_mail_without_a_static_token_and_anonymous_send_is_refuse
 	ApiKeyStore::open(dir.path())
 		.unwrap()
 		.add(ApiKey {
+			grants: Vec::new(),
 			label: "application".into(),
 			hash: sha256_hash(&secret),
 			scopes: vec!["send".into()],

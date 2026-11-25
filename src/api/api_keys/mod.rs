@@ -17,44 +17,52 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-/// Permissions a key may carry. The set is intentionally small — one per
-/// damage class — so an operator can read at a glance what a leaked key would
-/// let through.
+/// Permissions a key may carry. The set is intentionally small, one per
+/// damage class, so an operator can read at a glance what a leaked key would
+/// let through. Management and mail are separate: a key that manages accounts
+/// does not open JMAP and a key that reads mail does not open the management
+/// views.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Scope {
-	/// Read-only views (status, domains, accounts list, mailboxes, queue list,
-	/// suppression list, auth/verify, JMAP reads, JMAP `/download`).
-	Read,
-	/// State mutation that does not originate outbound mail: account
-	/// create/delete/password/TOTP, queue and suppression delete, JMAP
-	/// `/set` on mailbox/email/push-subscription, JMAP `/upload`.
-	Write,
+	/// Read-only views of `/api/v1` (status, domains, accounts list, queue
+	/// list, auth/verify) and the event stream.
+	ManageRead,
+	/// State mutation under `/api/v1` that does not originate outbound mail:
+	/// account create/delete/password/TOTP, queue deletes.
+	ManageWrite,
+	/// Reading mail: the JMAP session, the methods that return data,
+	/// `/jmap/download`, the JMAP socket and event stream, and the delivery
+	/// log and suppression list an account-bound key reaches.
+	MailRead,
+	/// Changing mail: the JMAP methods that change data and `/jmap/upload`,
+	/// and the suppression list an account-bound key reaches.
+	MailWrite,
 	/// Outbound mail submission: `POST /api/v1/send`, JMAP `EmailSubmission/set`.
 	Send,
 	/// SCIM 2.0 provisioning endpoints under `/scim/v2`. The SCIM surface
 	/// manages mail accounts (create / read / patch / delete) on behalf of an
 	/// external identity provider (Entra ID, Okta, Keycloak…), so it is its
-	/// own damage class and not folded into `Write`.
+	/// own damage class and not folded into `ManageWrite`.
 	Scim,
 	/// The address-alias routes under `/api/v1/aliases`: list, create and
 	/// remove the aliases that fan one address out to several accounts. An
-	/// alias redirects mail, so it is its own damage class and neither `read`
-	/// nor `write` opens it; a key holding it should also be confined to the
-	/// domains it manages (`--domain`).
+	/// alias redirects mail, so it is its own damage class and neither
+	/// `manage:read` nor `manage:write` opens it; a key holding it should also
+	/// be confined to the domains it manages (`--domain`).
 	Alias,
 	/// The ban routes under `/api/v1/bans`: list the bans in force, ban an
 	/// address or a network, lift a ban, and keep the allow list. A ban
 	/// locks clients out and the allow list exempts them from every ban, so it
-	/// is its own damage class and neither `read` nor `write` opens it. The
-	/// bans are the server's, not a tenant's, so a key holding it cannot be
+	/// is its own damage class and none of the management or mail scopes opens
+	/// it. The bans are the server's, not a tenant's, so a key holding it cannot be
 	/// confined to domains or bound to an account.
 	Ban,
 }
 
 /// Error returned when the [`std::str::FromStr`] impl for [`Scope`] is
-/// handed a value that is not one of the canonical `read`/`write`/`send`
-/// strings. Carries the offending value so a caller can format a context-aware
-/// message; nobody needs to construct one outside of this module.
+/// handed a value that is not one of the canonical names. Carries the
+/// offending value so a caller can format a context-aware message; nobody
+/// needs to construct one outside of this module.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnknownScopeError(String);
 
@@ -69,14 +77,17 @@ impl std::error::Error for UnknownScopeError {}
 impl std::str::FromStr for Scope {
 	type Err = UnknownScopeError;
 
-	/// Parse the canonical form (`read`, `write`, `send`, `scim`, `alias`, `ban`). Unknown
-	/// values are rejected — the store refuses to load an `api_keys.toml`
-	/// containing a typo, and the CLI rejects `--scope` values it does not
-	/// recognise.
+	/// Parse the canonical form (`manage:read`, `manage:write`, `mail:read`,
+	/// `mail:write`, `send`, `scim`, `alias`, `ban`). Unknown values are rejected, and
+	/// so are the names 0.14.0 used (`read`, `write`): those are expanded by
+	/// `grants::expand_legacy` where a file or an option may still carry
+	/// them.
 	fn from_str(value: &str) -> Result<Self, Self::Err> {
 		match value {
-			"read" => Ok(Scope::Read),
-			"write" => Ok(Scope::Write),
+			"manage:read" => Ok(Scope::ManageRead),
+			"manage:write" => Ok(Scope::ManageWrite),
+			"mail:read" => Ok(Scope::MailRead),
+			"mail:write" => Ok(Scope::MailWrite),
 			"send" => Ok(Scope::Send),
 			"scim" => Ok(Scope::Scim),
 			"alias" => Ok(Scope::Alias),
@@ -87,12 +98,13 @@ impl std::str::FromStr for Scope {
 }
 
 impl Scope {
-	/// Canonical serialised form (`read`, `write`, `send`, `scim`, `alias`, `ban`) used in
-	/// `api_keys.toml` and in the `ApiKey.scopes` vector.
+	/// Canonical serialised form, used in the `grants` of `api_keys.toml`.
 	pub fn as_str(self) -> &'static str {
 		match self {
-			Scope::Read => "read",
-			Scope::Write => "write",
+			Scope::ManageRead => "manage:read",
+			Scope::ManageWrite => "manage:write",
+			Scope::MailRead => "mail:read",
+			Scope::MailWrite => "mail:write",
 			Scope::Send => "send",
 			Scope::Scim => "scim",
 			Scope::Alias => "alias",
@@ -115,11 +127,20 @@ pub struct ApiKey {
 	/// Single-CIDR allowlist; `None` allows any client IP.
 	#[serde(default)]
 	pub ip_cidr: Option<String>,
-	/// Permissions granted to this key. Absent (legacy) = all scopes, with a
+	/// Permissions granted to this key, in the names 0.14.0 reads (`read`,
+	/// `write`, `send`, `scim`, `alias`). Absent (legacy) = all scopes, with a
 	/// one-time startup warning per key. New keys added through the store are
-	/// required to declare at least one scope.
+	/// required to declare at least one scope. When `grants` is present this
+	/// is the narrowest set of those names that covers it, so a 0.14.0 reader
+	/// of the same file gives the key at least what it holds.
 	#[serde(default)]
 	pub scopes: Vec<String>,
+	/// The permissions in the names 0.15.0 reads (`manage:read`,
+	/// `manage:write`, `mail:read`, `mail:write`, `send`, `scim`, `alias`).
+	/// Absent means the reach of `scopes` (`grants::expand_legacy`). A field
+	/// 0.14.0 does not know, so it ignores it.
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub grants: Vec<String>,
 	/// Domains this key may act on. Absent or empty means every configured
 	/// domain, which is what every key did before this field existed — a
 	/// tenancy field must not silently narrow the keys already installed.
@@ -181,14 +202,15 @@ impl ApiKey {
 		hash_ok && time_ok && ip_ok
 	}
 
-	/// Whether the key's scopes include one of `acceptable_scopes`. Empty
-	/// `scopes` is a legacy key and covers every scope (preserves behaviour);
-	/// a scoped key must list at least one of them.
+	/// Whether the key's reach includes one of `acceptable_scopes`. A key
+	/// with neither `grants` nor `scopes` is a legacy key and covers every
+	/// scope (preserves behaviour); a scoped key must hold at least one of
+	/// them ([`Self::reach`]).
 	pub fn covers_any(&self, acceptable_scopes: &[Scope]) -> bool {
-		self.scopes.is_empty()
-			|| acceptable_scopes
-				.iter()
-				.any(|scope| self.scopes.iter().any(|s| s == scope.as_str()))
+		match self.reach() {
+			None => true,
+			Some(held) => acceptable_scopes.iter().any(|scope| held.contains(scope)),
+		}
 	}
 }
 
@@ -245,9 +267,12 @@ pub struct ApiKeySummary {
 	pub expires_at: Option<u64>,
 	/// Single-CIDR allowlist; `None` allows any client IP.
 	pub ip_cidr: Option<String>,
-	/// Permissions granted to the key (canonical strings, e.g. `read`); empty
-	/// means the legacy "any scope" form.
+	/// Permissions granted to the key in the names 0.14.0 reads (e.g.
+	/// `read`); empty means the legacy "any scope" form.
 	pub scopes: Vec<String>,
+	/// The permissions in the names 0.15.0 reads; empty when the key holds
+	/// only what `scopes` says.
+	pub grants: Vec<String>,
 	/// Domains the key is confined to; empty reaches every domain.
 	pub domains: Vec<String>,
 	/// The account the key is bound to, if any.
@@ -263,46 +288,6 @@ pub struct ApiKeyStore {
 	keys: Vec<ApiKey>,
 }
 
-/// Validate `scopes` for a brand-new key (the CLI path): at least one scope
-/// must be listed, and every entry must be a known `Scope`.
-fn validate_new_scopes(scopes: &[String]) -> std::io::Result<()> {
-	if scopes.is_empty() {
-		return Err(std::io::Error::new(
-			std::io::ErrorKind::InvalidInput,
-			"API key must declare at least one scope (read/write/send/scim/alias/ban)",
-		));
-	}
-	for scope in scopes {
-		if scope.parse::<Scope>().is_err() {
-			return Err(std::io::Error::new(
-				std::io::ErrorKind::InvalidInput,
-				format!(
-					"unknown API key scope \"{scope}\" (expected read, write, send, scim, alias or ban)"
-				),
-			));
-		}
-	}
-	Ok(())
-}
-
-/// Validate the scope entries loaded from disk: empty is allowed (legacy),
-/// every non-empty entry must be a known `Scope`. A typo in the file is the
-/// kind of thing that should keep the server from starting — the file is
-/// small and operator-edited, so any mistake is best surfaced immediately.
-fn validate_loaded_scopes(scopes: &[String]) -> std::io::Result<()> {
-	for scope in scopes {
-		if scope.parse::<Scope>().is_err() {
-			return Err(std::io::Error::new(
-				std::io::ErrorKind::InvalidData,
-				format!(
-					"unknown API key scope \"{scope}\" in api_keys.toml (expected read, write, send, scim, alias or ban)"
-				),
-			));
-		}
-	}
-	Ok(())
-}
-
 impl ApiKeyStore {
 	/// Open (loading if present) the store under `data_dir`. A missing file is
 	/// an empty store.
@@ -315,7 +300,7 @@ impl ApiKeyStore {
 			Err(error) => return Err(error),
 		};
 		for key in &file.keys {
-			validate_loaded_scopes(&key.scopes)?;
+			grants::validate_loaded(key)?;
 		}
 		Ok(ApiKeyStore {
 			path,
@@ -355,7 +340,7 @@ impl ApiKeyStore {
 				crate::cidr::Cidr::refusal(spec),
 			));
 		}
-		validate_new_scopes(&key.scopes)?;
+		let key = grants::normalized(key)?;
 		let new_state = crate::storage::locked::edit(
 			&self.path,
 			|text| {
@@ -573,6 +558,7 @@ impl ApiKeyStore {
 				expires_at: key.expires_at,
 				ip_cidr: key.ip_cidr.clone(),
 				scopes: key.scopes.clone(),
+				grants: key.grants.clone(),
 				domains: key.domains.clone(),
 				account: key.account.clone(),
 				auto_submitted: key.auto_submitted,
@@ -624,7 +610,7 @@ impl ApiKeySet {
 			Err(error) => return Err(error),
 		};
 		for key in &file.keys {
-			validate_loaded_scopes(&key.scopes)?;
+			grants::validate_loaded(key)?;
 		}
 		Ok(ApiKeySet {
 			keys: std::sync::RwLock::new(file.keys),
@@ -639,7 +625,7 @@ impl ApiKeySet {
 		let file: ApiKeyFile = toml::from_str(text)
 			.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
 		for key in &file.keys {
-			validate_loaded_scopes(&key.scopes)?;
+			grants::validate_loaded(key)?;
 		}
 		*self.keys.write().unwrap_or_else(|p| p.into_inner()) = file.keys;
 		Ok(())
@@ -678,7 +664,11 @@ impl crate::directory_store::file_watcher::ApiKeyReloader for ApiKeySet {
 	}
 }
 
+mod grants;
+pub mod legacy_cutoff;
 mod revoke;
+
+pub use grants::{ScopeInputError, display_names, legacy_cover, stored_form};
 
 #[cfg(test)]
 mod tests;

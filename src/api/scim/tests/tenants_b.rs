@@ -113,6 +113,7 @@ fn two_reachable_tenants() -> (tempfile::TempDir, ApiState, Arc<AccountStore>) {
 	}
 	let mut keys = ApiKeyStore::open(dir.path()).expect("key store");
 	keys.add(ApiKey {
+		grants: Vec::new(),
 		label: "two".to_string(),
 		hash: api_keys::sha256_hash(tenant_key()),
 		expires_at: None,

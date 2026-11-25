@@ -4,7 +4,7 @@
 
 use super::Ctx;
 use super::report::{AreaReport, Item, Level};
-use crate::api::api_keys::{ApiKey, ApiKeyStore};
+use crate::api::api_keys::{ApiKey, ApiKeyStore, Scope, legacy_cutoff};
 use crate::cli::api_keys::expiry::status_warning;
 
 /// Read the same key file as `epistle api-key list`, without a server.
@@ -37,7 +37,7 @@ fn evaluate(store: &ApiKeyStore, data_dir: &std::path::Path, now: u64) -> AreaRe
 		let scopes = if key.scopes.is_empty() {
 			"all (legacy)".to_string()
 		} else {
-			key.scopes.join(", ")
+			crate::api::api_keys::display_names(&key.scopes, &key.grants).join(", ")
 		};
 		let name = format!("{} ({scopes})", key.label);
 		match key.expires_at {
@@ -51,16 +51,25 @@ fn evaluate(store: &ApiKeyStore, data_dir: &std::path::Path, now: u64) -> AreaRe
 		if let Some(detail) = broad_reach(key, clause.is_none()) {
 			items.push(Item::new(&name, Level::Warn, detail));
 		}
-		for scope in ["scim", "alias"] {
-			if key.scopes.iter().any(|held| held == scope) && key.domains.is_empty() {
+		// `read` and `write` open management and mail at once. The panel's key
+		// does so on purpose until the panel has a credential per user.
+		if key.label != crate::cli::init::PANEL_KEY_LABEL && key.spans_manage_and_mail() {
+			items.push(Item::new(
+				&name,
+				Level::Warn,
+				legacy_cutoff::warning(&key.label),
+			));
+		}
+		for scope in [Scope::Scim, Scope::Alias] {
+			if key.covers_any(&[scope]) && key.reach().is_some() && key.domains.is_empty() {
 				items.push(Item::new(
 					&name,
 					Level::Warn,
-					format!("{scope} key has no associated domain"),
+					format!("{} key has no associated domain", scope.as_str()),
 				));
 			}
 		}
-		if key.scopes.iter().any(|held| held == "ban") && !key.domains.is_empty() {
+		if key.reach().is_some_and(|held| held.contains(&Scope::Ban)) && !key.domains.is_empty() {
 			items.push(Item::new(
 				&name,
 				Level::Warn,
@@ -96,10 +105,10 @@ fn broad_reach(key: &ApiKey, cidr_decides: bool) -> Option<&'static str> {
 	if key.scopes.is_empty() {
 		return Some("holds every scope (legacy key); recreate it with explicit --scope");
 	}
-	let acts = key
-		.scopes
-		.iter()
-		.any(|scope| scope == "write" || scope == "send");
+	let acts = key.reach().is_some_and(|held| {
+		held.iter()
+			.any(|scope| matches!(scope, Scope::ManageWrite | Scope::MailWrite | Scope::Send))
+	});
 	(acts
 		&& key.domains.is_empty()
 		&& key.account.is_none()

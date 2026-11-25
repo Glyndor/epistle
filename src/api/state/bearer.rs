@@ -16,18 +16,25 @@ use super::{ApiState, ClientIp, MatchedAuth, auth};
 ///
 /// Unambiguous routes (`POST /api/v1/send`, `POST /jmap/upload`) get a
 /// single-scope slice. `POST /jmap/api` is ambiguous (every method call
-/// shares the same path), so the slice accepts any of `Read`/`Write`/`Send`
-/// — the dispatcher then enforces the actual scope per method call. The
-/// SCIM 2.0 surface under `/scim/v2` is its own damage class; both reads
+/// shares the same path), so the slice accepts any of the mail scopes and
+/// `Send` — the dispatcher then enforces the actual scope per method call.
+/// The SCIM 2.0 surface under `/scim/v2` is its own damage class; both reads
 /// and writes on it require the dedicated `Scim` scope.
+///
+/// Management (`/api/v1`) and mail (JMAP) are separate: a `manage:` scope
+/// never opens JMAP and a `mail:` scope never opens a management route. The
+/// routes an account-bound key reaches under `/api/v1` (the delivery log, the
+/// suppression list) are mail routes an administrator reads too, so each takes
+/// its `mail:` scope or its `manage:` one.
 pub(in crate::api) fn acceptable_scopes_for(method: &axum::http::Method, path: &str) -> Vec<Scope> {
-	const ALL: &[Scope] = &[Scope::Read, Scope::Write, Scope::Send];
+	const MAIL: &[Scope] = &[Scope::MailRead, Scope::MailWrite, Scope::Send];
+	let reading = matches!(*method, axum::http::Method::GET | axum::http::Method::HEAD);
 	if method == axum::http::Method::POST && path == "/api/v1/send" {
 		return vec![Scope::Send];
 	}
 	// Taking a send back is for the key that sent it, or one that may write.
 	if method == axum::http::Method::DELETE && path.starts_with("/api/v1/send/") {
-		return vec![Scope::Send, Scope::Write];
+		return vec![Scope::Send, Scope::ManageWrite];
 	}
 	if path.starts_with("/scim/v2") {
 		return vec![Scope::Scim];
@@ -42,19 +49,35 @@ pub(in crate::api) fn acceptable_scopes_for(method: &axum::http::Method, path: &
 	if path == "/api/v1/bans" || path.starts_with("/api/v1/bans/") {
 		return vec![Scope::Ban];
 	}
+	if path.starts_with("/api/v1/") && super::super::account_bound::path_is_account_scoped(path) {
+		return if reading {
+			vec![Scope::MailRead, Scope::ManageRead]
+		} else {
+			vec![Scope::MailWrite, Scope::ManageWrite]
+		};
+	}
+	let mail = path == "/.well-known/jmap" || path.starts_with("/jmap/");
 	match *method {
-		axum::http::Method::GET | axum::http::Method::HEAD => vec![Scope::Read],
+		axum::http::Method::GET | axum::http::Method::HEAD => {
+			vec![if mail {
+				Scope::MailRead
+			} else {
+				Scope::ManageRead
+			}]
+		}
 		axum::http::Method::POST
 		| axum::http::Method::PUT
 		| axum::http::Method::DELETE
 		| axum::http::Method::PATCH => {
-			if path.starts_with("/api/v1/") || path.starts_with("/jmap/upload") {
-				vec![Scope::Write]
+			if path.starts_with("/api/v1/") {
+				vec![Scope::ManageWrite]
+			} else if path.starts_with("/jmap/upload") {
+				vec![Scope::MailWrite]
 			} else {
-				ALL.to_vec()
+				MAIL.to_vec()
 			}
 		}
-		_ => vec![Scope::Write],
+		_ => vec![Scope::ManageWrite],
 	}
 }
 

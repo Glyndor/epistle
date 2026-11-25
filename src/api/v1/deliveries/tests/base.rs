@@ -102,6 +102,7 @@ async fn an_account_bound_key_only_sees_its_own_records() {
 	let mut key_store = crate::api::ApiKeyStore::open(dir.path()).expect("open key store");
 	key_store
 		.add(crate::api::api_keys::ApiKey {
+			grants: Vec::new(),
 			label: "alice-only".into(),
 			hash: crate::api::api_keys::sha256_hash("alice-secret"),
 			expires_at: None,

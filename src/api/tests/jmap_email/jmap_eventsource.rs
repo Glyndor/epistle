@@ -18,6 +18,7 @@ const SENDER: &str = "sender-es-secret";
 
 fn key(label: &str, secret: &str, scopes: &[&str], account: &str) -> crate::api::api_keys::ApiKey {
 	crate::api::api_keys::ApiKey {
+		grants: Vec::new(),
 		label: label.to_string(),
 		hash: crate::api::api_keys::sha256_hash(secret),
 		expires_at: None,

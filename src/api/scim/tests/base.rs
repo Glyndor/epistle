@@ -47,6 +47,7 @@ pub(in super::super) fn build_state() -> (tempfile::TempDir, ApiState) {
 	// least one.
 	let mut keys = ApiKeyStore::open(dir.path()).expect("key store");
 	keys.add(ApiKey {
+		grants: Vec::new(),
 		label: "scim".to_string(),
 		hash: api_keys::sha256_hash(SCIM_KEY_SECRET.as_str()),
 		expires_at: None,
@@ -58,11 +59,12 @@ pub(in super::super) fn build_state() -> (tempfile::TempDir, ApiState) {
 	})
 	.expect("add scim key");
 	keys.add(ApiKey {
+		grants: Vec::new(),
 		label: "read".to_string(),
 		hash: api_keys::sha256_hash(READ_KEY_SECRET.as_str()),
 		expires_at: None,
 		ip_cidr: None,
-		scopes: vec![Scope::Read.as_str().to_string()],
+		scopes: vec!["read".to_string()],
 		domains: Vec::new(),
 		account: None,
 		auto_submitted: false,

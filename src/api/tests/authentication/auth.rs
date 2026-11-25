@@ -197,6 +197,7 @@ fn sql_account_state_counted(
 /// unrestricted; passing a domain narrows the reach.
 fn verify_key(secret: &str, domains: Vec<String>) -> super::api_keys::ApiKey {
 	super::api_keys::ApiKey {
+		grants: Vec::new(),
 		label: "ci".to_string(),
 		hash: super::api_keys::sha256_hash(secret),
 		expires_at: None,

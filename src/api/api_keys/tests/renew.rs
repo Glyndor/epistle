@@ -11,6 +11,7 @@ fn add(dir: &std::path::Path, expires_at: Option<u64>) {
 	let mut store = stored(dir);
 	store
 		.add(ApiKey {
+			grants: Vec::new(),
 			label: "panel".to_string(),
 			hash: sha256_hash("old"),
 			expires_at,

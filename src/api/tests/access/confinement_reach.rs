@@ -98,6 +98,7 @@ fn a_binding_outside_the_domains_owns_nothing() {
 	let state = world(dir.path());
 	let bound = |account: &str| {
 		let key = crate::api::api_keys::ApiKey {
+			grants: Vec::new(),
 			label: format!("bound-{account}"),
 			hash: crate::api::api_keys::sha256_hash("unused"),
 			expires_at: None,

@@ -89,6 +89,7 @@ fn a_session_secret_under_32_bytes_is_refused_not_replaced() {
 
 fn foreign(label: &str, scopes: &[&str], domains: &[&str], account: Option<&str>) -> ApiKey {
 	ApiKey {
+		grants: Vec::new(),
 		label: label.to_string(),
 		hash: crate::api::api_keys::sha256_hash("theirs"),
 		expires_at: Some(NOW + 400 * DAY),

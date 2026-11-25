@@ -66,3 +66,53 @@ fn a_session_secret_of_exactly_32_bytes_is_kept_and_a_line_ending_does_not_count
 	run(&layout, NOW);
 	assert_eq!(text(&path), exact);
 }
+
+/// The key 0.14.0 wrote has no `grants`. `stack update` writes them, which
+/// changes nothing the key reaches, and keeps the secret and the expiry.
+#[test]
+fn panel_key_old_shape_is_upgraded() {
+	let layout = layout();
+	run(&layout, NOW);
+	let path = layout.data.join("api_keys.toml");
+	let mut table: toml::Table = toml::from_str(&text(&path)).expect("parse");
+	for key in table["keys"].as_array_mut().expect("keys") {
+		key.as_table_mut().expect("table").remove("grants");
+	}
+	std::fs::write(&path, toml::to_string(&table).expect("write")).expect("rewrite");
+	let before = row(&layout);
+	assert!(before.grants.is_empty(), "written the way 0.14.0 writes it");
+	let report = run(&layout, NOW + DAY);
+	let after = row(&layout);
+	assert_eq!(
+		after.grants,
+		["manage:read", "manage:write", "mail:read", "mail:write"]
+	);
+	assert_eq!(after.scopes, ["read", "write"]);
+	assert_eq!(
+		(after.hash, after.expires_at),
+		(before.hash, before.expires_at)
+	);
+	assert_eq!(kinds(&report)[0].0, "reused");
+}
+
+/// The key is the same key before and after: no `api_keys` warning names it.
+#[test]
+fn panel_key_in_both_shapes_is_the_panels_and_nothing_else_is() {
+	let layout = layout();
+	run(&layout, NOW);
+	let key = row(&layout);
+	assert!(key.spans_manage_and_mail(), "it reaches both, on purpose");
+	// A narrower grant set under the same label is another key: refused.
+	let mut store = ApiKeyStore::open(&layout.data).expect("open");
+	store
+		.set_scopes(
+			LABEL,
+			&["manage:read".to_string(), "manage:write".to_string()],
+		)
+		.expect("set");
+	let message = refusal(&layout, NOW);
+	assert!(
+		message.contains("other settings than the panel's"),
+		"{message}"
+	);
+}

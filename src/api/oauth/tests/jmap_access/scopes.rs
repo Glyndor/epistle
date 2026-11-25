@@ -11,8 +11,8 @@ async fn both_grants_preserve_scopes_and_redemption_cannot_widen_them() {
 		pkce(&app, None).await,
 	] {
 		let principal = state.oauth_principal(&token, None).unwrap();
-		assert!(principal.admits_scope(crate::api::api_keys::Scope::Read));
-		assert!(!principal.admits_scope(crate::api::api_keys::Scope::Write));
+		assert!(principal.admits_scope(crate::api::api_keys::Scope::MailRead));
+		assert!(!principal.admits_scope(crate::api::api_keys::Scope::MailWrite));
 		assert!(!principal.admits_scope(crate::api::api_keys::Scope::Send));
 		for method in ["Mailbox/set", "Email/set", "EmailSubmission/set"] {
 			let reply = call(

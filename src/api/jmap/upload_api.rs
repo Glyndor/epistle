@@ -15,7 +15,7 @@ pub async fn upload(
 	// `Write` scope: a read-only key must not be able to fill the quota or
 	// the blob store with arbitrary bytes.
 	if state
-		.require_scope_for_principal(&principal, Scope::Write)
+		.require_scope_for_principal(&principal, Scope::MailWrite)
 		.is_err()
 	{
 		return jmap_error(StatusCode::UNAUTHORIZED, "forbidden", "missing write scope");
