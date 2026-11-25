@@ -4247,6 +4247,9 @@ components:
         sender:
           type: string
           description: Written as `Sender`. Must be an address the account owns, like `from`.
+        envelope_from:
+          type: string
+          description: The envelope sender (`MAIL FROM`), where bounces and delivery reports go. Must be an address the account owns, like `from`. Absent is `from`. An empty string is refused; the null sender is not offered. Held to the key's domains and to the tenants' sending limits like `from`.
         subject:
           type: string
           default: ""

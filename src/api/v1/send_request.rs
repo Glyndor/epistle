@@ -64,6 +64,12 @@ pub struct SendRequest {
 	pub(super) inline: Vec<PartRequest>,
 	#[serde(default)]
 	pub(super) sender: Option<String>,
+	/// The envelope sender (`MAIL FROM`), where `From` says who wrote the
+	/// message: the address bounces and delivery reports go back to. Absent
+	/// is `from`. It must be an address the acting account owns, like `from`,
+	/// and cannot be empty.
+	#[serde(default)]
+	pub(super) envelope_from: Option<String>,
 	#[serde(default)]
 	in_reply_to: Option<String>,
 	#[serde(default)]
@@ -260,6 +266,7 @@ impl SendRequest {
 		fields.extend(self.list_unsubscribe.iter().map(String::as_str));
 		for single in [
 			&self.sender,
+			&self.envelope_from,
 			&self.in_reply_to,
 			&self.references,
 			&self.importance,

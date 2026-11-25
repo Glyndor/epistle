@@ -7,6 +7,9 @@ use uuid::Uuid;
 
 use super::*;
 
+/// Most From addresses an envelope remembers for the suppression lists.
+const MAX_AUTHORS: usize = 8;
+
 impl FsSpool {
 	/// Persist one message crash-safely and return its spool id.
 	///
@@ -111,6 +114,15 @@ impl FsSpool {
 			held_secs: 0,
 			last_error: None,
 			recipient_state: BTreeMap::new(),
+			authors: account
+				.as_deref()
+				.map(|_| {
+					let mut authors = crate::dmarc::author::all_addresses(&message.data);
+					authors.retain(|author| !author.eq_ignore_ascii_case(&message.reverse_path));
+					authors.truncate(MAX_AUTHORS);
+					authors
+				})
+				.unwrap_or_default(),
 			account,
 			extra: options.extra.clone(),
 			owner: options

@@ -89,6 +89,35 @@ pub fn author(raw: &[u8]) -> Author {
 	}
 }
 
+/// Every address of every From field of `raw`, in the lowercase form the
+/// envelope holds. What a check keyed by sender asks about besides the
+/// envelope sender, so a message is held to the lists of each address it
+/// claims to come from. Empty when the header block is not UTF-8 or has none.
+pub fn all_addresses(raw: &[u8]) -> Vec<String> {
+	let mut out: Vec<String> = Vec::new();
+	for value in from_fields(raw).unwrap_or_default() {
+		for address in addresses(&value) {
+			let address = crate::util::address::normalize(&address);
+			if !out.contains(&address) {
+				out.push(address);
+			}
+		}
+	}
+	out
+}
+
+/// The one address `raw` is written under, or `fallback` when it names none
+/// or several. The tenant and the retention of a submission follow it, not
+/// the envelope sender, which a caller may choose among the addresses it owns.
+pub fn sole_address(raw: &[u8], fallback: &str) -> String {
+	match author(raw) {
+		Author::Addresses(addresses) if addresses.len() == 1 => {
+			crate::util::address::normalize(&addresses[0])
+		}
+		_ => fallback.to_string(),
+	}
+}
+
 /// The DMARC Author Domain of `raw`.
 pub fn author_domain(raw: &[u8]) -> AuthorDomain {
 	let addresses = match author(raw) {
