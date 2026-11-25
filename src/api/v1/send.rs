@@ -18,6 +18,9 @@ use crate::util::address_reason;
 #[derive(Serialize)]
 pub struct Queued {
 	queued: String,
+	/// The `Message-ID` header of the message as written, angle brackets
+	/// included: the value a reply puts in `in_reply_to` and `references`.
+	message_id: String,
 	/// The class the server granted.
 	class: crate::evidence::MailClass,
 	/// When the send delay releases the message, as an RFC 3339 instant,
@@ -281,6 +284,7 @@ pub async fn send(
 	Ok(Json(Queued {
 		cancel_until: state.held_until(&account, id).map(crate::clock::rfc3339),
 		queued: id.to_string(),
+		message_id,
 		class: prepared.class,
 		suppressed: prepared.suppressed,
 	}))
