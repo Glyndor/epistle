@@ -75,6 +75,10 @@ fn as_root(config_path: &Path, to: Option<&str>, yes: bool) -> Result<String, St
 	})?;
 	let (chosen, mut binary) = store.select(current, to)?;
 	let version = chosen.trim_start_matches("epistle-").to_string();
+	// Before the question and before anything is stopped or replaced: a binary
+	// that cannot read mail.toml would be put in place and not start.
+	let text = crate::cli::config_edit::ConfigDocument::open(config_path)?.render();
+	super::check::refuse_unreadable_config(&version, &text).map_err(Stop::Failed)?;
 	crate::cli::prompt::confirm_destructive(
 		&super::action(&version),
 		&super::question(current, &version),

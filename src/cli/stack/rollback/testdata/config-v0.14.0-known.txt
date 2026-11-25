@@ -1,0 +1,26 @@
+# What 0.14.0 accepts of the two places 0.15.0 added to, read once from the
+# `v0.14.0` tag (`src/config/listener/mod.rs`, `src/config/api/mod.rs`). Do not
+# update it to follow the code: it is the other side of the rollback.
+#
+# `[[listeners]] kind`
+kind smtp
+kind submission
+kind submissions
+kind api
+kind imaps
+kind imap
+kind pop3s
+kind manage-sieve
+kind metrics
+kind acme
+kind autoconfig
+kind autoconfigs
+kind web-dav
+# `[api]` keys
+api token_hash
+api admins
+api trusted_proxies
+api limiter
+api event_streams_per_key
+api event_streams_per_server
+api event_stream_max_secs
