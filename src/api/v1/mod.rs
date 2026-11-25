@@ -4,6 +4,7 @@ mod accounts;
 mod aliases;
 mod archive;
 mod auth;
+mod bans;
 mod deliveries;
 mod display_name;
 mod dns;
@@ -39,6 +40,23 @@ pub fn router(max_message_size: usize) -> Router<ApiState> {
 		.route("/auth/verify", post(auth::verify))
 		.route("/dns/records", get(dns::records))
 		.route("/dns/verify", get(dns::verify))
+		.route(
+			"/bans",
+			get(bans::list)
+				.post(bans::ban)
+				.layer(DefaultBodyLimit::max(bans::MAX_BODY)),
+		)
+		.route(
+			"/bans/allow",
+			get(bans::allow_list)
+				.post(bans::allow_add)
+				.layer(DefaultBodyLimit::max(bans::MAX_BODY)),
+		)
+		.route(
+			"/bans/allow/{cidr}",
+			axum::routing::delete(bans::allow_remove),
+		)
+		.route("/bans/{subject}", axum::routing::delete(bans::unban))
 		.route("/domains", get(domains::list).post(domains::add::add))
 		.route(
 			"/domains/{domain}",

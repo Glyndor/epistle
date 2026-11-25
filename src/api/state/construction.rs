@@ -99,6 +99,7 @@ impl ApiState {
 				max_recipients: crate::smtp::session::DEFAULT_MAX_RECIPIENTS,
 				events: crate::api::events::Hub::new(Default::default()),
 				dns: Default::default(),
+				ban_admin: None,
 			}),
 		}
 	}

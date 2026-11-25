@@ -186,12 +186,12 @@ without a restart.
 
 | Flag | Effect |
 |---|---|
-| `--scope read\|write\|send\|scim\|alias` | Required, repeatable. Scopes are independent: `write` does not include `read` |
+| `--scope read\|write\|send\|scim\|alias\|ban` | Required, repeatable. Scopes are independent: `write` does not include `read` |
 | `--expires-at WHEN` | Unix seconds, a date (`2027-01-31`, midnight UTC), an RFC 3339 instant (`2027-01-31T12:00:00+02:00`) or a duration from now (`90d`). A date or instant already in the past is refused, and a bare number is read as an epoch only between 2001-09-09 and 9999-12-31, so `2027`, `20270131` and a count of milliseconds are refused. After the expiry the key is refused with `401`, like an unknown one |
 | `--expires-in DURATION` | A number and a unit from now: `s`, `m`, `h`, `d` or `w`, for example `90d`. `m` is minutes, not months: count months in days. Not combined with `--expires-at` |
 | `--ip-cidr CIDR` | One network the client must come from. A request from elsewhere is `401` |
 | `--domain NAME` | Confine the key to a domain (repeat for more). Without it the key reaches every domain |
-| `--account NAME` | Bind the key to one account. It then reaches only JMAP, `POST /api/v1/send`, `GET /api/v1/deliveries` and that account's suppression list, acting as that account, and cannot hold `scim`, `alias` or `--domain` |
+| `--account NAME` | Bind the key to one account. It then reaches only JMAP, `POST /api/v1/send`, `GET /api/v1/deliveries` and that account's suppression list, acting as that account, and cannot hold `scim`, `alias`, `ban` or `--domain` |
 | `--class CLASS` | The mail class `POST /api/v1/send` gives mail sent with the key when the request names none (see [Class and evidence](#class-and-evidence)) |
 | `--auto-submitted` | Add `Auto-Submitted: auto-generated` to mail sent with this key through `POST /api/v1/send` when the request omits the header. Off by default. A value in the request always wins. Other send paths and server-generated mail, including bounces, are not changed |
 
@@ -240,7 +240,7 @@ each key that
 - holds `write` or `send` with no `--domain`, no `--account` and no
   `--ip-cidr` (an `--ip-cidr` does not count while the server sits behind a
   network that hides the client address), so a leaked copy reaches every domain from any address, or
-- holds `scim` or `alias` with no `--domain`.
+- holds `scim` or `alias` with no `--domain`, or `ban` with one (the ban routes refuse it).
 
 These are warnings only; nothing is refused or revoked. To clear one, give the
 key an expiry, narrow it with `--domain`, `--account` or `--ip-cidr`, or
@@ -256,6 +256,7 @@ What each scope reaches:
 | `send` | `POST /api/v1/send` and JMAP `EmailSubmission/set` |
 | `scim` | Everything under `/scim/v2` |
 | `alias` | Everything under `/api/v1/aliases`, reads included. `read` and `write` do not open it, and the key made before scopes existed (it holds every scope) does |
+| `ban` | Everything under `/api/v1/bans`, reads included. `read` and `write` do not open it. See [Bans](#bans) |
 
 A key confined to some domains sees and changes only the accounts that live
 entirely inside them. What is outside is answered `404`, as if it did not
@@ -735,6 +736,7 @@ curl -s -X DELETE -H "Authorization: Bearer $KEY" "$API/api/v1/accounts/ana?queu
 | `DELETE /api/v1/domains/{domain}/aliases/{alias}` | Remove an alias currently pointing to the path domain; `write` |
 | `GET`, `POST /api/v1/aliases` | List the address aliases (paged, filtered by `domain` and `account`), make one; scope `alias`; create answers `201`. See [Address aliases](#address-aliases) |
 | `DELETE /api/v1/aliases/{alias}` | Remove an address alias; scope `alias` |
+| `GET`, `POST /api/v1/bans`, `DELETE /api/v1/bans/{subject}`, `GET`, `POST /api/v1/bans/allow`, `DELETE /api/v1/bans/allow/{cidr}` | The bans in force, banning, lifting, and the allow list; scope `ban`. See [Bans](#bans) |
 | `GET`, `POST /api/v1/accounts` | List (not paged), create. A duplicate name or address is `400 invalid_input` |
 | `DELETE /api/v1/accounts/{name}` | Removes the account and its data. Only accounts made through the API; one declared in the configuration file is `404 no such dynamic account` |
 | `PUT /api/v1/accounts/{name}/password` | New password |
@@ -839,6 +841,59 @@ Each durable change emits one structured event on `epistle::api::audit`, written
 `domain.updated`, `domain.alias_added` or `domain.alias_removed`, with `domain`
 (the alias name for alias events) and `client_ip`. Refusals and no-ops emit no
 change event. Bearer tokens, private keys and SRS secrets are never logged.
+
+### Bans
+
+`/api/v1/bans` is `epistle ban` over HTTP, through the same code: the bans in
+force, banning an address or a network, lifting a ban, and the allow list of
+the addresses that are never banned. The bans live in PostgreSQL, so a server
+without `[database]` answers `404` (`bans are not manageable`), as the command
+says so and exits 1.
+
+| Route | What it does |
+|---|---|
+| `GET /api/v1/bans` | The bans in force, as `epistle ban list --json` prints them (`subject`, `reason`, `until`), ordered by subject and paged: `limit` (100 by default, 500 at most) and `cursor` (the `next_cursor` of the page before) |
+| `POST /api/v1/bans` | `{"target":"203.0.113.9","for":"90m"}` bans an address or a network; `for` is a number and a unit (`s`, `m`, `h`, `d`, `w`), a day when absent. Answers `201` with `target` and `until` |
+| `DELETE /api/v1/bans/{subject}` | Lifts a ban and clears its failure records. Name the subject as the listing prints it, percent-encoded: `203.0.113.9`, `cidr:203.0.113.0%2F24`, `pair:alice@example.org\|203.0.113.9`, `account:alice@example.org`. A subject with no ban and no failure record is `404` |
+| `GET /api/v1/bans/allow` | The allow list, as `epistle ban allow list --json` prints it |
+| `POST /api/v1/bans/allow` | `{"cidr":"10.1.0.0/16"}` adds a block; `201`, or `200` with `changed: false` when it was there |
+| `DELETE /api/v1/bans/allow/{cidr}` | Takes a block off the list, percent-encoded (`10.1.0.0%2F16`); `404` when it is not there |
+
+All of it needs the `ban` scope, and only that one: `read` and `write` do not
+open it, and neither does the key made before scopes existed. A ban locks
+clients out and the allow list exempts them from every ban, so a leaked key of
+this kind is a way to shut out the panel or to switch the bans off. The bans
+belong to the server and not to a tenant, so a key confined with `--domain` is
+refused with `403` and so is one bound to an account; `epistle api-key create`
+does not make either, and `epistle status` warns about one found in
+`api_keys.toml`.
+
+A key is held to a narrower reach than the operator at a terminal, in the
+shape of the alias routes:
+
+- no network wider than a /16 of IPv4 or a /32 of IPv6 may be banned or
+  allowed (`400`); the command takes any block but the whole internet to ban
+  and any block at all to allow;
+- an address on the allow list cannot be banned (`409`, as the command says);
+- a key may leave at most 10000 manual bans in force (the bans the listeners
+  raise on their own are not counted, so they cannot use up its room), at
+  most 100 banned networks and 100 allowed networks (a block, not one
+  address), and 1000 allow-list entries (`409`). A few hundred networks of a
+  middling size would cover more than any one of them does, so the networks
+  have a count of their own. The command has no count;
+- a key may lift or remove only what it could have made: a network ban or an
+  allow-list block wider than a /16 of IPv4 or a /32 of IPv6, which the
+  operator may have set, stays until the operator lifts it (`400`);
+- a body is at most 4 KiB and carries only the fields above.
+
+Every change writes one audit line (`ban.added`, `ban.removed`,
+`ban.allow_added`, `ban.allow_removed`) with the label of the key and the
+client address; an account named by a subject is written as the pseudonym the
+logs use. The change and its line are made together on a task the request does
+not own, so a client that goes away leaves both or neither. The counts above are
+made and written in one step by the store (one transaction under a lock), so
+requests that arrive together at the edge take no more than the room left. A refusal and a request that changed nothing write none. A database
+that fails is a plain `500`: the answer never carries its message.
 
 ### Address aliases
 

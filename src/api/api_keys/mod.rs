@@ -42,6 +42,13 @@ pub enum Scope {
 	/// nor `write` opens it; a key holding it should also be confined to the
 	/// domains it manages (`--domain`).
 	Alias,
+	/// The ban routes under `/api/v1/bans`: list the bans in force, ban an
+	/// address or a network, lift a ban, and keep the allow list. A ban
+	/// locks clients out and the allow list exempts them from every ban, so it
+	/// is its own damage class and neither `read` nor `write` opens it. The
+	/// bans are the server's, not a tenant's, so a key holding it cannot be
+	/// confined to domains or bound to an account.
+	Ban,
 }
 
 /// Error returned when the [`std::str::FromStr`] impl for [`Scope`] is
@@ -62,7 +69,7 @@ impl std::error::Error for UnknownScopeError {}
 impl std::str::FromStr for Scope {
 	type Err = UnknownScopeError;
 
-	/// Parse the canonical form (`read`, `write`, `send`, `scim`, `alias`). Unknown
+	/// Parse the canonical form (`read`, `write`, `send`, `scim`, `alias`, `ban`). Unknown
 	/// values are rejected — the store refuses to load an `api_keys.toml`
 	/// containing a typo, and the CLI rejects `--scope` values it does not
 	/// recognise.
@@ -73,13 +80,14 @@ impl std::str::FromStr for Scope {
 			"send" => Ok(Scope::Send),
 			"scim" => Ok(Scope::Scim),
 			"alias" => Ok(Scope::Alias),
+			"ban" => Ok(Scope::Ban),
 			_ => Err(UnknownScopeError(value.to_string())),
 		}
 	}
 }
 
 impl Scope {
-	/// Canonical serialised form (`read`, `write`, `send`, `scim`, `alias`) used in
+	/// Canonical serialised form (`read`, `write`, `send`, `scim`, `alias`, `ban`) used in
 	/// `api_keys.toml` and in the `ApiKey.scopes` vector.
 	pub fn as_str(self) -> &'static str {
 		match self {
@@ -88,6 +96,7 @@ impl Scope {
 			Scope::Send => "send",
 			Scope::Scim => "scim",
 			Scope::Alias => "alias",
+			Scope::Ban => "ban",
 		}
 	}
 }
@@ -260,7 +269,7 @@ fn validate_new_scopes(scopes: &[String]) -> std::io::Result<()> {
 	if scopes.is_empty() {
 		return Err(std::io::Error::new(
 			std::io::ErrorKind::InvalidInput,
-			"API key must declare at least one scope (read/write/send/scim/alias)",
+			"API key must declare at least one scope (read/write/send/scim/alias/ban)",
 		));
 	}
 	for scope in scopes {
@@ -268,7 +277,7 @@ fn validate_new_scopes(scopes: &[String]) -> std::io::Result<()> {
 			return Err(std::io::Error::new(
 				std::io::ErrorKind::InvalidInput,
 				format!(
-					"unknown API key scope \"{scope}\" (expected read, write, send, scim or alias)"
+					"unknown API key scope \"{scope}\" (expected read, write, send, scim, alias or ban)"
 				),
 			));
 		}
@@ -286,7 +295,7 @@ fn validate_loaded_scopes(scopes: &[String]) -> std::io::Result<()> {
 			return Err(std::io::Error::new(
 				std::io::ErrorKind::InvalidData,
 				format!(
-					"unknown API key scope \"{scope}\" in api_keys.toml (expected read, write, send, scim or alias)"
+					"unknown API key scope \"{scope}\" in api_keys.toml (expected read, write, send, scim, alias or ban)"
 				),
 			));
 		}

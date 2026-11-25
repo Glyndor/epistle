@@ -20,9 +20,11 @@ use std::net::IpAddr;
 use crate::config::Protocol;
 
 mod alias;
+mod ban;
 mod carried;
 mod domain;
 pub use alias::{AliasEvent, log_alias_change};
+pub use ban::{BanEvent, log_ban_change};
 pub use carried::Carried;
 pub use domain::{DomainEvent, log_domain_change};
 
