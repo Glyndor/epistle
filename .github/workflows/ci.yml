@@ -318,6 +318,21 @@ jobs:
       checks: read
     uses: ./.github/workflows/reusable-deprecation-notices.yml
 
+  # The first failure of one of the quick jobs (the limits, the tests of the CI, the audit, the
+  # tests of the credential scan, the SBOM) ends the rest of this run and, on a pull request, the
+  # other runs of the commit, without waiting for the long suites: the one below waits for `rust`,
+  # which can take an hour. In the merge queue only this run is cancelled. `CI gate` runs whatever
+  # happened and fails on a job that was cancelled, so the run is red.
+  cancel-first-failure:
+    needs: [plan, line-limit, folder-limit, python-tests, secret-scan-tests, audit, sbom-and-licenses]
+    if: ${{ failure() && (github.event_name == 'pull_request' || github.event_name == 'merge_group') }}
+    permissions:
+      contents: read
+      actions: write
+    uses: ./.github/workflows/reusable-cancel-others.yml
+    with:
+      cancel-own: true
+
   # When this workflow fails on a pull request, the other runs of the same commit stop: they
   # would spend runners on a commit that is already red. The job and the rules it follows are in
   # reusable-cancel-others.yml.

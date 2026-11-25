@@ -38,8 +38,8 @@ exit 2
 """
 
 
-def run(number, path, event="pull_request", sha=SHA, branch="feature", repo=REPO, status="in_progress"):
-    return {"id": number, "event": event, "head_sha": sha, "head_branch": branch, "status": status, "path": path,
+def run(number, path, event="pull_request", sha=SHA, branch="feature", repo=REPO, status="in_progress", pr=9):
+    return {"id": number, "pull_requests": [{"number": pr}], "event": event, "head_sha": sha, "head_branch": branch, "status": status, "path": path,
             "head_repository": {"full_name": repo}}
 
 
@@ -56,7 +56,7 @@ class TheScript(unittest.TestCase):
         (self.dir / "runs.json").write_text(json.dumps({"workflow_runs": runs}))
         for name in ("cancelled", "listed"):
             (self.dir / name).write_text("")
-        values = {"GH_TOKEN": "t", "REPO": REPO, "RUN_ID": own, "HEAD_SHA": SHA, "HEAD_BRANCH": "feature", **(env or {})}
+        values = {"GH_TOKEN": "t", "REPO": REPO, "RUN_ID": own, "EVENT_NAME": "pull_request", "HEAD_SHA": SHA, "HEAD_BRANCH": "feature", "PR_NUMBER": "9", **(env or {})}
         done = subprocess.run(["bash", str(SCRIPT)], capture_output=True, text=True, check=False, env={
             **os.environ, "PATH": f"{self.dir}:{os.environ['PATH']}", "RUNS_JSON": str(self.dir / "runs.json"),
             "CANCELLED": str(self.dir / "cancelled"), "LISTED": str(self.dir / "listed"),
@@ -101,15 +101,74 @@ class TheScript(unittest.TestCase):
         code, cancelled, out = self.cancel([run(2, ".github/workflows/e2e.yml")], CANCEL_FAIL=1)
         self.assertEqual(code, 0)
         self.assertIn("could not be cancelled", out)
-        for missing in ("REPO", "RUN_ID", "HEAD_SHA", "HEAD_BRANCH"):
+        for missing, said in (("REPO", "nothing is cancelled"), ("RUN_ID", "nothing is cancelled"), ("HEAD_SHA", "no other run is cancelled"), ("HEAD_BRANCH", "no other run is cancelled"), ("PR_NUMBER", "no other run is cancelled")):
             code, cancelled, out = self.cancel([run(2, ".github/workflows/e2e.yml")], env={missing: ""})
             self.assertEqual((code, cancelled), (0, []), missing)
-            self.assertIn("nothing is cancelled", out)
+            self.assertIn(said, out, missing)
 
     def test_inputs_that_are_not_what_they_claim_to_be_cancel_nothing(self):
         for env in ({"HEAD_SHA": "main"}, {"HEAD_SHA": f"{SHA}; true"}, {"RUN_ID": "1; echo"}):
             code, cancelled, out = self.cancel([run(2, ".github/workflows/e2e.yml")], env=env)
             self.assertEqual((code, cancelled), (0, []), env)
+
+    def test_with_cancel_own_the_run_of_the_job_goes_last_and_only_when_it_says_true(self):
+        runs = [run(2, ".github/workflows/e2e.yml")]
+        code, cancelled, out = self.cancel(runs, env={"CANCEL_OWN": "true"})
+        self.assertEqual((code, cancelled), (0, ["2", "1"]), out)
+        self.assertIn("cancelled: this run (1)", out)
+        for value in ("", "false", "yes", "TRUE", "1"):
+            self.assertEqual(self.cancel(runs, env={"CANCEL_OWN": value})[1], ["2"], value)
+
+    def test_in_the_merge_queue_it_cancels_its_own_run_and_never_another_one(self):
+        runs = [run(2, ".github/workflows/ci.yml", event="merge_group"), run(3, ".github/workflows/e2e.yml"), run(4, ".github/workflows/db.yml", event="push")]
+        code, cancelled, out = self.cancel(runs, env={"EVENT_NAME": "merge_group", "CANCEL_OWN": "true", "HEAD_SHA": "", "HEAD_BRANCH": ""})
+        self.assertEqual((code, cancelled), (0, ["1"]), out)
+        self.assertEqual((self.dir / "listed").read_text(), "", "the runs of a queue entry are not even listed")
+        code, cancelled, out = self.cancel(runs, env={"EVENT_NAME": "merge_group"})
+        self.assertEqual((code, cancelled), (0, []), out)
+
+    def test_an_event_that_is_neither_a_pull_request_nor_the_queue_cancels_nothing_not_even_its_own_run(self):
+        for event in ("push", "schedule", "workflow_dispatch", "pull_request_target", ""):
+            code, cancelled, out = self.cancel([run(2, ".github/workflows/e2e.yml")], env={"EVENT_NAME": event, "CANCEL_OWN": "true"})
+            self.assertEqual((code, cancelled), (0, []), event)
+            self.assertIn("nothing is cancelled", out)
+
+    def test_a_pull_request_without_a_head_still_cancels_its_own_run_and_a_refused_cancellation_is_a_warning(self):
+        code, cancelled, out = self.cancel([run(2, ".github/workflows/e2e.yml")], env={"CANCEL_OWN": "true", "HEAD_SHA": "", "HEAD_BRANCH": ""})
+        self.assertEqual((code, cancelled), (0, ["1"]), out)
+        code, cancelled, out = self.cancel([], env={"CANCEL_OWN": "true"}, CANCEL_FAIL=1)
+        self.assertEqual(code, 0)
+        self.assertIn("this run (1) could not be cancelled", out)
+
+    def test_no_variable_of_the_environment_widens_what_it_cancels_or_loosens_who_it_cancels(self):
+        """What the script may cancel is written in the script. An environment that offers more changes nothing."""
+        runs = [run(2, ".github/workflows/release.yml"), run(3, ".github/workflows/codeql.yml"), run(4, ".github/workflows/e2e.yml", event="push"),
+                run(5, ".github/workflows/e2e.yml", branch="other"), run(6, ".github/workflows/e2e.yml", repo="fork/r"), run(7, ".github/workflows/e2e.yml", sha=OTHER_SHA)]
+        widening = {"CANCELLABLE_EXTRA": ".github/workflows/release.yml .github/workflows/codeql.yml", "CANCELLABLE": ".github/workflows/release.yml",
+                    "EXTRA": "release.yml", "CANCEL_ALL": "true", "ALLOW_EVENTS": "push", "BRANCH_ANY": "true", "CANCEL_OWN_ONLY": "false"}
+        code, cancelled, out = self.cancel(runs, env=widening)
+        self.assertEqual((code, cancelled), (0, []), out)
+        text = SCRIPT.read_text()
+        for word in ("EXTRA", "bypass", "override"):
+            self.assertNotIn(word, text)
+        self.assertEqual(sorted(set(re.findall(r"\$\{([A-Z_]+)(?::-[^}]*)?\}", text))), ["CANCEL_OWN", "EVENT_NAME", "HEAD_BRANCH", "HEAD_SHA", "PR_NUMBER", "REPO", "RUN_ID"])
+
+    def test_a_pull_request_with_no_head_branch_or_with_another_one_cancels_no_other_run_at_the_same_commit(self):
+        runs = [run(2, ".github/workflows/e2e.yml", branch="feature"), run(3, ".github/workflows/db.yml", branch="someone-elses")]
+        for branch in ("", "someone-elses-too", "feature/../x"):
+            code, cancelled, out = self.cancel(runs, env={"HEAD_BRANCH": branch})
+            self.assertEqual((code, cancelled), (0, []), branch)
+
+    def test_a_run_of_another_pull_request_from_the_same_branch_at_the_same_commit_is_kept(self):
+        """The same commit can head two pull requests, towards two bases: one failing does not end the runs of the other."""
+        runs = [run(2, ".github/workflows/e2e.yml", pr=9), run(3, ".github/workflows/db.yml", pr=10),
+                {**run(4, ".github/workflows/upgrade.yml"), "pull_requests": [{"number": 10}, {"number": 9}]},
+                {**run(5, ".github/workflows/ldap.yml"), "pull_requests": []}, {k: v for k, v in run(6, ".github/workflows/container.yml").items() if k != "pull_requests"}]
+        code, cancelled, out = self.cancel(runs)
+        self.assertEqual((code, cancelled), (0, ["2", "4"]), out)
+        for number in ("", "9x", "-9", "09; true", "nine"):
+            code, cancelled, out = self.cancel(runs, env={"PR_NUMBER": number})
+            self.assertEqual((code, cancelled), (0, []), number)
 
     def test_the_list_holds_only_workflows_that_exist_on_pull_requests_and_none_that_analyses_security(self):
         text = SCRIPT.read_text()
@@ -135,13 +194,15 @@ class TheWiring(unittest.TestCase):
         self.assertEqual(list(workflow["jobs"]), ["cancel"])
         job = workflow["jobs"]["cancel"]
         self.assertEqual(job["permissions"], {"contents": "read", "actions": "write"})
-        self.assertEqual(job["if"], "github.event_name == 'pull_request'")
+        self.assertEqual(job["if"], "github.event_name == 'pull_request' || github.event_name == 'merge_group'")
         self.assertEqual(job["runs-on"], "ubuntu-latest", "the job with a write token runs on GitHub's runners, never on a variable pool")
         self.assertEqual(len(job["steps"]), 2)
         checkout, launch = job["steps"]
         self.assertRegex(checkout["uses"], r"^actions/checkout@[0-9a-f]{40}$")
         self.assertEqual(checkout["with"], {"persist-credentials": False, "fetch-depth": 2})
-        self.assertEqual(set(launch["env"]), {"GH_TOKEN", "REPO", "RUN_ID", "HEAD_SHA", "HEAD_BRANCH", "BASE_SHA"})
+        self.assertEqual(set(launch["env"]), {"GH_TOKEN", "REPO", "RUN_ID", "EVENT_NAME", "CANCEL_OWN", "HEAD_SHA", "HEAD_BRANCH", "PR_NUMBER", "BASE_SHA"})
+        self.assertEqual(launch["env"]["BASE_SHA"], "${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}")
+        self.assertIs(workflow[True]["workflow_call"]["inputs"]["cancel-own"]["default"], False)
         self.assertNotIn("${{", launch["run"], "the values of the event reach the step through env")
         self.assertIn('git show "${BASE_SHA}:.github/scripts/ci/cancel-others.sh" >"$RUNNER_TEMP/others.sh"', launch["run"])
         self.assertIn('bash "$RUNNER_TEMP/others.sh"', launch["run"])
@@ -159,7 +220,7 @@ class TheWiring(unittest.TestCase):
                 perms = job["permissions"] if "permissions" in job else top
                 if self.holds(perms):
                     holders[(path.name, job_id)] = job
-        self.assertEqual({k for k in holders if k[0] != REUSABLE}, {(f, "cancel-others") for f in CALLERS})
+        self.assertEqual({k for k in holders if k[0] != REUSABLE}, {(f, "cancel-others") for f in CALLERS} | {("ci.yml", "cancel-first-failure")})
         self.assertIn((REUSABLE, "cancel"), holders)
         for (name, job_id), job in holders.items():
             if name != REUSABLE:
@@ -180,6 +241,25 @@ class TheWiring(unittest.TestCase):
             for need in job["needs"]:
                 self.assertIn(need, jobs, (name, need))
                 self.assertNotEqual(need, "cancel-others")
+
+    def test_the_first_failure_caller_waits_for_the_quick_jobs_only_and_cancels_the_run_it_is_in(self):
+        jobs = jobs_of("ci.yml")
+        job = jobs["cancel-first-failure"]
+        self.assertEqual(job["if"], "${{ failure() && (github.event_name == 'pull_request' || github.event_name == 'merge_group') }}")
+        self.assertEqual(job["permissions"], {"contents": "read", "actions": "write"})
+        self.assertEqual(job["with"], {"cancel-own": True})
+        self.assertEqual(job["uses"], f"./.github/workflows/{REUSABLE}")
+        # The point of it: it does not wait for what takes an hour.
+        for long in ("rust", "debian", "deprecations", "gate", "cancel-others"):
+            self.assertNotIn(long, job["needs"], long)
+        self.assertGreaterEqual(set(job["needs"]), {"line-limit", "folder-limit", "python-tests", "secret-scan-tests", "audit"})
+        for need in job["needs"]:
+            self.assertIn(need, jobs, need)
+        # And no other caller cancels its own run: it would end the jobs that are still to report.
+        for name in CALLERS:
+            for job_id, other in jobs_of(name).items():
+                if job_id != "cancel-first-failure" and other.get("uses") == f"./.github/workflows/{REUSABLE}":
+                    self.assertNotIn("with", other, (name, job_id))
 
     def test_a_workflow_a_failure_may_not_cancel_has_no_such_caller(self):
         for path in ci_yaml.workflow_files(ROOT):
@@ -250,7 +330,7 @@ class WhatIsCancelledCannotPass(unittest.TestCase):
 
         jobs = ci_yaml.load(ROOT / ".github/workflows/ci.yml")["jobs"]
         waited = set(jobs["gate"]["needs"])
-        exempt = {"plan", "gate", "dependabot-freshness", "cancel-others"}
+        exempt = {"plan", "gate", "dependabot-freshness", "cancel-others", "cancel-first-failure"}
         self.assertEqual(set(jobs) - exempt - waited, set(), "a job of ci.yml the gate does not wait for can be cancelled and the run still green")
         self.assertEqual(jobs["gate"]["if"], "always()")
         for suite in gate.SUITES:

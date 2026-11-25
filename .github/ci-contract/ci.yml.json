@@ -35,6 +35,26 @@
     "ref": ""
    }
   },
+  "cancel-first-failure": {
+   "if": "${{ failure() && (github.event_name == 'pull_request' || github.event_name == 'merge_group') }}",
+   "needs": [
+    "plan",
+    "line-limit",
+    "folder-limit",
+    "python-tests",
+    "secret-scan-tests",
+    "audit",
+    "sbom-and-licenses"
+   ],
+   "permissions": {
+    "actions": "write",
+    "contents": "read"
+   },
+   "uses": "./.github/workflows/reusable-cancel-others.yml",
+   "with": {
+    "cancel-own": true
+   }
+  },
   "cancel-others": {
    "if": "${{ failure() && github.event_name == 'pull_request' }}",
    "needs": [
