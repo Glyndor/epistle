@@ -2000,8 +2000,8 @@ scope here):
 
 | Command | What it does |
 |---|---|
-| `epistle dns-records [--json]` | Print the DNS records this deployment should publish: SPF, DKIM, DMARC, MTA-STS, MX, and a DANE TLSA record when a certificate is present. Reads the configuration only; nothing is queried or changed. A group `[dns_publish] skip` names is not published, so it holds no record in the list; the groups are named on stderr. |
-| `epistle verify-dns [--json]` | Look the same records up in DNS and report drift. Read-only. Exits 1 when a record is missing or differs. See [DNS](dns.md). |
+| `epistle dns-records [--json]` | Print the DNS records this deployment should publish: SPF, DKIM, DMARC, MTA-STS, MX, and a DANE TLSA record when a certificate is present. Reads the configuration only; nothing is queried or changed. A group `[dns_publish] skip` names is not published, so it holds no record in the list; the groups are named on stderr. The management API lists the same set at `GET /api/v1/dns/records` ([DNS in the API guide](api.md#dns)). |
+| `epistle verify-dns [--json]` | Look the same records up in DNS and report drift. Read-only. Exits 1 when a record is missing or differs. See [DNS](dns.md). `GET /api/v1/dns/verify` returns the same `--json` result ([DNS in the API guide](api.md#dns)). |
 | `epistle probe [--json]` | Dial each enabled listener on loopback and read its greeting. Exits 0 when every listener answers and 1 when one is down or greets wrongly. It is the container healthcheck, and the `ports` area of `status` runs the same check. |
 
 All three take `--config FILE`.

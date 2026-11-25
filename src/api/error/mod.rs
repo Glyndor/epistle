@@ -128,6 +128,26 @@ impl ApiError {
 		}
 	}
 
+	/// `504` for a check that did not finish in the time the route allows.
+	pub fn timed_out(message: &str) -> Self {
+		ApiError {
+			status: StatusCode::GATEWAY_TIMEOUT,
+			code: "timeout",
+			message: message.to_string(),
+			..Default::default()
+		}
+	}
+
+	/// `503` for something the server needs and cannot reach right now.
+	pub fn unavailable(message: &str) -> Self {
+		ApiError {
+			status: StatusCode::SERVICE_UNAVAILABLE,
+			code: "unavailable",
+			message: message.to_string(),
+			..Default::default()
+		}
+	}
+
 	/// `429` for the authentication limits; `retry_after` is the wait in
 	/// seconds, which every `429` states.
 	pub fn rate_limited(retry_after: u64) -> Self {

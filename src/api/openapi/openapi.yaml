@@ -66,6 +66,8 @@ tags:
     description: Accounts, passwords, two-factor, mailboxes, masked addresses and the archive.
   - name: Domains
     description: Hosted-domain reads and atomic writes shared with `epistle domain`.
+  - name: DNS
+    description: The records the hosted domains need in DNS, and a check of the live DNS against them.
   - name: Aliases
     description: Address aliases, written through the same rules as `epistle alias`.
   - name: Queue
@@ -187,6 +189,105 @@ paths:
           $ref: "#/components/responses/UnprocessableBody"
         "429":
           $ref: "#/components/responses/AuthRateLimited"
+  /api/v1/dns/records:
+    get:
+      operationId: listDnsRecords
+      tags: [DNS]
+      summary: The DNS records the hosted domains need
+      description: |-
+        The rows `epistle dns-records --json` prints, from the same code. The
+        server lists the records of the domains in the key's reach and, for a
+        key with no domain or account restriction that names no `domain`, the records of
+        the mail host too (its address records and its TLSA record). A key
+        confined to some domains gets those domains' records and never the
+        host's. At most 200 domains are listed in one request; past that, name
+        one with `domain`. `complete` is false when an input could not be read
+        (a DKIM key, the certificate); the server's log says which.
+      x-epistle-scope: [read]
+      parameters:
+        - $ref: "#/components/parameters/DnsDomain"
+      responses:
+        "200":
+          description: The records, and the groups the configuration does not publish.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DnsRecords"
+        "400":
+          $ref: "#/components/responses/InvalidInput"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/AccountBoundKey"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
+  /api/v1/dns/verify:
+    get:
+      operationId: verifyDns
+      tags: [DNS]
+      summary: Check the live DNS against the records the domains need
+      description: |-
+        The result `epistle verify-dns --json` prints, from the same code, with
+        the system resolver, built for each check, so no answer an earlier check
+        cached is reused. It checks the domains in the
+        key's reach and, for a key with no domain or account restriction that names no
+        `domain`, the mail host first. Drift is an answer, not an error: `ok`
+        is false when an expected record is missing, and a lookup that failed
+        is `error`, which is inconclusive. A check makes a dozen lookups for
+        each domain, so one request covers at most 20 domains (name one with
+        `domain` past that), two checks run at once on a server, a third is
+        answered `429` with `Retry-After`, and a check that is not finished in
+        45 seconds is answered `504`.
+      x-epistle-scope: [read]
+      parameters:
+        - $ref: "#/components/parameters/DnsDomain"
+      responses:
+        "200":
+          description: The groups of checks, the host first when it is included, then each domain.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DnsVerification"
+        "400":
+          $ref: "#/components/responses/InvalidInput"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/AccountBoundKey"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          description: |-
+            `rate_limited`: this client's failed authentications, or two DNS
+            checks are already running. Both carry `Retry-After`.
+          headers:
+            Retry-After:
+              description: Seconds to wait.
+              schema:
+                type: integer
+                minimum: 1
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "500":
+          $ref: "#/components/responses/Internal"
+        "503":
+          description: "`unavailable`: the system resolver could not be started."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "504":
+          description: "`timeout`: the check was not finished in 45 seconds."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
   /api/v1/domains:
     get:
       operationId: listDomains
@@ -2936,6 +3037,16 @@ components:
       description: A hosted domain, as the configuration spells it; ASCII case is ignored.
       schema:
         type: string
+    DnsDomain:
+      name: domain
+      in: query
+      required: false
+      description: |-
+        Only this hosted domain, as the configuration spells it; ASCII case is
+        ignored. A domain the server does not host and one outside the key's
+        domains are both `404`. Naming a domain leaves out the mail host.
+      schema:
+        type: string
     AccountName:
       name: name
       in: path
@@ -3292,7 +3403,8 @@ components:
                 and `scan_too_large` (413), `virus_detected`,
                 `attachment_refused`, `too_many_header_fields` and
                 `marketing_refused` (422), `rate_limited` (429), `internal`
-                (500), `scan_unavailable` and `evidence_unavailable` (503),
+                (500), `scan_unavailable`, `evidence_unavailable` and `unavailable` (503),
+                `timeout` (504),
                 `mailbox_full` (507). New codes can appear.
             message:
               type: string
@@ -3374,6 +3486,78 @@ components:
         admin:
           type: boolean
           description: Always false when `valid` is false.
+    DnsRecords:
+      type: object
+      required: [records, skipped, complete]
+      properties:
+        records:
+          type: array
+          description: The records to publish, the rows `epistle dns-records --json` prints.
+          items:
+            $ref: "#/components/schemas/DnsRecord"
+        skipped:
+          type: array
+          description: The groups the configuration does not publish, with how many records each holds; those records are not missing.
+          items:
+            type: object
+            required: [group, records]
+            properties:
+              group:
+                type: string
+                description: The name the configuration writes for the group.
+              records:
+                type: integer
+        complete:
+          type: boolean
+          description: False when an input could not be read (a DKIM key, the certificate), so the list may lack a record the configuration needs.
+    DnsRecord:
+      type: object
+      required: [name, ttl, type, value]
+      properties:
+        name:
+          type: string
+        ttl:
+          type: integer
+        type:
+          type: string
+          description: The record type, such as `TXT`, `MX` or `CNAME`.
+        value:
+          type: string
+          description: The value in presentation form; a TXT value is unsplit.
+    DnsVerification:
+      type: object
+      required: [ok, groups]
+      properties:
+        ok:
+          type: boolean
+          description: False when an expected record is missing. A lookup that failed does not make it false.
+        groups:
+          type: array
+          items:
+            type: object
+            required: [name, checks]
+            properties:
+              name:
+                type: string
+                description: The mail hostname or a domain.
+              checks:
+                type: array
+                items:
+                  type: object
+                  required: [kind, name, status, detail]
+                  properties:
+                    kind:
+                      type: string
+                      description: The record checked, such as `MX`, `SPF` or `DKIM ed1`.
+                    name:
+                      type: string
+                      description: The DNS name looked up.
+                    status:
+                      type: string
+                      enum: [ok, missing, error, skipped]
+                    detail:
+                      type: string
+                      description: What was found.
     Domains:
       type: object
       required: [domains, disabled, details]

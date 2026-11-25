@@ -411,6 +411,8 @@ The codes the API itself sends:
 | `rate_limited` | 429 | The authentication limit above, or a sending limit (next section). Always with `Retry-After` in seconds |
 | `internal` | 500 | The server failed. The message never carries details |
 | `scan_unavailable`, `evidence_unavailable` | 503 | Nothing was sent; retrying later works |
+| `unavailable` | 503 | Something the server needs cannot be reached now, such as the system resolver behind `/api/v1/dns/verify` |
+| `timeout` | 504 | A check did not finish in the time its route allows (`/api/v1/dns/verify`: 45 seconds) |
 | `mailbox_full` | 507 | A local recipient's mailbox is full. Nothing was queued for anyone |
 
 New codes can appear within `/api/v1`; treat an unknown one by its status.
@@ -714,6 +716,8 @@ curl -s -X DELETE -H "Authorization: Bearer $KEY" "$API/api/v1/accounts/ana?queu
 | Route | What it does |
 |---|---|
 | `GET /api/v1/status` | `version`, `domains`, `accounts` and `queue_size` (left out for a confined key) |
+| `GET /api/v1/dns/records` | The records the hosted domains need, as `epistle dns-records --json` prints them; `read`. See [DNS](#dns) |
+| `GET /api/v1/dns/verify` | A check of the live DNS against them, as `epistle verify-dns --json` prints it; `read`. See [DNS](#dns) |
 | `GET /api/v1/domains` | The hosted domains in the key's reach, which are `disabled`, and under `details` the rows `epistle domain list --json` prints |
 | `GET /api/v1/domains/{domain}` | What `epistle domain show <domain> --json` prints. A domain outside a confined key's reach is `404` like an unknown one |
 | `POST /api/v1/domains` | Host a new domain; unconfined `write` key only; answers `201` |
@@ -738,6 +742,43 @@ curl -s -X DELETE -H "Authorization: Bearer $KEY" "$API/api/v1/accounts/ana?queu
 
 Reading and writing the `Created`, `Removed` and other bodies is in the
 OpenAPI document, which also has every response code per route.
+
+### DNS
+
+`GET /api/v1/dns/records` answers `{"records": [...], "skipped": [...],
+"complete": true}`. `records` holds the rows `epistle dns-records --json`
+prints (`name`, `ttl`, `type`, `value`, a TXT value unsplit), computed by the
+same code. `skipped` names the groups the configuration does not publish
+(`[dns_publish] skip`) and how many records each holds: they are not missing.
+`complete` is false when an input could not be read, such as a DKIM key or the
+certificate; the list may then lack a record, and the server's log names the
+input. The answer never names a file.
+
+`GET /api/v1/dns/verify` answers what `epistle verify-dns --json` prints,
+`{"ok": false, "groups": [{"name": "example.org", "checks": [...]}]}`, with
+each check `ok`, `missing`, `error` (a lookup that failed, inconclusive) or
+`skipped`. Drift is a normal `200` with `ok: false`. The server asks its own
+resolver, built for each check, so it reuses no answer an earlier check cached;
+the name servers it asks may still hold a cached answer of their own.
+
+Both take `?domain=example.org` to cover one hosted domain, and both are
+reads: scope `read`.
+
+- A key with no domain or account restriction gets the mail host as well: the address
+  records of the hostname and its TLSA record in the list, and the hostname's
+  addresses and reverse DNS as the first group of the check. Naming a `domain`
+  leaves the host out.
+- A key confined to some domains gets those domains and never the host. A
+  `domain` outside its reach and one the server does not host are both
+  `404 no such domain`. A key bound to one account is refused with `403`.
+- Bounds. A listing covers at most 200 domains and a check at most 20, because
+  each domain is about a dozen lookups; past that the answer is `400` and
+  names `?domain=`. Two checks run at once on a server; the third is `429`
+  with `Retry-After`. A check not finished in 45 seconds is `504 timeout`, and
+  a resolver that cannot start is `503 unavailable`. The two places for a check
+  belong to the whole server, not to a key, so one key can hold both. The caps
+  on domains belong to the routes: the commands have none. The routes write no
+  audit line, since they change nothing.
 
 ### Changing hosted domains
 

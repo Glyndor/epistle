@@ -149,6 +149,8 @@ struct Inner {
 	max_recipients: usize,
 	/// Notifications for the admin event stream and its open streams.
 	events: super::events::Hub,
+	/// The resolver and the limit of the DNS routes.
+	dns: dns::DnsChecks,
 }
 
 mod limiter;
@@ -157,6 +159,7 @@ use limiter::{AUTH_WINDOW, ClientLimiters};
 pub use super::account_view::AccountView;
 
 mod construction;
+mod dns;
 mod event_stream;
 mod hosted;
 mod settings;

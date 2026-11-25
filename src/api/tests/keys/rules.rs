@@ -137,6 +137,18 @@ pub(super) const RULES: &[Rule] = &[
 		"domain_creation_requires_an_unconfined_writer",
 	),
 	rule(
+		"/api/v1/dns/records",
+		"read",
+		Domain::Filtered,
+		"a_confined_key_lists_its_domains_and_not_the_mail_host",
+	),
+	rule(
+		"/api/v1/dns/verify",
+		"read",
+		Domain::Filtered,
+		"a_confined_check_looks_up_only_its_own_names",
+	),
+	rule(
 		"/api/v1/domains/{domain}",
 		"read/write",
 		Domain::HostedParam,
