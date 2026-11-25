@@ -61,6 +61,7 @@ jobs:
           CANCEL_OWN: ${{ inputs.cancel-own && 'true' || 'false' }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
         run: |
           set -euo pipefail

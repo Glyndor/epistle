@@ -14,11 +14,14 @@
 #                job that was cancelled, so the run is red and not green.
 #   HEAD_SHA     the pull request's head commit (pull_request only).
 #   HEAD_BRANCH  the pull request's head branch (pull_request only).
+#   PR_NUMBER    the pull request's number (pull_request only): a run is cancelled only if it belongs to
+#                this pull request, so another pull request from the same branch, at the same commit and
+#                towards another base, keeps its runs.
 #
 # What it cancels, and only that:
-#   - on a pull request, the other runs of the `pull_request` event for the same head commit and the
-#     same head branch, from this repository, that have not finished, whose workflow file is in
-#     CANCELLABLE below;
+#   - on a pull request, the other runs of the `pull_request` event for the same head commit, head
+#     branch and pull request number, from this repository, that have not finished, whose workflow
+#     file is in CANCELLABLE below;
 #   - with CANCEL_OWN, the run it belongs to, last, on a pull request and in the merge queue.
 # In the merge queue it cancels nothing but its own run: the other runs of a queue entry belong to
 # the queue.
@@ -53,6 +56,7 @@ own="${RUN_ID:-}"
 event="${EVENT_NAME:-}"
 sha="${HEAD_SHA:-}"
 branch="${HEAD_BRANCH:-}"
+number="${PR_NUMBER:-}"
 if [ -z "$repo" ] || [ -z "$own" ]; then
 	echo "::warning::cancel-others: a required input is missing; nothing is cancelled"
 	exit 0
@@ -66,10 +70,13 @@ case "$event" in
 esac
 
 cancel_others() {
-	if [ -z "$sha" ] || [ -z "$branch" ]; then
-		echo "::warning::cancel-others: the head commit or branch is missing; no other run is cancelled"
+	if [ -z "$sha" ] || [ -z "$branch" ] || [ -z "$number" ]; then
+		echo "::warning::cancel-others: the head commit, branch or pull request number is missing; no other run is cancelled"
 		return 0
 	fi
+	case "$number" in
+		*[!0-9]*) echo "::warning::cancel-others: the pull request number is not a number; no other run is cancelled"; return 0 ;;
+	esac
 	case "$sha" in
 		*[!0-9a-f]*) echo "::warning::cancel-others: the head commit is not a hash; no other run is cancelled"; return 0 ;;
 	esac
@@ -80,11 +87,12 @@ cancel_others() {
 	# One run per line: id, status, path. The environment carries the values, so
 	# nothing is spliced into the filter.
 	if ! runs="$(
-		printf '%s' "$listing" | REPO="$repo" OWN="$own" SHA="$sha" BRANCH="$branch" jq -r '
+		printf '%s' "$listing" | REPO="$repo" OWN="$own" SHA="$sha" BRANCH="$branch" PR="$number" jq -r '
 			.workflow_runs[]?
 			| select(.event == "pull_request"
 				and .head_sha == env.SHA
 				and .head_branch == env.BRANCH
+				and ((.pull_requests // []) | map(.number) | index(env.PR | tonumber)) != null
 				and (.head_repository.full_name // "") == env.REPO
 				and (.id | tostring) != env.OWN
 				and (.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "pending"))
