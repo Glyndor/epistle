@@ -13,7 +13,7 @@
 # it. The two values are 1:1; a request for any other arch fails in
 # the case statement.
 
-FROM docker.io/library/rust@sha256:223cc32ddca8f3ee90c436dbc94b6b5f052ea7f9653c5201e9612f08ad7d21b8 AS builder
+FROM docker.io/library/rust@sha256:e84068000361bf3d4a5ba2b7647f62893528b1eb9f847d7a23b493f5ce8ea254 AS builder
 # 1.100-slim-trixie. Same pin as release.yml.
 
 ARG TARGETARCH
