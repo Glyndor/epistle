@@ -254,7 +254,7 @@ async fn upsert_sends_signed_update_with_correct_zone_and_rrset() {
 	assert_eq!(add.dns_class, DNSClass::IN);
 	assert_eq!(add.ttl, 3600);
 	assert_eq!(add.name.to_ascii(), "_dmarc.example.org.");
-	// TXT carries the value as a character-string; `TXT::new(vec![value])`
+	// TXT carries the value as a character-string; `TXT::try_new` over the value
 	// emits the raw bytes (no surrounding quotes).
 	if let hickory_resolver::proto::rr::RData::TXT(t) = &add.data {
 		let got: String = t

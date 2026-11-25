@@ -203,12 +203,9 @@ async fn serve(mut stream: TcpStream, reply: Reply, count: Arc<AtomicUsize>) {
 fn txt(owner: Name, value: String) -> Record {
 	// DNS character-strings are at most 255 bytes; concatenation must not
 	// insert spaces. These fixtures contain ASCII only.
-	let chunks = value
-		.as_bytes()
-		.chunks(255)
-		.map(|s| String::from_utf8(s.to_vec()).unwrap())
-		.collect();
-	Record::from_rdata(owner, 0, RData::TXT(TXT::new(chunks)))
+	let chunks = value.as_bytes().chunks(255).map(<[u8]>::to_vec);
+	let txt = TXT::try_new(chunks).expect("fixture fits a TXT record");
+	Record::from_rdata(owner, 0, RData::TXT(txt))
 }
 
 fn policy(owner: &Name, suffix: &str) -> String {
