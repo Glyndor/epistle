@@ -349,9 +349,20 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # The commit `verify` resolved, not the tag name again.
-          ref: ${{ needs.verify.outputs.commit }}
+          # A literal ref: no output of another job decides what the runner checks out, which is what
+          # code scanning reads as the checkout of untrusted code in front of the steps that build.
+          # The next step moves to the commit `verify` resolved, as `verify` does itself.
+          ref: main
           persist-credentials: false
+
+      - name: Move to the commit verify resolved
+        env:
+          RELEASE_COMMIT: ${{ needs.verify.outputs.commit }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin "$RELEASE_COMMIT"
+          git checkout --detach "$RELEASE_COMMIT"
+          test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"
 
       - name: Install toolchain
         run: |
