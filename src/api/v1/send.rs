@@ -15,6 +15,31 @@ use crate::smtp::sink::SinkError;
 use crate::storage::CapOutcome;
 use crate::util::address_reason;
 
+/// The answer to a send: the queued message, or what a dry run found.
+#[derive(Serialize)]
+#[serde(untagged)]
+pub enum Answer {
+	Queued(Queued),
+	DryRun(DryRun),
+}
+
+/// What a request with `dry_run` would have done. Nothing was queued,
+/// delivered, charged or recorded, so there is no queue id and no
+/// `Message-ID` to name.
+#[derive(Serialize)]
+pub struct DryRun {
+	dry_run: bool,
+	/// The class the server would grant.
+	class: crate::evidence::MailClass,
+	/// Envelope recipients that would be sent to, once suppression is applied.
+	recipients: usize,
+	/// The size of the message as it would be queued, in bytes.
+	size: usize,
+	/// Recipients that would be dropped because they are on a suppression list.
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	suppressed: Vec<String>,
+}
+
 #[derive(Serialize)]
 pub struct Queued {
 	queued: String,
@@ -50,7 +75,7 @@ pub async fn send(
 	State(state): State<ApiState>,
 	Extension(auth): Extension<MatchedAuth>,
 	Json(mut request): Json<SendRequest>,
-) -> Result<Json<Queued>, ApiError> {
+) -> Result<Json<Answer>, ApiError> {
 	// The sender is one lowercase address from here on, whatever case the
 	// client typed; the recipients are lowercased by `recipients()`.
 	request.from = crate::util::address::normalize(&request.from);
@@ -144,6 +169,11 @@ pub async fn send(
 	}
 	let account =
 		acting_account(&state, &principal, &request.from).ok_or_else(ApiError::forbidden_from)?;
+	// A dry run is charged before it looks at anything: it is a question the
+	// sending limits never see, so it has limits of its own.
+	if request.dry_run {
+		super::send_dry_limits::charge(&state, &account, &recipients, epoch_now())?;
+	}
 	// An account whose sending is switched off sends nothing, from any of
 	// its addresses or with the null sender.
 	if !state.can_send(&account) {
@@ -187,11 +217,20 @@ pub async fn send(
 	// Recording also runs without a cap so inbound replies remain known.
 	let recipient_refs: Vec<&str> = recipients.iter().map(String::as_str).collect();
 	if let Some(store) = state.correspondents() {
-		match store.enforce_new_recipient_cap(
-			&account,
-			&recipient_refs,
-			state.new_recipients_per_day(),
-		) {
+		// A dry run asks the cap and leaves its allowance as it was.
+		let cap = match request.dry_run {
+			true => store.preview_new_recipient_cap(
+				&account,
+				&recipient_refs,
+				state.new_recipients_per_day(),
+			),
+			false => store.enforce_new_recipient_cap(
+				&account,
+				&recipient_refs,
+				state.new_recipients_per_day(),
+			),
+		};
+		match cap {
 			Ok(CapOutcome::Limited {
 				new,
 				already,
@@ -248,13 +287,20 @@ pub async fn send(
 		reached.log(&account);
 		return Err(ApiError::message_over_cap(&reached));
 	}
-	if crate::api::quota::over_recipient_size_cap(&state, &recipients, data.len() as u64) {
+	// A dry run measures only the mailboxes the key reaches: the others are
+	// not told of, as that would answer for any address without sending.
+	let measured = match request.dry_run {
+		true => super::send_dry_limits::reachable(&state, &principal, &recipients),
+		false => recipients.clone(),
+	};
+	if crate::api::quota::over_recipient_size_cap(&state, &measured, data.len() as u64) {
 		return Err(ApiError::recipient_over_cap());
 	}
-	if let Some(full) = crate::api::quota::full_recipient(&state, &recipients, data.len() as u64) {
+	if let Some(full) = crate::api::quota::full_recipient(&state, &measured, data.len() as u64) {
 		return Err(ApiError::mailbox_full(&full));
 	}
 	let save_sent = request.save_sent();
+	let dry_run = request.dry_run;
 	// The same outbound path as SMTP submission: DKIM for remote mail,
 	// local recipients straight to their mailboxes. The `extra` correlation
 	// map is already validated and bounded in the request body, and the
@@ -273,6 +319,22 @@ pub async fn send(
 	};
 	let mut message = message;
 	let sources = state.class_sources(Some(&auth), &account, explicit_class);
+	// A marketing message is checked against the suppression lists, among them
+	// the one every tenant shares, and a dry run would say which of any
+	// addresses are on it without sending anything. Reading that list is for
+	// an unconfined key that may read the management views, so the others are
+	// refused before any list is looked at, and the same whatever it holds.
+	if dry_run && sources.granted() == crate::evidence::MailClass::Marketing {
+		super::scope::require_unconfined(
+			&principal,
+			"The suppression lists a marketing dry run reads",
+		)?;
+		if !principal.admits_scope(crate::api::api_keys::Scope::ManageRead) {
+			return Err(ApiError::forbidden(
+				"Marketing dry runs need the manage:read scope.",
+			));
+		}
+	}
 	let prepared = crate::evidence::submission::prepare(
 		&mut message,
 		sources,
@@ -285,6 +347,21 @@ pub async fn send(
 		return Err(ApiError::marketing_refused(
 			"every recipient is on the suppression list",
 		));
+	}
+	if dry_run {
+		// What the real send charges is one unit for each recipient left, and
+		// a dry run asks for as many, without charging.
+		let units = u32::try_from(message.recipients.len()).unwrap_or(u32::MAX);
+		if !budget.has_room_for(units, now) {
+			return Err(rate_limited());
+		}
+		return Ok(Json(Answer::DryRun(DryRun {
+			dry_run: true,
+			class: prepared.class,
+			recipients: message.recipients.len(),
+			size: message.data.len(),
+			suppressed: prepared.suppressed,
+		})));
 	}
 	// Clone the bytes so the Sent copy can be written after the routing
 	// sink takes ownership of the original.
@@ -314,13 +391,13 @@ pub async fn send(
 	if let Some(sent_copy) = sent_copy {
 		state.save_sent_copy(&account, &sent_copy, save_sent);
 	}
-	Ok(Json(Queued {
+	Ok(Json(Answer::Queued(Queued {
 		cancel_until: state.held_until(&account, id).map(crate::clock::rfc3339),
 		queued: id.to_string(),
 		message_id,
 		class: prepared.class,
 		suppressed: prepared.suppressed,
-	}))
+	})))
 }
 
 /// `429 rate_limited` for a send over one of its submission rate limits.
@@ -329,6 +406,13 @@ fn rate_limited() -> ApiError {
 		crate::smtp::submission_budget::RATE_LIMITED,
 		SEND_LIMIT_RETRY_AFTER,
 	)
+}
+
+fn epoch_now() -> u64 {
+	std::time::SystemTime::now()
+		.duration_since(std::time::UNIX_EPOCH)
+		.map(|d| d.as_secs())
+		.unwrap_or(0)
 }
 
 /// The addresses a request sends under: `from`, `sender` and `envelope_from`,

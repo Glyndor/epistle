@@ -102,6 +102,24 @@ impl ApiState {
 		self
 	}
 
+	/// What a dry run of the send endpoint is charged to.
+	pub(crate) fn dry_run_limits(&self) -> &crate::api::v1::send_dry_limits::Limits {
+		&self.inner.dry_run
+	}
+
+	/// Set how many recipients one account may dry-run in a minute and how
+	/// many addresses it never wrote to in a day. Must be set before the state
+	/// is shared; a zero keeps the default.
+	pub fn with_dry_run_limits(mut self, per_minute: u32, new_per_day: u32) -> Self {
+		if let Some(inner) = Arc::get_mut(&mut self.inner)
+			&& per_minute > 0
+			&& new_per_day > 0
+		{
+			inner.dry_run = crate::api::v1::send_dry_limits::Limits::new(per_minute, new_per_day);
+		}
+		self
+	}
+
 	/// Apply `[api.limiter]`: the failure budgets of the bearer limiter and
 	/// the size of the argon2 gate. Must be set before the state is shared.
 	pub fn with_auth_limits(mut self, limits: &crate::config::ApiLimiter) -> Self {

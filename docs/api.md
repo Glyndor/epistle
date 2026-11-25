@@ -517,6 +517,7 @@ given for it is the one written in the header.
 | `save_sent` | boolean | Whether a copy goes to the account's Sent folder. Absent follows the account setting. Transactional mail is never copied |
 | `extra` | object of strings | Correlation data, up to 10 keys (printable ASCII, no spaces, at most 64 bytes) with values of at most 256 bytes. It comes back on `/api/v1/deliveries` and in the webhook events of the message and is never written into the message |
 | `class` | `transactional`, `marketing`, `personal` | See below |
+| `dry_run` | boolean | Default `false`. Runs every check of a send and answers what would happen, without sending; see below |
 
 A refusal for a limit names the limit: `Too many recipients; the maximum is 100.`, the same for attachments, custom headers, `reply_to`, `list_unsubscribe`, `references` and the `extra` map.
 
@@ -543,6 +544,54 @@ bound to it, or any other key whose `from` names one of its addresses, gets
 refusal names the account's own state and tells nothing about other addresses.
 Signing in and reading mail are not affected. The same switch is what SMTP
 submission, JMAP and the account's own forwarding and auto-replies follow.
+
+### Dry run
+
+`"dry_run": true` runs the whole request through the checks of a real send and
+queues nothing:
+
+```json
+{"dry_run": true, "class": "marketing", "recipients": 1, "size": 2314, "suppressed": ["gone@example.net"]}
+```
+
+The answer has the `class` the server would grant, the number of envelope
+`recipients` left after suppression, the `size` in bytes of the message as it
+would be queued (about: the `Date` and `Message-ID` it will get are not fixed
+yet), and `suppressed` when a marketing message would drop recipients. It has
+no `queued` and no `message_id`: nothing was queued and no identifier is
+reserved. The checks are the ones of the real request: the scope and the
+credential's reach, sender ownership, `sending_off`, the address, header and
+size rules, the account, tenant and domain size caps, the full-mailbox check,
+the class rules, the sending rate limit and the cap on first-time recipients.
+A request refused for one of them is refused with the same status and body
+with or without `dry_run`, but for the mailbox checks below.
+
+A dry run is a question that costs a send nothing, so it has limits of its
+own, per account: one unit per recipient, at most 600 recipients a minute,
+and at most 1000 addresses a day that the account never wrote to. Past
+either, the answer is `429 rate_limited` with `Retry-After`, and what it
+asked is not counted again once refused. It measures only the mailboxes of
+the local recipients the key reaches: for any other address it does not
+check the mailbox, so it cannot be used to ask whether someone else's
+mailbox is full.
+
+A dry run of a marketing message reads the suppression lists, the one every
+tenant shares among them, and would tell which addresses are on them. It is
+therefore for an unconfined credential that holds `manage:read`: any other is
+refused `403` before a list is looked at, with the same answer whatever the
+lists hold. A confined credential keeps the real send and the personal and
+transactional dry runs. For a confined credential a dry run does not measure
+aliases, whoever their members are, since what it would measure depends on
+accounts the credential does not reach. The sending limits are asked for as
+many units as the real send charges, the recipients left after the suppressed
+ones.
+
+It spends nothing from the sending limits: no rate limit unit is charged, no recipient counts as
+written to for the first-time cap, no evidence record is written, no Sent
+copy is saved and nothing reaches the spool or a mailbox. It does not run
+what happens after queueing, so it does not tell that the antivirus will
+refuse an attachment, that the content scan is up, or that the evidence log
+can take a record.
 
 ### Taking a send back
 

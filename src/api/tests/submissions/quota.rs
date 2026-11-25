@@ -8,7 +8,7 @@ use crate::storage::{FsSpool, MessageCrypto};
 use axum::http::StatusCode;
 
 /// alice has no quota of her own; bob has 64 bytes.
-fn state(dir: &std::path::Path) -> ApiState {
+pub(in crate::api::tests) fn state(dir: &std::path::Path) -> ApiState {
 	let account = |name: &str, quota_bytes: Option<u64>| crate::config::Account {
 		send: None,
 		receive: None,
@@ -42,7 +42,7 @@ fn state(dir: &std::path::Path) -> ApiState {
 }
 
 /// Store `bytes` bytes of mail in bob's INBOX.
-fn fill_bob(dir: &std::path::Path, bytes: usize) {
+pub(in crate::api::tests) fn fill_bob(dir: &std::path::Path, bytes: usize) {
 	crate::imap::mailbox::append(
 		dir,
 		"bob",

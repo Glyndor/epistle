@@ -57,3 +57,34 @@ fn the_account_after_the_map_cap_can_still_send() {
 		assert!(!budget.has_room(1_000), "{name} used its one unit");
 	}
 }
+
+/// Asking whether several recipients fit takes nothing, and is the same
+/// measure as charging them.
+#[test]
+fn room_for_several_recipients_is_asked_without_charging() {
+	let account = limiter();
+	let tenant = limiter();
+	let budget = Budget {
+		limits: vec![
+			Limit {
+				limiter: Arc::clone(&account),
+				key: "alice".into(),
+				per_min: 3,
+			},
+			Limit {
+				limiter: Arc::clone(&tenant),
+				key: "acme".into(),
+				per_min: 2,
+			},
+		],
+	};
+	assert!(budget.has_room_for(2, 1_000));
+	assert!(
+		!budget.has_room_for(3, 1_000),
+		"the tenant has room for two"
+	);
+	assert!(budget.has_room_for(2, 1_000), "asking took nothing");
+	assert!(budget.has_room(1_000));
+	assert!(budget.charge(2, 1_000).is_ok(), "what was asked fits");
+	assert!(!budget.has_room_for(1, 1_000), "and now the tenant is full");
+}

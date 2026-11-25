@@ -2398,11 +2398,13 @@ paths:
               $ref: "#/components/schemas/SendRequest"
       responses:
         "200":
-          description: The message was accepted for delivery.
+          description: The message was accepted for delivery (`Queued`), or, with `dry_run`, would have been (`DryRun`).
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Queued"
+                oneOf:
+                  - $ref: "#/components/schemas/Queued"
+                  - $ref: "#/components/schemas/DryRun"
         "400":
           $ref: "#/components/responses/InvalidInput"
         "401":
@@ -4722,6 +4724,31 @@ components:
             values at most 256 bytes.
         class:
           $ref: "#/components/schemas/MailClass"
+        dry_run:
+          type: boolean
+          default: false
+          description: Run every check of a send and answer what would happen (`DryRun`), without queueing, delivering, charging a rate limit, recording a recipient, writing evidence or saving a Sent copy. A marketing dry run reads the suppression lists, so it needs an unconfined credential with the manage:read scope and is `403` for any other, whatever the lists hold. For a confined credential a dry run does not measure aliases.
+    DryRun:
+      type: object
+      required: [dry_run, class, recipients, size]
+      description: What a request with `dry_run` would have done. There is no queue id and no `message_id`, because nothing was queued.
+      properties:
+        dry_run:
+          type: boolean
+          const: true
+        class:
+          $ref: "#/components/schemas/MailClass"
+        recipients:
+          type: integer
+          description: Envelope recipients left once suppression is applied.
+        size:
+          type: integer
+          description: The size in bytes of the message as it would be queued, about, because its `Date` and `Message-ID` are made when it is really sent.
+        suppressed:
+          type: array
+          items:
+            type: string
+          description: Recipients that would be dropped because they are on a suppression list (marketing only). Absent when none.
     Queued:
       type: object
       required: [queued, message_id, class]
