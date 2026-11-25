@@ -3766,12 +3766,15 @@ components:
           $ref: "#/components/schemas/MailClass"
     Queued:
       type: object
-      required: [queued, class]
+      required: [queued, message_id, class]
       properties:
         queued:
           type: string
           format: uuid
           description: The queue id, also the `spool_id` of delivery records and webhook events.
+        message_id:
+          type: string
+          description: The `Message-ID` header of the message as written, with its angle brackets (`<id@domain>`). It is the value a reply puts in `in_reply_to` and `references`.
         class:
           $ref: "#/components/schemas/MailClass"
         cancel_until:

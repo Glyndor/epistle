@@ -437,12 +437,18 @@ curl -s -X POST "$API/api/v1/send" \
 ```
 
 ```json
-{"queued": "01a15026-ff4b-7411-a7e9-9292a7662720", "class": "personal"}
+{"queued": "01a15026-ff4b-7411-a7e9-9292a7662720", "message_id": "<01a15026-ff4b-7411-a7e9-9292a7662721@example.org>", "class": "personal"}
 ```
 
 `queued` is the queue id. It is also the `spool_id` of every delivery record
 and webhook event of the message, so keep it. A message for local recipients
 only is delivered at once and also gets an id.
+
+`message_id` is the `Message-ID` header the server wrote, with its angle
+brackets. It is what a later request puts in `in_reply_to` and `references` to
+continue the thread, and what a recipient's mail client shows. The server
+makes it, so it cannot be chosen in the request; every message gets a new one.
+Its domain is the domain of `from`.
 
 A recipient in `to`, `cc` or `reply_to` can carry a display name, which is
 written in front of the address in the `To`, `Cc` and `Reply-To` headers:
@@ -514,7 +520,7 @@ in the [configuration](configuration.md#queueundo_send), off by default), the
 answer to `POST /api/v1/send` also carries `cancel_until`, an RFC 3339 instant:
 
 ```json
-{"queued": "01a15026-ff4b-7411-a7e9-9292a7662720", "class": "personal", "cancel_until": "2026-11-16T10:00:30Z"}
+{"queued": "01a15026-ff4b-7411-a7e9-9292a7662720", "message_id": "<01a15026-ff4b-7411-a7e9-9292a7662721@example.org>", "class": "personal", "cancel_until": "2026-11-16T10:00:30Z"}
 ```
 
 Until then, and before anything of the message is delivered or queued,
