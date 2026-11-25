@@ -408,7 +408,12 @@ async fn bans_and_allow_entries_at_the_edge_of_the_room_are_taken_atomically() {
 		return;
 	};
 	let store = std::sync::Arc::new(store);
-	let block = fresh_block();
+	// Three groups of the address, so that the last one tells 16 networks of a
+	// /64 apart; with four, the sixteen would be the same network.
+	let full = fresh_block();
+	let block = full
+		.rsplit_once(':')
+		.map_or(full.as_str(), |(head, _)| head);
 	let at = now();
 	let held = store
 		.list_bans(at)
