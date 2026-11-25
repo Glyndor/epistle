@@ -140,6 +140,25 @@ class TheScript(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("this run (1) could not be cancelled", out)
 
+    def test_no_variable_of_the_environment_widens_what_it_cancels_or_loosens_who_it_cancels(self):
+        """What the script may cancel is written in the script. An environment that offers more changes nothing."""
+        runs = [run(2, ".github/workflows/release.yml"), run(3, ".github/workflows/codeql.yml"), run(4, ".github/workflows/e2e.yml", event="push"),
+                run(5, ".github/workflows/e2e.yml", branch="other"), run(6, ".github/workflows/e2e.yml", repo="fork/r"), run(7, ".github/workflows/e2e.yml", sha=OTHER_SHA)]
+        widening = {"CANCELLABLE_EXTRA": ".github/workflows/release.yml .github/workflows/codeql.yml", "CANCELLABLE": ".github/workflows/release.yml",
+                    "EXTRA": "release.yml", "CANCEL_ALL": "true", "ALLOW_EVENTS": "push", "BRANCH_ANY": "true", "CANCEL_OWN_ONLY": "false"}
+        code, cancelled, out = self.cancel(runs, env=widening)
+        self.assertEqual((code, cancelled), (0, []), out)
+        text = SCRIPT.read_text()
+        for word in ("EXTRA", "bypass", "override"):
+            self.assertNotIn(word, text)
+        self.assertEqual(sorted(set(re.findall(r"\$\{([A-Z_]+)(?::-[^}]*)?\}", text))), ["CANCEL_OWN", "EVENT_NAME", "HEAD_BRANCH", "HEAD_SHA", "REPO", "RUN_ID"])
+
+    def test_a_pull_request_with_no_head_branch_or_with_another_one_cancels_no_other_run_at_the_same_commit(self):
+        runs = [run(2, ".github/workflows/e2e.yml", branch="feature"), run(3, ".github/workflows/db.yml", branch="someone-elses")]
+        for branch in ("", "someone-elses-too", "feature/../x"):
+            code, cancelled, out = self.cancel(runs, env={"HEAD_BRANCH": branch})
+            self.assertEqual((code, cancelled), (0, []), branch)
+
     def test_the_list_holds_only_workflows_that_exist_on_pull_requests_and_none_that_analyses_security(self):
         text = SCRIPT.read_text()
         block = text[text.index("CANCELLABLE=("):text.index("\n)\n", text.index("CANCELLABLE=("))]
