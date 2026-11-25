@@ -131,11 +131,11 @@ class TheKey(unittest.TestCase):
             self.assertEqual(names.index("The checkout is the commit of the event"), names.index(checkouts[0]["uses"]) + 1, name)
         self.assertEqual(jobs()["sign-rehearsal"]["steps"][0]["with"]["ref"], "${{ github.sha }}")
 
-    def test_no_job_reads_a_commit_from_an_output_to_run_a_script_of_it_except_the_two_that_build(self):
+    def test_no_job_reads_a_commit_from_an_output_to_run_a_script_of_it_except_the_two_that_build_in_a_container_or_an_image(self):
         for name, job in jobs().items():
             refs = [s["with"].get("ref") for s in job["steps"] if "actions/checkout" in s.get("uses", "")]
             if "${{ needs.verify.outputs.commit }}" in refs:
-                self.assertIn(name, ("build-deb", "build", "image-build"), name)
+                self.assertIn(name, ("build-deb", "image-build"), name)
 
     def run_checkout_guard(self, head, sha, ref, verified):
         step = next(s for s in jobs()["sign"]["steps"] if s.get("name") == "The checkout is the commit of the event")["run"]
@@ -163,12 +163,58 @@ class TheCommit(unittest.TestCase):
         self.assertIn('[[ "$TAG" =~ $pattern ]]', first)
 
     def test_every_job_that_builds_checks_out_the_verified_commit_and_none_of_them_uses_a_cache(self):
-        for name in ("build-deb", "build", "image-build"):
+        for name in ("build-deb", "image-build"):
             checkout = next(s for s in jobs()[name]["steps"] if "actions/checkout" in s.get("uses", ""))
             self.assertEqual(checkout["with"]["ref"], "${{ needs.verify.outputs.commit }}", name)
         text = WORKFLOW.read_text()
         for forbidden in ("actions/cache", "rust-cache", "cache:", "cache-from", "cache-to", "type=gha"):
             self.assertNotIn(forbidden, text)
+
+    def test_the_job_that_builds_the_binary_checks_out_a_literal_ref_and_moves_to_the_verified_commit_before_it_builds_anything(self):
+        steps = jobs()["build"]["steps"]
+        names = [s.get("name", s.get("uses")) for s in steps]
+        checkout = steps[0]
+        self.assertIn("actions/checkout", checkout["uses"])
+        self.assertEqual(checkout["with"]["ref"], "main", "a literal ref: no output of another job decides it")
+        self.assertIs(checkout["with"]["persist-credentials"], False)
+        move = next(s for s in steps if s.get("name") == "Move to the commit verify resolved")
+        self.assertEqual(move["env"], {"RELEASE_COMMIT": "${{ needs.verify.outputs.commit }}"})
+        self.assertNotIn("${{", move["run"])
+        self.assertLess(names.index("Move to the commit verify resolved"), names.index("Install toolchain"))
+        self.assertLess(names.index("Move to the commit verify resolved"), names.index("Build release binary"))
+        self.assertIn('test "$(git rev-parse HEAD)" = "$RELEASE_COMMIT"', move["run"])
+        for step in steps[:names.index("Move to the commit verify resolved")]:
+            self.assertNotIn("run", step, "nothing runs before the tree is the verified one")
+
+    def test_the_step_that_moves_to_the_verified_commit_ends_on_it_and_refuses_one_it_cannot_fetch(self):
+        move = next(s for s in jobs()["build"]["steps"] if s.get("name") == "Move to the commit verify resolved")["run"]
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1", "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@x",
+                   "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@x"}
+
+            def git(*args, cwd=tmp):
+                return subprocess.run(["git", *args], cwd=cwd, env=env, capture_output=True, text=True, check=True).stdout.strip()
+
+            origin = tmp / "origin"
+            origin.mkdir()
+            git("init", "-q", "-b", "main", cwd=origin)
+            (origin / "f").write_text("1")
+            git("add", "-A", cwd=origin)
+            git("commit", "-q", "-m", "one", cwd=origin)
+            first = git("rev-parse", "HEAD", cwd=origin)
+            (origin / "f").write_text("2")
+            git("commit", "-q", "-am", "two", cwd=origin)
+            git("config", "uploadpack.allowReachableSHA1InWant", "true", cwd=origin)
+            work = tmp / "work"
+            git("clone", "-q", "--depth=1", f"file://{origin}", str(work))
+            done = subprocess.run(["bash", "-e", "-c", move], cwd=work, env={**env, "RELEASE_COMMIT": first}, capture_output=True, text=True, check=False)
+            self.assertEqual(done.returncode, 0, done.stderr)
+            self.assertEqual(git("rev-parse", "HEAD", cwd=work), first)
+            self.assertEqual((work / "f").read_text(), "1")
+            done = subprocess.run(["bash", "-e", "-c", move], cwd=work, env={**env, "RELEASE_COMMIT": "0" * 40}, capture_output=True, text=True, check=False)
+            self.assertNotEqual(done.returncode, 0)
+            self.assertEqual(git("rev-parse", "HEAD", cwd=work), first, "a commit it cannot fetch leaves the tree where it was")
 
     def test_the_release_is_made_as_a_draft_and_the_tag_is_read_before_and_after_it_becomes_public(self):
         steps = jobs()["publish"]["steps"]

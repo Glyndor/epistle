@@ -238,6 +238,8 @@ fn verify_resolves_the_tag_once_and_every_build_checks_out_that_commit() {
 		);
 	}
 
+	// `build` checks out a literal ref and moves to the commit `verify` resolved in a step of its own;
+	// the other two builders check out the commit. See `build_moves_to_the_verified_commit_in_a_step`.
 	for id in ["build-deb", "build", "image-build"] {
 		let build_steps = steps(job(&jobs, id));
 		let checkout = build_steps
@@ -247,6 +249,24 @@ fn verify_resolves_the_tag_once_and_every_build_checks_out_that_commit() {
 					.is_some_and(|uses| uses.starts_with("actions/checkout"))
 			})
 			.unwrap_or_else(|| panic!("the {id} job checks out nothing"));
+		if id == "build" {
+			assert_eq!(
+				checkout.key("ref"),
+				Some("main"),
+				"the build job checks out a literal ref and moves to the verified commit afterwards"
+			);
+			let mover = build_steps
+				.iter()
+				.find(|step| step.name() == "Move to the commit verify resolved")
+				.unwrap_or_else(|| {
+					panic!("the build job has no step that moves to the verified commit")
+				});
+			assert_eq!(
+				mover.key("RELEASE_COMMIT"),
+				Some("${{ needs.verify.outputs.commit }}")
+			);
+			continue;
+		}
 		assert_eq!(
 			checkout.key("ref"),
 			Some("${{ needs.verify.outputs.commit }}"),
