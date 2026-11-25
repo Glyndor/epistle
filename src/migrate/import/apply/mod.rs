@@ -161,6 +161,7 @@ pub(crate) fn prepare(
 	let mut key_paths = Vec::new();
 	for (index, key) in plan.keys.iter().enumerate() {
 		let path = key_path(&key_dir, key)?;
+		check_key(&path, key)?;
 		outcome.key_files.push(path.display().to_string());
 		key_paths.push((path, index));
 	}
@@ -196,20 +197,42 @@ pub(crate) fn apply(
 		new_accounts,
 		key_paths,
 	} = prepared;
-	for (path, index) in &key_paths {
-		write_key(path, &plan.keys[*index])?;
-	}
+	// Everything that can fail because of the arguments or the destination
+	// comes first and writes nothing the operator has to clean up: the
+	// passwords, the account store, and the password file, which is created
+	// exclusively with mode 0600 before the configuration is touched.
 	let domains = document.config().map_err(ApplyError::Failed)?.domains;
-	outcome.config_changed =
-		document.commit().map_err(ApplyError::Failed)? == crate::cli::config_edit::Outcome::Changed;
 	let mut secrets: Vec<(String, Zeroizing<String>)> = new_accounts
 		.iter()
 		.map(|account| Ok((account.name.clone(), temporary_password()?)))
 		.collect::<Result<_, ApplyError>>()?;
-	if let Passwords::File(path) = passwords {
-		write_passwords(path, &secrets)?;
-	}
 	let store = open_store(&config, &domains)?;
+	let password_file = match passwords {
+		Passwords::File(path) => {
+			write_passwords(path, &secrets)?;
+			Some(path)
+		}
+		Passwords::Reset => None,
+	};
+	let written = (|| {
+		for (path, index) in &key_paths {
+			write_key(path, &plan.keys[*index])?;
+		}
+		document.commit().map_err(ApplyError::Failed)
+	})();
+	match written {
+		Ok(changed) => {
+			outcome.config_changed = changed == crate::cli::config_edit::Outcome::Changed;
+		}
+		Err(error) => {
+			// The file was made for this run and no account exists yet:
+			// leaving it would hand out passwords for nothing.
+			if let Some(path) = password_file {
+				let _ = std::fs::remove_file(path);
+			}
+			return Err(error);
+		}
+	}
 	let policy = crate::password::Policy::from_config(&config.auth);
 	for (account, (_, secret)) in new_accounts.iter().zip(secrets.iter_mut()) {
 		let created = DynamicAccount::with_password(
@@ -261,6 +284,19 @@ fn key_path(dir: &Path, key: &Key) -> Result<PathBuf, ApplyError> {
 	contained_child(&domain_dir, &format!("{}.{algorithm}.pem", key.selector)).map_err(io_failed)
 }
 
+/// Refuse, before anything is written, a key file that holds another key.
+fn check_key(path: &Path, key: &Key) -> Result<(), ApplyError> {
+	match std::fs::read(path) {
+		Ok(existing) if existing != to_pem(&key.pkcs8).as_bytes() => {
+			Err(ApplyError::Refused(format!(
+				"{} exists and holds another key; move it away first",
+				path.display()
+			)))
+		}
+		_ => Ok(()),
+	}
+}
+
 /// Write a key file (mode 0600, directories 0700). An existing file with
 /// the same key is kept; one with another key is never replaced.
 fn write_key(path: &Path, key: &Key) -> Result<(), ApplyError> {
@@ -304,9 +340,13 @@ fn write_passwords(path: &Path, secrets: &[(String, Zeroizing<String>)]) -> Resu
 		body.push_str(secret);
 		body.push('\n');
 	}
-	private_file(path)
-		.and_then(|mut file| file.write_all(body.as_bytes()))
-		.map_err(|error| ApplyError::Refused(format!("{}: {error}", path.display())))
+	let mut file = private_file(path)
+		.map_err(|error| ApplyError::Refused(format!("{}: {error}", path.display())))?;
+	file.write_all(body.as_bytes()).map_err(|error| {
+		// Made here a moment ago, so it is ours to remove.
+		let _ = std::fs::remove_file(path);
+		ApplyError::Failed(format!("{}: {error}", path.display()))
+	})
 }
 
 /// 24 random octets as URL-safe base64: 32 printable ASCII characters.

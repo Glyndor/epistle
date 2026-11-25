@@ -1,8 +1,7 @@
 //! Tests for the container-side command spec: the `podup -f <compose>
 //! exec -T db` argv shape, the absence of a password in argv (the
 //! container shell reads the mounted secret into `PGPASSWORD`),
-//! and the `podup cp` + `podup exec psql` two-step used by the
-//! restore path.
+//! and the `podup exec psql` replay that takes the SQL on standard input.
 
 use super::*;
 use crate::cli::init::compose_file_path;
@@ -22,10 +21,8 @@ fn dump_shell() -> &'static str {
 	r#"PGPASSWORD="$(cat '/run/secrets/epistle_db_password')" exec pg_dump -Fp --clean --if-exists --no-owner --no-privileges -h '/var/run/postgresql' -U 'epistle' -d 'epistle'"#
 }
 
-fn restore_shell(path: &str) -> String {
-	format!(
-		"PGPASSWORD=\"$(cat '/run/secrets/epistle_db_password')\" exec psql -v ON_ERROR_STOP=1 -1 -X -f '{path}' -h '/var/run/postgresql' -U 'epistle' -d 'epistle'"
-	)
+fn restore_shell() -> String {
+	"PGPASSWORD=\"$(cat '/run/secrets/epistle_db_password')\" exec psql -v ON_ERROR_STOP=1 -X -f - -h '/var/run/postgresql' -U 'epistle' -d 'epistle'".to_string()
 }
 
 fn assert_password_stays_in_container(spec: &CommandSpec) {
@@ -99,20 +96,24 @@ fn container_pg_dump_missing_compose_surfaces_compose_error() {
 fn container_psql_load_argv_targets_db_service_with_no_tty() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let compose = write_minimal_compose(dir.path());
-	let container_path = "/tmp/epistle-restore.sql";
-	let spec = container_psql_load_spec(&compose, container_path, b"select 1;\n").expect("spec");
+	let spec = container_psql_load_spec(&compose, b"select 1;\n").expect("spec");
 	let argv = spec.argv();
 	assert_eq!(argv[0], "podup");
 	assert_eq!(argv[3], "exec");
 	assert_eq!(argv[4], "-T");
 	assert_eq!(argv[5], "db");
 	assert!(
-		argv[6..] == ["sh", "-c", restore_shell(container_path).as_str()],
-		"container restore must load the mounted secret and run psql with ON_ERROR_STOP and one transaction"
+		argv[6..] == ["sh", "-c", restore_shell().as_str()],
+		"container restore must load the mounted secret and run psql with ON_ERROR_STOP, reading standard input"
+	);
+	assert_eq!(
+		spec.stdin_payload(),
+		Some(b"BEGIN;\nselect 1;\n\nCOMMIT;\n".as_slice()),
+		"container restore must send the SQL on stdin, inside its own transaction"
 	);
 	assert!(
-		spec.stdin_payload().is_none(),
-		"container restore must use the copied SQL file"
+		!argv.iter().any(|word| word == "-1" || word == "cp"),
+		"no `psql -1` (it commits a cut stream) and no copy into the container: {argv:?}"
 	);
 }
 
@@ -120,8 +121,7 @@ fn container_psql_load_argv_targets_db_service_with_no_tty() {
 fn container_psql_load_argv_never_carries_a_password() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let compose = write_minimal_compose(dir.path());
-	let spec = container_psql_load_spec(&compose, "/tmp/epistle-restore.sql", b"select 1;\n")
-		.expect("spec");
+	let spec = container_psql_load_spec(&compose, b"select 1;\n").expect("spec");
 	assert_password_stays_in_container(&spec);
 	assert!(
 		spec.env().is_empty(),
@@ -159,38 +159,21 @@ fn pg_dump_spec_picks_host_branch_when_compose_is_absent() {
 }
 
 #[test]
-fn container_cp_into_spec_targets_the_db_service() {
-	let dir = tempfile::tempdir().expect("tempdir");
-	let compose = write_minimal_compose(dir.path());
-	let host = dir.path().join("host.sql");
-	std::fs::write(&host, b"select 1;\n").expect("write host");
-	let spec = container_cp_into_spec(&compose, &host, "/tmp/epistle-restore.sql").expect("spec");
-	let argv = spec.argv();
-	assert_eq!(argv[0], "podup");
-	assert_eq!(argv[3], "cp");
-	assert!(
-		argv.contains(&"db:/tmp/epistle-restore.sql".to_string()),
-		"the destination must be `db:<container path>`: {argv:?}"
-	);
-}
-
-#[test]
 fn container_load_spec_picks_container_path_when_compose_exists() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	write_minimal_compose(dir.path());
 	let body = r#"url = "postgres://epistle@%2Frun%2Fpostgresql/epistle""#.to_string();
 	let db: Database = toml::from_str(&body).expect("db");
-	let spec =
-		psql_load_spec(&db, dir.path(), b"select 1;\n", "/tmp/epistle-restore.sql").expect("spec");
+	let spec = psql_load_spec(&db, dir.path(), b"select 1;\n").expect("spec");
 	assert_eq!(
 		spec.argv()[0],
 		"podup",
-		"compose present means the restore runs through podup cp + exec: {:?}",
+		"compose present means the restore runs through podup exec: {:?}",
 		spec.argv()
 	);
 	assert!(
 		spec.argv().contains(&"exec".to_string()),
-		"the exec half of the two-step runs psql inside the db service: {:?}",
+		"psql runs inside the db service: {:?}",
 		spec.argv()
 	);
 }
@@ -204,15 +187,14 @@ fn container_commands_ignore_host_password_and_untrusted_connection_values() {
  password_file = "/nonexistent/$(untrusted-secret-file)""#,
 	)
 	.expect("db");
-	let container_path = "/tmp/epistle-restore.sql";
 	for (spec, expected) in [
 		(
 			pg_dump_spec(&db, dir.path()).expect("dump"),
 			dump_shell().to_string(),
 		),
 		(
-			psql_load_spec(&db, dir.path(), b"select 1;\n", container_path).expect("restore"),
-			restore_shell(container_path),
+			psql_load_spec(&db, dir.path(), b"select 1;\n").expect("restore"),
+			restore_shell(),
 		),
 	] {
 		let expected_argv = [

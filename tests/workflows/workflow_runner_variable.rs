@@ -27,14 +27,14 @@ const EXPRESSION: &str = "${{ fromJSON(vars.CI_RUNNER || '\"ubuntu-latest\"') }}
 /// Jobs that stay on GitHub's runners: `(workflow, job, why)`.
 const PRIVILEGED: &[(&str, &str, &str)] = &[
 	(
-		"release.yml",
-		"build-deb",
-		"builds the .deb with id-token and attestations: write",
+		"reusable-cancel-others.yml",
+		"cancel",
+		"cancels the unfinished runs of a failed commit with actions: write",
 	),
 	(
 		"release.yml",
-		"build",
-		"builds the release binaries with id-token and attestations: write",
+		"attest",
+		"attests the provenance of the finished files with id-token and attestations: write",
 	),
 	(
 		"release.yml",
@@ -53,8 +53,18 @@ const PRIVILEGED: &[(&str, &str, &str)] = &[
 	),
 	(
 		"release.yml",
+		"image-promote",
+		"moves the image tags with packages: write",
+	),
+	(
+		"release.yml",
 		"image-manifest",
 		"publishes and attests the image with packages, id-token and attestations: write",
+	),
+	(
+		"codeql.yml",
+		"analyze",
+		"uploads the results with security-events: write",
 	),
 	(
 		"rust-audit.yml",
@@ -69,11 +79,28 @@ const PRIVILEGED: &[(&str, &str, &str)] = &[
 ];
 
 /// Jobs with no secret or write scope that stay fixed anyway: `(workflow, job, why)`.
-const FIXED: &[(&str, &str, &str)] = &[(
-	"release.yml",
-	"verify",
-	"read-only gate of the release run that signs and publishes; the run stays on one kind of runner",
-)];
+const FIXED: &[(&str, &str, &str)] = &[
+	(
+		"release.yml",
+		"verify",
+		"read-only gate of the release run that signs and publishes; the run stays on one kind of runner",
+	),
+	(
+		"release.yml",
+		"build",
+		"compiles the release binary with a read of the repository only; the release stays on one kind of runner",
+	),
+	(
+		"release.yml",
+		"verify-signatures",
+		"verifies the signatures against the pinned public key with a read of the repository only; the release stays on one kind of runner",
+	),
+	(
+		"release.yml",
+		"sign-rehearsal",
+		"signs with a throwaway key and reads the repository only; the rehearsal runs on the runner the release uses",
+	),
+];
 
 const WRITE_SCOPES: &[&str] = &[
 	"contents",
@@ -110,6 +137,15 @@ fn grants_write(perms: &Yaml) -> bool {
 fn uses_secret(y: &Yaml) -> bool {
 	let named = |s: &str| {
 		s.match_indices("secrets.").any(|(i, _)| {
+			// `check-secrets.sh` is a file name, not the `secrets` context: the context is
+			// never glued to a word, a hyphen or an underscore before it.
+			let glued = s[..i]
+				.chars()
+				.next_back()
+				.is_some_and(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+			if glued {
+				return false;
+			}
 			let rest = &s[i + 8..];
 			let end = rest
 				.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
@@ -162,7 +198,12 @@ fn linux_jobs_read_the_runner_variable() {
 			let name = name.as_str().expect("job id");
 			let secret_or_write = privileged(&workflow, job);
 			if job["uses"].as_str().is_some() {
-				if secret_or_write {
+				// The one reusable allowed to be called with a write token: the job that cancels the
+				// other runs of a failed commit. Its own job is listed in PRIVILEGED, on a fixed runner,
+				// and `test_cancel_others.py` holds who may call it.
+				let cancels =
+					job["uses"].as_str() == Some("./.github/workflows/reusable-cancel-others.yml");
+				if secret_or_write && !cancels {
 					problems.push(format!(
 						"{file}: job {name} calls a reusable workflow with secrets or write permissions; its runner cannot be fixed from here"
 					));
@@ -208,4 +249,16 @@ fn linux_jobs_read_the_runner_variable() {
 		with_variable >= 30,
 		"expected at least 30 jobs on the CI_RUNNER expression, found {with_variable}"
 	);
+}
+
+#[test]
+fn a_file_name_that_ends_in_secrets_is_not_the_secrets_context() {
+	let text = |s: &str| Yaml::String(s.to_string());
+	assert!(!uses_secret(&text(
+		"bash scripts/scan-credentials/check-secrets.sh"
+	)));
+	assert!(!uses_secret(&text("${{ secrets.GITHUB_TOKEN }}")));
+	assert!(uses_secret(&text("${{ secrets.RELEASE_KEY }}")));
+	assert!(uses_secret(&text("${{secrets.RELEASE_KEY}}")));
+	assert!(uses_secret(&text("env: (secrets.RELEASE_KEY)")));
 }

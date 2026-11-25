@@ -1,0 +1,305 @@
+"""The `CI gate` job of ci.yml: what it accepts, what it refuses, and how it is wired.
+
+The cases run the step of the workflow as written, so the test and the
+workflow cannot drift apart.
+"""
+
+import json
+import os
+import re
+import subprocess
+import unittest
+from pathlib import Path
+
+import ci_yaml
+
+ROOT = Path(__file__).resolve().parents[3]
+CI = ROOT / ".github/workflows/ci.yml"
+SUITES = {
+    "rust": ("lint", "tests", "doc", "msrv"),
+    "debian": ("debian",),
+    # Judges the whole tree, so no plan output licenses skipping it.
+    "line-limit": (),
+    "sbom-and-licenses": ("supply",),
+    # Advisories appear without a file changing, so no plan output skips it.
+    "audit": (),
+    # Judge the whole tree and the tests of the CI itself: no plan skips them.
+    "folder-limit": (),
+    "python-tests": (),
+    # Reads the annotations of this run, so no plan output skips it.
+    "deprecations": (),
+    # The tests of the credential scan run on every pull request: executing files of the change
+    # is kept out of the job that judges, so they are a suite of their own.
+    "secret-scan-tests": (),
+}
+# The jobs of ci.yml, exactly. A job added to the workflow turns the test below
+# red until the author decides here, on purpose, whether the gate waits for it.
+JOBS = {"plan", "gate", "dependabot-freshness", "cancel-others", *SUITES}
+# The one job the gate does not wait for: it reads the age of the newest
+# Dependabot pull request, not the commit, so it would fail unrelated work.
+UNGATED = {"dependabot-freshness", "cancel-others"}  # the second runs only when something failed, and is skipped otherwise
+
+
+GATE_NAME = (
+    "${{ github.event_name == 'merge_group' && 'CI gate' || github.event_name == 'pull_request'"
+    " && (github.event.pull_request.base.ref == 'main' && 'CI gate (main)' || 'CI gate')"
+    " || format('CI gate ({0})', github.event_name) }}"
+)
+
+def workflow():
+    return ci_yaml.load(CI)
+
+
+def gate_step():
+    return workflow()["jobs"]["gate"]["steps"][0]["run"]
+
+
+def plan(**overrides):
+    """A successful plan that selects every job, with some outputs changed."""
+    outputs = {dim: "true" for dims in SUITES.values() for dim in dims}
+    outputs.update(freshness="true", folder="true")
+    outputs.update(overrides)
+    return {"result": "success", "outputs": outputs}
+
+
+def needs(plan_=None, **results):
+    """The `needs` context: a plan and one result per suite (success by default)."""
+    context = {"plan": plan_ or plan()}
+    for suite in SUITES:
+        context[suite] = {"result": results.pop(suite, "success"), "outputs": {}}
+    assert not results, results
+    return context
+
+
+def run_gate(context, event="pull_request", base="develop"):
+    done = subprocess.run(
+        ["bash", "-e", "-c", gate_step()],
+        env={**os.environ, "NEEDS": json.dumps(context), "EVENT_NAME": event, "BASE_REF": base},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return done.returncode, done.stdout + done.stderr
+
+
+class GateDecisions(unittest.TestCase):
+    def passes(self, context, **where):
+        code, out = run_gate(context, **where)
+        self.assertEqual(code, 0, out)
+
+    def fails(self, context, fragment, **where):
+        code, out = run_gate(context, **where)
+        self.assertEqual(code, 1, out)
+        self.assertIn(fragment, out)
+
+    def test_every_suite_green_passes(self):
+        self.passes(needs())
+
+    def test_a_base_that_is_not_exactly_develop_or_main_fails_whatever_the_suites_did(self):
+        for base in ("Develop", "DEVELOP", "Main", "develop-2", "feature", "", "refs/heads/develop"):
+            with self.subTest(base=base):
+                self.fails(needs(), "not develop or main", base=base)
+
+    def test_develop_and_main_pass_and_so_do_events_that_have_no_base(self):
+        self.passes(needs(), base="develop")
+        self.passes(needs(), base="main")
+        self.passes(needs(), event="merge_group", base="")
+        self.passes(needs(), event="push", base="")
+
+    def test_a_failed_plan_fails_even_if_every_suite_ran(self):
+        failed = needs(plan_={"result": "failure", "outputs": {}})
+        self.fails(failed, "the plan job did not succeed (result: failure)")
+
+    def test_a_failed_plan_fails_when_the_suites_were_skipped_behind_it(self):
+        behind = needs(plan_={"result": "failure", "outputs": {}}, **dict.fromkeys(SUITES, "skipped"))
+        self.fails(behind, "the plan job did not succeed")
+
+    def test_a_cancelled_plan_fails(self):
+        self.fails(needs(plan_={"result": "cancelled", "outputs": {}}), "result: cancelled")
+
+    def test_a_suite_skipped_although_the_plan_selected_it_fails(self):
+        for suite, dims in SUITES.items():
+            with self.subTest(suite=suite):
+                self.fails(needs(**{suite: "skipped"}), f"{suite} was skipped and the plan did not say it could be")
+
+    def test_a_suite_skipped_because_the_plan_said_so_passes(self):
+        for suite, dims in SUITES.items():
+            if not dims:
+                continue
+            with self.subTest(suite=suite):
+                self.passes(needs(plan_=plan(**dict.fromkeys(dims, "false")), **{suite: "skipped"}))
+
+    def test_a_suite_that_always_runs_fails_when_skipped(self):
+        for suite, dims in SUITES.items():
+            if not dims:
+                with self.subTest(suite=suite):
+                    self.fails(needs(**{suite: "skipped"}), f"{suite} was skipped and the plan did not say it could be")
+
+    def test_a_plan_that_skips_everything_passes_only_with_every_suite_skipped(self):
+        everything = plan(**{dim: "false" for dims in SUITES.values() for dim in dims})
+        self.passes(needs(plan_=everything, **{s: "skipped" for s in SUITES if SUITES[s]}))
+        self.fails(needs(plan_=everything, rust="failure", **{s: "skipped" for s in SUITES if s != "rust"}), "rust did not succeed")
+
+    def test_rust_may_be_skipped_only_when_the_plan_skips_all_four_kinds_of_work(self):
+        for kept in SUITES["rust"]:
+            with self.subTest(kept=kept):
+                partial = plan(**{dim: "false" for dim in SUITES["rust"] if dim != kept})
+                self.fails(needs(plan_=partial, rust="skipped"), "rust was skipped and the plan did not say it could be")
+
+    def test_a_failed_or_cancelled_suite_fails_whatever_the_plan_said(self):
+        for result in ("failure", "cancelled"):
+            for suite, dims in SUITES.items():
+                with self.subTest(result=result, suite=suite):
+                    self.fails(needs(plan_=plan(**dict.fromkeys(dims, "false")), **{suite: result}), f"{suite} did not succeed (result: {result})")
+
+    def test_a_suite_that_ran_although_the_plan_skipped_it_still_passes(self):
+        self.passes(needs(plan_=plan(debian="false")))
+
+    def test_an_output_that_is_missing_or_not_a_boolean_fails(self):
+        for value in ("", "maybe", None):
+            with self.subTest(value=value):
+                broken = plan()
+                if value is None:
+                    del broken["outputs"]["tests"]
+                else:
+                    broken["outputs"]["tests"] = value
+                self.fails(needs(plan_=broken), "plan output 'tests' is neither true nor false")
+
+    def test_an_output_that_is_not_a_boolean_never_licenses_a_skip(self):
+        self.fails(needs(plan_=plan(debian=""), debian="skipped"), "debian was skipped and the plan did not say it could be")
+
+    def test_a_suite_the_gate_does_not_wait_for_fails(self):
+        context = needs()
+        del context["debian"]
+        self.fails(context, "debian is not among the jobs the gate waits for")
+
+    def test_a_job_the_gate_does_not_know_fails(self):
+        context = needs()
+        context["new-suite"] = {"result": "success", "outputs": {}}
+        self.fails(context, "new-suite is not in the gate table")
+
+    def test_a_missing_plan_fails(self):
+        context = needs()
+        del context["plan"]
+        self.fails(context, "the plan job did not succeed")
+
+
+class GateWiring(unittest.TestCase):
+    def test_the_jobs_of_the_workflow_are_exactly_these(self):
+        self.assertEqual(set(workflow()["jobs"]), JOBS)
+
+    def test_it_runs_always_and_waits_for_the_plan_and_every_suite_except_the_ungated_one(self):
+        gate = workflow()["jobs"]["gate"]
+        self.assertEqual(gate["if"], "always()")
+        self.assertEqual(gate["name"], GATE_NAME)
+        self.assertEqual(set(gate["needs"]), {"plan", *SUITES})
+        self.assertEqual(JOBS - {"gate", "plan"} - UNGATED, set(SUITES))
+
+    def test_each_suite_is_gated_on_the_outputs_the_gate_table_names_for_it(self):
+        """The plan outputs a suite's own `if` reads are the ones the gate accepts a skip on."""
+        for name, dims in SUITES.items():
+            job = workflow()["jobs"][name]
+            read = tuple(sorted(set(re.findall(r"needs\.plan\.outputs\.(\w+)", str(job.get("if", ""))))))
+            self.assertEqual(read, tuple(sorted(dims)), name)
+
+    def test_the_table_of_the_step_is_the_table_of_this_test(self):
+        text = gate_step()
+        for suite, dims in SUITES.items():
+            expected = ", ".join(f'"{dim}"' for dim in dims) + ("," if len(dims) == 1 else "")
+            self.assertIn(f'"{suite}": ({expected}),', text)
+        self.assertEqual(len(re.findall(r'^\s+"[a-z-]+": \(.*\),$', text, re.M)), len(SUITES))
+
+    def test_the_name_is_the_required_one_only_for_the_queue_and_a_pull_request_the_filter_lets_through(self):
+        """The name per event and base, with `==` modelled as GitHub does it: without regard to case."""
+        def eq(left, right):
+            return left.lower() == right.lower()
+
+        def named(event, base):
+            if event == "merge_group":
+                return "CI gate"
+            if event == "pull_request":
+                return "CI gate (main)" if eq(base, "main") else "CI gate"
+            return f"CI gate ({event})"
+
+        def triggered(base):
+            """The `branches` filter of the workflow compares exactly."""
+            return base in ci_yaml.load(CI)[True]["pull_request"]["branches"]
+
+        self.assertEqual(workflow()["jobs"]["gate"]["name"], GATE_NAME)
+        self.assertEqual(ci_yaml.load(CI)[True]["pull_request"]["branches"], ["develop", "main"])
+        self.assertTrue(eq("Develop", "develop"), "the expression alone would take Develop for develop")
+        required = {"CI gate"}
+        for base in ("develop", "main", "Develop", "DEVELOP", "Main", "release/1.0", "feature", "develop-2", "", "refs/heads/develop"):
+            emitted = triggered(base) and named("pull_request", base) in required
+            self.assertEqual(emitted, base == "develop", base)
+        for event in ("push", "schedule", "workflow_dispatch", "pull_request_target", "issues"):
+            for base in ("develop", "main"):
+                self.assertNotIn(named(event, base), required)
+        self.assertEqual(named("merge_group", "develop"), "CI gate")
+        self.assertEqual(named("pull_request", "main"), "CI gate (main)")
+
+    def test_the_workflows_that_emit_a_required_check_run_on_no_push_to_develop(self):
+        """A push to develop would answer, for the same commit, the check the promotion pull request requires."""
+        for name in ("ci.yml", "dco.yml"):
+            on = ci_yaml.load(CI.parent / name)[True]
+            self.assertIn("merge_group", on, name)
+            self.assertIn("pull_request", on, name)
+            for event in ("push", "schedule", "workflow_dispatch"):
+                if event in on and event == "push":
+                    self.assertEqual((on["push"] or {}).get("branches"), ["main"], name)
+
+    def test_only_one_workflow_emits_the_gate_and_the_dco_check(self):
+        gates, dcos = [], []
+        for path in ci_yaml.workflow_files(ROOT):
+            for job_id, job in ci_yaml.load(path)["jobs"].items():
+                if job.get("name") == GATE_NAME or str(job.get("name", "")).startswith("CI gate"):
+                    gates.append((path.name, job_id))
+                if job_id == "dco" and "reusable-dco.yml" in str(job.get("uses", "")):
+                    dcos.append(path.name)
+        self.assertEqual(gates, [("ci.yml", "gate")])
+        self.assertEqual(dcos, ["dco.yml"])
+
+    def test_it_holds_no_permission_and_checks_nothing_out(self):
+        gate = workflow()["jobs"]["gate"]
+        self.assertEqual(gate["permissions"], {})
+        self.assertEqual(len(gate["steps"]), 1)
+        self.assertNotIn("uses", gate["steps"][0])
+
+    def test_it_reads_the_context_from_the_environment_only(self):
+        step = workflow()["jobs"]["gate"]["steps"][0]
+        self.assertEqual(step["env"], {"NEEDS": "${{ toJSON(needs) }}", "EVENT_NAME": "${{ github.event_name }}",
+                                       "BASE_REF": "${{ github.event.pull_request.base.ref }}"})
+        self.assertNotIn("${{", step["run"])
+
+    def test_it_uses_the_runner_variable_like_every_other_job(self):
+        self.assertEqual(workflow()["jobs"]["gate"]["runs-on"], "${{ fromJSON(vars.CI_RUNNER || '\"ubuntu-latest\"') }}")
+
+    def test_it_prints_the_plan_and_the_result_of_every_suite(self):
+        code, out = run_gate(needs(plan_=plan(debian="false"), debian="skipped"))
+        self.assertEqual(code, 0, out)
+        for suite in SUITES:
+            self.assertIn(suite, out)
+        self.assertRegex(out, r"debian\s+debian=false\s+skipped")
+
+    def test_a_suite_that_calls_a_reusable_carries_the_plan_condition_so_an_omission_shows_as_skipped(self):
+        jobs = workflow()["jobs"]
+        for name, dims in SUITES.items():
+            if "uses" in jobs[name] and dims:
+                for dim in dims:
+                    self.assertIn(f"needs.plan.outputs.{dim} != 'false'", jobs[name]["if"], name)
+
+    def test_every_suite_starts_even_when_the_plan_failed(self):
+        for name in SUITES:
+            condition = workflow()["jobs"][name]["if"]
+            # The one that reads the annotations of a finished run runs whatever happened, as the gate does.
+            self.assertTrue(condition.startswith("${{ !cancelled()") or (name == "deprecations" and condition == "always()"), name)
+
+    def test_a_suite_is_skipped_only_by_an_explicit_false(self):
+        for name, job in workflow()["jobs"].items():
+            for text in (str(job.get("if", "")), str(job.get("with", ""))):
+                self.assertNotIn("== 'true'", text, name)
+                self.assertNotIn("contains(needs", text, name)
+
+
+if __name__ == "__main__":
+    unittest.main()

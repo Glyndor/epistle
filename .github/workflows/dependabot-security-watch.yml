@@ -9,7 +9,7 @@ name: Dependabot security watch
 # open pull requests into `main` and fails when Dependabot authored one whose
 # head is not `develop`. The selection and the report live in
 # `.github/scripts/dependabot_security_watch.py`, which has its own tests
-# under `scripts.yml`; this file only feeds it.
+# under the `python scripts` job of ci.yml; this file only feeds it.
 #
 # Four triggers, each for a different reason:
 #
@@ -55,7 +55,7 @@ permissions:
 
 concurrency:
   group: dependabot-security-watch-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   dependabot-security-watch:

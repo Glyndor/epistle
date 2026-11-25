@@ -26,8 +26,9 @@ pub(super) fn service_status(json: &str, service: &str) -> Option<(String, Strin
 /// Poll `podup ps` until `service` is ready, or until `timeout`. A service
 /// whose compose definition has a healthcheck is ready only when podup
 /// reports it `healthy`: podup reports an empty health while the check is
-/// still in its start period (measured on podup 5.10.18, where `Status`
-/// said `starting` and `Health` was `""`), and treating that as healthy
+/// still in its start period (measured on podup 5.10.18 and again on
+/// 6.0.0 with Podman 6.2.0, where `Status` says `starting` and `Health` is
+/// `""`), and treating that as healthy
 /// let `stack update` judge mail before it listened. A service without a
 /// healthcheck is ready once it runs. `Err` says what it last saw.
 pub(in crate::cli) fn wait_healthy(

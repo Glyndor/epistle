@@ -5,14 +5,16 @@
 //! implementation below in declaration order, so the field order
 //! in this file is also the order in the rendered JSON.
 //!
-//! Conventions measured on podup 5.10.11 to 5.10.12:
-//! - `mode` for a secret spec must be a JSON number whose value is
-//!   the octal mode (`0o400` is `256`). The string `"0400"` would
-//!   be read as the decimal number `400`; the string `"0256"` and
-//!   the number `256` both resolve to the same octal mode.
+//! Conventions measured on podup 6.0.0 with Podman 6.2.0 (2026-11-23):
+//! - `mode` for a secret spec: a JSON number is read digit by digit as
+//!   octal, so `400` is `0o400` (`256`) and `256` would be `0o256`; a
+//!   number with an 8 or 9 in it cannot be octal digits and is taken as the
+//!   value itself. A string is parsed as octal (`"0400"` and `"400"` both
+//!   give `0o400`). epistle writes the number whose digits are the octal
+//!   mode.
 //! - `$(...)` inside a healthcheck `CMD-SHELL` is NOT interpolated by
-//!   podup. `$$` is not required; the shell runs the literal
-//!   `$(...)`.
+//!   podup: it reaches the container unchanged and the shell runs it.
+//!   `$$` is not required; where it is written, podup turns it into `$`.
 //! - The `mail` service binds `network_mode: "pasta"` so the SMTP
 //!   listeners keep the real client address; rootless podman would
 //!   otherwise funnel every connection through `rootlessport` and
@@ -51,16 +53,13 @@ pub(crate) const DATABASE_NAME: &str = "epistle";
 /// The database password secret mounted inside the db service.
 pub(crate) const DATABASE_PASSWORD_FILE: &str = "/run/secrets/epistle_db_password";
 
-/// The mode of the database secret. podup reads a JSON number as
-/// the octal mode, so the byte written here must be the decimal
-/// value whose octal representation is the desired mode. `0o400`
-/// reads as decimal `400` (not `256`); the rendered file carries
-/// the number `400` and podup applies `0o400` (owner read-only).
-/// Verified with `podup -f compose.yaml config` on 2026-10-04:
-/// `mode: 400` -> rendered `mode: 256`. The decimal `256` would
-/// be read as `0o256`, which has the owner-execute bit set and
-/// triggers a `mode 0o256 sets an execute bit on a secret`
-/// refusal at `podup up` time.
+/// The mode of the database secret. podup reads a JSON number digit by
+/// digit as octal, so the number written here is the one whose digits are
+/// the mode: `400` for owner read-only. Measured with podup 6.0.0 on
+/// 2026-11-23: `podup config` renders `mode: 400` as `mode: 256`
+/// (`0o400`), and the mounted file is `-r--------`. Written as `256`, the
+/// number would be read as `0o256`, which has an execute bit, and `podup up`
+/// refuses it with `mode 0o256 ... sets an execute bit on a secret/config`.
 const DATABASE_SECRET_MODE: u32 = 400;
 
 /// Where a key lives on the host, given data_dir.

@@ -1,3 +1,19 @@
+epistle (0.14.0) unstable; urgency=medium
+
+  * Address aliases can be managed over the API: `GET /api/v1/aliases`, `POST /api/v1/aliases` and `DELETE /api/v1/aliases/{alias}`, behind a new `alias` scope that `read` and `write` do not open. The routes and `epistle alias` apply the same rules and write the same file, `address-aliases.toml` in the data directory, which the running server applies through its file watcher without a restart. Through the API every member has to be an account on this server (the command still allows outside addresses), an alias has at most 100 members, a key confined to some domains needs the alias and every member inside them, and the role addresses (`postmaster`, `abuse`, `hostmaster` and the others `docs/api.md` lists) and alias addresses that carry a sub-address tag are refused. A copy of a message still has the member in `Delivered-To`, not the alias.
+  * The `[[alias]]` tables of the configuration file are the seed of `address-aliases.toml`: they are copied into it at the first change or the first start of `serve`, and a later edit of the tables is reported and not applied. Use `epistle alias` or the API from then on.
+  * The generated compose file restarts `mail`, `clamav` and the panel when their health check turns unhealthy, and a test audits the generated file with `podup audit`.
+  * `epistle` depends on `podup (>= 6.0.0)` and `podman (>= 6.2.0)`, and the run-time check refuses an older podup with a message naming the floor. Podman 5 is no longer supported; `apt upgrade` installs both from the Glyndor archive.
+  * `epistle restore` sends the dump to `psql` on the standard input of `podup exec` inside one transaction, so it is never written to a file on the host or in the container and a stream that is cut is rolled back.
+  * `epistle migrate mox` and `epistle migrate stalwart` check the password file and the key files before they write anything, so a refused import changes nothing and the same command works once the cause is gone.
+  * `epistle rotate` leaves no lock file behind when it ends before it has anything to keep, such as a refusal for lack of `--yes`.
+  * `app-password create`, `api-key create` and `evidence policy set` validate their arguments before they look at state: a value they cannot take exits with 2 whatever the data directory holds, and `--save-sent` with a bad value exits 2 instead of 1.
+  * `url` 2.5.9 and sqlx 0.9.1 clear RUSTSEC-2026-0592 (stack overflow in `Url::origin()` on nested `blob:` URLs); no advisory is ignored any more.
+  * The `--help` texts and the documentation that the code contradicted are corrected, among them the default of `limits set message-memory-budget`.
+  * The audit line of a change made through the alias routes and the domain routes is written on the thread that commits it, so a client that goes away between the commit and the line no longer leaves a change with no line.
+
+ -- Glyndor <packages@glyndor.net>  Wed, 25 Nov 2026 00:46:51 +0000
+
 epistle (0.13.4) unstable; urgency=medium
 
   * `epistle deliverability test --account NAME --to ADDRESS --yes` sends one test message from a hosted account to an address you name, signed with the server's DKIM key, and reports what became of it: the delivery result with the remote's answer in plain words, and SPF, DKIM, DMARC alignment and the reverse name from DNS. One test per minute per server, the destination must be outside the hosted domains, and it exits 1 when a check fails.

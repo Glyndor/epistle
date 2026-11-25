@@ -13,7 +13,7 @@
 # it. The two values are 1:1; a request for any other arch fails in
 # the case statement.
 
-FROM docker.io/library/rust@sha256:0b0ea86881537b3f645aace7e8e39556289f8787db057317c8d4978548213b9e AS builder
+FROM docker.io/library/rust@sha256:223cc32ddca8f3ee90c436dbc94b6b5f052ea7f9653c5201e9612f08ad7d21b8 AS builder
 # 1.100-slim-trixie. Same pin as release.yml.
 
 ARG TARGETARCH
@@ -71,7 +71,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
 #   podman image inspect --format '{{.Digest}}' gcr.io/distroless/static-debian13:nonroot
 # Bump the digest deliberately, the way db.yml documents the postgres
 # digests.
-FROM gcr.io/distroless/static-debian13:nonroot@sha256:aafe993665bf6200db38a02c11a9351e782a84b6a45e7f33b6695638c88e3931
+FROM gcr.io/distroless/static-debian13:nonroot@sha256:8ce6dd87e9823c5b48dcfb2c8604714ccb351ce59607327bcc4957448da279b5
 
 # OCI labels. `--label=...` on the `podman build` command line
 # overrides them at build time, so a release job can stamp the

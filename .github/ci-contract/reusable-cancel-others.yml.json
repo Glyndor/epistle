@@ -1,0 +1,44 @@
+{
+ "True": {
+  "workflow_call": null
+ },
+ "concurrency": {
+  "cancel-in-progress": false,
+  "group": "cancel-others-${{ github.workflow }}-${{ github.event.pull_request.head.sha || github.run_id }}"
+ },
+ "jobs": {
+  "cancel": {
+   "if": "github.event_name == 'pull_request'",
+   "name": "cancel the other runs of this commit",
+   "permissions": {
+    "actions": "write",
+    "contents": "read"
+   },
+   "runs-on": "ubuntu-latest",
+   "steps": [
+    {
+     "uses": "actions/checkout@PIN",
+     "with": {
+      "fetch-depth": 2,
+      "persist-credentials": false
+     }
+    },
+    {
+     "env": {
+      "BASE_SHA": "${{ github.event.pull_request.base.sha }}",
+      "GH_TOKEN": "${{ github.token }}",
+      "HEAD_BRANCH": "${{ github.event.pull_request.head.ref }}",
+      "HEAD_SHA": "${{ github.event.pull_request.head.sha }}",
+      "REPO": "${{ github.repository }}",
+      "RUN_ID": "${{ github.run_id }}"
+     },
+     "name": "Run the base commit's copy of the cancel script",
+     "run": "set -euo pipefail\ngit cat-file -e \"${BASE_SHA}^{commit}\" 2>/dev/null || git fetch --no-tags --depth=1 origin \"$BASE_SHA\" 2>/dev/null || true\nif git show \"${BASE_SHA}:.github/scripts/ci/cancel-others.sh\" >\"$RUNNER_TEMP/others.sh\" 2>/dev/null; then\n  bash \"$RUNNER_TEMP/others.sh\"\nelse\n  echo \"::warning::the base commit has no cancel script; nothing is cancelled\"\nfi\n"
+    }
+   ],
+   "timeout-minutes": 5
+  }
+ },
+ "name": "Cancel the other runs of a failed commit (reusable)",
+ "permissions": {}
+}

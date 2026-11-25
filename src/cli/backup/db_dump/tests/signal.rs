@@ -8,16 +8,15 @@
 //! has recorded the signal before the stub returns and the step that follows
 //! is the same on every run.
 //!
-//! A signal before the load must leave the database and the files untouched,
-//! one during the load must let both be restored, and either way nothing
-//! staged may be left on the host or in the container, and the process must
-//! end by the signal.
+//! A signal during the load must let both halves be restored, nothing may be
+//! written to the host's temporary directory, and the process must end by the
+//! signal.
 
 use std::fs;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 
-use super::staging::{FakeEngine, archive_entries, mail_file, restore_at};
+use super::replay::{FakeEngine, archive_entries, mail_file, restore_at};
 
 /// Set in the child: the engine's directory of notes, its stub and its
 /// compose file, separated by newlines.
@@ -52,7 +51,6 @@ struct Left {
 	status: std::process::ExitStatus,
 	database_loaded: bool,
 	files_laid: bool,
-	container: Vec<String>,
 	host: Vec<String>,
 }
 
@@ -81,7 +79,6 @@ fn signalled_at(step: &str) -> Left {
 		status,
 		database_loaded: engine.rec.join("psql.sql").exists(),
 		files_laid: mail_file(&engine).exists(),
-		container: engine.container_tmp(),
 		host: staged_on_host(host_tmp.path()),
 	}
 }
@@ -96,7 +93,6 @@ fn staged_on_host(dir: &Path) -> Vec<String> {
 				.to_string_lossy()
 				.into_owned()
 		})
-		.filter(|name| name.starts_with("epistle-restore-"))
 		.collect()
 }
 
@@ -114,40 +110,11 @@ fn assert_whole(step: &str) -> Left {
 		left.database_loaded, left.files_laid
 	);
 	assert_eq!(
-		left.container,
-		Vec::<String>::new(),
-		"signal at {step}: staged copy left in the container"
-	);
-	assert_eq!(
 		left.host,
 		Vec::<String>::new(),
-		"signal at {step}: staged copy left on the host"
+		"signal at {step}: something was written to the host's temporary directory"
 	);
 	left
-}
-
-/// A signal before `psql` starts stops the restore with nothing written.
-fn assert_untouched(step: &str) {
-	let left = assert_whole(step);
-	assert!(
-		!left.database_loaded && !left.files_laid,
-		"signal at {step}: the load had not started, so nothing may be restored"
-	);
-}
-
-#[test]
-fn a_signal_while_old_copies_are_swept_restores_nothing() {
-	assert_untouched("ls");
-}
-
-#[test]
-fn a_signal_while_the_container_directory_is_made_restores_nothing() {
-	assert_untouched("mkdir");
-}
-
-#[test]
-fn a_signal_while_the_dump_is_copied_in_restores_nothing() {
-	assert_untouched("cp");
 }
 
 /// Once `psql` has run, the load is not undone, so the restore finishes.

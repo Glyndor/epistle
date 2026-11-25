@@ -1,0 +1,45 @@
+{
+ "True": {
+  "workflow_call": null
+ },
+ "concurrency": {
+  "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
+  "group": "dco-${{ github.workflow }}-${{ github.ref }}"
+ },
+ "jobs": {
+  "dco": {
+   "name": "Signed-off-by present on every commit",
+   "runs-on": "${{ fromJSON(vars.CI_RUNNER || '\"ubuntu-latest\"') }}",
+   "steps": [
+    {
+     "uses": "actions/checkout@PIN",
+     "with": {
+      "fetch-depth": 0,
+      "persist-credentials": false
+     }
+    },
+    {
+     "env": {
+      "BASE_SHA": "${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}",
+      "HEAD_SHA": "${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}"
+     },
+     "name": "Verify Signed-off-by trailers",
+     "run": "set -euo pipefail\n# A commit that reached a protected branch without its trailer\n# cannot be rewritten. Its author fixes it with a later signed\n# remediation commit in the same range whose message carries\n# \"I, <name> <email>, hereby add my Signed-off-by to this\n# commit: <full sha>\", the form the DCO bot accepts. Only the\n# commit's own author can remediate it, matched by email. The\n# message is read as one line because a squash merge copies the PR\n# body, and a wrapped body splits the sentence in two.\nif [ -z \"$BASE_SHA\" ] || [ -z \"$HEAD_SHA\" ]; then\n  echo \"::error::dco check needs a pull_request or merge_group range; got BASE_SHA='$BASE_SHA' HEAD_SHA='$HEAD_SHA'\"\n  exit 1\nfi\nremediated=\"\"\nfor sha in $(git rev-list --no-merges \"${BASE_SHA}..${HEAD_SHA}\"); do\n  own=\"$(git show -s --format='%ae' \"$sha\" | tr '[:upper:]' '[:lower:]')\"\n  while IFS= read -r line; do\n    claimed=\"$(printf '%s' \"$line\" | sed -n 's/.*<\\([^>]*\\)>.*/\\1/p' | tr '[:upper:]' '[:lower:]')\"\n    target=\"$(printf '%s' \"$line\" | grep -oE '[0-9a-f]{40}$' || true)\"\n    if [ -n \"$target\" ] && [ \"$claimed\" = \"$own\" ]; then\n      remediated=\"${remediated}${own} ${target}\"$'\\n'\n    fi\n  done < <(git show -s --format='%B' \"$sha\" | tr '\\n' ' ' | tr -s ' ' \\\n    | grep -oE 'I, [^<,]+ <[^>]+>, hereby add my Signed-off-by to this commit: [0-9a-f]{40}' || true)\ndone\nmissing=0\nfor sha in $(git rev-list --no-merges \"${BASE_SHA}..${HEAD_SHA}\"); do\n  author=\"$(git show -s --format='%an <%ae>' \"$sha\")\"\n  email=\"$(git show -s --format='%ae' \"$sha\" | tr '[:upper:]' '[:lower:]')\"\n  if printf '%s\\n' \"$remediated\" | grep -qx \"$email $sha\"; then\n    echo \"commit $sha signed off by a remediation commit from its author\"\n    continue\n  fi\n  if ! git show -s --format='%(trailers:key=Signed-off-by)' \"$sha\" \\\n    | grep -qi 'Signed-off-by:'; then\n    echo \"::error::commit $sha ($author) is missing a Signed-off-by trailer\"\n    missing=1\n  fi\ndone\nif [ \"$missing\" -ne 0 ]; then\n  echo \"Add a sign-off with: git commit -s (or git rebase --signoff).\"\n  exit 1\nfi\necho \"All commits carry a Signed-off-by trailer.\"\n"
+    },
+    {
+     "env": {
+      "BASE_SHA": "${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}",
+      "HEAD_SHA": "${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}"
+     },
+     "name": "Detect evil merges",
+     "run": "set -euo pipefail\nif [ -z \"$BASE_SHA\" ] || [ -z \"$HEAD_SHA\" ]; then\n  echo \"::error::dco check needs a pull_request or merge_group range; got BASE_SHA='$BASE_SHA' HEAD_SHA='$HEAD_SHA'\"\n  exit 1\nfi\nbad=0\nstderr_file=\"$(mktemp)\"\nmerges=\"$(git rev-list --merges \"${BASE_SHA}..${HEAD_SHA}\")\" || {\n  echo \"::error::could not enumerate merge commits between ${BASE_SHA} and ${HEAD_SHA} \u2014 history may be corrupted or incomplete; this check fails closed\"\n  exit 1\n}\nfor m in $merges; do\n  read -r -a parents <<< \"$(git show -s --format='%P' \"$m\")\"\n  if [ \"${#parents[@]}\" -ne 2 ]; then\n    echo \"::error::merge commit $m has ${#parents[@]} parents \u2014 evil-merge detection only supports ordinary two-parent merges; an octopus merge is rejected rather than assumed safe\"\n    bad=1\n    continue\n  fi\n  actual_tree=\"$(git rev-parse \"${m}^{tree}\")\"\n  if ! clean_tree=\"$(git merge-tree --write-tree \"${parents[0]}\" \"${parents[1]}\" 2>\"$stderr_file\")\"; then\n    echo \"::error::merge commit $m cannot be automatically verified (conflicted or merge-tree error); this check fails closed because a hand-resolved merge can carry content that exists in no parent. Rebase the branch onto its base (producing no merge commit) or re-merge without conflicts, then push again.\"\n    echo \"git merge-tree stderr for $m:\"\n    cat \"$stderr_file\"\n    bad=1\n    continue\n  fi\n  if [ \"$clean_tree\" != \"$actual_tree\" ]; then\n    echo \"::error::merge commit $m's tree does not match the clean merge of its parents ${parents[0]} and ${parents[1]} \u2014 it introduces changes present in neither parent\"\n    bad=1\n  fi\ndone\nrm -f \"$stderr_file\"\nif [ \"$bad\" -ne 0 ]; then\n  echo \"One or more merge commits smuggle unreviewed changes, use an unsupported merge shape, or could not be automatically verified. See the errors above.\"\n  exit 1\nfi\necho \"No evil merges found.\"\n"
+    }
+   ],
+   "timeout-minutes": 15
+  }
+ },
+ "name": "DCO (reusable)",
+ "permissions": {
+  "contents": "read"
+ }
+}

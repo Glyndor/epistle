@@ -94,7 +94,7 @@ The checks a pull request runs are:
 ```sh
 cargo fmt --all --check
 cargo clippy --locked --all-targets --all-features -- -D warnings
-cargo test --locked --all-features --workspace
+RUST_MIN_STACK=8388608 cargo test --locked --all-features --workspace   # the stack CI gives test threads
 cargo test --locked --test database    # needs a live Postgres; CI provides one
 cargo test --locked --test interop     # needs a live Postfix on :1025; CI provides one
 cargo test --locked --test e2e         # needs a live epistle under systemd on real ports
@@ -169,11 +169,17 @@ you did not mean.
 
 ## Required checks
 
-A pull request into `develop` has to pass `rust / Format & lint`,
-`rust / Test`, `rust / Coverage`, `debian / dpkg-buildpackage`,
-`line-limit / line limit`, `sbom-and-licenses / SBOM and license attribution`
-and `dco / Signed-off-by present on every commit`. The workflow files are in
-`.github/workflows/`.
+A pull request into `develop` has to pass `CI gate`,
+`dco / Signed-off-by present on every commit`,
+`author and sign-off use a GitHub noreply address` and
+`no credential-shaped line is added`. `CI gate` is the last job of
+`.github/workflows/ci.yml`: it fails unless the plan succeeded and every suite
+(`rust`, `debian`, `line-limit`, `sbom-and-licenses`, `audit`, `folder-limit` and
+`python-tests`) either succeeded or was skipped because the plan said its inputs
+did not change. A pull request into `main` is named `CI gate (main)`. The
+workflow files are in `.github/workflows/`, and the reference copy of the ones the
+gate rests on is in `.github/ci-contract/`: after a change on purpose, run
+`python3 .github/scripts/ci_contract/snapshot.py` and review the diff.
 
 ## Security
 

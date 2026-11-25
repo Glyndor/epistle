@@ -77,7 +77,11 @@ jobs:
           rustup toolchain install "$TOOLCHAIN" --profile minimal
           rustup default "$TOOLCHAIN"
 
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      # Restore only: a pull request and a merge queue group used to save a
+      # copy of their own (107 MB each). A push or a schedule on a default
+      # branch saves, with the condition `rust-cache` uses.
+      - id: supply-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/bin
@@ -95,6 +99,19 @@ jobs:
         run: |
           command -v cargo-cyclonedx >/dev/null || cargo install --locked cargo-cyclonedx --version "=$CYCLONEDX_VERSION"
           command -v cargo-about >/dev/null || cargo install --locked --features cli cargo-about --version "=$ABOUT_VERSION"
+
+      - if: >-
+          ${{ !cancelled()
+          && steps.supply-cache.outputs.cache-hit != 'true'
+          && (github.event_name == 'push' || github.event_name == 'schedule')
+          && (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+          key: rust-supply-chain-${{ runner.os }}-${{ inputs.toolchain }}-${{ inputs.cyclonedx-version }}-${{ inputs.cargo-about-version }}
 
       - name: Generate CycloneDX SBOM
         run: cargo cyclonedx --format json --all-features

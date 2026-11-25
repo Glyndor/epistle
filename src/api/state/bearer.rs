@@ -32,6 +32,11 @@ pub(in crate::api) fn acceptable_scopes_for(method: &axum::http::Method, path: &
 	if path.starts_with("/scim/v2") {
 		return vec![Scope::Scim];
 	}
+	// The alias routes redirect mail, so listing them is as much theirs as
+	// changing them: only the `alias` scope opens them, whatever the method.
+	if path == "/api/v1/aliases" || path.starts_with("/api/v1/aliases/") {
+		return vec![Scope::Alias];
+	}
 	match *method {
 		axum::http::Method::GET | axum::http::Method::HEAD => vec![Scope::Read],
 		axum::http::Method::POST

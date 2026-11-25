@@ -22,7 +22,7 @@ mod cases {
 			"#!/bin/sh\n\
 			 echo \"$*\" >> {argv_log}\n\
 			 if [ \"$1\" = \"--version\" ]; then\n\
-			 \tprintf '\\npodup version v5.19.0\\n\\n'\n\
+			 \tprintf '\\npodup version v6.0.0\\n\\n'\n\
 			 \texit 0\n\
 			 fi\n\
 			 while [ \"$1\" = \"-f\" ]; do shift 2; done\n\

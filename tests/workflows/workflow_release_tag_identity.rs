@@ -205,13 +205,40 @@ fn verify_resolves_the_tag_once_and_every_build_checks_out_that_commit() {
 		 jobs check out. The job body was:\n{outputs}"
 	);
 
+	// The jobs that only need the scripts check out the commit of the event, with no ref, and say
+	// in shell that it is the commit of the event; what they sign and publish comes by artifact.
+	// A checkout of a commit read from an output, followed by a script of that tree, is what code
+	// scanning reports as a possible cache poisoning from a manual run.
 	for id in [
-		"build-deb",
-		"build",
+		"attest",
 		"sign",
-		"image-build",
+		"verify-signatures",
 		"image-manifest",
+		"image-promote",
 	] {
+		let script_steps = steps(job(&jobs, id));
+		let checkout = script_steps
+			.iter()
+			.find(|step| {
+				step.uses()
+					.is_some_and(|uses| uses.starts_with("actions/checkout"))
+			})
+			.unwrap_or_else(|| panic!("the {id} job checks out nothing"));
+		assert_eq!(
+			checkout.key("ref"),
+			None,
+			"the {id} job only needs the scripts: it checks out the commit of the event, not a \
+			 commit read from an output"
+		);
+		assert!(
+			script_steps
+				.iter()
+				.any(|step| step.name() == "The checkout is the commit of the event"),
+			"the {id} job must check in shell that the checkout is the commit of the event"
+		);
+	}
+
+	for id in ["build-deb", "build", "image-build"] {
 		let build_steps = steps(job(&jobs, id));
 		let checkout = build_steps
 			.iter()

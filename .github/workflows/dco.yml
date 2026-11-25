@@ -68,11 +68,43 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Test the check
-        run: bash scripts/scan-credentials/scan-credentials.test.sh
-
-      - name: Scan the lines this change adds
+      # This job judges and runs nothing else: no file of the change is executed here
+      # before or after the scan, so nothing the change carries can prepare the runner
+      # (the path, a function, a `git` or a `tar`, the environment) for the judge. The
+      # scanner is the one the base already has, taken out of the base with `git
+      # archive`: a change that rewrote the check could otherwise make it say nothing
+      # about itself. There is no fallback to the scanner of the change: a base that
+      # cannot be read, or that has no scanner, stops the job. The tests of the scanner
+      # run in the job `secret-scan-tests` of ci.yml, which `CI gate` waits for.
+      # `scan-credentials.sh` is the name the base has today; it is dropped from the loop
+      # in the pull request after this one, once the base has `check-secrets.sh`.
+      - name: Scan what this change adds, every commit of it and every message
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
-        run: bash scripts/scan-credentials/scan-credentials.sh "$BASE_SHA" "$HEAD_SHA"
+        run: |
+          set -euo pipefail
+          dir=scripts/scan-credentials
+          git rev-parse --verify "$BASE_SHA^{commit}" > /dev/null || { echo "::error::the base $BASE_SHA cannot be read, so nothing was scanned"; exit 1; }
+          scanner=""
+          for name in check-secrets.sh scan-credentials.sh; do
+            if git cat-file -e "$BASE_SHA:$dir/$name" 2>/dev/null; then
+              mkdir -p "$RUNNER_TEMP/scanner"
+              git archive "$BASE_SHA" "$dir/$name" | tar -x -C "$RUNNER_TEMP/scanner"
+              scanner="$RUNNER_TEMP/scanner/$dir/$name"
+              break
+            fi
+          done
+          [ -n "$scanner" ] || { echo "::error::the base has no secret scan, so nothing was scanned"; exit 1; }
+          bash "$scanner" "$BASE_SHA" "$HEAD_SHA"
+
+  # When this workflow fails on a pull request, the other runs of the same commit stop: they
+  # would spend runners on a commit that is already red. The job and the rules it follows are in
+  # reusable-cancel-others.yml.
+  cancel-others:
+    needs: [dco, noreply, secret-scan]
+    if: ${{ failure() && github.event_name == 'pull_request' }}
+    permissions:
+      contents: read
+      actions: write
+    uses: ./.github/workflows/reusable-cancel-others.yml

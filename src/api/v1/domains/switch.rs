@@ -17,17 +17,18 @@ async fn switch(
 ) -> Result<Json<Changed>, ApiError> {
 	let domain = change::canonical("domain", &raw)?;
 	change::in_scope(&Principal::for_token(&state, &auth), &domain)?;
-	let done = change::commit(&state, Change::SetEnabled { name: raw, enabled }, None).await?;
-	change::audit(
-		&done,
-		if enabled {
-			DomainEvent::Enabled
-		} else {
-			DomainEvent::Disabled
-		},
-		&domain,
-		ip,
-	);
+	let event = if enabled {
+		DomainEvent::Enabled
+	} else {
+		DomainEvent::Disabled
+	};
+	let done = change::commit(
+		&state,
+		Change::SetEnabled { name: raw, enabled },
+		None,
+		change::Trail::new(event, &domain, ip),
+	)
+	.await?;
 	Ok(Json(Changed::of(&done, domain)))
 }
 

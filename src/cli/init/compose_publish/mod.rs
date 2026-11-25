@@ -64,9 +64,10 @@ fn plain_http_host(kind: ListenerKind) -> Option<IpAddr> {
 /// Render one mapping. An absent host address, and an unspecified one, keep
 /// the `<port>:<port>` form every other writer of the map uses, so a stack
 /// nobody narrowed renders the bytes `init` wrote. A wildcard publishes on
-/// every address the host owns either way, and the explicit
-/// `0.0.0.0:PORT:PORT` and `[::]:PORT:PORT` forms were measured to be refused
-/// by pasta on Podman 5.4.2, so neither is written. An IPv6 address goes in
+/// every address the host owns, both families. The explicit
+/// `0.0.0.0:PORT:PORT` form listens on IPv4 only (`ss` on Podman 6.2.0), so
+/// it is not the same mapping, and pasta on Podman 5.4.2 refused both
+/// explicit wildcard forms. Neither is written. An IPv6 address goes in
 /// brackets: the engine reads the colons in a bare `::1:143:143` as the port
 /// separator.
 pub(super) fn entry(host: Option<IpAddr>, port: u16) -> String {

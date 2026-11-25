@@ -60,6 +60,16 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# Tests that build the whole command line (`Cli::try_parse_from`) run on a test
+# thread, whose stack is 2 MiB unless this says otherwise. clap 4.6.7 needed about
+# 1.75 MiB of it for that in an unoptimised build, which left no room, and 4.6.8
+# needs between 2 and 3 MiB: `account::switches::tests::parse` overflowed and
+# aborted the whole run. The value is the 8 MiB a main thread has. A file under
+# `.cargo/` cannot carry it: debian/rules reads the presence of
+# `.cargo/config.toml` as "the vendored configuration is already written".
+env:
+  RUST_MIN_STACK: "8388608"
+
 permissions:
   contents: read
 
@@ -93,11 +103,12 @@ jobs:
       # One leg: the floor (`MIN_SERVER_VERSION = 18` in `src/db/mod.rs`),
       # which is also the major the stack runs. When a newer major ships,
       # add it as a second `include:` row with its own digest.
-      fail-fast: false
+      # A pull request stops at the first failing leg; a push reports every leg.
+      fail-fast: ${{ github.event_name == 'pull_request' }}
       matrix:
         include:
           - postgres: 18
-            image: postgres:18@sha256:b9f6b8ff03b62f3cfd9d9ba3fe56226a9991c79d3fb46fd46536263bf02be553
+            image: postgres:18@sha256:c699303802144847d238196173655dbbecf7a96aeca1565f2b02eb671a1f0b6b
     services:
       postgres:
         # Digest-pinned: a major tag is a moving target, so a retag would
@@ -149,7 +160,7 @@ jobs:
           # reusable-rust-ci.yml. Two coverage jobs on two different
           # instrumentation versions produce two numbers that are not
           # comparable, so bump both together or neither.
-          LLVM_COV_VERSION: "0.9.1"
+          LLVM_COV_VERSION: "0.9.2"
         run: command -v cargo-llvm-cov >/dev/null || cargo install cargo-llvm-cov --locked --version "$LLVM_COV_VERSION"
 
       - name: Coverage gate
@@ -282,3 +293,14 @@ jobs:
           cache-hit: ${{ steps.cargo-cache.outputs.cache-hit }}
           prefix: rust-db
           extra-path: ~/.cargo/bin
+
+  # When this workflow fails on a pull request, the other runs of the same commit stop: they
+  # would spend runners on a commit that is already red. The job and the rules it follows are in
+  # reusable-cancel-others.yml.
+  cancel-others:
+    needs: [db-tests]
+    if: ${{ failure() && github.event_name == 'pull_request' }}
+    permissions:
+      contents: read
+      actions: write
+    uses: ./.github/workflows/reusable-cancel-others.yml

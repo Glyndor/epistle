@@ -1,18 +1,8 @@
-# One advisory is ignored, with its reason, and the ignore leaves when the
-# crate leaves the lockfile (tracked in #1696).
-#
-# RUSTSEC-2026-0459 is a CVE in the C SQLite that `libsqlite3-sys` 0.37 bundles.
-# epistle does not use SQLite: `sqlx` is built with the `postgres` driver only,
-# and `cargo tree -i libsqlite3-sys` prints nothing, so the crate is never
-# compiled into the binary, the package or the image. It is in `Cargo.lock`
-# only because `sqlx` and `sqlx-macros-core` list `sqlx-sqlite` as an optional
-# dependency, and `sqlx-sqlite` 0.9.0 (the latest sqlx) caps it below 0.38
-# while the fix is 0.39.
-#
-# Reviewed 2026-11-15: sqlx 0.9.0 is still the latest release on crates.io
-# and `libsqlite3-sys` is at 0.40.0. The `sqlx-sqlite` of the sqlx `main`
-# branch already allows `<0.40.0`, but it is not released, so the ignore
-# stays until the next sqlx release. Review it again when that release
-# appears or by 2026-12-15, whichever comes first.
+# No advisory is ignored. RUSTSEC-2026-0459 (the C SQLite bundled by
+# `libsqlite3-sys` below 0.39) used to be listed here until sqlx 0.9.1 allowed
+# `libsqlite3-sys` 0.40; both lockfiles now carry 0.40.0, which is patched.
+# The list stays so that `tests/repository/advisory_ignores_agree.rs` keeps
+# comparing it with `deny.toml`. An entry added here needs the same entry,
+# with its reason, in `deny.toml` and a line in `docs/threat-model.md`.
 [advisories]
-ignore = ["RUSTSEC-2026-0459"]
+ignore = []

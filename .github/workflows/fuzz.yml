@@ -3,7 +3,7 @@ name: Fuzz
 # No push trigger. Fuzzing asks "does cargo fuzz surface parser panics
 # on a fixed tree?", which is a property of HEAD, not a commit range.
 # The nightly schedule lives on main, the branch GitHub reads schedule:
-# triggers from. pull_request is path-filtered to keep per-PR cost down
+# triggers from, and it checks out develop. pull_request is path-filtered to keep per-PR cost down
 # to parser-facing changes.
 
 on:
@@ -93,10 +93,16 @@ jobs:
     timeout-minutes: 5
     outputs:
       targets: ${{ steps.pick.outputs.targets }}
+      groups: ${{ steps.pick.outputs.groups }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # The nightly run fires from the workflow file on main, the branch
+          # GitHub reads schedule: from, but main changes only at a release.
+          # It fuzzes develop, so what was merged during the day is fuzzed
+          # the same night; every other event keeps its own ref.
+          ref: ${{ github.event_name == 'schedule' && 'develop' || '' }}
           fetch-depth: 0
 
       # A pull request runs the targets of the protocols it touches, and a
@@ -111,21 +117,33 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: python3 .github/scripts/fuzz_targets.py
 
+  # One job builds the whole dependency graph once (the bulk of the time) and
+  # then runs its share of the targets one after the other: each next one only
+  # links. A job per target compiled the same graph thirty-five times and spent
+  # about ninety percent of its minutes on it.
   fuzz:
-    name: cargo fuzz
+    name: cargo fuzz (group ${{ matrix.group.id }})
     needs: plan
     if: needs.plan.outputs.targets != '[]'
     runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
-    # Measured 2026-10-30: the slowest of four green runs took 16 min.
-    timeout-minutes: 30
+    # A group builds once (about fifteen minutes) and runs seven targets of a
+    # minute each with a link between them.
+    timeout-minutes: 60
     strategy:
-      fail-fast: false
+      # A pull request stops at the first failing group; a push and the nightly
+      # run report every group.
+      fail-fast: ${{ github.event_name == 'pull_request' }}
       matrix:
-        target: ${{ fromJSON(needs.plan.outputs.targets) }}
+        group: ${{ fromJSON(needs.plan.outputs.groups) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # The nightly run fires from the workflow file on main, the branch
+          # GitHub reads schedule: from, but main changes only at a release.
+          # It fuzzes develop, so what was merged during the day is fuzzed
+          # the same night; every other event keeps its own ref.
+          ref: ${{ github.event_name == 'schedule' && 'develop' || '' }}
 
       # Pinned to a dated nightly. On 2026-11-01 the floating `nightly` stopped
       # compiling `ldap3` (error[E0391]: cycle detected when computing when
@@ -138,7 +156,12 @@ jobs:
           rustup toolchain install nightly-2026-10-31 --profile minimal
           rustup default nightly-2026-10-31
 
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      # Restore only. A pull request and a merge queue group used to save their
+      # own copy of `fuzz/target` (about 528 MB each), which evicted what the
+      # default branches seeded; only a push or a schedule on a default branch
+      # saves, with the condition `rust-cache` uses.
+      - id: fuzz-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/bin
@@ -150,7 +173,39 @@ jobs:
       - name: Install cargo-fuzz
         run: command -v cargo-fuzz >/dev/null || cargo install cargo-fuzz --locked --version "^0.13"
 
-      - name: Fuzz ${{ matrix.target }}
+      - name: Show the tree under test
+        run: git log -1 --format='%H %s'
+
+      - name: Fuzz the targets of the group
         env:
-          FUZZ_TARGET: ${{ matrix.target }}
-        run: cargo fuzz run "$FUZZ_TARGET" -- -max_total_time=60 -timeout=10
+          TARGETS: ${{ matrix.group.targets }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -u
+          status=0
+          for target in $TARGETS; do
+            echo "::group::fuzz $target"
+            if ! cargo fuzz run "$target" -- -max_total_time=60 -timeout=10; then
+              echo "::error::the fuzz target $target failed"
+              status=1
+              # A pull request stops at the first failing target; a push and the
+              # nightly run report every target of the group.
+              [ "$EVENT_NAME" = pull_request ] && { echo "::endgroup::"; break; }
+            fi
+            echo "::endgroup::"
+          done
+          exit "$status"
+
+      - if: >-
+          ${{ !cancelled()
+          && steps.fuzz-cache.outputs.cache-hit != 'true'
+          && (github.event_name == 'push' || github.event_name == 'schedule')
+          && (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            fuzz/target
+          key: cargo-fuzz-${{ runner.os }}-${{ hashFiles('fuzz/Cargo.toml') }}

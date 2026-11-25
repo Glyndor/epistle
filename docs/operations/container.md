@@ -107,7 +107,7 @@ podman run --rm \
   -p 143:143 -p 993:993 -p 995:995 \
   -v /etc/glyndor/epistle:/etc/epistle:ro \
   -v /var/lib/glyndor/epistle/data:/var/lib/glyndor/epistle/data \
-  ghcr.io/glyndor/epistle:0.13.4
+  ghcr.io/glyndor/epistle:0.14.0
 ```
 
 The `/etc/glyndor/epistle` mount carries `mail.toml`; the
@@ -136,7 +136,7 @@ The compose form is the same flag under the `userns_mode:` key:
 ```yaml
 services:
   epistle:
-    image: ghcr.io/glyndor/epistle:0.13.4
+    image: ghcr.io/glyndor/epistle:0.14.0
     userns_mode: "keep-id:uid=65532,gid=65532"
     volumes:
       - /etc/glyndor/epistle:/etc/epistle:ro
@@ -166,6 +166,16 @@ TCP/TLS path entirely. The `db` healthcheck queries the real database
 through that socket with `psql ... -Atc 'select 1'`, so a healthy
 state means the user, the role and the password file all line up;
 `mail` waits on it with `depends_on: {db: {condition: service_healthy}}`.
+
+When a healthcheck gives up, podup acts on `x-podman-on-failure` under it
+(podup 6.0.0; measured on Podman 6.2.0). `mail`, `clamav` and the panel carry
+`restart`: the container is restarted and, once the check passes again, it is
+healthy. Without the key an unhealthy container stays unhealthy. `db` carries
+none: its check gives up after 150 s, shorter than the crash recovery of a
+large database, and restarting the server in the middle of a recovery starts
+it over. `podup audit` reports the missing action as `no_health_action`; the
+one finding left for `db` is accepted in the test that runs `podup audit` on
+the generated file.
 
 The data directory (`<data_dir>`) and the directory holding
 `mail.toml` (`<config_dir>`, the parent of the `config_path` answer)
@@ -277,12 +287,14 @@ which ports each one published before it brings them together.
 
 #### Port mapping forms under pasta
 
-pasta, the rootless network mode the stack uses, refuses a port mapping that
-names an explicit address on Podman 5.4.2: `"[::]:25:25"`, alone or next to
-`"0.0.0.0:25:25"`, fails with `pasta failed ... Failed to bind port 25`, and
-`"25:25"` is the form that publishes on both families. That is why a wildcard
-is never written as an explicit address. Podman 5.7.0 accepts the explicit
-forms, so this is a floor of the engine and not a rule of the format. An
+pasta, the rootless network mode the stack uses, refused a port mapping that
+named an explicit address on Podman 5.4.2: `"[::]:25:25"`, alone or next to
+`"0.0.0.0:25:25"`, failed with `pasta failed ... Failed to bind port 25`.
+Podman 6.2.0, which the stack requires, accepts the explicit forms (measured
+on 2026-11-23 with `0.0.0.0:P:P`, `[::]:P:P` and both together). They are not
+the same mapping as `"25:25"`: that one listens on both families, while
+`0.0.0.0:P:P` listens on IPv4 only. That is why a wildcard is never written as
+an explicit address. An
 explicit IPv6 host address (`[ADDR]:PORT:PORT`) and a rootless bridge instead of
 pasta are shapes the operator writes in `compose.override.yaml`, where the
 generated map cannot reach them.
@@ -643,20 +655,18 @@ The scripts below are passed as one argument to `sh -c`:
 ```sh
 # Backup script
 PGPASSWORD="$(cat '/run/secrets/epistle_db_password')" exec pg_dump -Fp --no-owner --no-privileges -h '/var/run/postgresql' -U 'epistle' -d 'epistle'
-# Restore script, after (as root) mkdir -m 711 '/tmp/<staged-name>',
-# podup cp <host-sql> db:/tmp/<staged-name>/restore.sql (host file 0644)
-PGPASSWORD="$(cat '/run/secrets/epistle_db_password')" exec psql -v ON_ERROR_STOP=1 -1 -X -f '/tmp/<staged-name>/restore.sql' -h '/var/run/postgresql' -U 'epistle' -d 'epistle'
+# Restore script; the SQL is its standard input, `BEGIN;` first and `COMMIT;` last
+PGPASSWORD="$(cat '/run/secrets/epistle_db_password')" exec psql -v ON_ERROR_STOP=1 -X -f - -h '/var/run/postgresql' -U 'epistle' -d 'epistle'
 ```
 
 `POSTGRES_PASSWORD_FILE` is consumed by the image entrypoint during
 initialization. libpq does not read it, so it cannot authenticate the
 clients against `local all all scram-sha-256` without `PGPASSWORD`.
 The password value stays inside the container and never enters the
-host argv or environment. Restore uses the copied SQL file, stops on
-the first SQL error and runs in one transaction. The host temp file is
-removed when the replay finishes, and the private directory holding the
-copy inside `db` is removed afterwards with `podup exec -T -u root db sh -c
-"rm -rf '/tmp/<staged-name>'"`, whether the replay succeeded or failed.
+host argv or environment. Restore sends the SQL on the standard input of
+`podup exec -T`, stops on the first SQL error and runs in one transaction that
+the stream opens and closes itself, so an input that stops early is rolled
+back. No copy of the SQL is written to the host or to `db`.
 
 The `pg_dump`/`psql` host binaries are not required on the host
 in this path; the database step runs entirely inside the `db`
@@ -668,15 +678,15 @@ is absent (a bare host deployment without the container stack).
 The release job pushes per-arch images plus a multi-arch manifest list with
 three floating tags:
 
-- `ghcr.io/glyndor/epistle:0.13.4-amd64`, `…:0.13.4-arm64` per-arch, built
+- `ghcr.io/glyndor/epistle:0.14.0-amd64`, `…:0.14.0-arm64` per-arch, built
   natively on the matching runner.
-- `ghcr.io/glyndor/epistle:0.13.4` the full release.
+- `ghcr.io/glyndor/epistle:0.14.0` the full release.
 - `ghcr.io/glyndor/epistle:0.12` the latest patch release in the `0.12` line.
 - `ghcr.io/glyndor/epistle:0` the latest minor release in the `0.x` line.
 
 `podman pull ghcr.io/glyndor/epistle:0.12` keeps getting patches;
 `…:0` keeps getting minors. A consumer that wants to pin a specific build
-uses `gh attestation verify oci://ghcr.io/glyndor/epistle:0.13.4 …` (below);
+uses `gh attestation verify oci://ghcr.io/glyndor/epistle:0.14.0 …` (below);
 that command resolves the tag itself, so a separate digest lookup is
 not needed. `podman pull --quiet` only prints the local image id and is
 not a digest, so it has no place in the verification path.
@@ -688,7 +698,7 @@ Sigstore. The signed envelope is published as a GitHub attestation, so a
 consumer does not need a separate signer key:
 
 ```sh
-gh attestation verify oci://ghcr.io/glyndor/epistle:0.13.4 \
+gh attestation verify oci://ghcr.io/glyndor/epistle:0.14.0 \
   --repo Glyndor/epistle \
   --signer-workflow Glyndor/epistle/.github/workflows/release.yml \
   --deny-self-hosted-runners
@@ -698,7 +708,7 @@ A green `Verification succeeded` line proves four things and only four
 things:
 
 1. An attestation exists in `Glyndor/epistle` for the manifest list
-   that resolves from `oci://ghcr.io/glyndor/epistle:0.13.4`.
+   that resolves from `oci://ghcr.io/glyndor/epistle:0.14.0`.
 2. The signer workflow is `Glyndor/epistle/.github/workflows/release.yml`,
    identified by the `SubjectAlternativeName` of the Sigstore-issued
    certificate. Not just any workflow in this repository -- specifically

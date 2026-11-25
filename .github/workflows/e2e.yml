@@ -98,7 +98,8 @@ jobs:
     # Measured 2026-10-30: the slowest of four green runs took 8 min.
     timeout-minutes: 20
     strategy:
-      fail-fast: false
+      # A pull request stops at the first failing leg; a push reports every leg.
+      fail-fast: ${{ github.event_name == 'pull_request' }}
       matrix:
         os: [ubuntu-22.04, ubuntu-24.04]
     env:
@@ -246,3 +247,14 @@ jobs:
           # `Linux` for both, and objects built on ubuntu-24.04 (glibc 2.39) do not
           # link on ubuntu-22.04 (undefined symbol __isoc23_sscanf).
           prefix: rust-e2e-${{ matrix.os }}
+
+  # When this workflow fails on a pull request, the other runs of the same commit stop: they
+  # would spend runners on a commit that is already red. The job and the rules it follows are in
+  # reusable-cancel-others.yml.
+  cancel-others:
+    needs: [e2e]
+    if: ${{ failure() && github.event_name == 'pull_request' }}
+    permissions:
+      contents: read
+      actions: write
+    uses: ./.github/workflows/reusable-cancel-others.yml

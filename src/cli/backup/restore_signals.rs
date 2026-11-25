@@ -4,13 +4,14 @@
 //! `psql` runs inside the `db` container, outside this process group, so a
 //! signal that ended `epistle` half way did not stop the load. On the Debian 13
 //! VM a SIGTERM sent to the process group of `epistle restore --force` 0.5 s in
-//! left the database restored, the files not, and the staged copy of the dump
-//! on the host and in the container (#1331).
+//! left the database restored, the files not, and a staged copy of the dump
+//! on the host and in the container (#1331). The dump is no longer staged: it
+//! goes to `psql` on standard input.
 //!
 //! While a [`HeldSignals`] is alive, SIGINT, SIGTERM and SIGHUP only record
 //! that they came. The restore asks [`stop_if_arrived`] before each step that
 //! would start writing: a signal that came before the load began stops the
-//! restore there, after its cleanup, and one that came later lets it finish, so
+//! restore there, and one that came later lets it finish, so
 //! the database and the files end up from the same archive. When the guard is
 //! dropped the previous dispositions come back and the signal is raised again,
 //! so the process still ends the way it was asked to, only later.
@@ -140,7 +141,7 @@ extern "C" fn note_arrival(signal: libc::c_int) {
 }
 
 /// `Err(BackupError::Interrupted)` when a held signal has come: the caller
-/// stops before its next write and cleans up what it staged.
+/// stops before its next write.
 pub(in crate::cli::backup) fn stop_if_arrived() -> Result<(), BackupError> {
 	match ARRIVED.load(Ordering::Acquire) {
 		0 => Ok(()),

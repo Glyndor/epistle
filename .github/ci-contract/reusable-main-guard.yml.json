@@ -1,0 +1,30 @@
+{
+ "True": {
+  "workflow_call": null
+ },
+ "concurrency": {
+  "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
+  "group": "main-guard-${{ github.workflow }}-${{ github.ref }}"
+ },
+ "jobs": {
+  "develop-only": {
+   "if": "github.event_name == 'pull_request' && github.event.pull_request.base.ref == 'main'",
+   "name": "develop-only",
+   "runs-on": "${{ fromJSON(vars.CI_RUNNER || '\"ubuntu-latest\"') }}",
+   "steps": [
+    {
+     "env": {
+      "BASE_REPO": "${{ github.repository }}",
+      "HEAD_REF": "${{ github.head_ref }}",
+      "HEAD_REPO": "${{ github.event.pull_request.head.repo.full_name }}"
+     },
+     "name": "Require develop as source branch",
+     "run": "# The branch name alone is forgeable: a fork can name any branch\n# `develop`. Require the head to live in this repository too.\nif [ \"$HEAD_REPO\" != \"$BASE_REPO\" ]; then\n  echo \"::error::Pull requests into main must come from this repository's develop branch (got $HEAD_REPO).\"\n  exit 1\nfi\nif [ \"$HEAD_REF\" != \"develop\" ]; then\n  echo \"::error::Pull requests into main must come from develop (got $HEAD_REF).\"\n  exit 1\nfi\necho \"Source branch is develop.\"\n"
+    }
+   ],
+   "timeout-minutes": 10
+  }
+ },
+ "name": "Main guard (reusable)",
+ "permissions": {}
+}

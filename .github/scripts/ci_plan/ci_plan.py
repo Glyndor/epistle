@@ -12,21 +12,20 @@ import subprocess
 
 JOBS = ("lint", "tests", "doc", "msrv", "debian", "supply", "freshness", "folder", "lines")
 RUST = {"lint", "tests", "doc", "msrv"}
+ALWAYS = {"lines", "folder"}
 BUILD = RUST | {"debian"}
 OWN = {".github/scripts/ci_plan/ci_plan.py", ".github/scripts/ci_plan/test_ci_plan.py",
        ".github/scripts/ci_plan/__init__.py",
        ".github/workflows/reusable-ci-plan.yml"}
 WORKFLOWS = {
-    "ci.yml": RUST | {"freshness"},
+    "ci.yml": RUST | {"freshness", "debian", "supply", "lines"},
     "reusable-rust-ci.yml": RUST,
-    "debian.yml": {"debian"},
     "reusable-rust-debian.yml": {"debian"},
-    "supply-chain.yml": {"supply"},
     "reusable-rust-supply-chain.yml": {"supply"},
     "reusable-dependabot-freshness.yml": {"freshness"},
-    "folder-limit.yml": {"folder"},
-    "line-limit.yml": {"lines"},
     "reusable-line-limit.yml": {"lines"},
+    # Read on every run by the check it defines; no suite of the plan consumes it.
+    "reusable-deprecation-notices.yml": set(),
 }
 TEST_FILE = re.compile(r"(?:^tests?(?:_[a-z0-9_]+)?$|_tests(?:_[a-z0-9_]+)?$|^test_support$)")
 
@@ -68,9 +67,11 @@ def affected(path):
     if path == ".github/dependabot.yml":
         return {"freshness"}
     if path == ".github/folder-limit-exceptions.txt" or path.startswith("scripts/folder-limit/"):
-        return {"folder"}
+        return set()  # the folder gate runs on every pull request
     if path.startswith("fuzz/"):
         return {"lint"}  # lint checks the separate fuzz lockfile with metadata
+    if path.startswith((".github/codeql/", ".github/scripts/ci_codeql/")):
+        return {"lint", "tests"}  # the lint job judges the CodeQL configuration with the compiler's dep-info
     if path.startswith((".github/scripts/", "scripts/", "deploy/")):
         return {"tests"}  # repository and packaging contract tests read these
     if path.startswith("docs/"):
@@ -87,14 +88,10 @@ def select(event, changes):
     if event != "pull_request" or not changes:
         return dict.fromkeys(JOBS, True)
     chosen = set()
-    for status, path in changes:
+    for _status, path in changes:
         chosen |= affected(path)
-        if path.rsplit(".", 1)[-1] in {
-            "rs", "go", "ts", "tsx", "js", "jsx", "mjs", "cjs", "py", "sh", "astro", "vue", "svelte"
-        }:
-            chosen.add("lines")
-        if status in {"A", "D"}:
-            chosen.add("folder")
+    # These two judge the whole tree and not the diff, so they always run.
+    chosen |= ALWAYS
     return {job: job in chosen for job in JOBS}
 
 

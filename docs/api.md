@@ -186,12 +186,12 @@ without a restart.
 
 | Flag | Effect |
 |---|---|
-| `--scope read\|write\|send\|scim` | Required, repeatable. Scopes are independent: `write` does not include `read` |
+| `--scope read\|write\|send\|scim\|alias` | Required, repeatable. Scopes are independent: `write` does not include `read` |
 | `--expires-at WHEN` | Unix seconds, a date (`2027-01-31`, midnight UTC), an RFC 3339 instant (`2027-01-31T12:00:00+02:00`) or a duration from now (`90d`). A date or instant already in the past is refused, and a bare number is read as an epoch only between 2001-09-09 and 9999-12-31, so `2027`, `20270131` and a count of milliseconds are refused. After the expiry the key is refused with `401`, like an unknown one |
 | `--expires-in DURATION` | A number and a unit from now: `s`, `m`, `h`, `d` or `w`, for example `90d`. `m` is minutes, not months: count months in days. Not combined with `--expires-at` |
 | `--ip-cidr CIDR` | One network the client must come from. A request from elsewhere is `401` |
 | `--domain NAME` | Confine the key to a domain (repeat for more). Without it the key reaches every domain |
-| `--account NAME` | Bind the key to one account. It then reaches only JMAP, `POST /api/v1/send`, `GET /api/v1/deliveries` and that account's suppression list, acting as that account, and cannot hold `scim` or `--domain` |
+| `--account NAME` | Bind the key to one account. It then reaches only JMAP, `POST /api/v1/send`, `GET /api/v1/deliveries` and that account's suppression list, acting as that account, and cannot hold `scim`, `alias` or `--domain` |
 | `--class CLASS` | The mail class `POST /api/v1/send` gives mail sent with the key when the request names none (see [Class and evidence](#class-and-evidence)) |
 | `--auto-submitted` | Add `Auto-Submitted: auto-generated` to mail sent with this key through `POST /api/v1/send` when the request omits the header. Off by default. A value in the request always wins. Other send paths and server-generated mail, including bounces, are not changed |
 
@@ -240,7 +240,7 @@ each key that
 - holds `write` or `send` with no `--domain`, no `--account` and no
   `--ip-cidr` (an `--ip-cidr` does not count while the server sits behind a
   network that hides the client address), so a leaked copy reaches every domain from any address, or
-- holds `scim` with no `--domain`.
+- holds `scim` or `alias` with no `--domain`.
 
 These are warnings only; nothing is refused or revoked. To clear one, give the
 key an expiry, narrow it with `--domain`, `--account` or `--ip-cidr`, or
@@ -255,6 +255,7 @@ What each scope reaches:
 | `write` | Every other method of `/api/v1` except `send`, `/jmap/upload`, and the JMAP methods that change data (`Mailbox/set`, `Email/set`, `Email/copy`, `PushSubscription/set`, `VacationResponse/set`, `SieveScript/set`) |
 | `send` | `POST /api/v1/send` and JMAP `EmailSubmission/set` |
 | `scim` | Everything under `/scim/v2` |
+| `alias` | Everything under `/api/v1/aliases`, reads included. `read` and `write` do not open it, and the key made before scopes existed (it holds every scope) does |
 
 A key confined to some domains sees and changes only the accounts that live
 entirely inside them. What is outside is answered `404`, as if it did not
@@ -722,6 +723,8 @@ curl -s -X DELETE -H "Authorization: Bearer $KEY" "$API/api/v1/accounts/ana?queu
 | `POST /api/v1/domains/{domain}/disable` | Disable, keeping the stored role; `write`; refuses the last enabled domain with listeners |
 | `POST /api/v1/domains/{domain}/aliases` | Add `{"alias":"example.net"}` targeting the path domain; `write`; answers `201` |
 | `DELETE /api/v1/domains/{domain}/aliases/{alias}` | Remove an alias currently pointing to the path domain; `write` |
+| `GET`, `POST /api/v1/aliases` | List the address aliases (paged, filtered by `domain` and `account`), make one; scope `alias`; create answers `201`. See [Address aliases](#address-aliases) |
+| `DELETE /api/v1/aliases/{alias}` | Remove an address alias; scope `alias` |
 | `GET`, `POST /api/v1/accounts` | List (not paged), create. A duplicate name or address is `400 invalid_input` |
 | `DELETE /api/v1/accounts/{name}` | Removes the account and its data. Only accounts made through the API; one declared in the configuration file is `404 no such dynamic account` |
 | `PUT /api/v1/accounts/{name}/password` | New password |
@@ -784,11 +787,76 @@ last-enabled-domain refusals are also `409`, preserving the CLI message;
 malformed names or invalid limits are `400 invalid_input`, unknown names
 are `404 not_found`, and storage failures are `500 internal`.
 
-Each durable change emits one structured event on `epistle::api::audit`:
+Each durable change emits one structured event on `epistle::api::audit`, written by the same thread that makes the change, so a client that drops the connection after the write still leaves the line:
 `domain.added`, `domain.removed`, `domain.enabled`, `domain.disabled`,
 `domain.updated`, `domain.alias_added` or `domain.alias_removed`, with `domain`
 (the alias name for alias events) and `client_ip`. Refusals and no-ops emit no
 change event. Bearer tokens, private keys and SRS secrets are never logged.
+
+### Address aliases
+
+An address alias fans one address (`team@example.org`) out to several local
+accounts. The routes write the same state file as `epistle alias`,
+`<data_dir>/address-aliases.toml`, through the same rules, under its
+cross-process lock; the running server applies the change through its file
+watcher, like a domain change. The `[[alias]]` tables of the configuration
+file are the seed: they are copied into the state file at the first write or
+the first start of `serve`, and edited there afterwards.
+
+All three routes need the `alias` scope, and only that one; a key that holds
+it should also be confined with `--domain`. An account-bound key is refused.
+
+`POST /api/v1/aliases` takes `{"alias":"team@example.org","members":
+["ana@example.org","bo@example.org"]}`, or `{"alias":"help@example.org",
+"target_account":"ana"}` for one account (the member is its address in the
+alias's domain). `"dry_run": true` checks the request as it would be written
+and writes nothing. What differs from the command is stricter, not looser:
+
+- every member is the address of an account that exists on this server,
+  never an outside address, so a leaked key cannot forward a domain's mail
+  to a third party;
+- a key confined to some domains needs the alias and every member inside
+  them. A domain, a member or an account that does not exist and one that is
+  not the key's get the same `400`, and the alias of another tenant is `404
+  alias ... not found` like one that is not there;
+- the role addresses `postmaster`, `abuse`, `hostmaster`, `webmaster`,
+  `security`, `noc`, `admin`, `administrator`, `root`, `ssladmin`, `tlsrpt`
+  and `mailer-daemon` are the operator's, with or without a sub-address tag
+  (`postmaster+x`): a key may not make an alias on one, and may not remove
+  or edit one the operator made (`400`);
+- an alias address whose local part carries a sub-address tag (`shop+x@example.org`,
+  with the separators the directory strips, today `+`) is refused whether or
+  not an account of the base address exists: an alias is looked up before the
+  tag is stripped, so it would take that account's mail, now or once the
+  account is made. The command keeps the choice;
+- a member is an account that lies entirely inside the key's domains: an
+  account with one address inside and one outside is as unavailable as one
+  that does not exist.
+
+A key's domains are compared as they are written, in ASCII lowercase. A key
+made with `--domain bücher.example` does not reach `xn--bcher-kva.example`;
+list the domain as punycode. An alias address written in Unicode is stored as
+punycode and judged as such.
+
+The rest is the command's: the address is in a hosted domain and no account,
+masked address or other alias holds it, the caps of the domain
+(`max_aliases_per_domain`, `max_members_per_list`) apply and answer `409
+limit_reached`, an alias that exists is `409 conflict` with the command's
+text, and at most 100 members and 16 KiB of body are taken. A route makes a
+plain private alias: senders, `list_id` and visibility stay with the command.
+
+`GET /api/v1/aliases` lists the aliases ordered by address, with `limit`
+(default 50, at most 100) and `cursor`, filtered by `domain` and `account`.
+A key confined to some domains sees the aliases whose address, members and
+senders all lie in them (and every address of the account of a member or sender), and removes or edits only those; any other is `404`
+like one that is not there. `DELETE /api/v1/aliases/{alias}` takes `dry_run=true` as a
+query. Each durable change emits `alias.added` or `alias.removed` on
+`epistle::api::audit`, with the label of the key (never the key), the domain,
+a pseudonym of the alias and `client_ip`.
+
+Mail to an alias is delivered to each member account as before. The copy's
+`Delivered-To` names the member's address, not the alias, so a program that
+reads the mailbox cannot yet tell by it which alias a message came through.
 
 ## Webhooks
 

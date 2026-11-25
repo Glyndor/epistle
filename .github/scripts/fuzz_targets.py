@@ -55,6 +55,13 @@ ALL = [
     "signer_frame",
 ]
 
+# How many jobs share the targets of a run. A job pays the build of the whole
+# dependency graph once (about fifteen minutes) and then about a minute of
+# fuzzing and a link per target, so a job per target spent more than ninety
+# percent of its time compiling what the next job compiled again. Five jobs of
+# seven targets cost about a fifth of thirty-five jobs of one.
+GROUPS = 5
+
 # Folder of the source -> the targets that exercise it and nothing else.
 FOLDERS = {
     # Before "src/smtp/": the first matching prefix wins, and the IMAP session
@@ -157,6 +164,17 @@ def select(event, changed):
     return [target for target in ALL if target in chosen]
 
 
+def groups(targets, wanted=GROUPS):
+    """The targets split in at most `wanted` groups, as even as can be, in the order of ALL.
+
+    Round robin, so the heavy protocols that sit side by side in ALL land in
+    different jobs. Never an empty group, and every target exactly once.
+    """
+    ordered = [target for target in ALL if target in set(targets)]
+    count = min(wanted, len(ordered))
+    return [ordered[index::count] for index in range(count)]
+
+
 def changed_paths(base, head):
     out = subprocess.check_output(
         ["git", "diff", "--name-only", "-z", f"{base}...{head}"]
@@ -199,6 +217,9 @@ def main():
     if output:
         with open(output, "a", encoding="utf-8") as handle:
             handle.write(f"targets={line}\n")
+            # One entry per job: its number and the targets it runs, separated by spaces.
+            jobs = [{"id": index + 1, "targets": " ".join(group)} for index, group in enumerate(groups(targets))]
+            handle.write(f"groups={json.dumps(jobs)}\n")
     return 0
 
 

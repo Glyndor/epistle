@@ -53,17 +53,27 @@ jobs:
       - id: diff
         env:
           EVENT_NAME: ${{ github.event_name }}
+          # The planner of the base is trusted for a base that is exactly develop.
+          # A pull request into main is the promotion of develop, and one into any
+          # other branch has no planner this workflow knows: both run every job.
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
           script="$RUNNER_TEMP/ci_plan.py"
-          if [ "$EVENT_NAME" = pull_request ] \
+          if [ "$EVENT_NAME" = pull_request ] && [ "$BASE_REF" = develop ] \
             && git show "$BASE_SHA:.github/scripts/ci_plan/ci_plan.py" > "$script" \
             && python3 -I "$script"; then
             exit 0
           fi
           echo "No trusted PR plan; running all work on $EVENT_NAME"
           for job in lint tests doc msrv debian supply freshness folder lines; do
-            echo "$job=true" >> "$GITHUB_OUTPUT"
+            value=true
+            # The nightly run exists to seed the cargo caches, which only the
+            # Rust jobs use; the rest would be a second copy of the push to main.
+            if [ "$EVENT_NAME" = schedule ]; then
+              case "$job" in debian | supply | folder | lines) value=false ;; esac
+            fi
+            echo "$job=$value" >> "$GITHUB_OUTPUT"
           done

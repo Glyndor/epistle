@@ -399,7 +399,7 @@ fn item_7_a_unit_that_does_not_wait_or_a_shim_systemd_cannot_load_warns() {
 		"show podman-user-wait-network-online.service -p LoadState".into(),
 		"LoadState=not-found".into(),
 	);
-	assert_bad(&mut host, "network wait", Level::Warn, "Podman 5.3.0");
+	assert_bad(&mut host, "network wait", Level::Warn, "Podman 6.2.0");
 	let mut host = good();
 	host.system
 		.insert("is-active network-online.target".into(), "inactive".into());

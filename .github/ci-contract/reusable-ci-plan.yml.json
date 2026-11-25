@@ -1,0 +1,79 @@
+{
+ "True": {
+  "workflow_call": {
+   "outputs": {
+    "debian": {
+     "value": "${{ jobs.plan.outputs.debian }}"
+    },
+    "doc": {
+     "value": "${{ jobs.plan.outputs.doc }}"
+    },
+    "folder": {
+     "value": "${{ jobs.plan.outputs.folder }}"
+    },
+    "freshness": {
+     "value": "${{ jobs.plan.outputs.freshness }}"
+    },
+    "lines": {
+     "value": "${{ jobs.plan.outputs.lines }}"
+    },
+    "lint": {
+     "value": "${{ jobs.plan.outputs.lint }}"
+    },
+    "msrv": {
+     "value": "${{ jobs.plan.outputs.msrv }}"
+    },
+    "supply": {
+     "value": "${{ jobs.plan.outputs.supply }}"
+    },
+    "tests": {
+     "value": "${{ jobs.plan.outputs.tests }}"
+    }
+   }
+  }
+ },
+ "concurrency": {
+  "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
+  "group": "ci-plan-${{ github.workflow }}-${{ github.ref }}"
+ },
+ "jobs": {
+  "plan": {
+   "outputs": {
+    "debian": "${{ steps.diff.outputs.debian }}",
+    "doc": "${{ steps.diff.outputs.doc }}",
+    "folder": "${{ steps.diff.outputs.folder }}",
+    "freshness": "${{ steps.diff.outputs.freshness }}",
+    "lines": "${{ steps.diff.outputs.lines }}",
+    "lint": "${{ steps.diff.outputs.lint }}",
+    "msrv": "${{ steps.diff.outputs.msrv }}",
+    "supply": "${{ steps.diff.outputs.supply }}",
+    "tests": "${{ steps.diff.outputs.tests }}"
+   },
+   "runs-on": "${{ fromJSON(vars.CI_RUNNER || '\"ubuntu-latest\"') }}",
+   "steps": [
+    {
+     "uses": "actions/checkout@PIN",
+     "with": {
+      "fetch-depth": 0,
+      "persist-credentials": false
+     }
+    },
+    {
+     "env": {
+      "BASE_REF": "${{ github.event.pull_request.base.ref }}",
+      "BASE_SHA": "${{ github.event.pull_request.base.sha }}",
+      "EVENT_NAME": "${{ github.event_name }}",
+      "HEAD_SHA": "${{ github.event.pull_request.head.sha }}"
+     },
+     "id": "diff",
+     "run": "set -euo pipefail\nscript=\"$RUNNER_TEMP/ci_plan.py\"\nif [ \"$EVENT_NAME\" = pull_request ] && [ \"$BASE_REF\" = develop ] \\\n  && git show \"$BASE_SHA:.github/scripts/ci_plan/ci_plan.py\" > \"$script\" \\\n  && python3 -I \"$script\"; then\n  exit 0\nfi\necho \"No trusted PR plan; running all work on $EVENT_NAME\"\nfor job in lint tests doc msrv debian supply freshness folder lines; do\n  value=true\n  # The nightly run exists to seed the cargo caches, which only the\n  # Rust jobs use; the rest would be a second copy of the push to main.\n  if [ \"$EVENT_NAME\" = schedule ]; then\n    case \"$job\" in debian | supply | folder | lines) value=false ;; esac\n  fi\n  echo \"$job=$value\" >> \"$GITHUB_OUTPUT\"\ndone\n"
+    }
+   ],
+   "timeout-minutes": 5
+  }
+ },
+ "name": "CI plan",
+ "permissions": {
+  "contents": "read"
+ }
+}

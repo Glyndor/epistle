@@ -254,9 +254,9 @@ becomes the host side of the generated mapping as `ADDRESS:PORT:PORT`. A
 container bind that already answers that family is left alone, so the dual-stack
 `::` survives a move to an IPv4 host address. `list` then shows that address in
 a `HOST` column, `-` where the mapping still answers on every host address. A
-wildcard renders as `PORT:PORT` in both families, because a wildcard publishes
-on every address the host owns either way, and pasta on Podman 5.4.2 refuses the
-explicit `0.0.0.0:PORT:PORT` and `[::]:PORT:PORT` forms. A generated mapping
+wildcard renders as `PORT:PORT` in both families, because that form listens on
+both (`ss` on Podman 6.2.0), while `0.0.0.0:PORT:PORT` listens on IPv4 only;
+pasta on Podman 5.4.2 refused both explicit forms. A generated mapping
 with no explicit address stays `PORT:PORT`, and the
 host address one `set` wrote survives a later `enable`, `disable`, `init` rerun
 or `stack update`, since every writer of the map reads it back first. If
@@ -1132,7 +1132,7 @@ writes `address`, `members`, `senders`, `hidden`, `list_id` and
 `enabled`. When `senders` is empty, `show` prints `(any member)` instead
 of an empty string so the operator is not misled.
 
-`add` writes one `[[alias]]` row. The address must not already be used
+`add` writes one alias. The address must not already be used
 by another alias, by an account (static `[accounts]` or `<data_dir>/accounts.toml`),
 or by a masked address (`<data_dir>/masked.json`). The address must also
 live in a configured domain. Members and senders must be valid email
@@ -1146,11 +1146,16 @@ refuses to leave an alias with no members (use `alias remove` for that).
 the 2 s file watcher, so the change takes effect without a restart and
 without going through the config engine.
 
-Edits to `[alias]` go through the same config-edit engine as `service`
-and `limits` (validated, atomic, comment-preserving, restart-on-change
-when compose exists). `enable`/`disable` do not touch `mail.toml` and
-do not request a restart. `--dry-run` on the config edits prints the
-validated unified diff without writing.
+Aliases are kept in `<data_dir>/address-aliases.toml`, written with the same
+rules and the same lock as `POST /api/v1/aliases`, and the running server
+reloads the file within seconds. The `[[alias]]` tables of the configuration
+file are the seed: they are copied into the file at the first write or the
+first start of `serve`, and edits to them afterwards are reported and not
+applied. Through the command the members may be addresses the directory
+cannot route to; the API takes only accounts of this server.
+
+`enable` and `disable` write `<data_dir>/aliases.json` and do not touch the
+alias file. `--dry-run` prints the diff of the alias file without writing.
 
 ## Antispam (`epistle antispam`)
 
@@ -1295,7 +1300,7 @@ than 5% free. An output that is a link, a hard link, or not owned by
 for the server to read, so those files must be readable by the account where
 they are.
 
-Stack requires podup 5.19.0 or newer. A failed podup command stops the
+Stack requires podup 6.0.0 or newer, which in turn requires Podman 6.2.0 or newer. A failed podup command stops the
 sequence and its exit code becomes epistle's exit code.
 
 | Command | What it does |
@@ -1644,37 +1649,31 @@ works on the host and inside the container deployment:
   that names the cause. A dump cut short with a clean exit status is
   refused too, so a truncated `database.sql` never reaches the archive.
 - **container** (compose file present): the dump runs through
-  `podup -f <compose> exec -T db sh -c <script>`. Restore writes the SQL
-  to a host temp file and copies it into a directory that root makes in the
-  `/tmp` tmpfs of `db` (`podup exec -u root db sh -c "mkdir -m 711 ..."`) with
-  `podup cp <host> db:/tmp/<staged-name>/restore.sql`. The file holds the
-  credential hashes of every account. `podup cp` keeps the mode and the
-  numeric owner of the host file, and in `db` that owner is neither root nor
-  the database user, while root, with every capability dropped, cannot change
-  the mode of a file that is not its own. So the mode is set before the copy:
-  the host file is `0644`, inside a directory only the operator can enter
-  (`0700`), and the copy sits in a `0711` directory that only root can list.
-  `psql` then runs as the container user through the same shell with `-v
-  ON_ERROR_STOP=1 -1 -X -f '/tmp/<staged-name>/restore.sql'`, reading the
-  copy through its `o+r`. It cannot run as root, because the password mounted
-  in `db` is readable by the container user alone. A file that user can read
-  adds no exposure: it already reads every one of those hashes in the
-  database.
-  Each
-  script reads `/run/secrets/epistle_db_password` into `PGPASSWORD`
-  inside `db` before executing the client. `POSTGRES_PASSWORD_FILE` is
-  read by the image entrypoint during initialization, not by libpq. The
-  host argv contains the shell script and secret path, never the password
-  value, and the host process does not load the password. Restore
-  stops at the first SQL error and rolls back the single transaction.
-  The replay script runs `exec psql`, so a `SIGTERM` sent to the exec
-  (Ctrl-C, a timeout, an aborted `podman exec`) reaches `psql` and
-  aborts the transaction instead of the idle wrapper shell. The staged
-  directory is then removed with `podup exec -T -u root db sh -c "rm -rf
-  '/tmp/<staged-name>'"`, whether the replay succeeded or failed (not when
-  the directory could not be made). If that removal fails, the error (or,
-  when the replay worked, a warning) says which path in the container is left
-  and how to remove it.
+  `podup -f <compose> exec -T db sh -c <script>`. Restore sends the SQL to
+  `psql -f -` on the standard input of that exec, inside a transaction the
+  stream carries itself: `BEGIN;`, the dump, `COMMIT;`. Nothing is copied to a
+  file on the host or in the `db` container; the dump holds the credential
+  hashes of every account and exists only in the pipe. `psql` is not run with
+  `-1`, because `psql -1` commits whatever it was given when the input ends:
+  a sender that died after a whole statement would leave a prefix of the dump
+  committed with exit status 0. With the transaction in the stream, the server
+  rolls the work back when the connection ends without the `COMMIT;`. The
+  restore counts only when `psql` exits 0 and its last output line is the
+  `COMMIT` tag; an exit 0 without it is an error that says the dump was
+  rolled back. `psql` runs as the container user through the same shell, with
+  `-v ON_ERROR_STOP=1 -X`; it cannot run as root, because the password
+  mounted in `db` is readable by the container user alone. Each script reads
+  `/run/secrets/epistle_db_password` into `PGPASSWORD` inside `db` before
+  executing the client. `POSTGRES_PASSWORD_FILE` is read by the image
+  entrypoint during initialization, not by libpq. The host argv contains the
+  shell script and secret path, never the password value, and the host
+  process does not load the password. Restore stops at the first SQL error
+  and rolls back the transaction. The script runs `exec psql`, so a signal
+  that reaches the process in the container reaches `psql` and aborts the
+  transaction instead of the idle wrapper shell. A `SIGTERM` sent to `podup
+  exec` itself does not reach `psql` (measured with podup 6.0.0): the
+  statement in progress finishes, and the connection then ends without
+  `COMMIT;`.
 
 With a compose file present, both commands act on the stack's own database
 (role and database `epistle` over the socket of `db`) and nothing else. If
@@ -1697,21 +1696,10 @@ known whether the dump was committed and points at `epistle db status`. If the
 files fail after the database loaded, the message says so, and running the
 restore again with `--force` finishes the job.
 
-`podup exec` did not forward stdin before 5.15.0 (measured against `podup 5.10.13`
-and `5.14.0`), which is why the restore path uses `podup cp` to land the SQL file
-inside the `db` container rather than `psql < archive.sql`. The temp
-file on the host is created in `$TMPDIR` at `0644`, inside a directory
-created at `0700`, under a name unique to that restore, and a guard removes
-both on every exit path, error and panic included. A `SIGINT` or `SIGTERM`
-ends the process without running the guard, so a restore killed that way
-leaves its host directory (mode `0700`, owned by the operator) and its copy
-in the `db` container behind. The next `restore` removes the host directories
-left by a process that no longer exists, and the ones in the container, saying
-so with the path; if it cannot remove one it names the path and the command
-(`podup exec -T -u root db rm -rf`). A restart of `db` empties them too, the
-directory being in a tmpfs. The host cleanup only touches entries of the same
-user, so a restore killed as root is not cleared by one run as an operator,
-and the reverse.
+The restore never writes the SQL to a file, on the host or in the `db`
+container, so a restore that is killed leaves nothing behind to remove.
+Before podup 6.0.0 it did: `podup exec` did not forward stdin, so the dump
+was staged and copied in with `podup cp`.
 
 ### What lives in the tar
 

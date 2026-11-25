@@ -1,0 +1,123 @@
+{
+ "True": {
+  "workflow_call": {
+   "inputs": {
+    "about-template": {
+     "default": "about.hbs",
+     "description": "cargo-about handlebars template",
+     "type": "string"
+    },
+    "cargo-about-version": {
+     "default": "0.9.3",
+     "description": "Exact version of cargo-about to install; bumped via .github releases",
+     "type": "string"
+    },
+    "cyclonedx-version": {
+     "default": "0.5.10",
+     "description": "Exact version of cargo-cyclonedx to install; bumped via .github releases",
+     "type": "string"
+    },
+    "run-sbom": {
+     "default": true,
+     "description": "Generate artifacts selected by the caller's plan",
+     "type": "boolean"
+    },
+    "toolchain": {
+     "default": "1.100.0",
+     "description": "Rust toolchain to pin the SBOM and license job to",
+     "type": "string"
+    },
+    "working-directory": {
+     "default": ".",
+     "description": "Directory containing the Cargo workspace",
+     "type": "string"
+    }
+   }
+  }
+ },
+ "concurrency": {
+  "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
+  "group": "rust-supply-chain-${{ github.workflow }}-${{ github.ref }}-${{ inputs.working-directory }}"
+ },
+ "jobs": {
+  "sbom-and-licenses": {
+   "defaults": {
+    "run": {
+     "working-directory": "${{ inputs.working-directory }}"
+    }
+   },
+   "env": {
+    "ABOUT_TEMPLATE": "${{ inputs.about-template }}",
+    "ABOUT_VERSION": "${{ inputs.cargo-about-version }}",
+    "CYCLONEDX_VERSION": "${{ inputs.cyclonedx-version }}"
+   },
+   "if": "inputs.run-sbom",
+   "name": "SBOM and license attribution",
+   "runs-on": "${{ fromJSON(vars.CI_RUNNER || '\"ubuntu-latest\"') }}",
+   "steps": [
+    {
+     "uses": "actions/checkout@PIN",
+     "with": {
+      "persist-credentials": false
+     }
+    },
+    {
+     "env": {
+      "TOOLCHAIN": "${{ inputs.toolchain }}"
+     },
+     "name": "Install toolchain",
+     "run": "rustup toolchain install \"$TOOLCHAIN\" --profile minimal\nrustup default \"$TOOLCHAIN\"\n"
+    },
+    {
+     "id": "supply-cache",
+     "uses": "actions/cache/restore@PIN",
+     "with": {
+      "key": "rust-supply-chain-${{ runner.os }}-${{ inputs.toolchain }}-${{ inputs.cyclonedx-version }}-${{ inputs.cargo-about-version }}",
+      "path": "~/.cargo/bin\n~/.cargo/registry/index\n~/.cargo/registry/cache\n"
+     }
+    },
+    {
+     "name": "Install generators",
+     "run": "command -v cargo-cyclonedx >/dev/null || cargo install --locked cargo-cyclonedx --version \"=$CYCLONEDX_VERSION\"\ncommand -v cargo-about >/dev/null || cargo install --locked --features cli cargo-about --version \"=$ABOUT_VERSION\"\n"
+    },
+    {
+     "if": "${{ !cancelled() && steps.supply-cache.outputs.cache-hit != 'true' && (github.event_name == 'push' || github.event_name == 'schedule') && (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') }}",
+     "uses": "actions/cache/save@PIN",
+     "with": {
+      "key": "rust-supply-chain-${{ runner.os }}-${{ inputs.toolchain }}-${{ inputs.cyclonedx-version }}-${{ inputs.cargo-about-version }}",
+      "path": "~/.cargo/bin\n~/.cargo/registry/index\n~/.cargo/registry/cache\n"
+     }
+    },
+    {
+     "name": "Generate CycloneDX SBOM",
+     "run": "cargo cyclonedx --format json --all-features"
+    },
+    {
+     "name": "Generate third-party license attribution (NOTICES)",
+     "run": "cargo about generate \"$ABOUT_TEMPLATE\" > NOTICES.html"
+    },
+    {
+     "env": {
+      "WORKING_DIRECTORY": "${{ inputs.working-directory }}"
+     },
+     "id": "artifact-suffix",
+     "name": "Compute artifact name suffix",
+     "run": "suffix=\"$WORKING_DIRECTORY\"\nsuffix=\"${suffix#./}\"\n# \".\" and \"./\" both strip down to the same \"root\" case; so does an\n# empty input (\"\") \u2014 none of them denote a real subdirectory name,\n# and left alone they'd produce a trailing-hyphen artifact name\n# (\"sbom-and-notices-\") instead of one qualified by directory.\nif [ \"$suffix\" = \".\" ] || [ -z \"$suffix\" ]; then\n  suffix=\"root\"\nfi\nsuffix=\"$(printf '%s' \"$suffix\" | tr '/:<>|*?\\\\\"' '-' | tr -s '-')\"\nsuffix=\"$(printf '%s' \"$suffix\" | sed 's/^-*//; s/-*$//')\"\necho \"suffix=$suffix\" >> \"$GITHUB_OUTPUT\"\n"
+    },
+    {
+     "uses": "actions/upload-artifact@PIN",
+     "with": {
+      "if-no-files-found": "error",
+      "name": "sbom-and-notices-${{ steps.artifact-suffix.outputs.suffix }}",
+      "path": "${{ inputs.working-directory }}/**/*.cdx.json\n${{ inputs.working-directory }}/NOTICES.html\n"
+     }
+    }
+   ],
+   "timeout-minutes": 15
+  }
+ },
+ "name": "Rust supply chain (reusable)",
+ "permissions": {
+  "contents": "read"
+ }
+}

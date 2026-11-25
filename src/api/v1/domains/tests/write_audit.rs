@@ -137,3 +137,99 @@ async fn every_domain_change_is_audited_once_without_secrets_and_no_ops_are_sile
 		assert!(!blob.contains(value), "audit leaked sensitive material");
 	}
 }
+
+/// The commit runs on a blocking thread that outlives the request. A client
+/// that goes away after the commit started must still leave the audit line.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_request_dropped_while_the_commit_runs_still_leaves_its_audit_line() {
+	crate::cli::trace::capture::keep_callsites_live();
+	for (method, path, body, event) in [
+		(
+			"POST",
+			"/api/v1/domains",
+			Some(json!({"domain":"new.example"})),
+			"domain.added",
+		),
+		(
+			"POST",
+			"/api/v1/domains/a.example/aliases",
+			Some(json!({"alias":"fresh.example"})),
+			"domain.alias_added",
+		),
+		(
+			"PUT",
+			"/api/v1/domains/a.example",
+			Some(json!({"role":"send-only"})),
+			"domain.updated",
+		),
+		(
+			"POST",
+			"/api/v1/domains/a.example/disable",
+			None,
+			"domain.disabled",
+		),
+		(
+			"DELETE",
+			"/api/v1/domains/a.example/aliases/alias.example",
+			None,
+			"domain.alias_removed",
+		),
+		(
+			"DELETE",
+			"/api/v1/domains/new.example",
+			None,
+			"domain.removed",
+		),
+	] {
+		let world = world();
+		let capture = Capture::default();
+		let subscriber = Registry::default().with(capture.clone());
+		if path == "/api/v1/domains/new.example" {
+			// A domain nobody uses, so that its removal is allowed.
+			let (status, _) = call(
+				&world,
+				"POST",
+				"/api/v1/domains",
+				WRITER,
+				Some(json!({"domain":"new.example"})),
+			)
+			.await;
+			assert!(status.is_success());
+		}
+		let domains = crate::domain::state::path(world.state.data_dir());
+		let before = std::fs::read(&domains).ok();
+		let held =
+			crate::storage::lock::FileLock::acquire(&crate::storage::locked::lock_path(&domains))
+				.expect("lock");
+		let state = world.state.clone();
+		let request = tokio::spawn(
+			async move {
+				crate::api::tests::base::request_with_body(
+					&crate::api::router(state),
+					method,
+					path,
+					Some(WRITER),
+					body,
+				)
+				.await
+			}
+			.with_subscriber(subscriber),
+		);
+		tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+		request.abort();
+		assert!(request.await.expect_err("dropped").is_cancelled());
+		assert!(capture.0.lock().unwrap().is_empty());
+		drop(held);
+		let mut written = false;
+		for _ in 0..100 {
+			if std::fs::read(&domains).ok() != before && capture.0.lock().unwrap().len() == 1 {
+				written = true;
+				break;
+			}
+			tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+		}
+		assert!(written, "{path}: the change and its line both arrive");
+		let events = capture.0.lock().unwrap().clone();
+		assert_eq!(events[0]["event"], event, "{events:?}");
+	}
+}

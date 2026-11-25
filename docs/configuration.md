@@ -346,7 +346,7 @@ A public install has to let inbound TCP through the host firewall (or fronting l
 | 587 | Submission+STARTTLS | Mail clients that submit with STARTTLS. |
 | 993 | IMAPS | Mail clients that use implicit TLS for IMAP. |
 
-Optional ports the operator turns on per `[[listeners]]`: `995` (POP3S) when `services.pop3 = true`, `4190` (ManageSieve) when `services.managesieve = true`, `8090` (WebDAV) when `services.webdav = true`, `8025` (loopback management API) when `services.api = true`. The plain `autoconfig` listener (`8091`) is for a deployment that keeps its own TLS proxy in front of those names.
+Optional ports the operator turns on with a `[[listeners]]` entry of the matching `kind`: `995` (`pop3s`), `4190` (`manage-sieve`), `8090` (`web-dav`), `8025` (`api`, the loopback management API). `epistle init` writes those entries from the `[services]` table of its answers file (`pop3`, `managesieve`, `webdav`, `api`); that table belongs to the answers file, and `mail.toml` has no `[services]` table. The plain `autoconfig` listener (`8091`) is for a deployment that keeps its own TLS proxy in front of those names.
 
 With the default `http-01` challenge, port 80 has to be open even when no certificate renewal is in flight: the first certificate and every renewal are validated through the same responder, so closing it means the first certificate never lands. Port 80 is needed only with `http-01`. With `tls-alpn-01` the CA connects to port 443 instead, and with `dns-01` it connects to nothing on this host (see [`[acme]`](#acme)).
 
@@ -2626,7 +2626,7 @@ Addresses and domains here are used in lowercase (`config-check` names any writt
 | `save_sent` | Dynamic accounts only (`epistle account save-sent`); a `[[accounts]]` block in the file does not take it and the file is refused with it. Whether the server saves a copy of every message the account submits into its `Sent` folder. Absent or unset means "on" (the default); `true` enables the save explicitly, `false` opts the account out. Per-request overrides (`POST /api/v1/send`'s `save_sent` field, JMAP `EmailSubmission/saveSent`) and per-credential overrides (an app password's `save_sent`) win over this setting. |
 
 ### `[[alias]]`
-A multi-target alias: one address that delivers to several local accounts.
+A multi-target alias: one address that delivers to several local accounts. These tables are the seed of `<data_dir>/address-aliases.toml`: the file is made from them at the first write by `epistle alias` or `POST /api/v1/aliases`, or at the first start of `serve`, and replaces them from then on. A later edit here is reported when the configuration is loaded and is not applied.
 
 | Key | Meaning |
 |---|---|

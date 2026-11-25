@@ -7,7 +7,11 @@ updates:
   # major bump stays alone because it is the one that can break a workflow.
   # Security updates ignore the schedule and the groups below.
   - package-ecosystem: "github-actions"
-    directory: "/"
+    # `/` covers `.github/workflows`; the composite actions under
+    # `.github/actions` pin actions by SHA too and nothing else watches them.
+    directories:
+      - "/"
+      - "/.github/actions/*"
     schedule:
       interval: "weekly"
       day: "monday"
@@ -23,6 +27,9 @@ updates:
         patterns: ["*"]
         update-types: ["minor", "patch"]
 
+  # The images the workflows run (.github/ci-images/Dockerfile) are in this entry too: Dependabot
+  # does not read the `image:` of a workflow, so their digests are lines of a Dockerfile that a
+  # test keeps equal to the workflows, and `ci_images/images.py sync` copies them over.
   # The images the generated stack runs (deploy/images/Dockerfile, which the
   # binary reads at build time), the container image's base (Containerfile) and
   # the OpenLDAP image the directory tests run against, whose digest nothing
@@ -44,6 +51,7 @@ updates:
       - "/"
       - "/deploy/images"
       - "/tests/fixtures/ldap"
+      - "/.github/ci-images"
     schedule:
       interval: "weekly"
       day: "monday"
@@ -61,6 +69,13 @@ updates:
       images:
         patterns: ["*"]
         update-types: ["minor", "patch"]
+      # What the two groups above leave out: a bump of a digest with the same tag
+      # has no semver level, so `update-types` cannot select it. Without this
+      # group every base image digest opened its own pull request (#2021 and
+      # #2022 on the same day). It comes last, because a dependency goes to the
+      # first group that fits it.
+      images-digests:
+        patterns: ["*"]
     ignore:
       - dependency-name: "*postgres*"
         update-types: ["version-update:semver-major"]
@@ -132,5 +147,8 @@ updates:
     cooldown:
       default-days: 3
     groups:
+      # Minor and patch bumps together; a major bump of the signing library
+      # stays alone because it needs a reading of its changelog.
       signing-tooling:
         patterns: ["*"]
+        update-types: ["minor", "patch"]

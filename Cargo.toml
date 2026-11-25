@@ -1,6 +1,6 @@
 [package]
 name = "epistle"
-version = "0.13.4"
+version = "0.14.0"
 edition = "2024"
 # The floor CI builds on, and the one `epistle` claims to support. It now comes
 # from mail-parser 1.0's own `rust-version` (1.98), so it is a derived floor rather
@@ -87,7 +87,7 @@ tower-http = { version = "0.7.1", features = ["cors"] }
 tokio-rustls = "0.26.4"
 toml = "1.1.2"
 unicode-security = "0.1.2"
-url = "2.5.8"
+url = "2.5.9"
 percent-encoding = "2.3.2"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "json"] }
@@ -98,7 +98,7 @@ tracing-opentelemetry = "0.34"
 uuid = { version = "1.23.2", features = ["v7", "serde"] }
 webpki-roots = "1.0.7"
 x509-parser = "0.18.1"
-zeroize = "=1.9.1"
+zeroize = "=1.9.2"
 mail-parser = { version = "1.0.0", default-features = false }
 toml_edit = "0.25"
 unicode-normalization = "0.1.25"

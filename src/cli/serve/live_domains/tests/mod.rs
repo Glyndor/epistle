@@ -11,6 +11,8 @@ use crate::directory_store::file_watcher::{PollEvent, PollTarget, StateReloader}
 use crate::domain::state::edit::add::{Signing, prepare};
 use crate::domain::state::{Change, StoredRole, edit};
 
+mod aliases;
+
 struct Server {
 	_dir: tempfile::TempDir,
 	config: Config,

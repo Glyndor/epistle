@@ -5,7 +5,7 @@ export LC_ALL=C
 
 here="$(cd "$(dirname "$0")" && pwd)"
 script="$here/folder-limit.sh"
-workflow="$here/../../.github/workflows/folder-limit.yml"
+workflow="$here/../../.github/workflows/ci.yml"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 passed=0
@@ -138,11 +138,27 @@ exception leaf 23
 expect 'ceiling cannot increase' 1 $'leaf\t21\t23\tceiling increased from 22' env BASE="$base" bash "$script"
 exception leaf 21
 expect 'ceiling can decrease' 0 'folder-limit: OK' env BASE="$base" bash "$script"
+new_repo newexception
+files leaf 21
+git commit -qm base
+base="$(git rev-parse HEAD)"
+exception leaf 21
+expect 'a new exception does not approve itself' 1 $'leaf\t21\t21\tceiling increased from 20' env BASE="$base" bash "$script"
+expect 'without a base the same exception is read as written' 0 'folder-limit: OK' bash "$script"
+git add -A
+git commit -qm 'exception'
+base="$(git rev-parse HEAD)"
+expect 'an exception the base lists holds' 0 'folder-limit: OK' env BASE="$base" bash "$script"
+files other 21
+exception other 21
+expect 'a second new folder cannot join on its own' 1 $'other\t21\t21\tceiling increased from 20' env BASE="$base" bash "$script"
+
 expect 'unreadable base is an error' 128 '' env BASE=deadbeef bash "$script"
 
 # Extract and execute the real workflow loader, rather than copying its logic.
 awk '
-	/^          set -euo pipefail$/ { block=1 }
+	/Check direct file counts with the base gate/ { step=1 }
+	step && /^          set -euo pipefail$/ { block=1 }
 	block && /^          / { sub(/^          /, ""); print; next }
 	block { exit }
 ' "$workflow" >"$tmp/loader.sh"
@@ -159,7 +175,7 @@ cp "$script" scripts/folder-limit/folder-limit.sh
 expect 'first introduction uses PR gate and rejects 21' 1 $'leaf\t21\t20' \
 	env BASE="$first_base" RUNNER_TEMP="$tmp/runner" bash "$tmp/loader.sh"
 exception leaf 21
-expect 'first introduction with written exception' 0 'folder-limit: OK' \
+expect 'first introduction cannot approve its own exception' 1 'ceiling increased from 20' \
 	env BASE="$first_base" RUNNER_TEMP="$tmp/runner" bash "$tmp/loader.sh"
 git add scripts .github
 git commit -qm 'trusted base gate'

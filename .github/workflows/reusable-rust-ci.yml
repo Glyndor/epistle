@@ -40,7 +40,7 @@ on:
       llvm-cov-version:
         description: Exact version of the tool; bumped via .github releases
         type: string
-        default: "0.9.1"
+        default: "0.9.2"
       extra-test-os:
         description: JSON array of extra runner images to also run tests on (e.g. '["macos-latest"]')
         type: string
@@ -73,6 +73,16 @@ on:
         description: Build the docs with -D warnings so broken doc links fail the build
         type: boolean
         default: false
+
+# Tests that build the whole command line (`Cli::try_parse_from`) run on a test
+# thread, whose stack is 2 MiB unless this says otherwise. clap 4.6.7 needed about
+# 1.75 MiB of it for that in an unoptimised build, which left no room, and 4.6.8
+# needs between 2 and 3 MiB: `account::switches::tests::parse` overflowed and
+# aborted the whole run. The value is the 8 MiB a main thread has. A file under
+# `.cargo/` cannot carry it: debian/rules reads the presence of
+# `.cargo/config.toml` as "the vendored configuration is already written".
+env:
+  RUST_MIN_STACK: "8388608"
 
 permissions:
   contents: read
@@ -131,6 +141,72 @@ jobs:
           prefix: rust-lint
           working-directory: ${{ inputs.working-directory }}
 
+  # What the CodeQL analysis leaves out is judged by the compiler, in a job of its own
+  # so the five builds below do not delay the lint that the later jobs wait for. The
+  # production targets (library and binaries, no tests) are checked in debug and in
+  # `--release`, each with the default features and with all of them; the tests are
+  # checked with `--tests --all-features`. The dep-info `rustc` leaves next to each unit
+  # lists every file it opened, those of `mod`, `#[path]`, `include!` and the build
+  # script included. `check_paths.py` fails if a file the configuration leaves out is
+  # read by a production build, or by no test build (which would leave it unproven to be
+  # test code: another operating system, a feature that is off), or if a pattern is dead.
+  codeql-paths:
+    name: CodeQL leaves out only test code
+    if: inputs.run-lint
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
+    # Not measured yet: the first run of this job says what the five checks cost.
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install toolchain
+        env:
+          TOOLCHAIN: ${{ inputs.toolchain }}
+        run: |
+          rustup toolchain install "$TOOLCHAIN" --profile minimal
+          rustup default "$TOOLCHAIN"
+
+      - id: cargo-cache
+        uses: ./.github/actions/rust-cache
+        with:
+          prefix: rust-codeql-paths
+          working-directory: ${{ inputs.working-directory }}
+
+      - name: Check the production targets and the tests
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/codeql-paths"
+          mkdir -p "$out"
+          cargo check --locked --lib --bins --message-format=json > "$out/production-debug.json"
+          cargo check --locked --lib --bins --all-features --message-format=json > "$out/production-debug-all.json"
+          cargo check --locked --lib --bins --release --message-format=json > "$out/production-release.json"
+          cargo check --locked --lib --bins --release --all-features --message-format=json > "$out/production-release-all.json"
+          cargo check --locked --tests --all-features --message-format=json > "$out/tests.json"
+
+      # The same dep-info judges the other list of paths: the workflows that run on any change to the
+      # product (end-to-end, upgrade, container, database) have to be triggered by every source file a
+      # production build reads, or a change to it would skip them.
+      - name: The CodeQL configuration leaves out only files that only the tests read
+        run: >-
+          python3 -I .github/scripts/ci_codeql/check_paths.py .github/codeql/codeql-config.yml
+          --production "$RUNNER_TEMP"/codeql-paths/production-*.json
+          --tests "$RUNNER_TEMP/codeql-paths/tests.json"
+          --watch-all .github/workflows/e2e.yml .github/workflows/upgrade.yml .github/workflows/container.yml .github/workflows/db.yml
+
+      - name: Save the cargo cache
+        if: ${{ success() }}
+        uses: ./.github/actions/rust-cache
+        with:
+          mode: save
+          cache-hit: ${{ steps.cargo-cache.outputs.cache-hit }}
+          prefix: rust-codeql-paths
+          working-directory: ${{ inputs.working-directory }}
+
   test:
     name: Test
     needs: [test-suite, coverage]
@@ -151,7 +227,12 @@ jobs:
 
   test-suite:
     name: Workspace tests
-    if: inputs.run-tests && inputs.coverage-threshold == 0
+    # The long suites wait for the cheap one: on a pull request a failed lint ends
+    # the run here instead of after the suite. The condition names the one real
+    # gate and is not applied to a push or a queue entry. A job skipped behind a
+    # failed lint fails the sentinel below, which sees it as selected and not run.
+    needs: lint
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.lint.result != 'failure') && inputs.run-tests && inputs.coverage-threshold == 0 }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
     # Measured 2026-10-30: the slowest of four green runs took 34 min.
     timeout-minutes: 70
@@ -213,12 +294,13 @@ jobs:
 
   test-extra:
     name: Test (${{ matrix.os }})
-    if: inputs.run-tests && inputs.extra-test-os != '[]'
+    needs: lint
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.lint.result != 'failure') && inputs.run-tests && inputs.extra-test-os != '[]' }}
     runs-on: ${{ matrix.os }}
     # Measured 2026-10-30: the slowest of four green runs took 34 min.
     timeout-minutes: 70
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         os: ${{ fromJSON(inputs.extra-test-os) }}
     defaults:
@@ -267,7 +349,7 @@ jobs:
     # name, the ruleset still requires the old one, and nothing emits it. This job
     # carries a name that cannot move, so a ruleset gates on "the extra-platform
     # tests passed" without naming which platforms those are. Glyndor/podup#1552.
-    needs: test-extra
+    needs: [lint, test-extra]
     # `needs` on its own SKIPS this job when the dependency fails, and a skipped
     # required check does not block a merge - which is the exact failure this job
     # exists to prevent. `if: always()` plus an explicit result check is what makes
@@ -280,10 +362,13 @@ jobs:
       - name: Reflect the extra-platform test result
         env:
           RESULT: ${{ needs.test-extra.result }}
+          LINT: ${{ needs.lint.result }}
         run: |
           set -euo pipefail
-          # `skipped` is a pass: test-extra is gated on `extra-test-os != '[]'`, so a
-          # caller that asks for no extra platforms has nothing to fail.
+          # `skipped` is a pass only when test-extra was not asked for: it is gated on
+          # `extra-test-os != '[]'`, so a caller that asks for no extra platforms has
+          # nothing to fail. A skip because lint failed is not that.
+          [ "$LINT" != failure ] || { echo "::error::lint failed, so the extra-platform tests did not run"; exit 1; }
           case "$RESULT" in
             success | skipped) echo "extra-platform tests: $RESULT" ;;
             *) echo "::error::extra-platform tests did not pass (result: $RESULT)"; exit 1 ;;
@@ -291,7 +376,8 @@ jobs:
 
   coverage:
     name: Coverage
-    if: inputs.run-tests && inputs.coverage-threshold > 0
+    needs: lint
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.lint.result != 'failure') && inputs.run-tests && inputs.coverage-threshold > 0 }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
     # Measured 2026-10-30: the slowest of four green runs took 36 min.
     timeout-minutes: 75
@@ -523,3 +609,52 @@ jobs:
         env:
           RUSTDOCFLAGS: "-D warnings"
         run: cargo doc --no-deps --all-features
+
+  # The caller of this workflow ends in success when every job in here is skipped,
+  # and a job skipped by a condition that drifted looks the same as one the plan
+  # skipped. This one always runs and fails unless each job the inputs select
+  # finished in success, and unless nothing failed or was cancelled whether it was
+  # selected or not. The `Test` job above reflects the workspace suite; this one
+  # checks the same for every other selected job, and for that one too.
+  sentinel:
+    name: Selected suites ran
+    needs: [lint, codeql-paths, test, test-suite, coverage, test-extra, msrv, doc, package, semver]
+    if: always()
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
+    timeout-minutes: 5
+    steps:
+      - name: Every selected job ended in success
+        env:
+          WANT_LINT: ${{ inputs.run-lint }}
+          WANT_PATHS: ${{ inputs.run-lint }}
+          WANT_TEST: ${{ inputs.run-tests }}
+          WANT_COVERAGE: ${{ inputs.run-tests && inputs.coverage-threshold > 0 }}
+          WANT_SUITE: ${{ inputs.run-tests && inputs.coverage-threshold == 0 }}
+          WANT_MSRV: ${{ inputs.run-msrv && inputs.msrv != '' }}
+          WANT_DOC: ${{ inputs.doc-warnings }}
+          WANT_PACKAGE: ${{ inputs.package-check }}
+          WANT_SEMVER: ${{ inputs.semver-check }}
+          GOT_LINT: ${{ needs.lint.result }}
+          GOT_PATHS: ${{ needs.codeql-paths.result }}
+          GOT_TEST: ${{ needs.test.result }}
+          GOT_COVERAGE: ${{ needs.coverage.result }}
+          GOT_SUITE: ${{ needs.test-suite.result }}
+          GOT_MSRV: ${{ needs.msrv.result }}
+          GOT_DOC: ${{ needs.doc.result }}
+          GOT_PACKAGE: ${{ needs.package.result }}
+          GOT_SEMVER: ${{ needs.semver.result }}
+          GOT_EXTRA: ${{ needs.test-extra.result }}
+        run: |
+          set -u
+          failed=0
+          for name in LINT PATHS TEST COVERAGE SUITE MSRV DOC PACKAGE SEMVER; do
+            want="WANT_$name"
+            got="GOT_$name"
+            case "${!want}" in
+              true) [ "${!got}" = success ] || { echo "::error::$name was selected and ended in ${!got}"; failed=1; } ;;
+              false) case "${!got}" in failure | cancelled) echo "::error::$name ended in ${!got}"; failed=1 ;; esac ;;
+              *) echo "::error::$name: the selection is neither true nor false (${!want})"; failed=1 ;;
+            esac
+          done
+          case "$GOT_EXTRA" in failure | cancelled) echo "::error::the extra-platform tests ended in $GOT_EXTRA"; failed=1 ;; esac
+          exit "$failed"

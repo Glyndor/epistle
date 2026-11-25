@@ -10,4 +10,6 @@ mod database;
 #[cfg(test)]
 mod mail_services;
 #[cfg(test)]
+mod podup_audit;
+#[cfg(test)]
 mod rendering;

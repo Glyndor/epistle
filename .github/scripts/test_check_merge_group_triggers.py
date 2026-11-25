@@ -1,5 +1,6 @@
 import importlib.util
 import io
+import json
 import os
 import tempfile
 import unittest
@@ -23,13 +24,15 @@ REUSABLES = {
     "reusable-rust-supply-chain.yml": ["SBOM and license attribution"],
 }
 
-# caller file -> (job id, reusable)
+# caller file -> [(job id, reusable)]
 CALLERS = {
-    "ci.yml": ("rust", "reusable-rust-ci.yml"),
-    "dco.yml": ("dco", "reusable-dco.yml"),
-    "line-limit.yml": ("line-limit", "reusable-line-limit.yml"),
-    "debian.yml": ("debian", "reusable-rust-debian.yml"),
-    "supply-chain.yml": ("sbom-and-licenses", "reusable-rust-supply-chain.yml"),
+    "ci.yml": [
+        ("rust", "reusable-rust-ci.yml"),
+        ("line-limit", "reusable-line-limit.yml"),
+        ("debian", "reusable-rust-debian.yml"),
+        ("sbom-and-licenses", "reusable-rust-supply-chain.yml"),
+    ],
+    "dco.yml": [("dco", "reusable-dco.yml")],
 }
 
 
@@ -38,8 +41,18 @@ def reusable_text(names):
     return f"name: r\non:\n  workflow_call:\njobs:\n{jobs}"
 
 
-def caller_text(job_id, reusable, mg=MG):
-    return f"name: c\non:\n  pull_request:\n{mg}jobs:\n  {job_id}:\n    uses: ./.github/workflows/{reusable}\n"
+GATE = f"  gate:\n    name: {json.dumps(mod.GATE_NAME)}\n    runs-on: ubuntu-latest\n    steps: []\n"
+
+
+DCO_JOBS = ("  noreply:\n    name: author and sign-off use a GitHub noreply address\n    runs-on: ubuntu-latest\n    steps: []\n"
+            "  secret-scan:\n    name: no credential-shaped line is added\n    runs-on: ubuntu-latest\n    steps: []\n")
+
+
+def caller_text(job_id, reusable, mg=MG, extra=None):
+    """A caller of one reusable; the CI workflow also carries the gate job."""
+    jobs = {job_id: reusable, **(extra or {})}
+    body = "".join(f"  {j}:\n    uses: ./.github/workflows/{r}\n" for j, r in jobs.items())
+    return f"name: c\non:\n  pull_request:\n{mg}jobs:\n{body}{GATE if job_id == 'rust' else ''}{DCO_JOBS if job_id == 'dco' else ''}"
 
 
 class Tree:
@@ -49,8 +62,9 @@ class Tree:
         os.makedirs(self.wf)
         for name, jobs in REUSABLES.items():
             self.write(name, reusable_text(jobs))
-        for name, (job_id, reusable) in CALLERS.items():
-            self.write(name, caller_text(job_id, reusable))
+        for name, jobs in CALLERS.items():
+            (job_id, reusable), *rest = jobs
+            self.write(name, caller_text(job_id, reusable, extra=dict(rest)))
 
     def write(self, name, text):
         with open(os.path.join(self.wf, name), "w") as fh:
@@ -84,7 +98,7 @@ class MergeGroupTriggers(unittest.TestCase):
         self.assertIn("no `merge_group` trigger", out)
 
     def test_wrong_types_fails(self):
-        self.tree.write("ci.yml", caller_text("rust", "reusable-rust-ci.yml", "  merge_group:\n    types: [destroyed]\n"))
+        self.tree.write("ci.yml", caller_text("rust", "reusable-rust-ci.yml", "  merge_group:\n    types: [destroyed]\n", extra=dict(CALLERS["ci.yml"][1:])))
         code, out = self.tree.run()
         self.assertEqual(code, 1)
         self.assertIn("without `checks_requested`", out)
@@ -97,7 +111,7 @@ class MergeGroupTriggers(unittest.TestCase):
         self.assertIn("emits no check required on develop", out)
 
     def test_renamed_caller_job_fails(self):
-        self.tree.write("line-limit.yml", caller_text("limit", "reusable-line-limit.yml"))
+        self.tree.write("ci.yml", caller_text("rust", "reusable-rust-ci.yml", extra={"limit": "reusable-line-limit.yml", "debian": "reusable-rust-debian.yml", "sbom-and-licenses": "reusable-rust-supply-chain.yml"}))
         code, out = self.tree.run()
         self.assertEqual(code, 1)
         self.assertIn("line-limit / line limit", out)
@@ -109,11 +123,43 @@ class MergeGroupTriggers(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("has no job named `dpkg-buildpackage`", out)
 
-    def test_unparsable_file_is_skipped_with_warning(self):
+    def test_gate_without_the_trigger_fails(self):
+        self.tree.write("ci.yml", caller_text("rust", "reusable-rust-ci.yml", "", extra=dict(CALLERS["ci.yml"][1:])))
+        code, out = self.tree.run()
+        self.assertEqual(code, 1)
+        self.assertIn("`CI gate` is required on develop", out)
+
+    def test_renamed_gate_fails(self):
+        text = caller_text("rust", "reusable-rust-ci.yml", extra=dict(CALLERS["ci.yml"][1:])).replace(json.dumps(mod.GATE_NAME), "Gate")
+        self.tree.write("ci.yml", text)
+        code, out = self.tree.run()
+        self.assertEqual(code, 1)
+        self.assertIn("required check `CI gate` is not emitted", out)
+
+    def test_gate_that_calls_a_reusable_fails(self):
+        text = caller_text("rust", "reusable-rust-ci.yml", extra=dict(CALLERS["ci.yml"][1:])).replace("    runs-on: ubuntu-latest\n    steps: []\n", "    uses: ./.github/workflows/reusable-dco.yml\n")
+        self.tree.write("ci.yml", text)
+        code, out = self.tree.run()
+        self.assertEqual(code, 1)
+        self.assertIn("that runs its own steps", out)
+
+    def test_an_unparsable_file_fails(self):
         self.tree.write("broken.yml", "a: [unclosed\n")
         code, out = self.tree.run()
-        self.assertEqual(code, 0, out)
-        self.assertIn("::warning", out)
+        self.assertEqual(code, 1)
+        self.assertIn("broken.yml::does not parse", out)
+
+    def test_a_repeated_key_fails(self):
+        self.tree.write("ci.yml", caller_text("rust", "reusable-rust-ci.yml", extra=dict(CALLERS["ci.yml"][1:])) + "name: again\n")
+        code, out = self.tree.run()
+        self.assertEqual(code, 1)
+        self.assertIn("duplicate key 'name'", out)
+
+    def test_a_workflow_with_the_yaml_suffix_is_read_too(self):
+        self.tree.write("extra.yaml", "name: x\non:\n  merge_group:\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps: []\n")
+        code, out = self.tree.run()
+        self.assertEqual(code, 1)
+        self.assertIn("extra.yaml", out)
 
 
 if __name__ == "__main__":

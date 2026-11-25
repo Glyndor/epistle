@@ -46,11 +46,18 @@ pub enum BackupError {
 	/// execution time. The companion `data_dir` is reported so the
 	/// operator can verify what was expected.
 	ComposeFileMissing(PathBuf),
-	/// The SQL copy `podup cp` produces ended up empty (the copy itself
-	/// failed silently). The path inside the container is reported so the
-	/// operator can re-run `podup exec -T db ls <path>` to confirm.
-	#[allow(dead_code)]
-	ContainerFileMissing(PathBuf),
+	/// The replay printed the `COMMIT` tag, so the database has the dump, and
+	/// the exec exited non-zero after that. Carries the trimmed stderr.
+	FailedAfterCommit {
+		/// What the exec wrote on stderr.
+		stderr: String,
+	},
+	/// The replay in the `db` container exited with status 0 but `psql` never
+	/// printed the `COMMIT` tag. The SQL goes in on standard input inside an
+	/// explicit transaction, so an input that stopped early (a lost exec, a
+	/// sender that died) is rolled back by the server without any error;
+	/// this is the variant that says so.
+	NotCommitted,
 	/// A held stop signal (the number) came before the restore wrote the
 	/// database or the files, so it stopped without writing either.
 	Interrupted(i32),
@@ -86,10 +93,13 @@ impl std::fmt::Display for BackupError {
 				"compose file {} was expected (the container stack path was selected) but is gone; run `epistle init` to lay it down again",
 				path.display()
 			),
-			BackupError::ContainerFileMissing(path) => write!(
+			BackupError::FailedAfterCommit { stderr } => write!(
 				f,
-				"the SQL file copied into the container at {} is missing; podup cp reported success but the file is not visible to the exec'd psql",
-				path.display()
+				"the database committed the dump, and the exec failed after that: {stderr}"
+			),
+			BackupError::NotCommitted => write!(
+				f,
+				"the database did not confirm the commit of the dump, so it was rolled back; nothing was loaded"
 			),
 			BackupError::Interrupted(signal) => write!(
 				f,

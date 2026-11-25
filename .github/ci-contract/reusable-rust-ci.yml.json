@@ -1,0 +1,654 @@
+{
+ "True": {
+  "workflow_call": {
+   "inputs": {
+    "apt-packages": {
+     "default": "",
+     "description": "Space-separated apt packages the test job installs before running the suite",
+     "type": "string"
+    },
+    "coverage-ignore-regex": {
+     "default": "",
+     "description": "Regex of file paths to exclude from coverage (e.g. code covered only by a separate DB integration job)",
+     "type": "string"
+    },
+    "coverage-threshold": {
+     "default": 0,
+     "description": "Minimum line coverage percentage (0 disables the gate)",
+     "type": "number"
+    },
+    "doc-warnings": {
+     "default": false,
+     "description": "Build the docs with -D warnings so broken doc links fail the build",
+     "type": "boolean"
+    },
+    "extra-test-os": {
+     "default": "[]",
+     "description": "JSON array of extra runner images to also run tests on (e.g. '[\"macos-latest\"]')",
+     "type": "string"
+    },
+    "llvm-cov-version": {
+     "default": "0.9.2",
+     "description": "Exact version of the tool; bumped via .github releases",
+     "type": "string"
+    },
+    "msrv": {
+     "default": "",
+     "description": "Minimum supported Rust version to verify a --locked build against (empty disables the check)",
+     "type": "string"
+    },
+    "package-check": {
+     "default": false,
+     "description": "Run cargo publish --dry-run on PRs to catch packaging breakage before tagging",
+     "type": "boolean"
+    },
+    "podman": {
+     "default": false,
+     "description": "Start rootless Podman socket before running the coverage job (ubuntu-latest only)",
+     "type": "boolean"
+    },
+    "run-lint": {
+     "default": true,
+     "description": "Run formatting and lint checks selected by the caller's plan",
+     "type": "boolean"
+    },
+    "run-msrv": {
+     "default": true,
+     "description": "Check MSRV when selected by the caller's plan",
+     "type": "boolean"
+    },
+    "run-tests": {
+     "default": true,
+     "description": "Run workspace tests and coverage selected by the caller's plan",
+     "type": "boolean"
+    },
+    "semver-check": {
+     "default": false,
+     "description": "Run cargo-semver-checks to flag public API breaks against the last published release",
+     "type": "boolean"
+    },
+    "semver-checks-version": {
+     "default": "0.51.0",
+     "description": "Exact version of the tool; bumped via .github releases",
+     "type": "string"
+    },
+    "toolchain": {
+     "default": "1.100.0",
+     "description": "Rust toolchain to pin the build, lint and test jobs to",
+     "type": "string"
+    },
+    "working-directory": {
+     "default": ".",
+     "description": "Directory containing the Cargo workspace",
+     "type": "string"
+    }
+   }
+  }
+ },
+ "concurrency": {
+  "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
+  "group": "rust-ci-${{ github.workflow }}-${{ github.ref }}-${{ inputs.working-directory }}"
+ },
+ "env": {
+  "RUST_MIN_STACK": "8388608"
+ },
+ "jobs": {
+  "codeql-paths": {
+   "defaults": {
+    "run": {
+     "working-directory": "${{ inputs.working-directory }}"
+    }
+   },
+   "if": "inputs.run-lint",
+   "name": "CodeQL leaves out only test code",
+   "runs-on": "${{ fromJSON(vars.CI_RUNNER || '\"ubuntu-latest\"') }}",
+   "steps": [
+    {
+     "uses": "actions/checkout@PIN",
+     "with": {
+      "persist-credentials": false
+     }
+    },
+    {
+     "env": {
+      "TOOLCHAIN": "${{ inputs.toolchain }}"
+     },
+     "name": "Install toolchain",
+     "run": "rustup toolchain install \"$TOOLCHAIN\" --profile minimal\nrustup default \"$TOOLCHAIN\"\n"
+    },
+    {
+     "id": "cargo-cache",
+     "uses": "./.github/actions/rust-cache",
+     "with": {
+      "prefix": "rust-codeql-paths",
+      "working-directory": "${{ inputs.working-directory }}"
+     }
+    },
+    {
+     "name": "Check the production targets and the tests",
+     "run": "set -euo pipefail\nout=\"$RUNNER_TEMP/codeql-paths\"\nmkdir -p \"$out\"\ncargo check --locked --lib --bins --message-format=json > \"$out/production-debug.json\"\ncargo check --locked --lib --bins --all-features --message-format=json > \"$out/production-debug-all.json\"\ncargo check --locked --lib --bins --release --message-format=json > \"$out/production-release.json\"\ncargo check --locked --lib --bins --release --all-features --message-format=json > \"$out/production-release-all.json\"\ncargo check --locked --tests --all-features --message-format=json > \"$out/tests.json\"\n"
+    },
+    {
+     "name": "The CodeQL configuration leaves out only files that only the tests read",
+     "run": "python3 -I .github/scripts/ci_codeql/check_paths.py .github/codeql/codeql-config.yml --production \"$RUNNER_TEMP\"/codeql-paths/production-*.json --tests \"$RUNNER_TEMP/codeql-paths/tests.json\" --watch-all .github/workflows/e2e.yml .github/workflows/upgrade.yml .github/workflows/container.yml .github/workflows/db.yml"
+    },
+    {
+     "if": "${{ success() }}",
+     "name": "Save the cargo cache",
+     "uses": "./.github/actions/rust-cache",
+     "with": {
+      "cache-hit": "${{ steps.cargo-cache.outputs.cache-hit }}",
+      "mode": "save",
+      "prefix": "rust-codeql-paths",
+      "working-directory": "${{ inputs.working-directory }}"
+     }
+    }
+   ],
+   "timeout-minutes": 45
+  },
+  "coverage": {
+   "defaults": {
+    "run": {
+     "working-directory": "${{ inputs.working-directory }}"
+    }
+   },
+   "if": "${{ !cancelled() && (github.event_name != 'pull_request' || needs.lint.result != 'failure') && inputs.run-tests && inputs.coverage-threshold > 0 }}",
+   "name": "Coverage",
+   "needs": "lint",
+   "runs-on": "${{ fromJSON(vars.CI_RUNNER || '\"ubuntu-latest\"') }}",
+   "steps": [
+    {
+     "uses": "actions/checkout@PIN",
+     "with": {
+      "persist-credentials": false
+     }
+    },
+    {
+     "env": {
+      "TOOLCHAIN": "${{ inputs.toolchain }}"
+     },
+     "name": "Install toolchain",
+     "run": "rustup toolchain install \"$TOOLCHAIN\" --profile minimal --component llvm-tools\nrustup default \"$TOOLCHAIN\"\n"
+    },
+    {
+     "env": {
+      "APT_PACKAGES": "${{ inputs.apt-packages }}"
+     },
+     "name": "Install test tooling",
+     "run": "set -euo pipefail\nif [ -n \"$APT_PACKAGES\" ]; then\n  sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update -qq\n  # shellcheck disable=SC2086 # intentional word-splitting of the list\n  sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y --no-install-recommends $APT_PACKAGES\nfi\n",
+     "timeout-minutes": 10
+    },
+    {
+     "id": "cargo-cache",
+     "uses": "./.github/actions/rust-cache",
+     "with": {
+      "extra-path": "~/.cargo/bin",
+      "prefix": "rust-cov-${{ inputs.llvm-cov-version }}",
+      "working-directory": "${{ inputs.working-directory }}"
+     }
+    },
+    {
+     "env": {
+      "LLVM_COV_VERSION": "${{ inputs.llvm-cov-version }}"
+     },
+     "name": "Install cargo-llvm-cov",
+     "run": "command -v cargo-llvm-cov >/dev/null || cargo install cargo-llvm-cov --locked --version \"$LLVM_COV_VERSION\""
+    },
+    {
+     "id": "podman-socket",
+     "if": "inputs.podman",
+     "name": "Start Podman socket",
+     "run": "systemctl --user start podman.socket\nuntil [ -S \"/run/user/$(id -u)/podman/podman.sock\" ]; do sleep 0.1; done\necho \"path=unix:///run/user/$(id -u)/podman/podman.sock\" >> \"$GITHUB_OUTPUT\"\n"
+    },
+    {
+     "env": {
+      "COVERAGE_IGNORE_REGEX": "${{ inputs.coverage-ignore-regex }}",
+      "COVERAGE_THRESHOLD": "${{ inputs.coverage-threshold }}",
+      "PODMAN_SOCKET": "${{ steps.podman-socket.outputs.path }}"
+     },
+     "name": "Coverage gate",
+     "run": "cargo llvm-cov --locked --workspace --all-features --summary-only --json --output-path coverage.json \\\n  ${COVERAGE_IGNORE_REGEX:+--ignore-filename-regex \"$COVERAGE_IGNORE_REGEX\"}\nPCT=$(python3 -c \"import json; print(json.load(open('coverage.json'))['data'][0]['totals']['lines']['percent'])\")\necho \"Coverage: ${PCT}% (threshold: ${COVERAGE_THRESHOLD}%)\"\necho \"### Coverage: ${PCT}% (threshold: ${COVERAGE_THRESHOLD}%)\" >> \"$GITHUB_STEP_SUMMARY\"\npython3 - \"$PCT\" \"$COVERAGE_THRESHOLD\" <<'EOF'\nimport sys\npct, threshold = float(sys.argv[1]), float(sys.argv[2])\nif pct < threshold:\n    print(f\"::error::Coverage {pct}% is below the {threshold}% threshold\")\n    sys.exit(1)\nsys.exit(0)\nEOF\n"
+    },
+    {
+     "if": "${{ success() }}",
+     "name": "Save the cargo cache",
+     "uses": "./.github/actions/rust-cache",
+     "with": {
+      "cache-hit": "${{ steps.cargo-cache.outputs.cache-hit }}",
+      "extra-path": "~/.cargo/bin",
+      "mode": "save",
+      "prefix": "rust-cov-${{ inputs.llvm-cov-version }}",
+      "working-directory": "${{ inputs.working-directory }}"
+     }
+    }
+   ],
+   "timeout-minutes": 75
+  },
+  "doc": {
+   "defaults": {
+    "run": {
+     "working-directory": "${{ inputs.working-directory }}"
+    }
+   },
+   "if": "inputs.doc-warnings",
+   "name": "Doc warnings",
+   "runs-on": "${{ fromJSON(vars.CI_RUNNER || '\"ubuntu-latest\"') }}",
+   "steps": [
+    {
+     "uses": "actions/checkout@PIN",
+     "with": {
+      "persist-credentials": false
+     }
+    },
+    {
+     "env": {
+      "TOOLCHAIN": "${{ inputs.toolchain }}"
+     },
+     "name": "Install toolchain",
+     "run": "rustup toolchain install \"$TOOLCHAIN\" --profile minimal\nrustup default \"$TOOLCHAIN\"\n"
+    },
+    {
+     "env": {
+      "RUSTDOCFLAGS": "-D warnings"
+     },
+     "name": "Build docs with warnings denied",
+     "run": "cargo doc --no-deps --all-features"
+    }
+   ],
+   "timeout-minutes": 10
+  },
+  "extra-platforms-gate": {
+   "if": "${{ always() && inputs.run-tests }}",
+   "name": "Extra platforms",
+   "needs": [
+    "lint",
+    "test-extra"
+   ],
+   "runs-on": "${{ fromJSON(vars.CI_RUNNER || '\"ubuntu-latest\"') }}",
+   "steps": [
+    {
+     "env": {
+      "LINT": "${{ needs.lint.result }}",
+      "RESULT": "${{ needs.test-extra.result }}"
+     },
+     "name": "Reflect the extra-platform test result",
+     "run": "set -euo pipefail\n# `skipped` is a pass only when test-extra was not asked for: it is gated on\n# `extra-test-os != '[]'`, so a caller that asks for no extra platforms has\n# nothing to fail. A skip because lint failed is not that.\n[ \"$LINT\" != failure ] || { echo \"::error::lint failed, so the extra-platform tests did not run\"; exit 1; }\ncase \"$RESULT\" in\n  success | skipped) echo \"extra-platform tests: $RESULT\" ;;\n  *) echo \"::error::extra-platform tests did not pass (result: $RESULT)\"; exit 1 ;;\nesac\n"
+    }
+   ],
+   "timeout-minutes": 5
+  },
+  "lint": {
+   "defaults": {
+    "run": {
+     "working-directory": "${{ inputs.working-directory }}"
+    }
+   },
+   "if": "inputs.run-lint",
+   "name": "Format & lint",
+   "runs-on": "${{ fromJSON(vars.CI_RUNNER || '\"ubuntu-latest\"') }}",
+   "steps": [
+    {
+     "uses": "actions/checkout@PIN",
+     "with": {
+      "persist-credentials": false
+     }
+    },
+    {
+     "env": {
+      "TOOLCHAIN": "${{ inputs.toolchain }}"
+     },
+     "name": "Install toolchain",
+     "run": "rustup toolchain install \"$TOOLCHAIN\" --profile minimal --component rustfmt,clippy\nrustup default \"$TOOLCHAIN\"\n"
+    },
+    {
+     "id": "cargo-cache",
+     "uses": "./.github/actions/rust-cache",
+     "with": {
+      "prefix": "rust-lint",
+      "working-directory": "${{ inputs.working-directory }}"
+     }
+    },
+    {
+     "name": "rustfmt",
+     "run": "cargo fmt --all --check"
+    },
+    {
+     "name": "clippy",
+     "run": "cargo clippy --locked --all-targets --all-features -- -D warnings"
+    },
+    {
+     "if": "hashFiles('fuzz/Cargo.toml') != ''",
+     "name": "fuzz lockfile in sync",
+     "run": "cargo metadata --locked --format-version 1 --manifest-path fuzz/Cargo.toml > /dev/null"
+    },
+    {
+     "if": "${{ success() }}",
+     "name": "Save the cargo cache",
+     "uses": "./.github/actions/rust-cache",
+     "with": {
+      "cache-hit": "${{ steps.cargo-cache.outputs.cache-hit }}",
+      "mode": "save",
+      "prefix": "rust-lint",
+      "working-directory": "${{ inputs.working-directory }}"
+     }
+    }
+   ],
+   "timeout-minutes": 15
+  },
+  "msrv": {
+   "defaults": {
+    "run": {
+     "working-directory": "${{ inputs.working-directory }}"
+    }
+   },
+   "if": "inputs.run-msrv && inputs.msrv != ''",
+   "name": "MSRV (${{ inputs.msrv }})",
+   "runs-on": "${{ fromJSON(vars.CI_RUNNER || '\"ubuntu-latest\"') }}",
+   "steps": [
+    {
+     "uses": "actions/checkout@PIN",
+     "with": {
+      "persist-credentials": false
+     }
+    },
+    {
+     "env": {
+      "MSRV": "${{ inputs.msrv }}"
+     },
+     "name": "Install MSRV toolchain",
+     "run": "rustup toolchain install \"$MSRV\" --profile minimal\nrustup default \"$MSRV\"\n"
+    },
+    {
+     "id": "cargo-cache",
+     "uses": "./.github/actions/rust-cache",
+     "with": {
+      "prefix": "rust-msrv-${{ inputs.msrv }}",
+      "working-directory": "${{ inputs.working-directory }}"
+     }
+    },
+    {
+     "name": "Build on the declared MSRV",
+     "run": "cargo build --locked --all-features"
+    },
+    {
+     "if": "${{ success() }}",
+     "name": "Save the cargo cache",
+     "uses": "./.github/actions/rust-cache",
+     "with": {
+      "cache-hit": "${{ steps.cargo-cache.outputs.cache-hit }}",
+      "mode": "save",
+      "prefix": "rust-msrv-${{ inputs.msrv }}",
+      "working-directory": "${{ inputs.working-directory }}"
+     }
+    }
+   ],
+   "timeout-minutes": 15
+  },
+  "msrv-gate": {
+   "if": "${{ always() && inputs.run-msrv }}",
+   "name": "MSRV",
+   "needs": "msrv",
+   "runs-on": "${{ fromJSON(vars.CI_RUNNER || '\"ubuntu-latest\"') }}",
+   "steps": [
+    {
+     "env": {
+      "RESULT": "${{ needs.msrv.result }}"
+     },
+     "name": "Reflect the MSRV result",
+     "run": "set -euo pipefail\n# `skipped` is a pass: msrv is gated on `inputs.msrv != ''`.\ncase \"$RESULT\" in\n  success | skipped) echo \"MSRV: $RESULT\" ;;\n  *) echo \"::error::MSRV job did not pass (result: $RESULT)\"; exit 1 ;;\nesac\n"
+    }
+   ],
+   "timeout-minutes": 5
+  },
+  "package": {
+   "defaults": {
+    "run": {
+     "working-directory": "${{ inputs.working-directory }}"
+    }
+   },
+   "if": "inputs.package-check",
+   "name": "Package check",
+   "runs-on": "${{ fromJSON(vars.CI_RUNNER || '\"ubuntu-latest\"') }}",
+   "steps": [
+    {
+     "uses": "actions/checkout@PIN",
+     "with": {
+      "persist-credentials": false
+     }
+    },
+    {
+     "env": {
+      "TOOLCHAIN": "${{ inputs.toolchain }}"
+     },
+     "name": "Install toolchain",
+     "run": "rustup toolchain install \"$TOOLCHAIN\" --profile minimal\nrustup default \"$TOOLCHAIN\"\n"
+    },
+    {
+     "name": "cargo publish --dry-run",
+     "run": "cargo publish --dry-run --locked"
+    }
+   ],
+   "timeout-minutes": 20
+  },
+  "semver": {
+   "defaults": {
+    "run": {
+     "working-directory": "${{ inputs.working-directory }}"
+    }
+   },
+   "if": "inputs.semver-check",
+   "name": "Semver checks",
+   "runs-on": "${{ fromJSON(vars.CI_RUNNER || '\"ubuntu-latest\"') }}",
+   "steps": [
+    {
+     "uses": "actions/checkout@PIN",
+     "with": {
+      "persist-credentials": false
+     }
+    },
+    {
+     "env": {
+      "TOOLCHAIN": "${{ inputs.toolchain }}"
+     },
+     "name": "Install toolchain",
+     "run": "rustup toolchain install \"$TOOLCHAIN\" --profile minimal\nrustup default \"$TOOLCHAIN\"\n"
+    },
+    {
+     "env": {
+      "SEMVER_CHECKS_VERSION": "${{ inputs.semver-checks-version }}"
+     },
+     "name": "Install cargo-semver-checks",
+     "run": "command -v cargo-semver-checks >/dev/null || cargo install cargo-semver-checks --locked --version \"$SEMVER_CHECKS_VERSION\""
+    },
+    {
+     "name": "Check for public API breaks",
+     "run": "cargo semver-checks check-release"
+    }
+   ],
+   "timeout-minutes": 20
+  },
+  "sentinel": {
+   "if": "always()",
+   "name": "Selected suites ran",
+   "needs": [
+    "lint",
+    "codeql-paths",
+    "test",
+    "test-suite",
+    "coverage",
+    "test-extra",
+    "msrv",
+    "doc",
+    "package",
+    "semver"
+   ],
+   "runs-on": "${{ fromJSON(vars.CI_RUNNER || '\"ubuntu-latest\"') }}",
+   "steps": [
+    {
+     "env": {
+      "GOT_COVERAGE": "${{ needs.coverage.result }}",
+      "GOT_DOC": "${{ needs.doc.result }}",
+      "GOT_EXTRA": "${{ needs.test-extra.result }}",
+      "GOT_LINT": "${{ needs.lint.result }}",
+      "GOT_MSRV": "${{ needs.msrv.result }}",
+      "GOT_PACKAGE": "${{ needs.package.result }}",
+      "GOT_PATHS": "${{ needs.codeql-paths.result }}",
+      "GOT_SEMVER": "${{ needs.semver.result }}",
+      "GOT_SUITE": "${{ needs.test-suite.result }}",
+      "GOT_TEST": "${{ needs.test.result }}",
+      "WANT_COVERAGE": "${{ inputs.run-tests && inputs.coverage-threshold > 0 }}",
+      "WANT_DOC": "${{ inputs.doc-warnings }}",
+      "WANT_LINT": "${{ inputs.run-lint }}",
+      "WANT_MSRV": "${{ inputs.run-msrv && inputs.msrv != '' }}",
+      "WANT_PACKAGE": "${{ inputs.package-check }}",
+      "WANT_PATHS": "${{ inputs.run-lint }}",
+      "WANT_SEMVER": "${{ inputs.semver-check }}",
+      "WANT_SUITE": "${{ inputs.run-tests && inputs.coverage-threshold == 0 }}",
+      "WANT_TEST": "${{ inputs.run-tests }}"
+     },
+     "name": "Every selected job ended in success",
+     "run": "set -u\nfailed=0\nfor name in LINT PATHS TEST COVERAGE SUITE MSRV DOC PACKAGE SEMVER; do\n  want=\"WANT_$name\"\n  got=\"GOT_$name\"\n  case \"${!want}\" in\n    true) [ \"${!got}\" = success ] || { echo \"::error::$name was selected and ended in ${!got}\"; failed=1; } ;;\n    false) case \"${!got}\" in failure | cancelled) echo \"::error::$name ended in ${!got}\"; failed=1 ;; esac ;;\n    *) echo \"::error::$name: the selection is neither true nor false (${!want})\"; failed=1 ;;\n  esac\ndone\ncase \"$GOT_EXTRA\" in failure | cancelled) echo \"::error::the extra-platform tests ended in $GOT_EXTRA\"; failed=1 ;; esac\nexit \"$failed\"\n"
+    }
+   ],
+   "timeout-minutes": 5
+  },
+  "test": {
+   "if": "${{ always() && inputs.run-tests }}",
+   "name": "Test",
+   "needs": [
+    "test-suite",
+    "coverage"
+   ],
+   "runs-on": "${{ fromJSON(vars.CI_RUNNER || '\"ubuntu-latest\"') }}",
+   "steps": [
+    {
+     "env": {
+      "RESULT": "${{ inputs.coverage-threshold > 0 && needs.coverage.result || needs.test-suite.result }}"
+     },
+     "name": "Reflect the workspace suite result",
+     "run": "case \"$RESULT\" in\n  success) echo \"Workspace tests passed\" ;;\n  *) echo \"::error::workspace tests did not pass (result: $RESULT)\"; exit 1 ;;\nesac\n"
+    }
+   ],
+   "timeout-minutes": 5
+  },
+  "test-extra": {
+   "defaults": {
+    "run": {
+     "shell": "bash",
+     "working-directory": "${{ inputs.working-directory }}"
+    }
+   },
+   "if": "${{ !cancelled() && (github.event_name != 'pull_request' || needs.lint.result != 'failure') && inputs.run-tests && inputs.extra-test-os != '[]' }}",
+   "name": "Test (${{ matrix.os }})",
+   "needs": "lint",
+   "runs-on": "${{ matrix.os }}",
+   "steps": [
+    {
+     "uses": "actions/checkout@PIN",
+     "with": {
+      "persist-credentials": false
+     }
+    },
+    {
+     "env": {
+      "TOOLCHAIN": "${{ inputs.toolchain }}"
+     },
+     "name": "Install toolchain",
+     "run": "rustup toolchain install \"$TOOLCHAIN\" --profile minimal\nrustup default \"$TOOLCHAIN\"\n"
+    },
+    {
+     "id": "cargo-cache",
+     "uses": "./.github/actions/rust-cache",
+     "with": {
+      "prefix": "rust-test",
+      "working-directory": "${{ inputs.working-directory }}"
+     }
+    },
+    {
+     "name": "Tests",
+     "run": "cargo test --locked --all-features --workspace"
+    },
+    {
+     "if": "${{ success() }}",
+     "name": "Save the cargo cache",
+     "uses": "./.github/actions/rust-cache",
+     "with": {
+      "cache-hit": "${{ steps.cargo-cache.outputs.cache-hit }}",
+      "mode": "save",
+      "prefix": "rust-test",
+      "working-directory": "${{ inputs.working-directory }}"
+     }
+    }
+   ],
+   "strategy": {
+    "fail-fast": true,
+    "matrix": {
+     "os": "${{ fromJSON(inputs.extra-test-os) }}"
+    }
+   },
+   "timeout-minutes": 70
+  },
+  "test-suite": {
+   "defaults": {
+    "run": {
+     "working-directory": "${{ inputs.working-directory }}"
+    }
+   },
+   "if": "${{ !cancelled() && (github.event_name != 'pull_request' || needs.lint.result != 'failure') && inputs.run-tests && inputs.coverage-threshold == 0 }}",
+   "name": "Workspace tests",
+   "needs": "lint",
+   "runs-on": "${{ fromJSON(vars.CI_RUNNER || '\"ubuntu-latest\"') }}",
+   "steps": [
+    {
+     "uses": "actions/checkout@PIN",
+     "with": {
+      "persist-credentials": false
+     }
+    },
+    {
+     "env": {
+      "TOOLCHAIN": "${{ inputs.toolchain }}"
+     },
+     "name": "Install toolchain",
+     "run": "rustup toolchain install \"$TOOLCHAIN\" --profile minimal\nrustup default \"$TOOLCHAIN\"\n"
+    },
+    {
+     "env": {
+      "APT_PACKAGES": "${{ inputs.apt-packages }}"
+     },
+     "name": "Install test tooling",
+     "run": "set -euo pipefail\nif [ -n \"$APT_PACKAGES\" ]; then\n  sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update -qq\n  # shellcheck disable=SC2086 # intentional word-splitting of the list\n  sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y --no-install-recommends $APT_PACKAGES\nfi\n",
+     "timeout-minutes": 10
+    },
+    {
+     "id": "cargo-cache",
+     "uses": "./.github/actions/rust-cache",
+     "with": {
+      "prefix": "rust-test",
+      "working-directory": "${{ inputs.working-directory }}"
+     }
+    },
+    {
+     "name": "Tests",
+     "run": "cargo test --locked --all-features --workspace"
+    },
+    {
+     "if": "${{ success() }}",
+     "name": "Save the cargo cache",
+     "uses": "./.github/actions/rust-cache",
+     "with": {
+      "cache-hit": "${{ steps.cargo-cache.outputs.cache-hit }}",
+      "mode": "save",
+      "prefix": "rust-test",
+      "working-directory": "${{ inputs.working-directory }}"
+     }
+    }
+   ],
+   "timeout-minutes": 70
+  }
+ },
+ "name": "Rust CI (reusable)",
+ "permissions": {
+  "contents": "read"
+ }
+}

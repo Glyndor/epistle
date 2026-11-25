@@ -1,0 +1,29 @@
+# What the CodeQL analysis of this repository leaves out, and nothing else.
+#
+# Only test code. Rust code that exists only under `#[cfg(test)]` builds
+# fixtures with passwords, tokens and keys in plain sight and writes them to
+# temporary files and to logs on purpose: the cleartext-logging, unsafe
+# deserialization and hard-coded-key queries read that as a finding in
+# production, and each alert had to be dismissed by hand in GitHub, where the
+# decision is not reviewed, not visible in a diff and comes back with the next
+# test that looks the same. No query is switched off and no production path is
+# listed: the lint job runs `cargo check` of the production targets and
+# `.github/scripts/ci_codeql/check_paths.py` fails if a file the compiler read
+# for them (its dep-info) matches one of these patterns, or if a pattern matches
+# no file of the repository.
+#
+# `paths-ignore` is the documented way to leave files out of an analysis that
+# does not build the code (this one runs with `build-mode: none`).
+name: epistle
+
+paths-ignore:
+  # The test modules: a `tests/` folder next to the module it tests, and the
+  # files named for tests or for their support.
+  - "src/**/tests/**"
+  - "src/**/tests.rs"
+  - "src/**/tests_*.rs"
+  - "src/**/test_support.rs"
+  - "src/**/*_test_support.rs"
+  - "src/test_support/**"
+  # The integration tests of the crate, which only `cargo test` builds.
+  - "tests/**"

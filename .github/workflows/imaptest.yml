@@ -94,7 +94,7 @@ jobs:
     runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
     timeout-minutes: 30
     env:
-      IMAPTEST_IMAGE: docker.io/dovecot/imaptest@sha256:db2b7de2f7bdd5d331fbdc12463828e3e35f1571c40999df47a0ff2359d399d7
+      IMAPTEST_IMAGE: docker.io/dovecot/imaptest@sha256:34e3a745a033e16faccf03e68309b97311cd2a42d0c377b5d983bd2b88dbf918
       CONTAINER: docker
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -136,3 +136,14 @@ jobs:
           mode: save
           cache-hit: ${{ steps.cargo-cache.outputs.cache-hit }}
           prefix: rust-imaptest
+
+  # When this workflow fails on a pull request, the other runs of the same commit stop: they
+  # would spend runners on a commit that is already red. The job and the rules it follows are in
+  # reusable-cancel-others.yml.
+  cancel-others:
+    needs: [imaptest]
+    if: ${{ failure() && github.event_name == 'pull_request' }}
+    permissions:
+      contents: read
+      actions: write
+    uses: ./.github/workflows/reusable-cancel-others.yml

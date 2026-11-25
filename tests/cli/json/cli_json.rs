@@ -97,3 +97,45 @@ mod queue_webhook;
 
 #[path = "cli_json/accounts/domain_disabled_use.rs"]
 mod domain_disabled_use;
+
+#[path = "cli_json/delivery/warmup_flags.rs"]
+mod warmup_flags;
+
+#[path = "cli_json/migrate/migrate_import.rs"]
+mod migrate_import;
+
+#[path = "cli_json/operator/legacy_key_reach.rs"]
+mod legacy_key_reach;
+
+#[path = "cli_json/migrate/migrate_merge.rs"]
+mod migrate_merge;
+
+#[path = "cli_json/migrate/migrate_imap_port.rs"]
+mod migrate_imap_port;
+
+#[path = "cli_json/accounts/archive_purge.rs"]
+mod archive_purge;
+
+#[path = "cli_json/operator/destructive_confirmation.rs"]
+mod destructive_confirmation;
+
+#[path = "cli_json/snapshot.rs"]
+mod snapshot;
+
+#[path = "cli_json/accounts/forward_catch_all_refusals.rs"]
+mod forward_catch_all_refusals;
+
+#[path = "cli_json/accounts/class_arguments.rs"]
+mod class_arguments;
+
+#[path = "cli_json/delivery/evidence_policy.rs"]
+mod evidence_policy;
+
+#[path = "cli_json/operator/rotate_scope.rs"]
+mod rotate_scope;
+
+#[path = "cli_json/delivery/delivery_export_window.rs"]
+mod delivery_export_window;
+
+#[path = "cli_json/operator/move_subids_refusal.rs"]
+mod move_subids_refusal;

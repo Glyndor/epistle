@@ -1,18 +1,39 @@
 name: CI
 
+# One workflow carries every check a pull request must pass, and one job at the
+# end, `gate`, is the check the ruleset requires. GitHub counts a skipped job
+# as a pass, and the plan below skips work on purpose (a pull request that
+# only edits documentation compiles nothing), so a required check that can end
+# up skipped says "passed" for work that never ran. `gate` runs always and
+# fails unless the plan succeeded and every suite either succeeded or was
+# skipped because the plan said so. The suite names are not required any more.
+#
+# The jobs moved here from debian.yml, line-limit.yml and supply-chain.yml keep
+# their ids and their reusable job names, so the checks they emit keep their
+# names; only the file changed.
+
 on:
+  # develop is not listed: a push to develop would be a second run of the commit
+  # the merge queue just built, and the queue is where it was checked.
   push:
     branches: [main]
+  # The branch filter tells `develop` from `Develop`; an expression comparing
+  # `base.ref == 'develop'` does not, since GitHub compares strings without regard
+  # to case. This workflow emits the check the rulesets require, so it runs only
+  # for a base that is exactly one of the two branches they protect, and the gate
+  # checks that again in shell.
   pull_request:
+    branches: [develop, main]
   schedule:
     # Seeds the cargo caches that pull requests and the merge queue restore from:
     # a cache written on a pull request or on a queue ref is invisible to every
     # other one, and only `main` and `develop` are visible to all of them. The
-    # plan job runs everything for an event that is not a pull request.
+    # plan selects the Rust jobs for this event and nothing else.
     - cron: "17 2 * * *"
-  # Required checks `rust / Format & lint`, `rust / Test` and `rust / Coverage`: the merge queue fires
-  # `merge_group` on a temporary `gh-readonly-queue/...` branch and a required check that
-  # does not report there leaves the queue waiting forever.
+  # Required check `CI gate`, and the checks it replaces in the ruleset: the
+  # merge queue fires `merge_group` on a temporary `gh-readonly-queue/...`
+  # branch and a required check that does not report there leaves the queue
+  # waiting forever.
   # `paths:` and `branches:` filters do not apply to merge_group, so the
   # trigger sits at the top level.
   merge_group:
@@ -21,13 +42,28 @@ on:
 permissions:
   contents: read
 
+# A newer push to a pull request supersedes the run in flight. Queue and branch
+# runs are never cancelled: only a pull_request event is.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   plan:
     uses: ./.github/workflows/reusable-ci-plan.yml
 
+  # The plan's answer is the `if` of the job that calls the reusable, so a suite
+  # the plan skips shows as `skipped` here and `CI gate` can tell it from one
+  # that ran: the result of a caller is `success` even when every job inside it
+  # was skipped. `!= 'false'` keeps an empty or missing output on the side of
+  # running.
   rust:
-    needs: plan
-    if: ${{ !cancelled() }}
+    # On a pull request the line limit goes first (seconds), and the long jobs
+    # start only if it did not fail. The condition names that one gate, does not
+    # apply to a push or a queue entry, which run everything side by side, and a
+    # job skipped behind a failed gate fails `CI gate` through the plan check.
+    needs: [plan, line-limit]
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.line-limit.result != 'failure') && (needs.plan.outputs.lint != 'false' || needs.plan.outputs.tests != 'false' || needs.plan.outputs.doc != 'false' || needs.plan.outputs.msrv != 'false') }}
     uses: ./.github/workflows/reusable-rust-ci.yml
     with:
       run-lint: ${{ needs.plan.outputs.lint != 'false' }}
@@ -113,3 +149,277 @@ jobs:
     uses: ./.github/workflows/reusable-dependabot-freshness.yml
     with:
       max-age-days: 15
+
+  # Is epistle still a legitimate Debian package? Two different questions, two
+  # different builds: this one builds with Debian's own rustc through the
+  # reusable, and `dpkg-checkbuilddeps` proves Build-Depends is satisfiable
+  # rather than aspirational. release.yml answers the other question with a
+  # pinned upstream toolchain (1.100.0, the version this workflow validates), so
+  # the .deb a user installs is built by the compiler that vouched for the code.
+  # Neither build subsumes the other. Coverage owns the workspace suite.
+  debian:
+    needs: [plan, line-limit]
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.line-limit.result != 'failure') && needs.plan.outputs.debian != 'false' }}
+    uses: ./.github/workflows/reusable-rust-debian.yml
+    with:
+      package-name: epistle
+      run-build: ${{ needs.plan.outputs.debian != 'false' }}
+      # The package build runs as root in a container, which the ordinary test
+      # job does not, so a test that relies on a permission bit passes there and
+      # fails here. A pull request into develop and the merge queue skip the
+      # tests (the build is the question they ask); the promotion into main and
+      # the push to main run them, so the failure shows before the tag instead of
+      # after it (0.13.0 and 0.13.1 were tagged and never published).
+      run-tests: ${{ (github.event_name != 'pull_request' && github.event_name != 'merge_group') || github.base_ref == 'main' }}
+      # Not the reusable's trixie default: trixie ships rustc 1.85 and the
+      # dependency floor is 1.94 (set by sqlx 0.9's `rust-version`), which
+      # edition 2024 alone does not reveal. sid carries 1.95. Digest-pinned so
+      # the check runs against a fixed environment instead of a moving tag.
+      debian-image: "debian:sid@sha256:06889db0e48042b40d026b4505858812e4cb29f5cf7822189bb5be6522b4bee0"
+      # Debian's toolchain ships no musl standard library, so debian/rules
+      # builds for a target it has to bring itself. Keep this in step with the
+      # toolchain of the `rust` job: the whole point is that the packaged binary
+      # comes from the compiler CI validates with.
+      rust-toolchain: "1.100.0"
+      rust-target: x86_64-unknown-linux-musl
+      # aws-lc-sys is the only -sys crate in the tree and it compiles C, so
+      # cross-compiling to musl needs a C cross-compiler. ring and rcgen
+      # compile C without being -sys crates; the same package covers all three.
+      # Measured by .github/workflows/probe-musl.yml (epistle#757, closed):
+      # without it the build fails at aws-lc-sys and the floor survives.
+      apt-packages: "musl-tools fakeroot jq"
+
+  # A statement about the state of the whole tree, not about a diff: the reusable
+  # ends in `git ls-files -z` and counts the lines of every tracked file by
+  # extension. It does not depend on the plan, because a change that touches no
+  # source file can still be the one that leaves a file over the limit (a moved
+  # exception, a new extension), and it costs seconds.
+  line-limit:
+    if: ${{ !cancelled() }}
+    uses: ./.github/workflows/reusable-line-limit.yml
+
+  sbom-and-licenses:
+    needs: [plan, line-limit]
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.line-limit.result != 'failure') && needs.plan.outputs.supply != 'false' }}
+    uses: ./.github/workflows/reusable-rust-supply-chain.yml
+    with:
+      run-sbom: ${{ needs.plan.outputs.supply != 'false' }}
+
+  # How many files a folder holds is a statement about the whole tree, so it runs
+  # on every pull request and queue entry. The gate comes from the base commit, so
+  # a pull request cannot rewrite its own checker, and the proposed copy is tested
+  # too. Only the first pull request that introduces the gate uses its own copy.
+  folder-limit:
+    name: folder limit
+    if: ${{ !cancelled() }}
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check direct file counts with the base gate
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+        # An unreadable base is an error and never falls back to the copy of the
+        # pull request. A push or a nightly run has no base and checks the tree.
+        run: |
+          set -euo pipefail
+          script="$RUNNER_TEMP/folder-limit.sh"
+          if [ -z "$BASE" ]; then
+            cp scripts/folder-limit/folder-limit.sh "$script"
+          else
+            base="$(git rev-parse --verify "${BASE}^{commit}")"
+            git ls-tree --name-only "$base" -- scripts/folder-limit/folder-limit.sh >"$RUNNER_TEMP/folder-limit-base-path"
+            if [ -s "$RUNNER_TEMP/folder-limit-base-path" ]; then
+              git show "$base:scripts/folder-limit/folder-limit.sh" >"$script"
+            else
+              echo "base has no folder-limit gate; using PR copy for its first introduction" >&2
+              cp scripts/folder-limit/folder-limit.sh "$script"
+            fi
+          fi
+          bash "$script"
+
+      - name: Test the proposed gate
+        run: bash scripts/folder-limit/folder-limit.test.sh
+
+  # The tests of the CI itself: the gate, the plan, the map, the reference copy of
+  # the workflows, the audit, the signing scripts. They are part of the gate
+  # because a test nobody is made to pass guards nothing. The signing
+  # requirements are hash-pinned, and the release workflow installs from the same
+  # file, so what passes here is what signs a real release.
+  python-tests:
+    name: python scripts
+    if: ${{ !cancelled() }}
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install signing dependencies
+        run: python3 -m pip install --require-hashes -r .github/scripts/sign-requirements.txt
+
+      - name: Run the script tests
+        run: python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v
+
+      - name: Every required check is reachable from a merge queue
+        run: python3 .github/scripts/check_merge_group_triggers.py
+
+  # The tests of the credential scan, on a runner of their own: they execute files
+  # of the change, which the job `no credential-shaped line is added` (dco.yml) never
+  # does. They run on every pull request and queue entry (the run is seconds) and
+  # `CI gate` waits for them, so no further name has to be required.
+  secret-scan-tests:
+    name: the credential scan passes its own tests
+    if: ${{ !cancelled() }}
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Test the check
+        run: |
+          set -euo pipefail
+          for test in scripts/scan-credentials/tests/*.test.sh; do
+            bash "$test"
+          done
+
+  # Dependency advisories and the cargo-deny policy of the tree under test. They
+  # run on every pull request and in the merge queue, whatever changed, because a
+  # new advisory appears without any file changing, and a failure here stops the
+  # merge: they are a suite of the gate like the others, and no plan skips them.
+  audit:
+    if: ${{ !cancelled() }}
+    uses: ./.github/workflows/reusable-rust-audit.yml
+    with:
+      ref: ""
+      extra-lockfiles: fuzz/Cargo.lock
+
+  # A warning that something this workflow uses is deprecated (a runtime an
+  # action runs on, a command, an image) is an annotation on the job that hit
+  # it, and nobody reads annotations. The reusable this calls reads them: it lists
+  # the jobs of this run, fetches the annotations of each and fails when a warning
+  # or an error says "deprecated". Compilers and linters already fail on theirs
+  # (`-D warnings`). It waits for every suite so the annotations exist, runs on
+  # every event, and is a need of `CI gate`. Its check is named `deprecations / no
+  # deprecation notices`; it is not in the ruleset, which only `CI gate` is.
+  deprecations:
+    needs: [rust, debian, line-limit, sbom-and-licenses, audit, folder-limit, python-tests, secret-scan-tests]
+    if: always()
+    permissions:
+      contents: read
+      actions: read
+      checks: read
+    uses: ./.github/workflows/reusable-deprecation-notices.yml
+
+  # When this workflow fails on a pull request, the other runs of the same commit stop: they
+  # would spend runners on a commit that is already red. The job and the rules it follows are in
+  # reusable-cancel-others.yml.
+  cancel-others:
+    needs: [rust, line-limit, folder-limit, python-tests, secret-scan-tests]
+    if: ${{ failure() && github.event_name == 'pull_request' }}
+    permissions:
+      contents: read
+      actions: write
+    uses: ./.github/workflows/reusable-cancel-others.yml
+
+  # The one check the ruleset requires from this workflow. It runs whatever
+  # happened to the jobs it waits for, because a job that `needs` a failed job is
+  # skipped and a skipped job reports success. It fails unless:
+  #   - the plan succeeded, and every output it gives is `true` or `false`;
+  #   - every suite succeeded, or was skipped and the plan said `false` for each
+  #     thing that suite does.
+  # A suite that failed, was cancelled, or was skipped without that `false` is a
+  # failure here. A `needs` entry the table below does not know is a failure too,
+  # so a job added to this workflow cannot be left outside the gate.
+  # `dependabot-freshness` is outside on purpose: it reads the age of the newest
+  # Dependabot pull request, not the commit, so it would fail unrelated work.
+  # The ruleset requires `CI gate` and `dco / Signed-off-by present on every
+  # commit`; the names of the suites above are not required.
+  gate:
+    # `CI gate` in the merge queue and on a pull request into develop, `CI gate
+    # (main)` on a pull request into main, which plans differently, and a name no
+    # ruleset requires for any other event. The trigger only lets those two bases
+    # through; the step checks the base again. A job that is skipped emits its name
+    # too, and a skipped job counts as passed, so nothing else may carry the name a
+    # ruleset requires.
+    name: ${{ github.event_name == 'merge_group' && 'CI gate' || github.event_name == 'pull_request' && (github.event.pull_request.base.ref == 'main' && 'CI gate (main)' || 'CI gate') || format('CI gate ({0})', github.event_name) }}
+    needs: [plan, rust, debian, line-limit, sbom-and-licenses, audit, folder-limit, python-tests, deprecations, secret-scan-tests]
+    if: always()
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Every suite ran or the plan said it could be skipped
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          python3 -I - <<'PY'
+          import json
+          import os
+          import sys
+
+          SUITES = {
+              "rust": ("lint", "tests", "doc", "msrv"),
+              "debian": ("debian",),
+              "line-limit": (),
+              "audit": (),
+              "folder-limit": (),
+              "python-tests": (),
+              "deprecations": (),
+              "secret-scan-tests": (),
+              "sbom-and-licenses": ("supply",),
+          }
+          needs = json.loads(os.environ["NEEDS"])
+          problems = []
+
+          # Compared here, in code that tells `develop` from `Develop`, and not
+          # only in the expression that names this job.
+          if os.environ.get("EVENT_NAME") == "pull_request" and os.environ.get("BASE_REF") not in ("develop", "main"):
+              problems.append(f"the base of this pull request is {os.environ.get('BASE_REF')!r}, not develop or main")
+
+          plan = needs.get("plan") or {}
+          if plan.get("result") != "success":
+              problems.append(f"the plan job did not succeed (result: {plan.get('result')})")
+          outputs = plan.get("outputs") or {}
+          for dims in SUITES.values():
+              for dim in dims:
+                  if outputs.get(dim) not in ("true", "false"):
+                      problems.append(f"plan output {dim!r} is neither true nor false: {outputs.get(dim)!r}")
+
+          for name in needs:
+              if name != "plan" and name not in SUITES:
+                  problems.append(f"{name} is not in the gate table")
+          for name, dims in SUITES.items():
+              job = needs.get(name)
+              if job is None:
+                  problems.append(f"{name} is not among the jobs the gate waits for")
+                  continue
+              result = job.get("result")
+              if result == "success":
+                  continue
+              if result == "skipped":
+                  if plan.get("result") == "success" and dims and all(outputs.get(d) == "false" for d in dims):
+                      continue
+                  problems.append(f"{name} was skipped and the plan did not say it could be")
+              else:
+                  problems.append(f"{name} did not succeed (result: {result})")
+
+          print(f"{'suite':<20} {'plan says':<28} result")
+          for name, dims in SUITES.items():
+              says = ",".join(f"{d}={outputs.get(d)}" for d in dims) or "always runs"
+              print(f"{name:<20} {says:<28} {(needs.get(name) or {}).get('result')}")
+          for problem in problems:
+              print(f"::error::{problem}")
+          if problems:
+              sys.exit(1)
+          print("The plan succeeded and every suite passed or was skipped by the plan.")
+          PY
