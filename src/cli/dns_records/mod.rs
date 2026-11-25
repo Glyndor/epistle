@@ -45,16 +45,7 @@ pub fn run(config: &Config, json: bool, out: &mut impl std::io::Write) -> ExitCo
 
 /// The records as the JSON array `--json` prints.
 pub fn records_json(records: &[PublishRecord]) -> serde_json::Value {
-	records
-		.iter()
-		.map(|entry| {
-			let record = &entry.record;
-			serde_json::json!({
-				"name": record.name, "ttl": record.ttl,
-				"type": record.kind.as_str(), "value": record.value,
-			})
-		})
-		.collect()
+	serde_json::to_value(crate::dns::listing::rows(records)).unwrap_or_default()
 }
 
 /// Print one line per record: `name TTL IN KIND value`. TXT values are
