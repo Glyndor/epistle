@@ -28,6 +28,8 @@ fn ctx_for(dir: &std::path::Path, extra: &str) -> Ctx {
 		podup: "sh".to_string(),
 		meminfo: dir.join("meminfo"),
 		steady: std::time::Duration::ZERO,
+		hold: None,
+		deadline: std::time::Instant::now() + std::time::Duration::from_secs(60),
 	}
 }
 

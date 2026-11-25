@@ -2,15 +2,16 @@
 //! `epistle status`. Read-only and bounded: it asks `podup ps` and never
 //! touches the Podman socket setup that `epistle stack` repairs.
 
-use std::io::Read;
 use std::path::Path;
-use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 
 use super::{build_command, compose_path};
 use crate::cli::status::parse_rfc3339;
+
+/// What `podup ps` is reported to have done when it ran out of time.
+const TIMED_OUT: &str = "podup ps timed out";
 
 /// How long `podup ps` may take before it is abandoned.
 pub(in crate::cli) const PS_TIMEOUT: Duration = Duration::from_secs(5);
@@ -44,32 +45,31 @@ pub(in crate::cli) fn ps_json_with(
 	compose: &Path,
 	timeout: Duration,
 ) -> Result<String, String> {
-	let mut child = build_command(podup, compose, &["ps", "--format", "json"])
-		.stdin(Stdio::null())
-		.stdout(Stdio::piped())
-		.stderr(Stdio::null())
-		.spawn()
-		.map_err(|error| format!("cannot run {podup}: {error}"))?;
-	let mut stdout = child.stdout.take().ok_or("no stdout from podup")?;
-	let reader = std::thread::spawn(move || {
-		let mut bytes = Vec::new();
-		let _ = stdout.read_to_end(&mut bytes);
-		bytes
-	});
-	let deadline = Instant::now() + timeout;
-	let status = loop {
-		match child.try_wait() {
-			Ok(Some(status)) => break status,
-			Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
-			Ok(None) => {
-				let _ = child.kill();
-				let _ = child.wait();
-				return Err(format!("podup ps timed out after {}s", timeout.as_secs()));
-			}
-			Err(error) => return Err(format!("waiting for podup: {error}")),
+	ps_json_until(podup, compose, Instant::now() + timeout).map_err(|error| {
+		if error == TIMED_OUT {
+			format!("podup ps timed out after {}s", timeout.as_secs())
+		} else {
+			error
 		}
-	};
-	let bytes = reader.join().map_err(|_| "reading podup output failed")?;
+	})
+}
+
+/// `podup ps --format json`, killed with what it started at `until`, and its
+/// output collected within that time too.
+pub(in crate::cli) fn ps_json_until(
+	podup: &str,
+	compose: &Path,
+	until: Instant,
+) -> Result<String, String> {
+	let mut command = build_command(podup, compose, &["ps", "--format", "json"]);
+	let (status, bytes) =
+		crate::cli::status::bounded::output_until(&mut command, until).map_err(|error| {
+			if error.contains("over") {
+				TIMED_OUT.to_string()
+			} else {
+				format!("podup ps: {error}")
+			}
+		})?;
 	if !status.success() {
 		return Err(format!("podup ps exited with {status}"));
 	}

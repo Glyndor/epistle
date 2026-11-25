@@ -81,7 +81,7 @@ impl Cli {
 				listen,
 			} => crate::cli::mta::sts_serve::run(policy_dir, cert, key, listen),
 			Command::Serve { config, role } => match serve::load(&config, role) {
-				Ok(config) => serve::run(config, role),
+				Ok(loaded) => serve::run_from(loaded, role, Some(config.clone())),
 				Err(error) => {
 					style::error(error);
 					ExitCode::FAILURE

@@ -32,7 +32,8 @@ pub(super) async fn check(ctx: &Ctx) -> AreaReport {
 	}
 	let data_dir = config.data_dir.clone();
 	let relays = crate::queue::warmup::relay_hosts(&config.transport);
-	let groups = tokio::task::spawn_blocking(move || delivered::groups(&data_dir, days, &relays))
+	let groups = ctx
+		.blocking(move || delivered::groups(&data_dir, days, &relays))
 		.await
 		.unwrap_or_else(|error| Err(std::io::Error::other(error)));
 	let groups = match groups {

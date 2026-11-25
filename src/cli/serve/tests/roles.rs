@@ -38,7 +38,7 @@ fn split_config(dir: &Path, port: u16) -> Config {
 async fn the_whole_server_refuses_to_start_without_the_dns_credential() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let port = crate::test_support::fixtures::free_port();
-	let error = super::super::serve(split_config(dir.path(), port), ServeRole::All)
+	let error = super::super::serve(split_config(dir.path(), port), ServeRole::All, None)
 		.await
 		.expect_err("no credential to answer dns-01 with");
 	assert!(error.to_string().contains("could not be built"), "{error}");
@@ -51,6 +51,7 @@ async fn the_mail_role_serves_without_the_dns_credential() {
 	let server = tokio::spawn(super::super::serve(
 		split_config(dir.path(), port),
 		ServeRole::Mail,
+		None,
 	));
 	let mut connected = false;
 	for _ in 0..200 {

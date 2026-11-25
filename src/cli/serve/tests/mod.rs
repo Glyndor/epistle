@@ -2,12 +2,13 @@ pub use super::*;
 
 /// The whole server in one process, as `epistle serve` runs it by default.
 pub(super) async fn serve(config: Config) -> std::io::Result<()> {
-	super::serve(config, ServeRole::All).await
+	super::serve(config, ServeRole::All, None).await
 }
 
 mod acme_stop;
 mod base;
 mod exclusion;
+mod health_gate;
 mod limits;
 mod mta_sts;
 mod oauth;

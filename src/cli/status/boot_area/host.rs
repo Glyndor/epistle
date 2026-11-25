@@ -3,7 +3,7 @@
 
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 use crate::cli::stack::autostart::{self, Host};
 
@@ -85,12 +85,19 @@ fn classify(name: &str) -> Link {
 /// The real host.
 pub(super) struct Live {
 	account: Account,
+	/// When every program this host runs is killed: the end of the check.
+	until: std::time::Instant,
 }
 
 impl Live {
 	/// The packaged account when it exists, otherwise the user running the
 	/// command, which is the one whose rootless stack there is to check.
 	pub(super) fn new() -> Self {
+		Self::until(std::time::Instant::now() + super::super::AREA_DEADLINE)
+	}
+
+	/// [`Live::new`] with programs killed at `until`.
+	pub(super) fn until(until: std::time::Instant) -> Self {
 		let account = match crate::cli::rootless::lookup_user() {
 			Ok(Some(user)) => Account {
 				name: "glyndor-epistle".to_string(),
@@ -103,17 +110,13 @@ impl Live {
 				Account { name, uid }
 			}
 		};
-		Live { account }
+		Live { account, until }
 	}
 }
 
-fn stdout_of(command: &mut Command) -> Result<String, String> {
-	let output = command
-		.stdin(Stdio::null())
-		.stderr(Stdio::null())
-		.output()
-		.map_err(|error| error.to_string())?;
-	Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+fn stdout_of(command: &mut Command, until: std::time::Instant) -> Result<String, String> {
+	let (_, stdout) = super::super::bounded::output_until(command, until)?;
+	Ok(String::from_utf8_lossy(&stdout).trim().to_string())
 }
 
 impl Host for Live {
@@ -130,8 +133,11 @@ impl Host for Live {
 	}
 
 	fn systemctl(&mut self, args: &[&str]) -> Result<String, String> {
-		stdout_of(Command::new("systemctl").arg("--user").args(args))
-			.map_err(|error| format!("cannot run systemctl: {error}"))
+		stdout_of(
+			Command::new("systemctl").arg("--user").args(args),
+			self.until,
+		)
+		.map_err(|error| format!("cannot run systemctl: {error}"))
 	}
 
 	fn install(&mut self) -> Result<(), String> {
@@ -149,13 +155,16 @@ impl BootHost for Live {
 	}
 
 	fn system_systemctl(&mut self, args: &[&str]) -> Result<String, String> {
-		stdout_of(Command::new("systemctl").args(args))
+		stdout_of(Command::new("systemctl").args(args), self.until)
 			.map_err(|error| format!("cannot run systemctl: {error}"))
 	}
 
 	fn sysctl_at_boot(&mut self) -> Result<String, String> {
-		let mut text = stdout_of(Command::new("systemd-analyze").args(["cat-config", "sysctl.d"]))
-			.map_err(|error| format!("cannot run systemd-analyze: {error}"))?;
+		let mut text = stdout_of(
+			Command::new("systemd-analyze").args(["cat-config", "sysctl.d"]),
+			self.until,
+		)
+		.map_err(|error| format!("cannot run systemd-analyze: {error}"))?;
 		// systemd-sysctl reads this file after every `sysctl.d` one.
 		if let Ok(legacy) = std::fs::read_to_string("/etc/sysctl.conf") {
 			text.push('\n');
@@ -168,13 +177,11 @@ impl BootHost for Live {
 	}
 
 	fn image_exists(&mut self, image: &str) -> Result<bool, String> {
-		let status = Command::new("podman")
-			.args(["image", "exists", image])
-			.stdin(Stdio::null())
-			.stdout(Stdio::null())
-			.stderr(Stdio::null())
-			.status()
-			.map_err(|error| format!("cannot run podman: {error}"))?;
+		let (status, _) = super::super::bounded::output_until(
+			Command::new("podman").args(["image", "exists", image]),
+			self.until,
+		)
+		.map_err(|error| format!("cannot run podman: {error}"))?;
 		match status.code() {
 			Some(0) => Ok(true),
 			Some(1) => Ok(false),
@@ -193,28 +200,31 @@ impl BootHost for Live {
 	}
 
 	fn systemd_version(&mut self) -> Option<u32> {
-		let text = stdout_of(Command::new("systemctl").arg("--version")).ok()?;
+		let text = stdout_of(Command::new("systemctl").arg("--version"), self.until).ok()?;
 		autostart::dropins::parse_version(&text)
 	}
 
 	fn ps_json(&mut self, compose: &Path) -> Result<String, String> {
 		let mut command =
 			crate::cli::stack::build_command("podup", compose, &["ps", "--format", "json"]);
-		stdout_of(&mut command).map_err(|error| format!("cannot run podup: {error}"))
+		stdout_of(&mut command, self.until).map_err(|error| format!("cannot run podup: {error}"))
 	}
 
 	fn unit_log(&mut self) -> Result<String, String> {
-		stdout_of(Command::new("journalctl").args([
-			"--user",
-			"--unit",
-			autostart::UNIT,
-			"--boot",
-			"--lines",
-			"200",
-			"--output",
-			"cat",
-			"--no-pager",
-		]))
+		stdout_of(
+			Command::new("journalctl").args([
+				"--user",
+				"--unit",
+				autostart::UNIT,
+				"--boot",
+				"--lines",
+				"200",
+				"--output",
+				"cat",
+				"--no-pager",
+			]),
+			self.until,
+		)
 		.map_err(|error| format!("cannot run journalctl: {error}"))
 	}
 

@@ -60,7 +60,7 @@ fn the_seven_names_and_the_two_old_ones_are_taken() {
 	}
 	let error = parse_scope("manage").expect_err("not a scope");
 	assert!(
-		error.contains("manage:read") && error.contains("alias or ban"),
+		error.contains("manage:read") && error.contains("alias, ban or health"),
 		"{error}"
 	);
 }

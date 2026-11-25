@@ -26,7 +26,7 @@ pub(super) async fn check(ctx: &Ctx) -> AreaReport {
 	let data_dir = config.data_dir.clone();
 	let storage = config.storage.clone();
 	let now = epoch(ctx.now);
-	tokio::task::spawn_blocking(move || evaluate(&data_dir, storage.as_ref(), now))
+	ctx.blocking(move || evaluate(&data_dir, storage.as_ref(), now))
 		.await
 		.unwrap_or_else(|error| AreaReport::fail(format!("spool scan failed: {error}")))
 }

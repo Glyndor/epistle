@@ -69,11 +69,15 @@ fn evaluate(store: &ApiKeyStore, data_dir: &std::path::Path, now: u64) -> AreaRe
 				));
 			}
 		}
-		if key.reach().is_some_and(|held| held.contains(&Scope::Ban)) && !key.domains.is_empty() {
+		if key
+			.reach()
+			.is_some_and(|held| held.contains(&Scope::Ban) || held.contains(&Scope::Health))
+			&& !key.domains.is_empty()
+		{
 			items.push(Item::new(
 				&name,
 				Level::Warn,
-				"ban key is confined to domains, and the ban routes refuse it: bans belong to the whole server",
+				"ban or health key is confined to domains, and those routes refuse it: they belong to the whole server",
 			));
 		}
 		if let (Some(cidr), Some(clause)) = (&key.ip_cidr, &clause) {

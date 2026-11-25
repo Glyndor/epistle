@@ -14,7 +14,8 @@ use crate::clock::sync::{FIX, HostClock, probe};
 /// configuration loaded). The area surfaces a one-line summary plus
 /// per-source findings.
 pub(super) async fn check(ctx: &Ctx) -> AreaReport {
-	let host_probe = tokio::task::spawn_blocking(probe)
+	let host_probe = ctx
+		.blocking(probe)
 		.await
 		.unwrap_or_else(|_| HostClock::Unknown("the probe did not finish".to_string()));
 	let external = ctx
@@ -27,14 +28,15 @@ pub(super) async fn check(ctx: &Ctx) -> AreaReport {
 	if !external.enabled {
 		return compose_disabled(host_probe, &external);
 	}
-	let external_run = tokio::task::spawn_blocking({
-		let external = external.clone();
-		move || match tokio::runtime::Handle::try_current() {
-			Ok(handle) => Ok(handle.block_on(crate::clock::external::run(&external))),
-			Err(_) => Err(NoRun::Runtime),
-		}
-	})
-	.await;
+	let external_run = ctx
+		.blocking({
+			let external = external.clone();
+			move || match tokio::runtime::Handle::try_current() {
+				Ok(handle) => Ok(handle.block_on(crate::clock::external::run(&external))),
+				Err(_) => Err(NoRun::Runtime),
+			}
+		})
+		.await;
 	compose_joined(host_probe, external_run, &external)
 }
 

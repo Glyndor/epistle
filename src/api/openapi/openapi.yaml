@@ -29,7 +29,7 @@ info:
     client asks for; inside they are `mail:read`, `mail:write` and `send`). These
     tokens never authenticate `/api/v1` or SCIM.
     A key carries scopes (`manage:read`, `manage:write`, `mail:read`, `mail:write`,
-    `send`, `scim`, `alias`, `ban`). A key made before 0.15.0 with `read` or `write` holds
+    `send`, `scim`, `alias`, `ban`, `health`). A key made before 0.15.0 with `read` or `write` holds
     both halves of it, management and mail, until it is changed; a request the
     scopes do not cover is answered `403 forbidden` and does not count as a
     failed authentication; an unknown token is `401 unauthenticated`.
@@ -71,6 +71,8 @@ tags:
     description: Hosted-domain reads and atomic writes shared with `epistle domain`.
   - name: DNS
     description: The records the hosted domains need in DNS, and a check of the live DNS against them.
+  - name: Health
+    description: The checks `epistle status` and `epistle check` make, through the same code.
   - name: Bans
     description: The bans in force, banning and lifting, and the allow list, through the same code as `epistle ban`.
   - name: Aliases
@@ -293,6 +295,102 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiError"
+  /api/v1/health:
+    get:
+      operationId: getHealth
+      tags: [Health]
+      summary: The checks `epistle status` makes
+      description: |-
+        The JSON `epistle status --json` prints, from the same code: one object
+        keyed by area (`config`, `ports`, `tls`, `dns`, `db`, `api_keys`,
+        `antivirus`, `antispam`, `queue`, `disk`, `spool`, `storage_keys`,
+        `subid`, `boot`, `warmup`, `resources`, `clock`, `evidence`,
+        `deliverability`), each with `status` (`ok`, `warn`, `fail`), a
+        `detail` and its `items`. The answer is `200` whatever the areas find:
+        the command's exit code has no HTTP counterpart. The areas run against
+        the configuration the server runs with, each is cut off after 60
+        seconds, and at most two runs are in progress on a server, whatever its
+        number of listeners: the third is `429` with `Retry-After`. A run goes
+        on when its client leaves, and keeps its place until it has ended. The checks name the server's listeners,
+        certificate, disk, keys and stack, so the route needs the `health`
+        scope, and only that: `read` does not open it. A key confined to
+        domains or bound to an account is refused with `403`.
+      x-epistle-scope: [health]
+      responses:
+        "200":
+          description: One report per area.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthReport"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/HealthForbidden"
+        "429":
+          description: |-
+            `rate_limited`: this client's failed authentications, or two runs
+            are already in progress. Both carry `Retry-After`.
+          headers:
+            Retry-After:
+              description: Seconds to wait.
+              schema:
+                type: integer
+                minimum: 1
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "500":
+          $ref: "#/components/responses/Internal"
+  /api/v1/health/{area}:
+    get:
+      operationId: getHealthArea
+      tags: [Health]
+      summary: One check, as `epistle check <area>` makes it
+      description: |-
+        The JSON `epistle check <area> --json` prints: the same object as the
+        full report, with the one area. The name is one of the keys listed
+        there, spelled exactly; anything else is `404 no such area`, and only
+        after the key was found to be one that may ask. Needs the `health`
+        scope.
+      x-epistle-scope: [health]
+      parameters:
+        - name: area
+          in: path
+          required: true
+          description: The area, spelled as the keys of the full report are.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The report of the one area.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthReport"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/HealthForbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          description: |-
+            `rate_limited`: this client's failed authentications, or two runs
+            are already in progress. Both carry `Retry-After`.
+          headers:
+            Retry-After:
+              description: Seconds to wait.
+              schema:
+                type: integer
+                minimum: 1
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "500":
+          $ref: "#/components/responses/Internal"
   /api/v1/bans:
     get:
       operationId: listBans
@@ -3383,6 +3481,15 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/ApiError"
+    HealthForbidden:
+      description: |-
+        `forbidden`: the key does not hold the `health` scope, is confined to
+        some domains (the checks belong to the whole server), or is bound to
+        one account.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
     BanForbidden:
       description: |-
         `forbidden`: the key does not hold the `ban` scope, is confined to some
@@ -3419,7 +3526,7 @@ components:
         `no such dynamic account` (the account exists but is declared in the
         configuration file), `no such masked address`, `no such queue entry`,
         `no such domain`, `the delivery log is disabled`, `bans are not manageable`
-        (no `[database]`), `no ban or failure record`, `not on the allow list`. Lifting a network ban or removing an allow-list block
+        (no `[database]`), `no ban or failure record`, `not on the allow list`, `no such area`. Lifting a network ban or removing an allow-list block
         wider than a key may name is `400`. An account or a
         domain outside a confined key's domains answers exactly like one that
         does not exist.
@@ -3849,6 +3956,32 @@ components:
                     detail:
                       type: string
                       description: What was found.
+    HealthReport:
+      type: object
+      description: One entry per area, keyed by the area's name.
+      additionalProperties:
+        type: object
+        required: [status, detail, items]
+        properties:
+          status:
+            type: string
+            enum: [ok, warn, fail]
+          detail:
+            type: string
+            description: The one-line summary `epistle status` prints.
+          items:
+            type: array
+            items:
+              type: object
+              required: [name, status, detail]
+              properties:
+                name:
+                  type: string
+                status:
+                  type: string
+                  enum: [ok, warn, fail]
+                detail:
+                  type: string
     BanRow:
       type: object
       required: [subject, reason, until]

@@ -9,7 +9,7 @@
 use super::{ApiKey, ApiKeyFile, ApiKeyStore, Scope, UnknownScopeError};
 
 /// Every scope, in the order a set is written.
-pub(crate) const ALL: [Scope; 8] = [
+pub(crate) const ALL: [Scope; 9] = [
 	Scope::ManageRead,
 	Scope::ManageWrite,
 	Scope::MailRead,
@@ -18,6 +18,7 @@ pub(crate) const ALL: [Scope; 8] = [
 	Scope::Scim,
 	Scope::Alias,
 	Scope::Ban,
+	Scope::Health,
 ];
 
 /// What a name of 0.14.0 reaches in 0.15.0: `read` and `write` keep both
@@ -40,6 +41,7 @@ pub(crate) fn expand_legacy(name: &str) -> Result<&'static [Scope], UnknownScope
 fn expand_loaded(name: &str) -> Result<&'static [Scope], UnknownScopeError> {
 	match name {
 		"ban" => Ok(&[Scope::Ban]),
+		"health" => Ok(&[Scope::Health]),
 		other => expand_legacy(other),
 	}
 }
@@ -51,12 +53,17 @@ fn expand_loaded(name: &str) -> Result<&'static [Scope], UnknownScopeError> {
 pub fn legacy_cover(grants: &[Scope]) -> Vec<&'static str> {
 	let mut names = Vec::new();
 	for (name, members) in [
-		// `ban` did not exist in 0.14.0, which refuses a file that names it, so
+		// `ban` and `health` did not exist in 0.14.0, which refuses a file that names it, so
 		// a key that holds it is written there as `read`: the least that
 		// 0.14.0 can give a key that must hold something.
 		(
 			"read",
-			&[Scope::ManageRead, Scope::MailRead, Scope::Ban][..],
+			&[
+				Scope::ManageRead,
+				Scope::MailRead,
+				Scope::Ban,
+				Scope::Health,
+			][..],
 		),
 		("write", &[Scope::ManageWrite, Scope::MailWrite][..]),
 		("send", &[Scope::Send][..]),

@@ -153,6 +153,8 @@ struct Inner {
 	dns: dns::DnsChecks,
 	/// The ban store the ban routes manage, when the server has a database.
 	ban_admin: Option<Arc<dyn crate::antispam::bans::operator::BanAdmin>>,
+	/// What the health routes run and how many runs may overlap.
+	health: health::HealthRuns,
 }
 
 mod limiter;
@@ -164,6 +166,8 @@ mod bans;
 mod construction;
 mod dns;
 mod event_stream;
+mod health;
+pub use health::HealthGate;
 mod hosted;
 mod settings;
 #[cfg(test)]

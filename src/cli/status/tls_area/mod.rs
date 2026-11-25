@@ -142,15 +142,16 @@ async fn layout(ctx: &Ctx, compose: &std::path::Path, config: &Config) -> Layout
 			let podup = ctx.podup.clone();
 			let window = ctx.steady;
 			let compose = compose.to_path_buf();
-			let upness = tokio::task::spawn_blocking(move || {
-				crate::cli::stack::certs::upness(&podup, &compose, "certs", window)
-			})
-			.await
-			.unwrap_or_else(|error| {
-				crate::cli::stack::certs::Upness::Unreadable(format!(
-					"the podup task failed: {error}"
-				))
-			});
+			let upness = ctx
+				.blocking(move || {
+					crate::cli::stack::certs::upness(&podup, &compose, "certs", window)
+				})
+				.await
+				.unwrap_or_else(|error| {
+					crate::cli::stack::certs::Upness::Unreadable(format!(
+						"the podup task failed: {error}"
+					))
+				});
 			let renewal = certs::renewal(
 				&config.data_dir,
 				config
@@ -176,16 +177,17 @@ async fn orphan(ctx: &Ctx, compose: &std::path::Path) -> Option<Item> {
 	}
 	let podup = ctx.podup.clone();
 	let compose = compose.to_path_buf();
-	let rows = tokio::task::spawn_blocking(move || {
-		crate::cli::stack::started::ps_json_with(
-			&podup,
-			&compose,
-			crate::cli::stack::started::PS_TIMEOUT,
-		)
-	})
-	.await
-	.ok()?
-	.ok()?;
+	let rows = ctx
+		.blocking(move || {
+			crate::cli::stack::started::ps_json_with(
+				&podup,
+				&compose,
+				crate::cli::stack::started::PS_TIMEOUT,
+			)
+		})
+		.await
+		.ok()?
+		.ok()?;
 	let (state, _) = crate::cli::stack::certs::row(&rows, "certs").ok()??;
 	if state != "running" {
 		return None;

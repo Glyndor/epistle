@@ -18,7 +18,7 @@ pub(in crate::cli) fn parse_scope(value: &str) -> Result<String, String> {
 		return Ok(value.to_string());
 	}
 	Err(format!(
-		"unknown scope \"{value}\" (expected manage:read, manage:write, mail:read, mail:write, send, scim, alias or ban)"
+		"unknown scope \"{value}\" (expected manage:read, manage:write, mail:read, mail:write, send, scim, alias, ban or health)"
 	))
 }
 
@@ -46,9 +46,9 @@ pub(super) fn legacy_warning(scopes: &[String], account_bound: bool) -> Option<S
 /// 0.14.0 gave, kept as it was.
 pub(super) fn bound_refusal(scopes: &[String]) -> Option<&'static str> {
 	let names = |wanted: &[&str]| scopes.iter().any(|name| wanted.contains(&name.as_str()));
-	if names(&["scim", "alias", "ban"]) {
+	if names(&["scim", "alias", "ban", "health"]) {
 		Some(
-			"account-bound API keys cannot hold the scim, alias or ban scope (all are administrative)",
+			"account-bound API keys cannot hold the scim, alias, ban or health scope (all are administrative)",
 		)
 	} else if names(&["manage:read", "manage:write"]) {
 		Some(

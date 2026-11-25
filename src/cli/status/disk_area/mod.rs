@@ -26,7 +26,8 @@ pub(super) async fn check(ctx: &Ctx) -> AreaReport {
 		Err(report) => return report,
 	};
 	let data_dir = config.data_dir.clone();
-	let reading = tokio::task::spawn_blocking(move || measure(&data_dir))
+	let reading = ctx
+		.blocking(move || measure(&data_dir))
 		.await
 		.unwrap_or(None);
 	evaluate(reading)

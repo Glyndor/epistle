@@ -28,7 +28,7 @@ pub use audit::{
 pub use authorization::{Credential, Principal};
 pub use events::EventLimits;
 pub use jmap::reclaim_blobs;
-pub use state::{ApiState, ClientIp};
+pub use state::{ApiState, ClientIp, HealthGate};
 pub use tenant_limits::TenantLimits;
 
 use axum::Router;

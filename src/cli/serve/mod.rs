@@ -24,7 +24,7 @@ use ratelimit::RateLimiters;
 use smtp_state::SmtpSharedState;
 use tls::TlsStack;
 mod run;
-pub use run::run;
+pub use run::{run, run_from};
 
 /// The tables of the configuration the certificates role never reads: the
 /// accounts and their password hashes, the API token hash, the OAuth
@@ -57,7 +57,11 @@ fn dns_write_for_role(role: ServeRole, data_dir: &std::path::Path) -> tasks::Dns
 	}
 }
 
-async fn serve(config: Config, role: ServeRole) -> std::io::Result<()> {
+async fn serve(
+	config: Config,
+	role: ServeRole,
+	config_path: Option<std::path::PathBuf>,
+) -> std::io::Result<()> {
 	let _store = crate::storage::lock::FileLock::store_shared(&config.data_dir)?;
 	crate::log_id::init(&config.data_dir)?;
 	crate::mtasts::publish::write_policy(&config)?;
@@ -96,6 +100,8 @@ async fn serve(config: Config, role: ServeRole) -> std::io::Result<()> {
 		.into_shared();
 	let directory = account_store.handle();
 	let live = live_domains::start(&config);
+	// One gate for the server: every API listener takes its places from it.
+	let health_gate = crate::api::HealthGate::new();
 	// A write picks its tenant key from the account's addresses.
 	crypto.attach_accounts(Arc::new(directory.clone()));
 	let SplitCompanions {
@@ -255,6 +261,8 @@ async fn serve(config: Config, role: ServeRole) -> std::io::Result<()> {
 						bayes: &bayes,
 						live: &live,
 						ban_admin: &ban_admin,
+						config_path: &config_path,
+						health_gate: &health_gate,
 					},
 				)?;
 				let listener = tasks::bind(listener_config, &ipv4_any_ports).await?;

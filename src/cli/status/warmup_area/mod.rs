@@ -28,11 +28,9 @@ pub(super) async fn check(ctx: &Ctx) -> AreaReport {
 	let log_days = config.delivery_log_days();
 	let relays = crate::queue::warmup::relay_hosts(&config.transport);
 	let now = u64::try_from(epoch(ctx.now)).unwrap_or(0);
-	tokio::task::spawn_blocking(move || {
-		evaluate(&data_dir, storage.as_ref(), log_days, &relays, now)
-	})
-	.await
-	.unwrap_or_else(|error| AreaReport::fail(format!("warm-up check failed: {error}")))
+	ctx.blocking(move || evaluate(&data_dir, storage.as_ref(), log_days, &relays, now))
+		.await
+		.unwrap_or_else(|error| AreaReport::fail(format!("warm-up check failed: {error}")))
 }
 
 /// The report for the files under `data_dir` as of `now`.

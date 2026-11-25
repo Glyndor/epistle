@@ -185,16 +185,22 @@ fn item_line(item: &Item, decor: Decor) -> String {
 	format!("  {painted}{padding}  {text}")
 }
 
+/// The reports as the one JSON object keyed by area name that `--json`
+/// prints and the health routes answer.
+pub(super) fn to_value(reports: &[(CheckArea, AreaReport)]) -> serde_json::Value {
+	let map: std::collections::BTreeMap<&str, &AreaReport> = reports
+		.iter()
+		.map(|(area, report)| (area.name(), report))
+		.collect();
+	serde_json::to_value(map).unwrap_or_default()
+}
+
 /// Print one JSON object keyed by area name.
 pub(super) fn render_json(
 	reports: &[(CheckArea, AreaReport)],
 	out: &mut impl Write,
 ) -> std::io::Result<()> {
-	let map: std::collections::BTreeMap<&str, &AreaReport> = reports
-		.iter()
-		.map(|(area, report)| (area.name(), report))
-		.collect();
-	serde_json::to_writer_pretty(&mut *out, &map).map_err(std::io::Error::other)?;
+	serde_json::to_writer_pretty(&mut *out, &to_value(reports)).map_err(std::io::Error::other)?;
 	writeln!(out)
 }
 

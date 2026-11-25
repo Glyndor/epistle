@@ -50,7 +50,7 @@ mod service;
 mod srv;
 mod stack;
 mod staging;
-mod status;
+pub(crate) mod status;
 mod style;
 mod subid;
 mod suppression;
