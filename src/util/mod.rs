@@ -14,6 +14,7 @@ pub mod mailto;
 pub mod mutf7;
 pub mod path_component;
 pub mod path_containment;
+pub mod secret;
 pub mod validation;
 pub mod warn_limited;
 

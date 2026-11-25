@@ -63,6 +63,10 @@ pub enum Scope {
 	/// tenant, so neither `read` nor `write` opens them and a key holding it
 	/// cannot be confined to domains or bound to an account.
 	Health,
+	/// The key routes under `/api/v1/keys`: list, make and revoke keys. A
+	/// key that can make keys is the way to every other key, so it is its own
+	/// damage class, and a key it makes reaches no further than it does.
+	Key,
 }
 
 /// Error returned when the [`std::str::FromStr`] impl for [`Scope`] is
@@ -84,7 +88,7 @@ impl std::str::FromStr for Scope {
 	type Err = UnknownScopeError;
 
 	/// Parse the canonical form (`manage:read`, `manage:write`, `mail:read`,
-	/// `mail:write`, `send`, `scim`, `alias`, `ban`). Unknown values are rejected, and
+	/// `mail:write`, `send`, `scim`, `alias`, `ban`, `health`, `key`). Unknown values are rejected, and
 	/// so are the names 0.14.0 used (`read`, `write`): those are expanded by
 	/// `grants::expand_legacy` where a file or an option may still carry
 	/// them.
@@ -99,6 +103,7 @@ impl std::str::FromStr for Scope {
 			"alias" => Ok(Scope::Alias),
 			"ban" => Ok(Scope::Ban),
 			"health" => Ok(Scope::Health),
+			"key" => Ok(Scope::Key),
 			_ => Err(UnknownScopeError(value.to_string())),
 		}
 	}
@@ -117,6 +122,7 @@ impl Scope {
 			Scope::Alias => "alias",
 			Scope::Ban => "ban",
 			Scope::Health => "health",
+			Scope::Key => "key",
 		}
 	}
 }
@@ -341,6 +347,28 @@ impl ApiKeyStore {
 		key: ApiKey,
 		gate: Option<&crate::limits::Gate>,
 	) -> std::io::Result<()> {
+		self.add_inner(key, gate, None)
+	}
+
+	/// [`Self::add_within`] for a key made by another key: the key that asks
+	/// must still be in the file, with the same secret, when the new one is
+	/// written, and the file holds at most `max_keys`. The checks and the insert
+	/// are one step under the file's lock.
+	pub fn add_by(
+		&mut self,
+		key: ApiKey,
+		gate: Option<&crate::limits::Gate>,
+		by: (&issue::Caller, usize),
+	) -> std::io::Result<()> {
+		self.add_inner(key, gate, Some(by))
+	}
+
+	fn add_inner(
+		&mut self,
+		key: ApiKey,
+		gate: Option<&crate::limits::Gate>,
+		by: Option<(&issue::Caller, usize)>,
+	) -> std::io::Result<()> {
 		if let Some(spec) = &key.ip_cidr
 			&& crate::cidr::Cidr::parse(spec).is_none()
 		{
@@ -362,6 +390,23 @@ impl ApiKeyStore {
 			},
 			ApiKeyFile::default,
 			|state: &mut ApiKeyFile| -> std::io::Result<()> {
+				if let Some((caller, max_keys)) = by {
+					if !state.keys.iter().any(|held| {
+						held.label == caller.label()
+							&& held.hash.eq_ignore_ascii_case(caller.hash())
+					}) {
+						return Err(std::io::Error::new(
+							std::io::ErrorKind::PermissionDenied,
+							"the key that asked is no longer valid",
+						));
+					}
+					if state.keys.len() >= max_keys {
+						return Err(std::io::Error::new(
+							std::io::ErrorKind::QuotaExceeded,
+							format!("the file already holds {max_keys} API keys"),
+						));
+					}
+				}
 				if state
 					.keys
 					.iter()
@@ -409,7 +454,7 @@ impl ApiKeyStore {
 		// reported as it always was.
 		.map_err(|error| match error {
 			crate::storage::locked::EditError::Mutate(inner)
-				if inner.kind() == std::io::ErrorKind::QuotaExceeded =>
+				if inner.kind() == std::io::ErrorKind::QuotaExceeded || by.is_some() =>
 			{
 				inner
 			}
@@ -559,20 +604,7 @@ impl ApiKeyStore {
 	/// Every key as an [`ApiKeySummary`], sorted by label. Hashes are never
 	/// exposed.
 	pub fn list(&self) -> Vec<ApiKeySummary> {
-		let mut rows: Vec<ApiKeySummary> = self
-			.keys
-			.iter()
-			.map(|key| ApiKeySummary {
-				label: key.label.clone(),
-				expires_at: key.expires_at,
-				ip_cidr: key.ip_cidr.clone(),
-				scopes: key.scopes.clone(),
-				grants: key.grants.clone(),
-				domains: key.domains.clone(),
-				account: key.account.clone(),
-				auto_submitted: key.auto_submitted,
-			})
-			.collect();
+		let mut rows: Vec<ApiKeySummary> = self.keys.iter().map(ApiKeySummary::of).collect();
 		rows.sort_by(|a, b| a.label.cmp(&b.label));
 		rows
 	}
@@ -675,8 +707,11 @@ impl crate::directory_store::file_watcher::ApiKeyReloader for ApiKeySet {
 
 mod grants;
 pub mod held;
+pub mod issue;
 pub mod legacy_cutoff;
+mod removal;
 mod revoke;
+mod view;
 
 pub use grants::{ScopeInputError, display_names, legacy_cover, stored_form};
 

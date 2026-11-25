@@ -23,11 +23,13 @@ mod alias;
 mod ban;
 mod carried;
 mod domain;
+mod keys;
 mod queue;
 pub use alias::{AliasEvent, log_alias_change};
 pub use ban::{BanEvent, log_ban_change};
 pub use carried::Carried;
 pub use domain::{DomainEvent, log_domain_change};
+pub use keys::{KeyEvent, log_key_change};
 pub use queue::{QueueEvent, log_queue_change};
 
 /// A privileged action taken against an account through the management API.

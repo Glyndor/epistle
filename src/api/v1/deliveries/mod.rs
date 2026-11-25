@@ -243,7 +243,7 @@ enum Scope {
 	/// before the log is read, so the filter never has to walk it again.
 	Tenant {
 		reachable: std::collections::HashSet<String>,
-		caller: Principal,
+		caller: Box<Principal>,
 	},
 }
 
@@ -259,7 +259,7 @@ impl Scope {
 				.filter(|account| principal.admits_account(&account.name, &account.addresses))
 				.map(|account| account.name)
 				.collect(),
-			caller: principal.clone(),
+			caller: Box::new(principal.clone()),
 		}
 	}
 }

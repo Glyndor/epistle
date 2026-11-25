@@ -75,6 +75,10 @@ pub struct Principal {
 	/// line names so the key that made a change can be told from the others.
 	/// Never the bearer.
 	label: Option<String>,
+	/// The network the key is pinned to, when it is.
+	ip_cidr: Option<crate::cidr::Cidr>,
+	/// When the key expires, when it does.
+	expires_at: Option<u64>,
 }
 
 impl std::fmt::Debug for Principal {
@@ -103,6 +107,7 @@ impl Principal {
 		Scope::Alias,
 		Scope::Ban,
 		Scope::Health,
+		Scope::Key,
 	];
 
 	/// An OAuth token always has explicit scopes and exactly one account.
@@ -118,6 +123,8 @@ impl Principal {
 			credential: Some(credential),
 			auto_submitted: false,
 			label: None,
+			ip_cidr: None,
+			expires_at: None,
 		}
 	}
 	/// The reach of the configured static token: every scope, every account,
@@ -130,6 +137,8 @@ impl Principal {
 			credential: None,
 			auto_submitted: false,
 			label: None,
+			ip_cidr: None,
+			expires_at: None,
 		}
 	}
 
@@ -143,6 +152,8 @@ impl Principal {
 			credential,
 			auto_submitted: false,
 			label: None,
+			ip_cidr: None,
+			expires_at: None,
 		}
 	}
 
@@ -174,6 +185,8 @@ impl Principal {
 			credential,
 			auto_submitted: key.auto_submitted,
 			label: Some(key.label.clone()),
+			ip_cidr: key.ip_cidr.as_deref().and_then(crate::cidr::Cidr::parse),
+			expires_at: key.expires_at,
 		}
 	}
 
@@ -246,6 +259,30 @@ impl Principal {
 			// Two keys share the secret, so the one that let the request in
 			// cannot be told from the other and no reach is safe to pick.
 			_ => Principal::unreachable(Some(credential)),
+		}
+	}
+
+	/// The key that asks, as the rules for making a key see it, and `None` for
+	/// the configured token, which reaches everything and is no key of the file.
+	pub fn issuer(&self) -> Option<crate::api::api_keys::issue::Caller> {
+		let credential = self.credential.as_ref()?;
+		let label = self.label.clone()?;
+		Some(crate::api::api_keys::issue::Caller::new(
+			self.reach(),
+			label,
+			crate::api::api_keys::sha256_hash(&credential.token),
+		))
+	}
+
+	/// What the credential reaches: its scopes, its domains, its network and
+	/// its expiry.
+	pub fn reach(&self) -> crate::api::api_keys::issue::Reach {
+		crate::api::api_keys::issue::Reach {
+			scopes: self.scopes.clone(),
+			domains: self.domains.clone(),
+			account_addresses: None,
+			ip_cidr: self.ip_cidr,
+			expires_at: self.expires_at,
 		}
 	}
 

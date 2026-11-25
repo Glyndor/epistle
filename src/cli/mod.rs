@@ -5,7 +5,7 @@ mod accounts;
 mod alert;
 mod alias;
 mod antispam;
-mod api_keys;
+pub(crate) mod api_keys;
 mod archive;
 mod attachments;
 mod autoconfig;

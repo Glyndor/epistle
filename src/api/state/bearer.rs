@@ -54,6 +54,10 @@ pub(in crate::api) fn acceptable_scopes_for(method: &axum::http::Method, path: &
 	if path == "/api/v1/health" || path.starts_with("/api/v1/health/") {
 		return vec![Scope::Health];
 	}
+	// The key routes make and revoke keys: only the `key` scope opens them.
+	if path == "/api/v1/keys" || path.starts_with("/api/v1/keys/") {
+		return vec![Scope::Key];
+	}
 	if path.starts_with("/api/v1/") && super::super::account_bound::path_is_account_scoped(path) {
 		return if reading {
 			vec![Scope::MailRead, Scope::ManageRead]
