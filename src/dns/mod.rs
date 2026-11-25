@@ -7,6 +7,7 @@ pub mod check_host;
 pub mod desired;
 pub mod detect;
 pub mod handoff;
+pub mod listing;
 pub mod lockdown;
 pub mod names;
 pub mod provider;
@@ -23,6 +24,7 @@ pub mod skip;
 mod tests;
 pub mod tlsa;
 pub mod txt;
+pub mod verify;
 pub mod zone;
 pub mod zone_lock;
 

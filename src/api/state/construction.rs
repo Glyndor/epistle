@@ -98,6 +98,7 @@ impl ApiState {
 				max_message_size: crate::smtp::session::MAX_MESSAGE_SIZE,
 				max_recipients: crate::smtp::session::DEFAULT_MAX_RECIPIENTS,
 				events: crate::api::events::Hub::new(Default::default()),
+				dns: Default::default(),
 			}),
 		}
 	}

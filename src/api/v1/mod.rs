@@ -6,6 +6,9 @@ mod archive;
 mod auth;
 mod deliveries;
 mod display_name;
+mod dns;
+#[cfg(test)]
+pub(crate) use dns::parity as dns_parity;
 mod domains;
 mod mailboxes;
 mod masked;
@@ -34,6 +37,8 @@ pub fn router(max_message_size: usize) -> Router<ApiState> {
 		.route("/status", get(status::get))
 		.route("/openapi.json", get(crate::api::openapi::get))
 		.route("/auth/verify", post(auth::verify))
+		.route("/dns/records", get(dns::records))
+		.route("/dns/verify", get(dns::verify))
 		.route("/domains", get(domains::list).post(domains::add::add))
 		.route(
 			"/domains/{domain}",
