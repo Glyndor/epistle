@@ -5,6 +5,7 @@ pub(super) mod class;
 pub(super) mod send_as;
 pub(super) mod send_bcc;
 pub(super) mod send_case;
+pub(super) mod send_corrections;
 pub(super) mod send_identification;
 pub(super) mod send_message_id;
 pub(super) mod send_names;

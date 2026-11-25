@@ -36,6 +36,10 @@ pub(super) fn build(
 			"To",
 			&header_mailboxes(&request.to),
 		))?);
+	} else if request.cc.is_empty() {
+		// Only Bcc names anyone: the message still says whom it is for, as an
+		// empty group (RFC 5322 section 3.4), the way mail clients write it.
+		headers.push("To: undisclosed-recipients:;\r\n".to_string());
 	}
 	if !request.cc.is_empty() {
 		headers.push(line(compose::address_list(
@@ -43,10 +47,10 @@ pub(super) fn build(
 			&header_mailboxes(&request.cc),
 		))?);
 	}
-	if let Some(reply_to) = &request.reply_to {
+	if !request.reply_to.is_empty() {
 		headers.push(line(compose::address_list(
 			"Reply-To",
-			&header_mailboxes(std::slice::from_ref(reply_to)),
+			&header_mailboxes(request.reply_to.recipients()),
 		))?);
 	}
 	headers.push(line(compose::unstructured("Subject", &request.subject))?);
@@ -57,7 +61,9 @@ pub(super) fn build(
 	if request.attachments.len() + request.inline.len() > MAX_PARTS {
 		return Err(ApiError::field_out_of_range(
 			"attachments",
-			"Too many attachments.",
+			&format!(
+				"Too many attachments; the maximum is {MAX_PARTS} attachments and inline parts together."
+			),
 		));
 	}
 	let mut bodies = Bodies {

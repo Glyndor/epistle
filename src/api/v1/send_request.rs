@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
-use super::send_recipient::Recipient;
+use super::send_recipient::{Recipient, ReplyTo};
 use crate::api::error::ApiError;
 use crate::compose;
 
@@ -46,7 +46,7 @@ pub struct SendRequest {
 	#[serde(default)]
 	pub(super) bcc: Vec<Recipient>,
 	#[serde(default)]
-	pub(super) reply_to: Option<Recipient>,
+	pub(super) reply_to: ReplyTo,
 	#[serde(default)]
 	pub(super) subject: String,
 	#[serde(default)]
@@ -143,9 +143,32 @@ impl SendRequest {
 				recipient.check(&format!("{field}[{index}]"))?;
 			}
 		}
-		self.reply_to
-			.iter()
-			.try_for_each(|recipient| recipient.check("reply_to"))
+		self.reply_to.check()
+	}
+
+	/// The refusals that need no state: a bad optional header, then a message
+	/// with nothing in it.
+	pub(super) fn check_shape(&self, auto_submitted: bool) -> Result<(), ApiError> {
+		self.extra_headers(auto_submitted)?;
+		self.check_not_empty()
+	}
+
+	/// Refuse a message with nothing in it: no subject, no text, no HTML and
+	/// no attachment or inline part. An empty string counts as absent.
+	fn check_not_empty(&self) -> Result<(), ApiError> {
+		let filled = |text: &Option<String>| text.as_deref().is_some_and(|text| !text.is_empty());
+		if self.subject.is_empty()
+			&& !filled(&self.text)
+			&& !filled(&self.html)
+			&& self.attachments.is_empty()
+			&& self.inline.is_empty()
+		{
+			return Err(missing(
+				"text",
+				"a message needs a subject, a text, an html or an attachment",
+			));
+		}
+		Ok(())
 	}
 
 	/// The per-request `save_sent` override. `None` means "follow the
@@ -231,7 +254,7 @@ impl SendRequest {
 				.iter()
 				.chain(&self.cc)
 				.chain(&self.bcc)
-				.chain(&self.reply_to)
+				.chain(self.reply_to.recipients())
 				.map(Recipient::address),
 		);
 		fields.extend(self.list_unsubscribe.iter().map(String::as_str));
@@ -318,7 +341,10 @@ impl SendRequest {
 			lines.push(format!("Feedback-ID: {value}\r\n"));
 		}
 		if self.headers.len() > MAX_CUSTOM_HEADERS {
-			return Err(out_of_range("headers", "too many custom headers"));
+			return Err(out_of_range(
+				"headers",
+				&format!("too many custom headers; the maximum is {MAX_CUSTOM_HEADERS}"),
+			));
 		}
 		for (name, value) in &self.headers {
 			if !custom_name(name) {
@@ -348,7 +374,7 @@ impl SendRequest {
 		if urls.len() > MAX_UNSUBSCRIBE {
 			return Err(out_of_range(
 				"list_unsubscribe",
-				"too many list_unsubscribe URLs",
+				&format!("too many list_unsubscribe URLs; the maximum is {MAX_UNSUBSCRIBE}"),
 			));
 		}
 		let scheme = |url: &str, prefix: &str| {
@@ -397,10 +423,16 @@ fn message_ids(field: &'static str, value: &str, max: usize) -> Result<String, A
 				.bytes()
 				.all(|b| (0x21..0x7f).contains(&b) && b != b'<' && b != b'>')
 	};
-	if ids.is_empty() || ids.len() > max || !ids.iter().all(valid) {
+	if ids.is_empty() || !ids.iter().all(valid) {
 		return Err(not_allowed(
 			field,
 			"in_reply_to and references take <id@domain> message ids",
+		));
+	}
+	if ids.len() > max {
+		return Err(out_of_range(
+			field,
+			&format!("{field} takes at most {max} message ids"),
 		));
 	}
 	Ok(ids.join(" "))

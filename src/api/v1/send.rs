@@ -61,7 +61,7 @@ pub async fn send(
 			*address = crate::util::address::normalize(address);
 		}
 	}
-	if let Some(recipient) = request.reply_to.as_mut() {
+	for recipient in request.reply_to.recipients_mut() {
 		let address = recipient.address_mut();
 		*address = crate::util::address::normalize(address);
 	}
@@ -79,7 +79,10 @@ pub async fn send(
 	// Bound the recipient list to the same ceiling the SMTP path enforces.
 	let max_recipients = state.max_recipients();
 	if recipients.len() > max_recipients {
-		return Err(ApiError::field_out_of_range("to", "Too many recipients."));
+		return Err(ApiError::field_out_of_range(
+			"to",
+			&format!("Too many recipients; the maximum is {max_recipients}."),
+		));
 	}
 	// Header-injection guard (mandatory), before anything is built: no CR,
 	// LF or other control character (a tab aside) in any header-bound field,
@@ -106,7 +109,7 @@ pub async fn send(
 	if let Some(why) = recipients
 		.iter()
 		.map(String::as_str)
-		.chain(request.reply_to.as_ref().map(|r| r.address()))
+		.chain(request.reply_to.recipients().iter().map(|r| r.address()))
 		.chain(request.sender.as_deref())
 		.find_map(|address| address_reason::parse(address).err())
 	{
@@ -135,6 +138,11 @@ pub async fn send(
 		crate::api::mail_from::check_mail_from(&state, &account, sender)
 			.map_err(|_| ApiError::forbidden_from())?;
 	}
+
+	// The optional headers are read now, and a message with nothing in it is
+	// refused, before any budget or recipient record is touched. The headers
+	// go first so an empty message never hides a more specific refusal.
+	request.check_shape(principal.auto_submitted())?;
 
 	// Submission rate limits: the per-account limit and every tenant of
 	// the account, shared with SMTP and JMAP. Asked here so a sender with
