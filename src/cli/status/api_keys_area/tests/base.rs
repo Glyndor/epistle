@@ -313,6 +313,29 @@ async fn an_ip_cidr_behind_a_bridge_does_not_confine_a_send_key() {
 /// `read` and `write` open management and mail at once: the key is told to split
 /// it, and when `stack update` will stop accepting that. The panel's key does so
 /// on purpose, and a key bound to an account reaches no management route.
+/// After a rollback 0.14.0 refuses a key that holds only a scope it had no name
+/// for, and status says so before it happens.
+#[test]
+fn a_key_that_0_14_0_will_refuse_is_named() {
+	let later = format!("expires_at = {}\n", now() + 90 * 86_400);
+	let held = "scopes = [\"read\"]\ngrants = [\"ban\"]\n";
+	let details = warnings(&key("banner", &later, held, ""));
+	assert_eq!(details.len(), 1, "{details:?}");
+	assert!(
+		details[0].contains("after a rollback it is refused"),
+		"{details:?}"
+	);
+	// A key that also holds a scope with an old name is not refused there.
+	let mixed = "scopes = [\"read\"]\ngrants = [\"ban\", \"manage:read\"]\n";
+	let details = warnings(&key("mixed", &later, mixed, ""));
+	assert!(
+		details
+			.iter()
+			.all(|detail| !detail.contains("after a rollback")),
+		"{details:?}"
+	);
+}
+
 #[test]
 fn a_key_that_opens_management_and_mail_is_told_to_split_it() {
 	let later = format!("expires_at = {}\n", now() + 90 * 86_400);

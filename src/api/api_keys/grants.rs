@@ -46,35 +46,32 @@ fn expand_loaded(name: &str) -> Result<&'static [Scope], UnknownScopeError> {
 	}
 }
 
-/// The narrowest names of 0.14.0 that cover `grants`: `manage:read` or
-/// `mail:read` gives `read`, `manage:write` or `mail:write` gives `write`, the
-/// rest themselves. Never empty for a non-empty input, because 0.14.0 reads an
-/// empty `scopes` as every scope.
-pub fn legacy_cover(grants: &[Scope]) -> Vec<&'static str> {
-	let mut names = Vec::new();
-	for (name, members) in [
-		// `ban` and `health` did not exist in 0.14.0, which refuses a file that names it, so
-		// a key that holds it is written there as `read`: the least that
-		// 0.14.0 can give a key that must hold something.
-		(
-			"read",
-			&[
-				Scope::ManageRead,
-				Scope::MailRead,
-				Scope::Ban,
-				Scope::Health,
-			][..],
-		),
-		("write", &[Scope::ManageWrite, Scope::MailWrite][..]),
-		("send", &[Scope::Send][..]),
-		("scim", &[Scope::Scim][..]),
-		("alias", &[Scope::Alias][..]),
-	] {
-		if members.iter().any(|member| grants.contains(member)) {
-			names.push(name);
+impl Scope {
+	/// The name 0.14.0 gave what this scope opens, or `None` when it had no
+	/// scope for it. The `match` has no wildcard: a scope added later has to say
+	/// here what 0.14.0 makes of it, and `None` is the only answer that does not
+	/// widen anything (see [`ApiKey::unusable_in_v014`]).
+	pub const fn v014_name(self) -> Option<&'static str> {
+		match self {
+			Scope::ManageRead | Scope::MailRead => Some("read"),
+			Scope::ManageWrite | Scope::MailWrite => Some("write"),
+			Scope::Send => Some("send"),
+			Scope::Scim => Some("scim"),
+			Scope::Alias => Some("alias"),
+			Scope::Ban | Scope::Health => None,
 		}
 	}
-	names
+}
+
+/// The narrowest names of 0.14.0 that cover `grants`: `manage:read` or
+/// `mail:read` gives `read`, `manage:write` or `mail:write` gives `write`, the
+/// rest themselves. A scope 0.14.0 had no name for gives none, so the result is
+/// empty for a key that holds only such scopes.
+pub fn legacy_cover(grants: &[Scope]) -> Vec<&'static str> {
+	["read", "write", "send", "scim", "alias"]
+		.into_iter()
+		.filter(|name| grants.iter().any(|scope| scope.v014_name() == Some(*name)))
+		.collect()
 }
 
 impl ApiKey {
@@ -108,6 +105,17 @@ impl ApiKey {
 			}
 		}
 		Some(held)
+	}
+
+	/// Whether 0.14.0, reading the same file after a rollback, would have no
+	/// scope for anything this key holds. Its `scopes` then carry a placeholder
+	/// that 0.14.0 reads as `read`, so the key is written so that 0.14.0 loads it
+	/// and refuses it (see `held::HELD`), and 0.15.0 restores it.
+	pub fn unusable_in_v014(&self) -> bool {
+		!self.grants.is_empty()
+			&& self
+				.reach()
+				.is_some_and(|held| !held.is_empty() && legacy_cover(&held).is_empty())
 	}
 
 	/// Whether the key opens both a management route and a mail route of the
@@ -228,7 +236,15 @@ pub fn stored_form(
 	let scopes = if as_given.iter().all(|name| expand_legacy(name).is_ok()) {
 		as_given
 	} else {
-		legacy_cover(&set).into_iter().map(String::from).collect()
+		let cover: Vec<String> = legacy_cover(&set).into_iter().map(String::from).collect();
+		// 0.14.0 reads an empty list as every scope, so a key that holds only
+		// scopes it had no name for gets a placeholder here and is made
+		// unusable there instead ([`ApiKey::unusable_in_v014`]).
+		if cover.is_empty() {
+			vec!["read".to_string()]
+		} else {
+			cover
+		}
 	};
 	let grants = set.iter().map(|scope| scope.as_str().to_string()).collect();
 	Ok((scopes, grants))

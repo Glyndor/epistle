@@ -33,6 +33,22 @@ pub(super) struct V014File {
 	pub keys: Vec<V014Key>,
 }
 
+impl V014Key {
+	/// 0.14.0's `admits_credential`, with the digest check left out: whether the
+	/// key is usable from `client_ip` at `now`.
+	pub(super) fn usable_from(&self, client_ip: Option<std::net::IpAddr>, now: u64) -> bool {
+		let time_ok = self.expires_at.is_none_or(|expiry| now < expiry);
+		let ip_ok = match &self.ip_cidr {
+			None => true,
+			Some(spec) => match (crate::cidr::Cidr::parse(spec), client_ip) {
+				(Some(cidr), Some(ip)) => cidr.contains(ip),
+				_ => false,
+			},
+		};
+		time_ok && ip_ok
+	}
+}
+
 /// 0.14.0's `validate_loaded_scopes`: an unknown name refuses the whole file.
 fn v014_validate_loaded_scopes(scopes: &[String]) -> std::io::Result<()> {
 	for scope in scopes {
