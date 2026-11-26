@@ -23,6 +23,11 @@ pub enum StoreError {
 		/// The configured cap.
 		max: usize,
 	},
+	/// The account is being removed, so its addresses cannot change and no
+	/// second removal runs until this one ends or is run again. Carries the
+	/// name.
+	#[error("account {0} is being removed")]
+	BeingRemoved(String),
 	/// A configured cap stopped the write: the text says which one, its
 	/// value, the scope that set it and how to make room.
 	#[error("{0}")]

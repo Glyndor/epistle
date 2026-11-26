@@ -25,8 +25,11 @@ pub(super) fn serialize_dynamic_file(
 	let sealed = store
 		.sealed_for_disk(&state.accounts)
 		.map_err(|error| std::io::Error::other(error.to_string()))?;
-	toml::to_string_pretty(&DynamicFile { accounts: sealed })
-		.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string()))
+	toml::to_string_pretty(&DynamicFile {
+		accounts: sealed,
+		removals: state.removals.clone(),
+	})
+	.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string()))
 }
 
 impl AccountStore {
@@ -42,6 +45,20 @@ impl AccountStore {
 	where
 		F: FnOnce(&mut DynamicFile) -> Result<(), StoreError>,
 	{
+		self.mutate_store_except(None, mutate)
+	}
+
+	/// [`mutate_store`](Self::mutate_store) for the removal of `removing`: an
+	/// account being removed may not be moved or removed by any other write,
+	/// only by the one that names it here.
+	pub(super) fn mutate_store_except<F>(
+		&self,
+		removing: Option<&str>,
+		mutate: F,
+	) -> Result<(), StoreError>
+	where
+		F: FnOnce(&mut DynamicFile) -> Result<(), StoreError>,
+	{
 		edit_and_commit(
 			&self.path,
 			|text| {
@@ -53,7 +70,11 @@ impl AccountStore {
 			},
 			|state| serialize_dynamic_file(self, state),
 			DynamicFile::default,
-			mutate,
+			|state: &mut DynamicFile| {
+				let held = crate::directory_store::removal::reservation::held(state, removing);
+				mutate(state)?;
+				crate::directory_store::removal::reservation::untouched(state, &held)
+			},
 			|state| self.refresh_after_write(state),
 		)
 		.map_err(|error| match error {

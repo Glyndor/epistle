@@ -175,13 +175,20 @@ pub async fn remove(
 	require_in_scope(&state, &principal, &name)?;
 	let queue = parse_queue_policy(query.queue.as_deref())?;
 	let data_dir = state.data_dir().to_path_buf();
-	let counts = crate::directory_store::removal::remove_account(
+	// The key is read again at the write that reserves the account, before
+	// anything of it is destroyed.
+	let counts = crate::directory_store::removal::remove_account_if(
 		state.store(),
 		state.spool(),
 		&data_dir,
 		&name,
 		queue,
 		state.bayes_store(),
+		|account| {
+			let now = Principal::for_token(&state, &auth);
+			now.admits_scope(Scope::ManageWrite)
+				&& now.admits_account(&account.name, &account.addresses)
+		},
 	)
 	.await
 	.map_err(store_error)?;
@@ -328,5 +335,8 @@ pub(super) fn store_error(error: StoreError) -> ApiError {
 		StoreError::LimitReached { .. } => ApiError::internal(),
 		StoreError::Io(_) => ApiError::internal(),
 		StoreError::BayesPurge { .. } => ApiError::internal(),
+		StoreError::BeingRemoved(name) => {
+			ApiError::conflict(format!("account {name} is being removed"))
+		}
 	}
 }

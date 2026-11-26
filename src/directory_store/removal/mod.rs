@@ -27,9 +27,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use super::AccountStore;
-use super::StoreError;
 use super::names::validate_name;
+use super::{AccountStore, DynamicAccount, StoreError};
 use crate::queue::SuppressionList;
 use crate::storage::{CorrespondentStore, FsSpool};
 use crate::util::path_containment::{contained, contained_child};
@@ -227,14 +226,33 @@ pub async fn remove_account(
 	queue: QueuePolicy,
 	bayes: Option<&crate::antispam::corpus::BayesStore>,
 ) -> Result<Removed, StoreError> {
+	remove_account_if(store, spool, data_dir, name, queue, bayes, |_| true).await
+}
+
+/// [`remove_account`] for a caller whose reach over the account has to hold
+/// when the removal starts: `authorize` is asked about the account as it is
+/// under the store's lock, and the account is reserved in the same write,
+/// before anything of it is destroyed. A refusal answers like an account that
+/// does not exist. From then until the removal ends no other write moves or
+/// removes the account; if it fails half way the reservation stays, and
+/// running the removal again takes it over. A second removal of the same
+/// account while one runs is refused.
+pub async fn remove_account_if(
+	store: &AccountStore,
+	spool: &FsSpool,
+	data_dir: &Path,
+	name: &str,
+	queue: QueuePolicy,
+	bayes: Option<&crate::antispam::corpus::BayesStore>,
+	authorize: impl FnOnce(&DynamicAccount) -> bool + Send,
+) -> Result<Removed, StoreError> {
 	validate_name(name)?;
 	if store.dynamic(name).is_none() {
 		return Err(StoreError::NotFound(name.to_string()));
 	}
-	let addresses: Vec<String> = store
-		.dynamic(name)
-		.map(|account| account.addresses)
-		.unwrap_or_default();
+	let _running = store.running_removal(name)?;
+	let reserved = store.reserve_removal(name, authorize)?;
+	let addresses = reserved.addresses;
 
 	let (queued_messages_discarded, queued_messages_left) =
 		process_spool_queue(spool, data_dir, name, queue).map_err(StoreError::Io)?;
@@ -329,7 +347,7 @@ pub async fn remove_account(
 		let _admission = lock.lock().unwrap_or_else(|e| e.into_inner());
 		let mailbox_root = account_root(data_dir, name).map_err(StoreError::Io)?;
 		let files = remove_mailbox_dir(&mailbox_root).map_err(StoreError::Io)?;
-		store.remove(name)?;
+		store.remove_reserved(name, &reserved.token)?;
 		files
 	};
 
@@ -344,6 +362,8 @@ pub async fn remove_account(
 		bayes_tokens_removed,
 	})
 }
+
+pub(super) mod reservation;
 
 #[cfg(test)]
 mod tests;
