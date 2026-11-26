@@ -5,7 +5,7 @@
 use mail_parser::MessageParser;
 use serde_json::{Value, json};
 
-use super::{PushState, handle_frame};
+use super::{PushState, handle_ws_message_with, read_ahead};
 use crate::api::Principal;
 use crate::api::router;
 use crate::api::tests::base::{TOKEN, test_state};
@@ -16,7 +16,15 @@ async fn frame(state: &crate::api::state::ApiState, calls: Value) -> Value {
 		"methodCalls": calls})
 	.to_string();
 	let principal = Principal::unrestricted();
-	let replies = handle_frame(state, &principal, &text, &mut PushState::default()).await;
+	// As the socket loop does it: the uploads read first, then the frame.
+	let uploads = read_ahead(state, &principal, &text).await;
+	let replies = handle_ws_message_with(
+		state,
+		&principal,
+		&text,
+		&mut PushState::default(),
+		&uploads,
+	);
 	assert_eq!(replies.len(), 1, "{replies:?}");
 	let reply: Value = serde_json::from_str(&replies[0]).expect("json");
 	reply["methodResponses"][0][1].clone()
