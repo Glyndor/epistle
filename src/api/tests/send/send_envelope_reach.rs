@@ -16,11 +16,11 @@ use crate::directory_store::DirectoryHandle;
 use crate::smtp::directory::{AliasSpec, Directory};
 use crate::storage::FsSpool;
 
-const CONFINED: &str = "confined-secret";
+pub(super) const CONFINED: &str = "confined-secret";
 
 /// `alice` owns `alice@example.org` and is a member of `ops@other.example`, a
 /// list in another hosted domain.
-fn directory() -> Directory {
+pub(super) fn directory() -> Directory {
 	Directory::new(
 		["example.org".to_string(), "other.example".to_string()],
 		[("alice@example.org".to_string(), "alice".to_string())],
@@ -37,7 +37,7 @@ fn directory() -> Directory {
 }
 
 /// A key confined to `example.org` that is not bound to an account.
-fn add_confined_key(dir: &std::path::Path) {
+pub(super) fn add_confined_key(dir: &std::path::Path) {
 	let mut keys = crate::api::ApiKeyStore::open(dir).expect("open key store");
 	keys.add(crate::api::api_keys::ApiKey {
 		label: "confined".to_string(),
@@ -69,7 +69,7 @@ async fn send(app: &Router, token: &str, extra: Value) -> (StatusCode, Value) {
 	request_with_body(app, "POST", "/api/v1/send", Some(token), Some(body)).await
 }
 
-fn queued(dir: &std::path::Path) -> usize {
+pub(super) fn queued(dir: &std::path::Path) -> usize {
 	FsSpool::open(dir)
 		.expect("spool")
 		.list()

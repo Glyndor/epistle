@@ -172,6 +172,13 @@ fn submit_email(
 	if !crate::api::mail_from::owns_author(state, account, &raw) {
 		return Err("forbiddenFrom".into());
 	}
+	// The account may own an address in a domain the credential does not
+	// reach (a list it is a member of): the sender, the author and the
+	// `Sender` field are each held to the key's domains, as
+	// `POST /api/v1/send` holds them. Before any evidence is prepared or any
+	// budget is asked for. The null reverse path names no domain and is
+	// outside every declared one, so a confined key cannot use it.
+	check_reach(state, principal, account, &headers, &raw, &mail_from)?;
 	// Stamp Message-ID and Date on the queued copy when the client did not
 	// include them. Domain is the envelope's MAIL FROM, falling back to the
 	// first configured domain when the envelope has none (the null reverse
@@ -406,6 +413,41 @@ fn submit_email(
 		state.save_sent_copy(account, &sent_copy, request_save_sent);
 	}
 	Ok(id.to_string())
+}
+
+/// Hold every address the message is sent under to the account that sends it
+/// and to the domains of the credential: the envelope sender, the author and
+/// the `Sender` field, the three `POST /api/v1/send` asks the same of.
+fn check_reach(
+	state: &ApiState,
+	principal: &Principal,
+	account: &str,
+	headers: &str,
+	raw: &[u8],
+	mail_from: &str,
+) -> Result<(), Refusal> {
+	let sender_field: Vec<String> = objects::header_value(headers, "sender")
+		.map(|value| objects::header_emails(&value))
+		.unwrap_or_default()
+		.iter()
+		.map(|address| crate::util::address::normalize(address))
+		.collect();
+	for sender in &sender_field {
+		crate::api::mail_from::check_mail_from(state, account, sender).map_err(|refusal| {
+			match refusal {
+				crate::api::mail_from::MailFromRefusal::Invalid => "invalidEmail",
+				crate::api::mail_from::MailFromRefusal::NotOwned => "forbiddenFrom",
+			}
+		})?;
+	}
+	let mut senders = crate::dmarc::author::all_addresses(raw);
+	senders.extend(sender_field);
+	senders.push(mail_from.to_string());
+	if senders.iter().all(|sender| principal.admits_sender(sender)) {
+		Ok(())
+	} else {
+		Err("forbiddenFrom".into())
+	}
 }
 
 /// Whether `a` and `b` name the same mailbox: the domain compared without
