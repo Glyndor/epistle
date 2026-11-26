@@ -204,6 +204,7 @@ impl Principal {
 			Scope::Scim,
 			Scope::Alias,
 			Scope::Ban,
+			Scope::Health,
 		];
 		let credential = Credential {
 			token: token.to_string(),

@@ -65,7 +65,7 @@ pub(super) fn create(
 	}
 	if scopes.is_empty() {
 		return super::exit::refused(
-			"--scope is required (repeat to grant more than one: manage:read, manage:write, mail:read, mail:write, send, scim, alias, ban)",
+			"--scope is required (repeat to grant more than one: manage:read, manage:write, mail:read, mail:write, send, scim, alias, ban, health)",
 		);
 	}
 	// Checked before the class is bound or the store is touched, so a bad
@@ -87,9 +87,13 @@ pub(super) fn create(
 			return super::exit::policy(refusal);
 		}
 	}
-	if !domains.is_empty() && scopes.iter().any(|scope| scope == "ban") {
+	if !domains.is_empty()
+		&& scopes
+			.iter()
+			.any(|scope| scope == "ban" || scope == "health")
+	{
 		return super::exit::policy(
-			"the ban scope covers the whole server and cannot be confined with --domain",
+			"the ban and health scopes cover the whole server and cannot be confined with --domain",
 		);
 	}
 	let secret = match super::generate_secret() {

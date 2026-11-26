@@ -186,12 +186,12 @@ without a restart.
 
 | Flag | Effect |
 |---|---|
-| `--scope manage:read\|manage:write\|mail:read\|mail:write\|send\|scim\|alias` | Required, repeatable. Scopes are independent: `manage:write` does not include `manage:read`, and a management scope never opens JMAP or the other way round. `read` and `write`, the names before 0.15.0, are still taken and open both the management and the mail scope of their kind, with a warning |
+| `--scope manage:read\|manage:write\|mail:read\|mail:write\|send\|scim\|alias\|ban\|health` | Required, repeatable. Scopes are independent: `manage:write` does not include `manage:read`, and a management scope never opens JMAP or the other way round. `read` and `write`, the names before 0.15.0, are still taken and open both the management and the mail scope of their kind, with a warning |
 | `--expires-at WHEN` | Unix seconds, a date (`2027-01-31`, midnight UTC), an RFC 3339 instant (`2027-01-31T12:00:00+02:00`) or a duration from now (`90d`). A date or instant already in the past is refused, and a bare number is read as an epoch only between 2001-09-09 and 9999-12-31, so `2027`, `20270131` and a count of milliseconds are refused. After the expiry the key is refused with `401`, like an unknown one |
 | `--expires-in DURATION` | A number and a unit from now: `s`, `m`, `h`, `d` or `w`, for example `90d`. `m` is minutes, not months: count months in days. Not combined with `--expires-at` |
 | `--ip-cidr CIDR` | One network the client must come from. A request from elsewhere is `401` |
 | `--domain NAME` | Confine the key to a domain (repeat for more). Without it the key reaches every domain |
-| `--account NAME` | Bind the key to one account. It then reaches only JMAP, `POST /api/v1/send`, `GET /api/v1/deliveries` and that account's suppression list, acting as that account, and cannot hold `manage:read`, `manage:write`, `scim`, `alias`, `ban` or `--domain` (`read` and `write` mean `mail:read` and `mail:write` for it) |
+| `--account NAME` | Bind the key to one account. It then reaches only JMAP, `POST /api/v1/send`, `GET /api/v1/deliveries` and that account's suppression list, acting as that account, and cannot hold `manage:read`, `manage:write`, `scim`, `alias`, `ban`, `health` or `--domain` (`read` and `write` mean `mail:read` and `mail:write` for it) |
 | `--class CLASS` | The mail class `POST /api/v1/send` gives mail sent with the key when the request names none (see [Class and evidence](#class-and-evidence)) |
 | `--auto-submitted` | Add `Auto-Submitted: auto-generated` to mail sent with this key through `POST /api/v1/send` when the request omits the header. Off by default. A value in the request always wins. Other send paths and server-generated mail, including bounces, are not changed |
 
@@ -251,7 +251,7 @@ each key that
 - holds a write scope or `send` with no `--domain`, no `--account` and no
   `--ip-cidr` (an `--ip-cidr` does not count while the server sits behind a
   network that hides the client address), so a leaked copy reaches every domain from any address, or
-- holds `scim` or `alias` with no `--domain`, or `ban` with one (the ban routes refuse it).
+- holds `scim` or `alias` with no `--domain`, or `ban` or `health` with one (those routes refuse it).
 
 These are warnings only; nothing is refused or revoked. To clear one, give the
 key an expiry, narrow it with `--domain`, `--account` or `--ip-cidr`, or
@@ -269,6 +269,7 @@ What each scope reaches:
 | `send` | `POST /api/v1/send` and JMAP `EmailSubmission/set` |
 | `scim` | Everything under `/scim/v2` |
 | `alias` | Everything under `/api/v1/aliases`, reads included. `manage:read`, `manage:write` and the old `read` and `write` do not open it, and the key made before scopes existed (it holds every scope) does |
+| `health` | `GET /api/v1/health` and `/api/v1/health/{area}`. No management or mail scope opens them. See [Health](#health) |
 | `ban` | Everything under `/api/v1/bans`, reads included. No management or mail scope opens it. See [Bans](#bans) |
 
 A key made before 0.15.0 keeps what it reached: `read` holds `manage:read` and
@@ -752,6 +753,7 @@ curl -s -X DELETE -H "Authorization: Bearer $KEY" "$API/api/v1/accounts/ana?queu
 | `GET /api/v1/status` | `version`, `domains`, `accounts` and `queue_size` (left out for a confined key) |
 | `GET /api/v1/dns/records` | The records the hosted domains need, as `epistle dns-records --json` prints them; `read`. See [DNS](#dns) |
 | `GET /api/v1/dns/verify` | A check of the live DNS against them, as `epistle verify-dns --json` prints it; `read`. See [DNS](#dns) |
+| `GET /api/v1/health`, `GET /api/v1/health/{area}` | What `epistle status --json` and `epistle check <area> --json` print; scope `health`. See [Health](#health) |
 | `GET /api/v1/domains` | The hosted domains in the key's reach, which are `disabled`, and under `details` the rows `epistle domain list --json` prints |
 | `GET /api/v1/domains/{domain}` | What `epistle domain show <domain> --json` prints. A domain outside a confined key's reach is `404` like an unknown one |
 | `POST /api/v1/domains` | Host a new domain; unconfined `write` key only; answers `201` |
@@ -868,6 +870,45 @@ Each durable change emits one structured event on `epistle::api::audit`, written
 `domain.updated`, `domain.alias_added` or `domain.alias_removed`, with `domain`
 (the alias name for alias events) and `client_ip`. Refusals and no-ops emit no
 change event. Bearer tokens, private keys and SRS secrets are never logged.
+
+### Health
+
+`GET /api/v1/health` answers what `epistle status --json` prints, from the
+same code, and `GET /api/v1/health/{area}` what `epistle check <area> --json`
+prints: one object keyed by the name of the area (`config`, `ports`, `tls`,
+`dns`, `db`, `api_keys`, `antivirus`, `antispam`, `queue`, `disk`, `spool`,
+`storage_keys`, `subid`, `boot`, `warmup`, `resources`, `clock`, `evidence`,
+`deliverability`), each with `status` (`ok`, `warn` or `fail`), a `detail` and
+its `items`. The answer is `200` whatever the areas find; a failing area is in
+the body, and the command's exit code has no HTTP counterpart. A name that is
+not an area is `404 no such area`.
+
+The scope is `health`, and only that: `read` does not open it. The answer
+names the listeners, the certificate, the disk, the key labels and the state of
+the stack, which belong to the server and not to a tenant. A key confined with
+`--domain` or bound to an account is refused with `403`, before the name of the
+area is looked at, so the status says nothing of which areas exist;
+`epistle api-key create` makes neither, and `epistle status` warns about one it
+finds in `api_keys.toml`.
+
+The areas run against the configuration the server runs with now, with the
+state files laid over it, and the `config` area names the file the server was
+started with. They run inside the server, so an area that reads the host or the
+stack's tools (`boot`, `resources`, `clock`) reports what it can see from
+there, which is not always what the command sees on the host. Every area is cut off after 60 seconds, as in the
+command, and at most two runs are in progress on a server, however many API
+listeners it has: the third is `429` with `Retry-After`. The places are the
+server's, so one key can hold both. A run is a task of its own: a client that
+leaves neither stops it nor frees its place, which is given back when the last
+thread the run started has returned. The programs a check runs (`systemctl`,
+`podman` and the like) are killed, with whatever they started, when the area's
+time is over. The same time holds the collection of what they print: a program
+that ends and leaves something running that keeps its output open does not hold
+the run past it, the process group is killed when the program ends, at most 4 MiB
+of output is kept (the rest is read and dropped, so a program is never stopped by
+a full pipe), and the checks that ask the mail container, and `podup ps`, run on
+the thread that keeps the run's place and are killed at the same time.
+The routes write nothing and write no audit line.
 
 ### Bans
 

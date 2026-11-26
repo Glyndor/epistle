@@ -18,7 +18,7 @@ pub(super) async fn check(ctx: &Ctx) -> AreaReport {
 		Ok(config) => config.clone(),
 		Err(report) => return report,
 	};
-	tokio::task::spawn_blocking(move || evaluate(&config))
+	ctx.blocking(move || evaluate(&config))
 		.await
 		.unwrap_or_else(|error| AreaReport::fail(format!("storage key check failed: {error}")))
 }

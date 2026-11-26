@@ -57,6 +57,12 @@ pub enum Scope {
 	/// it. The bans are the server's, not a tenant's, so a key holding it cannot be
 	/// confined to domains or bound to an account.
 	Ban,
+	/// The health routes under `/api/v1/health`: the checks `epistle status`
+	/// and `epistle check` make. They name listeners, certificates, disk, keys
+	/// and the state of the stack, which belong to the server and not to a
+	/// tenant, so neither `read` nor `write` opens them and a key holding it
+	/// cannot be confined to domains or bound to an account.
+	Health,
 }
 
 /// Error returned when the [`std::str::FromStr`] impl for [`Scope`] is
@@ -92,6 +98,7 @@ impl std::str::FromStr for Scope {
 			"scim" => Ok(Scope::Scim),
 			"alias" => Ok(Scope::Alias),
 			"ban" => Ok(Scope::Ban),
+			"health" => Ok(Scope::Health),
 			_ => Err(UnknownScopeError(value.to_string())),
 		}
 	}
@@ -109,6 +116,7 @@ impl Scope {
 			Scope::Scim => "scim",
 			Scope::Alias => "alias",
 			Scope::Ban => "ban",
+			Scope::Health => "health",
 		}
 	}
 }

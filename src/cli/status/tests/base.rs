@@ -13,7 +13,7 @@ fn write_config(dir: &std::path::Path, body: &str) -> std::path::PathBuf {
 	path
 }
 
-fn valid(dir: &std::path::Path) -> std::path::PathBuf {
+pub(super) fn valid(dir: &std::path::Path) -> std::path::PathBuf {
 	write_config(
 		dir,
 		&format!(

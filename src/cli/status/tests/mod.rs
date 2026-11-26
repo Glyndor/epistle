@@ -1,3 +1,4 @@
 pub use super::*;
 
-mod base;
+mod api_parity;
+pub(super) mod base;

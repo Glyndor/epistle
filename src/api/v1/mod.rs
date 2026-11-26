@@ -11,6 +11,7 @@ mod dns;
 #[cfg(test)]
 pub(crate) use dns::parity as dns_parity;
 mod domains;
+mod health;
 mod mailboxes;
 mod masked;
 mod queue;
@@ -40,6 +41,8 @@ pub fn router(max_message_size: usize) -> Router<ApiState> {
 		.route("/auth/verify", post(auth::verify))
 		.route("/dns/records", get(dns::records))
 		.route("/dns/verify", get(dns::verify))
+		.route("/health", get(health::all))
+		.route("/health/{area}", get(health::one))
 		.route(
 			"/bans",
 			get(bans::list)

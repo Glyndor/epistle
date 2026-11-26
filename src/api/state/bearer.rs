@@ -49,6 +49,11 @@ pub(in crate::api) fn acceptable_scopes_for(method: &axum::http::Method, path: &
 	if path == "/api/v1/bans" || path.starts_with("/api/v1/bans/") {
 		return vec![Scope::Ban];
 	}
+	// The health routes name the server's listeners, certificates and keys:
+	// only the `health` scope opens them.
+	if path == "/api/v1/health" || path.starts_with("/api/v1/health/") {
+		return vec![Scope::Health];
+	}
 	if path.starts_with("/api/v1/") && super::super::account_bound::path_is_account_scoped(path) {
 		return if reading {
 			vec![Scope::MailRead, Scope::ManageRead]

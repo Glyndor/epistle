@@ -100,6 +100,7 @@ impl ApiState {
 				events: crate::api::events::Hub::new(Default::default()),
 				dns: Default::default(),
 				ban_admin: None,
+				health: Default::default(),
 			}),
 		}
 	}

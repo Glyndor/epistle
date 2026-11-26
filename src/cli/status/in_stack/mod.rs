@@ -13,17 +13,26 @@ const IN_CONTAINER_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// Run `command` (an `epistle check <area> --json` in the mail container)
 /// and return the `area` entry of its report. `what` names the check in
-/// error messages ("database", "antivirus").
+/// error messages ("database", "antivirus"). Looking at the stack and running
+/// the command both happen on a blocking thread that keeps the run's place until
+/// they return, and both programs are killed, with what they started, at the
+/// time of the run.
 pub(super) async fn run(
+	ctx: &super::Ctx,
 	config: &crate::config::Config,
 	command: std::process::Command,
 	area: &'static str,
 	what: &'static str,
 ) -> AreaReport {
-	if let Err(error) = crate::cli::container::db::ensure_mail_running(config) {
-		return AreaReport::fail(error);
-	}
-	let run = tokio::task::spawn_blocking(move || run_bounded(command, IN_CONTAINER_TIMEOUT, what));
+	let config = config.clone();
+	let podup = ctx.podup.clone();
+	let until = ctx
+		.deadline
+		.min(std::time::Instant::now() + IN_CONTAINER_TIMEOUT);
+	let run = ctx.blocking(move || {
+		crate::cli::container::db::ensure_mail_running_until(&config, &podup, until)?;
+		run_bounded(command, until, what)
+	});
 	let stdout = match run.await {
 		Ok(Ok(stdout)) => stdout,
 		Ok(Err(error)) => return AreaReport::fail(error),
@@ -32,40 +41,16 @@ pub(super) async fn run(
 	parse(&stdout, area, what)
 }
 
-/// Run `command` to completion, killing it after `limit`; return its stdout.
+/// Run `command` to completion, killing it, and what it started, at `until`;
+/// return its stdout.
 fn run_bounded(
 	mut command: std::process::Command,
-	limit: Duration,
+	until: std::time::Instant,
 	what: &str,
 ) -> Result<Vec<u8>, String> {
-	use std::io::Read;
-	let mut child = command
-		.stdin(std::process::Stdio::null())
-		.stdout(std::process::Stdio::piped())
-		.stderr(std::process::Stdio::null())
-		.spawn()
-		.map_err(|error| format!("cannot run podup: {error}"))?;
-	let deadline = std::time::Instant::now() + limit;
-	loop {
-		match child.try_wait() {
-			Ok(Some(_)) => break,
-			Ok(None) if std::time::Instant::now() < deadline => {
-				std::thread::sleep(Duration::from_millis(100));
-			}
-			Ok(None) => {
-				let _ = child.kill();
-				let _ = child.wait();
-				return Err(format!("the {what} check in the mail container timed out"));
-			}
-			Err(error) => return Err(format!("cannot wait for podup: {error}")),
-		}
-	}
-	let mut stdout = Vec::new();
-	if let Some(mut pipe) = child.stdout.take() {
-		pipe.read_to_end(&mut stdout)
-			.map_err(|error| format!("cannot read podup output: {error}"))?;
-	}
-	Ok(stdout)
+	super::bounded::output_until(&mut command, until)
+		.map(|(_, stdout)| stdout)
+		.map_err(|error| format!("the {what} check in the mail container: {error}"))
 }
 
 /// The `area` entry of `epistle check <area> --json` as printed in the

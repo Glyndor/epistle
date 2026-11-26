@@ -23,7 +23,7 @@ pub(super) async fn check(ctx: &Ctx) -> AreaReport {
 		config,
 		&["check".into(), "db".into(), "--json".into()],
 	) {
-		Ok(Some(command)) => super::in_stack::run(config, command, "db", "database").await,
+		Ok(Some(command)) => super::in_stack::run(ctx, config, command, "db", "database").await,
 		Ok(None) => evaluate(database, NET_TIMEOUT).await,
 		Err(error) => AreaReport::fail(error),
 	}

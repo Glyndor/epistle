@@ -20,7 +20,8 @@ pub(super) async fn check(ctx: &Ctx) -> AreaReport {
 	}
 	let data_dir = config.data_dir.clone();
 	let podup = ctx.podup.clone();
-	let started = tokio::task::spawn_blocking(move || mail_started_at(&data_dir, &podup))
+	let started = ctx
+		.blocking(move || mail_started_at(&data_dir, &podup))
 		.await
 		.unwrap_or_else(|error| Err(format!("start time lookup failed: {error}")));
 	let modified = std::fs::metadata(&ctx.path)

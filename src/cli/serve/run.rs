@@ -5,6 +5,11 @@ use std::process::ExitCode;
 
 /// Run the server with a validated configuration, as `role`.
 pub fn run(config: Config, role: ServeRole) -> ExitCode {
+	run_from(config, role, None)
+}
+
+/// [`run`] for a configuration read from `path`: the health routes name it.
+pub fn run_from(config: Config, role: ServeRole, path: Option<std::path::PathBuf>) -> ExitCode {
 	// Declared before the runtime so background writers stop before this drops. The
 	// certificates role does not open the mail store, so it takes no lease.
 	let _store = if matches!(role, ServeRole::Certs) {
@@ -32,7 +37,7 @@ pub fn run(config: Config, role: ServeRole) -> ExitCode {
 
 	let result = match role {
 		ServeRole::Certs => runtime.block_on(super::certs::serve(config)),
-		ServeRole::All | ServeRole::Mail => runtime.block_on(serve(config, role)),
+		ServeRole::All | ServeRole::Mail => runtime.block_on(serve(config, role, path)),
 	};
 
 	// Flush any buffered spans to the collector before exiting.

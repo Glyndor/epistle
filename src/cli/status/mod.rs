@@ -10,6 +10,7 @@ mod antispam_area;
 mod api_keys_area;
 mod av_area;
 mod boot_area;
+pub(in crate::cli) mod bounded;
 mod clock;
 mod clock_area;
 mod config_area;
@@ -48,7 +49,7 @@ use clap::ValueEnum;
 
 use crate::config::Config;
 pub(in crate::cli) use clock::parse_rfc3339;
-use report::{AreaReport, any_failed, render_json, render_table};
+use report::{AreaReport, any_failed, render_json, render_table, to_value};
 
 /// Upper bound for one network operation (connect, read, query).
 pub(super) const NET_TIMEOUT: Duration = Duration::from_secs(5);
@@ -105,7 +106,7 @@ pub enum CheckArea {
 
 impl CheckArea {
 	/// Every area, in the order `status` prints them.
-	const ALL: &'static [CheckArea] = &[
+	pub(crate) const ALL: &'static [CheckArea] = &[
 		CheckArea::Config,
 		CheckArea::Ports,
 		CheckArea::Tls,
@@ -128,7 +129,7 @@ impl CheckArea {
 	];
 
 	/// The name used on the command line and as the JSON key.
-	pub(super) fn name(self) -> &'static str {
+	pub(crate) fn name(self) -> &'static str {
 		match self {
 			CheckArea::Config => "config",
 			CheckArea::Ports => "ports",
@@ -167,6 +168,53 @@ pub(super) struct Ctx {
 	/// asks about it calls it up. The production window is the one the
 	/// switch uses; the tests shorten it.
 	pub(super) steady: Duration,
+	/// The place of the run in the server's limit, kept until the last
+	/// blocking thread of the run has ended. `None` for the command.
+	hold: Option<Arc<RunHold>>,
+	/// When the areas are cut off, and the programs they started killed.
+	pub(super) deadline: std::time::Instant,
+}
+
+/// What a run of the checks in a server keeps for as long as anything it
+/// started is still running. A check cut off at its deadline leaves its
+/// blocking thread behind, so the place in the limit is given back only when
+/// the last of them has returned.
+pub(crate) struct RunHold {
+	_permit: tokio::sync::OwnedSemaphorePermit,
+	/// How long every blocking thread of the run lingers, for the tests.
+	#[cfg(test)]
+	lag: Duration,
+	/// The time an area gets, when a test shortens it.
+	#[cfg(test)]
+	limit: Option<Duration>,
+}
+
+impl RunHold {
+	/// Keep `permit` for the run.
+	#[cfg_attr(test, allow(dead_code))]
+	pub(crate) fn new(permit: tokio::sync::OwnedSemaphorePermit) -> Self {
+		RunHold {
+			_permit: permit,
+			#[cfg(test)]
+			lag: Duration::ZERO,
+			#[cfg(test)]
+			limit: None,
+		}
+	}
+
+	/// [`RunHold::new`] with every blocking thread of the run kept busy for `lag`.
+	#[cfg(test)]
+	pub(crate) fn lagging(
+		permit: tokio::sync::OwnedSemaphorePermit,
+		lag: Duration,
+		limit: Option<Duration>,
+	) -> Self {
+		RunHold {
+			_permit: permit,
+			lag,
+			limit,
+		}
+	}
 }
 
 impl Ctx {
@@ -178,6 +226,33 @@ impl Ctx {
 			.map_err(|_| AreaReport::fail("not checked: the configuration did not load"))
 	}
 
+	/// Run `work` on a blocking thread that keeps the run's place until it
+	/// returns, whatever becomes of the future that waits for it.
+	pub(super) fn blocking<R: Send + 'static>(
+		&self,
+		work: impl FnOnce() -> R + Send + 'static,
+	) -> tokio::task::JoinHandle<R> {
+		let hold = self.hold.clone();
+		tokio::task::spawn_blocking(move || {
+			#[cfg(test)]
+			if let Some(hold) = &hold {
+				std::thread::sleep(hold.lag);
+			}
+			let result = work();
+			drop(hold);
+			result
+		})
+	}
+
+	/// How long an area gets before it is cut off.
+	fn area_limit(&self) -> Duration {
+		#[cfg(test)]
+		if let Some(limit) = self.hold.as_ref().and_then(|hold| hold.limit) {
+			return limit;
+		}
+		AREA_DEADLINE
+	}
+
 	fn load(path: &Path) -> Self {
 		Ctx {
 			path: path.to_path_buf(),
@@ -186,8 +261,51 @@ impl Ctx {
 			podup: "podup".to_string(),
 			meminfo: PathBuf::from("/proc/meminfo"),
 			steady: crate::cli::stack::certs::STEADY,
+			hold: None,
+			deadline: std::time::Instant::now() + AREA_DEADLINE,
 		}
 	}
+}
+
+impl Ctx {
+	/// The context of a running server: the configuration it runs with, read
+	/// from `path` when it has one.
+	fn of(path: PathBuf, config: Config, hold: RunHold) -> Self {
+		let hold = Arc::new(hold);
+		let mut ctx = Ctx {
+			path,
+			config: Ok(config),
+			now: SystemTime::now(),
+			podup: "podup".to_string(),
+			meminfo: PathBuf::from("/proc/meminfo"),
+			steady: crate::cli::stack::certs::STEADY,
+			hold: Some(hold),
+			deadline: std::time::Instant::now() + AREA_DEADLINE,
+		};
+		ctx.deadline = std::time::Instant::now() + ctx.area_limit();
+		ctx
+	}
+}
+
+/// The area `name` names, as `epistle check` and `status --json` spell it.
+pub(crate) fn area_named(name: &str) -> Option<CheckArea> {
+	CheckArea::ALL
+		.iter()
+		.copied()
+		.find(|area| area.name() == name)
+}
+
+/// Run `areas` for a server running with `config` (read from `path` when it
+/// has one) and answer the JSON `epistle status --json` and `epistle check
+/// <area> --json` print for them. Each area is bounded by [`AREA_DEADLINE`].
+pub(crate) async fn run_json(
+	path: PathBuf,
+	config: Config,
+	areas: &[CheckArea],
+	hold: RunHold,
+) -> serde_json::Value {
+	let reports = run_areas(areas, Arc::new(Ctx::of(path, config, hold))).await;
+	to_value(&reports)
 }
 
 /// What `init` prints at its end: the `boot` summary for the configuration at
@@ -286,9 +404,12 @@ async fn run_areas(areas: &[CheckArea], ctx: Arc<Ctx>) -> Vec<(CheckArea, AreaRe
 	for (index, area) in areas.iter().copied().enumerate() {
 		let ctx = Arc::clone(&ctx);
 		set.spawn(async move {
-			let report = match tokio::time::timeout(AREA_DEADLINE, check_area(area, &ctx)).await {
+			let report = match tokio::time::timeout(ctx.area_limit(), check_area(area, &ctx)).await
+			{
 				Ok(report) => report,
-				Err(_) => AreaReport::fail(format!("timed out after {}s", AREA_DEADLINE.as_secs())),
+				Err(_) => {
+					AreaReport::fail(format!("timed out after {}s", ctx.area_limit().as_secs()))
+				}
 			};
 			(index, area, report)
 		});
