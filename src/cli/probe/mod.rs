@@ -35,6 +35,7 @@ use tokio::net::TcpStream;
 use tokio::time::timeout;
 use tokio_rustls::rustls;
 
+mod fronts;
 mod protocols;
 mod verifier;
 use super::term::table::Table;
@@ -74,10 +75,18 @@ pub(super) struct ProbeLine {
 /// Returns the exit code the dispatcher should propagate: SUCCESS
 /// when no listener failed, FAILURE when at least one did. An unchecked
 /// host publication produces a warning rather than a failure.
-pub(super) fn run(config: &Config, json: bool, out: &mut impl std::io::Write) -> ExitCode {
+///
+/// With `fronts`, the listeners that serve the API are asked on their Unix
+/// sockets instead, and the others as usual.
+pub(super) fn run(
+	config: &Config,
+	json: bool,
+	fronts: bool,
+	out: &mut impl std::io::Write,
+) -> ExitCode {
 	ensure_crypto_provider();
 	let cert_path = pinned_cert_path(config);
-	let results = match execute(config, cert_path.as_deref()) {
+	let results = match execute(config, cert_path.as_deref(), fronts) {
 		Ok(results) => results,
 		Err(error) => {
 			super::style::error(format_args!("probe: {error}"));
@@ -105,12 +114,26 @@ pub(super) fn pinned_cert_path(config: &Config) -> Option<PathBuf> {
 /// runtime is required because the production call site (the CLI
 /// subcommand) is synchronous; tests run the [`probe_all`] async
 /// function directly on the `#[tokio::test]` runtime instead.
-fn execute(config: &Config, tls_cert_path: Option<&Path>) -> std::io::Result<Vec<ProbeLine>> {
+fn execute(
+	config: &Config,
+	tls_cert_path: Option<&Path>,
+	fronts: bool,
+) -> std::io::Result<Vec<ProbeLine>> {
 	let runtime = tokio::runtime::Builder::new_current_thread()
 		.enable_all()
 		.build()
 		.map_err(|error| std::io::Error::other(format!("build probe runtime: {error}")))?;
-	runtime.block_on(published::probe(config, tls_cert_path, "podup"))
+	if !fronts {
+		return runtime.block_on(published::probe(config, tls_cert_path, "podup"));
+	}
+	let mut rest = config.clone();
+	rest.listeners
+		.retain(|listener| !listener.kind.serves_api());
+	runtime.block_on(async {
+		let mut lines = published::probe(&rest, tls_cert_path, "podup").await?;
+		lines.extend(fronts::probe_sockets(config).await);
+		Ok(lines)
+	})
 }
 
 /// Probe every listener sequentially, returning one entry per listener

@@ -115,6 +115,10 @@ macro_rules! deployment_commands {
 				/// `error` field on failure.
 				#[arg(long)]
 				json: bool,
+				/// The stack runs fronts: ask the listeners that serve the API
+				/// on their Unix sockets (`GET /healthz`) instead of on TCP.
+				#[arg(long)]
+				fronts: bool,
 			},
 			/// Move mail and settings from another mail server into this one.
 			///
