@@ -3,6 +3,7 @@
 pub use super::*;
 
 pub(super) mod cidr;
+pub(super) mod confined_after_body;
 pub(super) mod reload;
 pub(in crate::api) mod rules;
 pub(super) mod rules_check;

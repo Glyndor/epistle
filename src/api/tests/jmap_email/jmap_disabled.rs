@@ -215,13 +215,28 @@ async fn post_while(
 	payload: Value,
 	change: impl FnOnce(),
 ) -> (StatusCode, Value) {
+	slow_request(app, "POST", path, CAROL, payload, change).await
+}
+
+/// `method` `path` with `payload` as the body, for the key `token`, the body
+/// held back until `change` has run, once the server is reading it; the
+/// answer. What `change` does lands between the check the middleware made and
+/// the handler that reads the body.
+pub(in crate::api::tests) async fn slow_request(
+	app: &axum::Router,
+	method: &str,
+	path: &str,
+	token: &str,
+	payload: Value,
+	change: impl FnOnce(),
+) -> (StatusCode, Value) {
 	use tower::ServiceExt;
 	let (started, reading) = tokio::sync::oneshot::channel();
 	let (send_piece, pieces) = tokio::sync::mpsc::channel(1);
 	let request = axum::http::Request::builder()
-		.method("POST")
+		.method(method)
 		.uri(path)
-		.header(axum::http::header::AUTHORIZATION, format!("Bearer {CAROL}"))
+		.header(axum::http::header::AUTHORIZATION, format!("Bearer {token}"))
 		.header(axum::http::header::CONTENT_TYPE, "application/json")
 		.body(axum::body::Body::from_stream(Pending {
 			started: Some(started),

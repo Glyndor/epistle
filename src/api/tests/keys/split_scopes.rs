@@ -270,3 +270,83 @@ async fn management_keys_keep_the_lists() {
 		assert_ne!(status, StatusCode::FORBIDDEN, "{path}");
 	}
 }
+
+/// A request let in under a scope that the key no longer holds when its body
+/// is complete does not go on. The key keeps a scope (so it is still a key
+/// that exists and reaches things), just not the one the request needed.
+#[tokio::test]
+async fn a_scope_withdrawn_while_the_body_arrives_stops_the_request() {
+	use super::super::jmap_email::jmap_disabled::slow_request;
+	let dir = tempfile::tempdir().expect("tempdir");
+	let state = test_state(dir.path(), 0);
+	state
+		.store()
+		.add(crate::directory_store::DynamicAccount {
+			name: "dyna".to_string(),
+			addresses: vec!["dyna@example.org".to_string()],
+			password_hash: "$argon2id$prior".to_string(),
+			..crate::directory_store::DynamicAccount::default()
+		})
+		.expect("add dyna");
+	let mut store = crate::api::ApiKeyStore::open(dir.path()).expect("key store");
+	store
+		.add(crate::api::api_keys::ApiKey {
+			label: "k".to_string(),
+			hash: crate::api::api_keys::sha256_hash("manager-secret"),
+			expires_at: None,
+			ip_cidr: None,
+			scopes: vec!["manage:write".to_string()],
+			grants: Vec::new(),
+			domains: Vec::new(),
+			account: None,
+			auto_submitted: false,
+		})
+		.expect("add key");
+	drop(store);
+	state
+		.api_keys()
+		.reload_from(&std::fs::read_to_string(dir.path().join("api_keys.toml")).expect("keys"))
+		.expect("reload");
+	let app = router(state.clone());
+	let body = || json!({ "password": crate::test_support::fixtures::second_password() });
+	let hash = || {
+		state
+			.store()
+			.dynamic_account("dyna")
+			.expect("dyna")
+			.password_hash
+	};
+	let before = hash();
+	// Control: nothing changes while the body arrives, and it is served.
+	let (status, answer) = slow_request(
+		&app,
+		"PUT",
+		"/api/v1/accounts/dyna/password",
+		"manager-secret",
+		body(),
+		|| {},
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK, "{answer}");
+	assert_ne!(hash(), before, "the password was changed");
+	// The key is cut down to mail while the next one is on its way.
+	let before = hash();
+	let (status, answer) = slow_request(
+		&app,
+		"PUT",
+		"/api/v1/accounts/dyna/password",
+		"manager-secret",
+		body(),
+		|| {
+			let mut store = crate::api::ApiKeyStore::open(dir.path()).expect("key store");
+			store
+				.set_scopes("k", &["mail:write".to_string()])
+				.expect("set scopes");
+			let text = std::fs::read_to_string(dir.path().join("api_keys.toml")).expect("keys");
+			state.api_keys().reload_from(&text).expect("reload");
+		},
+	)
+	.await;
+	assert!(!status.is_success(), "{status}: {answer}");
+	assert_eq!(hash(), before, "the password was not touched");
+}

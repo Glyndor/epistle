@@ -40,6 +40,8 @@ async fn oauth_frames_keep_scopes_and_subject_and_stream_rechecks_notice_revocat
 		token: Some(token.clone()),
 		client_ip: None,
 		configured: false,
+		acceptable_scopes: crate::api::Principal::EVERY_SCOPE.to_vec(),
+		account_scoped: true,
 	};
 	let principal = Principal::for_token(&state, &auth);
 	assert!(credential_still_valid(&state, &auth, &principal));

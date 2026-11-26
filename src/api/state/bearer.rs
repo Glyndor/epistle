@@ -232,6 +232,7 @@ pub async fn require_bearer_token(
 	// Inject the resolved client IP so privileged handlers can attribute
 	// their state-changing actions in the audit log.
 	request.extensions_mut().insert(ClientIp(client_ip));
+	let account_scoped = super::super::account_bound::path_is_account_scoped(request.uri().path());
 	// Stash the matched credentials so per-route handlers can apply a
 	// fine-grained scope check on top of the coarse path/method inference
 	// the middleware just performed.
@@ -239,6 +240,8 @@ pub async fn require_bearer_token(
 		token: token.clone(),
 		client_ip,
 		configured,
+		acceptable_scopes,
+		account_scoped,
 	});
 	next.run(request).await
 }
