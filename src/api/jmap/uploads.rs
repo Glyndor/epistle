@@ -61,10 +61,10 @@ impl Uploads {
 	pub async fn prefetch(state: &ApiState, principal: &Principal, request: &Request) -> Self {
 		let mut uploads = Uploads::default();
 		let can_write = state
-			.require_scope_for_principal(principal, Scope::Write)
+			.require_scope_for_principal(principal, Scope::MailWrite)
 			.is_ok();
 		let can_read = state
-			.require_scope_for_principal(principal, Scope::Read)
+			.require_scope_for_principal(principal, Scope::MailRead)
 			.is_ok();
 		// Most bytes read ahead for one request: no message over the size
 		// limit can be built anyway, so more would only be held in memory

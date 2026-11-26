@@ -34,12 +34,13 @@ fn state_with_keys(dir: &std::path::Path, token: &str, keys: Vec<ApiKey>) -> Api
 
 fn key(label: &str, secret: &str) -> ApiKey {
 	ApiKey {
+		grants: Vec::new(),
 		label: label.to_string(),
 		hash: crate::api::api_keys::sha256_hash(secret),
 		expires_at: None,
 		ip_cidr: None,
 		// `add()` rejects empty scopes; every test-built key carries one.
-		scopes: vec![Scope::Read.as_str().to_string()],
+		scopes: vec!["read".to_string()],
 		domains: Vec::new(),
 		account: None,
 		auto_submitted: false,
@@ -50,8 +51,8 @@ fn key(label: &str, secret: &str) -> ApiKey {
 fn configured_token_still_authorizes() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let state = state_with_keys(dir.path(), fixtures::api_token(), Vec::new());
-	assert!(state.authorizes(fixtures::api_token(), None, &[Scope::Read]));
-	assert!(!state.authorizes(&fixtures::fresh_secret(), None, &[Scope::Read]));
+	assert!(state.authorizes(fixtures::api_token(), None, &[Scope::ManageRead]));
+	assert!(!state.authorizes(&fixtures::fresh_secret(), None, &[Scope::ManageRead]));
 }
 
 #[test]
@@ -62,9 +63,9 @@ fn valid_api_key_authorizes() {
 		fixtures::api_token(),
 		vec![key("ci", fixtures::api_key())],
 	);
-	assert!(state.authorizes(fixtures::api_key(), None, &[Scope::Read]));
+	assert!(state.authorizes(fixtures::api_key(), None, &[Scope::ManageRead]));
 	// The configured token also still works.
-	assert!(state.authorizes(fixtures::api_token(), None, &[Scope::Read]));
+	assert!(state.authorizes(fixtures::api_token(), None, &[Scope::ManageRead]));
 }
 
 #[test]
@@ -75,7 +76,7 @@ fn wrong_api_key_rejected() {
 		fixtures::api_token(),
 		vec![key("ci", fixtures::api_key())],
 	);
-	assert!(!state.authorizes(&fixtures::fresh_secret(), None, &[Scope::Read]));
+	assert!(!state.authorizes(&fixtures::fresh_secret(), None, &[Scope::ManageRead]));
 }
 
 #[test]
@@ -84,7 +85,7 @@ fn expired_api_key_rejected() {
 	let mut expired = key("ci", fixtures::api_key());
 	expired.expires_at = Some(1); // long past
 	let state = state_with_keys(dir.path(), fixtures::api_token(), vec![expired]);
-	assert!(!state.authorizes(fixtures::api_key(), None, &[Scope::Read]));
+	assert!(!state.authorizes(fixtures::api_key(), None, &[Scope::ManageRead]));
 }
 
 #[test]
@@ -93,10 +94,18 @@ fn ip_restricted_api_key_enforced() {
 	let mut restricted = key("ci", fixtures::api_key());
 	restricted.ip_cidr = Some("10.0.0.0/8".to_string());
 	let state = state_with_keys(dir.path(), fixtures::api_token(), vec![restricted]);
-	assert!(state.authorizes(fixtures::api_key(), Some(ip("10.1.2.3")), &[Scope::Read]));
-	assert!(!state.authorizes(fixtures::api_key(), Some(ip("192.0.2.1")), &[Scope::Read]));
+	assert!(state.authorizes(
+		fixtures::api_key(),
+		Some(ip("10.1.2.3")),
+		&[Scope::ManageRead]
+	));
+	assert!(!state.authorizes(
+		fixtures::api_key(),
+		Some(ip("192.0.2.1")),
+		&[Scope::ManageRead]
+	));
 	// A restricted key with no known client IP cannot be satisfied.
-	assert!(!state.authorizes(fixtures::api_key(), None, &[Scope::Read]));
+	assert!(!state.authorizes(fixtures::api_key(), None, &[Scope::ManageRead]));
 }
 
 /// `owns_address` must return `false` when no directory has been attached

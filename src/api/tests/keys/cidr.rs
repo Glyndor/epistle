@@ -20,7 +20,7 @@ use axum::http::{Request, StatusCode, header};
 use std::net::SocketAddr;
 use tower::ServiceExt;
 
-use crate::api::api_keys::{ApiKey, ApiKeyStore, Scope};
+use crate::api::api_keys::{ApiKey, ApiKeyStore};
 use crate::api::router;
 use crate::api::tests::base::{TOKEN, test_state};
 
@@ -36,11 +36,12 @@ const KEY_SECRET: &str = "cidr-dual-stack-fixture-secret";
 fn state_with_cidr_key(dir: &std::path::Path) -> crate::api::ApiState {
 	let mut store = ApiKeyStore::open(dir).expect("open key store");
 	let mut key = ApiKey {
+		grants: Vec::new(),
 		label: "cidr-restricted".to_string(),
 		hash: crate::api::api_keys::sha256_hash(KEY_SECRET),
 		expires_at: None,
 		ip_cidr: Some("192.0.2.0/24".to_string()),
-		scopes: vec![Scope::Read.as_str().to_string()],
+		scopes: vec!["read".to_string()],
 		domains: Vec::new(),
 		account: None,
 		auto_submitted: false,

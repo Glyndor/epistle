@@ -35,10 +35,15 @@ pub(crate) use session::SessionAction;
 /// The label of the panel's API key.
 pub(crate) const LABEL: &str = "panel";
 
-/// The scopes of the panel's key: it lists and changes accounts, domains and
-/// the queue, and sends no mail and provisions nothing, so `send` and `scim`
-/// stay out.
+/// The scopes of the panel's key in the names 0.14.0 reads: it lists and
+/// changes accounts, domains and the queue, and sends no mail and provisions
+/// nothing, so `send` and `scim` stay out.
 pub(crate) const SCOPES: [&str; 2] = ["read", "write"];
+
+/// The same reach in the names 0.15.0 reads, sorted. The panel's webmail
+/// calls JMAP with this key until the panel has a credential per user, so the
+/// key keeps both halves and is not narrowed to the management scopes.
+pub(crate) const GRANTS: [&str; 4] = ["mail:read", "mail:write", "manage:read", "manage:write"];
 
 /// How long a new or renewed key lives.
 pub(crate) const KEY_LIFETIME_SECS: u64 = 365 * 24 * 60 * 60;

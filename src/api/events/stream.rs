@@ -94,7 +94,7 @@ impl Events {
 			&self.principal,
 		) && self
 			.state
-			.require_scope_for_principal(&self.principal, Scope::Read)
+			.require_scope_for_principal(&self.principal, Scope::ManageRead)
 			.is_ok()
 	}
 

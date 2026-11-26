@@ -29,6 +29,7 @@ async fn aggregate_quota_blocks_an_over_cap_upload() {
 	let mut key_store = crate::api::ApiKeyStore::open(dir.path()).expect("open key store");
 	key_store
 		.add(crate::api::api_keys::ApiKey {
+			grants: Vec::new(),
 			label: "tenant-a".to_string(),
 			hash: crate::api::api_keys::sha256_hash(KEY),
 			expires_at: None,
@@ -108,6 +109,7 @@ async fn aggregate_rate_blocks_a_second_send_within_the_window() {
 	let mut key_store = crate::api::ApiKeyStore::open(dir.path()).expect("open key store");
 	key_store
 		.add(crate::api::api_keys::ApiKey {
+			grants: Vec::new(),
 			label: "tenant-a".to_string(),
 			hash: crate::api::api_keys::sha256_hash(KEY),
 			expires_at: None,
@@ -198,6 +200,7 @@ async fn aggregate_rate_charges_per_recipient() {
 	let mut key_store = crate::api::ApiKeyStore::open(dir.path()).expect("open key store");
 	key_store
 		.add(crate::api::api_keys::ApiKey {
+			grants: Vec::new(),
 			label: "tenant-a".to_string(),
 			hash: crate::api::api_keys::sha256_hash(KEY),
 			expires_at: None,

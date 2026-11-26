@@ -91,6 +91,7 @@ impl Harness {
 		);
 		let mut keys = ApiKeyStore::open(dir.path()).expect("key store");
 		keys.add(ApiKey {
+			grants: Vec::new(),
 			label: "alice".into(),
 			hash: sha256_hash(ALICE),
 			expires_at: None,

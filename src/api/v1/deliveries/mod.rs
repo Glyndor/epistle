@@ -65,6 +65,11 @@ pub async fn list(
 ) -> Result<Json<DeliveryPage>, ApiError> {
 	let limit = params.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
 	let principal = crate::api::Principal::for_token(&state, &auth);
+	super::scope::require_manage_unless_bound(
+		&principal,
+		crate::api::api_keys::Scope::ManageRead,
+		"The delivery log",
+	)?;
 
 	// The acting account a restricted key may see is decided by the common
 	// authorization: the records it may read are the ones tagged with an

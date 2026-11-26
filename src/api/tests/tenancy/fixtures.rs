@@ -72,6 +72,7 @@ pub(super) fn world() -> World {
 	store.add(account("carol", "carol@b.test")).expect("carol");
 	let mut keys = crate::api::ApiKeyStore::open(dir.path()).expect("key store");
 	keys.add(crate::api::api_keys::ApiKey {
+		grants: Vec::new(),
 		label: "tenant-a".to_string(),
 		hash: crate::api::api_keys::sha256_hash(tenant_key()),
 		expires_at: None,

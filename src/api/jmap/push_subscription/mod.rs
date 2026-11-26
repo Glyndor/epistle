@@ -83,7 +83,7 @@ pub(crate) fn owner_of(state: &ApiState, principal: &Principal) -> Option<String
 		.duration_since(std::time::UNIX_EPOCH)
 		.map(|d| d.as_secs())
 		.unwrap_or(0);
-	const EVERY_SCOPE: &[Scope] = &[Scope::Read, Scope::Write, Scope::Send];
+	const EVERY_SCOPE: &[Scope] = &[Scope::MailRead, Scope::MailWrite, Scope::Send];
 	state
 		.api_keys()
 		.snapshot()

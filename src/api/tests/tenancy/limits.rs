@@ -15,6 +15,7 @@ pub(super) fn unscoped_state(dir: &std::path::Path) -> ApiState {
 	let mut key_store = crate::api::ApiKeyStore::open(dir).expect("open key store");
 	key_store
 		.add(crate::api::api_keys::ApiKey {
+			grants: Vec::new(),
 			label: "tenant-a".to_string(),
 			hash: crate::api::api_keys::sha256_hash(KEY),
 			expires_at: None,
@@ -79,6 +80,7 @@ pub(super) fn capped_state(dir: &std::path::Path, max_accounts: u64) -> ApiState
 	let mut key_store = crate::api::ApiKeyStore::open(dir).expect("open key store");
 	key_store
 		.add(crate::api::api_keys::ApiKey {
+			grants: Vec::new(),
 			label: "tenant-a".to_string(),
 			hash: crate::api::api_keys::sha256_hash(KEY),
 			expires_at: None,

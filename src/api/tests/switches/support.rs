@@ -38,6 +38,7 @@ pub(super) fn app(dir: &std::path::Path) -> Router {
 	let mut keys = crate::api::ApiKeyStore::open(dir).expect("open key store");
 	for name in [OFF, ON] {
 		keys.add(crate::api::api_keys::ApiKey {
+			grants: Vec::new(),
 			label: format!("{name}-only"),
 			hash: crate::api::api_keys::sha256_hash(&secret(name)),
 			expires_at: None,

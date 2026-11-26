@@ -9,6 +9,7 @@ use tower::ServiceExt;
 fn state(dir: &std::path::Path, token: &str) -> ApiState {
 	let mut keys = crate::api::ApiKeyStore::open(dir).expect("keys");
 	keys.add(crate::api::api_keys::ApiKey {
+		grants: Vec::new(),
 		label: "tenant".into(),
 		hash: crate::api::api_keys::sha256_hash(token),
 		expires_at: None,

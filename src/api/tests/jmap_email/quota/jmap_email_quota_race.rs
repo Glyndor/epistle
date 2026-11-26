@@ -42,6 +42,7 @@ async fn draft_size() -> u64 {
 fn state(dir: &std::path::Path, limit: u64) -> Router {
 	let mut keys = crate::api::ApiKeyStore::open(dir).expect("open key store");
 	keys.add(crate::api::api_keys::ApiKey {
+		grants: Vec::new(),
 		label: "race".to_string(),
 		hash: crate::api::api_keys::sha256_hash(KEY),
 		expires_at: None,

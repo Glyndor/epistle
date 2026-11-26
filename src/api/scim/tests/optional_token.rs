@@ -10,6 +10,7 @@ async fn scim_routes_accept_a_labelled_key_without_a_static_token() {
 	let secret = crate::test_support::fixtures::api_key();
 	let mut keys = crate::api::ApiKeyStore::open(dir.path()).unwrap();
 	keys.add(crate::api::ApiKey {
+		grants: Vec::new(),
 		label: "provisioner".into(),
 		hash: crate::api::api_keys::sha256_hash(secret),
 		scopes: vec!["scim".into()],

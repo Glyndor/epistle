@@ -35,7 +35,7 @@ fn pinned(expiry: bool) -> String {
 	};
 	format!(
 		"[[keys]]\nlabel = \"ci\"\nhash = \"sha256:stored-hash-must-not-leak\"\n{expiry}\
-		 scopes = [\"read\"]\nip_cidr = \"10.0.0.0/24\"\n"
+		 scopes = [\"read\"]\ngrants = [\"manage:read\"]\nip_cidr = \"10.0.0.0/24\"\n"
 	)
 }
 
@@ -54,7 +54,12 @@ async fn a_key_without_expiry_warns_with_label_and_scope() {
 	let context = ctx(dir.path(), "");
 	keys_file(
 		&dir.path().join("data"),
-		&key("automation", "", "scopes = [\"read\"]\n", ""),
+		&key(
+			"automation",
+			"",
+			"scopes = [\"read\"]\ngrants = [\"manage:read\"]\n",
+			"",
+		),
 	);
 	let report = check(&context).await;
 	assert_eq!(report.status, Level::Warn, "{report:?}");
@@ -94,7 +99,7 @@ async fn expiring_keys_and_scim_keys_with_domains_are_healthy() {
 		key(
 			"reader",
 			"expires_at = 4102444800\n",
-			"scopes = [\"read\"]\n",
+			"scopes = [\"read\"]\ngrants = [\"manage:read\"]\n",
 			""
 		),
 		key(
@@ -179,7 +184,12 @@ fn warnings(body: &str) -> Vec<String> {
 #[test]
 fn a_key_that_expires_within_two_weeks_warns_with_the_days_left() {
 	let soon = format!("expires_at = {}\n", now() + 3 * 86_400);
-	let details = warnings(&key("ci", &soon, "scopes = [\"read\"]\n", ""));
+	let details = warnings(&key(
+		"ci",
+		&soon,
+		"scopes = [\"read\"]\ngrants = [\"manage:read\"]\n",
+		"",
+	));
 	assert_eq!(details.len(), 1, "{details:?}");
 	assert!(details[0].starts_with("expires in 3 days"), "{details:?}");
 }
@@ -187,13 +197,26 @@ fn a_key_that_expires_within_two_weeks_warns_with_the_days_left() {
 #[test]
 fn a_key_that_expires_after_two_weeks_is_quiet() {
 	let later = format!("expires_at = {}\n", now() + 20 * 86_400);
-	assert!(warnings(&key("ci", &later, "scopes = [\"read\"]\n", "")).is_empty());
+	assert!(
+		warnings(&key(
+			"ci",
+			&later,
+			"scopes = [\"read\"]\ngrants = [\"manage:read\"]\n",
+			""
+		))
+		.is_empty()
+	);
 }
 
 #[test]
 fn a_key_that_has_expired_warns_with_its_date() {
 	let past = "expires_at = 1700000000\n";
-	let details = warnings(&key("ci", past, "scopes = [\"read\"]\n", ""));
+	let details = warnings(&key(
+		"ci",
+		past,
+		"scopes = [\"read\"]\ngrants = [\"manage:read\"]\n",
+		"",
+	));
 	assert_eq!(details.len(), 1, "{details:?}");
 	assert_eq!(details[0], "expired on 2023-11-14T22:13:20Z");
 }
@@ -209,8 +232,8 @@ fn a_legacy_key_with_every_scope_warns_of_its_reach() {
 #[test]
 fn a_send_or_write_key_without_domain_account_or_cidr_warns() {
 	let later = format!("expires_at = {}\n", now() + 90 * 86_400);
-	for scope in ["send", "write"] {
-		let scopes = format!("scopes = [\"{scope}\"]\n");
+	for (scope, grant) in [("send", "send"), ("write", "manage:write")] {
+		let scopes = format!("scopes = [\"{scope}\"]\ngrants = [\"{grant}\"]\n");
 		let details = warnings(&key("mailer", &later, &scopes, ""));
 		assert_eq!(details.len(), 1, "{scope}: {details:?}");
 		assert!(details[0].contains("every domain"), "{details:?}");
@@ -239,13 +262,13 @@ async fn check_uses_the_real_clock_for_expiry_warnings() {
 		key(
 			"soon",
 			&format!("expires_at = {}\n", now() + 3 * 86_400),
-			"scopes = [\"read\"]\n",
+			"scopes = [\"read\"]\ngrants = [\"manage:read\"]\n",
 			""
 		),
 		key(
 			"gone",
 			"expires_at = 1700000000\n",
-			"scopes = [\"read\"]\n",
+			"scopes = [\"read\"]\ngrants = [\"manage:read\"]\n",
 			""
 		)
 	);
@@ -285,4 +308,46 @@ async fn an_ip_cidr_behind_a_bridge_does_not_confine_a_send_key() {
 	compose(&data, "pasta");
 	let report = check(&context).await;
 	assert!(report.items.is_empty(), "{report:?}");
+}
+
+/// `read` and `write` open management and mail at once: the key is told to split
+/// it, and when `stack update` will stop accepting that. The panel's key does so
+/// on purpose, and a key bound to an account reaches no management route.
+#[test]
+fn a_key_that_opens_management_and_mail_is_told_to_split_it() {
+	let later = format!("expires_at = {}\n", now() + 90 * 86_400);
+	let domain = "domains = [\"example.org\"]\n";
+	let details = warnings(&key("ci", &later, "scopes = [\"read\"]\n", domain));
+	assert_eq!(details.len(), 1, "{details:?}");
+	assert!(details[0].contains("management and mail"), "{details:?}");
+	assert!(
+		details[0].contains("epistle api-key set ci --scope"),
+		"{details:?}"
+	);
+	assert!(details[0].contains(crate::api::api_keys::legacy_cutoff::LEGACY_SCOPES_REFUSED_FROM));
+	// Split, it is quiet.
+	let split = "scopes = [\"read\"]\ngrants = [\"mail:read\"]\n";
+	assert!(warnings(&key("ci", &later, split, domain)).is_empty());
+	// The panel's key keeps both halves on purpose.
+	let both = "scopes = [\"read\", \"write\"]\ngrants = [\"manage:read\", \"manage:write\", \"mail:read\", \"mail:write\"]\n";
+	let panel = warnings(&key("panel", &later, both, domain));
+	assert!(
+		panel
+			.iter()
+			.all(|detail| !detail.contains("management and mail")),
+		"{panel:?}"
+	);
+	// A key bound to one account reaches no management route.
+	let bound = warnings(&key(
+		"alice",
+		&later,
+		"scopes = [\"read\"]\naccount = \"alice\"\n",
+		"",
+	));
+	assert!(
+		bound
+			.iter()
+			.all(|detail| !detail.contains("management and mail")),
+		"{bound:?}"
+	);
 }

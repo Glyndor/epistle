@@ -38,6 +38,7 @@ fn key(
 		expires_at: None,
 		ip_cidr: None,
 		scopes: scopes.iter().map(|scope| (*scope).to_string()).collect(),
+		grants: Vec::new(),
 		domains: domains.iter().map(|domain| (*domain).to_string()).collect(),
 		account: None,
 		auto_submitted: false,

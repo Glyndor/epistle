@@ -131,6 +131,7 @@ async fn q56_foreign_existing_account_returns_account_not_found() {
 	let secret = "query-alice-only";
 	let mut keys = crate::api::ApiKeyStore::open(dir.path()).expect("key store");
 	keys.add(crate::api::api_keys::ApiKey {
+		grants: Vec::new(),
 		label: "query-alice".into(),
 		hash: crate::api::api_keys::sha256_hash(secret),
 		expires_at: None,

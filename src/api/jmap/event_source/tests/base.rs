@@ -53,10 +53,15 @@ pub(super) fn state(dir: &Path) -> ApiState {
 		.expect("store"),
 	);
 	let mut keys = ApiKeyStore::open(dir).expect("key store");
-	keys.add(key("read", READ_KEY.as_str(), &[Scope::Read], "alice"))
+	keys.add(key("read", READ_KEY.as_str(), &[Scope::MailRead], "alice"))
 		.expect("add read key");
-	keys.add(key("write", WRITE_KEY.as_str(), &[Scope::Write], "alice"))
-		.expect("add write key");
+	keys.add(key(
+		"write",
+		WRITE_KEY.as_str(),
+		&[Scope::MailWrite],
+		"alice",
+	))
+	.expect("add write key");
 	drop(keys);
 	for name in ["alice", "carol"] {
 		std::fs::create_dir_all(dir.join("accounts").join(name)).expect("mkdir");
@@ -75,6 +80,7 @@ pub(super) fn state(dir: &Path) -> ApiState {
 /// One labeled API key.
 fn key(label: &str, secret: &str, scopes: &[Scope], account: &str) -> ApiKey {
 	ApiKey {
+		grants: Vec::new(),
 		label: label.to_string(),
 		hash: crate::api::api_keys::sha256_hash(secret),
 		expires_at: None,

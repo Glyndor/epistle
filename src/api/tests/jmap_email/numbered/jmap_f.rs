@@ -13,6 +13,7 @@ fn state_with_scoped_key(dir: &tempfile::TempDir, scopes: &[&str]) -> (Router, S
 	let secret = format!("scoped-secret-{}", scopes.join("-"));
 	key_store
 		.add(crate::api::api_keys::ApiKey {
+			grants: Vec::new(),
 			label: "scoped".to_string(),
 			hash: crate::api::api_keys::sha256_hash(&secret),
 			expires_at: None,

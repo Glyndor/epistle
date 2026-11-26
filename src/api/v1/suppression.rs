@@ -12,7 +12,8 @@ use crate::api::Principal;
 use crate::api::error::ApiError;
 use crate::api::state::{ApiState, MatchedAuth};
 
-use super::scope::require_unconfined;
+use super::scope::{require_manage_unless_bound, require_unconfined};
+use crate::api::api_keys::Scope;
 use crate::queue::SuppressionList;
 use crate::suppression::AddError;
 
@@ -104,6 +105,7 @@ pub async fn list(
 	Query(params): Query<ListParams>,
 ) -> Result<Json<SuppressionPage>, ApiError> {
 	let principal = Principal::for_token(&state, &auth);
+	require_manage_unless_bound(&principal, Scope::ManageRead, "Listing suppressions")?;
 	if params.tenant.is_some() && params.account.is_some() {
 		return Err(ApiError::invalid_input("give account or tenant, not both"));
 	}
@@ -172,6 +174,7 @@ pub async fn add(
 	Json(request): Json<AddRequest>,
 ) -> Result<Json<Suppressed>, ApiError> {
 	let principal = Principal::for_token(&state, &auth);
+	require_manage_unless_bound(&principal, Scope::ManageWrite, "Suppressing an address")?;
 	let scope = match &params.account {
 		Some(account) => Some(account_scope(&state, &principal, account)?),
 		None => {
@@ -223,6 +226,7 @@ pub async fn remove(
 	Query(params): Query<RemoveParams>,
 ) -> Result<Json<Removed>, ApiError> {
 	let principal = Principal::for_token(&state, &auth);
+	require_manage_unless_bound(&principal, Scope::ManageWrite, "Lifting a suppression")?;
 	if params.tenant.is_some() && params.account.is_some() {
 		return Err(ApiError::invalid_input("give account or tenant, not both"));
 	}

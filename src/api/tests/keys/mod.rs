@@ -7,3 +7,4 @@ pub(super) mod reload;
 pub(in crate::api) mod rules;
 pub(super) mod rules_check;
 pub(super) mod scopes;
+mod split_scopes;

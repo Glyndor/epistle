@@ -2,15 +2,17 @@
 
 use super::*;
 
-/// The scope a method call needs: `Write` to change stored data or push
-/// subscriptions, `Send` to submit mail, `Read` for everything that returns
+/// The scope a method call needs: `MailWrite` to change stored data or push
+/// subscriptions, `Send` to submit mail, `MailRead` for everything that returns
 /// account data. `None` for `Core/echo`, which touches nothing, and for a
 /// method this server does not know, which is answered `unknownMethod`.
 pub(super) fn required_scope(method: &str) -> Option<Scope> {
 	match method {
-		"Mailbox/set" | "Email/set" | "Email/copy" | "PushSubscription/set" => Some(Scope::Write),
+		"Mailbox/set" | "Email/set" | "Email/copy" | "PushSubscription/set" => {
+			Some(Scope::MailWrite)
+		}
 		"EmailSubmission/set" => Some(Scope::Send),
-		"VacationResponse/set" | "SieveScript/set" => Some(Scope::Write),
+		"VacationResponse/set" | "SieveScript/set" => Some(Scope::MailWrite),
 		"Mailbox/get"
 		| "Mailbox/query"
 		| "Mailbox/changes"
@@ -27,7 +29,7 @@ pub(super) fn required_scope(method: &str) -> Option<Scope> {
 		| "VacationResponse/get"
 		| "SieveScript/get"
 		| "SieveScript/query"
-		| "SieveScript/validate" => Some(Scope::Read),
+		| "SieveScript/validate" => Some(Scope::MailRead),
 		_ => None,
 	}
 }

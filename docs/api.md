@@ -7,7 +7,7 @@ and what to expect when something goes wrong.
 The routes are described machine-readably in
 [`src/api/openapi/openapi.yaml`](../src/api/openapi/openapi.yaml) (OpenAPI 3.1).
 A running server serves the same document as JSON at
-`GET /api/v1/openapi.json`, with a key that has the `read` scope. The tests
+`GET /api/v1/openapi.json`, with a key that has the `manage:read` scope. The tests
 fail when a route in the code is missing from it or it lists one the code does
 not register, and when an operation names a scope the code does not enforce;
 they do not check every field or status code in it. This
@@ -186,28 +186,36 @@ without a restart.
 
 | Flag | Effect |
 |---|---|
-| `--scope read\|write\|send\|scim\|alias\|ban` | Required, repeatable. Scopes are independent: `write` does not include `read` |
+| `--scope manage:read\|manage:write\|mail:read\|mail:write\|send\|scim\|alias` | Required, repeatable. Scopes are independent: `manage:write` does not include `manage:read`, and a management scope never opens JMAP or the other way round. `read` and `write`, the names before 0.15.0, are still taken and open both the management and the mail scope of their kind, with a warning |
 | `--expires-at WHEN` | Unix seconds, a date (`2027-01-31`, midnight UTC), an RFC 3339 instant (`2027-01-31T12:00:00+02:00`) or a duration from now (`90d`). A date or instant already in the past is refused, and a bare number is read as an epoch only between 2001-09-09 and 9999-12-31, so `2027`, `20270131` and a count of milliseconds are refused. After the expiry the key is refused with `401`, like an unknown one |
 | `--expires-in DURATION` | A number and a unit from now: `s`, `m`, `h`, `d` or `w`, for example `90d`. `m` is minutes, not months: count months in days. Not combined with `--expires-at` |
 | `--ip-cidr CIDR` | One network the client must come from. A request from elsewhere is `401` |
 | `--domain NAME` | Confine the key to a domain (repeat for more). Without it the key reaches every domain |
-| `--account NAME` | Bind the key to one account. It then reaches only JMAP, `POST /api/v1/send`, `GET /api/v1/deliveries` and that account's suppression list, acting as that account, and cannot hold `scim`, `alias`, `ban` or `--domain` |
+| `--account NAME` | Bind the key to one account. It then reaches only JMAP, `POST /api/v1/send`, `GET /api/v1/deliveries` and that account's suppression list, acting as that account, and cannot hold `manage:read`, `manage:write`, `scim`, `alias`, `ban` or `--domain` (`read` and `write` mean `mail:read` and `mail:write` for it) |
 | `--class CLASS` | The mail class `POST /api/v1/send` gives mail sent with the key when the request names none (see [Class and evidence](#class-and-evidence)) |
 | `--auto-submitted` | Add `Auto-Submitted: auto-generated` to mail sent with this key through `POST /api/v1/send` when the request omits the header. Off by default. A value in the request always wins. Other send paths and server-generated mail, including bounces, are not changed |
 
 `epistle api-key rotate LABEL` replaces the secret and keeps everything else,
 the class included; `epistle api-key set LABEL --auto-submitted on|off`
-changes the `Auto-Submitted` setting; `epistle api-key revoke LABEL` removes
+changes the `Auto-Submitted` setting and `epistle api-key set LABEL --scope S
+[--scope ...]` replaces the scopes; `epistle api-key revoke LABEL` removes
 the key; `epistle api-key list` shows the label, expiry, network, scopes,
 domains, account and `auto_submitted` setting, never the key. The expiry is
 printed as an RFC 3339 instant, with `(expired)` after one that has passed;
 `--json` keeps the epoch and adds `"auto_submitted": true` only when the
-setting is enabled, so disabled keys keep their existing JSON shape.
+setting is enabled, so disabled keys keep their existing JSON shape. The scopes
+shown are the names the key was made with (`read` stays `read`), or the new
+names once it is narrowed or was made with them. A key made
+or changed by 0.15.0 is stored with two fields in `api_keys.toml`: `grants`, the
+scopes above, and `scopes`, the narrowest of the old names that covers them
+(`read`, `write`, `send`, `scim`, `alias`), so the same file still loads in
+0.14.0 after a rollback. After a rollback a `mail:read` key is read as `read`
+and reaches the management views as well.
 
 ### The panel's key
 
 When the stack runs the web panel, `epistle init` and `epistle stack update`
-create a key labelled `panel` for it, with the scopes `read` and `write` only,
+create a key labelled `panel` for it, with the scopes `manage:read`, `manage:write`, `mail:read` and `mail:write` only (its webmail calls JMAP with it),
 no `--domain` and no `--account`, and a 365-day expiry. It is an
 administrator-grade key: the panel acts for every domain. The secret is written
 to `secrets/panel_api_token` beside the data directory with mode `0600` and is
@@ -237,7 +245,10 @@ each key that
 - has no expiry,
 - expires within 14 days, or has already expired,
 - holds every scope (a legacy key made before scopes existed),
-- holds `write` or `send` with no `--domain`, no `--account` and no
+- holds `read` or `write`, which open both management and mail (it is told to
+  split the key, and the release from which `stack update` refuses a stack that
+  still has one),
+- holds a write scope or `send` with no `--domain`, no `--account` and no
   `--ip-cidr` (an `--ip-cidr` does not count while the server sits behind a
   network that hides the client address), so a leaked copy reaches every domain from any address, or
 - holds `scim` or `alias` with no `--domain`, or `ban` with one (the ban routes refuse it).
@@ -251,12 +262,22 @@ What each scope reaches:
 
 | Scope | Reaches |
 |---|---|
-| `read` | Every `GET` of `/api/v1`, `/jmap/session`, `/.well-known/jmap`, `/jmap/download`, `/jmap/ws`, `/jmap/eventsource`, and the JMAP methods that return data (`*/get`, `*/query`, `*/changes`, `*/queryChanges`, `Identity/get`, `Quota/get`, `SieveScript/validate`) |
-| `write` | Every other method of `/api/v1` except `send`, `/jmap/upload`, and the JMAP methods that change data (`Mailbox/set`, `Email/set`, `Email/copy`, `PushSubscription/set`, `VacationResponse/set`, `SieveScript/set`) |
+| `manage:read` | Every `GET` and `HEAD` of `/api/v1` except the mail routes below |
+| `manage:write` | Every other method of `/api/v1` except `send`, `aliases` and the mail routes below; `DELETE /api/v1/send/{id}` |
+| `mail:read` | `/jmap/session`, `/.well-known/jmap`, `/jmap/download`, `/jmap/ws`, `/jmap/eventsource`, the JMAP methods that return data (`*/get`, `*/query`, `*/changes`, `*/queryChanges`, `Identity/get`, `Quota/get`, `SieveScript/validate`), and, for a key bound to one account, `GET /api/v1/deliveries` and `GET /api/v1/suppression?account=`; every other key reads those with `manage:read` |
+| `mail:write` | `/jmap/upload`, the JMAP methods that change data (`Mailbox/set`, `Email/set`, `Email/copy`, `PushSubscription/set`, `VacationResponse/set`, `SieveScript/set`), and, for a key bound to one account, its own suppression list; every other key changes the suppression lists with `manage:write` |
 | `send` | `POST /api/v1/send` and JMAP `EmailSubmission/set` |
 | `scim` | Everything under `/scim/v2` |
-| `alias` | Everything under `/api/v1/aliases`, reads included. `read` and `write` do not open it, and the key made before scopes existed (it holds every scope) does |
-| `ban` | Everything under `/api/v1/bans`, reads included. `read` and `write` do not open it. See [Bans](#bans) |
+| `alias` | Everything under `/api/v1/aliases`, reads included. `manage:read`, `manage:write` and the old `read` and `write` do not open it, and the key made before scopes existed (it holds every scope) does |
+| `ban` | Everything under `/api/v1/bans`, reads included. No management or mail scope opens it. See [Bans](#bans) |
+
+A key made before 0.15.0 keeps what it reached: `read` holds `manage:read` and
+`mail:read`, `write` holds `manage:write` and `mail:write`, and a key with no
+scopes holds every scope. OAuth access tokens keep asking for and carrying
+`read`, `write` and `send`; they mean `mail:read`, `mail:write` and `send`, and
+reach JMAP only. To split a key that holds `read` or `write`, run
+`epistle api-key set LABEL --scope manage:read --scope manage:write` (or the two
+`mail:` scopes).
 
 A key confined to some domains sees and changes only the accounts that live
 entirely inside them. What is outside is answered `404`, as if it did not
@@ -539,7 +560,7 @@ Until then, and before anything of the message is delivered or queued,
 {"canceled": "01a15026-ff4b-7411-a7e9-9292a7662720"}
 ```
 
-It needs the `send` or the `write` scope. A key bound to one account cancels
+It needs the `send` or the `manage:write` scope. A key bound to one account cancels
 that account's messages; a key confined to some domains cancels those of the
 accounts it reaches; an unconfined key cancels any. An id that is unknown,
 that belongs to an account the key does not reach, or that was never held
