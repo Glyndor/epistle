@@ -459,7 +459,9 @@ pub async fn put_user(
 	};
 	state
 		.store()
-		.replace_account(&id, replacement, new_password)
+		.replace_account_if(&id, replacement, new_password, |account| {
+			principal.admits_account(&account.name, &account.addresses)
+		})
 		.map_err(store_to_scim)?;
 	let stored = lookup(&state, &id)?;
 	Ok(scim_resource(StatusCode::OK, render_user(&stored)))
@@ -516,7 +518,7 @@ pub async fn patch_user(
 		plan.push(plan_operation(&state, op)?);
 	}
 	for step in plan {
-		apply_step(&state, &id, step)?;
+		apply_step(&state, &principal, &id, step)?;
 	}
 	let stored = lookup_in_scope(&state, &principal, &id)?;
 	Ok(scim_resource(StatusCode::OK, render_user(&stored)))
@@ -566,11 +568,20 @@ fn plan_operation(state: &ApiState, op: &PatchOperation) -> Result<Step, ScimErr
 	}
 }
 
-fn apply_step(state: &ApiState, id: &str, step: Step) -> Result<(), ScimError> {
+fn apply_step(
+	state: &ApiState,
+	principal: &Principal,
+	id: &str,
+	step: Step,
+) -> Result<(), ScimError> {
 	let store = state.store();
 	match step {
 		Step::Active(active) => store.set_disabled(id, !active).map(|_| ()),
-		Step::Password { hash, scram } => store.set_password_hash(id, hash, scram),
+		// The reach was checked before the passwords were hashed; it is asked
+		// again about the account as it is when the password is written.
+		Step::Password { hash, scram } => store.set_password_hash_if(id, hash, scram, |account| {
+			principal.admits_account(&account.name, &account.addresses)
+		}),
 		Step::DisplayName(name) => store.set_display_name(id, &name).map(|_| ()),
 	}
 	.map_err(store_to_scim)

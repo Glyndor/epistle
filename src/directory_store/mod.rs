@@ -263,12 +263,29 @@ impl AccountStore {
 		replacement: DynamicAccount,
 		new_password: Option<NewPassword>,
 	) -> Result<(), StoreError> {
+		self.replace_account_if(name, replacement, new_password, |_| true)
+	}
+
+	/// [`replace_account`](Self::replace_account) for a caller whose reach
+	/// over the account was decided before the replacement was built:
+	/// `authorize` is asked about the stored account under the store's lock,
+	/// and a refusal answers like an account that does not exist.
+	pub fn replace_account_if(
+		&self,
+		name: &str,
+		replacement: DynamicAccount,
+		new_password: Option<NewPassword>,
+		authorize: impl FnOnce(&DynamicAccount) -> bool,
+	) -> Result<(), StoreError> {
 		self.mutate_store_hosted(|state| {
 			let slot = state
 				.accounts
 				.iter()
 				.position(|existing| existing.name == name)
 				.ok_or_else(|| StoreError::NotFound(name.to_string()))?;
+			if !authorize(&state.accounts[slot]) {
+				return Err(StoreError::NotFound(name.to_string()));
+			}
 			let mut fresh = replacement;
 			fresh.name = name.to_string();
 			credential_reset::carry(&state.accounts[slot], &mut fresh, new_password);

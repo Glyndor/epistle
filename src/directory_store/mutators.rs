@@ -261,12 +261,31 @@ impl AccountStore {
 		hash: String,
 		scram: Option<crate::smtp::scram::ScramStored>,
 	) -> Result<(), StoreError> {
+		self.set_password_hash_if(name, hash, scram, |_| true)
+	}
+
+	/// [`set_password_hash`](Self::set_password_hash) for a caller whose
+	/// reach over the account was decided before the password was derived:
+	/// `authorize` is asked about the account as it is under the store's
+	/// lock, just before it is changed, and a refusal answers like an
+	/// account that does not exist, with the credentials untouched. The
+	/// account may have moved out of the caller's reach in between.
+	pub fn set_password_hash_if(
+		&self,
+		name: &str,
+		hash: String,
+		scram: Option<crate::smtp::scram::ScramStored>,
+		authorize: impl FnOnce(&DynamicAccount) -> bool,
+	) -> Result<(), StoreError> {
 		self.mutate_store(|state| {
 			let target = state
 				.accounts
 				.iter_mut()
 				.find(|account| account.name == name)
 				.ok_or_else(|| StoreError::NotFound(name.to_string()))?;
+			if !authorize(target) {
+				return Err(StoreError::NotFound(name.to_string()));
+			}
 			target.password_hash = hash;
 			target.scram = scram;
 			target.rehashed = None;
