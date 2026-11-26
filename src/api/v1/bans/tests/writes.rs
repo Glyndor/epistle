@@ -8,7 +8,6 @@ use super::fixture::*;
 #[tokio::test]
 async fn a_ban_lasts_a_day_unless_told_and_is_listed() {
 	let world = world();
-	let before = super::super::now();
 	let (status, reply) = call(
 		&world,
 		"POST",
@@ -21,10 +20,11 @@ async fn a_ban_lasts_a_day_unless_told_and_is_listed() {
 	assert_eq!(reply["target"], "203.0.113.9");
 	assert_eq!(reply["changed"], true);
 	let until = reply["until"].as_u64().expect("until");
-	assert!(
-		(before + 86_400..=before + 86_410).contains(&until),
-		"{reply}"
-	);
+	// A day from the time the store was given, whatever the clock said when
+	// the request was sent: the test reads no clock of its own.
+	let (at, stored) = world.store.ban_times()[0];
+	assert_eq!(stored, at + 86_400, "{reply}");
+	assert_eq!(until, stored, "{reply}");
 	let (status, reply) = call(
 		&world,
 		"POST",

@@ -12,8 +12,19 @@ use tracing_subscriber::{Layer, Registry};
 
 use super::fixture::*;
 
-#[derive(Clone, Default)]
-pub(super) struct Capture(Arc<Mutex<Vec<BTreeMap<String, String>>>>);
+/// The audit events seen, and a permit for each one, so that a test waits for
+/// an event and not for a time.
+#[derive(Clone)]
+pub(super) struct Capture(
+	Arc<Mutex<Vec<BTreeMap<String, String>>>>,
+	Arc<tokio::sync::Semaphore>,
+);
+
+impl Default for Capture {
+	fn default() -> Self {
+		Capture(Arc::default(), Arc::new(tokio::sync::Semaphore::new(0)))
+	}
+}
 
 #[derive(Default)]
 struct Fields(BTreeMap<String, String>);
@@ -31,6 +42,7 @@ impl<S: tracing::Subscriber> Layer<S> for Capture {
 			let mut fields = Fields::default();
 			event.record(&mut fields);
 			self.0.lock().unwrap().push(fields.0);
+			self.1.add_permits(1);
 		}
 	}
 }
@@ -38,6 +50,16 @@ impl<S: tracing::Subscriber> Layer<S> for Capture {
 impl Capture {
 	pub(super) fn events(&self) -> Vec<BTreeMap<String, String>> {
 		self.0.lock().unwrap().clone()
+	}
+
+	/// Wait for one more event. The limit is only there so that a lost signal
+	/// fails the test and does not hang it.
+	pub(super) async fn next(&self) {
+		tokio::time::timeout(std::time::Duration::from_secs(60), self.1.acquire())
+			.await
+			.expect("an audit line was written")
+			.expect("open")
+			.forget();
 	}
 }
 
@@ -178,6 +200,10 @@ async fn concurrent_adds_of_one_block_are_audited_once() {
 
 /// A client that goes away after the change was made leaves the change and
 /// its line: the two are made on a task the request does not own.
+///
+/// The store holds each write after it was made, so the order is the one the
+/// test fixes: the write is made, the request is dropped while the write is
+/// held, and only then is the write let go and its line expected.
 #[tokio::test]
 async fn a_request_dropped_after_the_write_still_leaves_its_line() {
 	crate::cli::trace::capture::keep_callsites_live();
@@ -206,9 +232,7 @@ async fn a_request_dropped_after_the_write_still_leaves_its_line() {
 		let world = world();
 		world.store.preload_ban("ip:198.51.100.7", u64::MAX / 2);
 		world.store.allow_entries(["10.9.0.0/16".to_string()]);
-		world
-			.store
-			.pause_after_writes(std::time::Duration::from_millis(400));
+		let held = world.store.hold_writes();
 		let capture = Capture::default();
 		let dispatch = tracing::Dispatch::new(Registry::default().with(capture.clone()));
 		let state = world.state.clone();
@@ -223,24 +247,14 @@ async fn a_request_dropped_after_the_write_still_leaves_its_line() {
 			}
 			.with_subscriber(dispatch.clone()),
 		);
-		for _ in 0..200 {
-			if !world.store.writes().is_empty() {
-				break;
-			}
-			tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-		}
-		assert!(
-			!world.store.writes().is_empty(),
-			"{path}: the change was not made"
-		);
+		held.written().await;
+		assert!(!world.store.writes().is_empty(), "{path}: not made");
+		assert!(!request.is_finished(), "{path}: answered while held");
+		assert!(capture.events().is_empty(), "{path}: a line came first");
 		request.abort();
-		let _ = request.await;
-		for _ in 0..200 {
-			if !capture.events().is_empty() {
-				break;
-			}
-			tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-		}
+		assert!(request.await.expect_err("dropped").is_cancelled());
+		held.resume();
+		capture.next().await;
 		let events = capture.events();
 		assert_eq!(events.len(), 1, "{path}: {events:?}");
 		assert_eq!(events[0]["event"], expected, "{path}");

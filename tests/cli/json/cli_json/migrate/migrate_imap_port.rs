@@ -39,10 +39,15 @@ fn the_connection_goes_to_the_port_given() {
 	let seen = {
 		let finished = Arc::clone(&finished);
 		std::thread::spawn(move || {
-			// The first connection ends the run at once: it is closed
-			// without a word, so the command gives up on the greeting.
-			let _ = listener.accept();
-			!finished.load(Ordering::SeqCst)
+			// The first connection ends the run: it is closed without a
+			// word, so the command gives up on the greeting. Whether the
+			// command was the one to connect is read while the connection is
+			// still open, so that the command cannot end, and the test say
+			// so, before the answer is taken.
+			let (stream, _) = listener.accept().expect("accept");
+			let from_the_command = !finished.load(Ordering::SeqCst);
+			drop(stream);
+			from_the_command
 		})
 	};
 

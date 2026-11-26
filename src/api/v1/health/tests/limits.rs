@@ -1,5 +1,7 @@
 //! How many runs may overlap, and that a run that ends gives its place back.
 
+use std::sync::Arc;
+
 use axum::http::{StatusCode, header};
 
 use super::fixture::*;
@@ -63,47 +65,51 @@ async fn the_areas_run_on_the_live_configuration() {
 
 /// A client that leaves does not stop the run or free its place: the run is
 /// a task of its own, and the place stays until the last thing it started
-/// has returned. Three clients that leave mid-run never make more than two
-/// runs alive.
+/// has returned. Clients that leave mid-run never make more than two runs
+/// alive.
+///
+/// Two runs are held in the work they started, and the test acts only once
+/// both have said they are in it: the third client is turned away, the first
+/// two leave, and the places are still taken because the work is. Nothing is
+/// waited for by time.
 #[tokio::test]
 async fn clients_that_leave_mid_run_neither_stop_it_nor_free_its_place() {
-	let lag = std::time::Duration::from_secs(3);
-	let world = build_with(true, |state| state.with_health_lag(lag, None));
+	let blocker = crate::cli::status::Blocker::closed();
+	let world = build_with(true, |state| {
+		state.with_health_blocker(Arc::clone(&blocker), None)
+	});
 	let mut requests = Vec::new();
-	for _ in 0..3 {
+	for _ in 0..2 {
 		let state = world.state.clone();
 		requests.push(tokio::spawn(async move {
-			get(&state, "/api/v1/health", Some(HEALTHY)).await.0
+			get(&state, "/api/v1/health/disk", Some(HEALTHY)).await.0
 		}));
-		tokio::time::sleep(std::time::Duration::from_millis(30)).await;
 	}
+	blocker.entered(2).await;
+	// Both places are taken and both runs are in their work: a third client
+	// is told to come back.
+	let (status, _, body) = get(&world.state, "/api/v1/health/disk", Some(HEALTHY)).await;
+	assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
 	for request in &requests {
 		request.abort();
 	}
 	for request in requests {
-		let _ = request.await;
+		assert!(request.await.expect_err("dropped").is_cancelled());
 	}
 	assert!(
 		world.state.try_health_run().is_none(),
 		"the places were freed while the runs were still working"
 	);
-	assert!(
-		world.state.health_alive() >= 1,
+	assert_eq!(
+		world.state.health_alive(),
+		2,
 		"the runs stopped with their clients"
 	);
-	assert!(
-		world.state.health_peak() <= 2,
-		"{}",
-		world.state.health_peak()
-	);
-	assert!(world.state.health_peak() >= 1);
-	for _ in 0..300 {
-		if world.state.try_health_run().is_some() {
-			return;
-		}
-		tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-	}
-	panic!("the places never came back");
+	assert!(world.state.health_peak() <= 2);
+	blocker.open();
+	blocker.left(2).await;
+	world.state.health_places_free(2).await;
+	assert_eq!(world.state.health_alive(), 0);
 }
 
 /// The limit is the server's: two listeners of one server share the places.
@@ -131,35 +137,35 @@ async fn listeners_of_one_server_share_the_places() {
 /// An area cut off at its deadline leaves its blocking thread behind, and the
 /// run keeps its place until that thread has returned: the request is answered
 /// long before.
-#[tokio::test]
+///
+/// The clock of the test is paused and moved by hand, and the work is held
+/// until the test opens it: once the work has said it is in, the test moves the
+/// clock past the time the area gets, so the order is the one the test fixes
+/// and no time is waited for. A paused clock does not move by itself while a
+/// blocking thread runs, which is why the test moves it.
+#[tokio::test(start_paused = true)]
 async fn a_run_keeps_its_place_until_the_threads_of_a_cut_off_area_return() {
+	let limit = std::time::Duration::from_millis(100);
+	let blocker = crate::cli::status::Blocker::closed();
 	let world = build_with(true, |state| {
-		state.with_health_lag(
-			std::time::Duration::from_secs(4),
-			Some(std::time::Duration::from_millis(100)),
-		)
+		state.with_health_blocker(Arc::clone(&blocker), Some(limit))
 	});
-	let started = std::time::Instant::now();
-	let (status, _, body) = get(&world.state, "/api/v1/health/disk", Some(HEALTHY)).await;
+	let state = world.state.clone();
+	let request =
+		tokio::spawn(async move { get(&state, "/api/v1/health/disk", Some(HEALTHY)).await });
+	blocker.entered(1).await;
+	tokio::time::advance(limit * 2).await;
+	let (status, _, body) = request.await.expect("answered");
 	assert_eq!(status, StatusCode::OK, "{body}");
-	assert!(
-		started.elapsed() < std::time::Duration::from_secs(3),
-		"the answer waited for the thread"
-	);
 	assert!(body.to_string().contains("timed out"), "{body}");
+	// The answer is out and the thread of the area is still in its work.
 	let first = world.state.try_health_run();
 	assert!(
 		first.is_none() || world.state.try_health_run().is_none(),
 		"the place was given back while a thread of the run was still working"
 	);
 	drop(first);
-	for _ in 0..300 {
-		let (one, two) = (world.state.try_health_run(), world.state.try_health_run());
-		if one.is_some() && two.is_some() {
-			return;
-		}
-		drop((one, two));
-		tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-	}
-	panic!("the places never came back");
+	blocker.open();
+	blocker.left(1).await;
+	world.state.health_places_free(2).await;
 }
