@@ -144,7 +144,7 @@ fn account_remove_drops_account_and_reports_counts_to_stdout() {
 				sender_verified: false,
 				no_dsn: Vec::new(),
 			},
-			None,
+			Some("alice"),
 			&std::collections::BTreeMap::new(),
 		)
 		.expect("store");

@@ -10,8 +10,7 @@
 //! - masked addresses owned by the account;
 //! - app passwords on the account;
 //! - the per-account suppression list;
-//! - queued outbound mail whose `reverse_path` is one of the account's
-//!   addresses.
+//! - queued outbound mail the account submitted.
 //!
 //! The third class is the dangerous one: recreating the same name
 //! inherits the previous user's mailbox. A data leak through an
@@ -43,8 +42,7 @@ use crate::util::path_containment::{contained, contained_child};
 /// [`QueuePolicy::Drain`]; the management API requires the parameter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum QueuePolicy {
-	/// Drop every queued message whose `reverse_path` belongs to the
-	/// account. Spool files are removed; downstream retries do not see
+	/// Drop every queued message the account submitted. Spool files are removed; downstream retries do not see
 	/// them again.
 	Discard,
 	/// Leave the queued messages alone. They will be delivered under
@@ -151,22 +149,23 @@ fn walk_and_remove(dir: &Path, visited: &mut u64) -> std::io::Result<()> {
 	Ok(())
 }
 
-/// Walk the spool, decide which envelopes belong to the account's
-/// addresses, and either drop them or count them as left behind. The
-/// decision on each envelope is the inverse of the policy: `Discard`
-/// removes matching envelopes, `Drain` leaves them. Either way, the
-/// mismatched (other-account) envelopes are untouched.
+/// Walk the spool, decide which envelopes belong to the account, and either
+/// drop them or count them as left behind. The decision on each envelope is
+/// the inverse of the policy: `Discard` removes matching envelopes, `Drain`
+/// leaves them. Either way, the mismatched (other-account) envelopes are
+/// untouched.
 ///
-/// `addresses` is the case-insensitive set of `user@domain` strings
-/// the removed account owned, pre-collected by the caller so the
-/// membership test stays O(1) per envelope.
+/// An envelope belongs to the account that submitted it, which the server
+/// recorded when it queued it ([`crate::storage::Envelope::account`]), and
+/// not to whoever its reverse path names: a message that came in from the
+/// account's address and was forwarded by another tenant is that tenant's.
+/// An entry written before the account was recorded is left alone.
 fn process_spool_queue(
 	spool: &FsSpool,
 	data_dir: &Path,
-	addresses: &[String],
+	account: &str,
 	policy: QueuePolicy,
 ) -> std::io::Result<(u32, u32)> {
-	let addresses: Vec<String> = addresses.iter().map(|a| a.to_ascii_lowercase()).collect();
 	let mut discarded = 0u32;
 	let mut left = 0u32;
 	for id in spool.list()? {
@@ -174,9 +173,7 @@ fn process_spool_queue(
 			Ok(entry) => entry,
 			Err(_) => continue, // A corrupt envelope is not the removal caller's problem.
 		};
-		let matches = addresses
-			.iter()
-			.any(|address| entry.envelope.reverse_path.eq_ignore_ascii_case(address));
+		let matches = entry.envelope.account.as_deref() == Some(account);
 		match (matches, policy) {
 			(true, QueuePolicy::Discard) => {
 				// A message that kept evidence ends on record, not by vanishing
@@ -240,7 +237,7 @@ pub async fn remove_account(
 		.unwrap_or_default();
 
 	let (queued_messages_discarded, queued_messages_left) =
-		process_spool_queue(spool, data_dir, &addresses, queue).map_err(StoreError::Io)?;
+		process_spool_queue(spool, data_dir, name, queue).map_err(StoreError::Io)?;
 
 	let masked_addresses = store.remove_all_masked(name)?;
 

@@ -139,3 +139,42 @@ async fn a_name_that_is_not_a_valid_account_name_never_reaches_the_filesystem() 
 		assert_eq!(before, after, "name {bad} touched the filesystem");
 	}
 }
+
+/// An entry that names the account's address as its sender is not the
+/// account's unless the account submitted it: mail from that address that
+/// another tenant forwarded is the other tenant's, and removing the account
+/// with the queue discarded leaves it.
+#[tokio::test]
+async fn queue_tenant_owner_removal_discards_what_the_account_submitted_and_only_that() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let (store, spool) = store_and_spool(dir.path());
+	seed(dir.path(), &store, &spool, "alice");
+	let forwarded = spool
+		.store_owned(
+			&crate::smtp::session::AcceptedMessage {
+				reverse_path: "alice@example.org".to_string(),
+				recipients: vec!["bob@elsewhere.example".to_string()],
+				data: b"Subject: forwarded\r\n\r\nfrom alice, kept by another tenant\r\n".to_vec(),
+				require_tls: false,
+				mailbox: None,
+				tlsrpt_verified: false,
+				sender_verified: false,
+				no_dsn: Vec::new(),
+			},
+			Some("other.example"),
+			&std::collections::BTreeMap::new(),
+		)
+		.expect("forwarded entry");
+	let result = remove_account(
+		&store,
+		&spool,
+		dir.path(),
+		"alice",
+		QueuePolicy::Discard,
+		None,
+	)
+	.await
+	.expect("remove");
+	assert_eq!(result.queued_messages_discarded, 2, "her own two");
+	assert!(spool.load(forwarded).is_ok(), "the forwarded entry stays");
+}

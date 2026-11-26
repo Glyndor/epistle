@@ -26,9 +26,13 @@ pub(super) fn account(name: &str, address: &str) -> DynamicAccount {
 	}
 }
 
-pub(super) fn queue_message(spool: &FsSpool, reverse_path: &str) -> uuid::Uuid {
-	// The server decides the owner; here it is the domain the sender writes.
-	let owner = reverse_path.rsplit_once('@').map(|(_, domain)| domain);
+/// A queued message from `reverse_path` that the server assigned to the
+/// hosted domain `owner`, as it does for what an account submits or forwards.
+pub(super) fn queue_message(
+	spool: &FsSpool,
+	reverse_path: &str,
+	owner: Option<&str>,
+) -> uuid::Uuid {
 	spool
 		.store_owned(
 			&AcceptedMessage {
@@ -87,9 +91,9 @@ pub(super) fn world() -> World {
 	.expect("add key");
 	drop(keys);
 	let spool = FsSpool::open(dir.path()).expect("spool");
-	let alice_entry = queue_message(&spool, "alice@a.test");
-	let carol_entry = queue_message(&spool, "carol@b.test");
-	let null_path_entry = queue_message(&spool, "");
+	let alice_entry = queue_message(&spool, "alice@a.test", Some("a.test"));
+	let carol_entry = queue_message(&spool, "carol@b.test", Some("b.test"));
+	let null_path_entry = queue_message(&spool, "", None);
 	let suppression = SuppressionList::open(dir.path()).expect("suppression");
 	suppression.suppress("victim@b.test");
 	suppression.suppress_for("alice", "alice-gone@elsewhere.test");
