@@ -345,6 +345,37 @@ fn revoke_key(state: &ApiState, dir: &std::path::Path) {
 }
 
 #[tokio::test]
+async fn losing_the_send_scope_while_the_body_arrives_refuses_the_send() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let state = state_with_carol(dir.path());
+	let app = router(state.clone());
+	let answer = post_while(&app, "/api/v1/send", send_body(), || {
+		// The key comes back with the scopes it had, less `send`.
+		let mut key_store = crate::api::ApiKeyStore::open(dir.path()).expect("key store");
+		key_store.remove("carol-key").expect("remove key");
+		key_store
+			.add(crate::api::api_keys::ApiKey {
+				grants: Vec::new(),
+				label: "carol-key".to_string(),
+				hash: crate::api::api_keys::sha256_hash(CAROL),
+				expires_at: None,
+				ip_cidr: None,
+				scopes: vec!["read".into(), "write".into()],
+				domains: Vec::new(),
+				account: Some("carol".to_string()),
+				auto_submitted: false,
+			})
+			.expect("add key");
+		let text = std::fs::read_to_string(dir.path().join("api_keys.toml")).expect("key file");
+		state.api_keys().reload_from(&text).expect("reload keys");
+	})
+	.await;
+	assert_refused(&answer, "send");
+	let spool = crate::storage::FsSpool::open(dir.path()).expect("spool");
+	assert!(spool.list().expect("list").is_empty(), "nothing was queued");
+}
+
+#[tokio::test]
 async fn revoking_the_key_while_its_body_arrives_refuses_the_request() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let state = state_with_carol(dir.path());
