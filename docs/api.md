@@ -219,19 +219,29 @@ names once it is narrowed or was made with them. A key made
 or changed by 0.15.0 is stored with two fields in `api_keys.toml`: `grants`, the
 scopes above, and `scopes`, the narrowest of the old names that covers them
 (`read`, `write`, `send`, `scim`, `alias`), so the same file still loads in
-0.14.0 after a rollback. After a rollback a `mail:read` key is read as `read`
-and reaches the management views as well.
+0.14.0 after a rollback.
 
-A scope that 0.14.0 had no name for (`ban`, `health`) must not widen anything there. A key
-that holds only such scopes is written so that 0.14.0 loads the file and refuses
-the key from every address: its `scopes` hold the placeholder `read`, its
-`ip_cidr` is `held-until-0.15`, which is no network, and the `ip_cidr` it really
-has is kept in a `[[rollback_hold]]` table that 0.14.0 ignores. After a rollback
-these keys are unusable until 0.15.0 is back, which puts them back as they were.
-If 0.14.0 wrote `api_keys.toml` in between, the table is gone and the key stays
-refused: make it again. A key that holds such a scope next to one with an old
-name is written under the old name only, and keeps working there with that
-reach. `epistle status` names each key that will be refused.
+0.14.0 must not give a key more than it holds. It reads only `scopes`, and in
+its names: `read` opens the management and the mail reads together, `write`
+both writes. So a key keeps working there only when its scopes are exactly what
+a name of 0.14.0 opens: `manage:read` with `mail:read`, `manage:write` with
+`mail:write`, `send`, `scim`, `alias`, and combinations of those (an account
+reaches no management route in either release, so for a key bound to an account
+the mail half alone is enough). Every other key, a `mail:write` key that could
+change a password there, a `manage:read` key that could read mail, and any key
+that holds `ban` or `health`, is written so that 0.14.0 loads the file and
+refuses the key from every address: its `ip_cidr` is `held-until-0.15`, which
+is no network, and the `ip_cidr` it really has is kept in a `[[rollback_hold]]`
+table that 0.14.0 ignores. After a rollback these keys are unusable until
+0.15.0 is back, which puts them back as they were. If 0.14.0 wrote
+`api_keys.toml` in between, the table is gone and the key stays refused: make it
+again.
+
+Keys that an earlier build stored in another form (`scopes = ["read"]` for a key
+that holds only `ban`, or one half of `read`) are rewritten the same way when
+`epistle serve` starts and again by `stack rollback`, which stops if it cannot,
+before it puts the old binary back. `epistle status` names each key that holds
+only scopes 0.14.0 has no name for.
 
 ### The panel's key
 

@@ -322,16 +322,17 @@ fn a_key_that_0_14_0_will_refuse_is_named() {
 	let details = warnings(&key("banner", &later, held, ""));
 	assert_eq!(details.len(), 1, "{details:?}");
 	assert!(
-		details[0].contains("after a rollback it is refused"),
+		details[0].contains("rollback refuses it to prevent broader access"),
 		"{details:?}"
 	);
-	// A key that also holds a scope with an old name is not refused there.
+	// A key that also holds a scope with an old name is not named: a rollback
+	// holds it as well, but that is what every key with one half of `read` is.
 	let mixed = "scopes = [\"read\"]\ngrants = [\"ban\", \"manage:read\"]\n";
 	let details = warnings(&key("mixed", &later, mixed, ""));
 	assert!(
 		details
 			.iter()
-			.all(|detail| !detail.contains("after a rollback")),
+			.all(|detail| !detail.contains("rollback refuses")),
 		"{details:?}"
 	);
 }
