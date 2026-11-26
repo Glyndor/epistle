@@ -38,7 +38,7 @@ fn split_config(dir: &Path, port: u16) -> Config {
 async fn the_whole_server_refuses_to_start_without_the_dns_credential() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let port = crate::test_support::fixtures::free_port();
-	let error = super::super::serve(split_config(dir.path(), port), ServeRole::All, None)
+	let error = super::super::serve(split_config(dir.path(), port), ServeRole::All, None, false)
 		.await
 		.expect_err("no credential to answer dns-01 with");
 	assert!(error.to_string().contains("could not be built"), "{error}");
@@ -52,6 +52,7 @@ async fn the_mail_role_serves_without_the_dns_credential() {
 		split_config(dir.path(), port),
 		ServeRole::Mail,
 		None,
+		false,
 	));
 	let mut connected = false;
 	for _ in 0..200 {
@@ -172,9 +173,12 @@ async fn the_certificates_role_refuses_to_start_without_acme() {
 #[test]
 fn the_mail_role_publishes_through_the_hand_off_and_the_whole_server_by_itself() {
 	let dir = std::path::Path::new("/var/lib/epistle");
-	assert_eq!(dns_write_for_role(ServeRole::All, dir), DnsWrite::Direct);
 	assert_eq!(
-		dns_write_for_role(ServeRole::Mail, dir),
+		super::super::startup::dns_write_for_role(ServeRole::All, dir),
+		DnsWrite::Direct
+	);
+	assert_eq!(
+		super::super::startup::dns_write_for_role(ServeRole::Mail, dir),
 		DnsWrite::Handoff(crate::dns::handoff::dir(dir))
 	);
 }

@@ -80,8 +80,12 @@ impl Cli {
 				key,
 				listen,
 			} => crate::cli::mta::sts_serve::run(policy_dir, cert, key, listen),
-			Command::Serve { config, role } => match serve::load(&config, role) {
-				Ok(loaded) => serve::run_from(loaded, role, Some(config.clone())),
+			Command::Serve {
+				config,
+				role,
+				fronts,
+			} => match serve::load(&config, role) {
+				Ok(loaded) => serve::run_from(loaded, role, Some(config.clone()), fronts),
 				Err(error) => {
 					style::error(error);
 					ExitCode::FAILURE
@@ -354,8 +358,14 @@ impl Cli {
 			} => with_config(&config, |config| {
 				api_keys::run(config, action, json, &mut std::io::stdout().lock())
 			}),
-			Command::Probe { config, json } => with_config(&config, |config| {
-				live::run("probe", json, |mut out| probe::run(config, json, &mut out))
+			Command::Probe {
+				config,
+				json,
+				fronts,
+			} => with_config(&config, |config| {
+				live::run("probe", json, |mut out| {
+					probe::run(config, json, fronts, &mut out)
+				})
 			}),
 			Command::Completions { shell } => super::completions::run_completions(shell),
 			Command::Manpages { dir } => super::completions::run_manpages(&dir),

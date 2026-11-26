@@ -27,6 +27,10 @@ const NOT_HEADERS: &[(&str, &str)] = &[
 		"X-Injected",
 		"a header of a hostile HTTP request in the tests of the public listeners",
 	),
+	(
+		"X-Epistle-Peer",
+		"a header of the HTTP request a front forwards to the core, which carries the client address and is never in a message",
+	),
 	("Report-ID", "text inside the subject of a DMARC report"),
 	(
 		"Content-Length",

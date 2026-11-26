@@ -29,6 +29,11 @@ macro_rules! server_commands {
 				/// (certificate renewal only, no listener).
 				#[arg(long, value_enum, default_value_t = serve::ServeRole::All)]
 				role: serve::ServeRole,
+				/// Serve each `api`, `jmap`, `scim` and `oauth` listener on a Unix
+				/// socket under `<data_dir parent>/fronts/<kind>/core.sock`, for the
+				/// front containers, instead of on TCP.
+				#[arg(long)]
+				fronts: bool,
 			},
 			/// Validate a configuration file and report problems.
 			ConfigCheck {

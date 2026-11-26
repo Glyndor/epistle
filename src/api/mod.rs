@@ -11,6 +11,8 @@ mod audit;
 mod authorization;
 mod error;
 pub mod events;
+pub mod front_peer;
+pub mod front_socket;
 pub(crate) mod jmap;
 mod mail_from;
 pub mod oauth;
@@ -92,9 +94,20 @@ fn scim_routes() -> Router<ApiState> {
 	Router::new().nest("/scim/v2", scim::router())
 }
 
-/// Build the API router for the surfaces one listener serves. The middleware
-/// stack is the same for every surface, and `/healthz` is on every listener.
+/// Build the API router for the surfaces one listener serves, on TCP. The
+/// middleware stack is the same for every surface, `/healthz` is on every
+/// listener, and an `X-Epistle-Peer` the client sent is removed.
 pub fn router_for(state: ApiState, surfaces: &Surfaces) -> Router {
+	routes_for(state, surfaces).layer(middleware::from_fn(front_peer::strip))
+}
+
+/// [`router_for`] for a front socket: the client address comes from the one
+/// `X-Epistle-Peer` the front writes, and a request without it is `400`.
+pub fn router_for_front(state: ApiState, surfaces: &Surfaces) -> Router {
+	routes_for(state, surfaces).layer(middleware::from_fn(front_peer::from_header))
+}
+
+fn routes_for(state: ApiState, surfaces: &Surfaces) -> Router {
 	// The configured per-instance message-size cap, applied consistently
 	// to SMTP, the JMAP upload body limit, the JMAP `Email/set` build,
 	// and the REST `POST /api/v1/send` builder.

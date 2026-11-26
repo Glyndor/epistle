@@ -147,3 +147,28 @@ fn event_limits(api: &crate::config::Api) -> crate::api::EventLimits {
 		..defaults
 	}
 }
+
+/// The task that serves one listener of the API: on its socket for a front
+/// when `fronts` is set, on TCP otherwise. The front is the only thing that
+/// connects to the socket, and it has the client address; the router reads it
+/// from the front's header.
+pub(super) async fn task(
+	state: crate::api::ApiState,
+	config: &Config,
+	listener_config: &crate::config::Listener,
+	fronts: bool,
+	ipv4_any_ports: &std::collections::HashSet<u16>,
+	limits: crate::net::http_serve::Limits,
+) -> std::io::Result<tasks::ListenerTask> {
+	let surfaces = crate::api::Surfaces::for_listener(config, listener_config.kind);
+	if fronts {
+		let socket = crate::api::front_socket::path(&config.data_dir, listener_config.kind);
+		crate::api::front_socket::create_root(&config.data_dir)?;
+		let listener = crate::net::unix_socket::bind(&socket)?;
+		let router = crate::api::router_for_front(state, &surfaces);
+		return Ok(tasks::serve_unix(listener, router, limits));
+	}
+	let listener = tasks::bind(listener_config, ipv4_any_ports).await?;
+	let router = crate::api::router_for(state, &surfaces);
+	Ok(tasks::serve_http(listener, router, limits))
+}

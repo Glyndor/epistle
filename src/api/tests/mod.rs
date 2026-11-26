@@ -13,6 +13,7 @@ pub(super) mod access;
 pub(super) mod accounts;
 pub(super) mod authentication;
 pub(super) mod changes;
+pub(super) mod front;
 pub(super) mod jmap_email;
 pub(super) mod jmap_state;
 pub(super) mod jmap_ws;

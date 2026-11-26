@@ -25,6 +25,20 @@ impl Accept for TcpListener {
 	}
 }
 
+/// Connections from a Unix socket. A socket has no peer address, so every
+/// connection reports `0.0.0.0:0`; whoever serves it takes the client address
+/// from somewhere else (the HTTP fronts write it in `X-Epistle-Peer`).
+pub struct UnixAccept(pub tokio::net::UnixListener);
+
+impl Accept for UnixAccept {
+	type Stream = tokio::net::UnixStream;
+
+	async fn accept(&self) -> std::io::Result<(tokio::net::UnixStream, SocketAddr)> {
+		let (stream, _) = self.0.accept().await?;
+		Ok((stream, SocketAddr::from(([0, 0, 0, 0], 0))))
+	}
+}
+
 /// Shortest pause after a failed accept that signals resource exhaustion.
 const MIN_BACKOFF: Duration = Duration::from_millis(10);
 

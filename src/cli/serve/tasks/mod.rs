@@ -36,6 +36,24 @@ pub(super) fn serve_http(
 	Box::pin(crate::net::http_serve::serve_with(listener, router, limits))
 }
 
+/// Serve `router` on a Unix socket for a front. A socket has no peer, so the
+/// per-address cap is the number of connections: the front holds that cap.
+pub(super) fn serve_unix(
+	listener: tokio::net::UnixListener,
+	router: axum::Router,
+	limits: crate::net::http_serve::Limits,
+) -> ListenerTask {
+	let limits = crate::net::http_serve::Limits {
+		per_ip: limits.connections,
+		..limits
+	};
+	Box::pin(crate::net::http_serve::serve_on_with(
+		crate::net::accept::UnixAccept(listener),
+		router,
+		limits,
+	))
+}
+
 #[cfg(test)]
 mod tests;
 

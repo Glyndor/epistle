@@ -44,23 +44,11 @@ pub fn load(path: &std::path::Path, role: ServeRole) -> Result<Config, crate::co
 	}
 }
 
-/// Where the DKIM rotations write their records in this role.
-///
-/// The certificates container holds the DNS credential, so the `mail` role
-/// holds none: its rotations publish through the hand-off the other
-/// container serves, and the keys stay where they are.
-fn dns_write_for_role(role: ServeRole, data_dir: &std::path::Path) -> tasks::DnsWrite {
-	match role {
-		ServeRole::All => tasks::DnsWrite::Direct,
-		ServeRole::Mail => tasks::DnsWrite::Handoff(crate::dns::handoff::dir(data_dir)),
-		ServeRole::Certs => tasks::DnsWrite::Direct,
-	}
-}
-
 async fn serve(
 	config: Config,
 	role: ServeRole,
 	config_path: Option<std::path::PathBuf>,
+	fronts: bool,
 ) -> std::io::Result<()> {
 	let _store = crate::storage::lock::FileLock::store_shared(&config.data_dir)?;
 	crate::log_id::init(&config.data_dir)?;
@@ -190,25 +178,13 @@ async fn serve(
 	)?;
 	tasks::spawn_dmarc_flush(&config, Arc::clone(&spf_dns), Arc::clone(&sink))?;
 	tasks::spawn_tlsrpt_reports(&config, Arc::clone(&spf_dns), Arc::clone(&sink))?;
-	if role.writes_dns() || config.dkim.is_some() {
-		// The rotations publish their records through the provider this
-		// process holds, or, with the certificates container on, through
-		// the hand-off the other container serves: that one holds the DNS
-		// credential, and this one holds the keys.
-		let write = dns_write_for_role(role, &config.data_dir);
-		tasks::spawn_dkim_rotation(
-			&config,
-			&dkim_signer,
-			webhook.as_ref().map(Arc::clone),
-			&write,
-		);
-		tasks::spawn_domain_rotations(
-			&config,
-			&domain_signers,
-			webhook.as_ref().map(Arc::clone),
-			&write,
-		);
-	}
+	startup::spawn_rotations(
+		&config,
+		role,
+		&dkim_signer,
+		&domain_signers,
+		webhook.as_ref(),
+	);
 	if role.writes_dns() {
 		tasks::dns_reconcile::spawn(&config);
 	}
@@ -269,10 +245,17 @@ async fn serve(
 						health_gate: &health_gate,
 					},
 				)?;
-				let listener = tasks::bind(listener_config, &ipv4_any_ports).await?;
-				let surfaces = crate::api::Surfaces::for_listener(&config, listener_config.kind);
-				let router = crate::api::router_for(state, &surfaces);
-				tasks.push(tasks::serve_http(listener, router, http_limits));
+				tasks.push(
+					api_listener::task(
+						state,
+						&config,
+						listener_config,
+						fronts,
+						&ipv4_any_ports,
+						http_limits,
+					)
+					.await?,
+				);
 			}
 			ListenerKind::Acme => {
 				let listener = tasks::bind(listener_config, &ipv4_any_ports).await?;
