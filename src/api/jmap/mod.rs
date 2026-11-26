@@ -240,9 +240,20 @@ pub async fn api(
 		}
 		Err(rejection) => return rejection.into_response(),
 	};
+	// The principal was resolved before the body, which a client may hold
+	// back for as long as the server waits for it. The key may have been
+	// revoked and the account suspended or replaced since, so the same
+	// check the WebSocket makes on every frame runs again, here and after
+	// the blobs are read, before anything is dispatched.
+	if !websocket::credential_still_valid(&state, &auth, &principal) {
+		return crate::api::error::ApiError::credential_no_longer_valid().into_response();
+	}
 	// Uploaded blobs an `Email/set` create names are read here, where the
 	// blob backend can be awaited; dispatch itself is synchronous.
 	let uploads = Uploads::prefetch(&state, &principal, &request).await;
+	if !websocket::credential_still_valid(&state, &auth, &principal) {
+		return crate::api::error::ApiError::credential_no_longer_valid().into_response();
+	}
 	match dispatch_request(&state, &principal, request, &uploads) {
 		Ok(response) => Json(response).into_response(),
 		Err(problem) => (StatusCode::BAD_REQUEST, Json(problem)).into_response(),

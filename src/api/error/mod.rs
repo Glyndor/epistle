@@ -234,6 +234,18 @@ impl ApiError {
 		}
 	}
 
+	/// `403` for a request whose key was revoked, changed, or whose bound
+	/// account went away, between the moment the request was accepted and
+	/// the moment its body was complete.
+	pub fn credential_no_longer_valid() -> Self {
+		ApiError {
+			status: StatusCode::FORBIDDEN,
+			code: "forbidden",
+			message: "The credential for this request is no longer valid.".to_string(),
+			..Default::default()
+		}
+	}
+
 	/// `507` for a local recipient whose mailbox is full, or would be with
 	/// this message: nothing was queued; the recipient has to make room or
 	/// be left out.
