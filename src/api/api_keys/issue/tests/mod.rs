@@ -2,6 +2,8 @@
 //! not give the key it makes.
 
 use super::*;
+
+mod lock;
 use crate::api::api_keys::{ApiKey, Scope};
 
 const NOW: u64 = 1_800_000_000;
@@ -13,7 +15,7 @@ struct Server;
 
 impl World for Server {
 	fn account_known(&self, name: &str) -> bool {
-		matches!(name, "ann" | "bob")
+		matches!(name, "ann" | "bob" | "nowhere")
 	}
 	fn account_addresses(&self, name: &str) -> Vec<String> {
 		match name {
@@ -270,4 +272,20 @@ fn read_means_both_halves_or_the_mail_half_for_an_account() {
 		refused(&bound_management, None),
 		Refusal::Policy(_)
 	));
+}
+
+/// An account whose addresses are not known cannot be placed inside any domain,
+/// so a key confined to domains does not make a key for it, nor reach one.
+#[test]
+fn an_account_with_no_addresses_is_outside_every_domain() {
+	let confined = caller(Some(READER), Some(&["a.example"]));
+	let mut unplaced = request(&["read"]);
+	unplaced.account = Some("nowhere".to_string());
+	assert!(matches!(
+		refused(&unplaced, Some(&confined)),
+		Refusal::Escalation(_)
+	));
+	let unconfined = caller(Some(READER), None);
+	assert!(check(&unplaced, Some(&unconfined), &Server).is_ok());
+	assert!(check(&unplaced, None, &Server).is_ok());
 }

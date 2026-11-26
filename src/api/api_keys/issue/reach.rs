@@ -34,6 +34,15 @@ impl Reach {
 		}
 	}
 
+	/// The reach of a key that is asking to make or revoke keys, from the key as
+	/// the file holds it at `now`, or `None` when it may no longer do either: it
+	/// has expired, is bound to an account or no longer holds the `key` scope.
+	pub fn of_maker(key: &ApiKey, now: u64) -> Option<Self> {
+		let holds = key.reach().is_none_or(|held| held.contains(&Scope::Key));
+		let live = key.expires_at.is_none_or(|expiry| now < expiry);
+		(holds && live && key.account.is_none()).then(|| Reach::of_key(key, None))
+	}
+
 	/// Whether this reach holds `other`: `other` has no scope this one lacks,
 	/// no domain outside it, no address outside it, a network inside it and
 	/// an expiry that comes first. The answer says what is wider when not.
@@ -67,11 +76,8 @@ impl Reach {
 				}
 			}
 			if let Some(addresses) = &other.account_addresses
-				&& !addresses.iter().all(|address| {
-					address
-						.rsplit_once('@')
-						.is_some_and(|(_, domain)| own.contains(&domain.to_ascii_lowercase()))
-				}) {
+				&& !crate::api::authorization::within_domains(own, addresses)
+			{
 				return Err("the account is not inside the domains of the key".to_string());
 			}
 		}

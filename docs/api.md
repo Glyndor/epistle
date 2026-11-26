@@ -1117,9 +1117,10 @@ a tenant does not learn which labels the others use. A key may revoke itself.
 
 A key may leave at most 500 keys in the file (`409`); the configured token has
 no cap. The label is unique (`409`). The key that asks is read again under the
-lock of the file when the new one is written, so one revoked a moment ago makes
-nothing, and requests that arrive together for one label make one key. A body
-is at most 4 KiB and carries only the fields above.
+lock of the file when a key is made or revoked, with what it reaches at that
+moment, so one revoked or narrowed a moment ago does no more than it may now,
+and requests that arrive together for one label make one key. A body is at most
+4 KiB and carries only the fields above.
 
 Every change writes one audit line (`key.created`, `key.revoked`) with the
 label of the key that asked, the label and the scopes of the key it touched and

@@ -77,6 +77,9 @@ pub struct Principal {
 	label: Option<String>,
 	/// The network the key is pinned to, when it is.
 	ip_cidr: Option<crate::cidr::Cidr>,
+	/// Whether this is the configured static token. Nothing else is: a
+	/// principal with no label is not thereby the operator.
+	configured: bool,
 	/// When the key expires, when it does.
 	expires_at: Option<u64>,
 }
@@ -125,6 +128,7 @@ impl Principal {
 			label: None,
 			ip_cidr: None,
 			expires_at: None,
+			configured: false,
 		}
 	}
 	/// The reach of the configured static token: every scope, every account,
@@ -139,6 +143,7 @@ impl Principal {
 			label: None,
 			ip_cidr: None,
 			expires_at: None,
+			configured: true,
 		}
 	}
 
@@ -154,6 +159,7 @@ impl Principal {
 			label: None,
 			ip_cidr: None,
 			expires_at: None,
+			configured: false,
 		}
 	}
 
@@ -187,6 +193,7 @@ impl Principal {
 			label: Some(key.label.clone()),
 			ip_cidr: key.ip_cidr.as_deref().and_then(crate::cidr::Cidr::parse),
 			expires_at: key.expires_at,
+			configured: false,
 		}
 	}
 
@@ -262,14 +269,24 @@ impl Principal {
 		}
 	}
 
-	/// The key that asks, as the rules for making a key see it, and `None` for
-	/// the configured token, which reaches everything and is no key of the file.
-	pub fn issuer(&self) -> Option<crate::api::api_keys::issue::Caller> {
-		let credential = self.credential.as_ref()?;
-		let label = self.label.clone()?;
-		Some(crate::api::api_keys::issue::Caller::new(
+	/// Who is asking, as the rules for making a key see it. Only the configured
+	/// token is the operator; a key is a maker only while it is a key of the
+	/// file that holds the `key` scope and is bound to no account; anything else
+	/// is nobody and makes, lists and revokes nothing.
+	pub fn issuer(&self) -> crate::api::api_keys::issue::Issuer {
+		use crate::api::api_keys::issue::{Caller, Issuer};
+		if self.configured {
+			return Issuer::Operator;
+		}
+		let (Some(credential), Some(label)) = (&self.credential, &self.label) else {
+			return Issuer::Nobody;
+		};
+		if self.account.is_some() || !self.admits_scope(Scope::Key) {
+			return Issuer::Nobody;
+		}
+		Issuer::Key(Caller::new(
 			self.reach(),
-			label,
+			label.clone(),
 			crate::api::api_keys::sha256_hash(&credential.token),
 		))
 	}
@@ -392,15 +409,7 @@ impl Principal {
 		let Some(domains) = &self.domains else {
 			return true;
 		};
-		if addresses.is_empty() {
-			return false;
-		}
-		addresses.iter().all(|address| {
-			address.rsplit_once('@').is_some_and(|(_, domain)| {
-				let lower = domain.to_ascii_lowercase();
-				domains.iter().any(|declared| declared == &lower)
-			})
-		})
+		within_domains(domains, addresses)
 	}
 
 	/// The list of every account the credential may reach, given the full
@@ -416,6 +425,18 @@ impl Principal {
 }
 
 mod recheck;
+
+/// Whether every one of `addresses` is inside `domains`, which are lowercase. An
+/// empty set of addresses is outside: there is nothing to place it with.
+pub(in crate::api) fn within_domains(domains: &[String], addresses: &[String]) -> bool {
+	!addresses.is_empty()
+		&& addresses.iter().all(|address| {
+			address.rsplit_once('@').is_some_and(|(_, domain)| {
+				let lower = domain.to_ascii_lowercase();
+				domains.iter().any(|declared| declared == &lower)
+			})
+		})
+}
 
 #[cfg(test)]
 mod tests;

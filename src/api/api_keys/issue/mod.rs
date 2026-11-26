@@ -14,6 +14,30 @@ mod reach;
 
 pub use reach::{Caller, Reach};
 
+/// Who asks for a change to the keys.
+#[derive(Debug, Clone)]
+pub enum Issuer {
+	/// The configured token: the operator, held to the rules and to no reach.
+	Operator,
+	/// A key that may make keys, held to its own reach.
+	Key(Caller),
+	/// Anything else, which may do nothing here.
+	Nobody,
+}
+
+/// A write a key asks of the file: who asks, what the new key would reach and
+/// how many keys the file may hold. The store asks the file again, under its
+/// lock, whether the key that asks still reaches that far.
+#[derive(Debug, Clone, Copy)]
+pub struct Ask<'a> {
+	/// The key that asks.
+	pub caller: &'a Caller,
+	/// What the new key would reach.
+	pub wanted: &'a Reach,
+	/// The most keys the file may hold when a key makes one.
+	pub max_keys: usize,
+}
+
 /// Most domains one key may be confined to.
 pub const MAX_DOMAINS: usize = 32;
 /// Most keys the file may hold when a key makes one.
@@ -94,10 +118,15 @@ pub fn bound_refusal(scopes: &[String]) -> Option<&'static str> {
 	}
 }
 
-/// Check `request`. With a `caller`, the key it asks for may not reach
-/// further than the caller does. The domains it names must be hosted here
-/// whoever asks (the command's `World` says they all are).
-pub fn check(request: &Request, caller: Option<&Caller>, world: &dyn World) -> Result<(), Refusal> {
+/// Check `request` and answer what the key it asks for would reach. With a
+/// `caller`, that may not be further than the caller reaches. The domains it
+/// names must be hosted here whoever asks (the command's `World` says they all
+/// are).
+pub fn check(
+	request: &Request,
+	caller: Option<&Caller>,
+	world: &dyn World,
+) -> Result<Reach, Refusal> {
 	if let Some(problem) = crate::util::label_rule::problem(&request.label) {
 		return Err(Refusal::Invalid(problem.to_string()));
 	}
@@ -151,9 +180,6 @@ pub fn check(request: &Request, caller: Option<&Caller>, world: &dyn World) -> R
 			"{domain} is not a domain this server hosts"
 		)));
 	}
-	let Some(caller) = caller else {
-		return Ok(());
-	};
 	let wanted = Reach {
 		scopes: Some(
 			grants
@@ -175,7 +201,13 @@ pub fn check(request: &Request, caller: Option<&Caller>, world: &dyn World) -> R
 		ip_cidr: cidr,
 		expires_at: request.expires_at,
 	};
-	caller.reach().covers(&wanted).map_err(Refusal::Escalation)
+	if let Some(caller) = caller {
+		caller
+			.reach()
+			.covers(&wanted)
+			.map_err(Refusal::Escalation)?;
+	}
+	Ok(wanted)
 }
 
 #[cfg(test)]

@@ -1,19 +1,39 @@
 //! Revoking a key on behalf of another key.
 
-use super::issue::Caller;
+use super::issue::{Caller, Reach};
 use super::{ApiKey, ApiKeyFile, ApiKeyStore};
+
+pub(super) fn no_longer_valid() -> std::io::Error {
+	std::io::Error::new(
+		std::io::ErrorKind::PermissionDenied,
+		"the key that asked is no longer valid",
+	)
+}
+
+/// What the key that asks reaches now, as `keys` holds it. An error when it is
+/// gone, or may no longer make or revoke keys.
+pub(super) fn maker_in(keys: &[ApiKey], caller: &Caller) -> std::io::Result<Reach> {
+	let now = std::time::SystemTime::now()
+		.duration_since(std::time::UNIX_EPOCH)
+		.map_or(0, |elapsed| elapsed.as_secs());
+	keys.iter()
+		.find(|held| held.label == caller.label() && held.hash.eq_ignore_ascii_case(caller.hash()))
+		.and_then(|held| Reach::of_maker(held, now))
+		.ok_or_else(no_longer_valid)
+}
 
 impl ApiKeyStore {
 	/// Remove the key `label` when `within` says it is one the caller may
 	/// revoke, and return it. The caller must still be in the file with the
-	/// same secret, and `within` is asked about the key as it is in the file
-	/// now, all under the file's lock. A key that is not there and one that
-	/// `within` refuses are the same `NotFound`.
+	/// same secret and still be allowed to revoke, and `within` is asked, of
+	/// what the caller reaches now and of the key as the file holds it, all
+	/// under the file's lock. A key that is not there and one that `within`
+	/// refuses are the same `NotFound`.
 	pub fn remove_by(
 		&mut self,
 		label: &str,
 		by: &Caller,
-		within: impl Fn(&ApiKey) -> bool,
+		within: impl Fn(&Reach, &ApiKey) -> bool,
 	) -> std::io::Result<ApiKey> {
 		let mut removed = None;
 		let new_state = crate::storage::locked::edit(
@@ -28,18 +48,11 @@ impl ApiKeyStore {
 			},
 			ApiKeyFile::default,
 			|state: &mut ApiKeyFile| -> std::io::Result<()> {
-				if !state.keys.iter().any(|held| {
-					held.label == by.label() && held.hash.eq_ignore_ascii_case(by.hash())
-				}) {
-					return Err(std::io::Error::new(
-						std::io::ErrorKind::PermissionDenied,
-						"the key that asked is no longer valid",
-					));
-				}
+				let own = maker_in(&state.keys, by)?;
 				let Some(at) = state
 					.keys
 					.iter()
-					.position(|held| held.label == label && within(held))
+					.position(|held| held.label == label && within(&own, held))
 				else {
 					return Err(std::io::Error::new(
 						std::io::ErrorKind::NotFound,

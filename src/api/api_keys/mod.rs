@@ -351,14 +351,15 @@ impl ApiKeyStore {
 	}
 
 	/// [`Self::add_within`] for a key made by another key: the key that asks
-	/// must still be in the file, with the same secret, when the new one is
-	/// written, and the file holds at most `max_keys`. The checks and the insert
-	/// are one step under the file's lock.
+	/// must still be in the file, with the same secret, and still reach as far
+	/// as the new key would, when the new one is written, and the file holds at
+	/// most `max_keys`. The checks and the insert are one step under the file's
+	/// lock.
 	pub fn add_by(
 		&mut self,
 		key: ApiKey,
 		gate: Option<&crate::limits::Gate>,
-		by: (&issue::Caller, usize),
+		by: issue::Ask<'_>,
 	) -> std::io::Result<()> {
 		self.add_inner(key, gate, Some(by))
 	}
@@ -367,7 +368,7 @@ impl ApiKeyStore {
 		&mut self,
 		key: ApiKey,
 		gate: Option<&crate::limits::Gate>,
-		by: Option<(&issue::Caller, usize)>,
+		by: Option<issue::Ask<'_>>,
 	) -> std::io::Result<()> {
 		if let Some(spec) = &key.ip_cidr
 			&& crate::cidr::Cidr::parse(spec).is_none()
@@ -390,16 +391,12 @@ impl ApiKeyStore {
 			},
 			ApiKeyFile::default,
 			|state: &mut ApiKeyFile| -> std::io::Result<()> {
-				if let Some((caller, max_keys)) = by {
-					if !state.keys.iter().any(|held| {
-						held.label == caller.label()
-							&& held.hash.eq_ignore_ascii_case(caller.hash())
-					}) {
-						return Err(std::io::Error::new(
-							std::io::ErrorKind::PermissionDenied,
-							"the key that asked is no longer valid",
-						));
+				if let Some(ask) = by {
+					let own = removal::maker_in(&state.keys, ask.caller)?;
+					if own.covers(ask.wanted).is_err() {
+						return Err(removal::no_longer_valid());
 					}
+					let max_keys = ask.max_keys;
 					if state.keys.len() >= max_keys {
 						return Err(std::io::Error::new(
 							std::io::ErrorKind::QuotaExceeded,

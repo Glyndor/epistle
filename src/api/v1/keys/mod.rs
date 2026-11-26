@@ -17,7 +17,7 @@ use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
 use serde::Deserialize;
 
-use crate::api::api_keys::issue::{self, Reach, Refusal, World};
+use crate::api::api_keys::issue::{self, Ask, Issuer, Reach, Refusal, World};
 use crate::api::api_keys::{
 	ApiKey, ApiKeyStore, ApiKeySummary, display_names, sha256_hash, stored_form,
 };
@@ -75,6 +75,16 @@ fn refusal(refusal: Refusal) -> ApiError {
 	}
 }
 
+/// The key that asks, `None` for the configured token. Anything else is refused
+/// before the keys are looked at.
+fn asking(principal: &Principal) -> Result<Option<issue::Caller>, ApiError> {
+	match principal.issuer() {
+		Issuer::Operator => Ok(None),
+		Issuer::Key(caller) => Ok(Some(caller)),
+		Issuer::Nobody => Err(ApiError::forbidden("the key that asked is no longer valid")),
+	}
+}
+
 fn not_found() -> ApiError {
 	ApiError::not_found("no such API key")
 }
@@ -113,7 +123,7 @@ pub async fn list(
 		));
 	}
 	let principal = Principal::for_token(&state, &auth);
-	let caller = principal.issuer().map(|issuer| issuer.reach().clone());
+	let caller = asking(&principal)?.map(|caller| caller.reach().clone());
 	let mut rows: Vec<ApiKeySummary> = state
 		.api_keys()
 		.snapshot()
@@ -202,8 +212,8 @@ pub async fn create(
 			.collect(),
 		account: body.account,
 	};
-	let caller = principal.issuer();
-	issue::check(&request, caller.as_ref(), &Server(&state)).map_err(refusal)?;
+	let caller = asking(&principal)?;
+	let wanted = issue::check(&request, caller.as_ref(), &Server(&state)).map_err(refusal)?;
 	let secret = crate::util::secret::generate_secret().ok_or_else(|| {
 		tracing::error!("no randomness for an API key");
 		ApiError::internal()
@@ -246,9 +256,15 @@ pub async fn create(
 	let written = tokio::task::spawn_blocking(move || {
 		let mut store = ApiKeyStore::open(&data_dir)?;
 		match &caller {
-			Some(caller) => {
-				store.add_by(key.clone(), gate.as_ref(), (caller, issue::MAX_KEYS_BY_KEY))?
-			}
+			Some(caller) => store.add_by(
+				key.clone(),
+				gate.as_ref(),
+				Ask {
+					caller,
+					wanted: &wanted,
+					max_keys: issue::MAX_KEYS_BY_KEY,
+				},
+			)?,
 			None => store.add_within(key.clone(), gate.as_ref())?,
 		}
 		apply(&data_dir, &set);
@@ -298,7 +314,7 @@ pub async fn revoke(
 	Path(label): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
 	let principal = Principal::for_token(&state, &auth);
-	let caller = principal.issuer();
+	let caller = asking(&principal)?;
 	let by = principal.key_label().map(str::to_owned);
 	let carried = Carried::capture();
 	let (data_dir, set) = (state.data_dir().to_path_buf(), Arc::clone(state.api_keys()));
@@ -307,8 +323,7 @@ pub async fn revoke(
 		let mut store = ApiKeyStore::open(&data_dir)?;
 		let removed = match &caller {
 			Some(caller) => {
-				let reach = caller.reach().clone();
-				store.remove_by(&label, caller, |key| reaches(&world, Some(&reach), key))?
+				store.remove_by(&label, caller, |own, key| reaches(&world, Some(own), key))?
 			}
 			None => {
 				let key = store

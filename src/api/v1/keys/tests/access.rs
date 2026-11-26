@@ -55,3 +55,63 @@ async fn the_configured_token_and_a_key_with_the_scope_reach_the_routes() {
 		assert_eq!(status, StatusCode::OK, "{body}");
 	}
 }
+
+/// A request whose key is no longer a key of the file by the time the route
+/// looks does nothing: it is not taken for the configured token.
+#[tokio::test]
+async fn a_request_that_is_neither_the_token_nor_a_maker_does_nothing() {
+	use axum::Extension;
+	use axum::Json;
+	use axum::extract::{Path, Query, State};
+
+	use crate::api::api_keys::Scope;
+	use crate::api::state::{ClientIp, MatchedAuth};
+
+	let world = world();
+	for secret in ["gone-secret", PLAIN, BOUND] {
+		let auth = MatchedAuth {
+			token: Some(secret.to_string()),
+			client_ip: None,
+			configured: false,
+			acceptable_scopes: vec![Scope::Key],
+			account_scoped: false,
+		};
+		let listed = super::super::list(
+			State(world.state.clone()),
+			Extension(auth.clone()),
+			Query(serde_json::from_value(json!({})).expect("query")),
+		)
+		.await;
+		assert_eq!(status_of(listed.map(|_| ())), StatusCode::FORBIDDEN, "list");
+		let made = super::super::create(
+			State(world.state.clone()),
+			Extension(auth.clone()),
+			Extension(ClientIp(None)),
+			Json(
+				serde_json::from_value(json!({"label": "made", "scopes": ["read"]})).expect("body"),
+			),
+		)
+		.await;
+		assert_eq!(status_of(made.map(|_| ())), StatusCode::FORBIDDEN, "create");
+		let revoked = super::super::revoke(
+			State(world.state.clone()),
+			Extension(auth),
+			Extension(ClientIp(None)),
+			Path("of-a".to_string()),
+		)
+		.await;
+		assert_eq!(
+			status_of(revoked.map(|_| ())),
+			StatusCode::FORBIDDEN,
+			"revoke"
+		);
+	}
+	assert_eq!(labels(&world).len(), 7, "nothing was made or revoked");
+}
+
+fn status_of(result: Result<(), crate::api::error::ApiError>) -> StatusCode {
+	match result {
+		Ok(()) => StatusCode::OK,
+		Err(error) => axum::response::IntoResponse::into_response(error).status(),
+	}
+}
