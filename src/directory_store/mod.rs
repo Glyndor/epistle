@@ -75,6 +75,19 @@ mod collisions;
 mod credential_fingerprint;
 pub mod credential_reset;
 pub use credential_reset::{CredentialReset, NewPassword, ResetTarget};
+
+/// The changes one request makes to a dynamic account, written together by
+/// [`AccountStore::change_account_if`]. A field that is `None` is left as it
+/// is.
+#[derive(Debug, Default)]
+pub struct AccountChanges {
+	/// Whether the account is administratively disabled.
+	pub disabled: Option<bool>,
+	/// A new password.
+	pub password: Option<NewPassword>,
+	/// A new display name, as the client sent it; empty clears it.
+	pub display_name: Option<String>,
+}
 pub mod display_name;
 mod limits;
 mod mutate_store;
