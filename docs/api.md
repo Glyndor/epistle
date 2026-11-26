@@ -534,7 +534,7 @@ given for it is the one written in the header.
 | `from` | string, required | A bare address, no display name. Must be one the acting account owns |
 | `from_name` | string | The phrase of `From`. Absent uses the account's display name. At most 128 characters |
 | `to`, `cc`, `bcc` | arrays of recipients | A recipient is a bare address or `{"name": "Ana Pérez", "address": "ana@example.org"}`; see below. `to` is required but may be empty if `cc` or `bcc` has someone. Together at most 100 distinct addresses by default (`max_recipients`). `bcc` is envelope only. With `to` and `cc` both empty the message carries `To: undisclosed-recipients:;`, an empty group, so no header names a recipient |
-| `reply_to` | recipient or array of recipients | A bare address or the same object, or a list of them (at most 10), written as one `Reply-To` header. An empty list writes none |
+| `reply_to` | recipient or array of recipients | A bare address or the same object, or a list of them (at most 10), written as one `Reply-To` header. An empty list or `null` writes none |
 | `sender` | string | A bare address; it must be one the account owns, like `from` |
 | `envelope_from` | string | The address bounces and delivery reports go back to (`MAIL FROM`), where `from` is what the reader sees. A bare address the account owns, like `from`; absent is `from`. An empty string is refused: the null sender is not offered here. The `From` header, the DKIM signature and the `Message-ID` keep following `from`; see below for what else follows which address |
 | `subject` | string | Default empty. A request with no subject, no `text`, no `html`, no `attachments` and no `inline` is an empty message and is refused with `400 invalid_input` on `text` |
@@ -550,7 +550,7 @@ given for it is the one written in the header.
 | `save_sent` | boolean | Whether a copy goes to the account's Sent folder. Absent follows the account setting. Transactional mail is never copied |
 | `extra` | object of strings | Correlation data, up to 10 keys (printable ASCII, no spaces, at most 64 bytes) with values of at most 256 bytes. It comes back on `/api/v1/deliveries` and in the webhook events of the message and is never written into the message |
 | `class` | `transactional`, `marketing`, `personal` | See below |
-| `dry_run` | boolean | Default `false`. Runs every check of a send and answers what would happen, without sending; see below |
+| `dry_run` | boolean | Default `false`, also for `null`. Runs every check of a send and answers what would happen, without sending; see below |
 
 A refusal for a limit names the limit: `Too many recipients; the maximum is 100.`, the same for attachments, custom headers, `reply_to`, `list_unsubscribe`, `references` and the `extra` map.
 

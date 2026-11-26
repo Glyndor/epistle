@@ -240,3 +240,23 @@ async fn a_refusal_for_a_limit_names_the_limit() {
 		assert_eq!(queued, 0);
 	}
 }
+
+/// A client of 0.14.0 may write `null` for a field it leaves out: `reply_to`
+/// was optional, and a field that release did not know was read as absent.
+#[tokio::test]
+async fn reply_to_null_is_the_same_as_omitted() {
+	for extra in [
+		json!({"text": "x", "reply_to": null}),
+		json!({"text": "x", "dry_run": null}),
+		json!({"text": "x"}),
+	] {
+		let dir = tempfile::tempdir().expect("tempdir");
+		let (status, body) = send(dir.path(), extra.clone()).await;
+		assert_eq!(status, StatusCode::OK, "{extra}: {body}");
+		assert!(body.get("queued").is_some(), "{extra}: it was sent, {body}");
+		assert!(
+			!has_line(&head(&queued(dir.path()).1), "Reply-To:"),
+			"{extra}"
+		);
+	}
+}

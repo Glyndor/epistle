@@ -36,6 +36,12 @@ pub(super) const MAX_EXTRA_VALUE_LEN: usize = 256;
 /// `X-` headers the server writes itself from a named field.
 const RESERVED_CUSTOM: &[&str] = &["x-priority", "x-auto-response-suppress"];
 
+/// A boolean that a client may write as `null`, read as `false`. 0.14.0 did
+/// not know the field and ignored it, whatever it held.
+fn null_as_false<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<bool, D::Error> {
+	Option::<bool>::deserialize(deserializer).map(Option::unwrap_or_default)
+}
+
 #[derive(Deserialize)]
 pub struct SendRequest {
 	pub(super) from: String,
@@ -108,7 +114,7 @@ pub struct SendRequest {
 	extra: BTreeMap<String, String>,
 	/// Run every check the send runs and answer what would happen, without
 	/// queueing, delivering, charging a rate limit or recording a recipient.
-	#[serde(default)]
+	#[serde(default, deserialize_with = "null_as_false")]
 	pub(super) dry_run: bool,
 	/// The class of the message (`transactional`, `marketing`, `personal`).
 	/// Absent: the class bound to the API key, else the account default,
