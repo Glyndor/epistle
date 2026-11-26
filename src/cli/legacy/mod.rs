@@ -155,9 +155,11 @@ pub enum Legacy {
 		#[arg(long, value_name = "CIDR")]
 		ip_cidr: Option<String>,
 		/// Permissions granted to this key (repeat to grant more than one:
-		/// `read`, `write`, `send`, `scim`). Required at least once: an
-		/// unscoped key is admin-equivalent, which is exactly what the scopes
-		/// field exists to prevent.
+		/// `manage:read`, `manage:write`, `mail:read`, `mail:write`, `send`,
+		/// `scim`, `alias`, `ban`, `health`; `read` and `write` are still
+		/// taken, with a warning). Required at least once: an unscoped key is
+		/// admin-equivalent, which is exactly what the scopes field exists to
+		/// prevent.
 		#[arg(
 			long = "scope",
 			value_name = "SCOPE",

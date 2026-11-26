@@ -317,8 +317,9 @@ pub enum ApiKeyCli {
 	/// Create an API key and print it once.
 	///
 	/// The plaintext key is never stored. With `--account`, the key is bound
-	/// to that account and refused by every route except JMAP and
-	/// `/api/v1/send`; it may hold `read`, `write` and `send`, never `scim`.
+	/// to that account and reaches only JMAP, `/api/v1/send`,
+	/// `/api/v1/deliveries` and that account's suppression list; it may hold
+	/// `mail:read`, `mail:write` and `send`, never an administrative scope.
 	Create {
 		/// A label identifying this API key (e.g. "ci").
 		#[arg(value_name = "LABEL")]
@@ -344,8 +345,12 @@ pub enum ApiKeyCli {
 		/// Optional single-CIDR client-IP allowlist.
 		#[arg(long, value_name = "CIDR")]
 		ip_cidr: Option<String>,
-		/// Permissions granted (repeat to grant more than one: `read`,
-		/// `write`, `send`). `scim` is rejected for account-bound keys.
+		/// Permissions granted, repeated to grant more than one: `manage:read`,
+		/// `manage:write`, `mail:read`, `mail:write`, `send`, `scim`, `alias`,
+		/// `ban`, `health`. `read` and `write` are still taken, with a warning,
+		/// and open both management and mail. A key bound to an account refuses
+		/// `manage:read`, `manage:write`, `scim`, `alias`, `ban` and `health`;
+		/// `ban` and `health` cannot be confined with `--domain`.
 		#[arg(
 			long = "scope",
 			value_name = "SCOPE",
@@ -388,8 +393,8 @@ pub enum ApiKeyCli {
 		)]
 		auto_submitted: Option<bool>,
 		/// Replace the key's scopes with these (repeat for more): `manage:read`,
-		/// `manage:write`, `mail:read`, `mail:write`, `send`, `scim`, `alias`.
-		/// How to split a key that holds `read` or `write`.
+		/// `manage:write`, `mail:read`, `mail:write`, `send`, `scim`, `alias`,
+		/// `ban`, `health`. How to split a key that holds `read` or `write`.
 		#[arg(long = "scope", value_name = "SCOPE", value_parser = parse_scope)]
 		scopes: Vec<String>,
 	},

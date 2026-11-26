@@ -234,6 +234,12 @@ serves. A client that called port 8025 for JMAP, SCIM or the OAuth grants has to
 move to the new port, or a TLS proxy has to send those paths to it.
 `smtp` (25) cannot be disabled because inbound mail needs it.
 
+The web panel is such a client: its webmail and its administration share the one
+address it is given, the `api` listener's port, so JMAP cannot be moved for it
+alone. On a stack that runs the panel, `service disable jmap`, `service enable
+jmap` and an `[api] surfaces` list without `jmap` all leave the webmail without
+service.
+
 Edits preserve every other configuration value, use init's comment-free TOML
 formatting, and validate through the normal loader before atomically replacing
 `/etc/epistle/mail.toml` (or `--config`). Existing TLS and API prerequisites must

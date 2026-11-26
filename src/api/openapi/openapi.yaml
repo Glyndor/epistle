@@ -17,9 +17,11 @@ info:
   summary: Management, send, JMAP, SCIM and OAuth routes of one epistle server.
   description: |-
     Everything under `/api/v1` is the versioned management API. `/jmap/*`,
-    `/scim/v2/*` and `/oauth/*` are standard protocols served by the same
-    listener. The routes at the end (autodiscovery, ACME, metrics) live on
-    their own listeners, see their `servers` entries.
+    `/scim/v2/*` and `/oauth/*` are standard protocols served by the `api`
+    listener too, unless a `jmap`, `scim` or `oauth` listener serves one of them
+    instead or `[api] surfaces` leaves it out. The routes at the end
+    (autodiscovery, ACME, metrics) live on their own listeners, see their
+    `servers` entries.
 
     **Authentication.** Every route of the API listener except `/healthz` and
     `/oauth/*` needs `Authorization: Bearer <token>`: the optional static token whose hash is

@@ -7,4 +7,5 @@ mod caps;
 mod cidr;
 mod expiry_cases;
 mod rotate;
+mod scope_help;
 mod split_scopes;
