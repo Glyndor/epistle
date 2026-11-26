@@ -239,6 +239,7 @@ pub async fn require_bearer_token(
 		token: token.clone(),
 		client_ip,
 		configured,
+		acceptable_scopes,
 	});
 	next.run(request).await
 }

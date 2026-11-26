@@ -91,6 +91,20 @@ impl std::fmt::Debug for Principal {
 }
 
 impl Principal {
+	/// Every scope a key can hold, for the places that need to find a key
+	/// whatever it holds (a secret that two keys share has no reach).
+	pub(crate) const EVERY_SCOPE: &'static [Scope] = &[
+		Scope::ManageRead,
+		Scope::ManageWrite,
+		Scope::MailRead,
+		Scope::MailWrite,
+		Scope::Send,
+		Scope::Scim,
+		Scope::Alias,
+		Scope::Ban,
+		Scope::Health,
+	];
+
 	/// An OAuth token always has explicit scopes and exactly one account.
 	pub(in crate::api) fn of_oauth(
 		account: String,
@@ -195,17 +209,6 @@ impl Principal {
 		// authenticates the caller is the same key whether the route wants
 		// `manage:read`, `mail:write`, `send` or `scim`. The scopes it holds ride on the
 		// principal, and the route that needs one asks for it.
-		const EVERY_SCOPE: &[Scope] = &[
-			Scope::ManageRead,
-			Scope::ManageWrite,
-			Scope::MailRead,
-			Scope::MailWrite,
-			Scope::Send,
-			Scope::Scim,
-			Scope::Alias,
-			Scope::Ban,
-			Scope::Health,
-		];
 		let credential = Credential {
 			token: token.to_string(),
 			client_ip: auth.client_ip,
@@ -213,9 +216,14 @@ impl Principal {
 		let keys = state.api_keys().snapshot();
 		let mut matching = keys
 			.iter()
-			.filter(|key| key.admits_any(token, auth.client_ip, now, EVERY_SCOPE));
+			.filter(|key| key.admits_any(token, auth.client_ip, now, Self::EVERY_SCOPE));
 		match (matching.next(), matching.next()) {
-			(Some(key), None) => Principal::of_key(key, Some(credential)),
+			// The key has to hold one of the scopes the request was admitted
+			// under, now and not as of the middleware: it is read again after
+			// the body, and the scopes may have been withdrawn in between.
+			(Some(key), None) if key.covers_any(&auth.acceptable_scopes) => {
+				Principal::of_key(key, Some(credential))
+			}
 			// Two keys share the secret, so the one that let the request in
 			// cannot be told from the other and no reach is safe to pick.
 			_ => Principal::unreachable(Some(credential)),

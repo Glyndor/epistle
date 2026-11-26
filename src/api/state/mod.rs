@@ -25,6 +25,11 @@ pub struct MatchedAuth {
 	/// middleware: the configured hash may be a legacy argon2id one, and
 	/// nothing after it compares the bearer against that hash again.
 	pub configured: bool,
+	/// The scopes the middleware admitted the request under: any one of them
+	/// is enough for the key to have been let in. The key is read again by
+	/// the handler, after the body, and has to hold one of these still, or a
+	/// request admitted under a scope that was withdrawn since would go on.
+	pub acceptable_scopes: Vec<crate::api::api_keys::Scope>,
 }
 
 /// State shared by every handler.

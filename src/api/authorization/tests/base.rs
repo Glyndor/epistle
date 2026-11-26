@@ -96,6 +96,7 @@ fn a_token_that_matches_no_credential_reaches_no_account() {
 		token: Some("removed-key-secret".to_string()),
 		client_ip: None,
 		configured: false,
+		acceptable_scopes: crate::api::Principal::EVERY_SCOPE.to_vec(),
 	};
 	let principal = Principal::for_token(&state, &auth);
 	assert!(
