@@ -107,15 +107,29 @@ impl ApiKey {
 		Some(held)
 	}
 
-	/// Whether 0.14.0, reading the same file after a rollback, would have no
-	/// scope for anything this key holds. Its `scopes` then carry a placeholder
-	/// that 0.14.0 reads as `read`, so the key is written so that 0.14.0 loads it
-	/// and refuses it (see `held::HELD`), and 0.15.0 restores it.
+	/// Whether 0.14.0, reading the same file after a rollback, would give this
+	/// key more than it holds. 0.14.0 reads only `scopes`, in its own names, and
+	/// each name opens what the name opened there: `read` is `manage:read` and
+	/// `mail:read` together, `write` both writes. A key that holds one half, or
+	/// only scopes 0.14.0 had no name for (`ban`, `health`, which leave the
+	/// placeholder `read`), would be given the rest. Such a key is written so
+	/// that 0.14.0 loads the file and refuses the key (see `held::HELD`), and
+	/// 0.15.0 puts it back. Only a key whose scopes are exactly the ones 0.14.0
+	/// named stays usable there. A key bound to an account reaches no management
+	/// route in either release, so the management half adds nothing to it.
 	pub fn unusable_in_v014(&self) -> bool {
-		!self.grants.is_empty()
-			&& self
-				.reach()
-				.is_some_and(|held| !held.is_empty() && legacy_cover(&held).is_empty())
+		let Some(held) = self.reach() else {
+			return false;
+		};
+		self.scopes.iter().any(|name| {
+			expand_legacy(name).map_or(true, |members| {
+				members.iter().any(|scope| {
+					let confined_anyway = self.account.is_some()
+						&& matches!(scope, Scope::ManageRead | Scope::ManageWrite);
+					!confined_anyway && !held.contains(scope)
+				})
+			})
+		})
 	}
 
 	/// Whether the key opens both a management route and a mail route of the
@@ -288,7 +302,69 @@ pub(super) fn normalized(mut key: ApiKey) -> std::io::Result<ApiKey> {
 	Ok(key)
 }
 
+/// Every key written the way 0.15.0 writes it: `scopes` and `grants` from what
+/// the key holds, `grants` first. A key that holds nothing is left as it is.
+fn canonical(keys: &mut [ApiKey]) -> std::io::Result<()> {
+	for key in keys {
+		validate_loaded(key)?;
+		let Some(held) = key.reach().filter(|held| !held.is_empty()) else {
+			continue;
+		};
+		let names: Vec<String> = held.iter().map(|s| s.as_str().to_string()).collect();
+		let (scopes, grants) = stored_form(&names, key.account.is_some())?;
+		key.scopes = scopes;
+		key.grants = grants;
+	}
+	Ok(())
+}
+
 impl ApiKeyStore {
+	/// Write `api_keys.toml` so that 0.14.0 reads no key as more than it holds,
+	/// whichever way an earlier build wrote it: a key stored as `scopes =
+	/// ["read"]` with `grants = ["ban"]`, as `scopes = ["ban"]`, or with one half
+	/// of `read`. The keys that would be given more are held (see `held`), the
+	/// rest are untouched, and nothing is written when the file already is what
+	/// this would write. Returns whether it wrote. `stack rollback` runs it before
+	/// it puts the old binary back, and `serve` runs it at start.
+	pub fn prepare_for_v014(&mut self) -> std::io::Result<bool> {
+		let text = match std::fs::read_to_string(&self.path) {
+			Ok(text) => text,
+			Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+			Err(error) => return Err(error),
+		};
+		let invalid =
+			|error: toml::de::Error| std::io::Error::new(std::io::ErrorKind::InvalidData, error);
+		let file: ApiKeyFile = toml::from_str(&text).map_err(invalid)?;
+		let mut wanted = file.clone();
+		canonical(&mut wanted.keys)?;
+		let render = |file: &ApiKeyFile| {
+			toml::to_string_pretty(file)
+				.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+		};
+		if render(&wanted)? == text {
+			return Ok(false);
+		}
+		let new_state = crate::storage::locked::edit(
+			&self.path,
+			|text| {
+				toml::from_str::<ApiKeyFile>(text)
+					.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+			},
+			|state| {
+				toml::to_string_pretty(state)
+					.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+			},
+			ApiKeyFile::default,
+			|state: &mut ApiKeyFile| canonical(&mut state.keys),
+		)
+		.map_err(|error| match error {
+			crate::storage::locked::EditError::Io(error)
+			| crate::storage::locked::EditError::Mutate(error) => error,
+		})?;
+		self.keys = new_state.keys;
+		Ok(true)
+	}
+
 	/// Replace the scopes of `label` with `names`, in both fields, in one
 	/// locked rewrite. `NotFound` if the label is absent. The key keeps its
 	/// secret, domains, expiry, address allowlist and account.

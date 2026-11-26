@@ -166,3 +166,68 @@ fn lost_database_changes_are_named_only_when_the_dump_was_restored() {
 		);
 	}
 }
+
+fn config_in(dir: &std::path::Path) -> crate::config::Config {
+	let toml = format!(
+		"hostname = \"mail.example.org\"\ndata_dir = \"{}\"\n",
+		dir.display()
+	);
+	toml::from_str(&toml).expect("base config")
+}
+
+/// What a build before this one wrote for a key that holds only `ban`: 0.14.0
+/// reads `read` there, which is mail and management.
+const BAN_KEY: &str = "[[keys]]\nlabel = \"banner\"\nhash = \"sha256:aa\"\nscopes = [\"read\"]\n\
+	 grants = [\"ban\"]\n";
+
+#[test]
+fn rollback_holds_the_keys_before_the_old_binary_can_read_them() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let keys = dir.path().join("api_keys.toml");
+	std::fs::write(&keys, BAN_KEY).expect("write");
+	let config = config_in(dir.path());
+	// `true` stands in for podup: it stops mail without doing anything.
+	let result = super::run::restore(&config, &dir.path().join("compose.json"), "true");
+	assert!(result.is_ok(), "{result:?}");
+	let text = std::fs::read_to_string(&keys).expect("read");
+	assert!(
+		text.contains("rollback_hold") && text.contains(crate::api::api_keys::held::HELD),
+		"{text}"
+	);
+}
+
+#[test]
+fn rollback_stops_when_the_keys_cannot_be_prepared() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	std::fs::write(dir.path().join("api_keys.toml"), "this is = not [valid").expect("write");
+	let config = config_in(dir.path());
+	let result = super::run::restore(&config, &dir.path().join("compose.json"), "true");
+	let error = result.expect_err("an old binary must not be put back over keys left as they were");
+	assert!(
+		error.contains("cannot prepare API keys for rollback"),
+		"{error}"
+	);
+}
+
+/// The file reads fine and has a key to hold, but nothing can be written next to
+/// it: the preparation fails after the store opened, and that stops the rollback.
+#[cfg(unix)]
+#[test]
+fn rollback_stops_when_the_held_keys_cannot_be_written() {
+	use std::os::unix::fs::PermissionsExt;
+	let dir = tempfile::tempdir().expect("tempdir");
+	std::fs::write(dir.path().join("api_keys.toml"), BAN_KEY).expect("write");
+	let config = config_in(dir.path());
+	std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o500)).expect("chmod");
+	let result = super::run::restore(&config, &dir.path().join("compose.json"), "true");
+	let bound = std::fs::File::create(dir.path().join("probe")).is_err();
+	std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).expect("chmod");
+	if !bound {
+		return; // running as a user the mode does not bind
+	}
+	let error = result.expect_err("a key that could not be held must stop the rollback");
+	assert!(
+		error.contains("cannot prepare API keys for rollback"),
+		"{error}"
+	);
+}

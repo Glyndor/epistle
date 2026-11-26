@@ -169,10 +169,23 @@ pub(in crate::cli) fn restore_db(config: &Config, compose: &Path, podup: &str) -
 	}
 }
 
-fn restore(config: &Config, compose: &Path, podup: &str) -> Result<String, String> {
+/// `api_keys.toml` written so that 0.14.0 gives no key more than it holds.
+fn prepare_api_keys(data_dir: &Path) -> Result<(), String> {
+	let mut store = crate::api::ApiKeyStore::open(data_dir)
+		.map_err(|error| format!("cannot prepare API keys for rollback: {error}"))?;
+	store
+		.prepare_for_v014()
+		.map(drop)
+		.map_err(|error| format!("cannot prepare API keys for rollback: {error}"))
+}
+
+pub(super) fn restore(config: &Config, compose: &Path, podup: &str) -> Result<String, String> {
 	if crate::cli::stack::run_sequence(podup, compose, &[&["stop", "mail"]]) != ExitCode::SUCCESS {
 		return Err("cannot stop mail".into());
 	}
+	// Before anything else that could end in the old binary being put back: no
+	// key may be read there as more than it holds. A failure stops the rollback.
+	prepare_api_keys(&config.data_dir)?;
 	let has_db = crate::cli::regular::read::read(compose)
 		.ok()
 		.and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())

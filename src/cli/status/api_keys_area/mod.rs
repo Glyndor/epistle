@@ -60,12 +60,18 @@ fn evaluate(store: &ApiKeyStore, data_dir: &std::path::Path, now: u64) -> AreaRe
 				legacy_cutoff::warning(&key.label),
 			));
 		}
-		if key.unusable_in_v014() {
+		// A key that holds one half of `read` or `write` is held too, but that is
+		// what every split key is, so only the keys 0.14.0 has no scope for at all
+		// are named here; `stack rollback` holds the rest and `docs/api.md` says so.
+		let nameless = key
+			.reach()
+			.is_some_and(|held| crate::api::api_keys::legacy_cover(&held).is_empty());
+		if nameless && key.unusable_in_v014() {
 			items.push(Item::new(
 				&name,
 				Level::Warn,
-				"0.14.0 has no scope for what this key holds: after a rollback it is refused there \
-				 until 0.15.0 is back",
+				"0.14.0 cannot preserve this key's permissions: rollback refuses it to prevent broader \
+				 access",
 			));
 		}
 		for scope in [Scope::Scim, Scope::Alias] {
