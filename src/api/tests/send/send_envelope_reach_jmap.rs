@@ -151,3 +151,87 @@ async fn the_sender_field_is_held_to_the_account_as_the_rest_route_does() {
 	.await;
 	assert!(created(&response), "{response}");
 }
+
+/// Every `Sender` field is read, and every address of each, as the From field
+/// is: a second field, or a second address in one, is held to the key and to
+/// the account like the first.
+#[tokio::test]
+async fn every_sender_field_and_address_of_a_submission_is_checked() {
+	let cases = [
+		(
+			"a second field",
+			"From: alice@example.org\r\nSender: alice@example.org\r\nSender: ops@other.example\r\n",
+			"ops@other.example is the second field and outside the key",
+		),
+		(
+			"a list",
+			"From: alice@example.org\r\nSender: alice@example.org, ops@other.example\r\n",
+			"ops@other.example is the second address and outside the key",
+		),
+	];
+	for (name, headers, why) in cases {
+		let dir = tempfile::tempdir().expect("tempdir");
+		let app = app(dir.path());
+		// The account owns every address, so the unconfined token sends it.
+		let response = submit(
+			&app,
+			dir.path(),
+			TOKEN.as_str(),
+			headers,
+			Some(json!("alice@example.org")),
+		)
+		.await;
+		assert!(created(&response), "{name}: {response}");
+		let response = submit(
+			&app,
+			dir.path(),
+			CONFINED,
+			headers,
+			Some(json!("alice@example.org")),
+		)
+		.await;
+		assert_eq!(
+			response["notCreated"]["s1"]["type"], "forbiddenFrom",
+			"{name}: {why}: {response}"
+		);
+	}
+	// And one the account does not own, in the second field, is refused to all.
+	let dir = tempfile::tempdir().expect("tempdir");
+	let app = app(dir.path());
+	let headers = "From: alice@example.org\r\nSender: alice@example.org\r\nSender: stranger@elsewhere.example\r\n";
+	let response = submit(
+		&app,
+		dir.path(),
+		TOKEN.as_str(),
+		headers,
+		Some(json!("alice@example.org")),
+	)
+	.await;
+	assert_eq!(
+		response["notCreated"]["s1"]["type"], "forbiddenFrom",
+		"{response}"
+	);
+}
+
+/// A `Sender` field that names no address cannot have been checked, so the
+/// submission is refused rather than passed on the strength of an empty list.
+#[tokio::test]
+async fn a_sender_field_that_names_no_address_is_refused() {
+	for sender in [",,,", "()", "<>"] {
+		let dir = tempfile::tempdir().expect("tempdir");
+		let app = app(dir.path());
+		let headers = format!("From: alice@example.org\r\nSender: {sender}\r\n");
+		let response = submit(
+			&app,
+			dir.path(),
+			TOKEN.as_str(),
+			&headers,
+			Some(json!("alice@example.org")),
+		)
+		.await;
+		assert_eq!(
+			response["notCreated"]["s1"]["type"], "forbiddenFrom",
+			"Sender: {sender}: {response}"
+		);
+	}
+}

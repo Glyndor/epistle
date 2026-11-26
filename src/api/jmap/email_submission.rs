@@ -178,7 +178,7 @@ fn submit_email(
 	// `POST /api/v1/send` holds them. Before any evidence is prepared or any
 	// budget is asked for. The null reverse path names no domain and is
 	// outside every declared one, so a confined key cannot use it.
-	check_reach(state, principal, account, &headers, &raw, &mail_from)?;
+	check_reach(state, principal, account, &raw, &mail_from)?;
 	// Stamp Message-ID and Date on the queued copy when the client did not
 	// include them. Domain is the envelope's MAIL FROM, falling back to the
 	// first configured domain when the envelope has none (the null reverse
@@ -422,16 +422,14 @@ fn check_reach(
 	state: &ApiState,
 	principal: &Principal,
 	account: &str,
-	headers: &str,
 	raw: &[u8],
 	mail_from: &str,
 ) -> Result<(), Refusal> {
-	let sender_field: Vec<String> = objects::header_value(headers, "sender")
-		.map(|value| objects::header_emails(&value))
-		.unwrap_or_default()
-		.iter()
-		.map(|address| crate::util::address::normalize(address))
-		.collect();
+	// A `Sender` field that names no address is not one that passed.
+	if crate::dmarc::author::sender_unreadable(raw) {
+		return Err("forbiddenFrom".into());
+	}
+	let sender_field = crate::dmarc::author::all_sender_addresses(raw);
 	for sender in &sender_field {
 		crate::api::mail_from::check_mail_from(state, account, sender).map_err(|refusal| {
 			match refusal {
