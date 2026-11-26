@@ -489,6 +489,7 @@ sudo epistle check subid
 |---|---|
 | `epistle serve` | Bind the configured listeners and run. |
 | `epistle serve --role mail\|certs` | Run one half of a stack whose certificate work has its own container (see [the split plan](operations/container-split.md)). `mail` binds the listeners, renews nothing and reloads the ACME pair from `<data_dir>/acme` when it changes; `certs` binds nothing and runs only the ACME renewal with `dns-01` through `[dns]` and the TLSA refresh, with the account key read from `secrets/acme_account.key` beside data_dir. `certs` refuses to start without `[acme] challenge = "dns-01"` and a `[dns]` provider. The default, `all`, is both in one process. |
+| `epistle serve --fronts` | Serve each `api`, `jmap`, `scim` and `oauth` listener on a Unix socket, `<parent of data_dir>/fronts/<kind>/core.sock`, instead of on TCP, for a front that forwards one surface to it. The directory is made `0700` and the socket `0600`, a socket left by an earlier run is replaced, and the client address comes from the one `X-Epistle-Peer` header the front writes: a request on a socket without it is refused with `400`. On TCP the header is removed and means nothing. |
 | `epistle mta-sts-serve --policy-dir DIR --cert FILE --key FILE [--listen ADDR]` | Serve the public MTA-STS policy over HTTPS. |
 | `epistle config-check` | Validate the configuration and exit. Values an older release accepted that the current rules refuse (`public_ipv4`, `public_ipv6`, an alias `list_id`) are ignored with a warning rather than failing; any other validation error fails, and so it does for `backup`, `restore`, `stack rollback` and `serve`. `status` alone still reads such a file and reports the reason in its `config` area. |
 | `epistle verify` | Check on-disk data integrity (run before an upgrade). |
@@ -2010,7 +2011,7 @@ scope here):
 |---|---|
 | `epistle dns-records [--json]` | Print the DNS records this deployment should publish: SPF, DKIM, DMARC, MTA-STS, MX, and a DANE TLSA record when a certificate is present. Reads the configuration only; nothing is queried or changed. A group `[dns_publish] skip` names is not published, so it holds no record in the list; the groups are named on stderr. The management API lists the same set at `GET /api/v1/dns/records` ([DNS in the API guide](api.md#dns)). |
 | `epistle verify-dns [--json]` | Look the same records up in DNS and report drift. Read-only. Exits 1 when a record is missing or differs. See [DNS](dns.md). `GET /api/v1/dns/verify` returns the same `--json` result ([DNS in the API guide](api.md#dns)). |
-| `epistle probe [--json]` | Dial each enabled listener on loopback and read its greeting. Exits 0 when every listener answers and 1 when one is down or greets wrongly. It is the container healthcheck, and the `ports` area of `status` runs the same check. |
+| `epistle probe [--json] [--fronts]` | Dial each enabled listener on loopback and read its greeting. Exits 0 when every listener answers and 1 when one is down or greets wrongly. It is the container healthcheck, and the `ports` area of `status` runs the same check. With `--fronts`, the listeners that serve the API are asked `GET /healthz` on their Unix sockets instead. |
 
 All three take `--config FILE`.
 
