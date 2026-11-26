@@ -60,6 +60,14 @@ fn evaluate(store: &ApiKeyStore, data_dir: &std::path::Path, now: u64) -> AreaRe
 				legacy_cutoff::warning(&key.label),
 			));
 		}
+		if key.unusable_in_v014() {
+			items.push(Item::new(
+				&name,
+				Level::Warn,
+				"0.14.0 has no scope for what this key holds: after a rollback it is refused there \
+				 until 0.15.0 is back",
+			));
+		}
 		for scope in [Scope::Scim, Scope::Alias] {
 			if key.covers_any(&[scope]) && key.reach().is_some() && key.domains.is_empty() {
 				items.push(Item::new(

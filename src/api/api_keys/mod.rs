@@ -258,10 +258,11 @@ pub fn sha256_hash(token: &str) -> String {
 	format!("sha256:{hex}")
 }
 
-/// The TOML document.
-#[derive(Debug, Default, Serialize, Deserialize)]
+/// The TOML document. A key 0.14.0 has no scope for is written held, which
+/// [`held`] explains.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[serde(from = "held::FileWire", into = "held::FileWire")]
 struct ApiKeyFile {
-	#[serde(default)]
 	keys: Vec<ApiKey>,
 }
 
@@ -673,6 +674,7 @@ impl crate::directory_store::file_watcher::ApiKeyReloader for ApiKeySet {
 }
 
 mod grants;
+pub mod held;
 pub mod legacy_cutoff;
 mod revoke;
 

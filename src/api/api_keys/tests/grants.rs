@@ -112,15 +112,14 @@ fn writers_never_leave_scopes_empty() {
 		assert!(!key.scopes.is_empty(), "{}", key.label);
 		assert!(!key.grants.is_empty(), "{}", key.label);
 		let reach = key.reach().expect("explicit scopes");
-		assert_eq!(
-			legacy_cover(&reach)
-				.iter()
-				.map(|s| s.to_string())
-				.collect::<Vec<_>>(),
-			key.scopes,
-			"{}",
-			key.label
-		);
+		let mut cover: Vec<String> = legacy_cover(&reach).iter().map(|s| s.to_string()).collect();
+		// A key that holds only scopes 0.14.0 had no name for carries a
+		// placeholder, and is held so that 0.14.0 refuses it.
+		if cover.is_empty() {
+			assert!(key.unusable_in_v014(), "{}", key.label);
+			cover = vec!["read".to_string()];
+		}
+		assert_eq!(cover, key.scopes, "{}", key.label);
 	}
 }
 
@@ -194,4 +193,137 @@ fn the_v015_loader_reads_what_v014_wrote() {
 	let reach = file.keys[0].reach().expect("explicit");
 	assert!(reach.contains(&Scope::ManageRead) && reach.contains(&Scope::MailRead));
 	assert!(reach.contains(&Scope::Send) && !reach.contains(&Scope::ManageWrite));
+}
+
+// --- A key 0.14.0 has no scope for -------------------------------------------
+
+fn ip(text: &str) -> IpAddr {
+	text.parse().expect("ip")
+}
+
+fn held_store(dir: &std::path::Path, label: &str, grants: &[&str], cidr: Option<&str>) -> String {
+	let mut store = ApiKeyStore::open(dir).expect("open");
+	let mut key = key_with(&[], grants);
+	key.label = label.to_string();
+	key.hash = sha256_hash(&format!("secret-{label}"));
+	key.ip_cidr = cidr.map(str::to_string);
+	store.add(key).expect("add");
+	std::fs::read_to_string(dir.join("api_keys.toml")).expect("read")
+}
+
+#[test]
+fn a_scope_0_14_0_had_no_name_for_gives_no_name() {
+	assert!(legacy_cover(&[Scope::Ban]).is_empty());
+	assert_eq!(legacy_cover(&[Scope::Ban, Scope::Send]), ["send"]);
+	assert_eq!(Scope::Ban.v014_name(), None);
+	for scope in ALL {
+		assert_eq!(
+			scope.v014_name().is_none(),
+			matches!(scope, Scope::Ban | Scope::Health),
+			"{scope:?}: a scope added later says here what 0.14.0 makes of it"
+		);
+	}
+}
+
+/// What a rollback does to a key that holds only `ban`: 0.14.0 loads the file and
+/// refuses the key from every address, and 0.15.0 puts it back.
+#[test]
+fn a_ban_key_taken_back_to_0_14_0_can_neither_read_nor_write_and_comes_back() {
+	for (cidr, scope) in [
+		(None, "ban"),
+		(Some("10.0.0.0/8"), "ban"),
+		(None, "health"),
+		(Some("10.0.0.0/8"), "health"),
+	] {
+		let dir = tempfile::tempdir().expect("tempdir");
+		let text = held_store(dir.path(), "banner", &[scope], cidr);
+		let loaded = v014_load(&text).expect("0.14.0 loads the file");
+		let key = &loaded.keys[0];
+		assert_eq!(key.scopes, ["read"], "a placeholder, never an empty list");
+		for ip in [None, Some("10.1.2.3"), Some("192.0.2.1"), Some("::1")] {
+			let ip = ip.map(|ip| ip.parse().expect("ip"));
+			assert!(!key.usable_from(ip, 1_000), "{ip:?} is refused by 0.14.0");
+		}
+		// Back on 0.15.0: the key is what it was.
+		let store = ApiKeyStore::open(dir.path()).expect("reopen");
+		let key = &store.keys()[0];
+		let held: Scope = scope.parse().expect("scope");
+		assert_eq!(key.reach(), Some(vec![held]));
+		assert_eq!(key.ip_cidr.as_deref(), cidr);
+		assert!(
+			key.admits_any("secret-banner", Some(ip("10.1.2.3")), 1_000, &[held]) || cidr.is_none()
+		);
+		if cidr.is_none() {
+			assert!(key.admits_any("secret-banner", None, 1_000, &[held]));
+		}
+	}
+}
+
+#[test]
+fn a_key_that_has_a_name_in_0_14_0_is_not_held() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let text = held_store(
+		dir.path(),
+		"mixed",
+		&["ban", "manage:read"],
+		Some("10.0.0.0/8"),
+	);
+	assert!(!text.contains("rollback_hold"), "{text}");
+	let loaded = v014_load(&text).expect("loads");
+	assert_eq!(loaded.keys[0].scopes, ["read"]);
+	assert_eq!(loaded.keys[0].ip_cidr.as_deref(), Some("10.0.0.0/8"));
+	assert!(loaded.keys[0].usable_from(Some(ip("10.1.2.3")), 1_000));
+}
+
+#[test]
+fn narrowing_a_held_key_to_a_scope_with_a_name_releases_it_and_the_other_way_holds_it() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	held_store(dir.path(), "k", &["ban"], Some("10.0.0.0/8"));
+	let mut store = ApiKeyStore::open(dir.path()).expect("open");
+	store
+		.set_scopes("k", &["manage:read".to_string()])
+		.expect("set");
+	let text = std::fs::read_to_string(dir.path().join("api_keys.toml")).expect("read");
+	assert!(
+		!text.contains("rollback_hold") && !text.contains("held-until"),
+		"{text}"
+	);
+	assert_eq!(
+		v014_load(&text).expect("loads").keys[0].ip_cidr.as_deref(),
+		Some("10.0.0.0/8")
+	);
+	store.set_scopes("k", &["ban".to_string()]).expect("set");
+	let text = std::fs::read_to_string(dir.path().join("api_keys.toml")).expect("read");
+	assert!(!v014_load(&text).expect("loads").keys[0].usable_from(Some(ip("10.1.2.3")), 1_000));
+	assert_eq!(
+		ApiKeyStore::open(dir.path()).expect("open").keys()[0]
+			.ip_cidr
+			.as_deref(),
+		Some("10.0.0.0/8")
+	);
+}
+
+/// 0.14.0 drops what it does not know when it writes the file, so the table that
+/// restores the key can be gone. The key then stays refused, here and there.
+#[test]
+fn a_held_key_that_0_14_0_rewrote_stays_refused() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let text = held_store(dir.path(), "banner", &["ban"], None);
+	let rewritten = toml::to_string_pretty(&v014_load(&text).expect("loads")).expect("write");
+	assert!(!rewritten.contains("rollback_hold") && !rewritten.contains("grants"));
+	std::fs::write(dir.path().join("api_keys.toml"), rewritten).expect("rewrite");
+	let store = ApiKeyStore::open(dir.path()).expect("0.15.0 loads it");
+	let key = &store.keys()[0];
+	assert!(!key.admits_any(
+		"secret-banner",
+		Some(ip("10.1.2.3")),
+		1_000,
+		&[Scope::ManageRead]
+	));
+	assert!(!key.admits_any("secret-banner", None, 1_000, &[Scope::ManageRead]));
+}
+
+#[test]
+fn the_held_marker_is_no_network_for_either_release() {
+	assert!(crate::cidr::Cidr::parse(super::super::held::HELD).is_none());
 }

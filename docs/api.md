@@ -212,6 +212,17 @@ scopes above, and `scopes`, the narrowest of the old names that covers them
 0.14.0 after a rollback. After a rollback a `mail:read` key is read as `read`
 and reaches the management views as well.
 
+A scope that 0.14.0 had no name for (`ban`, `health`) must not widen anything there. A key
+that holds only such scopes is written so that 0.14.0 loads the file and refuses
+the key from every address: its `scopes` hold the placeholder `read`, its
+`ip_cidr` is `held-until-0.15`, which is no network, and the `ip_cidr` it really
+has is kept in a `[[rollback_hold]]` table that 0.14.0 ignores. After a rollback
+these keys are unusable until 0.15.0 is back, which puts them back as they were.
+If 0.14.0 wrote `api_keys.toml` in between, the table is gone and the key stays
+refused: make it again. A key that holds such a scope next to one with an old
+name is written under the old name only, and keeps working there with that
+reach. `epistle status` names each key that will be refused.
+
 ### The panel's key
 
 When the stack runs the web panel, `epistle init` and `epistle stack update`
