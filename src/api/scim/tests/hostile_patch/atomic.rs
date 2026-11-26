@@ -66,6 +66,64 @@ async fn an_operation_that_fails_leaves_the_earlier_ones_unapplied() {
 }
 
 #[tokio::test]
+async fn a_value_the_store_refuses_leaves_the_earlier_operations_unapplied() {
+	let (_dir, state) = victim();
+	let peer = Peer::start_within(app(state.clone()), HASHING_WAIT).await;
+	let before = state
+		.store()
+		.dynamic("victim")
+		.unwrap()
+		.password_hash
+		.clone();
+	let (status, body) = patch(
+		&peer,
+		json!([
+			{"op": "replace", "path": "password", "value": "A-new-passphrase-1"},
+			{"op": "replace", "path": "active", "value": false},
+			{"op": "replace", "path": "displayName", "value": "a\tb"}
+		]),
+	)
+	.await;
+	assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+	let after = state.store().dynamic("victim").unwrap();
+	assert_eq!(after.password_hash, before, "the password was not changed");
+	assert!(!after.disabled, "the account was not disabled");
+}
+
+/// Every operation is checked, including one a later operation on the same
+/// field replaces.
+#[tokio::test]
+async fn an_operation_that_a_later_one_replaces_is_still_checked() {
+	let (_dir, state) = victim();
+	let peer = Peer::start_within(app(state.clone()), HASHING_WAIT).await;
+	let (status, body) = patch(
+		&peer,
+		json!([
+			{"op": "replace", "path": "active", "value": false},
+			{"op": "replace", "path": "displayName", "value": "a\tb"},
+			{"op": "replace", "path": "displayName", "value": "Valid"}
+		]),
+	)
+	.await;
+	assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+	let after = state.store().dynamic("victim").unwrap();
+	assert!(!after.disabled, "the account was not disabled");
+	assert_eq!(after.display_name, None);
+	// Two names that are both allowed: the later one stays.
+	let (status, body) = patch(
+		&peer,
+		json!([
+			{"op": "replace", "path": "displayName", "value": "First"},
+			{"op": "replace", "path": "displayName", "value": "Second"}
+		]),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	let after = state.store().dynamic("victim").unwrap();
+	assert_eq!(after.display_name.as_deref(), Some("Second"));
+}
+
+#[tokio::test]
 async fn more_than_three_passwords_are_refused_before_any_is_hashed() {
 	let (_dir, state) = victim();
 	let peer = Peer::start_within(app(state), HASHING_WAIT).await;

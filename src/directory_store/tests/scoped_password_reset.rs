@@ -104,3 +104,48 @@ fn scoped_password_reset_guards_replace_account_too() {
 		None
 	);
 }
+
+#[test]
+fn scoped_password_reset_guards_every_change_of_a_patch() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let store = two_tenants(dir.path());
+	let mut moved = store.dynamic_account("victim").expect("victim");
+	moved.addresses = vec!["victim@b.example".to_string()];
+	store
+		.replace_account("victim", moved, None)
+		.expect("move to b");
+	let changes = AccountChanges {
+		disabled: Some(true),
+		password: None,
+		display_name: Some("renamed".to_string()),
+	};
+	let refused = store.change_account_if("victim", changes, in_tenant_a);
+	assert!(
+		matches!(refused, Err(StoreError::NotFound(_))),
+		"{refused:?}"
+	);
+	let after = store.dynamic_account("victim").expect("victim");
+	assert!(!after.disabled);
+	assert_eq!(after.display_name, None);
+}
+
+#[test]
+fn scoped_password_reset_writes_the_changes_of_a_patch_together() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let store = two_tenants(dir.path());
+	let changes = AccountChanges {
+		disabled: Some(true),
+		password: Some(NewPassword {
+			hash: "$argon2id$together".to_string(),
+			scram: None,
+		}),
+		display_name: Some(" Together ".to_string()),
+	};
+	store
+		.change_account_if("victim", changes, in_tenant_a)
+		.expect("change");
+	let after = store.dynamic_account("victim").expect("victim");
+	assert!(after.disabled);
+	assert_eq!(after.password_hash, "$argon2id$together");
+	assert_eq!(after.display_name.as_deref(), Some("Together"));
+}

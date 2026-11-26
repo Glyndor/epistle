@@ -378,5 +378,7 @@ impl Principal {
 	}
 }
 
+mod recheck;
+
 #[cfg(test)]
 mod tests;
