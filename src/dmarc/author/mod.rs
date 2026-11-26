@@ -131,6 +131,17 @@ pub fn all_sender_addresses(raw: &[u8]) -> Vec<String> {
 	out
 }
 
+/// Whether a `Sender` field of `raw` cannot be read: the header block is not
+/// UTF-8, or a field names no address at all. A check that goes through the
+/// addresses of the fields would pass such a message without having checked
+/// anything, so the caller refuses it.
+pub fn sender_unreadable(raw: &[u8]) -> bool {
+	match named_fields(raw, "sender") {
+		None => true,
+		Some(fields) => fields.iter().any(|value| addresses(value).is_empty()),
+	}
+}
+
 /// The one address `raw` is written under, or `fallback` when it names none
 /// or several. The tenant and the retention of a submission follow it, not
 /// the envelope sender, which a caller may choose among the addresses it owns.

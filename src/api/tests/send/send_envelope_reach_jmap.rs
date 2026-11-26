@@ -212,3 +212,26 @@ async fn every_sender_field_and_address_of_a_submission_is_checked() {
 		"{response}"
 	);
 }
+
+/// A `Sender` field that names no address cannot have been checked, so the
+/// submission is refused rather than passed on the strength of an empty list.
+#[tokio::test]
+async fn a_sender_field_that_names_no_address_is_refused() {
+	for sender in [",,,", "()", "<>"] {
+		let dir = tempfile::tempdir().expect("tempdir");
+		let app = app(dir.path());
+		let headers = format!("From: alice@example.org\r\nSender: {sender}\r\n");
+		let response = submit(
+			&app,
+			dir.path(),
+			TOKEN.as_str(),
+			&headers,
+			Some(json!("alice@example.org")),
+		)
+		.await;
+		assert_eq!(
+			response["notCreated"]["s1"]["type"], "forbiddenFrom",
+			"Sender: {sender}: {response}"
+		);
+	}
+}

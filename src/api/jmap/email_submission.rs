@@ -425,6 +425,10 @@ fn check_reach(
 	raw: &[u8],
 	mail_from: &str,
 ) -> Result<(), Refusal> {
+	// A `Sender` field that names no address is not one that passed.
+	if crate::dmarc::author::sender_unreadable(raw) {
+		return Err("forbiddenFrom".into());
+	}
 	let sender_field = crate::dmarc::author::all_sender_addresses(raw);
 	for sender in &sender_field {
 		crate::api::mail_from::check_mail_from(state, account, sender).map_err(|refusal| {
