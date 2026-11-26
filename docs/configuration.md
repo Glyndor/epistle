@@ -475,7 +475,7 @@ codes. See [the API guide](api.md#turn-it-on).
 | `event_streams_per_server` | Streams of `GET /api/v1/events` the server holds open in all, 1 to 65536. Default `64`. |
 | `event_stream_max_secs` | Seconds a stream of `GET /api/v1/events` stays open before the server closes it and the client reconnects, 60 to 86400. Default `3600`. |
 | `limiter` | The limits on failed bearer sign-ins and on password checks, the `[api.limiter]` table below. |
-| `surfaces` | Optional list of the surfaces besides management that the `api` listener serves: `"jmap"`, `"oauth"`, `"scim"`. Absent serves every surface that has no listener of its own, which is what 0.14.0 did. `[]` serves management only, so JMAP, SCIM and OAuth are off unless a `jmap`, `scim` or `oauth` listener serves them. A surface that has a listener of its own cannot be listed: it is served in one place, and the configuration is refused with a message that names both. |
+| `surfaces` | Optional list of the surfaces besides management that the `api` listener serves: `"jmap"`, `"oauth"`, `"scim"`. Absent serves every surface that has no listener of its own, which is what 0.14.0 did. `[]` serves management only, so JMAP, SCIM and OAuth are off unless a `jmap`, `scim` or `oauth` listener serves them. A surface that has a listener of its own cannot be listed: it is served in one place, and the configuration is refused with a message that names both. The panel's webmail calls JMAP on the `api` listener, so on a stack that runs the panel, a list without `"jmap"`, or a `jmap` listener, leaves the webmail without service. |
 
 #### `[api.limiter]`
 Failed bearer attempts are counted per client (an IPv4 address or an IPv6 /64)
