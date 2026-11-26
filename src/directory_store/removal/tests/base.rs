@@ -39,7 +39,7 @@ pub(in super::super) fn store_and_spool(dir: &Path) -> (Arc<AccountStore>, FsSpo
 	(store, spool)
 }
 
-pub(super) fn enqueue(spool: &FsSpool, reverse_path: &str, body: &str) {
+pub(super) fn enqueue(spool: &FsSpool, reverse_path: &str, account: Option<&str>, body: &str) {
 	spool
 		.store(
 			&AcceptedMessage {
@@ -52,7 +52,7 @@ pub(super) fn enqueue(spool: &FsSpool, reverse_path: &str, body: &str) {
 				sender_verified: false,
 				no_dsn: Vec::new(),
 			},
-			None,
+			account,
 			&std::collections::BTreeMap::new(),
 		)
 		.expect("store");
@@ -113,9 +113,9 @@ pub(in super::super) fn seed(dir: &Path, store: &Arc<AccountStore>, spool: &FsSp
 	suppression.suppress_for(name, "ghost@elsewhere.example");
 
 	// Spooled envelopes: two from this account's address, one from another account.
-	enqueue(spool, &address, "msg1");
-	enqueue(spool, &address, "msg2");
-	enqueue(spool, "carol@elsewhere.example", "other");
+	enqueue(spool, &address, Some(name), "msg1");
+	enqueue(spool, &address, Some(name), "msg2");
+	enqueue(spool, "carol@elsewhere.example", Some("carol"), "other");
 }
 
 #[tokio::test]
