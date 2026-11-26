@@ -349,8 +349,22 @@ impl FsSpool {
 		id: Uuid,
 		before: impl FnOnce(&Envelope, &std::cell::Cell<bool>) -> std::io::Result<()>,
 	) -> std::io::Result<Envelope> {
+		self.remove_with_if(id, |_| Ok(()), before)
+	}
+
+	/// [`FsSpool::remove_with`] for a caller that may be refused: `allowed` is
+	/// asked about the envelope as it is read under the lock, before anything
+	/// is written, and an error from it leaves the entry untouched, with no
+	/// removal marker on it.
+	pub fn remove_with_if(
+		&self,
+		id: Uuid,
+		allowed: impl FnOnce(&Envelope) -> std::io::Result<()>,
+		before: impl FnOnce(&Envelope, &std::cell::Cell<bool>) -> std::io::Result<()>,
+	) -> std::io::Result<Envelope> {
 		let _guard = self.lock()?;
 		let envelope = self.read_envelope_unlocked(id)?;
+		allowed(&envelope)?;
 		if !envelope.outcomes_pending.is_empty() {
 			return Err(std::io::Error::new(
 				std::io::ErrorKind::ResourceBusy,
@@ -359,9 +373,14 @@ impl FsSpool {
 		}
 		let mut held = envelope.clone();
 		let now = crate::storage::delivery_log::now_epoch();
+		// A hold that is only the marker of this removal says so.
+		held.held_for_removal |= held.held.is_none();
 		held.hold(now);
 		held.cancelling.get_or_insert(now);
-		if held.held != envelope.held || held.cancelling != envelope.cancelling {
+		if held.held != envelope.held
+			|| held.cancelling != envelope.cancelling
+			|| held.held_for_removal != envelope.held_for_removal
+		{
 			self.write_envelope_unlocked(id, &held)?;
 		}
 		let may_have_written = std::cell::Cell::new(false);

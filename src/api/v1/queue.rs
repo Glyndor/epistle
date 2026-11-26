@@ -68,7 +68,7 @@ pub async fn list(
 		last_read = Some(id);
 		// An entry can vanish between list and load (worker delivered it).
 		if let Ok(entry) = state.spool().load(id)
-			&& principal.admits_addresses(std::slice::from_ref(&entry.envelope.reverse_path))
+			&& super::queue_access::reaches(&principal, &entry.envelope)
 		{
 			entries.push(QueueEntry {
 				id,
@@ -101,24 +101,47 @@ pub async fn remove(
 	// An entry of another tenant answers like one that is not there.
 	let principal = Principal::for_token(&state, &auth);
 	match state.spool().load(id) {
-		Ok(entry)
-			if principal.admits_addresses(std::slice::from_ref(&entry.envelope.reverse_path)) => {}
+		Ok(entry) if super::queue_access::reaches(&principal, &entry.envelope) => {}
 		_ => return Err(ApiError::not_found("no such queue entry")),
 	}
-	// The cancellation is recorded, and the entry removed, as one step.
-	crate::queue::cancel::remove(
+	// The cancellation is recorded, and the entry removed, as one step. What
+	// the key may remove is decided on the entry as it is read under the
+	// spool's lock, so a hold put between the load above and the removal is
+	// the one that counts: a key confined to some domains does not remove mail
+	// the operator (or a key outside its reach) holds.
+	let by = match principal.confined_domains() {
+		Some(domains) => crate::queue::inspect::Holder::Confined(domains.to_vec()),
+		None => crate::queue::inspect::Holder::Operator,
+	};
+	crate::queue::cancel::remove_if(
 		state.spool(),
 		&crate::evidence::service::root_of(state.data_dir()),
-		state.data_dir(),
-		state.delivery_log_days().unwrap_or_default(),
+		(
+			state.data_dir(),
+			state.delivery_log_days().unwrap_or_default(),
+		),
 		id,
 		std::time::SystemTime::now()
 			.duration_since(std::time::UNIX_EPOCH)
 			.unwrap_or_default()
 			.as_secs(),
 		state.webhook(),
+		|fresh| {
+			if !super::queue_access::reaches(&principal, fresh) {
+				return Err(std::io::Error::from(std::io::ErrorKind::NotFound));
+			}
+			// A hold someone placed, before the removal or while it was
+			// under way; the marker of a removal is no one's hold.
+			if fresh.has_real_hold() && !by.may_lift(fresh.held_by.as_deref()) {
+				return Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied));
+			}
+			Ok(())
+		},
 	)
 	.map_err(|error| match error.kind() {
+		std::io::ErrorKind::PermissionDenied => ApiError::forbidden(
+			"the entry is on hold, and the hold was not put by this key or one inside its domains",
+		),
 		std::io::ErrorKind::NotFound => ApiError::not_found("no such queue entry"),
 		std::io::ErrorKind::ResourceBusy => ApiError::conflict(
 			"the entry has evidence outcomes waiting to be written: it stays until they are",

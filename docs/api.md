@@ -652,6 +652,42 @@ from `next_cursor`), `DELETE /api/v1/queue/{id}` removes an entry and records
 each pending recipient as `canceled` in the delivery log, then posts a
 `canceled` webhook event when the delivery log is enabled and a webhook is
 configured.
+
+One entry in detail, and its schedule. `GET /api/v1/queue/{id}` prints what
+`epistle queue show --json` prints: the envelope and its retry state
+(`attempts`, `next_attempt`, `held`, `last_error`), never the message. With
+`?headers=true` it also returns the header fields of the message, in order,
+folding undone, up to 200 of them with a value cut at 1000 characters
+(`headers_truncated` says when something was left out); the body is never
+read past the blank line. `POST /api/v1/queue/{id}/retry`, `/hold` and
+`/release` do what `epistle queue retry`, `hold` and `release` do to one
+entry, with the `manage:write` scope, and answer `{"changed", "id", "held"}`:
+`changed` is false when the entry already was as asked, and then no audit line
+is written. Each change writes one (`queue.retried`, `queue.held`,
+`queue.released`) with the label of the key. A key confined to some domains
+reaches the entries whose sender is inside them, and an entry of another
+tenant and one that is not there are the same `404 no such queue entry`.
+An entry belongs to the hosted domain the server decided when it queued it (the
+domain of the account that sent it, of the local recipient that forwarded it, or
+of the delivery that produced a report), never to the sender the message names:
+anyone can write a tenant's domain in `MAIL FROM`. So a forward, with or without
+SRS, and a return are the tenant's whatever their reverse-path says, an entry
+with no owner is reached by a key with no confinement only, and the same rule
+decides the list, the removal and these routes. A release is refused with `409`
+for an entry whose removal began (it stays on hold until it is gone, and the
+worker does not attempt it), and a confined key lifts only a hold put by a key
+confined inside its own domains: the operator's, or one put by a key outside its
+reach, is `403` and stays. `DELETE /api/v1/queue/{id}` follows the same rule for a hold: a confined key does
+not remove mail the operator, or a key outside its reach, put on hold (`403`, the
+entry stays), decided on the entry as it is under the spool's lock before anything is written,
+so a hold put between the check and the removal counts, and so does one put on an
+entry a removal is already holding (the hold a removal puts on an entry is only a
+marker, and no one's hold). `--all` stays with the command. `GET /api/v1/queue/destinations` lists the
+destinations the queue holds off and the receiver groups at their warm-up cap,
+as `epistle queue destinations --json` does (at most 1000 rows, `truncated`
+says more); the holds are shared by every tenant, so a confined key is
+refused with `403`.
+
 `GET /api/v1/suppression` lists suppressed recipients,
 `POST /api/v1/suppression` adds one and `DELETE /api/v1/suppression/{address}`
 clears one. The POST body is `{"address": "recipient@example.net"}` with an

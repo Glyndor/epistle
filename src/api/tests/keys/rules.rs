@@ -299,10 +299,34 @@ pub(super) const RULES: &[Rule] = &[
 		"the_queue_lists_only_the_tenants_own_messages",
 	),
 	rule(
+		"/api/v1/queue/destinations",
+		"manage:read",
+		Domain::Unconfined,
+		"a_bound_key_is_refused_and_the_destinations_are_for_an_unconfined_key",
+	),
+	rule(
 		"/api/v1/queue/{id}",
+		"manage:read/manage:write",
+		Domain::Filtered,
+		"another_tenants_entry_answers_as_one_that_does_not_exist",
+	),
+	rule(
+		"/api/v1/queue/{id}/retry",
 		"manage:write",
 		Domain::Filtered,
-		"another_tenants_queue_entry_cannot_be_removed",
+		"another_tenants_entry_answers_as_one_that_does_not_exist",
+	),
+	rule(
+		"/api/v1/queue/{id}/hold",
+		"manage:write",
+		Domain::Filtered,
+		"another_tenants_entry_answers_as_one_that_does_not_exist",
+	),
+	rule(
+		"/api/v1/queue/{id}/release",
+		"manage:write",
+		Domain::Filtered,
+		"another_tenants_entry_answers_as_one_that_does_not_exist",
 	),
 	rule(
 		"/api/v1/suppression",

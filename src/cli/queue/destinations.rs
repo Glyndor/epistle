@@ -15,7 +15,7 @@ use std::process::ExitCode;
 use clap::Args;
 
 use crate::cli::term::sanitize;
-use crate::queue::backoff::{Hold, Holds};
+use crate::queue::backoff::Hold;
 use crate::queue::destination::{Destination, Kind};
 use crate::storage::{FsSpool, RecipientStatus};
 
@@ -32,12 +32,7 @@ pub struct DestinationTarget {
 
 /// The holds in force at `now`, by destination.
 fn in_force(spool: &FsSpool, now: u64) -> std::io::Result<Vec<(Destination, Hold)>> {
-	let holds = Holds::read(spool)?;
-	Ok(holds
-		.in_force(now)
-		.into_iter()
-		.map(|(destination, hold)| (destination.clone(), hold.clone()))
-		.collect())
+	crate::queue::inspect::held(spool, now)
 }
 
 /// `queue destinations`: every destination on hold, until when, after how
@@ -52,20 +47,10 @@ pub(super) fn list(spool: &FsSpool, now: u64, json: bool, out: &mut impl Write) 
 		Err(error) => return super::fail(format_args!("reading the spool: {error}")),
 	};
 	if json {
-		let mut rows: Vec<serde_json::Value> = held
-			.iter()
-			.map(|(destination, hold)| {
-				serde_json::json!({
-					"kind": destination.kind().label(),
-					"name": destination.as_str(),
-					"until": hold.until,
-					"deferrals": hold.deferrals,
-					"reason": hold.reason,
-				})
-			})
-			.collect();
-		rows.extend(super::warmup::json_rows(&capped));
-		return crate::cli::json_out::print(out, &serde_json::Value::Array(rows));
+		return match crate::queue::inspect::destination_rows(spool, now) {
+			Ok(rows) => crate::cli::json_out::print(out, &serde_json::Value::Array(rows)),
+			Err(error) => super::fail(format_args!("reading the spool: {error}")),
+		};
 	}
 	// The name and the reply come from remote servers: their control
 	// characters are shown escaped, never sent to the terminal.

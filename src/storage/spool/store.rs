@@ -134,6 +134,8 @@ impl FsSpool {
 			retain_days: options.retain_days,
 			outcomes_pending: Vec::new(),
 			cancelling: None,
+			held_by: None,
+			held_for_removal: false,
 		};
 
 		let tmp_message = self.entry_file(SpoolDir::Tmp, id, MessageExt::Eml)?;

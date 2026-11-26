@@ -45,7 +45,19 @@ pub fn remove(
 	evidence_root: &Path,
 	id: uuid::Uuid,
 ) -> std::io::Result<Envelope> {
-	spool.remove_with(id, |fresh, partial| {
+	remove_if(spool, evidence_root, id, |_| Ok(()))
+}
+
+/// [`remove`] for a caller that may be refused: `allowed` is asked about the
+/// envelope as it is read under the spool's lock, the one the removal goes on
+/// to record, and an error from it leaves the entry as it was.
+pub fn remove_if(
+	spool: &crate::storage::FsSpool,
+	evidence_root: &Path,
+	id: uuid::Uuid,
+	allowed: impl FnOnce(&Envelope) -> std::io::Result<()>,
+) -> std::io::Result<Envelope> {
+	spool.remove_with_if(id, allowed, |fresh, partial| {
 		record_partly(evidence_root, fresh, partial).map(|_| ())
 	})
 }

@@ -15,6 +15,8 @@ mod health;
 mod mailboxes;
 mod masked;
 mod queue;
+mod queue_access;
+mod queue_detail;
 mod scope;
 mod send;
 mod send_cancel;
@@ -111,7 +113,11 @@ pub fn router(max_message_size: usize) -> Router<ApiState> {
 		)
 		.route("/events", get(crate::api::events::get))
 		.route("/queue", get(queue::list))
-		.route("/queue/{id}", axum::routing::delete(queue::remove))
+		.route("/queue/destinations", get(queue_detail::destinations))
+		.route("/queue/{id}", get(queue_detail::show).delete(queue::remove))
+		.route("/queue/{id}/retry", post(queue_detail::retry))
+		.route("/queue/{id}/hold", post(queue_detail::hold))
+		.route("/queue/{id}/release", post(queue_detail::release))
 		.route(
 			"/suppression",
 			get(suppression::list)

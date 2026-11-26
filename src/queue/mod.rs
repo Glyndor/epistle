@@ -5,6 +5,7 @@ pub mod bounce;
 pub mod cancel;
 pub mod client;
 pub mod destination;
+pub mod inspect;
 pub mod limits;
 pub(crate) mod local_failure;
 pub mod reply;
