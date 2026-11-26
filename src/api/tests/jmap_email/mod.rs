@@ -3,6 +3,7 @@ pub use super::*;
 pub(super) mod email_query;
 pub(super) mod jmap;
 pub(super) mod jmap_author;
+pub(super) mod jmap_blob_recheck;
 pub(super) mod jmap_copy_and_chain;
 pub(super) mod jmap_disabled;
 pub(super) mod jmap_email_create;

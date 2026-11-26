@@ -2,6 +2,34 @@
 
 use super::*;
 
+/// Whether the credential that opened a blob request is still good and still
+/// reaches `account` as it is now, or the answer to give instead.
+pub(super) fn recheck(
+	state: &ApiState,
+	auth: &MatchedAuth,
+	principal: &Principal,
+	account: &str,
+) -> Result<(), Box<axum::response::Response>> {
+	if !super::websocket::credential_still_valid(state, auth, principal) {
+		return Err(Box::new(
+			crate::api::error::ApiError::credential_no_longer_valid().into_response(),
+		));
+	}
+	let reached = state
+		.accounts()
+		.into_iter()
+		.any(|view| view.name == account && principal.admits_account(&view.name, &view.addresses));
+	if reached {
+		Ok(())
+	} else {
+		Err(Box::new(jmap_error(
+			StatusCode::NOT_FOUND,
+			"notFound",
+			"account not found",
+		)))
+	}
+}
+
 /// `POST /jmap/upload/{accountId}` (RFC 8620 §6.1): store an uploaded blob and
 /// return its id, type and size. Blobs live in the account's partition,
 /// `<data_dir>/blobs/accounts/<account>/`.
@@ -48,6 +76,12 @@ pub async fn upload(
 		}
 		Err(rejection) => return rejection.into_response(),
 	};
+	// The body may have taken as long as the client wished: the credential and
+	// its reach over the account are asked again before anything is reserved or
+	// stored.
+	if let Err(refused) = recheck(&state, &auth, &principal, &account) {
+		return *refused;
+	}
 	// The size cap of this account, its tenant and its domains, below the
 	// server's `maxSizeUpload`.
 	if let Err(reached) = state
