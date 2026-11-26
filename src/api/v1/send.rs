@@ -142,6 +142,12 @@ pub async fn send(
 	if !crate::api::account_bound::bound_account_is_live(&state, &principal) {
 		return Err(ApiError::bound_account_unavailable());
 	}
+	// The same for the key itself: the principal is read again now that the
+	// body is here, and a key that lost the `send` scope, or was revoked,
+	// since the middleware let the request in does not send.
+	if !principal.admits_scope(crate::api::api_keys::Scope::Send) {
+		return Err(ApiError::credential_no_longer_valid());
+	}
 	let account =
 		acting_account(&state, &principal, &request.from).ok_or_else(ApiError::forbidden_from)?;
 	// An account whose sending is switched off sends nothing, from any of
