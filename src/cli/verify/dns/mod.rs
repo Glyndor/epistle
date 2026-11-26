@@ -80,44 +80,7 @@ pub(in crate::cli) fn emit_single_signature_warning(
 	}
 }
 
-/// The default DKIM selectors epistle publishes (the Ed25519 selector
-/// plus an optional RSA selector), used to locate the `_domainkey`
-/// records when a domain has no `[dkim.domain]` override. The
-/// Ed25519 selector is the one the rotator currently has in service
-/// when the rotation state file exists, falling back to the configured
-/// selector at startup before the first tick has run. The RSA
-/// selector follows the same rule through
-/// [`crate::dkim::rotate::active_rsa`].
-pub(in crate::cli) fn dkim_default_selectors(
-	config: &Config,
-) -> Result<Vec<String>, crate::dkim::rotate::RotateError> {
-	let Some(dkim) = &config.dkim else {
-		return Ok(Vec::new());
-	};
-	let mut selectors = vec![crate::dkim::rotate::active_ed25519(dkim, &config.data_dir)?.selector];
-	if let Some(rsa) = crate::dkim::rotate::active_rsa(dkim, &config.data_dir)? {
-		selectors.push(rsa.selector);
-	}
-	Ok(selectors)
-}
-
-/// One domain's DKIM selectors, ed25519 plus an optional RSA. The
-/// selectors come from `[dkim.domain]` when the configuration has an
-/// entry for the domain, otherwise from the default `[dkim]` block.
-pub(in crate::cli) fn dkim_selectors_for(
-	config: &Config,
-	domain: &str,
-) -> Result<Vec<String>, crate::dkim::rotate::RotateError> {
-	let Some(dkim) = &config.dkim else {
-		return Ok(Vec::new());
-	};
-	if let Some(entry) = dkim.override_for(domain) {
-		return Ok(std::iter::once(entry.selector.clone())
-			.chain(entry.rsa_selector.clone())
-			.collect());
-	}
-	dkim_default_selectors(config)
-}
+pub(in crate::cli) use crate::dns::verify::{dkim_default_selectors, dkim_selectors_for};
 
 /// Check the hostname's addresses and their reverse DNS first, then every
 /// domain. The exit code is failure if any expected record is missing (lookup
@@ -152,7 +115,9 @@ async fn report(
 		.collect();
 	let mut steps = Steps::start(&labels, false);
 	steps.begin(hostname);
-	let host_checks = dns::check_host(hostname, public_ipv4, public_ipv6, dns).await;
+	let host_checks = crate::dns::verify::host_group(hostname, public_ipv4, public_ipv6, dns)
+		.await
+		.checks;
 	steps.clear();
 	let mut all_ok = dns::all_ok(&host_checks);
 	print_group(out, hostname, &host_checks, ":", decor);
@@ -165,28 +130,13 @@ async fn report(
 	}
 	for domain in domains {
 		steps.begin(domain);
-		// A per-domain override replaces the default for the domain it
-		// names; the operator's published TXT must match the key the
-		// server signs with, so a domain in `[dkim.domain]` cannot be
-		// verified against the default selectors.
-		let selectors = match dkim_selectors_for(config, domain) {
-			Ok(s) => s,
+		let checks = match crate::dns::verify::domain_group(config, hostname, domain, dns).await {
+			Ok(group) => group.checks,
 			Err(error) => {
 				crate::cli::style::error(format_args!("{error}"));
 				return ExitCode::FAILURE;
 			}
 		};
-		let checks = dns::check_domain_for_role(
-			domain,
-			hostname,
-			&selectors,
-			config.domain_role(domain),
-			dns,
-		)
-		.await;
-		// A record of a group the configuration skips is not published on
-		// purpose: it is not missing, and it is not drift.
-		let checks = crate::dns::skip::split_checks(checks, &config.skip_set());
 		steps.clear();
 		print_group(out, domain, &checks, " \u{2014}", decor);
 		for _ in &checks {
@@ -223,21 +173,11 @@ async fn report(
 
 /// One group of checks as the `--json` result lists it.
 fn group_json(name: &str, checks: &[dns::Check]) -> serde_json::Value {
-	let checks: Vec<serde_json::Value> = checks
-		.iter()
-		.map(|check| {
-			let status = match check.status {
-				Status::Ok => "ok",
-				Status::Missing => "missing",
-				Status::LookupError => "error",
-				Status::Skipped => "skipped",
-			};
-			serde_json::json!({
-				"kind": check.kind, "name": check.name, "status": status, "detail": check.detail,
-			})
-		})
-		.collect();
-	serde_json::json!({ "name": name, "checks": checks })
+	crate::dns::verify::Group {
+		name: name.to_string(),
+		checks: checks.to_vec(),
+	}
+	.json()
 }
 
 /// Write one group (`name:` and a line per record) in one go, with any

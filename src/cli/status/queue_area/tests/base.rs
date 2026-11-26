@@ -31,6 +31,7 @@ fn enqueue(data_dir: &Path, age: i64, attempts: u32, next_attempt: u64) -> Uuid 
 		held_secs: 0,
 		last_error: None,
 		recipient_state: Default::default(),
+		authors: Vec::new(),
 		account: None,
 		extra: BTreeMap::new(),
 		owner: None,
@@ -39,6 +40,8 @@ fn enqueue(data_dir: &Path, age: i64, attempts: u32, next_attempt: u64) -> Uuid 
 		retain_days: 0,
 		outcomes_pending: Vec::new(),
 		cancelling: None,
+		held_by: None,
+		held_for_removal: false,
 	};
 	std::fs::write(
 		new.join(format!("{id}.json")),

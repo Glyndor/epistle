@@ -27,6 +27,7 @@ pub(super) fn ws_state(
 	for (label, secret, account) in [("ann-key", ANN, "ann"), ("carol-key", CAROL, "carol")] {
 		key_store
 			.add(crate::api::api_keys::ApiKey {
+				grants: Vec::new(),
 				label: label.to_string(),
 				hash: crate::api::api_keys::sha256_hash(secret),
 				expires_at: None,

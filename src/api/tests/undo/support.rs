@@ -18,13 +18,15 @@ pub(super) fn secret(account: &str) -> String {
 	format!("{account}-secret")
 }
 
-fn account(name: &str) -> crate::config::Account {
+fn account(name: &str, extra: &[&str]) -> crate::config::Account {
 	crate::config::Account {
 		send: None,
 		receive: None,
 		display_name: None,
 		name: name.to_string(),
-		addresses: vec![format!("{name}@example.org")],
+		addresses: std::iter::once(format!("{name}@example.org"))
+			.chain(extra.iter().map(|address| (*address).to_string()))
+			.collect(),
 		password_hash: Some(crate::smtp::auth::tests::base::hash(
 			crate::test_support::fixtures::password(),
 		)),
@@ -45,6 +47,23 @@ pub(super) struct Rig {
 /// The app. `delay_secs` is the server-wide send delay; `0` leaves the
 /// submission path as it is without undo send.
 pub(super) fn rig(delay_secs: u32, scopes: &[&str]) -> Rig {
+	build(delay_secs, scopes, false)
+}
+
+/// The secret of the key bound to `account` and confined to `example.org`,
+/// which only holds the `send` scope.
+pub(super) fn confined_secret(account: &str) -> String {
+	format!("{account}-confined-secret")
+}
+
+/// [`rig`] with a second hosted domain, `other.example`, where `ann` has an
+/// address as well as in `example.org`, and a key for `ann` and one for `bob`
+/// that are each confined to `example.org`.
+pub(super) fn rig_with_confined_keys(delay_secs: u32) -> Rig {
+	build(delay_secs, &[], true)
+}
+
+fn build(delay_secs: u32, scopes: &[&str], confined: bool) -> Rig {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let mut keys = crate::api::ApiKeyStore::open(dir.path()).expect("open key store");
 	for (name, scopes) in [
@@ -53,6 +72,7 @@ pub(super) fn rig(delay_secs: u32, scopes: &[&str]) -> Rig {
 		("ann-read", vec!["read"]),
 	] {
 		keys.add(crate::api::api_keys::ApiKey {
+			grants: Vec::new(),
 			label: format!("{name}-only"),
 			hash: crate::api::api_keys::sha256_hash(&secret(name)),
 			expires_at: None,
@@ -64,14 +84,38 @@ pub(super) fn rig(delay_secs: u32, scopes: &[&str]) -> Rig {
 		})
 		.expect("add key");
 	}
+	if confined {
+		for name in [ANN, BOB] {
+			keys.add(crate::api::api_keys::ApiKey {
+				grants: Vec::new(),
+				label: format!("{name}-confined"),
+				hash: crate::api::api_keys::sha256_hash(&confined_secret(name)),
+				expires_at: None,
+				ip_cidr: None,
+				scopes: vec!["send".to_string()],
+				domains: vec!["example.org".to_string()],
+				account: Some(name.to_string()),
+				auto_submitted: false,
+			})
+			.expect("add key");
+		}
+	}
 	drop(keys);
-	let domains = vec!["example.org".to_string()];
+	let mut domains = vec!["example.org".to_string()];
+	if confined {
+		domains.push("other.example".to_string());
+	}
+	let ann_extra: &[&str] = if confined {
+		&["ann@other.example"]
+	} else {
+		&[]
+	};
 	let store = Arc::new(
 		crate::directory_store::AccountStore::open(
 			dir.path(),
 			domains.clone(),
 			std::collections::HashMap::new(),
-			vec![account(ANN), account(BOB)],
+			vec![account(ANN, ann_extra), account(BOB, &[])],
 		)
 		.expect("open store"),
 	);

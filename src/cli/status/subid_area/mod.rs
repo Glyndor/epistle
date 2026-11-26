@@ -15,8 +15,8 @@ use super::Ctx;
 use super::report::{AreaReport, Item, Level};
 
 /// Check the host's subordinate id tables.
-pub(super) async fn check(_ctx: &Ctx) -> AreaReport {
-	tokio::task::spawn_blocking(|| check_files(Path::new("/etc/subuid"), Path::new("/etc/subgid")))
+pub(super) async fn check(ctx: &Ctx) -> AreaReport {
+	ctx.blocking(|| check_files(Path::new("/etc/subuid"), Path::new("/etc/subgid")))
 		.await
 		.unwrap_or_else(|_| AreaReport::single(Level::Warn, "the subordinate id check did not run"))
 }

@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use super::super::super::apply::{ApplyError, Report, ReportStep};
 use super::held::{Held, trimmed};
-use super::{KEY_LIFETIME_SECS, LABEL, RENEW_WITHIN_SECS, SCOPES};
+use super::{GRANTS, KEY_LIFETIME_SECS, LABEL, RENEW_WITHIN_SECS, SCOPES};
 use crate::api::{ApiKey, ApiKeyStore};
 
 /// What happens to the API key.
@@ -66,7 +66,14 @@ pub(super) fn decide(store: &ApiKeyStore, held: &Held, now: u64) -> Result<KeyAc
 fn check_shape(row: &ApiKey) -> Result<(), ApplyError> {
 	let mut scopes: Vec<&str> = row.scopes.iter().map(String::as_str).collect();
 	scopes.sort_unstable();
-	if scopes == SCOPES && row.domains.is_empty() && row.account.is_none() {
+	let mut grants: Vec<&str> = row.grants.iter().map(String::as_str).collect();
+	grants.sort_unstable();
+	// The old shape (no grants) and the new one are both the panel's key.
+	if scopes == SCOPES
+		&& (grants.is_empty() || grants == GRANTS)
+		&& row.domains.is_empty()
+		&& row.account.is_none()
+	{
 		return Ok(());
 	}
 	Err(ApplyError::PanelKey(format!(
@@ -98,6 +105,19 @@ pub(super) fn apply(
 	clock: &Clock<'_>,
 	report: &mut Report,
 ) -> Result<(), ApplyError> {
+	let store_path: PathBuf = clock.data_dir.join("api_keys.toml");
+	// A key made by 0.14.0 has no `grants`: write them, which changes nothing it
+	// reaches, so 0.15.0 reads it in its own names.
+	if store
+		.keys()
+		.iter()
+		.any(|key| key.label == LABEL && key.grants.is_empty())
+	{
+		let grants: Vec<String> = GRANTS.iter().map(|grant| (*grant).to_string()).collect();
+		store
+			.set_scopes(LABEL, &grants)
+			.map_err(|error| ApplyError::KeyWrite(store_path.clone(), error))?;
+	}
 	if action == KeyAction::Reuse {
 		report.steps.push(ReportStep::Reused(path.to_path_buf()));
 		return Ok(());
@@ -108,7 +128,6 @@ pub(super) fn apply(
 	crate::storage::write_secret(path, secret.as_bytes())
 		.map_err(|error| ApplyError::KeyWrite(path.to_path_buf(), error))?;
 	let expires_at = clock.now + KEY_LIFETIME_SECS;
-	let store_path: PathBuf = clock.data_dir.join("api_keys.toml");
 	match action {
 		KeyAction::Create => store.add(ApiKey {
 			label: LABEL.to_string(),
@@ -116,6 +135,7 @@ pub(super) fn apply(
 			expires_at: Some(expires_at),
 			ip_cidr: None,
 			scopes: SCOPES.iter().map(|scope| (*scope).to_string()).collect(),
+			grants: GRANTS.iter().map(|grant| (*grant).to_string()).collect(),
 			domains: Vec::new(),
 			account: None,
 			auto_submitted: false,

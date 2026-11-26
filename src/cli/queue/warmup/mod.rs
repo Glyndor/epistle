@@ -6,56 +6,9 @@ use std::collections::BTreeMap;
 use std::io::Write;
 
 use crate::cli::term::sanitize;
-use crate::storage::{Envelope, FsSpool, RecipientStatus};
+use crate::storage::FsSpool;
 
-/// Recipients waiting for one group's cap: how many, and the earliest
-/// time one of them may be tried (epoch seconds).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct Waiting {
-	pub(super) recipients: u64,
-	pub(super) until: u64,
-}
-
-/// The groups of `envelope`'s pending recipients that wait for a cap.
-fn groups(envelope: &Envelope) -> impl Iterator<Item = (String, u64)> + '_ {
-	envelope.recipients.iter().filter_map(|recipient| {
-		let state = envelope.recipient_state(recipient);
-		match (state.status, state.warmup) {
-			(RecipientStatus::Pending, Some(group)) => Some((group, state.next_attempt)),
-			_ => None,
-		}
-	})
-}
-
-/// Whether a pending recipient of `envelope` waits for a cap.
-pub(super) fn waits(envelope: &Envelope) -> bool {
-	groups(envelope).next().is_some()
-}
-
-/// Whether every pending recipient of `envelope` waits for a cap.
-pub(super) fn only_waits(envelope: &Envelope) -> bool {
-	let pending = envelope.pending();
-	!pending.is_empty() && groups(envelope).count() == pending.len()
-}
-
-/// The recipients waiting for each group's cap, by group.
-pub(super) fn waiting(spool: &FsSpool) -> std::io::Result<BTreeMap<String, Waiting>> {
-	let mut by_group: BTreeMap<String, Waiting> = BTreeMap::new();
-	for id in spool.list()? {
-		let Ok(envelope) = spool.load_envelope(id) else {
-			continue;
-		};
-		for (group, until) in groups(&envelope) {
-			let entry = by_group.entry(group).or_insert(Waiting {
-				recipients: 0,
-				until,
-			});
-			entry.recipients += 1;
-			entry.until = entry.until.min(until);
-		}
-	}
-	Ok(by_group)
-}
+pub(super) use crate::queue::inspect::{Waiting, only_waits, waiting, waits};
 
 /// `queue destinations` lines for the groups at their cap.
 pub(super) fn lines(waiting: &BTreeMap<String, Waiting>, now: u64, out: &mut impl Write) {
@@ -69,22 +22,6 @@ pub(super) fn lines(waiting: &BTreeMap<String, Waiting>, now: u64, out: &mut imp
 			wait.recipients
 		);
 	}
-}
-
-/// `queue destinations --json` rows for the groups at their cap.
-pub(super) fn json_rows(waiting: &BTreeMap<String, Waiting>) -> Vec<serde_json::Value> {
-	waiting
-		.iter()
-		.map(|(group, wait)| {
-			serde_json::json!({
-				"kind": "warmup",
-				"name": group,
-				"until": wait.until,
-				"waiting": wait.recipients,
-				"reason": "warm-up cap",
-			})
-		})
-		.collect()
 }
 
 /// The line `queue list` adds when recipients wait for a cap.

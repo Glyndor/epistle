@@ -16,6 +16,7 @@ use axum::http::StatusCode;
 /// Build a read-scoped, IP-unrestricted key for a tempdir fixture.
 fn read_key(secret: &str) -> crate::api::ApiKey {
 	crate::api::ApiKey {
+		grants: Vec::new(),
 		label: "ci".to_string(),
 		hash: crate::api::api_keys::sha256_hash(secret),
 		expires_at: None,

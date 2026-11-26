@@ -57,13 +57,23 @@ pub fn prepare(
 		marketing::check(&message.data)?;
 		marketing::mark_bulk(&mut message.data);
 		if let Some(list) = data_dir.and_then(|dir| crate::queue::SuppressionList::open(dir).ok()) {
-			let sender = message.reverse_path.clone();
+			// The lists are keyed by sender. The envelope sender is one, and a
+			// submitter may choose it among the addresses it owns, so the
+			// addresses the message is written under are asked as well.
+			let mut senders = vec![message.reverse_path.clone()];
+			for author in crate::dmarc::author::all_addresses(&message.data) {
+				if !senders.contains(&author) {
+					senders.push(author);
+				}
+			}
 			// An entry past its lifetime stops blocking. A clock that is ahead
 			// only lets a recipient through early, which costs a bounce and
 			// loses nothing, so the wall clock is enough here.
 			let now = crate::storage::delivery_log::now_epoch();
 			message.recipients.retain(|recipient| {
-				let blocked = list.is_blocked(&sender, recipient, now);
+				let blocked = senders
+					.iter()
+					.any(|sender| list.is_blocked(sender, recipient, now));
 				if blocked {
 					suppressed.push(recipient.clone());
 				}

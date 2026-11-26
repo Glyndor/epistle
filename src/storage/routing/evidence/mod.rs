@@ -48,7 +48,10 @@ impl SplitDelivery {
 		{
 			return Err(SinkError::EvidenceUnavailable(reason));
 		}
-		Ok(service.retention(account, &message.reverse_path, class))
+		// The tenant is the author's, not the envelope sender's, which the
+		// submitter chooses among the addresses it owns.
+		let author = crate::dmarc::author::sole_address(&message.data, &message.reverse_path);
+		Ok(service.retention(account, &author, class))
 	}
 
 	/// How many recipients leave the server.

@@ -49,6 +49,7 @@ fn ann_only(dir: &std::path::Path) -> (Router, String) {
 	let secret = crate::test_support::fixtures::api_key().to_string();
 	let mut keys = crate::api::ApiKeyStore::open(dir).expect("open key store");
 	keys.add(crate::api::api_keys::ApiKey {
+		grants: Vec::new(),
 		label: "ann-only".to_string(),
 		hash: crate::api::api_keys::sha256_hash(&secret),
 		expires_at: None,

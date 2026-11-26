@@ -39,7 +39,10 @@ async fn rest_send_takes_as_many_recipients_as_the_cap_and_refuses_one_more() {
 	let (status, body) = send(&app, 501).await;
 	assert_eq!(status, StatusCode::BAD_REQUEST);
 	assert_eq!(body["error"]["code"], "invalid_input");
-	assert_eq!(body["error"]["message"], "Too many recipients.");
+	assert_eq!(
+		body["error"]["message"],
+		"Too many recipients; the maximum is 500."
+	);
 }
 
 #[tokio::test]

@@ -57,6 +57,14 @@ pub struct Envelope {
 	/// as "submitted by an unknown account".
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub account: Option<String>,
+	/// The addresses the message is written under (its From field) when they
+	/// are not the envelope sender, for a message an account submitted. The
+	/// suppression lists are keyed by sender, so the worker asks them about
+	/// these too: choosing the envelope sender does not leave a list behind.
+	/// Empty when the envelope sender is the author and in every envelope
+	/// written before the field existed.
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub authors: Vec<String>,
 	/// The caller-supplied correlation map the API allows on a `send`. Kept
 	/// alongside the message in the envelope so the delivery log and the
 	/// delivery webhooks can copy it onto every record they emit, but never
@@ -100,6 +108,27 @@ pub struct Envelope {
 	/// Not the hold of the operator, which can be as old as they like.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub cancelling: Option<u64>,
+	/// Who put the entry on hold, when it is held: the domains of the key
+	/// that held it, when a key confined to some domains did, so that only a
+	/// key confined inside them may release it. `None` for the operator's hold
+	/// and for every spool file written before the field existed, which only
+	/// the operator may lift.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub held_by: Option<Vec<String>>,
+	/// Whether the hold is only the marker a removal put to keep the entry
+	/// still while it records its end, and not a hold anyone placed. Set when
+	/// a removal puts an entry that was not held on hold; a hold placed on the
+	/// entry meanwhile clears it, and so does a release.
+	#[serde(default, skip_serializing_if = "std::ops::Not::not")]
+	pub held_for_removal: bool,
+}
+
+impl Envelope {
+	/// Whether someone placed a hold on the entry: it is held, and the hold is
+	/// not just the marker of a removal.
+	pub fn has_real_hold(&self) -> bool {
+		self.held.is_some() && !self.held_for_removal
+	}
 }
 
 /// An outcome the evidence log has not taken yet.
@@ -156,6 +185,8 @@ impl Envelope {
 	/// Release a held entry as of `now`, folding the time spent on hold into
 	/// [`Envelope::held_secs`]. A no-op for an entry that is not held.
 	pub fn release(&mut self, now: u64) {
+		self.held_by = None;
+		self.held_for_removal = false;
 		if let Some(since) = self.held.take() {
 			self.held_secs = self.held_secs.saturating_add(now.saturating_sub(since));
 		}

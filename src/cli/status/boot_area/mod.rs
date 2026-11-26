@@ -35,9 +35,12 @@ pub(super) async fn check(ctx: &Ctx) -> AreaReport {
 		Ok(config) => config.clone(),
 		Err(report) => return report,
 	};
-	tokio::task::spawn_blocking(move || check_with(&mut Live::new(), &config))
-		.await
-		.unwrap_or_else(|_| AreaReport::single(Level::Warn, "the boot check did not run"))
+	ctx.blocking({
+		let until = ctx.deadline;
+		move || check_with(&mut Live::until(until), &config)
+	})
+	.await
+	.unwrap_or_else(|_| AreaReport::single(Level::Warn, "the boot check did not run"))
 }
 
 /// Judge the host through `host` for the stack `config` describes.

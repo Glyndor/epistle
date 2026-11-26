@@ -17,17 +17,22 @@ info:
   summary: Management, send, JMAP, SCIM and OAuth routes of one epistle server.
   description: |-
     Everything under `/api/v1` is the versioned management API. `/jmap/*`,
-    `/scim/v2/*` and `/oauth/*` are standard protocols served by the same
-    listener. The routes at the end (autodiscovery, ACME, metrics) live on
-    their own listeners, see their `servers` entries.
+    `/scim/v2/*` and `/oauth/*` are standard protocols served by the `api`
+    listener too, unless a `jmap`, `scim` or `oauth` listener serves one of them
+    instead or `[api] surfaces` leaves it out. The routes at the end
+    (autodiscovery, ACME, metrics) live on their own listeners, see their
+    `servers` entries.
 
     **Authentication.** Every route of the API listener except `/healthz` and
     `/oauth/*` needs `Authorization: Bearer <token>`: the optional static token whose hash is
     `[api] token_hash`, or an API key made with `epistle api-key create`.
     JMAP also accepts locally issued OAuth access tokens, confined to the
-    signed `sub` account and explicit `read`, `write`, `send` scopes. These
+    signed `sub` account and explicit `read`, `write`, `send` scopes (the names a
+    client asks for; inside they are `mail:read`, `mail:write` and `send`). These
     tokens never authenticate `/api/v1` or SCIM.
-    A key carries scopes (`read`, `write`, `send`, `scim`, `alias`); a request the
+    A key carries scopes (`manage:read`, `manage:write`, `mail:read`, `mail:write`,
+    `send`, `scim`, `alias`, `ban`, `health`). A key made before 0.15.0 with `read` or `write` holds
+    both halves of it, management and mail, until it is changed; a request the
     scopes do not cover is answered `403 forbidden` and does not count as a
     failed authentication; an unknown token is `401 unauthenticated`.
     `x-epistle-scope` on each operation names the
@@ -66,6 +71,12 @@ tags:
     description: Accounts, passwords, two-factor, mailboxes, masked addresses and the archive.
   - name: Domains
     description: Hosted-domain reads and atomic writes shared with `epistle domain`.
+  - name: DNS
+    description: The records the hosted domains need in DNS, and a check of the live DNS against them.
+  - name: Health
+    description: The checks `epistle status` and `epistle check` make, through the same code.
+  - name: Bans
+    description: The bans in force, banning and lifting, and the allow list, through the same code as `epistle ban`.
   - name: Aliases
     description: Address aliases, written through the same rules as `epistle alias`.
   - name: Queue
@@ -113,7 +124,7 @@ paths:
       description: |-
         The OpenAPI document the running server was built with. It is behind
         the bearer check like the rest of `/api/v1`.
-      x-epistle-scope: [read]
+      x-epistle-scope: [manage:read]
       responses:
         "200":
           description: The OpenAPI 3.1 document.
@@ -132,7 +143,7 @@ paths:
       operationId: getStatus
       tags: [Service]
       summary: Counters for the server, or for the reach of a confined key
-      x-epistle-scope: [read]
+      x-epistle-scope: [manage:read]
       responses:
         "200":
           description: The counters.
@@ -161,7 +172,7 @@ paths:
         IP like any other authentication attempt, so the account's own
         failure counters and bans apply. A key confined to some domains only
         gets a real check for logins inside them.
-      x-epistle-scope: [write]
+      x-epistle-scope: [manage:write]
       requestBody:
         required: true
         content:
@@ -187,12 +198,460 @@ paths:
           $ref: "#/components/responses/UnprocessableBody"
         "429":
           $ref: "#/components/responses/AuthRateLimited"
+  /api/v1/dns/records:
+    get:
+      operationId: listDnsRecords
+      tags: [DNS]
+      summary: The DNS records the hosted domains need
+      description: |-
+        The rows `epistle dns-records --json` prints, from the same code. The
+        server lists the records of the domains in the key's reach and, for a
+        key with no domain or account restriction that names no `domain`, the records of
+        the mail host too (its address records and its TLSA record). A key
+        confined to some domains gets those domains' records and never the
+        host's. At most 200 domains are listed in one request; past that, name
+        one with `domain`. `complete` is false when an input could not be read
+        (a DKIM key, the certificate); the server's log says which.
+      x-epistle-scope: [manage:read]
+      parameters:
+        - $ref: "#/components/parameters/DnsDomain"
+      responses:
+        "200":
+          description: The records, and the groups the configuration does not publish.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DnsRecords"
+        "400":
+          $ref: "#/components/responses/InvalidInput"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/AccountBoundKey"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
+  /api/v1/dns/verify:
+    get:
+      operationId: verifyDns
+      tags: [DNS]
+      summary: Check the live DNS against the records the domains need
+      description: |-
+        The result `epistle verify-dns --json` prints, from the same code, with
+        the system resolver, built for each check, so no answer an earlier check
+        cached is reused. It checks the domains in the
+        key's reach and, for a key with no domain or account restriction that names no
+        `domain`, the mail host first. Drift is an answer, not an error: `ok`
+        is false when an expected record is missing, and a lookup that failed
+        is `error`, which is inconclusive. A check makes a dozen lookups for
+        each domain, so one request covers at most 20 domains (name one with
+        `domain` past that), two checks run at once on a server, a third is
+        answered `429` with `Retry-After`, and a check that is not finished in
+        45 seconds is answered `504`.
+      x-epistle-scope: [manage:read]
+      parameters:
+        - $ref: "#/components/parameters/DnsDomain"
+      responses:
+        "200":
+          description: The groups of checks, the host first when it is included, then each domain.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DnsVerification"
+        "400":
+          $ref: "#/components/responses/InvalidInput"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/AccountBoundKey"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          description: |-
+            `rate_limited`: this client's failed authentications, or two DNS
+            checks are already running. Both carry `Retry-After`.
+          headers:
+            Retry-After:
+              description: Seconds to wait.
+              schema:
+                type: integer
+                minimum: 1
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "500":
+          $ref: "#/components/responses/Internal"
+        "503":
+          description: "`unavailable`: the system resolver could not be started."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "504":
+          description: "`timeout`: the check was not finished in 45 seconds."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /api/v1/health:
+    get:
+      operationId: getHealth
+      tags: [Health]
+      summary: The checks `epistle status` makes
+      description: |-
+        The JSON `epistle status --json` prints, from the same code: one object
+        keyed by area (`config`, `ports`, `tls`, `dns`, `db`, `api_keys`,
+        `antivirus`, `antispam`, `queue`, `disk`, `spool`, `storage_keys`,
+        `subid`, `boot`, `warmup`, `resources`, `clock`, `evidence`,
+        `deliverability`), each with `status` (`ok`, `warn`, `fail`), a
+        `detail` and its `items`. The answer is `200` whatever the areas find:
+        the command's exit code has no HTTP counterpart. The areas run against
+        the configuration the server runs with, each is cut off after 60
+        seconds, and at most two runs are in progress on a server, whatever its
+        number of listeners: the third is `429` with `Retry-After`. A run goes
+        on when its client leaves, and keeps its place until it has ended. The checks name the server's listeners,
+        certificate, disk, keys and stack, so the route needs the `health`
+        scope, and only that: `read` does not open it. A key confined to
+        domains or bound to an account is refused with `403`.
+      x-epistle-scope: [health]
+      responses:
+        "200":
+          description: One report per area.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthReport"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/HealthForbidden"
+        "429":
+          description: |-
+            `rate_limited`: this client's failed authentications, or two runs
+            are already in progress. Both carry `Retry-After`.
+          headers:
+            Retry-After:
+              description: Seconds to wait.
+              schema:
+                type: integer
+                minimum: 1
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "500":
+          $ref: "#/components/responses/Internal"
+  /api/v1/health/{area}:
+    get:
+      operationId: getHealthArea
+      tags: [Health]
+      summary: One check, as `epistle check <area>` makes it
+      description: |-
+        The JSON `epistle check <area> --json` prints: the same object as the
+        full report, with the one area. The name is one of the keys listed
+        there, spelled exactly; anything else is `404 no such area`, and only
+        after the key was found to be one that may ask. Needs the `health`
+        scope.
+      x-epistle-scope: [health]
+      parameters:
+        - name: area
+          in: path
+          required: true
+          description: The area, spelled as the keys of the full report are.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The report of the one area.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthReport"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/HealthForbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          description: |-
+            `rate_limited`: this client's failed authentications, or two runs
+            are already in progress. Both carry `Retry-After`.
+          headers:
+            Retry-After:
+              description: Seconds to wait.
+              schema:
+                type: integer
+                minimum: 1
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "500":
+          $ref: "#/components/responses/Internal"
+  /api/v1/bans:
+    get:
+      operationId: listBans
+      tags: [Bans]
+      summary: List the bans in force
+      description: |-
+        Needs the `ban` scope, and only that: `manage:read` and `mail:read` do not open it. Ordered
+        by subject and keyset-paged by it, 100 to a page by default and 500 at
+        most. The rows are those `epistle ban list --json` prints. The bans are
+        the server's, so a key confined to domains is refused with `403`, as is
+        a key bound to an account. Without a `[database]` the answer is `404`:
+        bans are not manageable.
+      x-epistle-scope: [ban]
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: Page size. Above 500 it is cut to 500; 0 is refused.
+          schema:
+            type: integer
+        - name: cursor
+          in: query
+          required: false
+          description: The `next_cursor` of the page before.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: A page of bans.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BanPage"
+        "400":
+          $ref: "#/components/responses/InvalidInput"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/BanForbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
+    post:
+      operationId: addBan
+      tags: [Bans]
+      summary: Ban an address or a network
+      description: |-
+        The ban `epistle ban add` makes, by the same code. The target is an
+        address or a network; `for` is a number and a unit (`s`, `m`, `h`, `d`,
+        `w`), a day when absent and at most ten years. A ban of the same target
+        moves to the new end. Refused with `409` for an address on the allow
+        list, and with `400` for a network wider than a /16 of IPv4 or a /32 of
+        IPv6, which a key may not name (the command may). A key may leave at most
+        10000 manual bans in force (automatic bans are not counted) and 100
+        banned networks (`409`). The body is at most 4 KiB. Audited as
+        `ban.added`.
+      x-epistle-scope: [ban]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddBan"
+      responses:
+        "201":
+          description: The ban, and when it ends.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BanAdded"
+        "400":
+          $ref: "#/components/responses/InvalidInput"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/BanForbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: The address is on the allow list, or the key has as many manual bans or banned networks in force as it may keep.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "413":
+          description: The body is over 4 KiB. `text/plain`.
+          content:
+            text/plain:
+              schema:
+                type: string
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "422":
+          $ref: "#/components/responses/UnprocessableBody"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
+  /api/v1/bans/{subject}:
+    delete:
+      operationId: removeBan
+      tags: [Bans]
+      summary: Lift a ban
+      description: |-
+        The lift `epistle ban remove` makes, by the same code: the ban on the
+        subject goes and so do its failure records, so the next failure starts
+        from zero. Name the subject as the listing prints it, percent-encoded:
+        an address or a network (`203.0.113.9`, `cidr:203.0.113.0/24`), or one
+        an automatic ban made (`pair:alice@example.org|203.0.113.9`,
+        `account:alice@example.org`). A subject with no ban and no failure
+        record is `404`. Audited as `ban.removed`.
+      x-epistle-scope: [ban]
+      parameters:
+        - $ref: "#/components/parameters/BanSubject"
+      responses:
+        "200":
+          description: What was lifted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BanLifted"
+        "400":
+          $ref: "#/components/responses/InvalidInput"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/BanForbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
+  /api/v1/bans/allow:
+    get:
+      operationId: listBanAllow
+      tags: [Bans]
+      summary: The allow list
+      description: |-
+        The blocks that are never banned and never counted, canonical and
+        sorted, as `epistle ban allow list --json` prints them. At most 1000.
+        Needs the `ban` scope.
+      x-epistle-scope: [ban]
+      responses:
+        "200":
+          description: The blocks.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BanAllowList"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/BanForbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
+    post:
+      operationId: addBanAllow
+      tags: [Bans]
+      summary: Never ban an address or a network
+      description: |-
+        The entry `epistle ban allow add` makes, by the same code. A network
+        wider than a /16 of IPv4 or a /32 of IPv6 is refused with `400` (the
+        command accepts any), and a key may leave at most 1000 blocks, 100 of them
+        networks, on the list (`409`).
+        A block already on the list answers `200` with `changed` false. The
+        body is at most 4 KiB. Audited as `ban.allow_added`.
+      x-epistle-scope: [ban]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddBanAllow"
+      responses:
+        "200":
+          description: The block was already on the list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BanAllowChanged"
+        "201":
+          description: The block joined the list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BanAllowChanged"
+        "400":
+          $ref: "#/components/responses/InvalidInput"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/BanForbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: The key has left as many allow-list entries or allowed networks as it may keep.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "413":
+          description: The body is over 4 KiB. `text/plain`.
+          content:
+            text/plain:
+              schema:
+                type: string
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "422":
+          $ref: "#/components/responses/UnprocessableBody"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
+  /api/v1/bans/allow/{cidr}:
+    delete:
+      operationId: removeBanAllow
+      tags: [Bans]
+      summary: Take a block off the allow list
+      description: |-
+        The removal `epistle ban allow remove` makes, by the same code. Name the
+        block as it was added, percent-encoded (`10.1.0.0%2F16`). A block that
+        is not on the list is `404`. Audited as `ban.allow_removed`.
+      x-epistle-scope: [ban]
+      parameters:
+        - $ref: "#/components/parameters/BanCidr"
+      responses:
+        "200":
+          description: The block that was removed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BanAllowChanged"
+        "400":
+          $ref: "#/components/responses/InvalidInput"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/BanForbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
   /api/v1/domains:
     get:
       operationId: listDomains
       tags: [Domains]
       summary: The hosted domains in the key's reach
-      x-epistle-scope: [read]
+      x-epistle-scope: [manage:read]
       responses:
         "200":
           description: The domains, and which of them are switched off.
@@ -216,7 +675,7 @@ paths:
         Creates the same DKIM key and SRS secret as epistle domain add, exclusively
         under data_dir. No configuration file is written. Duplicate names are 409.
         The response never exposes key material or the SRS secret.
-      x-epistle-scope: [write]
+      x-epistle-scope: [manage:write]
       requestBody:
         required: true
         content:
@@ -263,7 +722,7 @@ paths:
         compared as given except for ASCII case, and `domain` in the answer is
         the name as asked. A domain outside a confined key's domains answers
         exactly like one the server does not host.
-      x-epistle-scope: [read]
+      x-epistle-scope: [manage:read]
       parameters:
         - $ref: "#/components/parameters/DomainName"
       responses:
@@ -286,7 +745,7 @@ paths:
       tags: [Domains]
       summary: Set a hosted domain role and limits atomically
       description: |-
-        Needs write scope and the domain in the key's reach. A foreign domain is
+        Needs `manage:write` and the domain in the key's reach. A foreign domain is
         404 no such domain. Omitted fields stay unchanged; null quota or
         submission_rate removes the domain override, falling back to server defaults.
         quota is bytes (0 means unlimited); submission_rate is recipients per minute.
@@ -295,7 +754,7 @@ paths:
         it may still change the role. An empty body object is 400. Values already in
         effect succeed with changed false and do not write a state file. The
         configuration file is never written.
-      x-epistle-scope: [write]
+      x-epistle-scope: [manage:write]
       parameters:
         - $ref: "#/components/parameters/DomainName"
       requestBody:
@@ -338,7 +797,7 @@ paths:
       tags: [Domains]
       summary: Stop hosting an unused domain
       description: |-
-        Needs write scope and the domain in the key's reach. A foreign domain is
+        Needs `manage:write` and the domain in the key's reach. A foreign domain is
         404 no such domain. Refused while accounts, aliases or configuration entries
         still use it, with the same blockers as epistle domain remove. The 409 names
         them only for an unconfined key; a confined key gets "domain is still in use",
@@ -346,7 +805,7 @@ paths:
         at the same moment can still land on the domain being removed, because the
         check reads accounts.toml while account creation checks the running
         snapshot; the command has the same race.
-      x-epistle-scope: [write]
+      x-epistle-scope: [manage:write]
       parameters:
         - $ref: "#/components/parameters/DomainName"
       responses:
@@ -380,11 +839,11 @@ paths:
       tags: [Domains]
       summary: Enable a hosted domain
       description: |-
-        Needs write scope and the domain in the key's reach; foreign domains answer
+        Needs `manage:write` and the domain in the key's reach; foreign domains answer
         404 no such domain. Preserves its stored role. Disabling the last enabled
         domain of a server with listeners is 409. Repeating the current switch
         succeeds with changed false and writes nothing.
-      x-epistle-scope: [write]
+      x-epistle-scope: [manage:write]
       parameters:
         - $ref: "#/components/parameters/DomainName"
       responses:
@@ -418,11 +877,11 @@ paths:
       tags: [Domains]
       summary: Disable a hosted domain
       description: |-
-        Needs write scope and the domain in the key's reach; foreign domains answer
+        Needs `manage:write` and the domain in the key's reach; foreign domains answer
         404 no such domain. Preserves its stored role. Disabling the last enabled
         domain of a server with listeners is 409. Repeating the current switch
         succeeds with changed false and writes nothing.
-      x-epistle-scope: [write]
+      x-epistle-scope: [manage:write]
       parameters:
         - $ref: "#/components/parameters/DomainName"
       responses:
@@ -456,11 +915,11 @@ paths:
       tags: [Domains]
       summary: Declare a domain alias
       description: |-
-        Needs write scope. A confined key must admit both the target domain and
+        Needs `manage:write`. A confined key must admit both the target domain and
         the alias name; otherwise 404 no such domain. The target must be hosted.
         Both names use CLI DNS-name validation. A taken alias or hosted-name
         collision is 409, with the CLI refusal message.
-      x-epistle-scope: [write]
+      x-epistle-scope: [manage:write]
       parameters:
         - $ref: "#/components/parameters/DomainName"
       requestBody:
@@ -504,11 +963,11 @@ paths:
       tags: [Domains]
       summary: Drop an alias of a hosted domain
       description: |-
-        Needs write scope. A confined key must admit both the target domain and
+        Needs `manage:write`. A confined key must admit both the target domain and
         the alias name; otherwise 404 no such domain. The alias must currently
         point to the path domain, checked under the state lock; another domain's
         alias or an absent alias is 404. Both names use CLI DNS-name validation.
-      x-epistle-scope: [write]
+      x-epistle-scope: [manage:write]
       parameters:
         - $ref: "#/components/parameters/DomainName"
         - $ref: "#/components/parameters/DomainAliasName"
@@ -543,7 +1002,7 @@ paths:
       tags: [Aliases]
       summary: List the address aliases
       description: |-
-        Needs the `alias` scope, and only that: `read` does not open it. Ordered
+        Needs the `alias` scope, and only that: `manage:read` does not open it. Ordered
         by address and keyset-paged by it. A key confined to some domains sees
         the aliases whose address and every member lie in them. `domain` and
         `account` filter; a domain or an account outside the key's reach
@@ -709,7 +1168,7 @@ paths:
       tags: [Accounts]
       summary: The accounts in the key's reach
       description: Not paged. A confined key sees only accounts whose addresses all lie in its domains.
-      x-epistle-scope: [read]
+      x-epistle-scope: [manage:read]
       responses:
         "200":
           description: The accounts.
@@ -740,7 +1199,7 @@ paths:
         (12 to 64 printable ASCII characters, not in the bundled breach
         list), then the store (duplicate name or address, unknown domain,
         malformed name). Answers `200`, not `201`.
-      x-epistle-scope: [write]
+      x-epistle-scope: [manage:write]
       requestBody:
         required: true
         content:
@@ -792,7 +1251,7 @@ paths:
         required so a client never drops queued mail by omission. Accounts
         declared in the configuration file are not API-managed and answer
         `404 no such dynamic account`.
-      x-epistle-scope: [write]
+      x-epistle-scope: [manage:write]
       parameters:
         - $ref: "#/components/parameters/AccountName"
         - name: queue
@@ -829,7 +1288,7 @@ paths:
       description: |-
         The same password policy as account creation. The SCRAM verifier is
         replaced too (or dropped when `[auth] scram = false`).
-      x-epistle-scope: [write]
+      x-epistle-scope: [manage:write]
       parameters:
         - $ref: "#/components/parameters/AccountName"
       requestBody:
@@ -877,7 +1336,7 @@ paths:
         Kept as written, trimmed; an empty value clears it. It becomes the
         phrase of the `From` header of mail sent with `POST /api/v1/send`
         when the request names none.
-      x-epistle-scope: [write]
+      x-epistle-scope: [manage:write]
       parameters:
         - $ref: "#/components/parameters/AccountName"
       requestBody:
@@ -927,7 +1386,7 @@ paths:
       description: |-
         Replaces any secret the account had and takes effect at once; there
         is no confirmation step. The secret is returned here and nowhere else.
-      x-epistle-scope: [write]
+      x-epistle-scope: [manage:write]
       parameters:
         - $ref: "#/components/parameters/AccountName"
       responses:
@@ -958,7 +1417,7 @@ paths:
       operationId: disableTotp
       tags: [Accounts]
       summary: Turn off two-factor authentication for an account
-      x-epistle-scope: [write]
+      x-epistle-scope: [manage:write]
       parameters:
         - $ref: "#/components/parameters/AccountName"
       responses:
@@ -983,7 +1442,7 @@ paths:
       operationId: listMailboxes
       tags: [Accounts]
       summary: The mailboxes of an account
-      x-epistle-scope: [read]
+      x-epistle-scope: [manage:read]
       parameters:
         - $ref: "#/components/parameters/AccountName"
       responses:
@@ -1006,7 +1465,7 @@ paths:
       operationId: listMaskedAddresses
       tags: [Accounts]
       summary: The masked addresses of an account
-      x-epistle-scope: [read]
+      x-epistle-scope: [manage:read]
       parameters:
         - $ref: "#/components/parameters/AccountName"
       responses:
@@ -1040,7 +1499,7 @@ paths:
         the account's first address, falling back to the first configured
         domain only when the account has no address. Mail sent to it lands in
         the account while it is enabled.
-      x-epistle-scope: [write]
+      x-epistle-scope: [manage:write]
       parameters:
         - $ref: "#/components/parameters/AccountName"
       requestBody:
@@ -1096,7 +1555,7 @@ paths:
       operationId: updateMaskedAddress
       tags: [Accounts]
       summary: Enable or disable a masked address
-      x-epistle-scope: [write]
+      x-epistle-scope: [manage:write]
       parameters:
         - $ref: "#/components/parameters/AccountName"
         - $ref: "#/components/parameters/MaskedAddress"
@@ -1143,7 +1602,7 @@ paths:
       operationId: deleteMaskedAddress
       tags: [Accounts]
       summary: Remove a masked address
-      x-epistle-scope: [write]
+      x-epistle-scope: [manage:write]
       parameters:
         - $ref: "#/components/parameters/AccountName"
         - $ref: "#/components/parameters/MaskedAddress"
@@ -1173,7 +1632,7 @@ paths:
         The archive exists when `[storage] deleted_retention_days` is set.
         Oldest first, not paged. A failure to read the archive answers
         `404 not_found` with the reason in the message.
-      x-epistle-scope: [read]
+      x-epistle-scope: [manage:read]
       parameters:
         - $ref: "#/components/parameters/AccountName"
       responses:
@@ -1218,7 +1677,7 @@ paths:
         when that mailbox no longer exists, and removes it from the archive.
         Any failure, an unknown id included, answers `404 not_found` with
         `cannot restore: ...`.
-      x-epistle-scope: [write]
+      x-epistle-scope: [manage:write]
       parameters:
         - $ref: "#/components/parameters/AccountName"
         - name: id
@@ -1271,10 +1730,10 @@ paths:
         `domains`, and only about what it reaches; a key bound to one
         account is refused. A `:heartbeat` comment keeps an idle stream
         alive. The stream ends after `[api] event_stream_max_secs`, or when
-        the key is revoked, expires, is narrowed or loses `read`. A key may
+        the key is revoked, expires, is narrowed or loses `manage:read`. A key may
         hold `[api] event_streams_per_key` streams and the server
         `event_streams_per_server`.
-      x-epistle-scope: [read]
+      x-epistle-scope: [manage:read]
       parameters:
         - name: Last-Event-ID
           in: header
@@ -1330,7 +1789,7 @@ paths:
         1000 entries per request, so a page can come back short with a
         `next_cursor` and the next call carries on. Bounces (empty sender)
         are shown only to unconfined keys.
-      x-epistle-scope: [read]
+      x-epistle-scope: [manage:read]
       parameters:
         - name: limit
           in: query
@@ -1387,7 +1846,76 @@ paths:
           $ref: "#/components/responses/AuthRateLimited"
         "500":
           $ref: "#/components/responses/Internal"
+  /api/v1/queue/destinations:
+    get:
+      operationId: listQueueDestinations
+      tags: [Queue]
+      summary: The destinations the queue holds off
+      description: |-
+        The rows `epistle queue destinations --json` prints: each recipient domain
+        or exchanger on hold (with `until`, `deferrals` and the remote `reason`),
+        then each receiver group at its warm-up cap. At most 1000 rows; `truncated`
+        says there were more. The holds are shared by every tenant, so a key
+        confined to some domains is refused with `403`.
+      x-epistle-scope: [manage:read]
+      responses:
+        "200":
+          description: The destinations.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QueueDestinations"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/AccountBoundKey"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
   /api/v1/queue/{id}:
+    get:
+      operationId: showQueueEntry
+      tags: [Queue]
+      summary: One message in the queue
+      description: |-
+        What `epistle queue show --json` prints: the envelope and its retry state
+        (`attempts`, `next_attempt`, `held`, `last_error`), never the message. With
+        `headers=true` the header fields of the message are returned too, up to 200
+        of them with a value cut at 1000 characters (`headers_truncated` says when
+        something was left out); the body is never read past the blank line. An
+        entry of another tenant answers like one that is not there. An entry
+        belongs to the domain the server decided when it queued it, not to the
+        sender the message names; one with no owner is for a key with no
+        confinement only.
+      x-epistle-scope: [manage:read]
+      parameters:
+        - $ref: "#/components/parameters/QueueId"
+        - name: headers
+          in: query
+          required: false
+          description: Also return the header fields of the message.
+          schema:
+            type: boolean
+      responses:
+        "200":
+          description: The entry.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QueueEntry"
+        "400":
+          $ref: "#/components/responses/UnreadableRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/AccountBoundKey"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
     delete:
       operationId: cancelQueueEntry
       tags: [Queue]
@@ -1399,8 +1927,9 @@ paths:
         cannot be done. Each pending recipient gets a delivery-log record with
         outcome `canceled`; when the delivery log is enabled, the configured
         webhook receives a `canceled` event with the message's `extra`. An
-        entry of another tenant answers like one that is not there.
-      x-epistle-scope: [write]
+        entry of another tenant answers like one that is not there. A key confined to
+        some domains does not remove an entry the operator holds.
+      x-epistle-scope: [manage:write]
       parameters:
         - name: id
           in: path
@@ -1426,13 +1955,127 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthenticated"
         "403":
-          $ref: "#/components/responses/AccountBoundKey"
+          description: |-
+            `forbidden`: the key is bound to one account, or the entry is on hold and the
+            hold was put by the operator or by a key outside the reach of this one. The
+            entry stays.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
           description: |-
             `conflict`: the entry has evidence outcomes waiting to be written
             and stays until they are. Retrying later works.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
+  /api/v1/queue/{id}/retry:
+    post:
+      operationId: retryQueueEntry
+      tags: [Queue]
+      summary: Attempt a message now
+      description: |-
+        Makes the next delivery attempt happen now, skipping the backoff, as `epistle queue retry` does. A retry does not lift a hold. An entry of another tenant answers like one that is not there
+        (`404`). Audited as `queue.retried` when it changed the entry; a request that
+        found it as asked answers `200` with `changed` false and writes no line. A
+        confined key lifts only a hold put by a key confined inside its domains.
+      x-epistle-scope: [manage:write]
+      parameters:
+        - $ref: "#/components/parameters/QueueId"
+      responses:
+        "200":
+          description: What the entry is now.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QueueSteered"
+        "400":
+          $ref: "#/components/responses/UnreadableRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/AccountBoundKey"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
+  /api/v1/queue/{id}/hold:
+    post:
+      operationId: holdQueueEntry
+      tags: [Queue]
+      summary: Hold a message
+      description: |-
+        The entry is not attempted until it is released, as `epistle queue hold` does. Holding an entry already held keeps the original start. An entry of another tenant answers like one that is not there
+        (`404`). Audited as `queue.held` when it changed the entry; a request that
+        found it as asked answers `200` with `changed` false and writes no line.
+      x-epistle-scope: [manage:write]
+      parameters:
+        - $ref: "#/components/parameters/QueueId"
+      responses:
+        "200":
+          description: What the entry is now.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QueueSteered"
+        "400":
+          $ref: "#/components/responses/UnreadableRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/AccountBoundKey"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
+  /api/v1/queue/{id}/release:
+    post:
+      operationId: releaseQueueEntry
+      tags: [Queue]
+      summary: Release a held message
+      description: |-
+        A held entry is attempted again, as `epistle queue release` does. An entry of another tenant answers like one that is not there
+        (`404`). Audited as `queue.released` when it changed the entry; a request that
+        found it as asked answers `200` with `changed` false and writes no line.
+      x-epistle-scope: [manage:write]
+      parameters:
+        - $ref: "#/components/parameters/QueueId"
+      responses:
+        "200":
+          description: What the entry is now.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QueueSteered"
+        "400":
+          $ref: "#/components/responses/UnreadableRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          description: |-
+            `forbidden`: the key is bound to one account, or the hold was put by the
+            operator or by a key outside the reach of this one, and stays.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: |-
+            `conflict`: the entry's removal began, so it stays on hold until it is gone.
           content:
             application/json:
               schema:
@@ -1449,8 +2092,10 @@ paths:
       description: |-
         Without `account`, the global list, which is shared by every tenant:
         a key confined to some domains is refused with `403 forbidden`. With
-        `account`, that sending account's own list.
-      x-epistle-scope: [read]
+        `account`, that sending account's own list. A key bound to one account
+        reads its own list with `mail:read`; every other key needs `manage:read`,
+        and is refused with `403 forbidden` without it.
+      x-epistle-scope: [mail:read, manage:read]
       parameters:
         - name: account
           in: query
@@ -1506,11 +2151,13 @@ paths:
       summary: Add an address to a suppression list
       description: |-
         Adds a recipient to the global list, or to the sending account's list
-        with `account`. The global list is refused to a key confined to an
+        with `account`. A key bound to one account may do so with `mail:write`;
+        every other key needs `manage:write`, and is refused with `403
+        forbidden` without it. The global list is refused to a key confined to an
         account or domain. The address is validated by the server. Adding an
         address already on the list succeeds without replacing its first
         reason or timestamp.
-      x-epistle-scope: [write]
+      x-epistle-scope: [mail:write, manage:write]
       parameters:
         - name: account
           in: query
@@ -1573,8 +2220,9 @@ paths:
       summary: Take an address off a suppression list
       description: |-
         Removing an address that is not on the list still answers `200`.
-        The global list is refused to a confined key, as for the listing.
-      x-epistle-scope: [write]
+        The global list is refused to a confined key, as for the listing, and
+        a key that is not bound to one account needs `manage:write`.
+      x-epistle-scope: [mail:write, manage:write]
       parameters:
         - name: address
           in: path
@@ -1612,12 +2260,13 @@ paths:
       summary: The per-recipient delivery log
       description: |-
         Newest day first. There is no cursor: narrow with `since`, `outcome`
-        or `recipient`. A key bound to one account sees only its own
-        records; a key confined to some domains sees none, because records
+        or `recipient`. A key bound to one account reads it with `mail:read`
+        and sees only its own records; every other key needs `manage:read`.
+        A key confined to some domains sees none, because records
         carry an account, not a domain. Records are kept for
         `[storage] delivery_log_days` (30 by default); with `0` the log is
         off and this answers `404`.
-      x-epistle-scope: [read]
+      x-epistle-scope: [mail:read, manage:read]
       parameters:
         - name: recipient
           in: query
@@ -1688,7 +2337,7 @@ paths:
         unconfined key any. An id that is unknown, belongs to an account the
         key does not reach, or was never held answers the same `404`. A message
         already handed on answers `409 already_sent`.
-      x-epistle-scope: [send, write]
+      x-epistle-scope: [send, manage:write]
       parameters:
         - name: id
           in: path
@@ -1751,11 +2400,13 @@ paths:
               $ref: "#/components/schemas/SendRequest"
       responses:
         "200":
-          description: The message was accepted for delivery.
+          description: The message was accepted for delivery (`Queued`), or, with `dry_run`, would have been (`DryRun`).
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Queued"
+                oneOf:
+                  - $ref: "#/components/schemas/Queued"
+                  - $ref: "#/components/schemas/DryRun"
         "400":
           $ref: "#/components/responses/InvalidInput"
         "401":
@@ -1852,7 +2503,7 @@ paths:
       description: |-
         Answers the Session resource itself, not a redirect to
         `/jmap/session`. A key bound to one account is allowed here.
-      x-epistle-scope: [read]
+      x-epistle-scope: [mail:read]
       responses:
         "200":
           description: The Session resource.
@@ -1874,7 +2525,7 @@ paths:
         key, the accounts inside its domains for a confined one, only its own
         for a bound key), the capabilities and the limits. The URLs in it are
         relative.
-      x-epistle-scope: [read]
+      x-epistle-scope: [mail:read]
       responses:
         "200":
           description: The Session resource.
@@ -1892,13 +2543,13 @@ paths:
       tags: [JMAP]
       summary: Run JMAP method calls
       description: |-
-        The coarse check lets any key with `read`, `write` or `send` in; each
+        The coarse check lets any key with `mail:read`, `mail:write` or `send` in; each
         method call is then checked against the scope it needs, and a call
         the key's scopes do not cover answers a `forbidden` method error
-        inside a `200` response. `read` covers `*/get`, `*/query`,
+        inside a `200` response. `mail:read` covers `*/get`, `*/query`,
         `*/changes`, `*/queryChanges`, `Identity/get`, `Quota/get`,
         `PushSubscription/get`, `VacationResponse/get`, `SieveScript/get`,
-        `SieveScript/query` and `SieveScript/validate`; `write` covers
+        `SieveScript/query` and `SieveScript/validate`; `mail:write` covers
         `Mailbox/set`, `Email/set`, `Email/copy`, `PushSubscription/set`,
         `VacationResponse/set` and `SieveScript/set`; `send` covers
         `EmailSubmission/set`. `Core/echo` needs none. Other methods answer
@@ -1908,7 +2559,7 @@ paths:
         calls per request, 500 objects per `/get` or `/set`, 4 requests in
         flight per credential. `EmailSubmission/set` accepts the extension
         property `epistle:class`.
-      x-epistle-scope: [read, write, send]
+      x-epistle-scope: [mail:read, mail:write, send]
       requestBody:
         required: true
         content:
@@ -1977,7 +2628,7 @@ paths:
         Push is connection-scoped: a `StateChange` follows only the requests
         made on the same socket. Use the event source for changes made
         elsewhere.
-      x-epistle-scope: [read]
+      x-epistle-scope: [mail:read]
       responses:
         "101":
           description: Switching protocols.
@@ -1996,10 +2647,10 @@ paths:
         moves in an account the credential reaches, whichever protocol made
         the change (the account's change journal is polled every second). A
         `ping` event, `{"interval": N}`, is sent when nothing else was. The
-        stream ends when the credential stops holding or loses `read`. No
+        stream ends when the credential stops holding or loses `mail:read`. No
         event ids are sent, so there is no replay: catch up with `/changes`
         from the states you hold. One credential may hold 4 streams.
-      x-epistle-scope: [read]
+      x-epistle-scope: [mail:read]
       parameters:
         - name: types
           in: query
@@ -2065,7 +2716,7 @@ paths:
         the blob; a stored message is `application/octet-stream`. An account
         the key does not reach answers the same `404` as one that does not
         exist.
-      x-epistle-scope: [read]
+      x-epistle-scope: [mail:read]
       parameters:
         - name: account_id
           in: path
@@ -2116,7 +2767,7 @@ paths:
         and the tenant's aggregate quota apply; 4 uploads may be in flight
         per credential. Uploaded blobs are reclaimed after a while if no
         message refers to them.
-      x-epistle-scope: [write]
+      x-epistle-scope: [mail:write]
       parameters:
         - name: account_id
           in: path
@@ -2936,6 +3587,40 @@ components:
       description: A hosted domain, as the configuration spells it; ASCII case is ignored.
       schema:
         type: string
+    DnsDomain:
+      name: domain
+      in: query
+      required: false
+      description: |-
+        Only this hosted domain, as the configuration spells it; ASCII case is
+        ignored. A domain the server does not host and one outside the key's
+        domains are both `404`. Naming a domain leaves out the mail host.
+      schema:
+        type: string
+    BanSubject:
+      name: subject
+      in: path
+      required: true
+      description: |-
+        What to lift, as `GET /api/v1/bans` lists it, percent-encoded: an
+        address, `cidr:<network>`, `pair:<login>|<client>` or `account:<login>`.
+      schema:
+        type: string
+    BanCidr:
+      name: cidr
+      in: path
+      required: true
+      description: The allowed block as it was added, percent-encoded (`10.1.0.0%2F16`).
+      schema:
+        type: string
+    QueueId:
+      name: id
+      in: path
+      required: true
+      description: The queue id.
+      schema:
+        type: string
+        format: uuid
     AccountName:
       name: name
       in: path
@@ -2992,6 +3677,24 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/ApiError"
+    HealthForbidden:
+      description: |-
+        `forbidden`: the key does not hold the `health` scope, is confined to
+        some domains (the checks belong to the whole server), or is bound to
+        one account.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+    BanForbidden:
+      description: |-
+        `forbidden`: the key does not hold the `ban` scope, is confined to some
+        domains (the bans belong to the whole server), or is bound to one
+        account.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
     AuthRateLimited:
       description: |-
         `rate_limited`: this client address already made 20 requests with
@@ -3018,7 +3721,9 @@ components:
         `not_found`. The message says what is missing: `no such account`,
         `no such dynamic account` (the account exists but is declared in the
         configuration file), `no such masked address`, `no such queue entry`,
-        `no such domain`, `the delivery log is disabled`. An account or a
+        `no such domain`, `the delivery log is disabled`, `bans are not manageable`
+        (no `[database]`), `no ban or failure record`, `not on the allow list`, `no such area`. Lifting a network ban or removing an allow-list block
+        wider than a key may name is `400`. An account or a
         domain outside a confined key's domains answers exactly like one that
         does not exist.
       content:
@@ -3292,7 +3997,8 @@ components:
                 and `scan_too_large` (413), `virus_detected`,
                 `attachment_refused`, `too_many_header_fields` and
                 `marketing_refused` (422), `rate_limited` (429), `internal`
-                (500), `scan_unavailable` and `evidence_unavailable` (503),
+                (500), `scan_unavailable`, `evidence_unavailable` and `unavailable` (503),
+                `timeout` (504),
                 `mailbox_full` (507). New codes can appear.
             message:
               type: string
@@ -3374,6 +4080,252 @@ components:
         admin:
           type: boolean
           description: Always false when `valid` is false.
+    DnsRecords:
+      type: object
+      required: [records, skipped, complete]
+      properties:
+        records:
+          type: array
+          description: The records to publish, the rows `epistle dns-records --json` prints.
+          items:
+            $ref: "#/components/schemas/DnsRecord"
+        skipped:
+          type: array
+          description: The groups the configuration does not publish, with how many records each holds; those records are not missing.
+          items:
+            type: object
+            required: [group, records]
+            properties:
+              group:
+                type: string
+                description: The name the configuration writes for the group.
+              records:
+                type: integer
+        complete:
+          type: boolean
+          description: False when an input could not be read (a DKIM key, the certificate), so the list may lack a record the configuration needs.
+    DnsRecord:
+      type: object
+      required: [name, ttl, type, value]
+      properties:
+        name:
+          type: string
+        ttl:
+          type: integer
+        type:
+          type: string
+          description: The record type, such as `TXT`, `MX` or `CNAME`.
+        value:
+          type: string
+          description: The value in presentation form; a TXT value is unsplit.
+    DnsVerification:
+      type: object
+      required: [ok, groups]
+      properties:
+        ok:
+          type: boolean
+          description: False when an expected record is missing. A lookup that failed does not make it false.
+        groups:
+          type: array
+          items:
+            type: object
+            required: [name, checks]
+            properties:
+              name:
+                type: string
+                description: The mail hostname or a domain.
+              checks:
+                type: array
+                items:
+                  type: object
+                  required: [kind, name, status, detail]
+                  properties:
+                    kind:
+                      type: string
+                      description: The record checked, such as `MX`, `SPF` or `DKIM ed1`.
+                    name:
+                      type: string
+                      description: The DNS name looked up.
+                    status:
+                      type: string
+                      enum: [ok, missing, error, skipped]
+                    detail:
+                      type: string
+                      description: What was found.
+    HealthReport:
+      type: object
+      description: One entry per area, keyed by the area's name.
+      additionalProperties:
+        type: object
+        required: [status, detail, items]
+        properties:
+          status:
+            type: string
+            enum: [ok, warn, fail]
+          detail:
+            type: string
+            description: The one-line summary `epistle status` prints.
+          items:
+            type: array
+            items:
+              type: object
+              required: [name, status, detail]
+              properties:
+                name:
+                  type: string
+                status:
+                  type: string
+                  enum: [ok, warn, fail]
+                detail:
+                  type: string
+    QueueEntry:
+      type: object
+      required: [id, reverse_path, recipients, attempts, next_attempt, held, require_tls]
+      properties:
+        id:
+          type: string
+          format: uuid
+        reverse_path:
+          type: string
+        recipients:
+          type: array
+          items:
+            type: string
+        attempts:
+          type: integer
+        next_attempt:
+          type: integer
+          description: Epoch seconds; 0 is now.
+        held:
+          type: boolean
+        held_since:
+          type: [integer, "null"]
+        require_tls:
+          type: boolean
+        last_error:
+          type: [string, "null"]
+        headers:
+          type: array
+          description: Present only with `headers=true`.
+          items:
+            type: object
+            required: [name, value]
+            properties:
+              name:
+                type: string
+              value:
+                type: string
+        headers_truncated:
+          type: boolean
+    QueueSteered:
+      type: object
+      required: [changed, id, held]
+      properties:
+        changed:
+          type: boolean
+          description: False when the entry already was as the change leaves it.
+        id:
+          type: string
+          format: uuid
+        held:
+          type: boolean
+    QueueDestinations:
+      type: object
+      required: [destinations, truncated]
+      properties:
+        destinations:
+          type: array
+          items:
+            type: object
+            description: "A hold (`kind` domain or exchanger: `name`, `until`, `deferrals`, `reason`) or a group at its warm-up cap (`kind` warmup: `name`, `until`, `waiting`, `reason`)."
+        truncated:
+          type: boolean
+    BanRow:
+      type: object
+      required: [subject, reason, until]
+      properties:
+        subject:
+          type: string
+          description: "`ip:<address>`, `cidr:<network>`, `pair:<login>|<client>` or `account:<login>`."
+        reason:
+          type: string
+          description: The rule that raised the ban, or `manual ban`.
+        until:
+          type: integer
+          description: Unix seconds the ban ends.
+    BanPage:
+      type: object
+      required: [bans]
+      properties:
+        bans:
+          type: array
+          items:
+            $ref: "#/components/schemas/BanRow"
+        next_cursor:
+          type: string
+          description: Pass as `cursor` to fetch the next page; absent on the last page.
+    AddBan:
+      type: object
+      required: [target]
+      additionalProperties: false
+      properties:
+        target:
+          type: string
+          description: An address (`203.0.113.9`) or a network (`203.0.113.0/24`).
+        for:
+          type: string
+          description: How long the ban lasts, a number and a unit `s`, `m`, `h`, `d` or `w`. A day when absent.
+    BanAdded:
+      type: object
+      required: [changed, target, until]
+      properties:
+        changed:
+          type: boolean
+        target:
+          type: string
+        until:
+          type: integer
+          description: Unix seconds the ban ends.
+    BanLifted:
+      type: object
+      required: [changed, target, bans, failures]
+      properties:
+        changed:
+          type: boolean
+        target:
+          type: string
+        bans:
+          type: integer
+          description: Bans removed.
+        failures:
+          type: integer
+          description: Failure records cleared.
+    BanAllowList:
+      type: object
+      required: [allow]
+      properties:
+        allow:
+          type: array
+          items:
+            type: string
+    AddBanAllow:
+      type: object
+      required: [cidr]
+      additionalProperties: false
+      properties:
+        cidr:
+          type: string
+          description: An address or a network.
+    BanAllowChanged:
+      type: object
+      required: [changed, cidr]
+      properties:
+        changed:
+          type: boolean
+          description: False when the block was already on the list.
+        cidr:
+          type: string
+          description: The block in its canonical form.
     Domains:
       type: object
       required: [domains, disabled, details]
@@ -3683,15 +4635,25 @@ components:
           items:
             $ref: "#/components/schemas/SendRecipient"
           default: []
-          description: Envelope only; never written into the message, and a name here appears in no header.
+          description: "Envelope only; never written into the message, and a name here appears in no header. With `to` and `cc` empty the message carries `To: undisclosed-recipients:;`."
         reply_to:
-          $ref: "#/components/schemas/SendRecipient"
+          description: One recipient, or a list of at most 10, written as one `Reply-To` header. An empty list writes none, and `null` is read as the field being absent.
+          oneOf:
+            - $ref: "#/components/schemas/SendRecipient"
+            - type: array
+              maxItems: 10
+              items:
+                $ref: "#/components/schemas/SendRecipient"
         sender:
           type: string
           description: Written as `Sender`. Must be an address the account owns, like `from`.
+        envelope_from:
+          type: string
+          description: The envelope sender (`MAIL FROM`), where bounces and delivery reports go. Must be an address the account owns, like `from`. Absent is `from`. An empty string is refused; the null sender is not offered. Held to the key's domains and to the tenants' sending limits like `from`.
         subject:
           type: string
           default: ""
+          description: A request with no subject, no `text`, no `html` and no attachment or inline part is an empty message and is refused.
         text:
           type: string
         html:
@@ -3764,14 +4726,42 @@ components:
             values at most 256 bytes.
         class:
           $ref: "#/components/schemas/MailClass"
+        dry_run:
+          type: boolean
+          default: false
+          description: Run every check of a send and answer what would happen (`DryRun`), without queueing, delivering, charging a rate limit, recording a recipient, writing evidence or saving a Sent copy. `null` is read as `false`. A marketing dry run reads the suppression lists, so it needs an unconfined credential with the manage:read scope and is `403` for any other, whatever the lists hold. For a confined credential a dry run does not measure aliases.
+    DryRun:
+      type: object
+      required: [dry_run, class, recipients, size]
+      description: What a request with `dry_run` would have done. There is no queue id and no `message_id`, because nothing was queued.
+      properties:
+        dry_run:
+          type: boolean
+          const: true
+        class:
+          $ref: "#/components/schemas/MailClass"
+        recipients:
+          type: integer
+          description: Envelope recipients left once suppression is applied.
+        size:
+          type: integer
+          description: The size in bytes of the message as it would be queued, about, because its `Date` and `Message-ID` are made when it is really sent.
+        suppressed:
+          type: array
+          items:
+            type: string
+          description: Recipients that would be dropped because they are on a suppression list (marketing only). Absent when none.
     Queued:
       type: object
-      required: [queued, class]
+      required: [queued, message_id, class]
       properties:
         queued:
           type: string
           format: uuid
           description: The queue id, also the `spool_id` of delivery records and webhook events.
+        message_id:
+          type: string
+          description: The `Message-ID` header of the message as written, with its angle brackets (`<id@domain>`). It is the value a reply puts in `in_reply_to` and `references`.
         class:
           $ref: "#/components/schemas/MailClass"
         cancel_until:

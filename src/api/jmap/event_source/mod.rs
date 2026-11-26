@@ -224,7 +224,7 @@ impl Events {
 		super::websocket::credential_still_valid(&self.state, &self.auth, &self.principal)
 			&& self
 				.state
-				.require_scope_for_principal(&self.principal, Scope::Read)
+				.require_scope_for_principal(&self.principal, Scope::MailRead)
 				.is_ok()
 	}
 

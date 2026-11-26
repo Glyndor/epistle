@@ -36,6 +36,13 @@ pub enum AuthorDomain {
 /// The unfolded values of every From field in the header block of `raw`,
 /// or `None` when the header block is not UTF-8.
 pub fn from_fields(raw: &[u8]) -> Option<Vec<String>> {
+	named_fields(raw, "from")
+}
+
+/// The unfolded values of every field called `wanted` (any case) in the
+/// header block of `raw`, in order, or `None` when the header block is not
+/// UTF-8.
+fn named_fields(raw: &[u8], wanted: &str) -> Option<Vec<String>> {
 	let block = std::str::from_utf8(crate::util::header_block::split_at_blank_line(raw).0).ok()?;
 	let mut fields = Vec::new();
 	let mut current: Option<String> = None;
@@ -61,7 +68,7 @@ pub fn from_fields(raw: &[u8]) -> Option<Vec<String>> {
 		if let Some((name, value)) = line.split_once(':')
 			&& name
 				.trim_end_matches([' ', '\t'])
-				.eq_ignore_ascii_case("from")
+				.eq_ignore_ascii_case(wanted)
 		{
 			current = Some(value.to_string());
 		}
@@ -86,6 +93,64 @@ pub fn author(raw: &[u8]) -> Author {
 			}
 		}
 		_ => Author::MultipleFields,
+	}
+}
+
+/// Every address of every From field of `raw`, in the lowercase form the
+/// envelope holds. What a check keyed by sender asks about besides the
+/// envelope sender, so a message is held to the lists of each address it
+/// claims to come from. Empty when the header block is not UTF-8 or has none.
+pub fn all_addresses(raw: &[u8]) -> Vec<String> {
+	let mut out: Vec<String> = Vec::new();
+	for value in from_fields(raw).unwrap_or_default() {
+		for address in addresses(&value) {
+			let address = crate::util::address::normalize(&address);
+			if !out.contains(&address) {
+				out.push(address);
+			}
+		}
+	}
+	out
+}
+
+/// Every address of every `Sender` field of `raw`, in the lowercase form the
+/// envelope holds, read the way the From field is: all of the fields, not
+/// the first, and every address of each. RFC 5322 allows one `Sender`, but a
+/// message may carry more, and each is something the message says it was sent
+/// by. Empty when the header block is not UTF-8 or has none.
+pub fn all_sender_addresses(raw: &[u8]) -> Vec<String> {
+	let mut out: Vec<String> = Vec::new();
+	for value in named_fields(raw, "sender").unwrap_or_default() {
+		for address in addresses(&value) {
+			let address = crate::util::address::normalize(&address);
+			if !out.contains(&address) {
+				out.push(address);
+			}
+		}
+	}
+	out
+}
+
+/// Whether a `Sender` field of `raw` cannot be read: the header block is not
+/// UTF-8, or a field names no address at all. A check that goes through the
+/// addresses of the fields would pass such a message without having checked
+/// anything, so the caller refuses it.
+pub fn sender_unreadable(raw: &[u8]) -> bool {
+	match named_fields(raw, "sender") {
+		None => true,
+		Some(fields) => fields.iter().any(|value| addresses(value).is_empty()),
+	}
+}
+
+/// The one address `raw` is written under, or `fallback` when it names none
+/// or several. The tenant and the retention of a submission follow it, not
+/// the envelope sender, which a caller may choose among the addresses it owns.
+pub fn sole_address(raw: &[u8], fallback: &str) -> String {
+	match author(raw) {
+		Author::Addresses(addresses) if addresses.len() == 1 => {
+			crate::util::address::normalize(&addresses[0])
+		}
+		_ => fallback.to_string(),
 	}
 }
 

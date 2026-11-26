@@ -30,7 +30,7 @@ mod reload_api;
 pub use masked::{MaskedAddress, MaskedAddressStore, MaskedAddressView};
 
 pub mod removal;
-pub use removal::{QueuePolicy, Removed, remove_account};
+pub use removal::{QueuePolicy, Removed, remove_account, remove_account_if};
 
 pub mod sql;
 pub use sql::{SqlAccount, load_sql_accounts};
@@ -75,6 +75,19 @@ mod collisions;
 mod credential_fingerprint;
 pub mod credential_reset;
 pub use credential_reset::{CredentialReset, NewPassword, ResetTarget};
+
+/// The changes one request makes to a dynamic account, written together by
+/// [`AccountStore::change_account_if`]. A field that is `None` is left as it
+/// is.
+#[derive(Debug, Default)]
+pub struct AccountChanges {
+	/// Whether the account is administratively disabled.
+	pub disabled: Option<bool>,
+	/// A new password.
+	pub password: Option<NewPassword>,
+	/// A new display name, as the client sent it; empty clears it.
+	pub display_name: Option<String>,
+}
 pub mod display_name;
 mod limits;
 mod mutate_store;
@@ -94,6 +107,10 @@ pub use crate::directory_store::scram_upgrade::{NoopScramUpgrader, ScramUpgrader
 struct DynamicFile {
 	#[serde(default)]
 	accounts: Vec<DynamicAccount>,
+	/// The accounts being removed, by name, with the token of the removal
+	/// that holds each: see [`removal::reservation`].
+	#[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+	removals: std::collections::BTreeMap<String, String>,
 }
 
 /// The mutable account store: static accounts + persisted dynamic ones.
@@ -217,11 +234,25 @@ impl AccountStore {
 	}
 
 	/// Add a dynamic account. `password_hash` must already be argon2id.
-	pub fn add(&self, mut account: DynamicAccount) -> Result<(), StoreError> {
+	pub fn add(&self, account: DynamicAccount) -> Result<(), StoreError> {
+		self.add_if(account, || true)
+	}
+
+	/// [`add`](Self::add) for a caller whose authority was decided before the
+	/// account was prepared: `authorize` is asked under the store's lock, and a
+	/// refusal answers like an account that does not exist.
+	pub fn add_if(
+		&self,
+		mut account: DynamicAccount,
+		authorize: impl FnOnce() -> bool,
+	) -> Result<(), StoreError> {
 		account.name = normalize::account_name(&account.name);
 		normalize::account(&mut account);
 		account.display_name = display_name::stored(account.display_name.as_deref())?;
 		self.mutate_store_hosted(|state| {
+			if !authorize() {
+				return Err(StoreError::NotFound(account.name.clone()));
+			}
 			self.check_name_and_addresses(&account)?;
 			let name_taken = self
 				.static_accounts
@@ -263,12 +294,29 @@ impl AccountStore {
 		replacement: DynamicAccount,
 		new_password: Option<NewPassword>,
 	) -> Result<(), StoreError> {
+		self.replace_account_if(name, replacement, new_password, |_| true)
+	}
+
+	/// [`replace_account`](Self::replace_account) for a caller whose reach
+	/// over the account was decided before the replacement was built:
+	/// `authorize` is asked about the stored account under the store's lock,
+	/// and a refusal answers like an account that does not exist.
+	pub fn replace_account_if(
+		&self,
+		name: &str,
+		replacement: DynamicAccount,
+		new_password: Option<NewPassword>,
+		authorize: impl FnOnce(&DynamicAccount) -> bool,
+	) -> Result<(), StoreError> {
 		self.mutate_store_hosted(|state| {
 			let slot = state
 				.accounts
 				.iter()
 				.position(|existing| existing.name == name)
 				.ok_or_else(|| StoreError::NotFound(name.to_string()))?;
+			if !authorize(&state.accounts[slot]) {
+				return Err(StoreError::NotFound(name.to_string()));
+			}
 			let mut fresh = replacement;
 			fresh.name = name.to_string();
 			credential_reset::carry(&state.accounts[slot], &mut fresh, new_password);

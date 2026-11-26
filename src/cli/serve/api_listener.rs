@@ -24,6 +24,27 @@ pub(super) struct Inputs<'a> {
 	)>,
 	/// The hosted-domain state the routes answer with and write through.
 	pub live: &'a Arc<crate::editable::LiveConfig>,
+	/// The ban store the ban routes manage, with a `[database]`.
+	pub ban_admin: &'a Option<Arc<dyn crate::antispam::bans::operator::BanAdmin>>,
+	/// Where the configuration was read from, which the health routes name.
+	pub config_path: &'a Option<std::path::PathBuf>,
+	/// The places for health runs, shared by every API listener.
+	pub health_gate: &'a crate::api::HealthGate,
+}
+
+/// The state every listener that serves the API shares: built for the first,
+/// cloned for the others, so a limit or a counter means the same on all of them.
+pub(super) fn shared(
+	slot: &mut Option<crate::api::ApiState>,
+	config: &Config,
+	inputs: Inputs<'_>,
+) -> std::io::Result<crate::api::ApiState> {
+	if let Some(state) = slot {
+		return Ok(state.clone());
+	}
+	let built = build(config, inputs)?;
+	*slot = Some(built.clone());
+	Ok(built)
 }
 
 pub(super) fn build(config: &Config, inputs: Inputs<'_>) -> std::io::Result<crate::api::ApiState> {
@@ -43,6 +64,9 @@ pub(super) fn build(config: &Config, inputs: Inputs<'_>) -> std::io::Result<crat
 		tenant_limits,
 		bayes,
 		live,
+		ban_admin,
+		config_path,
+		health_gate,
 	} = inputs;
 	// Validation guarantees [api] exists for api listeners.
 	let api = config
@@ -91,6 +115,13 @@ pub(super) fn build(config: &Config, inputs: Inputs<'_>) -> std::io::Result<crat
 	.with_new_recipients_per_day(daily_new_recipients)
 	.with_outbound(Arc::clone(sink));
 	state = ratelimit::wire_api_submission_limits(state, config, send_limiter, tenant_limits);
+	state = state.with_health_gate(health_gate.clone());
+	if let Some(path) = config_path {
+		state = state.with_config_path(path.clone());
+	}
+	if let Some(admin) = ban_admin {
+		state = state.with_ban_admin(Arc::clone(admin));
+	}
 	if let Some((store, queue)) = bayes {
 		state = state
 			.with_training(queue.clone())

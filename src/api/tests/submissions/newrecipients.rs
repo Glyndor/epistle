@@ -13,7 +13,10 @@ use axum::http::StatusCode;
 /// the cap layer attached; re-implementing rather than threading two
 /// new arguments through the existing builder keeps the prior tests
 /// (which never set the cap) bit-for-bit identical.
-fn test_state_with_cap(dir: &std::path::Path, limit: Option<u32>) -> ApiState {
+pub(in crate::api::tests) fn test_state_with_cap(
+	dir: &std::path::Path,
+	limit: Option<u32>,
+) -> ApiState {
 	let spool = FsSpool::open(dir).expect("open spool");
 	let accounts = vec![crate::config::Account {
 		send: None,
@@ -92,3 +95,4 @@ async fn send_over_the_daily_new_recipient_limit_is_429() {
 }
 
 mod correspondents;
+mod unavailable;

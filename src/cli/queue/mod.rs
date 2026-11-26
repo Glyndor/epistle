@@ -18,6 +18,7 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::config::Storage;
+use crate::queue::inspect::{Holder, Refused, Steer, Steered, steer};
 use crate::storage::{Envelope, FsSpool};
 
 mod destinations;
@@ -117,13 +118,9 @@ pub(super) fn run(
 		QueueCli::List { .. } => list(data_dir, storage, out),
 		QueueCli::Show { id, json: leaf } if leaf || json => show_json(&spool, id, out),
 		QueueCli::Show { id, .. } => show(&spool, id, now, out),
-		QueueCli::Retry(target) => edit_many(&spool, &target, "retried", json, out, |e| {
-			e.next_attempt = 0;
-		}),
-		QueueCli::Hold(target) => edit_many(&spool, &target, "held", json, out, |e| e.hold(now)),
-		QueueCli::Release(target) => edit_many(&spool, &target, "released", json, out, |e| {
-			e.release(now);
-		}),
+		QueueCli::Retry(target) => edit_many(&spool, &target, Steer::Retry, now, json, out),
+		QueueCli::Hold(target) => edit_many(&spool, &target, Steer::Hold, now, json, out),
+		QueueCli::Release(target) => edit_many(&spool, &target, Steer::Release, now, json, out),
 		QueueCli::Destinations { json: leaf } => destinations::list(&spool, now, leaf || json, out),
 		QueueCli::ReleaseDestination(target) => {
 			destinations::release(&spool, &target, now, json, out)
@@ -364,43 +361,44 @@ fn show_json(spool: &FsSpool, id: Uuid, out: &mut impl Write) -> ExitCode {
 		Ok(envelope) => envelope,
 		Err(error) => return entry_error(id, &error),
 	};
-	let view = serde_json::json!({
-		"id": envelope.id,
-		"reverse_path": envelope.reverse_path,
-		"recipients": envelope.recipients,
-		"attempts": envelope.attempts,
-		"next_attempt": envelope.next_attempt,
-		"held": envelope.held.is_some(),
-		"held_since": envelope.held,
-		"require_tls": envelope.require_tls,
-		"last_error": envelope.last_error,
-	});
+	let view = crate::queue::inspect::show_view(&envelope);
 	super::json_out::print(out, &view)
 }
 
-/// Apply `edit` to one entry or to every entry, then say how many changed.
+/// Apply `change` to one entry or to every entry, then say how many changed.
 fn edit_many(
 	spool: &FsSpool,
 	target: &Target,
-	verb: &str,
+	change: Steer,
+	now: u64,
 	json: bool,
 	out: &mut impl Write,
-	edit: impl Fn(&mut Envelope),
 ) -> ExitCode {
-	let action = match verb {
-		"retried" => "retry",
-		"held" => "hold",
-		_ => "release",
+	let action = change.name();
+	let verb = match change {
+		Steer::Retry => "retried",
+		Steer::Hold => "held",
+		Steer::Release => "released",
 	};
 	if let Some(id) = target.id {
-		return match spool.update_envelope(id, edit) {
-			Ok(envelope) if json => {
+		return match steer(spool, id, change, &Holder::Operator, now) {
+			Ok(Steered {
+				refused: Some(Refused::Cancelling),
+				..
+			}) => super::exit::refused(format_args!(
+				"the entry {id} is being removed: it stays on hold until it is"
+			)),
+			Ok(Steered {
+				refused: Some(Refused::HeldByOther),
+				..
+			}) => super::exit::refused(format_args!("the hold of {id} is not one to lift")),
+			Ok(Steered { envelope, .. }) if json => {
 				let fields = serde_json::json!({
 					"id": id.to_string(), "held": envelope.held.is_some(),
 				});
 				super::json_out::Report::new(out, json).change(action, true, fields, None)
 			}
-			Ok(envelope) => {
+			Ok(Steered { envelope, .. }) => {
 				let _ = writeln!(out, "{verb} {id}");
 				note_if_held(verb, &envelope, out);
 				ExitCode::SUCCESS
@@ -414,7 +412,10 @@ fn edit_many(
 	};
 	let mut changed = 0usize;
 	for id in ids {
-		match spool.update_envelope(id, &edit) {
+		match steer(spool, id, change, &Holder::Operator, now) {
+			Ok(Steered {
+				refused: Some(_), ..
+			}) => {}
 			Ok(_) => changed += 1,
 			// The worker delivered or dropped it since the listing.
 			Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}

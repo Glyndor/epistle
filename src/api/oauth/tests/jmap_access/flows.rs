@@ -108,6 +108,7 @@ async fn static_and_api_key_authentication_keep_working_with_oauth_enabled() {
 	crate::api::ApiKeyStore::open(dir.path())
 		.unwrap()
 		.add(crate::api::ApiKey {
+			grants: Vec::new(),
 			label: "operator".into(),
 			hash: crate::api::api_keys::sha256_hash(secret),
 			expires_at: None,

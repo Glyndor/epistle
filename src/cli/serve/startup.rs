@@ -4,6 +4,13 @@ use crate::config::Config;
 use std::sync::Arc;
 
 pub(super) fn api_keys(config: &Config) -> Arc<crate::api::ApiKeySet> {
+	// A file an earlier build wrote may hold keys that a rollback would widen;
+	// this writes them the way 0.15.0 does, and writes nothing when they are.
+	if let Err(error) = crate::api::ApiKeyStore::open(&config.data_dir)
+		.and_then(|mut store| store.prepare_for_v014())
+	{
+		tracing::warn!(%error, "api_keys.toml not prepared for a rollback");
+	}
 	Arc::new(
 		crate::api::ApiKeySet::open(&config.data_dir)
 			.unwrap_or_else(|error| {

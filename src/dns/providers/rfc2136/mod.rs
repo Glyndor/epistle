@@ -304,7 +304,12 @@ fn record_rdata(kind: &RecordKind, value: &str) -> Result<RData, ProviderError> 
 			// (<https://www.rfc-editor.org/rfc/rfc2136.txt>, read
 			// 2026-10-12), so the cut must be the same on every call:
 			// it is always `txt_character_strings` of the logical value.
-			Ok(RData::TXT(TXT::new(txt_character_strings(value))))
+			let strings = txt_character_strings(value)
+				.into_iter()
+				.map(String::into_bytes);
+			let txt = TXT::try_new(strings)
+				.map_err(|e| ProviderError::Remote(format!("bad TXT value: {e}")))?;
+			Ok(RData::TXT(txt))
 		}
 		RecordKind::Tlsa => {
 			// TLSA in presentation form: "usage selector matching cert-hex".

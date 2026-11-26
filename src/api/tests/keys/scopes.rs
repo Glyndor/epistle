@@ -16,6 +16,7 @@ async fn read_scoped_key_is_admitted_on_get() {
 	let mut key_store = crate::api::ApiKeyStore::open(dir.path()).expect("open key store");
 	key_store
 		.add(crate::api::api_keys::ApiKey {
+			grants: Vec::new(),
 			label: "reader".to_string(),
 			hash: crate::api::api_keys::sha256_hash("reader-secret"),
 			expires_at: None,
@@ -42,6 +43,7 @@ async fn read_scoped_key_is_rejected_on_send() {
 	let mut key_store = crate::api::ApiKeyStore::open(dir.path()).expect("open key store");
 	key_store
 		.add(crate::api::api_keys::ApiKey {
+			grants: Vec::new(),
 			label: "reader".to_string(),
 			hash: crate::api::api_keys::sha256_hash("reader-secret"),
 			expires_at: None,
@@ -77,6 +79,7 @@ async fn queue_removal_requires_the_write_scope() {
 	let mut key_store = crate::api::ApiKeyStore::open(dir.path()).expect("open key store");
 	key_store
 		.add(crate::api::api_keys::ApiKey {
+			grants: Vec::new(),
 			label: "reader".to_string(),
 			hash: crate::api::api_keys::sha256_hash("reader-secret"),
 			expires_at: None,
@@ -116,6 +119,7 @@ async fn send_scoped_key_is_rejected_on_write() {
 	let mut key_store = crate::api::ApiKeyStore::open(dir.path()).expect("open key store");
 	key_store
 		.add(crate::api::api_keys::ApiKey {
+			grants: Vec::new(),
 			label: "sender".to_string(),
 			hash: crate::api::api_keys::sha256_hash("sender-secret"),
 			expires_at: None,
@@ -156,6 +160,7 @@ async fn send_scoped_key_is_admitted_on_send() {
 	let mut key_store = crate::api::ApiKeyStore::open(dir.path()).expect("open key store");
 	key_store
 		.add(crate::api::api_keys::ApiKey {
+			grants: Vec::new(),
 			label: "sender".to_string(),
 			hash: crate::api::api_keys::sha256_hash("sender-secret"),
 			expires_at: None,
@@ -193,6 +198,7 @@ async fn a_key_without_the_scope_does_not_spend_the_failure_budget() {
 	let mut key_store = crate::api::ApiKeyStore::open(dir.path()).expect("open key store");
 	key_store
 		.add(crate::api::api_keys::ApiKey {
+			grants: Vec::new(),
 			label: "reader".to_string(),
 			hash: crate::api::api_keys::sha256_hash("reader-secret"),
 			expires_at: None,

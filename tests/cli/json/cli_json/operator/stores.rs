@@ -121,14 +121,17 @@ fn app_password_create_shows_the_secret_once_then_revoke() {
 #[test]
 fn api_key_create_rotate_revoke() {
 	let env = env("");
-	let (code, mut created) = run(&env.config, &["api-key", "create", "ci", "--scope", "read"]);
+	let (code, mut created) = run(
+		&env.config,
+		&["api-key", "create", "ci", "--scope", "manage:read"],
+	);
 	assert_eq!(code, 0);
 	let first = created["key"].take();
 	assert_eq!(
 		created,
 		json!({
 			"result": "saved", "action": "create", "label": "ci", "key": null,
-			"scopes": ["read"], "domains": [], "account": null, "expires_at": null, "ip_cidr": null,
+			"scopes": ["manage:read"], "domains": [], "account": null, "expires_at": null, "ip_cidr": null,
 		})
 	);
 	assert_eq!(

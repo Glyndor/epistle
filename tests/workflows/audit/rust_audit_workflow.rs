@@ -91,7 +91,7 @@ fn rust_audit_workflow_pins_daily_matrix_and_open_issue_path() {
 		!has_pr,
 		"rust-audit.yml has a `pull_request:` trigger.\n\
          The audit of a pull request is a suite of the gate in ci.yml; the \
-         workflow here runs on schedule, on dispatch and on a push to develop.",
+         workflow here runs on schedule and on dispatch.",
 	);
 
 	let matrix_section = extract_block(&text, "matrix:")

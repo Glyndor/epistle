@@ -27,6 +27,7 @@ pub(in super::super) fn push_state(dir: &std::path::Path) -> Router {
 	] {
 		key_store
 			.add(crate::api::api_keys::ApiKey {
+				grants: Vec::new(),
 				label: label.to_string(),
 				hash: crate::api::api_keys::sha256_hash(secret),
 				expires_at: None,

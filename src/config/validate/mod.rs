@@ -278,6 +278,9 @@ impl Config {
 			crate::config::ListenerKind::Submission
 				| crate::config::ListenerKind::WebDav
 				| crate::config::ListenerKind::Api
+				| crate::config::ListenerKind::Jmap
+				| crate::config::ListenerKind::Scim
+				| crate::config::ListenerKind::Oauth
 				| crate::config::ListenerKind::Autoconfig
 				| crate::config::ListenerKind::Metrics
 		)

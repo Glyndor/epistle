@@ -8,6 +8,7 @@ use crate::limits::{Gate, Target, test_support::shared};
 
 fn bound(label: &str, account: Option<&str>) -> ApiKey {
 	ApiKey {
+		grants: Vec::new(),
 		label: label.to_string(),
 		hash: sha256_hash(label),
 		expires_at: None,

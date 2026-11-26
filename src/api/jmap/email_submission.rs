@@ -5,6 +5,7 @@ use serde_json::{Value, json};
 use super::super::Principal;
 use super::super::state::ApiState;
 use super::objects;
+use crate::api::new_recipients::CapRefusal;
 
 use crate::smtp::trace::ensure_submission_headers;
 
@@ -172,6 +173,13 @@ fn submit_email(
 	if !crate::api::mail_from::owns_author(state, account, &raw) {
 		return Err("forbiddenFrom".into());
 	}
+	// The account may own an address in a domain the credential does not
+	// reach (a list it is a member of): the sender, the author and the
+	// `Sender` field are each held to the key's domains, as
+	// `POST /api/v1/send` holds them. Before any evidence is prepared or any
+	// budget is asked for. The null reverse path names no domain and is
+	// outside every declared one, so a confined key cannot use it.
+	check_reach(state, principal, account, &raw, &mail_from)?;
 	// Stamp Message-ID and Date on the queued copy when the client did not
 	// include them. Domain is the envelope's MAIL FROM, falling back to the
 	// first configured domain when the envelope has none (the null reverse
@@ -288,31 +296,14 @@ fn submit_email(
 	// resource; RFC 8621 §3.6.2 carries it through. The on-wire error
 	// keeps the same wording as the SMTP / REST paths so an operator
 	// reading either log can correlate by the message.
-	if let Some(store) = state.correspondents() {
-		let recipient_refs: Vec<&str> = recipients.iter().map(String::as_str).collect();
-		match store.enforce_new_recipient_cap(
-			account,
-			&recipient_refs,
-			state.new_recipients_per_day(),
-		) {
-			Ok(crate::storage::CapOutcome::Limited {
-				new,
-				already,
-				limit,
-			}) => {
-				crate::api::log_send_limited(account, None, new.saturating_add(already), limit);
-				return Err("tooManyRecipients".into());
-			}
-			Ok(
-				crate::storage::CapOutcome::Allowed { .. } | crate::storage::CapOutcome::Uncapped,
-			) => {}
-			Err(error) => {
-				tracing::warn!(
-					account = %crate::log_id::account(account),
-					%error,
-					"correspondent store error; accepting"
-				);
-			}
+	match crate::api::new_recipients::reserve(state, account, &recipients, false) {
+		Ok(()) => {}
+		Err(CapRefusal::Limited) => return Err("tooManyRecipients".into()),
+		Err(CapRefusal::Unavailable) => {
+			return Err(Refusal {
+				kind: "serverUnavailable",
+				description: Some("the new-recipient limit cannot be checked right now".into()),
+			});
 		}
 	}
 	// A full local mailbox is refused now, not bounced days later
@@ -406,6 +397,39 @@ fn submit_email(
 		state.save_sent_copy(account, &sent_copy, request_save_sent);
 	}
 	Ok(id.to_string())
+}
+
+/// Hold every address the message is sent under to the account that sends it
+/// and to the domains of the credential: the envelope sender, the author and
+/// the `Sender` field, the three `POST /api/v1/send` asks the same of.
+fn check_reach(
+	state: &ApiState,
+	principal: &Principal,
+	account: &str,
+	raw: &[u8],
+	mail_from: &str,
+) -> Result<(), Refusal> {
+	// A `Sender` field that names no address is not one that passed.
+	if crate::dmarc::author::sender_unreadable(raw) {
+		return Err("forbiddenFrom".into());
+	}
+	let sender_field = crate::dmarc::author::all_sender_addresses(raw);
+	for sender in &sender_field {
+		crate::api::mail_from::check_mail_from(state, account, sender).map_err(|refusal| {
+			match refusal {
+				crate::api::mail_from::MailFromRefusal::Invalid => "invalidEmail",
+				crate::api::mail_from::MailFromRefusal::NotOwned => "forbiddenFrom",
+			}
+		})?;
+	}
+	let mut senders = crate::dmarc::author::all_addresses(raw);
+	senders.extend(sender_field);
+	senders.push(mail_from.to_string());
+	if senders.iter().all(|sender| principal.admits_sender(sender)) {
+		Ok(())
+	} else {
+		Err("forbiddenFrom".into())
+	}
 }
 
 /// Whether `a` and `b` name the same mailbox: the domain compared without

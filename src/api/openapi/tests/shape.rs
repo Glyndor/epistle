@@ -344,6 +344,7 @@ fn every_error_code_and_status_the_api_can_answer_is_listed() {
 		("TOO_MANY_REQUESTS", "429"),
 		("INTERNAL_SERVER_ERROR", "500"),
 		("SERVICE_UNAVAILABLE", "503"),
+		("GATEWAY_TIMEOUT", "504"),
 		("INSUFFICIENT_STORAGE", "507"),
 	]);
 	let mut listed = BTreeSet::new();

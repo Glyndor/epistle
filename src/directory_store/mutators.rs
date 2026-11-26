@@ -9,7 +9,7 @@
 use crate::util::address::normalize;
 use crate::util::address_reason;
 
-use super::{AccountStore, DynamicAccount, StoreError};
+use super::{AccountChanges, AccountStore, DynamicAccount, NewPassword, StoreError};
 
 impl AccountStore {
 	/// Whether the named account comes from the static configuration. The
@@ -261,16 +261,77 @@ impl AccountStore {
 		hash: String,
 		scram: Option<crate::smtp::scram::ScramStored>,
 	) -> Result<(), StoreError> {
+		self.set_password_hash_if(name, hash, scram, |_| true)
+	}
+
+	/// [`set_password_hash`](Self::set_password_hash) for a caller whose
+	/// reach over the account was decided before the password was derived:
+	/// `authorize` is asked about the account as it is under the store's
+	/// lock, just before it is changed, and a refusal answers like an
+	/// account that does not exist, with the credentials untouched. The
+	/// account may have moved out of the caller's reach in between.
+	pub fn set_password_hash_if(
+		&self,
+		name: &str,
+		hash: String,
+		scram: Option<crate::smtp::scram::ScramStored>,
+		authorize: impl FnOnce(&DynamicAccount) -> bool,
+	) -> Result<(), StoreError> {
 		self.mutate_store(|state| {
 			let target = state
 				.accounts
 				.iter_mut()
 				.find(|account| account.name == name)
 				.ok_or_else(|| StoreError::NotFound(name.to_string()))?;
+			if !authorize(target) {
+				return Err(StoreError::NotFound(name.to_string()));
+			}
 			target.password_hash = hash;
 			target.scram = scram;
 			target.rehashed = None;
 			super::credential_reset::password_replaced(target);
+			Ok(())
+		})?;
+		Ok(())
+	}
+
+	/// Apply several changes to a dynamic account in one write, for a caller
+	/// whose reach over the account was decided before the changes were
+	/// prepared: `authorize` is asked about the account as it is under the
+	/// store's lock. Either every change is written or none is: a value the
+	/// store refuses, a refusal or an unknown account leaves it as it was.
+	pub fn change_account_if(
+		&self,
+		name: &str,
+		changes: AccountChanges,
+		authorize: impl FnOnce(&DynamicAccount) -> bool,
+	) -> Result<(), StoreError> {
+		let display_name = changes
+			.display_name
+			.as_deref()
+			.map(|raw| super::display_name::validate(raw).map_err(StoreError::Invalid))
+			.transpose()?;
+		self.mutate_store(|state| {
+			let target = state
+				.accounts
+				.iter_mut()
+				.find(|account| account.name == name)
+				.ok_or_else(|| StoreError::NotFound(name.to_string()))?;
+			if !authorize(target) {
+				return Err(StoreError::NotFound(name.to_string()));
+			}
+			if let Some(disabled) = changes.disabled {
+				target.disabled = disabled;
+			}
+			if let Some(NewPassword { hash, scram }) = changes.password {
+				target.password_hash = hash;
+				target.scram = scram;
+				target.rehashed = None;
+				super::credential_reset::password_replaced(target);
+			}
+			if let Some(display_name) = display_name {
+				target.display_name = display_name;
+			}
 			Ok(())
 		})?;
 		Ok(())

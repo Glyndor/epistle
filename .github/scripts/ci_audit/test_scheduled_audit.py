@@ -45,14 +45,12 @@ class Shape(unittest.TestCase):
 
 
 class Triggers(unittest.TestCase):
-    def test_cargo_deny_and_the_audit_also_run_on_every_push_to_develop_on_its_own_tree(self):
+    def test_the_audit_runs_on_schedule_and_dispatch_only_and_audits_both_branches(self):
         workflow = ci_yaml.load(ROOT / ".github/workflows/rust-audit.yml")
-        self.assertEqual(workflow[True]["push"], {"branches": ["develop"]})
-        matrix = workflow["jobs"]["audit"]["strategy"]["matrix"]["ref"]
-        self.assertIn("github.event_name == 'push'", matrix)
-        self.assertIn("'[\"\"]'", matrix)
-        # The pull request is audited by the gate in ci.yml, on every change.
-        self.assertNotIn("pull_request", workflow[True])
+        self.assertEqual(set(workflow[True]), {"schedule", "workflow_dispatch"})
+        self.assertEqual(workflow["jobs"]["audit"]["strategy"]["matrix"]["ref"], ["develop", "main"])
+        # The pull request and the queue entry are audited by the gate in ci.yml, on every change; a push
+        # to develop would audit the commit the queue just audited.
         self.assertNotIn("paths", str(workflow[True]))
 
     def test_a_push_never_opens_or_closes_an_issue(self):

@@ -1,3 +1,20 @@
+epistle (0.15.0) unstable; urgency=medium
+
+  * API keys: the `read` and `write` scopes are split into `manage:read`, `manage:write`, `mail:read` and `mail:write`. A key made before this release keeps what it reached; `api-key create` still takes `read` and `write` with a warning, and `stack update` refuses a stack that still has one from 0.17.0. `api-key set` replaces the scopes of a key.
+  * A rollback to 0.14.0 refuses, instead of widening, every key 0.14.0 would read as more than it holds, and 0.15.0 brings those keys back. A stack that uses a `jmap`, `scim` or `oauth` listener or `[api] surfaces` is not rolled back until they are removed.
+  * JMAP, SCIM and the OAuth grants can take listeners of their own (ports 8026, 8027 and 8028), and `[api] surfaces` says what the management listener serves; without it the configuration means what it did.
+  * The send API returns the `Message-ID`, takes `envelope_from` and `dry_run`, takes a list in `reply_to`, writes `To: undisclosed-recipients:;` for a message with only `bcc` recipients, refuses an empty message with `400`, and reads `reply_to` and `dry_run` written as `null` as absent.
+  * New routes for the DNS records (`/api/v1/dns`), the delivery queue (`/api/v1/queue`), the bans (`/api/v1/bans`, scope `ban`) and the health checks (`/api/v1/health`, scope `health`).
+  * `EmailSubmission/set` checks the envelope sender, the author and the `Sender` field as `POST /api/v1/send` does.
+  * A key, an account and the `send` scope are checked again after a request waits: once its body has been read, for JMAP uploads and downloads and WebSocket frames, and again when a SCIM or REST password change writes.
+  * A SCIM `PATCH` is written in one step, and one with an invalid operation is refused whole.
+  * Cancelling a held submission applies the domains of the key.
+  * A submission is refused when the cap of new recipients cannot be checked; before, it was accepted.
+  * An account is reserved before it is removed, so a removal does not act on an account that changed hands.
+  * Removing an account with its queue drops the messages the account submitted, not the ones that name its address as sender.
+
+ -- Glyndor <packages@glyndor.net>  Thu, 26 Nov 2026 19:40:00 +0000
+
 epistle (0.14.0) unstable; urgency=medium
 
   * Address aliases can be managed over the API: `GET /api/v1/aliases`, `POST /api/v1/aliases` and `DELETE /api/v1/aliases/{alias}`, behind a new `alias` scope that `read` and `write` do not open. The routes and `epistle alias` apply the same rules and write the same file, `address-aliases.toml` in the data directory, which the running server applies through its file watcher without a restart. Through the API every member has to be an account on this server (the command still allows outside addresses), an alias has at most 100 members, a key confined to some domains needs the alias and every member inside them, and the role addresses (`postmaster`, `abuse`, `hostmaster` and the others `docs/api.md` lists) and alias addresses that carry a sub-address tag are refused. A copy of a message still has the member in `Delivered-To`, not the alias.

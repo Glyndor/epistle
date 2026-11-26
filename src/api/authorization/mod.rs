@@ -91,6 +91,20 @@ impl std::fmt::Debug for Principal {
 }
 
 impl Principal {
+	/// Every scope a key can hold, for the places that need to find a key
+	/// whatever it holds (a secret that two keys share has no reach).
+	pub(crate) const EVERY_SCOPE: &'static [Scope] = &[
+		Scope::ManageRead,
+		Scope::ManageWrite,
+		Scope::MailRead,
+		Scope::MailWrite,
+		Scope::Send,
+		Scope::Scim,
+		Scope::Alias,
+		Scope::Ban,
+		Scope::Health,
+	];
+
 	/// An OAuth token always has explicit scopes and exactly one account.
 	pub(in crate::api) fn of_oauth(
 		account: String,
@@ -139,19 +153,10 @@ impl Principal {
 	/// one restriction, not one of them replacing the other. An account that
 	/// is present but empty names no account, so it reaches none.
 	pub fn of_key(key: &ApiKey, credential: Option<Credential>) -> Self {
-		let scopes = match key
-			.scopes
-			.iter()
-			.map(|scope| scope.parse::<Scope>())
-			.collect::<Result<Vec<Scope>, _>>()
-		{
-			// No scope declared is the legacy key: it holds every scope.
-			Ok(scopes) if scopes.is_empty() => None,
-			Ok(scopes) => Some(scopes),
-			// A scope this build cannot read is a scope the key does not
-			// hold. Refusing the whole key is the only fail-closed reading.
-			Err(_) => Some(Vec::new()),
-		};
+		// No scope declared is the legacy key: it holds every scope. A scope
+		// this build cannot read is a scope the key does not hold, and refusing
+		// the whole key is the only fail-closed reading.
+		let scopes = key.reach();
 		let domains = if key.domains.is_empty() {
 			None
 		} else {
@@ -182,6 +187,25 @@ impl Principal {
 	/// not know yet) reaches no account and holds no scope. It never falls
 	/// back to the reach of the configured token.
 	pub fn for_token(state: &ApiState, auth: &MatchedAuth) -> Principal {
+		let principal = Self::resolve(state, auth);
+		// The restrictions of a key bound to an account apply to every
+		// resolution, so that one made after a request's body has arrived is
+		// held to what the middleware asked: a route such a key may use, and
+		// an account that is still there to act on.
+		if principal.bound_account().is_some()
+			&& !(auth.account_scoped
+				&& crate::api::account_bound::bound_account_is_live(state, &principal))
+		{
+			return Principal::unreachable(principal.credential);
+		}
+		principal
+	}
+
+	/// The key of `auth` as it is now, without the restrictions that depend on
+	/// the route and on the bound account's state, which
+	/// [`for_token`](Self::for_token) adds: the middleware asks them itself, to
+	/// answer each with its own error.
+	pub(crate) fn resolve(state: &ApiState, auth: &MatchedAuth) -> Principal {
 		let Some(token) = auth.token.as_deref() else {
 			// The middleware never lets an unauthenticated request reach a
 			// handler, so the only way we get here is a bug in the wiring.
@@ -202,15 +226,8 @@ impl Principal {
 			.unwrap_or(0);
 		// The principal is independent of any specific scope: the key that
 		// authenticates the caller is the same key whether the route wants
-		// `read`, `write`, `send` or `scim`. The scopes it holds ride on the
+		// `manage:read`, `mail:write`, `send` or `scim`. The scopes it holds ride on the
 		// principal, and the route that needs one asks for it.
-		const EVERY_SCOPE: &[Scope] = &[
-			Scope::Read,
-			Scope::Write,
-			Scope::Send,
-			Scope::Scim,
-			Scope::Alias,
-		];
 		let credential = Credential {
 			token: token.to_string(),
 			client_ip: auth.client_ip,
@@ -218,9 +235,14 @@ impl Principal {
 		let keys = state.api_keys().snapshot();
 		let mut matching = keys
 			.iter()
-			.filter(|key| key.admits_any(token, auth.client_ip, now, EVERY_SCOPE));
+			.filter(|key| key.admits_any(token, auth.client_ip, now, Self::EVERY_SCOPE));
 		match (matching.next(), matching.next()) {
-			(Some(key), None) => Principal::of_key(key, Some(credential)),
+			// The key has to hold one of the scopes the request was admitted
+			// under, now and not as of the middleware: it is read again after
+			// the body, and the scopes may have been withdrawn in between.
+			(Some(key), None) if key.covers_any(&auth.acceptable_scopes) => {
+				Principal::of_key(key, Some(credential))
+			}
 			// Two keys share the secret, so the one that let the request in
 			// cannot be told from the other and no reach is safe to pick.
 			_ => Principal::unreachable(Some(credential)),
@@ -355,6 +377,8 @@ impl Principal {
 			.collect()
 	}
 }
+
+mod recheck;
 
 #[cfg(test)]
 mod tests;

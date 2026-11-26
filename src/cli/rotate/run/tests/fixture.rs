@@ -58,6 +58,7 @@ pub(super) fn server() -> Server {
 	for label in KEYS {
 		let hash = crate::api::api_keys::sha256_hash(&minted());
 		keys.add(ApiKey {
+			grants: Vec::new(),
 			label: label.to_string(),
 			hash: hash.clone(),
 			expires_at: None,

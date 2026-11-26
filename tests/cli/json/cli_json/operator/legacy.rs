@@ -149,7 +149,7 @@ fn api_key_flat_commands_match_the_resource_form() {
 	let flat_env = env("");
 	let (code, created) = run(
 		&flat_env,
-		&["api-key-create", "--label", "ci", "--scope", "read"],
+		&["api-key-create", "--label", "ci", "--scope", "manage:read"],
 	);
 	assert_eq!(code, 0);
 	let key = created["key"].as_str().expect("key").to_string();
@@ -157,7 +157,7 @@ fn api_key_flat_commands_match_the_resource_form() {
 	assert_eq!(
 		without(created, "key"),
 		json!({
-			"result": "saved", "action": "create", "label": "ci", "scopes": ["read"],
+			"result": "saved", "action": "create", "label": "ci", "scopes": ["manage:read"],
 			"domains": [], "account": null, "expires_at": null, "ip_cidr": null, "key": null,
 		})
 	);

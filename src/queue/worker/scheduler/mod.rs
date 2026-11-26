@@ -120,6 +120,7 @@ impl Worker {
 			// Skip entries already in hand, held, or still backing off.
 			if !schedule.rounds.contains_key(&id)
 				&& envelope.held.is_none()
+				&& envelope.cancelling.is_none()
 				&& self.wakes(&envelope, now)
 			{
 				due_entries.push((id, envelope));
@@ -153,6 +154,7 @@ impl Worker {
 	/// until its turn comes.
 	fn overdue(&self, id: Uuid, envelope: &crate::storage::Envelope, now: u64) -> bool {
 		envelope.held.is_none()
+			&& envelope.cancelling.is_none()
 			&& envelope.pending().iter().any(|recipient| {
 				!self.claims.holds(id, recipient)
 					&& self.window_used(id, envelope, recipient, now) >= self.max_age_secs
@@ -349,7 +351,9 @@ impl Worker {
 		};
 		// The entry may have been delivered, held or removed since the scan.
 		let entry = match self.spool.load(job.id) {
-			Ok(entry) if entry.envelope.held.is_none() => entry,
+			Ok(entry) if entry.envelope.held.is_none() && entry.envelope.cancelling.is_none() => {
+				entry
+			}
 			Ok(_) => return Started::Dropped(job.id),
 			Err(error) => {
 				if error.kind() != std::io::ErrorKind::NotFound {

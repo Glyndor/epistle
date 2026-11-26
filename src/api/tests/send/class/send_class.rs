@@ -156,6 +156,8 @@ fn the_class_bound_to_an_api_key_is_found_by_its_token() {
 		token: Some(token),
 		client_ip: None,
 		configured: false,
+		acceptable_scopes: crate::api::Principal::EVERY_SCOPE.to_vec(),
+		account_scoped: true,
 	};
 	assert_eq!(
 		state.class_sources(Some(&key), "alice", None).granted(),

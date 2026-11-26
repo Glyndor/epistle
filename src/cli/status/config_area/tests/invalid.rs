@@ -20,6 +20,8 @@ async fn an_invalid_file_fails_the_config_area_with_the_reason() {
 		podup: "podup".to_string(),
 		meminfo: std::path::PathBuf::from("meminfo-absent"),
 		steady: std::time::Duration::ZERO,
+		hold: None,
+		deadline: std::time::Instant::now() + std::time::Duration::from_secs(60),
 	};
 	let report = super::check(&ctx).await;
 	assert!(report.status == Level::Fail);

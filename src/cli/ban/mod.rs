@@ -14,14 +14,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use clap::Subcommand;
 use serde::Serialize;
 
+use crate::antispam::bans::operator::{self as admin, BanAdmin, Limits, Refusal, StoreError};
 use crate::antispam::bans::{BanRow, BanTarget, PgBanStore, UnbanTarget, parse_allow, parse_login};
 use crate::cidr::Cidr;
 use crate::config::Config;
-
-/// Default length of a manual ban when `--for` is not given.
-const DEFAULT_BAN_SECS: u64 = 24 * 3600;
-/// Longest manual ban accepted: keeps the end time far from timestamp limits.
-const MAX_BAN_SECS: u64 = 10 * 365 * 24 * 3600;
 
 /// Ban management actions.
 #[derive(Debug, Subcommand)]
@@ -94,35 +90,7 @@ pub enum AllowCli {
 	},
 }
 
-/// Parse `<number><unit>` into seconds (`s`, `m`, `h`, `d`, `w`; a bare number
-/// is seconds). Zero and anything above ten years are refused.
-pub(super) fn parse_duration(text: &str) -> Result<u64, String> {
-	let text = text.trim();
-	let split = text
-		.find(|c: char| !c.is_ascii_digit())
-		.unwrap_or(text.len());
-	let (digits, unit) = text.split_at(split);
-	let count: u64 = digits
-		.parse()
-		.map_err(|_| format!("{text:?} is not a duration; use a number and a unit, like 24h"))?;
-	let unit_secs = match unit {
-		"" | "s" => 1,
-		"m" => 60,
-		"h" => 3600,
-		"d" => 86_400,
-		"w" => 604_800,
-		other => {
-			return Err(format!(
-				"unknown duration unit {other:?}; use s, m, h, d or w"
-			));
-		}
-	};
-	let secs = count.saturating_mul(unit_secs);
-	if secs == 0 || secs > MAX_BAN_SECS {
-		return Err("a ban lasts between 1 second and 10 years".to_string());
-	}
-	Ok(secs)
-}
+pub(super) use crate::antispam::bans::operator::parse_duration;
 
 /// The current epoch second.
 pub(super) fn now_epoch() -> u64 {
@@ -175,7 +143,7 @@ pub(super) fn run(
 		match execute(&store, action, json, now, out, err).await {
 			Ok(code) => code,
 			Err(error) => {
-				super::style::error_to(err, format_args!("database: {error}"));
+				super::style::error_to(err, error);
 				ExitCode::FAILURE
 			}
 		}
@@ -204,14 +172,25 @@ fn render_rows(rows: &[BanRow], out: &mut impl Write) {
 	let _ = writeln!(out, "{} banned", rows.len());
 }
 
-async fn execute(
-	store: &PgBanStore,
+/// The refusal of an operation, said on `err`.
+fn refused(refusal: Refusal, err: &mut impl Write) -> Result<ExitCode, StoreError> {
+	match refusal {
+		Refusal::Store(error) => Err(error),
+		other => {
+			super::style::error_to(err, other);
+			Ok(ExitCode::FAILURE)
+		}
+	}
+}
+
+pub(super) async fn execute(
+	store: &dyn BanAdmin,
 	action: BanCli,
 	json: bool,
 	now: u64,
 	out: &mut impl Write,
 	err: &mut impl Write,
-) -> Result<ExitCode, sqlx::Error> {
+) -> Result<ExitCode, StoreError> {
 	match action {
 		BanCli::List { json: leaf } => {
 			let rows = store.list_bans(now).await?;
@@ -231,29 +210,16 @@ async fn execute(
 			}
 		}
 		BanCli::Add { target, duration } => {
-			if let BanTarget::Ip(ip) = target
-				&& store
-					.allow_list()
-					.await?
-					.iter()
-					.any(|entry| Cidr::parse(entry).is_some_and(|cidr| cidr.contains(ip)))
-			{
-				super::style::error_to(
-					err,
-					format_args!(
-						"{ip} is on the allow list, which overrides every ban; remove it there first"
-					),
-				);
-				return Ok(ExitCode::FAILURE);
-			}
-			let until = now.saturating_add(duration.unwrap_or(DEFAULT_BAN_SECS));
-			store.add_ban(target, now, until).await?;
+			let banned = match admin::ban(store, target, duration, now, Limits::operator()).await {
+				Ok(banned) => banned,
+				Err(refusal) => return refused(refusal, err),
+			};
 			let mut report = super::json_out::Report::new(out, json);
 			report.line(format_args!(
 				"banned {target} until {}",
-				crate::clock::rfc3339_or_epoch(until)
+				crate::clock::rfc3339_or_epoch(banned.until)
 			));
-			let fields = serde_json::json!({ "target": target.to_string(), "until": until });
+			let fields = serde_json::json!({ "target": banned.target, "until": banned.until });
 			Ok(report.change("add", true, fields, None))
 		}
 		BanCli::Remove {
@@ -275,17 +241,17 @@ async fn execute(
 					return Ok(ExitCode::FAILURE);
 				}
 			};
-			let (bans, failures) = store.remove_ban(target.clone()).await?;
-			if bans == 0 && failures == 0 {
-				super::style::error_to(err, format_args!("{target} has no ban or failure record"));
-				return Ok(ExitCode::FAILURE);
-			}
+			let unbanned = match admin::unban(store, target, Limits::operator()).await {
+				Ok(unbanned) => unbanned,
+				Err(refusal) => return refused(refusal, err),
+			};
 			let mut report = super::json_out::Report::new(out, json);
 			report.line(format_args!(
-				"unbanned {target} ({bans} bans, {failures} failures cleared)"
+				"unbanned {} ({} bans, {} failures cleared)",
+				unbanned.target, unbanned.bans, unbanned.failures
 			));
 			let fields = serde_json::json!({
-				"target": target.to_string(), "bans": bans, "failures": failures,
+				"target": unbanned.target, "bans": unbanned.bans, "failures": unbanned.failures,
 			});
 			Ok(report.change("remove", true, fields, None))
 		}
@@ -294,12 +260,12 @@ async fn execute(
 }
 
 async fn allow(
-	store: &PgBanStore,
+	store: &dyn BanAdmin,
 	action: AllowCli,
 	json: bool,
 	out: &mut impl Write,
 	err: &mut impl Write,
-) -> Result<ExitCode, sqlx::Error> {
+) -> Result<ExitCode, StoreError> {
 	match action {
 		AllowCli::List { json: leaf } => {
 			let entries = store.allow_list().await?;
@@ -313,7 +279,10 @@ async fn allow(
 			Ok(ExitCode::SUCCESS)
 		}
 		AllowCli::Add { cidr } => {
-			let added = store.allow_add(cidr).await?;
+			let added = match admin::allow(store, cidr, Limits::operator()).await {
+				Ok(added) => added,
+				Err(refusal) => return refused(refusal, err),
+			};
 			let mut report = super::json_out::Report::new(out, json);
 			report.line(format_args!(
 				"{} {cidr}",
@@ -322,17 +291,15 @@ async fn allow(
 			let fields = serde_json::json!({ "cidr": cidr.to_string() });
 			Ok(report.change("allow add", added, fields, None))
 		}
-		AllowCli::Remove { cidr } => {
-			if store.allow_remove(cidr).await? {
+		AllowCli::Remove { cidr } => match admin::disallow(store, cidr, Limits::operator()).await {
+			Ok(()) => {
 				let mut report = super::json_out::Report::new(out, json);
 				report.line(format_args!("removed {cidr} from the allow list"));
 				let fields = serde_json::json!({ "cidr": cidr.to_string() });
 				Ok(report.change("allow remove", true, fields, None))
-			} else {
-				super::style::error_to(err, format_args!("{cidr} is not on the allow list"));
-				Ok(ExitCode::FAILURE)
 			}
-		}
+			Err(refusal) => refused(refusal, err),
+		},
 	}
 }
 
@@ -340,7 +307,7 @@ fn print_json(
 	value: &impl Serialize,
 	out: &mut impl Write,
 	err: &mut impl Write,
-) -> Result<ExitCode, sqlx::Error> {
+) -> Result<ExitCode, StoreError> {
 	match serde_json::to_writer_pretty(&mut *out, value) {
 		Ok(()) => {
 			let _ = writeln!(out);

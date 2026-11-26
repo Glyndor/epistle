@@ -51,7 +51,9 @@ impl TryFrom<ListenerKind> for Protocol {
 			ListenerKind::Smtp => Ok(Protocol::Smtp),
 			ListenerKind::Submission => Ok(Protocol::Submission),
 			ListenerKind::Submissions => Ok(Protocol::Submissions),
-			ListenerKind::Api => Ok(Protocol::Api),
+			ListenerKind::Api | ListenerKind::Jmap | ListenerKind::Scim | ListenerKind::Oauth => {
+				Ok(Protocol::Api)
+			}
 			ListenerKind::Imaps => Ok(Protocol::Imaps),
 			ListenerKind::Imap => Ok(Protocol::Imap),
 			ListenerKind::Pop3s => Ok(Protocol::Pop3s),
@@ -97,6 +99,13 @@ pub enum ListenerKind {
 	Submissions,
 	/// Management HTTP API.
 	Api,
+	/// JMAP over HTTP, on a listener of its own (port 8026).
+	Jmap,
+	/// SCIM 2.0 provisioning, on a listener of its own (port 8027).
+	Scim,
+	/// The OAuth grants, on a listener of its own (port 8028). Needs an OAuth
+	/// signing key.
+	Oauth,
 	/// IMAP over implicit TLS (port 993).
 	Imaps,
 	/// IMAP with mandatory STARTTLS upgrade (port 143).
@@ -129,6 +138,9 @@ impl ListenerKind {
 			ListenerKind::Submission => 587,
 			ListenerKind::Submissions => 465,
 			ListenerKind::Api => 8025,
+			ListenerKind::Jmap => 8026,
+			ListenerKind::Scim => 8027,
+			ListenerKind::Oauth => 8028,
 			ListenerKind::Imaps => 993,
 			ListenerKind::Imap => 143,
 			ListenerKind::Pop3s => 995,
@@ -139,6 +151,16 @@ impl ListenerKind {
 			ListenerKind::Autoconfigs => 443,
 			ListenerKind::WebDav => 8090,
 		}
+	}
+
+	/// Whether this listener serves HTTP surfaces of the API: `api` and the
+	/// kinds that split a surface off it. They share one state and one set of
+	/// limits, and need `[api]`.
+	pub const fn serves_api(self) -> bool {
+		matches!(
+			self,
+			ListenerKind::Api | ListenerKind::Jmap | ListenerKind::Scim | ListenerKind::Oauth
+		)
 	}
 
 	/// The kebab-case spelling the TOML serialisation round-trips
@@ -152,6 +174,9 @@ impl ListenerKind {
 			ListenerKind::Submission => "submission",
 			ListenerKind::Submissions => "submissions",
 			ListenerKind::Api => "api",
+			ListenerKind::Jmap => "jmap",
+			ListenerKind::Scim => "scim",
+			ListenerKind::Oauth => "oauth",
 			ListenerKind::Imaps => "imaps",
 			ListenerKind::Imap => "imap",
 			ListenerKind::Pop3s => "pop3s",

@@ -20,6 +20,20 @@ pub(super) fn ban_policy_for(config: &Config) -> crate::antispam::bans::BanPolic
 	}
 }
 
+/// The operator side of the ban store over `pool`, which the ban routes of the
+/// API manage the bans through.
+pub(super) fn pg_ban_admin(
+	pool: &sqlx::PgPool,
+	metrics: &std::sync::Arc<crate::metrics::Metrics>,
+	policy: crate::antispam::bans::BanPolicy,
+) -> std::sync::Arc<dyn crate::antispam::bans::operator::BanAdmin> {
+	std::sync::Arc::new(crate::antispam::bans::PgBanStore::with_policy(
+		pool.clone(),
+		Some(metrics.clone()),
+		policy,
+	))
+}
+
 /// The store of bans and known networks over `pool`, with the policy of the
 /// operator's configuration.
 pub(super) fn pg_ban_store(

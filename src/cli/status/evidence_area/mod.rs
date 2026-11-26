@@ -24,7 +24,7 @@ pub(super) async fn check(ctx: &Ctx) -> AreaReport {
 	};
 	let root = crate::evidence::service::root_of(&config.data_dir);
 	let now = u64::try_from(epoch(ctx.now)).unwrap_or(0);
-	tokio::task::spawn_blocking(move || evaluate(&root, now))
+	ctx.blocking(move || evaluate(&root, now))
 		.await
 		.unwrap_or_else(|error| AreaReport::fail(format!("evidence check failed: {error}")))
 }

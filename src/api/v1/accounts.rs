@@ -13,6 +13,7 @@ use axum::extract::{Path, Query, State};
 use serde::{Deserialize, Serialize};
 
 use crate::api::Principal;
+use crate::api::api_keys::Scope;
 use crate::api::audit::{self, AuditEvent};
 use crate::api::error::ApiError;
 use crate::api::state::{AccountView, ApiState, ClientIp, MatchedAuth};
@@ -110,19 +111,25 @@ pub async fn create(
 	let password_hash =
 		crate::smtp::auth::hash_password(prepared.as_ref()).map_err(|_| ApiError::internal())?;
 	let name = crate::directory_store::account_name(&request.name);
+	let addresses = request.addresses.clone();
+	let account = DynamicAccount {
+		name: name.clone(),
+		addresses: request.addresses,
+		password_hash,
+		scram: derive_scram(prepared.as_ref(), state.store())?,
+		totp_secret: None,
+		disabled: false,
+		quota_bytes: None,
+		allowed_protocols: None,
+		display_name: request.display_name,
+		..DynamicAccount::default()
+	};
+	// The key is asked again at the write: it was last asked before the
+	// password was derived.
 	state
 		.store()
-		.add(DynamicAccount {
-			name: name.clone(),
-			addresses: request.addresses,
-			password_hash,
-			scram: derive_scram(prepared.as_ref(), state.store())?,
-			totp_secret: None,
-			disabled: false,
-			quota_bytes: None,
-			allowed_protocols: None,
-			display_name: request.display_name,
-			..DynamicAccount::default()
+		.add_if(account, || {
+			Principal::still_reaches_addresses(&state, &auth, Scope::ManageWrite, &addresses)
 		})
 		.map_err(store_error)?;
 	Ok(Json(Created { created: name }))
@@ -168,13 +175,20 @@ pub async fn remove(
 	require_in_scope(&state, &principal, &name)?;
 	let queue = parse_queue_policy(query.queue.as_deref())?;
 	let data_dir = state.data_dir().to_path_buf();
-	let counts = crate::directory_store::removal::remove_account(
+	// The key is read again at the write that reserves the account, before
+	// anything of it is destroyed.
+	let counts = crate::directory_store::removal::remove_account_if(
 		state.store(),
 		state.spool(),
 		&data_dir,
 		&name,
 		queue,
 		state.bayes_store(),
+		|account| {
+			let now = Principal::for_token(&state, &auth);
+			now.admits_scope(Scope::ManageWrite)
+				&& now.admits_account(&account.name, &account.addresses)
+		},
 	)
 	.await
 	.map_err(store_error)?;
@@ -218,9 +232,19 @@ pub async fn set_password(
 	let hash =
 		crate::smtp::auth::hash_password(prepared.as_ref()).map_err(|_| ApiError::internal())?;
 	let scram = derive_scram(prepared.as_ref(), state.store())?;
+	// The reach was checked before the key derivations; the key is read again
+	// and asked about the account as it is when the password is written.
 	state
 		.store()
-		.set_password_hash(&name, hash, scram)
+		.set_password_hash_if(&name, hash, scram, |account| {
+			Principal::still_reaches_account(
+				&state,
+				&auth,
+				Scope::ManageWrite,
+				&account.name,
+				&account.addresses,
+			)
+		})
 		.map_err(store_error)?;
 	audit::log_privilege_change(AuditEvent::PasswordReset, &name, client_ip.0);
 	Ok(Json(PasswordChanged { updated: name }))
@@ -311,5 +335,8 @@ pub(super) fn store_error(error: StoreError) -> ApiError {
 		StoreError::LimitReached { .. } => ApiError::internal(),
 		StoreError::Io(_) => ApiError::internal(),
 		StoreError::BayesPurge { .. } => ApiError::internal(),
+		StoreError::BeingRemoved(name) => {
+			ApiError::conflict(format!("account {name} is being removed"))
+		}
 	}
 }

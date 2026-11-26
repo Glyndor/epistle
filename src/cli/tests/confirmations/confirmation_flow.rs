@@ -176,7 +176,7 @@ fn account_remove_discards_sealed_queued_mail() {
 				sender_verified: false,
 				no_dsn: Vec::new(),
 			},
-			None,
+			Some(NAME),
 			&BTreeMap::new(),
 		)
 		.expect("store");

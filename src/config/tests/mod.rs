@@ -5,6 +5,7 @@ pub(super) mod env;
 pub(super) mod hold_outbound;
 pub(super) mod load;
 pub(super) mod permissions;
+pub(super) mod surfaces;
 
 pub(super) fn write_temp(content: &str) -> tempfile::NamedTempFile {
 	use std::io::Write;

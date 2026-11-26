@@ -20,10 +20,11 @@ use serde::Deserialize;
 use super::error::{CONTENT_TYPE, ScimError};
 use super::types::{Email, ListResponse, Name, PatchOperation, PatchRequest, USER_SCHEMA, User};
 use crate::api::Principal;
+use crate::api::api_keys::Scope;
 use crate::api::audit::{self, AuditEvent};
 use crate::api::state::{ApiState, MatchedAuth};
 use crate::directory_store::removal::QueuePolicy;
-use crate::directory_store::{DynamicAccount, StoreError};
+use crate::directory_store::{AccountChanges, DynamicAccount, NewPassword, StoreError};
 
 /// Build a SCIM `User` JSON from a `DynamicAccount` (RFC 7643 §4.1). The
 /// `id` is the account name; `active` mirrors `disabled`; `emails` carries
@@ -145,6 +146,9 @@ fn store_to_scim(error: StoreError) -> ScimError {
 		StoreError::LimitReached { .. } => ScimError::internal(),
 		StoreError::Io(_) => ScimError::internal(),
 		StoreError::BayesPurge { .. } => ScimError::internal(),
+		StoreError::BeingRemoved(name) => {
+			ScimError::conflict(format!("user \"{name}\" is being removed"))
+		}
 	}
 }
 
@@ -364,7 +368,13 @@ pub async fn create_user(
 		display_name: body.display_name.clone(),
 		..DynamicAccount::default()
 	};
-	state.store().add(account).map_err(store_to_scim)?;
+	let addresses = account.addresses.clone();
+	state
+		.store()
+		.add_if(account, || {
+			Principal::still_reaches_addresses(&state, &auth, Scope::Scim, &addresses)
+		})
+		.map_err(store_to_scim)?;
 	let stored = lookup(&state, &name)?;
 	Ok(scim_resource(StatusCode::CREATED, render_user(&stored)))
 }
@@ -394,13 +404,19 @@ pub async fn delete_user(
 	let principal = Principal::for_token(&state, &auth);
 	lookup_in_scope(&state, &principal, &id)?;
 	let data_dir = state.data_dir().to_path_buf();
-	let counts = crate::directory_store::removal::remove_account(
+	// The key is read again at the write that reserves the account, before
+	// anything of it is destroyed.
+	let counts = crate::directory_store::removal::remove_account_if(
 		state.store(),
 		state.spool(),
 		&data_dir,
 		&id,
 		QueuePolicy::Drain,
 		state.bayes_store(),
+		|account| {
+			let now = Principal::for_token(&state, &auth);
+			now.admits_scope(Scope::Scim) && now.admits_account(&account.name, &account.addresses)
+		},
 	)
 	.await
 	.map_err(store_to_scim)?;
@@ -457,9 +473,23 @@ pub async fn put_user(
 		}
 		None => None,
 	};
+	// The key is read again at the write, and asked about the account as it
+	// is and as it would become.
+	let proposed = replacement.addresses.clone();
 	state
 		.store()
-		.replace_account(&id, replacement, new_password)
+		.replace_account_if(&id, replacement, new_password, |account| {
+			let reaches = |addresses: &[String]| {
+				Principal::still_reaches_account(
+					&state,
+					&auth,
+					Scope::Scim,
+					&account.name,
+					addresses,
+				)
+			};
+			reaches(&account.addresses) && reaches(&proposed)
+		})
 		.map_err(store_to_scim)?;
 	let stored = lookup(&state, &id)?;
 	Ok(scim_resource(StatusCode::OK, render_user(&stored)))
@@ -515,8 +545,22 @@ pub async fn patch_user(
 	for op in &body.operations {
 		plan.push(plan_operation(&state, op)?);
 	}
-	for step in plan {
-		apply_step(&state, &id, step)?;
+	// The plan is written in one go. The key is read again and asked about the
+	// account as it is under the store's lock: both were last checked before
+	// the passwords were hashed.
+	if !plan.is_empty() {
+		state
+			.store()
+			.change_account_if(&id, gather(plan), |account| {
+				Principal::still_reaches_account(
+					&state,
+					&auth,
+					Scope::Scim,
+					&account.name,
+					&account.addresses,
+				)
+			})
+			.map_err(store_to_scim)?;
 	}
 	let stored = lookup_in_scope(&state, &principal, &id)?;
 	Ok(scim_resource(StatusCode::OK, render_user(&stored)))
@@ -550,9 +594,13 @@ fn plan_operation(state: &ApiState, op: &PatchOperation) -> Result<Step, ScimErr
 			let scram = derive_scram(plain, state.store())?;
 			Ok(Step::Password { hash, scram })
 		}
-		("replace", Some("displayName")) | ("add", Some("displayName")) => Ok(Step::DisplayName(
-			op.value.as_str().unwrap_or_default().to_string(),
-		)),
+		// Checked here, operation by operation: a later one on the same field
+		// replaces its value, which must not spare it the check.
+		("replace", Some("displayName")) | ("add", Some("displayName")) => {
+			let raw = op.value.as_str().unwrap_or_default();
+			crate::directory_store::display_name::validate(raw).map_err(ScimError::invalid)?;
+			Ok(Step::DisplayName(raw.to_string()))
+		}
 		("replace", Some(path)) | ("add", Some(path)) => Err(ScimError::invalid(format!(
 			"`{path}` cannot be modified via PATCH; only `active`, `password` and \
 			 `displayName` are accepted"
@@ -566,14 +614,20 @@ fn plan_operation(state: &ApiState, op: &PatchOperation) -> Result<Step, ScimErr
 	}
 }
 
-fn apply_step(state: &ApiState, id: &str, step: Step) -> Result<(), ScimError> {
-	let store = state.store();
-	match step {
-		Step::Active(active) => store.set_disabled(id, !active).map(|_| ()),
-		Step::Password { hash, scram } => store.set_password_hash(id, hash, scram),
-		Step::DisplayName(name) => store.set_display_name(id, &name).map(|_| ()),
+/// The changes of `plan`, in order: a later operation on a field replaces an
+/// earlier one.
+fn gather(plan: Vec<Step>) -> AccountChanges {
+	let mut changes = AccountChanges::default();
+	for step in plan {
+		match step {
+			Step::Active(active) => changes.disabled = Some(!active),
+			Step::Password { hash, scram } => {
+				changes.password = Some(NewPassword { hash, scram });
+			}
+			Step::DisplayName(name) => changes.display_name = Some(name),
+		}
 	}
-	.map_err(store_to_scim)
+	changes
 }
 
 #[cfg(test)]

@@ -27,9 +27,9 @@ pub struct Cap {
 	/// pre-feature behaviour bit-for-bit.
 	pub correspondents: Option<Arc<CorrespondentStore>>,
 	/// Cap on first-time recipients per account in any rolling 24h
-	/// window. `None` disables the cap. `correspondents` and this
-	/// field are independent: a configured cap without a store
-	/// short-circuits to "no cap" rather than failing closed.
+	/// window. `None` disables the cap. A configured cap that cannot be
+	/// checked, because there is no store or the store fails, defers the
+	/// submission rather than letting it through.
 	pub daily_new_recipients: Option<u32>,
 	/// Shared metrics handle, bumped when a submission is refused for
 	/// exceeding the cap. `None` is the listener-default.
@@ -89,6 +89,9 @@ pub enum Outcome {
 	/// and **must not** record or deliver. The audit event and the
 	/// metric counter are bumped before this returns.
 	Limited,
+	/// A cap is configured and could not be checked. The caller must emit
+	/// a `451` reply and **must not** deliver.
+	Unavailable,
 }
 
 /// Check the cap and reserve recipients against the authenticated `account`
@@ -105,7 +108,15 @@ pub fn enforce(
 		return Outcome::Accept;
 	};
 	let Some(store) = cap.correspondents.as_deref() else {
-		return Outcome::Accept;
+		return if cap.daily_new_recipients.is_some() {
+			tracing::error!(
+				account = %crate::log_id::account(account),
+				"a new-recipient cap is configured and there is no correspondent store; deferring"
+			);
+			Outcome::Unavailable
+		} else {
+			Outcome::Accept
+		};
 	};
 	let recipient_refs: Vec<&str> = recipients.iter().map(String::as_str).collect();
 	match store.enforce_new_recipient_cap(account, &recipient_refs, cap.daily_new_recipients) {
@@ -121,13 +132,23 @@ pub fn enforce(
 			Outcome::Limited
 		}
 		Ok(CapOutcome::Allowed { .. } | CapOutcome::Uncapped) => Outcome::Accept,
-		Err(error) => {
+		// Without a cap the store only keeps the record of who was written
+		// to, which the submission can do without; with one it is the check.
+		Err(error) if cap.daily_new_recipients.is_none() => {
 			tracing::warn!(
 				account = %crate::log_id::account(account),
 				%error,
 				"correspondent store error; accepting"
 			);
 			Outcome::Accept
+		}
+		Err(error) => {
+			tracing::error!(
+				account = %crate::log_id::account(account),
+				%error,
+				"correspondent store error with a new-recipient cap configured; deferring"
+			);
+			Outcome::Unavailable
 		}
 	}
 }
@@ -136,6 +157,15 @@ pub fn enforce(
 /// the wording lives next to the check it backs.
 pub fn limited_reply() -> crate::smtp::reply::Reply {
 	crate::smtp::reply::Reply::single(450, "4.7.1 too many new recipients today; retry tomorrow")
+}
+
+/// The reply for a submission whose cap cannot be checked. Temporary, and
+/// without the cause, which is in the log.
+pub fn unavailable_reply() -> crate::smtp::reply::Reply {
+	crate::smtp::reply::Reply::single(
+		451,
+		"4.3.0 the new-recipient limit cannot be checked right now; try again later",
+	)
 }
 
 /// Convenience for the SMTP run-loop: returns the reply to emit when
@@ -151,6 +181,7 @@ pub fn check_or_reply(
 ) -> Option<crate::smtp::reply::Reply> {
 	match enforce(account, &message.recipients, cap, peer_ip) {
 		Outcome::Limited => Some(limited_reply()),
+		Outcome::Unavailable => Some(unavailable_reply()),
 		Outcome::Accept => None,
 	}
 }

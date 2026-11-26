@@ -25,6 +25,14 @@ pub struct MatchedAuth {
 	/// middleware: the configured hash may be a legacy argon2id one, and
 	/// nothing after it compares the bearer against that hash again.
 	pub configured: bool,
+	/// The scopes the middleware admitted the request under: any one of them
+	/// is enough for the key to have been let in. The key is read again by
+	/// the handler, after the body, and has to hold one of these still, or a
+	/// request admitted under a scope that was withdrawn since would go on.
+	pub acceptable_scopes: Vec<crate::api::api_keys::Scope>,
+	/// Whether the route is one a key bound to an account may use. A key read
+	/// again by a handler is held to it, like the one the middleware read.
+	pub account_scoped: bool,
 }
 
 /// State shared by every handler.
@@ -147,8 +155,16 @@ struct Inner {
 	/// JMAP `EmailSubmission/set`, the same count the SMTP listeners accept.
 	/// The default is [`crate::smtp::session::DEFAULT_MAX_RECIPIENTS`].
 	max_recipients: usize,
+	/// What a dry run of the send endpoint is charged to.
+	dry_run: crate::api::v1::send_dry_limits::Limits,
 	/// Notifications for the admin event stream and its open streams.
 	events: super::events::Hub,
+	/// The resolver and the limit of the DNS routes.
+	dns: dns::DnsChecks,
+	/// The ban store the ban routes manage, when the server has a database.
+	ban_admin: Option<Arc<dyn crate::antispam::bans::operator::BanAdmin>>,
+	/// What the health routes run and how many runs may overlap.
+	health: health::HealthRuns,
 }
 
 mod limiter;
@@ -156,8 +172,12 @@ use limiter::{AUTH_WINDOW, ClientLimiters};
 
 pub use super::account_view::AccountView;
 
+mod bans;
 mod construction;
+mod dns;
 mod event_stream;
+mod health;
+pub use health::HealthGate;
 mod hosted;
 mod settings;
 #[cfg(test)]

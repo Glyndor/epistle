@@ -97,7 +97,11 @@ impl ApiState {
 				webhook: None,
 				max_message_size: crate::smtp::session::MAX_MESSAGE_SIZE,
 				max_recipients: crate::smtp::session::DEFAULT_MAX_RECIPIENTS,
+				dry_run: Default::default(),
 				events: crate::api::events::Hub::new(Default::default()),
+				dns: Default::default(),
+				ban_admin: None,
+				health: Default::default(),
 			}),
 		}
 	}

@@ -98,3 +98,57 @@ fn cap_counts_case_insensitive_unique_recipients() {
 		"allowed recipients must be reserved before returning"
 	);
 }
+
+#[test]
+fn a_preview_answers_like_the_cap_and_writes_nothing() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let store = CorrespondentStore::open(dir.path()).expect("store");
+	store
+		.record("alice", &["known@example.net"])
+		.expect("record");
+	let fresh = ["fresh0@example.net", "fresh1@example.net"];
+	assert_eq!(
+		store
+			.preview_new_recipient_cap("alice", &fresh, Some(3))
+			.expect("preview"),
+		CapOutcome::Allowed { new: 2 }
+	);
+	assert_eq!(
+		store
+			.preview_new_recipient_cap("alice", &fresh, Some(3))
+			.expect("preview again"),
+		CapOutcome::Allowed { new: 2 },
+		"asking twice leaves the allowance as it was"
+	);
+	assert!(!store.knows("alice", "fresh0@example.net"));
+	assert_eq!(store.new_in_last_day("alice").expect("count"), 1);
+	assert_eq!(
+		store
+			.preview_new_recipient_cap("alice", &fresh, Some(3))
+			.expect("preview"),
+		store
+			.enforce_new_recipient_cap("alice", &fresh, Some(3))
+			.expect("enforce"),
+		"the preview is what the cap then decides"
+	);
+	assert_eq!(
+		store
+			.preview_new_recipient_cap("alice", &["third@example.net"], Some(3))
+			.expect("preview"),
+		CapOutcome::Limited {
+			new: 1,
+			already: 3,
+			limit: 3
+		}
+	);
+	assert_eq!(
+		store
+			.preview_new_recipient_cap("alice", &["third@example.net"], None)
+			.expect("preview"),
+		CapOutcome::Uncapped
+	);
+	assert!(
+		!store.knows("alice", "third@example.net"),
+		"no cap, still no marker"
+	);
+}

@@ -114,3 +114,32 @@ async fn time_spent_on_hold_does_not_count_toward_giving_up() {
 	);
 	assert!(bounce_sink.messages().is_empty());
 }
+
+/// An entry whose removal began is not sent, whatever became of its hold:
+/// the removal records what it records on the strength of the entry staying.
+#[tokio::test]
+async fn an_entry_whose_removal_began_is_never_attempted() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let spool = spool_with_message(dir.path(), "bob@remote.example");
+	let id = only_id(&spool);
+	let sink = Arc::new(MemorySink::new());
+	let worker = Worker::new(spool, loopback(&sink), "mail.sender.example");
+
+	// A removal that began and did not finish, with the hold gone.
+	worker
+		.spool
+		.update_envelope(id, |e| e.cancelling = Some(1))
+		.expect("begin a removal");
+	assert_eq!(worker.pass().await.expect("pass"), 0);
+	assert!(
+		sink.messages().is_empty(),
+		"an entry being removed was sent"
+	);
+	assert_eq!(worker.spool.list().expect("list").len(), 1);
+
+	worker
+		.spool
+		.update_envelope(id, |e| e.cancelling = None)
+		.expect("end it");
+	assert_eq!(worker.pass().await.expect("pass"), 1);
+}

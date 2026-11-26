@@ -7,6 +7,8 @@ pub(super) mod device_limits;
 pub(super) mod proxy;
 mod refresh;
 mod revocation_file;
+mod scope_names;
+mod surface;
 
 mod hostile_device;
 mod hostile_pkce;

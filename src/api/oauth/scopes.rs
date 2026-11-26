@@ -17,9 +17,14 @@ impl Scopes {
 		}
 		let mut scopes = Vec::new();
 		for name in value.split(' ') {
+			// The names a client asks for and the claim carries stay `read`,
+			// `write` and `send`, so tokens issued before the upgrade keep
+			// working and a rollback reads the ones issued after it. Inside,
+			// an OAuth principal is always bound to one account, so they mean
+			// the mail scopes.
 			let scope = match name {
-				"read" => Scope::Read,
-				"write" => Scope::Write,
+				"read" => Scope::MailRead,
+				"write" => Scope::MailWrite,
 				"send" => Scope::Send,
 				_ => return None,
 			};
@@ -33,7 +38,11 @@ impl Scopes {
 	pub(super) fn as_string(&self) -> String {
 		self.0
 			.iter()
-			.map(|scope| scope.as_str())
+			.map(|scope| match scope {
+				Scope::MailRead => "read",
+				Scope::MailWrite => "write",
+				other => other.as_str(),
+			})
 			.collect::<Vec<_>>()
 			.join(" ")
 	}
@@ -50,7 +59,7 @@ impl Scopes {
 
 	/// Whether the only scope is `read`, the default of an omitted scope.
 	pub(super) fn is_default(&self) -> bool {
-		self.0 == [Scope::Read]
+		self.0 == [Scope::MailRead]
 	}
 
 	pub(super) fn into_vec(self) -> Vec<Scope> {

@@ -31,7 +31,9 @@ pub(super) async fn check(ctx: &Ctx) -> AreaReport {
 		config,
 		&["check".into(), "antivirus".into(), "--json".into()],
 	) {
-		Ok(Some(command)) => super::in_stack::run(config, command, "antivirus", "antivirus").await,
+		Ok(Some(command)) => {
+			super::in_stack::run(ctx, config, command, "antivirus", "antivirus").await
+		}
 		Ok(None) => {
 			let now = epoch(ctx.now);
 			let report = evaluate(socket, now, NET_TIMEOUT).await;

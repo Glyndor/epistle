@@ -35,7 +35,7 @@ pub(super) fn email_copy(
 		source_view.is_some_and(|view| principal.admits_account(&view.name, &view.addresses));
 	if !source_allowed
 		|| state
-			.require_scope_for_principal(principal, Scope::Read)
+			.require_scope_for_principal(principal, Scope::MailRead)
 			.is_err()
 	{
 		return json!(["error", { "type": "fromAccountNotFound" }, call_id]);

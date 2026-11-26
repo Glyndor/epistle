@@ -145,6 +145,7 @@ async fn jmap_email_changes_for_a_foreign_account_is_account_not_found() {
 	let secret_bob = "bob-secret".to_string();
 	let mut keys = crate::api::ApiKeyStore::open(dir.path()).expect("key store");
 	keys.add(ApiKey {
+		grants: Vec::new(),
 		label: "alice-only".into(),
 		hash: crate::api::api_keys::sha256_hash(&secret_alice),
 		expires_at: None,
@@ -156,6 +157,7 @@ async fn jmap_email_changes_for_a_foreign_account_is_account_not_found() {
 	})
 	.expect("add");
 	keys.add(ApiKey {
+		grants: Vec::new(),
 		label: "bob-only".into(),
 		hash: crate::api::api_keys::sha256_hash(&secret_bob),
 		expires_at: None,

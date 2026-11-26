@@ -222,9 +222,23 @@ that `enable` would use. JSON records contain `name`, `enabled`, `port`, and `bi
 plus `host` on a container stack where the generated map pins one.
 
 Names are `imap` (143), `imaps` (993), `submission` (587), `submissions` (465),
-`pop3` (implicit TLS, 995), `managesieve` (4190), `webdav` (8090), and `api`
-(loopback, 8025). IMAP and submission TLS siblings can be toggled independently.
+`pop3` (implicit TLS, 995), `managesieve` (4190), `webdav` (8090), `api`
+(loopback, 8025), and the three surfaces of the API that can have a listener of
+their own: `jmap` (loopback, 8026), `scim` (loopback, 8027) and `oauth`
+(loopback, 8028, which needs an `[oauth]` signing key). IMAP and submission TLS
+siblings can be toggled independently. Without a `jmap`, `scim` or `oauth`
+listener the `api` listener serves that surface, as it always did. Enabling one
+takes the surface off `api`, and disabling it turns the surface off instead of
+handing it back: the command writes `[api] surfaces` with the others `api`
+serves. A client that called port 8025 for JMAP, SCIM or the OAuth grants has to
+move to the new port, or a TLS proxy has to send those paths to it.
 `smtp` (25) cannot be disabled because inbound mail needs it.
+
+The web panel is such a client: its webmail and its administration share the one
+address it is given, the `api` listener's port, so JMAP cannot be moved for it
+alone. On a stack that runs the panel, `service disable jmap`, `service enable
+jmap` and an `[api] surfaces` list without `jmap` all leave the webmail without
+service.
 
 Edits preserve every other configuration value, use init's comment-free TOML
 formatting, and validate through the normal loader before atomically replacing
@@ -334,7 +348,7 @@ after 5 s. `--config` defaults to `/etc/epistle/mail.toml`.
 | `tls` | 21 days or more left, hostname in the certificate, the TLSA record (when DNSSEC publishes one) matches it | under 21 days, under 14 days with nothing renewing it (no `[acme]`), the certificates container is down or does not settle (a split stack renews in it), a certificates container the compose file does not name is still running, the TLSA lookup failed | under 7 days, expired, or hostname not in the certificate; unreadable file; a TLSA record that does not match the certificate in use |
 | `dns` | published records match | a lookup was inconclusive, a public address is listed in a DNS blocklist or its blocklist lookup failed (`[own_ip_blocklist]`), or `dkim-rotation.json` is unreadable and the server signs with the last good state in `dkim-rotation.json.bak` | a record is missing, or the published DKIM `p=` is not the public key of the key actually signing (the rotation state in `<data_dir>/dkim-rotation.json` when present, else `[dkim] key_file`) |
 | `db` | `[database]` connects and answers `SELECT 1` (or is not configured) | | cannot connect within 5 s |
-| `api_keys` | every key has a distant expiry and a narrow reach, and each `scim` key has an associated domain | a key has no expiry, expires within 14 days or has expired, holds every scope (a legacy key), holds `write` or `send` with no domain, account or usable `--ip-cidr`, or is a `scim` key with no domain; findings identify the label and scopes. The store has no creation or last-use timestamps | |
+| `api_keys` | every key has a distant expiry and a narrow reach, and each `scim` key has an associated domain | a key has no expiry, expires within 14 days or has expired, holds every scope (a legacy key), holds `read` or `write` (both management and mail), holds a write scope or `send` with no domain, account or usable `--ip-cidr`, is a `scim` key with no domain, or holds only a scope 0.14.0 had no name for (`ban`, `health`), which a rollback to 0.14.0 refuses until 0.15.0 is back (a key with one half of `read` or `write` is refused there too, and `stack rollback` prepares them all before it puts the old binary back); findings identify the label and scopes. The store has no creation or last-use timestamps | |
 | `antivirus` | clamd answers `PING` with `PONG` and reports its signature age (or is not configured) | `VERSION` fails | no `PONG` |
 | `antispam` | something is wired in: greylisting, or the `[database]` features (Bayes, reputation, persistent bans, greylist persistence), or the clamd scanner; each feature is listed | no `[database]`: those four features are off and the finding says so; with nothing at all wired in the summary says antispam is off | |
 | `queue` | oldest queued message under 4 h | over 4 h | over 24 h |
@@ -2000,8 +2014,8 @@ scope here):
 
 | Command | What it does |
 |---|---|
-| `epistle dns-records [--json]` | Print the DNS records this deployment should publish: SPF, DKIM, DMARC, MTA-STS, MX, and a DANE TLSA record when a certificate is present. Reads the configuration only; nothing is queried or changed. A group `[dns_publish] skip` names is not published, so it holds no record in the list; the groups are named on stderr. |
-| `epistle verify-dns [--json]` | Look the same records up in DNS and report drift. Read-only. Exits 1 when a record is missing or differs. See [DNS](dns.md). |
+| `epistle dns-records [--json]` | Print the DNS records this deployment should publish: SPF, DKIM, DMARC, MTA-STS, MX, and a DANE TLSA record when a certificate is present. Reads the configuration only; nothing is queried or changed. A group `[dns_publish] skip` names is not published, so it holds no record in the list; the groups are named on stderr. The management API lists the same set at `GET /api/v1/dns/records` ([DNS in the API guide](api.md#dns)). |
+| `epistle verify-dns [--json]` | Look the same records up in DNS and report drift. Read-only. Exits 1 when a record is missing or differs. See [DNS](dns.md). `GET /api/v1/dns/verify` returns the same `--json` result ([DNS in the API guide](api.md#dns)). |
 | `epistle probe [--json]` | Dial each enabled listener on loopback and read its greeting. Exits 0 when every listener answers and 1 when one is down or greets wrongly. It is the container healthcheck, and the `ports` area of `status` runs the same check. |
 
 All three take `--config FILE`.
@@ -2096,8 +2110,9 @@ Only `epistle init` turns one into the other: it derives the name from the addre
 | `epistle app-password rename N LABEL NEW_LABEL [--dry-run]` | Give the credential a new label; the secret and the settings stay, so clients keep working. Refuses a label that is taken (exit 2). `previous_label` in the JSON result holds the old one. |
 | `epistle app-password revoke N LABEL [--yes\|-y]` | Revoke it. Asks first. |
 | `epistle api-key list [--json]` | API keys: label, expiry (RFC 3339, `--json` keeps the epoch), CIDR, scopes, domains, bound account and `auto_submitted` setting. Never the key. JSON adds `"auto_submitted": true` only for enabled keys, preserving the existing object shape for disabled keys. |
-| `epistle api-key create LABEL --scope S [--scope …] [--domain D] [--account N] [--expires-at WHEN \| --expires-in 90d] [--ip-cidr CIDR] [--class CLASS] [--auto-submitted]` | Create a key; prints it once. `--ip-cidr` is an allowlist of one CIDR for the client address. `--class` (`transactional`, `marketing` or `personal`) is the [mail class](evidence.md) `/api/v1/send` grants to mail the request gives none. `--auto-submitted` makes `/api/v1/send` add `Auto-Submitted: auto-generated` when the request omits that header; it is off by default and a request value always wins. `WHEN` is an epoch, a date, an RFC 3339 instant or a duration; no key expires unless one is given, and `status` warns about the ones that do not (see [Expiry is opt-in](api.md#expiry-is-opt-in)). Scopes: `read`, `write`, `send`, `scim`. `--domain` confines it to domains. `--account` binds it to one account (static or dynamic): it then reaches only JMAP, `/api/v1/send`, `/api/v1/deliveries` and that account's suppression list, cannot hold `scim`, and takes no `--domain`. |
+| `epistle api-key create LABEL --scope S [--scope …] [--domain D] [--account N] [--expires-at WHEN \| --expires-in 90d] [--ip-cidr CIDR] [--class CLASS] [--auto-submitted]` | Create a key; prints it once. `--ip-cidr` is an allowlist of one CIDR for the client address. `--class` (`transactional`, `marketing` or `personal`) is the [mail class](evidence.md) `/api/v1/send` grants to mail the request gives none. `--auto-submitted` makes `/api/v1/send` add `Auto-Submitted: auto-generated` when the request omits that header; it is off by default and a request value always wins. `WHEN` is an epoch, a date, an RFC 3339 instant or a duration; no key expires unless one is given, and `status` warns about the ones that do not (see [Expiry is opt-in](api.md#expiry-is-opt-in)). Scopes: `manage:read`, `manage:write`, `mail:read`, `mail:write`, `send`, `scim`, `alias`; `read` and `write` are still taken and open both the management and the mail scope, with a warning. `--domain` confines it to domains. `--account` binds it to one account (static or dynamic): it then reaches only JMAP, `/api/v1/send`, `/api/v1/deliveries` and that account's suppression list, cannot hold `manage:read`, `manage:write`, `scim` or `alias`, and takes no `--domain`. |
 | `epistle api-key set LABEL --auto-submitted on\|off` | Change whether `/api/v1/send` adds `Auto-Submitted: auto-generated` when the request omits that header. Other settings and the secret stay unchanged. |
+| `epistle api-key set LABEL --scope S [--scope …]` | Replace the scopes of a key, for example to split one that holds `read` or `write`. The secret, domains, expiry, network and account stay unchanged; an account-bound key refuses the management scopes. |
 | `epistle api-key revoke LABEL [--yes\|-y]` | Revoke a key. Asks first. |
 | `epistle api-key rotate LABEL` | New secret, same scopes and settings; prints it once. |
 
@@ -2326,6 +2341,10 @@ a ban. It does not change the per-connection limit that SMTP applies to one
 connection (three failed attempts close it), which keeps no state between
 connections. A network ban (`add 203.0.113.0/24`) covers every address in it;
 `add 203.0.113.9/32` is the same ban as `add 203.0.113.9`.
+
+The management API does the same through `/api/v1/bans` and `/api/v1/bans/allow`, with the
+`ban` scope and a narrower reach (see [Bans in the API guide](api.md#bans)). The command has no
+count and no limit on how wide a block is; a key has both.
 
 ## Learning from the user's moves (`epistle learning`)
 

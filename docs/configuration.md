@@ -56,7 +56,7 @@ a connection URL.
 | `quota_bytes` | int | 5 GiB | Default per-account mailbox quota (RFC 9208), used when an account has no per-account or per-domain quota. Absent means 5 GiB; `0` means no limit, here and in `domain_quotas` or an account's own `quota_bytes`. IMAP QUOTA, JMAP `Quota/get` and `epistle limits show` report the same limit (none when it is `0`). Enforced on every path, measured as IMAP QUOTA reports it (archived mail included): IMAP APPEND answers `NO [OVERQUOTA]`; SMTP refuses a full mailbox at `RCPT TO` with `452 4.2.2` for that recipient only, and a message that would overfill one is accepted for the other recipients with a DSN to the sender, or refused with `452 4.2.2`, as at `RCPT TO`, when it fits none, so the sender retries; `POST /api/v1/send` answers `507 mailbox_full` and JMAP `EmailSubmission/set` `overQuota`, with nothing queued. |
 | `domain_quotas` | table | `{}` | `domain → bytes`: default mailbox quota for accounts in a domain (overridden by a per-account `quota_bytes`). `0` means no limit. |
 | `submission_rate_limit_per_min` | int | unset | Recipients an authenticated account may submit per minute, on SMTP, `POST /api/v1/send` and JMAP `EmailSubmission/set` together: one budget per account whatever the protocol, app password or sender address. A message costs one unit per recipient: on SMTP every `RCPT TO` the server accepted, on the API every `to`, `cc` and `bcc` address, on JMAP the envelope `rcptTo` or, without an envelope, the deduplicated `To`, `Cc` and `Bcc` (RFC 8621). It is charged once, when the message is accepted, all of it or none: a transaction ended by `RSET`, a message over the limit and one refused on the way out cost nothing. Over the limit: SMTP `450 4.7.1 sending rate limit exceeded; retry later` (at `MAIL FROM` once the budget is spent, at the end of the data when the message has more recipients than are left), REST `429` `rate_limited` with the message `sending rate limit exceeded; retry later`, JMAP `SetError` `rateLimit` with the same description. Absent disables it (the default); `epistle limits` refuses `0`, which the server reads as no limit. Changes apply when the server restarts. |
-| `new_recipients_per_day` | int | unset | Cap on first-time recipients an authenticated account may write to in a rolling 24h window. Refused: SMTP `450 4.7.1 too many new recipients today; retry tomorrow`, REST `429 rate_limited`, JMAP `tooManyRecipients`. Absent disables the cap (the default); it stays disabled until the operator sets it (`epistle limits set new-recipients-per-day <N>`). |
+| `new_recipients_per_day` | int | unset | Cap on first-time recipients an authenticated account may write to in a rolling 24h window. Refused: SMTP `450 4.7.1 too many new recipients today; retry tomorrow`, REST `429 rate_limited`, JMAP `tooManyRecipients`. While a configured cap cannot be checked, submissions are deferred: SMTP `451 4.3.0`, REST `503 unavailable`, JMAP `serverUnavailable`. Absent disables the cap (the default); it stays disabled until the operator sets it (`epistle limits set new-recipients-per-day <N>`). |
 | `default_feedback_id` | bool | `true` | Write a `Feedback-ID` of the sending domain and the class on a submission that carries none (`epistle:<class>:<domain>`). `false` leaves the field to the client. See [headers](headers.md#identification-headers). |
 | `default_list_unsubscribe` | bool | `true` | Give a bulk `transactional` submission a `mailto:` `List-Unsubscribe` naming the sender, when it has none. Marketing mail is left alone (it must carry a one-click unsubscribe) and personal mail never gets one. Nothing on the server answers the address it points at: it is the sender's own mailbox, and the sender's own tooling has to act on it. `false` turns it off for every class. |
 | `bulk_recipients` | int | `20` | Recipients above which a `transactional` submission counts as bulk for `default_list_unsubscribe`: `20`, the default, means twenty-one or more. A notice to a handful of people is correspondence, not bulk mail. Refused below `1`: it is a count of recipients, and zero would make every transactional submission bulk. For no unsubscribe at all, turn `default_list_unsubscribe` off. |
@@ -261,14 +261,17 @@ addr = "0.0.0.0"   # default: 127.0.0.1
 | `imaps` | 993 | IMAP4rev2 over implicit TLS. Requires `[tls]`. |
 | `pop3s` | 995 | POP3 over implicit TLS (no plaintext POP3). |
 | `manage-sieve` | 4190 | ManageSieve (RFC 5804), STARTTLS before auth. Requires `[tls]`. |
-| `api` | 8025 | Management HTTP API. Requires `[api]`. |
+| `api` | 8025 | Management HTTP API. Requires `[api]`. Also serves JMAP, SCIM and the OAuth grants unless they have a listener of their own or `[api] surfaces` leaves them out ([below](#api)). |
+| `jmap` | 8026 | JMAP on a listener of its own, taken off `api`. Requires `[api]`. |
+| `scim` | 8027 | SCIM 2.0 on a listener of its own, taken off `api`. Requires `[api]`. |
+| `oauth` | 8028 | The OAuth grants (`/oauth/*`) on a listener of its own, taken off `api`. Requires `[api]` and an `[oauth]` `signing_key` or `signing_key_file`. |
 | `metrics` | 9090 | Prometheus metrics at `GET /metrics`. |
 | `acme` | 80 | ACME HTTP-01 challenge responder. Needed only with `[acme] challenge = "http-01"` (the default). |
 | `autoconfig` | 8091 | Serves Thunderbird autoconfig, Microsoft Autodiscover and the Apple profile (`/mobileconfig?email=`) over plain HTTP, for a deployment that keeps its own TLS proxy. |
 | `autoconfigs` | 443 | The same documents over HTTPS with the server certificate, so `autoconfig.<domain>`/`autodiscover.<domain>` need no proxy. Requires `[tls]`; the certificate (or `[acme] domains`) must cover both names. |
 | `web-dav` | 8090 | WebDAV (RFC 4918) files + CardDAV (RFC 6352) addressbooks + CalDAV (RFC 4791) calendars. HTTP Basic auth as the mail account; each account is confined to its own tree. Run behind a TLS proxy. |
 
-Plaintext listeners (`submission` 587, `web-dav` 8090, `api` 8025, `autoconfig` 8091, `metrics` 9090) are accepted without a `[tls]` block ONLY when bound to a loopback address. When `addr = 0.0.0.0` (or any non-loopback address) and `[tls]` is unset, a warning is emitted at validate time.
+Plaintext listeners (`submission` 587, `web-dav` 8090, `api` 8025, `jmap` 8026, `scim` 8027, `oauth` 8028, `autoconfig` 8091, `metrics` 9090) are accepted without a `[tls]` block ONLY when bound to a loopback address. When `addr = 0.0.0.0` (or any non-loopback address) and `[tls]` is unset, a warning is emitted at validate time.
 
 `[tls]` does not encrypt `api`, `web-dav` or `autoconfig`: those three carry plain HTTP and the mail certificate is not offered on them. Configuring `[tls]` leaves them in plaintext, so the way to expose them is a TLS reverse proxy in front of a loopback listener, which is where they belong. `epistle service enable` gives them loopback for that reason, on a host install as much as on the container stack, `epistle service set <name> --bind <address>` refuses any address outside loopback, and the generated compose map publishes them on `127.0.0.1` even when nothing narrowed it explicitly.
 
@@ -472,6 +475,7 @@ codes. See [the API guide](api.md#turn-it-on).
 | `event_streams_per_server` | Streams of `GET /api/v1/events` the server holds open in all, 1 to 65536. Default `64`. |
 | `event_stream_max_secs` | Seconds a stream of `GET /api/v1/events` stays open before the server closes it and the client reconnects, 60 to 86400. Default `3600`. |
 | `limiter` | The limits on failed bearer sign-ins and on password checks, the `[api.limiter]` table below. |
+| `surfaces` | Optional list of the surfaces besides management that the `api` listener serves: `"jmap"`, `"oauth"`, `"scim"`. Absent serves every surface that has no listener of its own, which is what 0.14.0 did. `[]` serves management only, so JMAP, SCIM and OAuth are off unless a `jmap`, `scim` or `oauth` listener serves them. A surface that has a listener of its own cannot be listed: it is served in one place, and the configuration is refused with a message that names both. The panel's webmail calls JMAP on the `api` listener, so on a stack that runs the panel, a list without `"jmap"`, or a `jmap` listener, leaves the webmail without service. |
 
 #### `[api.limiter]`
 Failed bearer attempts are counted per client (an IPv4 address or an IPv6 /64)
@@ -582,17 +586,22 @@ follows, and fails when a route is added without one.
 
 Scopes are independent: holding one does not grant another.
 
-- `read`: the JMAP Session, every JMAP method that returns account data
+- `mail:read`: the JMAP Session, every JMAP method that returns account data
   (`*/get`, `*/query`, `*/changes`, `*/queryChanges`, `Identity/get`,
-  `Quota/get`, `SieveScript/validate`), downloads, the WebSocket and the event source, and the
-  `GET` routes of the management API.
-- `write`: JMAP `*/set` and `Email/copy`, uploads, and the mutating routes
-  of the management API.
+  `Quota/get`, `SieveScript/validate`), downloads, the WebSocket and the event
+  source.
+- `mail:write`: JMAP `*/set` and `Email/copy`, and uploads.
+- `manage:read`: the `GET` routes of the management API.
+- `manage:write`: the mutating routes of the management API.
 - `send`: JMAP `EmailSubmission/set` and `POST /api/v1/send`.
 - `scim`: `/scim/v2`.
 
-A key that only sends or only writes therefore cannot read the mailbox; give
-it `read` too if the client needs to.
+A management scope never opens JMAP and a mail scope never opens the management
+API (the delivery log and the suppression list take either). A key that only
+sends or only writes therefore cannot read the mailbox; give it `mail:read` too
+if the client needs to. Keys made before 0.15.0 with `read` or `write` hold both
+the management and the mail scope of their kind until they are changed with
+`epistle api-key set LABEL --scope ...`.
 
 ### `POST /api/v1/send`
 
@@ -786,8 +795,8 @@ and `.jmap_lock`); it is trimmed to its newer half past 1 MiB.
 ### `/scim/v2` (SCIM 2.0 provisioning)
 Mounted under `/scim/v2` when the management API listener is enabled.
 Authenticates against the same bearer token plus the labeled keys in
-`api_keys.toml`, but requires the dedicated `Scim` scope: a `read`- or
-`write`-only key cannot enumerate or mutate users here, so an IdP
+`api_keys.toml`, but requires the dedicated `Scim` scope: a `manage:read`-,
+`manage:write`-, `mail:read`- or `mail:write`-only key cannot enumerate or mutate users here, so an IdP
 integration can be scoped tighter than the operator's own panel access.
 
 The implementation is the minimum that Entra ID, Okta and Keycloak
@@ -3095,7 +3104,7 @@ session value names the implementation and version. Each account's value
 carries the limits below and the extension list, and the Sieve account is a
 primary account. The methods are `SieveScript/get`, `SieveScript/query`,
 `SieveScript/set` and `SieveScript/validate`. `/get`, `/query` and
-`/validate` need the `read` scope and `/set` the `write` scope, and `/set`
+`/validate` need the `mail:read` scope and `/set` the `mail:write` scope, and `/set`
 also the `send` scope for a script that sends mail (below). The account check
 is the one every JMAP method uses. There is no `SieveScript/changes` (the RFC
 defines none): a client re-reads with `/get`, which an account can always
@@ -3172,16 +3181,16 @@ removes it. The active script cannot be destroyed: deactivate it in a call of
 its own first.
 
 **Scopes.** A script that redirects, replies (`vacation`) or rejects (`reject`,
-`ereject`) makes the server send mail when mail arrives, and `write` does not
+`ereject`) makes the server send mail when mail arrives, and `mail:write` does not
 originate mail. Creating such a script, replacing the content of one, or
 activating one that exists takes the `send` scope as well; without it the
 answer is `forbidden`, and an activation is refused before the call changes
-anything. Renaming and deactivating need only `write`. The action names are
+anything. Renaming and deactivating need only `mail:write`. The action names are
 read without regard to case, as Sieve does. The same rule holds for the JMAP
 `VacationResponse`, which also answers mail: `VacationResponse/set` that
 switches the reply on, or changes one that is on, needs `send` as well
 (`notUpdated` `forbidden` without it); switching it off, or editing one that
-stays off, needs only `write`. Upgrading: a key with `read` and `write` only
+stays off, needs only `mail:write`. Upgrading: a key with `read` and `write` only
 that used to switch the reply on now gets `forbidden`. ManageSieve is reached
 with the account's password and has no scopes.
 

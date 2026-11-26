@@ -58,6 +58,7 @@ async fn a_key_that_loses_read_is_cut() {
 		let hash = keys.hash_of("admin").expect("hash");
 		keys.remove("admin").expect("remove");
 		keys.add(crate::api::ApiKey {
+			grants: Vec::new(),
 			label: "admin".to_string(),
 			hash,
 			expires_at: None,
@@ -86,6 +87,7 @@ async fn a_key_confined_after_opening_is_cut() {
 		let hash = keys.hash_of("admin").expect("hash");
 		keys.remove("admin").expect("remove");
 		keys.add(crate::api::ApiKey {
+			grants: Vec::new(),
 			label: "admin".to_string(),
 			hash,
 			expires_at: None,

@@ -121,6 +121,7 @@ async fn read_scope_is_rejected_on_masked_mutators() {
 	let mut key_store = crate::api::ApiKeyStore::open(dir.path()).expect("open");
 	key_store
 		.add(crate::api::ApiKey {
+			grants: Vec::new(),
 			label: "reader".to_string(),
 			hash: crate::api::api_keys::sha256_hash("reader-secret"),
 			expires_at: None,

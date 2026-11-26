@@ -1,10 +1,13 @@
 //! `epistle api-key`: list, create, revoke and rotate management API keys.
 
 pub(super) mod expiry;
+mod scope_args;
+
+pub(super) use scope_args::parse_scope;
+use scope_args::{bound_refusal, legacy_warning, set_scopes, shown};
 
 use std::process::ExitCode;
 
-use crate::api::api_keys::Scope;
 use crate::api::{ApiKey, ApiKeyStore};
 use crate::config::Config;
 
@@ -17,7 +20,8 @@ pub(super) struct NewKey {
 	pub(super) expires_at: Option<u64>,
 	/// Single-CIDR client-IP allowlist.
 	pub(super) ip_cidr: Option<String>,
-	/// Permissions granted (`read`, `write`, `send`, `scim`).
+	/// Permissions granted (`manage:read`, `manage:write`, `mail:read`,
+	/// `mail:write`, `send`, `scim`, `alias`; `read` and `write` still work).
 	pub(super) scopes: Vec<String>,
 	/// Domains the key is confined to; empty reaches every domain.
 	pub(super) domains: Vec<String>,
@@ -61,7 +65,7 @@ pub(super) fn create(
 	}
 	if scopes.is_empty() {
 		return super::exit::refused(
-			"--scope is required (repeat to grant more than one: read, write, send, scim, alias)",
+			"--scope is required (repeat to grant more than one: manage:read, manage:write, mail:read, mail:write, send, scim, alias, ban, health)",
 		);
 	}
 	// Checked before the class is bound or the store is touched, so a bad
@@ -79,14 +83,18 @@ pub(super) fn create(
 			}
 			Err(code) => return code,
 		}
-		if scopes
-			.iter()
-			.any(|scope| scope == "scim" || scope == "alias")
-		{
-			return super::exit::policy(
-				"account-bound API keys cannot hold the scim or alias scope (both are administrative)",
-			);
+		if let Some(refusal) = bound_refusal(&scopes) {
+			return super::exit::policy(refusal);
 		}
+	}
+	if !domains.is_empty()
+		&& scopes
+			.iter()
+			.any(|scope| scope == "ban" || scope == "health")
+	{
+		return super::exit::policy(
+			"the ban and health scopes cover the whole server and cannot be confined with --domain",
+		);
 	}
 	let secret = match super::generate_secret() {
 		Some(secret) => secret,
@@ -119,6 +127,7 @@ pub(super) fn create(
 			return ExitCode::FAILURE;
 		}
 	}
+	let legacy = legacy_warning(&scopes, account.is_some());
 	// Read before the move into the key: the advisory names the network it
 	// was pinned to.
 	let pinned = crate::cli::client::address::cidr_advisory(
@@ -132,6 +141,7 @@ pub(super) fn create(
 		expires_at,
 		ip_cidr,
 		scopes,
+		grants: Vec::new(),
 		domains,
 		account: account.map(str::to_string),
 		auto_submitted,
@@ -151,7 +161,7 @@ pub(super) fn create(
 			// The advisory travels with the result: stderr for a human, and
 			// the `warnings` array of the JSON result for a script. The exit
 			// code stays SUCCESS; the key was created as asked.
-			let warnings = pinned.into_iter().collect::<Vec<_>>();
+			let warnings = pinned.into_iter().chain(legacy).collect::<Vec<_>>();
 			for warning in &warnings {
 				super::style::warn_to(err, warning);
 			}
@@ -307,8 +317,9 @@ pub enum ApiKeyCli {
 	/// Create an API key and print it once.
 	///
 	/// The plaintext key is never stored. With `--account`, the key is bound
-	/// to that account and refused by every route except JMAP and
-	/// `/api/v1/send`; it may hold `read`, `write` and `send`, never `scim`.
+	/// to that account and reaches only JMAP, `/api/v1/send`,
+	/// `/api/v1/deliveries` and that account's suppression list; it may hold
+	/// `mail:read`, `mail:write` and `send`, never an administrative scope.
 	Create {
 		/// A label identifying this API key (e.g. "ci").
 		#[arg(value_name = "LABEL")]
@@ -334,8 +345,12 @@ pub enum ApiKeyCli {
 		/// Optional single-CIDR client-IP allowlist.
 		#[arg(long, value_name = "CIDR")]
 		ip_cidr: Option<String>,
-		/// Permissions granted (repeat to grant more than one: `read`,
-		/// `write`, `send`). `scim` is rejected for account-bound keys.
+		/// Permissions granted, repeated to grant more than one: `manage:read`,
+		/// `manage:write`, `mail:read`, `mail:write`, `send`, `scim`, `alias`,
+		/// `ban`, `health`. `read` and `write` are still taken, with a warning,
+		/// and open both management and mail. A key bound to an account refuses
+		/// `manage:read`, `manage:write`, `scim`, `alias`, `ban` and `health`;
+		/// `ban` and `health` cannot be confined with `--domain`.
 		#[arg(
 			long = "scope",
 			value_name = "SCOPE",
@@ -359,7 +374,13 @@ pub enum ApiKeyCli {
 		#[arg(long)]
 		auto_submitted: bool,
 	},
-	/// Change whether mail sent with a key gets `Auto-Submitted`.
+	/// Change a key: whether mail sent with it gets `Auto-Submitted`, or its
+	/// scopes.
+	#[command(group(
+		clap::ArgGroup::new("change")
+			.required(true)
+			.args(["auto_submitted", "scopes"])
+	))]
 	Set {
 		/// The label of the API key to change.
 		label: String,
@@ -368,10 +389,14 @@ pub enum ApiKeyCli {
 			long,
 			value_name = "STATE",
 			value_parser = crate::cli::account::parse_on_off,
-			action = clap::ArgAction::Set,
-			required = true
+			action = clap::ArgAction::Set
 		)]
-		auto_submitted: bool,
+		auto_submitted: Option<bool>,
+		/// Replace the key's scopes with these (repeat for more): `manage:read`,
+		/// `manage:write`, `mail:read`, `mail:write`, `send`, `scim`, `alias`,
+		/// `ban`, `health`. How to split a key that holds `read` or `write`.
+		#[arg(long = "scope", value_name = "SCOPE", value_parser = parse_scope)]
+		scopes: Vec<String>,
 	},
 	/// Revoke an API key by label.
 	///
@@ -439,7 +464,16 @@ pub(super) fn run(
 		ApiKeyCli::Set {
 			label,
 			auto_submitted,
-		} => set_auto_submitted(config, &label, auto_submitted, json, out),
+			scopes,
+		} => match auto_submitted {
+			Some(state) if scopes.is_empty() => {
+				set_auto_submitted(config, &label, state, json, out)
+			}
+			_ => {
+				let mut err = super::style::stderr();
+				set_scopes(config, &label, scopes, json, out, &mut err)
+			}
+		},
 		ApiKeyCli::Revoke { label, yes } => revoke(config, &label, yes, json, out),
 		ApiKeyCli::Rotate { label } => rotate(config, &label, json, out),
 	}
@@ -484,7 +518,7 @@ pub(super) fn list(
 					"label": row.label,
 					"expires_at": row.expires_at,
 					"ip_cidr": row.ip_cidr,
-					"scopes": row.scopes,
+					"scopes": shown(&row.scopes, &row.grants),
 					"domains": row.domains,
 					"account": row.account,
 				});
@@ -508,7 +542,7 @@ pub(super) fn list(
 		let scopes_repr = if row.scopes.is_empty() {
 			"legacy(all)".to_string()
 		} else {
-			row.scopes.join(",")
+			shown(&row.scopes, &row.grants).join(",")
 		};
 		let bound = row
 			.account
@@ -526,18 +560,6 @@ pub(super) fn list(
 		}
 	}
 	ExitCode::SUCCESS
-}
-
-/// Validate a `--scope` argument. Called by the CLI dispatch before the value
-/// reaches `ApiKeyStore::add` (the store repeats the check; this gives the
-/// user a clean error before any I/O happens).
-pub(super) fn parse_scope(value: &str) -> Result<String, String> {
-	match value.parse::<Scope>() {
-		Ok(_) => Ok(value.to_string()),
-		Err(_) => Err(format!(
-			"unknown scope \"{value}\" (expected read, write, send, scim or alias)"
-		)),
-	}
 }
 
 /// Revoke a management API key by label. Asks
@@ -563,7 +585,7 @@ pub(super) fn revoke(
 	};
 	let question = format!(
 		"Revoke API key \"{label}\" (scopes: {})? [y/N]",
-		key.scopes.join(", ")
+		shown(&key.scopes, &key.grants).join(", ")
 	);
 	if let Err(code) = super::prompt::confirm_destructive("api-key-revoke", &question, yes) {
 		return code;

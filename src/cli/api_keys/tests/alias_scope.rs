@@ -39,7 +39,7 @@ fn a_key_holds_the_alias_scope_and_a_typo_of_it_is_refused() {
 	assert_eq!(keys.keys()[0].scopes, ["alias"]);
 	assert!(parse_scope("alias").is_ok());
 	let error = parse_scope("aliases").expect_err("not a scope");
-	assert!(error.contains("scim or alias"), "{error}");
+	assert!(error.contains("scim, alias, ban or health"), "{error}");
 }
 
 #[test]

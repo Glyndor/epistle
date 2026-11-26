@@ -64,7 +64,7 @@ pub(crate) async fn confine(
 		// One resolution of the credential, the same one the handlers use:
 		// the account binding, the domain binding and the scopes all come
 		// from the same key snapshot.
-		let principal = Principal::for_token(&state, auth);
+		let principal = Principal::resolve(&state, auth);
 		if !path_is_account_scoped(request.uri().path()) {
 			if principal.bound_account().is_some() {
 				return Err(ApiError::account_bound_route());

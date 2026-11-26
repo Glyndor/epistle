@@ -2,6 +2,7 @@ use super::*;
 
 fn key(domains: &[&str], account: Option<&str>) -> ApiKey {
 	ApiKey {
+		grants: Vec::new(),
 		label: "k".into(),
 		hash: "sha256:00".into(),
 		expires_at: None,
@@ -95,6 +96,8 @@ fn a_token_that_matches_no_credential_reaches_no_account() {
 		token: Some("removed-key-secret".to_string()),
 		client_ip: None,
 		configured: false,
+		acceptable_scopes: crate::api::Principal::EVERY_SCOPE.to_vec(),
+		account_scoped: true,
 	};
 	let principal = Principal::for_token(&state, &auth);
 	assert!(
@@ -103,7 +106,7 @@ fn a_token_that_matches_no_credential_reaches_no_account() {
 	);
 	assert!(
 		state
-			.require_scope_for_principal(&principal, Scope::Write)
+			.require_scope_for_principal(&principal, Scope::ManageWrite)
 			.is_err(),
 		"a credential that matches no key must hold no scope"
 	);
@@ -168,8 +171,8 @@ fn a_key_holds_only_the_scopes_it_declares() {
 	let mut key = key(&[], None);
 	key.scopes = vec!["read".to_string()];
 	let principal = Principal::of_key(&key, None);
-	assert!(principal.admits_scope(Scope::Read));
-	assert!(!principal.admits_scope(Scope::Write));
+	assert!(principal.admits_scope(Scope::ManageRead));
+	assert!(!principal.admits_scope(Scope::ManageWrite));
 	assert!(!principal.admits_scope(Scope::Send));
 }
 
@@ -178,8 +181,8 @@ fn a_legacy_key_without_scopes_holds_every_scope() {
 	let mut key = key(&[], None);
 	key.scopes = Vec::new();
 	let principal = Principal::of_key(&key, None);
-	assert!(principal.admits_scope(Scope::Read));
-	assert!(principal.admits_scope(Scope::Write));
+	assert!(principal.admits_scope(Scope::ManageRead));
+	assert!(principal.admits_scope(Scope::ManageWrite));
 	assert!(principal.admits_scope(Scope::Send));
 	assert!(principal.admits_scope(Scope::Scim));
 }
@@ -190,7 +193,7 @@ fn a_key_with_an_unreadable_scope_holds_none() {
 	key.scopes = vec!["teleport".to_string()];
 	let principal = Principal::of_key(&key, None);
 	assert!(
-		!principal.admits_scope(Scope::Read),
+		!principal.admits_scope(Scope::ManageRead),
 		"a scope this build cannot read is a scope the key does not hold"
 	);
 }

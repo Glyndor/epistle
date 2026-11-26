@@ -6,6 +6,7 @@ use crate::api::api_keys::{ApiKey, ApiKeyStore, sha256_hash};
 
 fn key(label: &str, account: Option<&str>) -> ApiKey {
 	ApiKey {
+		grants: Vec::new(),
 		label: label.to_string(),
 		hash: sha256_hash(label),
 		expires_at: None,

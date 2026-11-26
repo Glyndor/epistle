@@ -3,7 +3,7 @@ use serde_json::json;
 
 use super::super::base::{TOKEN, request_with_body};
 use super::super::problem::base::{PROBLEM, call};
-use super::support::{ANN, BOB, queued, rig, secret};
+use super::support::{ANN, BOB, confined_secret, queued, rig, rig_with_confined_keys, secret};
 
 fn message() -> serde_json::Value {
 	json!({
@@ -176,4 +176,85 @@ async fn a_scope_can_turn_the_delay_off_for_one_account() {
 	let body = send(&rig.app, &secret(ANN)).await;
 	assert!(body.get("cancel_until").is_none(), "{body}");
 	assert_eq!(queued(rig.dir.path()).len(), 1);
+}
+
+/// A key that is bound to an account and confined to domains reaches the
+/// account only while all of the account's addresses are in those domains,
+/// as everywhere else: the account name alone does not make it a match.
+/// `ann` has an address in `other.example`, so the key of `ann` confined to
+/// `example.org` is told what an id that does not exist is told.
+#[tokio::test]
+async fn a_key_confined_to_domains_cancels_only_inside_them() {
+	let rig = rig_with_confined_keys(60);
+	let held = send(&rig.app, &secret(ANN)).await;
+	let (status, answer) = request_with_body(
+		&rig.app,
+		"DELETE",
+		&cancel_path(&held),
+		Some(&confined_secret(ANN)),
+		None,
+	)
+	.await;
+	let (unknown_status, unknown) = request_with_body(
+		&rig.app,
+		"DELETE",
+		&format!("/api/v1/send/{}", uuid::Uuid::now_v7()),
+		Some(&confined_secret(ANN)),
+		None,
+	)
+	.await;
+	assert_eq!(status, StatusCode::NOT_FOUND, "{answer}");
+	assert_eq!((status, answer), (unknown_status, unknown));
+	// The message is still held: the attempt took nothing back.
+	rig.releaser.release_due(u64::MAX / 2).expect("pass");
+	assert_eq!(queued(rig.dir.path()).len(), 1);
+	// Once handed on it is still the answer for an id the key does not reach,
+	// not `already_sent`.
+	let (status, answer) = request_with_body(
+		&rig.app,
+		"DELETE",
+		&cancel_path(&held),
+		Some(&confined_secret(ANN)),
+		None,
+	)
+	.await;
+	assert_eq!(status, StatusCode::NOT_FOUND, "{answer}");
+	assert_eq!(answer["error"]["code"], "not_found");
+}
+
+#[tokio::test]
+async fn a_key_confined_to_domains_cancels_what_is_inside_them() {
+	let rig = rig_with_confined_keys(60);
+	let body = serde_json::json!({
+		"from": "bob@example.org", "to": ["carol@remote.example"], "subject": "s", "text": "t",
+	});
+	let (status, held) = request_with_body(
+		&rig.app,
+		"POST",
+		"/api/v1/send",
+		Some(&secret(BOB)),
+		Some(body),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK, "{held}");
+	// Another account's confined key reaches nothing of bob's.
+	let (status, _) = request_with_body(
+		&rig.app,
+		"DELETE",
+		&cancel_path(&held),
+		Some(&confined_secret(ANN)),
+		None,
+	)
+	.await;
+	assert_eq!(status, StatusCode::NOT_FOUND);
+	let (status, answer) = request_with_body(
+		&rig.app,
+		"DELETE",
+		&cancel_path(&held),
+		Some(&confined_secret(BOB)),
+		None,
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK, "{answer}");
+	assert_eq!(answer["canceled"], held["queued"]);
 }

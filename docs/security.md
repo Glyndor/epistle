@@ -570,7 +570,9 @@ instead of being read as whichever primitive the verifier happened to use.
   and the JMAP `tooManyRecipients` error type on `EmailSubmission/set`;
   the audit channel carries `send.new_recipients_limited` with the
   account, count and limit, and the `send_limited_new_recipients`
-  Prometheus counter bumps so an operator can alert on it.
+  Prometheus counter bumps so an operator can alert on it. While a
+  configured cap cannot be checked, a submission is deferred (`451` on SMTP,
+  `503` on REST, `serverUnavailable` on JMAP) rather than accepted.
 - **Reply fast path for known correspondents**: the same per-account
   correspondent store powers an inbound optimisation. If the envelope
   sender of an unauthenticated message is known to **any** local

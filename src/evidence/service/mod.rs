@@ -351,7 +351,10 @@ impl EvidenceService {
 		let accepted = Accepted {
 			spool_id: submitted.spool_id,
 			account: bounded(submitted.account),
-			tenant: self.tenant_of(submitted.from),
+			tenant: self.tenant_of(&crate::dmarc::author::sole_address(
+				submitted.data,
+				submitted.from,
+			)),
 			class: submitted.class,
 			from: bounded(submitted.from),
 			recipients: submitted.recipients.iter().map(|r| bounded(r)).collect(),

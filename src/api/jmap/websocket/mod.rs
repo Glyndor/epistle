@@ -98,21 +98,32 @@ async fn serve(mut socket: WebSocket, state: ApiState, auth: MatchedAuth, _slot:
 			Message::Ping(_) | Message::Pong(_) => continue,
 		};
 		if !credential_still_valid(&state, &auth, &principal) {
-			let refusal = Message::Text(credential_refusal(&text).into());
-			if socket.send(refusal).await.is_ok() {
-				let close = CloseFrame {
-					code: close_code::POLICY,
-					reason: "credential no longer valid".into(),
-				};
-				socket.send(Message::Close(Some(close))).await.ok();
-			}
-			return;
+			return refuse_and_close(socket, &text).await;
 		}
-		for reply in handle_frame(&state, &principal, &text, &mut push).await {
+		let uploads = read_ahead(&state, &principal, &text).await;
+		// Reading the blobs waits on the blob store for as long as it takes,
+		// so the credential is asked about again before anything runs.
+		if !credential_still_valid(&state, &auth, &principal) {
+			return refuse_and_close(socket, &text).await;
+		}
+		for reply in handle_ws_message_with(&state, &principal, &text, &mut push, &uploads) {
 			if socket.send(Message::Text(reply.into())).await.is_err() {
 				return;
 			}
 		}
+	}
+}
+
+/// Answer the frame `text` with the refusal of a credential that stopped being
+/// valid, and close the connection.
+async fn refuse_and_close(mut socket: WebSocket, text: &str) {
+	let refusal = Message::Text(credential_refusal(text).into());
+	if socket.send(refusal).await.is_ok() {
+		let close = CloseFrame {
+			code: close_code::POLICY,
+			reason: "credential no longer valid".into(),
+		};
+		socket.send(Message::Close(Some(close))).await.ok();
 	}
 }
 
@@ -174,18 +185,6 @@ pub fn handle_ws_message(
 	push: &mut PushState,
 ) -> Vec<String> {
 	handle_ws_message_with(state, principal, text, push, &super::Uploads::default())
-}
-
-/// One text frame as the socket loop handles it: the uploads it names read
-/// first, then the frame itself.
-async fn handle_frame(
-	state: &ApiState,
-	principal: &Principal,
-	text: &str,
-	push: &mut PushState,
-) -> Vec<String> {
-	let uploads = read_ahead(state, principal, text).await;
-	handle_ws_message_with(state, principal, text, push, &uploads)
 }
 
 /// The uploaded blobs a `Request` frame's `Email/set` creates name, read

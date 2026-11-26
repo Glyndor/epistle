@@ -118,12 +118,21 @@ fn require_running_mail(json: &str) -> Result<(), String> {
 
 /// Fail early, with a hint, when the mail container is not running.
 pub(in crate::cli) fn ensure_mail_running(config: &Config) -> Result<(), String> {
-	let compose = crate::cli::init::compose_file_path(&config.data_dir);
-	let json = crate::cli::stack::started::ps_json_with(
+	ensure_mail_running_until(
+		config,
 		"podup",
-		&compose,
-		crate::cli::stack::started::PS_TIMEOUT,
-	)?;
+		std::time::Instant::now() + crate::cli::stack::started::PS_TIMEOUT,
+	)
+}
+
+/// [`ensure_mail_running`], cut off at `until`.
+pub(in crate::cli) fn ensure_mail_running_until(
+	config: &Config,
+	podup: &str,
+	until: std::time::Instant,
+) -> Result<(), String> {
+	let compose = crate::cli::init::compose_file_path(&config.data_dir);
+	let json = crate::cli::stack::started::ps_json_until(podup, &compose, until)?;
 	require_running_mail(&json)
 }
 

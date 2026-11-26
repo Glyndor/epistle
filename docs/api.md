@@ -7,7 +7,7 @@ and what to expect when something goes wrong.
 The routes are described machine-readably in
 [`src/api/openapi/openapi.yaml`](../src/api/openapi/openapi.yaml) (OpenAPI 3.1).
 A running server serves the same document as JSON at
-`GET /api/v1/openapi.json`, with a key that has the `read` scope. The tests
+`GET /api/v1/openapi.json`, with a key that has the `manage:read` scope. The tests
 fail when a route in the code is missing from it or it lists one the code does
 not register, and when an operation names a scope the code does not enforce;
 they do not check every field or status code in it. This
@@ -21,6 +21,18 @@ guide is the prose around it. How the headers of the mail come out is in
 | `/scim/v2` | SCIM 2.0 account provisioning | A bearer key with `scim` |
 | `/oauth` | Device and PKCE grants for mail clients | The account's own credentials |
 | `/healthz` | Liveness | Nothing |
+
+Each prefix is a surface, and the listeners say which of them a port serves. A
+listener of kind `api` serves management and, unless they have a listener of
+their own, JMAP, SCIM and the OAuth grants too, which is what a configuration
+from 0.14.0 means. A listener of kind `jmap` (port 8026), `scim` (8027) or
+`oauth` (8028) serves that surface and `/healthz` and nothing else, and the
+`api` listener stops serving it. A path outside the surfaces a listener serves
+is treated like any path nobody serves: `401` without a valid credential, `403`
+with a key that may not call that path, and `404` otherwise. `[api] surfaces`
+lists the surfaces the `api` listener adds to management (`[]` for none), and
+`epistle service enable jmap`, `scim` or `oauth` adds the listener
+([`service` in the command reference](cli.md#service-listeners)).
 
 Not in the API, because they exist only in the CLI: DKIM keys, TLS, evidence,
 warm-up, global limits, address aliases and lists, relays, backups.
@@ -186,28 +198,57 @@ without a restart.
 
 | Flag | Effect |
 |---|---|
-| `--scope read\|write\|send\|scim\|alias` | Required, repeatable. Scopes are independent: `write` does not include `read` |
+| `--scope manage:read\|manage:write\|mail:read\|mail:write\|send\|scim\|alias\|ban\|health` | Required, repeatable. Scopes are independent: `manage:write` does not include `manage:read`, and a management scope never opens JMAP or the other way round. `read` and `write`, the names before 0.15.0, are still taken and open both the management and the mail scope of their kind, with a warning |
 | `--expires-at WHEN` | Unix seconds, a date (`2027-01-31`, midnight UTC), an RFC 3339 instant (`2027-01-31T12:00:00+02:00`) or a duration from now (`90d`). A date or instant already in the past is refused, and a bare number is read as an epoch only between 2001-09-09 and 9999-12-31, so `2027`, `20270131` and a count of milliseconds are refused. After the expiry the key is refused with `401`, like an unknown one |
 | `--expires-in DURATION` | A number and a unit from now: `s`, `m`, `h`, `d` or `w`, for example `90d`. `m` is minutes, not months: count months in days. Not combined with `--expires-at` |
 | `--ip-cidr CIDR` | One network the client must come from. A request from elsewhere is `401` |
 | `--domain NAME` | Confine the key to a domain (repeat for more). Without it the key reaches every domain |
-| `--account NAME` | Bind the key to one account. It then reaches only JMAP, `POST /api/v1/send`, `GET /api/v1/deliveries` and that account's suppression list, acting as that account, and cannot hold `scim`, `alias` or `--domain` |
+| `--account NAME` | Bind the key to one account. It then reaches only JMAP, `POST /api/v1/send`, `GET /api/v1/deliveries` and that account's suppression list, acting as that account, and cannot hold `manage:read`, `manage:write`, `scim`, `alias`, `ban`, `health` or `--domain` (`read` and `write` mean `mail:read` and `mail:write` for it) |
 | `--class CLASS` | The mail class `POST /api/v1/send` gives mail sent with the key when the request names none (see [Class and evidence](#class-and-evidence)) |
 | `--auto-submitted` | Add `Auto-Submitted: auto-generated` to mail sent with this key through `POST /api/v1/send` when the request omits the header. Off by default. A value in the request always wins. Other send paths and server-generated mail, including bounces, are not changed |
 
 `epistle api-key rotate LABEL` replaces the secret and keeps everything else,
 the class included; `epistle api-key set LABEL --auto-submitted on|off`
-changes the `Auto-Submitted` setting; `epistle api-key revoke LABEL` removes
+changes the `Auto-Submitted` setting and `epistle api-key set LABEL --scope S
+[--scope ...]` replaces the scopes; `epistle api-key revoke LABEL` removes
 the key; `epistle api-key list` shows the label, expiry, network, scopes,
 domains, account and `auto_submitted` setting, never the key. The expiry is
 printed as an RFC 3339 instant, with `(expired)` after one that has passed;
 `--json` keeps the epoch and adds `"auto_submitted": true` only when the
-setting is enabled, so disabled keys keep their existing JSON shape.
+setting is enabled, so disabled keys keep their existing JSON shape. The scopes
+shown are the names the key was made with (`read` stays `read`), or the new
+names once it is narrowed or was made with them. A key made
+or changed by 0.15.0 is stored with two fields in `api_keys.toml`: `grants`, the
+scopes above, and `scopes`, the narrowest of the old names that covers them
+(`read`, `write`, `send`, `scim`, `alias`), so the same file still loads in
+0.14.0 after a rollback.
+
+0.14.0 must not give a key more than it holds. It reads only `scopes`, and in
+its names: `read` opens the management and the mail reads together, `write`
+both writes. So a key keeps working there only when its scopes are exactly what
+a name of 0.14.0 opens: `manage:read` with `mail:read`, `manage:write` with
+`mail:write`, `send`, `scim`, `alias`, and combinations of those (an account
+reaches no management route in either release, so for a key bound to an account
+the mail half alone is enough). Every other key, a `mail:write` key that could
+change a password there, a `manage:read` key that could read mail, and any key
+that holds `ban` or `health`, is written so that 0.14.0 loads the file and
+refuses the key from every address: its `ip_cidr` is `held-until-0.15`, which
+is no network, and the `ip_cidr` it really has is kept in a `[[rollback_hold]]`
+table that 0.14.0 ignores. After a rollback these keys are unusable until
+0.15.0 is back, which puts them back as they were. If 0.14.0 wrote
+`api_keys.toml` in between, the table is gone and the key stays refused: make it
+again.
+
+Keys that an earlier build stored in another form (`scopes = ["read"]` for a key
+that holds only `ban`, or one half of `read`) are rewritten the same way when
+`epistle serve` starts and again by `stack rollback`, which stops if it cannot,
+before it puts the old binary back. `epistle status` names each key that holds
+only scopes 0.14.0 has no name for.
 
 ### The panel's key
 
 When the stack runs the web panel, `epistle init` and `epistle stack update`
-create a key labelled `panel` for it, with the scopes `read` and `write` only,
+create a key labelled `panel` for it, with the scopes `manage:read`, `manage:write`, `mail:read` and `mail:write` only (its webmail calls JMAP with it),
 no `--domain` and no `--account`, and a 365-day expiry. It is an
 administrator-grade key: the panel acts for every domain. The secret is written
 to `secrets/panel_api_token` beside the data directory with mode `0600` and is
@@ -237,10 +278,13 @@ each key that
 - has no expiry,
 - expires within 14 days, or has already expired,
 - holds every scope (a legacy key made before scopes existed),
-- holds `write` or `send` with no `--domain`, no `--account` and no
+- holds `read` or `write`, which open both management and mail (it is told to
+  split the key, and the release from which `stack update` refuses a stack that
+  still has one),
+- holds a write scope or `send` with no `--domain`, no `--account` and no
   `--ip-cidr` (an `--ip-cidr` does not count while the server sits behind a
   network that hides the client address), so a leaked copy reaches every domain from any address, or
-- holds `scim` or `alias` with no `--domain`.
+- holds `scim` or `alias` with no `--domain`, or `ban` or `health` with one (those routes refuse it).
 
 These are warnings only; nothing is refused or revoked. To clear one, give the
 key an expiry, narrow it with `--domain`, `--account` or `--ip-cidr`, or
@@ -251,11 +295,23 @@ What each scope reaches:
 
 | Scope | Reaches |
 |---|---|
-| `read` | Every `GET` of `/api/v1`, `/jmap/session`, `/.well-known/jmap`, `/jmap/download`, `/jmap/ws`, `/jmap/eventsource`, and the JMAP methods that return data (`*/get`, `*/query`, `*/changes`, `*/queryChanges`, `Identity/get`, `Quota/get`, `SieveScript/validate`) |
-| `write` | Every other method of `/api/v1` except `send`, `/jmap/upload`, and the JMAP methods that change data (`Mailbox/set`, `Email/set`, `Email/copy`, `PushSubscription/set`, `VacationResponse/set`, `SieveScript/set`) |
+| `manage:read` | Every `GET` and `HEAD` of `/api/v1` except the mail routes below |
+| `manage:write` | Every other method of `/api/v1` except `send`, `aliases` and the mail routes below; `DELETE /api/v1/send/{id}` |
+| `mail:read` | `/jmap/session`, `/.well-known/jmap`, `/jmap/download`, `/jmap/ws`, `/jmap/eventsource`, the JMAP methods that return data (`*/get`, `*/query`, `*/changes`, `*/queryChanges`, `Identity/get`, `Quota/get`, `SieveScript/validate`), and, for a key bound to one account, `GET /api/v1/deliveries` and `GET /api/v1/suppression?account=`; every other key reads those with `manage:read` |
+| `mail:write` | `/jmap/upload`, the JMAP methods that change data (`Mailbox/set`, `Email/set`, `Email/copy`, `PushSubscription/set`, `VacationResponse/set`, `SieveScript/set`), and, for a key bound to one account, its own suppression list; every other key changes the suppression lists with `manage:write` |
 | `send` | `POST /api/v1/send` and JMAP `EmailSubmission/set` |
 | `scim` | Everything under `/scim/v2` |
-| `alias` | Everything under `/api/v1/aliases`, reads included. `read` and `write` do not open it, and the key made before scopes existed (it holds every scope) does |
+| `alias` | Everything under `/api/v1/aliases`, reads included. `manage:read`, `manage:write` and the old `read` and `write` do not open it, and the key made before scopes existed (it holds every scope) does |
+| `health` | `GET /api/v1/health` and `/api/v1/health/{area}`. No management or mail scope opens them. See [Health](#health) |
+| `ban` | Everything under `/api/v1/bans`, reads included. No management or mail scope opens it. See [Bans](#bans) |
+
+A key made before 0.15.0 keeps what it reached: `read` holds `manage:read` and
+`mail:read`, `write` holds `manage:write` and `mail:write`, and a key with no
+scopes holds every scope. OAuth access tokens keep asking for and carrying
+`read`, `write` and `send`; they mean `mail:read`, `mail:write` and `send`, and
+reach JMAP only. To split a key that holds `read` or `write`, run
+`epistle api-key set LABEL --scope manage:read --scope manage:write` (or the two
+`mail:` scopes).
 
 A key confined to some domains sees and changes only the accounts that live
 entirely inside them. What is outside is answered `404`, as if it did not
@@ -411,6 +467,8 @@ The codes the API itself sends:
 | `rate_limited` | 429 | The authentication limit above, or a sending limit (next section). Always with `Retry-After` in seconds |
 | `internal` | 500 | The server failed. The message never carries details |
 | `scan_unavailable`, `evidence_unavailable` | 503 | Nothing was sent; retrying later works |
+| `unavailable` | 503 | Something the server needs cannot be reached now, such as the system resolver behind `/api/v1/dns/verify` |
+| `timeout` | 504 | A check did not finish in the time its route allows (`/api/v1/dns/verify`: 45 seconds) |
 | `mailbox_full` | 507 | A local recipient's mailbox is full. Nothing was queued for anyone |
 
 New codes can appear within `/api/v1`; treat an unknown one by its status.
@@ -437,12 +495,18 @@ curl -s -X POST "$API/api/v1/send" \
 ```
 
 ```json
-{"queued": "01a15026-ff4b-7411-a7e9-9292a7662720", "class": "personal"}
+{"queued": "01a15026-ff4b-7411-a7e9-9292a7662720", "message_id": "<01a15026-ff4b-7411-a7e9-9292a7662721@example.org>", "class": "personal"}
 ```
 
 `queued` is the queue id. It is also the `spool_id` of every delivery record
 and webhook event of the message, so keep it. A message for local recipients
 only is delivered at once and also gets an id.
+
+`message_id` is the `Message-ID` header the server wrote, with its angle
+brackets. It is what a later request puts in `in_reply_to` and `references` to
+continue the thread, and what a recipient's mail client shows. The server
+makes it, so it cannot be chosen in the request; every message gets a new one.
+Its domain is the domain of `from`.
 
 A recipient in `to`, `cc` or `reply_to` can carry a display name, which is
 written in front of the address in the `To`, `Cc` and `Reply-To` headers:
@@ -458,7 +522,8 @@ line break. It is written as a quoted string when it holds a comma, a quote,
 a backslash, parentheses, angle brackets or an at sign, and as RFC 2047
 encoded-words when it holds non-ASCII text. A name that cannot be written
 safely is refused with `400 invalid_input` and the field `to[2].name`
-(`reply_to.name` for the reply address); it is never dropped or altered.
+(`reply_to.name` for a single reply address, `reply_to[1].name` inside a list);
+it is never dropped or altered.
 Names in `bcc` are checked but appear in no header. The envelope, the
 delivery records and the webhook events identify a recipient by its address
 only. An address given more than once is one recipient, and the first name
@@ -468,10 +533,11 @@ given for it is the one written in the header.
 |---|---|---|
 | `from` | string, required | A bare address, no display name. Must be one the acting account owns |
 | `from_name` | string | The phrase of `From`. Absent uses the account's display name. At most 128 characters |
-| `to`, `cc`, `bcc` | arrays of recipients | A recipient is a bare address or `{"name": "Ana Pérez", "address": "ana@example.org"}`; see below. `to` is required but may be empty if `cc` or `bcc` has someone. Together at most 100 distinct addresses by default (`max_recipients`). `bcc` is envelope only |
-| `reply_to` | recipient | A bare address or the same object |
+| `to`, `cc`, `bcc` | arrays of recipients | A recipient is a bare address or `{"name": "Ana Pérez", "address": "ana@example.org"}`; see below. `to` is required but may be empty if `cc` or `bcc` has someone. Together at most 100 distinct addresses by default (`max_recipients`). `bcc` is envelope only. With `to` and `cc` both empty the message carries `To: undisclosed-recipients:;`, an empty group, so no header names a recipient |
+| `reply_to` | recipient or array of recipients | A bare address or the same object, or a list of them (at most 10), written as one `Reply-To` header. An empty list or `null` writes none |
 | `sender` | string | A bare address; it must be one the account owns, like `from` |
-| `subject` | string | Default empty |
+| `envelope_from` | string | The address bounces and delivery reports go back to (`MAIL FROM`), where `from` is what the reader sees. A bare address the account owns, like `from`; absent is `from`. An empty string is refused: the null sender is not offered here. The `From` header, the DKIM signature and the `Message-ID` keep following `from`; see below for what else follows which address |
+| `subject` | string | Default empty. A request with no subject, no `text`, no `html`, no `attachments` and no `inline` is an empty message and is refused with `400 invalid_input` on `text` |
 | `text`, `html` | string | With both, a `multipart/alternative`, text first |
 | `attachments`, `inline` | arrays of `{name, content_type, data, content_id}` | `data` is base64 (standard alphabet, padded). An empty `content_type` is detected. Every `inline` part needs a `content_id`; the HTML refers to it as `cid:<content_id>`. At most 100 parts together |
 | `in_reply_to`, `references` | string | `<id@domain>` ids, space separated: one for `in_reply_to`, up to 100 for `references` (in practice about 50, because each header value is at most 1000 bytes) |
@@ -484,6 +550,9 @@ given for it is the one written in the header.
 | `save_sent` | boolean | Whether a copy goes to the account's Sent folder. Absent follows the account setting. Transactional mail is never copied |
 | `extra` | object of strings | Correlation data, up to 10 keys (printable ASCII, no spaces, at most 64 bytes) with values of at most 256 bytes. It comes back on `/api/v1/deliveries` and in the webhook events of the message and is never written into the message |
 | `class` | `transactional`, `marketing`, `personal` | See below |
+| `dry_run` | boolean | Default `false`, also for `null`. Runs every check of a send and answers what would happen, without sending; see below |
+
+A refusal for a limit names the limit: `Too many recipients; the maximum is 100.`, the same for attachments, custom headers, `reply_to`, `list_unsubscribe`, `references` and the `extra` map.
 
 Fields the server does not know are ignored. Every value that ends up on a
 header line, attachment names and types included, may not hold a control
@@ -497,7 +566,9 @@ owns. A key bound to one account acts for that account. Any other key acts
 for the account that owns `from`, provided the key reaches it. In every other
 case the answer is `403 forbidden_from`, the same whether the address belongs
 to another account or to nobody, so it says nothing about which addresses
-exist. The envelope sender is the `from` as written; its letter case is kept.
+exist. The envelope sender is `envelope_from` when the request has it and the `from` as written otherwise; the same rule and the same `403 forbidden_from` hold for `sender` and `envelope_from`.
+
+**Which address counts for what.** `from`, `sender` and `envelope_from` may be three different addresses, and each is held to the account and to the key: a key confined to some domains is refused (`403 forbidden_from`) when any of the three is outside them, even when the account owns it as a member of a list in another domain. The sending rate limit of every tenant that owns one of the three is checked and charged. The suppression lists, which are kept per sender, are asked about the envelope sender and about the address in `From`, and the queue asks again before delivering. The evidence tenant and its retention follow the `From` address, not the envelope sender.
 
 **An account that does not send.** An account whose `send` switch is off
 (`epistle account set NAME --send off`) sends nothing through the API: a key
@@ -507,6 +578,54 @@ refusal names the account's own state and tells nothing about other addresses.
 Signing in and reading mail are not affected. The same switch is what SMTP
 submission, JMAP and the account's own forwarding and auto-replies follow.
 
+### Dry run
+
+`"dry_run": true` runs the whole request through the checks of a real send and
+queues nothing:
+
+```json
+{"dry_run": true, "class": "marketing", "recipients": 1, "size": 2314, "suppressed": ["gone@example.net"]}
+```
+
+The answer has the `class` the server would grant, the number of envelope
+`recipients` left after suppression, the `size` in bytes of the message as it
+would be queued (about: the `Date` and `Message-ID` it will get are not fixed
+yet), and `suppressed` when a marketing message would drop recipients. It has
+no `queued` and no `message_id`: nothing was queued and no identifier is
+reserved. The checks are the ones of the real request: the scope and the
+credential's reach, sender ownership, `sending_off`, the address, header and
+size rules, the account, tenant and domain size caps, the full-mailbox check,
+the class rules, the sending rate limit and the cap on first-time recipients.
+A request refused for one of them is refused with the same status and body
+with or without `dry_run`, but for the mailbox checks below.
+
+A dry run is a question that costs a send nothing, so it has limits of its
+own, per account: one unit per recipient, at most 600 recipients a minute,
+and at most 1000 addresses a day that the account never wrote to. Past
+either, the answer is `429 rate_limited` with `Retry-After`, and what it
+asked is not counted again once refused. It measures only the mailboxes of
+the local recipients the key reaches: for any other address it does not
+check the mailbox, so it cannot be used to ask whether someone else's
+mailbox is full.
+
+A dry run of a marketing message reads the suppression lists, the one every
+tenant shares among them, and would tell which addresses are on them. It is
+therefore for an unconfined credential that holds `manage:read`: any other is
+refused `403` before a list is looked at, with the same answer whatever the
+lists hold. A confined credential keeps the real send and the personal and
+transactional dry runs. For a confined credential a dry run does not measure
+aliases, whoever their members are, since what it would measure depends on
+accounts the credential does not reach. The sending limits are asked for as
+many units as the real send charges, the recipients left after the suppressed
+ones.
+
+It spends nothing from the sending limits: no rate limit unit is charged, no recipient counts as
+written to for the first-time cap, no evidence record is written, no Sent
+copy is saved and nothing reaches the spool or a mailbox. It does not run
+what happens after queueing, so it does not tell that the antivirus will
+refuse an attachment, that the content scan is up, or that the evidence log
+can take a record.
+
 ### Taking a send back
 
 When the server holds what accounts send for a few seconds (`[queue.undo_send]`
@@ -514,7 +633,7 @@ in the [configuration](configuration.md#queueundo_send), off by default), the
 answer to `POST /api/v1/send` also carries `cancel_until`, an RFC 3339 instant:
 
 ```json
-{"queued": "01a15026-ff4b-7411-a7e9-9292a7662720", "class": "personal", "cancel_until": "2026-11-16T10:00:30Z"}
+{"queued": "01a15026-ff4b-7411-a7e9-9292a7662720", "message_id": "<01a15026-ff4b-7411-a7e9-9292a7662721@example.org>", "class": "personal", "cancel_until": "2026-11-16T10:00:30Z"}
 ```
 
 Until then, and before anything of the message is delivered or queued,
@@ -524,7 +643,7 @@ Until then, and before anything of the message is delivered or queued,
 {"canceled": "01a15026-ff4b-7411-a7e9-9292a7662720"}
 ```
 
-It needs the `send` or the `write` scope. A key bound to one account cancels
+It needs the `send` or the `manage:write` scope. A key bound to one account cancels
 that account's messages; a key confined to some domains cancels those of the
 accounts it reaches; an unconfined key cancels any. An id that is unknown,
 that belongs to an account the key does not reach, or that was never held
@@ -565,7 +684,7 @@ keeps its mail transactional whatever the request says; the response's
 | Recipients | 100 per message (`to`, `cc`, `bcc` together) | `400 invalid_input` |
 | Parts | 100 attachments and inline parts together | `400 invalid_input` |
 | Submission rate | `submission_rate_limit_per_min` recipients per minute per account, shared with SMTP and JMAP; per-domain and per-tenant limits too | `429 rate_limited`, "sending rate limit exceeded; retry later", with `Retry-After: 60`. Nothing was sent |
-| New recipients | `new_recipients_per_day` first-time recipients per account per rolling 24 hours | `429 rate_limited`, "too many new recipients today; retry tomorrow", with `Retry-After: 86400` |
+| New recipients | `new_recipients_per_day` first-time recipients per account per rolling 24 hours | `429 rate_limited`, "too many new recipients today; retry tomorrow", with `Retry-After: 86400`. `503 unavailable` while the cap cannot be checked; nothing was sent |
 | Mailbox quota | `quota_bytes` | `507 mailbox_full` |
 
 The message of a `429` tells the sending limits from the authentication one.
@@ -615,6 +734,42 @@ from `next_cursor`), `DELETE /api/v1/queue/{id}` removes an entry and records
 each pending recipient as `canceled` in the delivery log, then posts a
 `canceled` webhook event when the delivery log is enabled and a webhook is
 configured.
+
+One entry in detail, and its schedule. `GET /api/v1/queue/{id}` prints what
+`epistle queue show --json` prints: the envelope and its retry state
+(`attempts`, `next_attempt`, `held`, `last_error`), never the message. With
+`?headers=true` it also returns the header fields of the message, in order,
+folding undone, up to 200 of them with a value cut at 1000 characters
+(`headers_truncated` says when something was left out); the body is never
+read past the blank line. `POST /api/v1/queue/{id}/retry`, `/hold` and
+`/release` do what `epistle queue retry`, `hold` and `release` do to one
+entry, with the `manage:write` scope, and answer `{"changed", "id", "held"}`:
+`changed` is false when the entry already was as asked, and then no audit line
+is written. Each change writes one (`queue.retried`, `queue.held`,
+`queue.released`) with the label of the key. A key confined to some domains
+reaches the entries whose sender is inside them, and an entry of another
+tenant and one that is not there are the same `404 no such queue entry`.
+An entry belongs to the hosted domain the server decided when it queued it (the
+domain of the account that sent it, of the local recipient that forwarded it, or
+of the delivery that produced a report), never to the sender the message names:
+anyone can write a tenant's domain in `MAIL FROM`. So a forward, with or without
+SRS, and a return are the tenant's whatever their reverse-path says, an entry
+with no owner is reached by a key with no confinement only, and the same rule
+decides the list, the removal and these routes. A release is refused with `409`
+for an entry whose removal began (it stays on hold until it is gone, and the
+worker does not attempt it), and a confined key lifts only a hold put by a key
+confined inside its own domains: the operator's, or one put by a key outside its
+reach, is `403` and stays. `DELETE /api/v1/queue/{id}` follows the same rule for a hold: a confined key does
+not remove mail the operator, or a key outside its reach, put on hold (`403`, the
+entry stays), decided on the entry as it is under the spool's lock before anything is written,
+so a hold put between the check and the removal counts, and so does one put on an
+entry a removal is already holding (the hold a removal puts on an entry is only a
+marker, and no one's hold). `--all` stays with the command. `GET /api/v1/queue/destinations` lists the
+destinations the queue holds off and the receiver groups at their warm-up cap,
+as `epistle queue destinations --json` does (at most 1000 rows, `truncated`
+says more); the holds are shared by every tenant, so a confined key is
+refused with `403`.
+
 `GET /api/v1/suppression` lists suppressed recipients,
 `POST /api/v1/suppression` adds one and `DELETE /api/v1/suppression/{address}`
 clears one. The POST body is `{"address": "recipient@example.net"}` with an
@@ -714,6 +869,9 @@ curl -s -X DELETE -H "Authorization: Bearer $KEY" "$API/api/v1/accounts/ana?queu
 | Route | What it does |
 |---|---|
 | `GET /api/v1/status` | `version`, `domains`, `accounts` and `queue_size` (left out for a confined key) |
+| `GET /api/v1/dns/records` | The records the hosted domains need, as `epistle dns-records --json` prints them; `read`. See [DNS](#dns) |
+| `GET /api/v1/dns/verify` | A check of the live DNS against them, as `epistle verify-dns --json` prints it; `read`. See [DNS](#dns) |
+| `GET /api/v1/health`, `GET /api/v1/health/{area}` | What `epistle status --json` and `epistle check <area> --json` print; scope `health`. See [Health](#health) |
 | `GET /api/v1/domains` | The hosted domains in the key's reach, which are `disabled`, and under `details` the rows `epistle domain list --json` prints |
 | `GET /api/v1/domains/{domain}` | What `epistle domain show <domain> --json` prints. A domain outside a confined key's reach is `404` like an unknown one |
 | `POST /api/v1/domains` | Host a new domain; unconfined `write` key only; answers `201` |
@@ -725,6 +883,7 @@ curl -s -X DELETE -H "Authorization: Bearer $KEY" "$API/api/v1/accounts/ana?queu
 | `DELETE /api/v1/domains/{domain}/aliases/{alias}` | Remove an alias currently pointing to the path domain; `write` |
 | `GET`, `POST /api/v1/aliases` | List the address aliases (paged, filtered by `domain` and `account`), make one; scope `alias`; create answers `201`. See [Address aliases](#address-aliases) |
 | `DELETE /api/v1/aliases/{alias}` | Remove an address alias; scope `alias` |
+| `GET`, `POST /api/v1/bans`, `DELETE /api/v1/bans/{subject}`, `GET`, `POST /api/v1/bans/allow`, `DELETE /api/v1/bans/allow/{cidr}` | The bans in force, banning, lifting, and the allow list; scope `ban`. See [Bans](#bans) |
 | `GET`, `POST /api/v1/accounts` | List (not paged), create. A duplicate name or address is `400 invalid_input` |
 | `DELETE /api/v1/accounts/{name}` | Removes the account and its data. Only accounts made through the API; one declared in the configuration file is `404 no such dynamic account` |
 | `PUT /api/v1/accounts/{name}/password` | New password |
@@ -738,6 +897,43 @@ curl -s -X DELETE -H "Authorization: Bearer $KEY" "$API/api/v1/accounts/ana?queu
 
 Reading and writing the `Created`, `Removed` and other bodies is in the
 OpenAPI document, which also has every response code per route.
+
+### DNS
+
+`GET /api/v1/dns/records` answers `{"records": [...], "skipped": [...],
+"complete": true}`. `records` holds the rows `epistle dns-records --json`
+prints (`name`, `ttl`, `type`, `value`, a TXT value unsplit), computed by the
+same code. `skipped` names the groups the configuration does not publish
+(`[dns_publish] skip`) and how many records each holds: they are not missing.
+`complete` is false when an input could not be read, such as a DKIM key or the
+certificate; the list may then lack a record, and the server's log names the
+input. The answer never names a file.
+
+`GET /api/v1/dns/verify` answers what `epistle verify-dns --json` prints,
+`{"ok": false, "groups": [{"name": "example.org", "checks": [...]}]}`, with
+each check `ok`, `missing`, `error` (a lookup that failed, inconclusive) or
+`skipped`. Drift is a normal `200` with `ok: false`. The server asks its own
+resolver, built for each check, so it reuses no answer an earlier check cached;
+the name servers it asks may still hold a cached answer of their own.
+
+Both take `?domain=example.org` to cover one hosted domain, and both are
+reads: scope `read`.
+
+- A key with no domain or account restriction gets the mail host as well: the address
+  records of the hostname and its TLSA record in the list, and the hostname's
+  addresses and reverse DNS as the first group of the check. Naming a `domain`
+  leaves the host out.
+- A key confined to some domains gets those domains and never the host. A
+  `domain` outside its reach and one the server does not host are both
+  `404 no such domain`. A key bound to one account is refused with `403`.
+- Bounds. A listing covers at most 200 domains and a check at most 20, because
+  each domain is about a dozen lookups; past that the answer is `400` and
+  names `?domain=`. Two checks run at once on a server; the third is `429`
+  with `Retry-After`. A check not finished in 45 seconds is `504 timeout`, and
+  a resolver that cannot start is `503 unavailable`. The two places for a check
+  belong to the whole server, not to a key, so one key can hold both. The caps
+  on domains belong to the routes: the commands have none. The routes write no
+  audit line, since they change nothing.
 
 ### Changing hosted domains
 
@@ -792,6 +988,98 @@ Each durable change emits one structured event on `epistle::api::audit`, written
 `domain.updated`, `domain.alias_added` or `domain.alias_removed`, with `domain`
 (the alias name for alias events) and `client_ip`. Refusals and no-ops emit no
 change event. Bearer tokens, private keys and SRS secrets are never logged.
+
+### Health
+
+`GET /api/v1/health` answers what `epistle status --json` prints, from the
+same code, and `GET /api/v1/health/{area}` what `epistle check <area> --json`
+prints: one object keyed by the name of the area (`config`, `ports`, `tls`,
+`dns`, `db`, `api_keys`, `antivirus`, `antispam`, `queue`, `disk`, `spool`,
+`storage_keys`, `subid`, `boot`, `warmup`, `resources`, `clock`, `evidence`,
+`deliverability`), each with `status` (`ok`, `warn` or `fail`), a `detail` and
+its `items`. The answer is `200` whatever the areas find; a failing area is in
+the body, and the command's exit code has no HTTP counterpart. A name that is
+not an area is `404 no such area`.
+
+The scope is `health`, and only that: `read` does not open it. The answer
+names the listeners, the certificate, the disk, the key labels and the state of
+the stack, which belong to the server and not to a tenant. A key confined with
+`--domain` or bound to an account is refused with `403`, before the name of the
+area is looked at, so the status says nothing of which areas exist;
+`epistle api-key create` makes neither, and `epistle status` warns about one it
+finds in `api_keys.toml`.
+
+The areas run against the configuration the server runs with now, with the
+state files laid over it, and the `config` area names the file the server was
+started with. They run inside the server, so an area that reads the host or the
+stack's tools (`boot`, `resources`, `clock`) reports what it can see from
+there, which is not always what the command sees on the host. Every area is cut off after 60 seconds, as in the
+command, and at most two runs are in progress on a server, however many API
+listeners it has: the third is `429` with `Retry-After`. The places are the
+server's, so one key can hold both. A run is a task of its own: a client that
+leaves neither stops it nor frees its place, which is given back when the last
+thread the run started has returned. The programs a check runs (`systemctl`,
+`podman` and the like) are killed, with whatever they started, when the area's
+time is over. The same time holds the collection of what they print: a program
+that ends and leaves something running that keeps its output open does not hold
+the run past it, the process group is killed when the program ends, at most 4 MiB
+of output is kept (the rest is read and dropped, so a program is never stopped by
+a full pipe), and the checks that ask the mail container, and `podup ps`, run on
+the thread that keeps the run's place and are killed at the same time.
+The routes write nothing and write no audit line.
+
+### Bans
+
+`/api/v1/bans` is `epistle ban` over HTTP, through the same code: the bans in
+force, banning an address or a network, lifting a ban, and the allow list of
+the addresses that are never banned. The bans live in PostgreSQL, so a server
+without `[database]` answers `404` (`bans are not manageable`), as the command
+says so and exits 1.
+
+| Route | What it does |
+|---|---|
+| `GET /api/v1/bans` | The bans in force, as `epistle ban list --json` prints them (`subject`, `reason`, `until`), ordered by subject and paged: `limit` (100 by default, 500 at most) and `cursor` (the `next_cursor` of the page before) |
+| `POST /api/v1/bans` | `{"target":"203.0.113.9","for":"90m"}` bans an address or a network; `for` is a number and a unit (`s`, `m`, `h`, `d`, `w`), a day when absent. Answers `201` with `target` and `until` |
+| `DELETE /api/v1/bans/{subject}` | Lifts a ban and clears its failure records. Name the subject as the listing prints it, percent-encoded: `203.0.113.9`, `cidr:203.0.113.0%2F24`, `pair:alice@example.org\|203.0.113.9`, `account:alice@example.org`. A subject with no ban and no failure record is `404` |
+| `GET /api/v1/bans/allow` | The allow list, as `epistle ban allow list --json` prints it |
+| `POST /api/v1/bans/allow` | `{"cidr":"10.1.0.0/16"}` adds a block; `201`, or `200` with `changed: false` when it was there |
+| `DELETE /api/v1/bans/allow/{cidr}` | Takes a block off the list, percent-encoded (`10.1.0.0%2F16`); `404` when it is not there |
+
+All of it needs the `ban` scope, and only that one: `read` and `write` do not
+open it, and neither does the key made before scopes existed. A ban locks
+clients out and the allow list exempts them from every ban, so a leaked key of
+this kind is a way to shut out the panel or to switch the bans off. The bans
+belong to the server and not to a tenant, so a key confined with `--domain` is
+refused with `403` and so is one bound to an account; `epistle api-key create`
+does not make either, and `epistle status` warns about one found in
+`api_keys.toml`.
+
+A key is held to a narrower reach than the operator at a terminal, in the
+shape of the alias routes:
+
+- no network wider than a /16 of IPv4 or a /32 of IPv6 may be banned or
+  allowed (`400`); the command takes any block but the whole internet to ban
+  and any block at all to allow;
+- an address on the allow list cannot be banned (`409`, as the command says);
+- a key may leave at most 10000 manual bans in force (the bans the listeners
+  raise on their own are not counted, so they cannot use up its room), at
+  most 100 banned networks and 100 allowed networks (a block, not one
+  address), and 1000 allow-list entries (`409`). A few hundred networks of a
+  middling size would cover more than any one of them does, so the networks
+  have a count of their own. The command has no count;
+- a key may lift or remove only what it could have made: a network ban or an
+  allow-list block wider than a /16 of IPv4 or a /32 of IPv6, which the
+  operator may have set, stays until the operator lifts it (`400`);
+- a body is at most 4 KiB and carries only the fields above.
+
+Every change writes one audit line (`ban.added`, `ban.removed`,
+`ban.allow_added`, `ban.allow_removed`) with the label of the key and the
+client address; an account named by a subject is written as the pseudonym the
+logs use. The change and its line are made together on a task the request does
+not own, so a client that goes away leaves both or neither. The counts above are
+made and written in one step by the store (one transaction under a lock), so
+requests that arrive together at the edge take no more than the room left. A refusal and a request that changed nothing write none. A database
+that fails is a plain `500`: the answer never carries its message.
 
 ### Address aliases
 

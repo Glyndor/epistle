@@ -29,6 +29,8 @@ fn ctx_for(path: &std::path::Path) -> Ctx {
 		podup: "podup".to_string(),
 		meminfo: std::path::PathBuf::from("meminfo-absent"),
 		steady: std::time::Duration::ZERO,
+		hold: None,
+		deadline: std::time::Instant::now() + std::time::Duration::from_secs(60),
 	}
 }
 

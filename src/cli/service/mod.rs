@@ -74,6 +74,13 @@ pub enum ServiceName {
 	Webdav,
 	/// Management API on loopback port 8025.
 	Api,
+	/// JMAP on loopback port 8026, split off the management listener.
+	Jmap,
+	/// SCIM 2.0 on loopback port 8027, split off the management listener.
+	Scim,
+	/// The OAuth grants on loopback port 8028, split off the management
+	/// listener. Needs an OAuth signing key.
+	Oauth,
 }
 
 impl ServiceName {
@@ -88,6 +95,9 @@ impl ServiceName {
 			Self::Managesieve => ListenerKind::ManageSieve,
 			Self::Webdav => ListenerKind::WebDav,
 			Self::Api => ListenerKind::Api,
+			Self::Jmap => ListenerKind::Jmap,
+			Self::Scim => ListenerKind::Scim,
+			Self::Oauth => ListenerKind::Oauth,
 		}
 	}
 
