@@ -9,10 +9,10 @@ use serde::Serialize;
 use super::send_request::SendRequest;
 use crate::api::Principal;
 use crate::api::error::ApiError;
+use crate::api::new_recipients::CapRefusal;
 use crate::api::state::{ApiState, MatchedAuth};
 use crate::smtp::session::AcceptedMessage;
 use crate::smtp::sink::SinkError;
-use crate::storage::CapOutcome;
 use crate::util::address_reason;
 
 /// The answer to a send: the queued message, or what a dry run found.
@@ -221,41 +221,19 @@ pub async fn send(
 
 	// Reserve correspondents under the same account lock as SMTP and JMAP.
 	// Recording also runs without a cap so inbound replies remain known.
-	let recipient_refs: Vec<&str> = recipients.iter().map(String::as_str).collect();
-	if let Some(store) = state.correspondents() {
-		// A dry run asks the cap and leaves its allowance as it was.
-		let cap = match request.dry_run {
-			true => store.preview_new_recipient_cap(
-				&account,
-				&recipient_refs,
-				state.new_recipients_per_day(),
-			),
-			false => store.enforce_new_recipient_cap(
-				&account,
-				&recipient_refs,
-				state.new_recipients_per_day(),
-			),
-		};
-		match cap {
-			Ok(CapOutcome::Limited {
-				new,
-				already,
-				limit,
-			}) => {
-				crate::api::log_send_limited(&account, None, new.saturating_add(already), limit);
-				return Err(ApiError::rate_limited_with_message(
-					NEW_RECIPIENT_LIMIT_MESSAGE,
-					NEW_RECIPIENT_RETRY_AFTER,
-				));
-			}
-			Ok(CapOutcome::Allowed { .. } | CapOutcome::Uncapped) => {}
-			Err(error) => {
-				tracing::warn!(
-					account = %crate::log_id::account(&account),
-					%error,
-					"correspondent store error; accepting"
-				);
-			}
+	// A dry run asks the cap and leaves its allowance as it was.
+	match crate::api::new_recipients::reserve(&state, &account, &recipients, request.dry_run) {
+		Ok(()) => {}
+		Err(CapRefusal::Limited) => {
+			return Err(ApiError::rate_limited_with_message(
+				NEW_RECIPIENT_LIMIT_MESSAGE,
+				NEW_RECIPIENT_RETRY_AFTER,
+			));
+		}
+		Err(CapRefusal::Unavailable) => {
+			return Err(ApiError::unavailable(
+				"The new-recipient limit cannot be checked right now. Try again shortly.",
+			));
 		}
 	}
 

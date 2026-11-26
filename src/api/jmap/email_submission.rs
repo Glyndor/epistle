@@ -5,6 +5,7 @@ use serde_json::{Value, json};
 use super::super::Principal;
 use super::super::state::ApiState;
 use super::objects;
+use crate::api::new_recipients::CapRefusal;
 
 use crate::smtp::trace::ensure_submission_headers;
 
@@ -295,31 +296,14 @@ fn submit_email(
 	// resource; RFC 8621 §3.6.2 carries it through. The on-wire error
 	// keeps the same wording as the SMTP / REST paths so an operator
 	// reading either log can correlate by the message.
-	if let Some(store) = state.correspondents() {
-		let recipient_refs: Vec<&str> = recipients.iter().map(String::as_str).collect();
-		match store.enforce_new_recipient_cap(
-			account,
-			&recipient_refs,
-			state.new_recipients_per_day(),
-		) {
-			Ok(crate::storage::CapOutcome::Limited {
-				new,
-				already,
-				limit,
-			}) => {
-				crate::api::log_send_limited(account, None, new.saturating_add(already), limit);
-				return Err("tooManyRecipients".into());
-			}
-			Ok(
-				crate::storage::CapOutcome::Allowed { .. } | crate::storage::CapOutcome::Uncapped,
-			) => {}
-			Err(error) => {
-				tracing::warn!(
-					account = %crate::log_id::account(account),
-					%error,
-					"correspondent store error; accepting"
-				);
-			}
+	match crate::api::new_recipients::reserve(state, account, &recipients, false) {
+		Ok(()) => {}
+		Err(CapRefusal::Limited) => return Err("tooManyRecipients".into()),
+		Err(CapRefusal::Unavailable) => {
+			return Err(Refusal {
+				kind: "serverUnavailable",
+				description: Some("the new-recipient limit cannot be checked right now".into()),
+			});
 		}
 	}
 	// A full local mailbox is refused now, not bounced days later

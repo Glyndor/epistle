@@ -684,7 +684,7 @@ keeps its mail transactional whatever the request says; the response's
 | Recipients | 100 per message (`to`, `cc`, `bcc` together) | `400 invalid_input` |
 | Parts | 100 attachments and inline parts together | `400 invalid_input` |
 | Submission rate | `submission_rate_limit_per_min` recipients per minute per account, shared with SMTP and JMAP; per-domain and per-tenant limits too | `429 rate_limited`, "sending rate limit exceeded; retry later", with `Retry-After: 60`. Nothing was sent |
-| New recipients | `new_recipients_per_day` first-time recipients per account per rolling 24 hours | `429 rate_limited`, "too many new recipients today; retry tomorrow", with `Retry-After: 86400` |
+| New recipients | `new_recipients_per_day` first-time recipients per account per rolling 24 hours | `429 rate_limited`, "too many new recipients today; retry tomorrow", with `Retry-After: 86400`. `503 unavailable` while the cap cannot be checked; nothing was sent |
 | Mailbox quota | `quota_bytes` | `507 mailbox_full` |
 
 The message of a `429` tells the sending limits from the authentication one.

@@ -100,3 +100,42 @@ fn known_recipients_do_not_count_against_the_limit() {
 	);
 	assert_eq!(code, 250, "every recipient is already known");
 }
+
+/// Put a file where the store's directory is, so that taking its lock fails.
+fn break_store(dir: &std::path::Path) {
+	std::fs::rename(dir.join("correspondents"), dir.join("correspondents.away")).expect("move");
+	std::fs::write(dir.join("correspondents"), b"").expect("file in its place");
+}
+
+/// A cap that cannot be checked defers the submission with a `451`, and
+/// delivers nothing; once the store works the cap is the `450` again.
+#[test]
+fn a_cap_that_cannot_be_checked_defers_the_submission() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let store = Arc::new(crate::storage::CorrespondentStore::open(dir.path()).expect("store"));
+	break_store(dir.path());
+	let mut session = alice_session_with_correspondents(store, Some(2));
+	assert_eq!(submit_to(&mut session, &["b@elsewhere.example"]), 451);
+}
+
+#[test]
+fn a_cap_with_no_store_defers_the_submission() {
+	let mut session = tls_session();
+	session.command_line(&format!(
+		"AUTH PLAIN {}",
+		plain("alice", fixture_password())
+	));
+	let mut session = session.with_cap(super::cap::Cap::empty().with_daily_new_recipients(Some(2)));
+	assert_eq!(submit_to(&mut session, &["b@elsewhere.example"]), 451);
+}
+
+/// Without a cap the store only keeps a record, and a failure there does not
+/// stop the message.
+#[test]
+fn without_a_cap_a_failing_store_does_not_defer() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let store = Arc::new(crate::storage::CorrespondentStore::open(dir.path()).expect("store"));
+	break_store(dir.path());
+	let mut session = alice_session_with_correspondents(store, None);
+	assert_eq!(submit_to(&mut session, &["b@elsewhere.example"]), 250);
+}
