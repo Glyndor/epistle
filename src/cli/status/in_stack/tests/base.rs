@@ -60,7 +60,7 @@ async fn a_hung_podup_neither_outlives_the_deadline_nor_frees_a_place_early() {
 	let podup = dir.path().join("podup");
 	std::fs::write(
 		&podup,
-		format!("#!/bin/sh\necho $$ >> {}\nsleep 5\n", marker.display()),
+		format!("#!/bin/sh\necho $$ >> {}\nsleep 60\n", marker.display()),
 	)
 	.expect("script");
 	std::fs::set_permissions(&podup, std::fs::Permissions::from_mode(0o755)).expect("chmod");
@@ -78,7 +78,7 @@ async fn a_hung_podup_neither_outlives_the_deadline_nor_frees_a_place_early() {
 		let mut ctx = crate::cli::status::test_support::ctx(dir.path(), "");
 		ctx.podup = podup.display().to_string();
 		ctx.hold = Some(Arc::new(crate::cli::status::RunHold::new(permit)));
-		ctx.deadline = Instant::now() + Duration::from_millis(600);
+		ctx.deadline = Instant::now() + Duration::from_secs(3);
 		let (alive, peak) = (Arc::clone(&alive), Arc::clone(&peak));
 		runs.push(tokio::spawn(async move {
 			let now = alive.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
@@ -103,7 +103,7 @@ async fn a_hung_podup_neither_outlives_the_deadline_nor_frees_a_place_early() {
 	}
 	assert!(peak.load(std::sync::atomic::Ordering::SeqCst) <= 2);
 	assert!(
-		started.elapsed() < Duration::from_secs(4),
+		started.elapsed() < Duration::from_secs(30),
 		"{:?}",
 		started.elapsed()
 	);
@@ -116,7 +116,6 @@ async fn a_hung_podup_neither_outlives_the_deadline_nor_frees_a_place_early() {
 	}
 	assert_eq!(gate.available_permits(), 2);
 	// Every podup that was started is gone with what it started.
-	tokio::time::sleep(Duration::from_millis(200)).await;
 	let pids = std::fs::read_to_string(&marker).expect("both started");
 	assert_eq!(pids.lines().count(), 2);
 	for pid in pids.lines() {

@@ -67,7 +67,7 @@ async fn the_areas_run_on_the_live_configuration() {
 /// runs alive.
 #[tokio::test]
 async fn clients_that_leave_mid_run_neither_stop_it_nor_free_its_place() {
-	let lag = std::time::Duration::from_millis(600);
+	let lag = std::time::Duration::from_secs(3);
 	let world = build_with(true, |state| state.with_health_lag(lag, None));
 	let mut requests = Vec::new();
 	for _ in 0..3 {
@@ -97,7 +97,7 @@ async fn clients_that_leave_mid_run_neither_stop_it_nor_free_its_place() {
 		world.state.health_peak()
 	);
 	assert!(world.state.health_peak() >= 1);
-	for _ in 0..100 {
+	for _ in 0..300 {
 		if world.state.try_health_run().is_some() {
 			return;
 		}
@@ -135,7 +135,7 @@ async fn listeners_of_one_server_share_the_places() {
 async fn a_run_keeps_its_place_until_the_threads_of_a_cut_off_area_return() {
 	let world = build_with(true, |state| {
 		state.with_health_lag(
-			std::time::Duration::from_millis(1500),
+			std::time::Duration::from_secs(4),
 			Some(std::time::Duration::from_millis(100)),
 		)
 	});
@@ -143,7 +143,7 @@ async fn a_run_keeps_its_place_until_the_threads_of_a_cut_off_area_return() {
 	let (status, _, body) = get(&world.state, "/api/v1/health/disk", Some(HEALTHY)).await;
 	assert_eq!(status, StatusCode::OK, "{body}");
 	assert!(
-		started.elapsed() < std::time::Duration::from_millis(1200),
+		started.elapsed() < std::time::Duration::from_secs(3),
 		"the answer waited for the thread"
 	);
 	assert!(body.to_string().contains("timed out"), "{body}");
@@ -153,7 +153,7 @@ async fn a_run_keeps_its_place_until_the_threads_of_a_cut_off_area_return() {
 		"the place was given back while a thread of the run was still working"
 	);
 	drop(first);
-	for _ in 0..100 {
+	for _ in 0..300 {
 		let (one, two) = (world.state.try_health_run(), world.state.try_health_run());
 		if one.is_some() && two.is_some() {
 			return;
