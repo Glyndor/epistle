@@ -1,4 +1,5 @@
-//! Binding the signer's socket with permissions only its own uid passes.
+//! Binding a Unix socket with permissions only its own uid passes: the
+//! signer's, and the ones the HTTP fronts connect to.
 
 use std::io;
 use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, PermissionsExt};
@@ -11,8 +12,7 @@ const DIR_MODE: u32 = 0o700;
 /// The mode of the socket itself.
 const SOCKET_MODE: u32 = 0o600;
 
-/// Bind the signer's socket at `path`, inside a directory only this uid
-/// can enter.
+/// Bind a socket at `path`, inside a directory only this uid can enter.
 ///
 /// The parent directory is created `0700` when it is missing. When it
 /// exists it must be a real directory (not a symlink), owned by the
@@ -28,7 +28,7 @@ pub fn bind(path: &Path) -> io::Result<UnixListener> {
 		.ok_or_else(|| {
 			io::Error::new(
 				io::ErrorKind::InvalidInput,
-				"the signer socket path names no directory",
+				"the socket path names no directory",
 			)
 		})?;
 	private_directory(dir)?;
@@ -52,10 +52,7 @@ fn private_directory(dir: &Path) -> io::Result<()> {
 	if !meta.file_type().is_dir() {
 		return Err(io::Error::new(
 			io::ErrorKind::InvalidInput,
-			format!(
-				"the signer socket directory {} is not a directory",
-				dir.display()
-			),
+			format!("the socket directory {} is not a directory", dir.display()),
 		));
 	}
 	// SAFETY: geteuid has no preconditions and cannot fail.
@@ -64,7 +61,7 @@ fn private_directory(dir: &Path) -> io::Result<()> {
 		return Err(io::Error::new(
 			io::ErrorKind::PermissionDenied,
 			format!(
-				"the signer socket directory {} must be owned by uid {euid} and closed to group and others (0700)",
+				"the socket directory {} must be owned by uid {euid} and closed to group and others (0700)",
 				dir.display()
 			),
 		));

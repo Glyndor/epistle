@@ -28,6 +28,7 @@ pub mod response_writer;
 #[cfg(test)]
 pub(crate) mod tests;
 pub mod trusted_ip;
+pub(crate) mod unix_socket;
 
 pub use https_url::{HttpsUrl, HttpsUrlError};
 

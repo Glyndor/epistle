@@ -2,7 +2,6 @@
 //! holder, after checking it.
 
 mod admit;
-mod socket;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -14,8 +13,8 @@ use tokio::sync::Semaphore;
 use super::frame::{MAX_REQUEST_BYTES, ReadError, Reason, SignResponse, read_frame};
 use crate::dkim::{KeyHolder, Refusal};
 
+pub use crate::net::unix_socket::bind;
 pub(crate) use admit::admit;
-pub use socket::bind;
 
 /// How long one exchange may take on the server, from the accept to the
 /// last byte of the answer: reading the request, signing, writing.
