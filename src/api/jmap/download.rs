@@ -50,6 +50,11 @@ pub async fn download(
 	} else {
 		None
 	};
+	// The blob store may have taken its time: the credential and its reach are
+	// asked again before the bytes are handed over.
+	if let Err(refused) = super::upload_api::recheck(&state, &auth, &principal, &account) {
+		return *refused;
+	}
 	match blob {
 		Some((content_type, bytes)) => {
 			([(header::CONTENT_TYPE, content_type)], bytes).into_response()
