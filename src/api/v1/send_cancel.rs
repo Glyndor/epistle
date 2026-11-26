@@ -58,11 +58,14 @@ pub async fn cancel(
 	}
 }
 
-/// Whether `principal` may act for `account`.
+/// Whether `principal` may act for `account`: the account must be one the
+/// credential reaches by name and by domain, whatever else binds it, and an
+/// account-bound credential also needs that account to be live.
 fn reaches(state: &ApiState, principal: &Principal, account: &str) -> bool {
-	if let Some(bound) = principal.bound_account() {
-		return bound == account
-			&& crate::api::account_bound::bound_account_is_live(state, principal);
+	if principal.bound_account().is_some()
+		&& !crate::api::account_bound::bound_account_is_live(state, principal)
+	{
+		return false;
 	}
 	state
 		.accounts()
