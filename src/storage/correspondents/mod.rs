@@ -210,18 +210,53 @@ impl CorrespondentStore {
 			return Ok(CapOutcome::Uncapped);
 		}
 		let _lock = self.lock_account(account)?;
-		let Some(limit) = limit else {
+		let outcome = self.decide(account, recipients, limit)?;
+		if !matches!(outcome, CapOutcome::Limited { .. }) {
 			self.record_locked(account, recipients)?;
+		}
+		Ok(outcome)
+	}
+
+	/// What [`Self::enforce_new_recipient_cap`] would answer for the same
+	/// arguments, without writing a marker: a dry run asks the question and
+	/// leaves the account's footprint, and so its daily cap, as it was.
+	pub fn preview_new_recipient_cap(
+		&self,
+		account: &str,
+		recipients: &[&str],
+		limit: Option<u32>,
+	) -> std::io::Result<CapOutcome> {
+		if account.is_empty() || recipients.is_empty() {
 			return Ok(CapOutcome::Uncapped);
-		};
+		}
+		let _lock = self.lock_account(account)?;
+		self.decide(account, recipients, limit)
+	}
+
+	/// How many of `recipients` (each address once, whatever its case) the
+	/// account has never written to.
+	pub fn unknown_count(&self, account: &str, recipients: &[&str]) -> std::io::Result<u32> {
 		let dir = self.account_dir(account)?;
-		let new = recipients
+		Ok(recipients
 			.iter()
 			.map(|address| DigestName::of(address))
 			.collect::<std::collections::HashSet<_>>()
 			.iter()
 			.filter(|name| !name.in_dir(&dir).is_ok_and(|path| path.exists()))
-			.count() as u32;
+			.count() as u32)
+	}
+
+	/// The cap decision for `recipients`, under the account lock the caller holds.
+	fn decide(
+		&self,
+		account: &str,
+		recipients: &[&str],
+		limit: Option<u32>,
+	) -> std::io::Result<CapOutcome> {
+		let Some(limit) = limit else {
+			return Ok(CapOutcome::Uncapped);
+		};
+		let new = self.unknown_count(account, recipients)?;
 		let already = self.new_in_last_day(account)?;
 		if new > 0 && already.saturating_add(new) > limit {
 			return Ok(CapOutcome::Limited {
@@ -230,7 +265,6 @@ impl CorrespondentStore {
 				limit,
 			});
 		}
-		self.record_locked(account, recipients)?;
 		Ok(CapOutcome::Allowed { new })
 	}
 

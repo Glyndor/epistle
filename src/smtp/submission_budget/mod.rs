@@ -77,9 +77,17 @@ impl Budget {
 	/// Whether one more recipient fits under every limit at `now`. Charges
 	/// nothing: SMTP asks at `MAIL FROM`, before the message is sent.
 	pub fn has_room(&self, now: u64) -> bool {
-		self.limits
-			.iter()
-			.all(|limit| limit.limiter.has_room(&limit.key, 1, limit.per_min, now))
+		self.has_room_for(1, now)
+	}
+
+	/// Whether `recipients` more recipients fit under every limit at `now`.
+	/// Charges nothing: a dry run asks what the real send would be charged.
+	pub fn has_room_for(&self, recipients: u32, now: u64) -> bool {
+		self.limits.iter().all(|limit| {
+			limit
+				.limiter
+				.has_room(&limit.key, recipients, limit.per_min, now)
+		})
 	}
 
 	/// Charge `recipients` units against every limit, or none when any of

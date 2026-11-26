@@ -106,6 +106,10 @@ pub struct SendRequest {
 	/// are checked.
 	#[serde(default)]
 	extra: BTreeMap<String, String>,
+	/// Run every check the send runs and answer what would happen, without
+	/// queueing, delivering, charging a rate limit or recording a recipient.
+	#[serde(default)]
+	pub(super) dry_run: bool,
 	/// The class of the message (`transactional`, `marketing`, `personal`).
 	/// Absent: the class bound to the API key, else the account default,
 	/// else `personal`.

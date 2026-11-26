@@ -22,6 +22,7 @@ mod send;
 mod send_cancel;
 #[cfg(test)]
 pub(crate) use send::sink_refusal;
+pub(crate) mod send_dry_limits;
 mod send_from;
 mod send_message;
 mod send_recipient;

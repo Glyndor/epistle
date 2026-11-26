@@ -147,6 +147,8 @@ struct Inner {
 	/// JMAP `EmailSubmission/set`, the same count the SMTP listeners accept.
 	/// The default is [`crate::smtp::session::DEFAULT_MAX_RECIPIENTS`].
 	max_recipients: usize,
+	/// What a dry run of the send endpoint is charged to.
+	dry_run: crate::api::v1::send_dry_limits::Limits,
 	/// Notifications for the admin event stream and its open streams.
 	events: super::events::Hub,
 	/// The resolver and the limit of the DNS routes.
