@@ -13,6 +13,7 @@ use axum::extract::{Path, Query, State};
 use serde::{Deserialize, Serialize};
 
 use crate::api::Principal;
+use crate::api::api_keys::Scope;
 use crate::api::audit::{self, AuditEvent};
 use crate::api::error::ApiError;
 use crate::api::state::{AccountView, ApiState, ClientIp, MatchedAuth};
@@ -110,19 +111,25 @@ pub async fn create(
 	let password_hash =
 		crate::smtp::auth::hash_password(prepared.as_ref()).map_err(|_| ApiError::internal())?;
 	let name = crate::directory_store::account_name(&request.name);
+	let addresses = request.addresses.clone();
+	let account = DynamicAccount {
+		name: name.clone(),
+		addresses: request.addresses,
+		password_hash,
+		scram: derive_scram(prepared.as_ref(), state.store())?,
+		totp_secret: None,
+		disabled: false,
+		quota_bytes: None,
+		allowed_protocols: None,
+		display_name: request.display_name,
+		..DynamicAccount::default()
+	};
+	// The key is asked again at the write: it was last asked before the
+	// password was derived.
 	state
 		.store()
-		.add(DynamicAccount {
-			name: name.clone(),
-			addresses: request.addresses,
-			password_hash,
-			scram: derive_scram(prepared.as_ref(), state.store())?,
-			totp_secret: None,
-			disabled: false,
-			quota_bytes: None,
-			allowed_protocols: None,
-			display_name: request.display_name,
-			..DynamicAccount::default()
+		.add_if(account, || {
+			Principal::still_reaches_addresses(&state, &auth, Scope::ManageWrite, &addresses)
 		})
 		.map_err(store_error)?;
 	Ok(Json(Created { created: name }))
@@ -218,12 +225,18 @@ pub async fn set_password(
 	let hash =
 		crate::smtp::auth::hash_password(prepared.as_ref()).map_err(|_| ApiError::internal())?;
 	let scram = derive_scram(prepared.as_ref(), state.store())?;
-	// The reach was checked before the key derivations; it is asked again
-	// about the account as it is when the password is written.
+	// The reach was checked before the key derivations; the key is read again
+	// and asked about the account as it is when the password is written.
 	state
 		.store()
 		.set_password_hash_if(&name, hash, scram, |account| {
-			principal.admits_account(&account.name, &account.addresses)
+			Principal::still_reaches_account(
+				&state,
+				&auth,
+				Scope::ManageWrite,
+				&account.name,
+				&account.addresses,
+			)
 		})
 		.map_err(store_error)?;
 	audit::log_privilege_change(AuditEvent::PasswordReset, &name, client_ip.0);

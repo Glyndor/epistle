@@ -20,6 +20,7 @@ use serde::Deserialize;
 use super::error::{CONTENT_TYPE, ScimError};
 use super::types::{Email, ListResponse, Name, PatchOperation, PatchRequest, USER_SCHEMA, User};
 use crate::api::Principal;
+use crate::api::api_keys::Scope;
 use crate::api::audit::{self, AuditEvent};
 use crate::api::state::{ApiState, MatchedAuth};
 use crate::directory_store::removal::QueuePolicy;
@@ -364,7 +365,13 @@ pub async fn create_user(
 		display_name: body.display_name.clone(),
 		..DynamicAccount::default()
 	};
-	state.store().add(account).map_err(store_to_scim)?;
+	let addresses = account.addresses.clone();
+	state
+		.store()
+		.add_if(account, || {
+			Principal::still_reaches_addresses(&state, &auth, Scope::Scim, &addresses)
+		})
+		.map_err(store_to_scim)?;
 	let stored = lookup(&state, &name)?;
 	Ok(scim_resource(StatusCode::CREATED, render_user(&stored)))
 }
@@ -457,10 +464,22 @@ pub async fn put_user(
 		}
 		None => None,
 	};
+	// The key is read again at the write, and asked about the account as it
+	// is and as it would become.
+	let proposed = replacement.addresses.clone();
 	state
 		.store()
 		.replace_account_if(&id, replacement, new_password, |account| {
-			principal.admits_account(&account.name, &account.addresses)
+			let reaches = |addresses: &[String]| {
+				Principal::still_reaches_account(
+					&state,
+					&auth,
+					Scope::Scim,
+					&account.name,
+					addresses,
+				)
+			};
+			reaches(&account.addresses) && reaches(&proposed)
 		})
 		.map_err(store_to_scim)?;
 	let stored = lookup(&state, &id)?;
@@ -517,14 +536,20 @@ pub async fn patch_user(
 	for op in &body.operations {
 		plan.push(plan_operation(&state, op)?);
 	}
-	// The plan is written in one go, and the reach is asked again about the
-	// account as it is under the store's lock: it was first checked before
+	// The plan is written in one go. The key is read again and asked about the
+	// account as it is under the store's lock: both were last checked before
 	// the passwords were hashed.
 	if !plan.is_empty() {
 		state
 			.store()
 			.change_account_if(&id, gather(plan), |account| {
-				principal.admits_account(&account.name, &account.addresses)
+				Principal::still_reaches_account(
+					&state,
+					&auth,
+					Scope::Scim,
+					&account.name,
+					&account.addresses,
+				)
 			})
 			.map_err(store_to_scim)?;
 	}

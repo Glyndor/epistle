@@ -4,6 +4,8 @@ pub use super::*;
 
 pub(super) mod cidr;
 pub(super) mod confined_after_body;
+#[cfg(target_os = "linux")]
+pub(super) mod held_commit;
 pub(super) mod reload;
 pub(in crate::api) mod rules;
 pub(super) mod rules_check;

@@ -230,11 +230,25 @@ impl AccountStore {
 	}
 
 	/// Add a dynamic account. `password_hash` must already be argon2id.
-	pub fn add(&self, mut account: DynamicAccount) -> Result<(), StoreError> {
+	pub fn add(&self, account: DynamicAccount) -> Result<(), StoreError> {
+		self.add_if(account, || true)
+	}
+
+	/// [`add`](Self::add) for a caller whose authority was decided before the
+	/// account was prepared: `authorize` is asked under the store's lock, and a
+	/// refusal answers like an account that does not exist.
+	pub fn add_if(
+		&self,
+		mut account: DynamicAccount,
+		authorize: impl FnOnce() -> bool,
+	) -> Result<(), StoreError> {
 		account.name = normalize::account_name(&account.name);
 		normalize::account(&mut account);
 		account.display_name = display_name::stored(account.display_name.as_deref())?;
 		self.mutate_store_hosted(|state| {
+			if !authorize() {
+				return Err(StoreError::NotFound(account.name.clone()));
+			}
 			self.check_name_and_addresses(&account)?;
 			let name_taken = self
 				.static_accounts
