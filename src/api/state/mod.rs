@@ -30,6 +30,9 @@ pub struct MatchedAuth {
 	/// the handler, after the body, and has to hold one of these still, or a
 	/// request admitted under a scope that was withdrawn since would go on.
 	pub acceptable_scopes: Vec<crate::api::api_keys::Scope>,
+	/// Whether the route is one a key bound to an account may use. A key read
+	/// again by a handler is held to it, like the one the middleware read.
+	pub account_scoped: bool,
 }
 
 /// State shared by every handler.

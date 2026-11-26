@@ -79,6 +79,7 @@ async fn every_scope_key_is_not_the_static_identity() {
 			client_ip: None,
 			configured: false,
 			acceptable_scopes: crate::api::Principal::EVERY_SCOPE.to_vec(),
+			account_scoped: true,
 		},
 	);
 	assert!(principal.credential().is_some());

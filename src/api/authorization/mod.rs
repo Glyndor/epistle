@@ -187,6 +187,25 @@ impl Principal {
 	/// not know yet) reaches no account and holds no scope. It never falls
 	/// back to the reach of the configured token.
 	pub fn for_token(state: &ApiState, auth: &MatchedAuth) -> Principal {
+		let principal = Self::resolve(state, auth);
+		// The restrictions of a key bound to an account apply to every
+		// resolution, so that one made after a request's body has arrived is
+		// held to what the middleware asked: a route such a key may use, and
+		// an account that is still there to act on.
+		if principal.bound_account().is_some()
+			&& !(auth.account_scoped
+				&& crate::api::account_bound::bound_account_is_live(state, &principal))
+		{
+			return Principal::unreachable(principal.credential);
+		}
+		principal
+	}
+
+	/// The key of `auth` as it is now, without the restrictions that depend on
+	/// the route and on the bound account's state, which
+	/// [`for_token`](Self::for_token) adds: the middleware asks them itself, to
+	/// answer each with its own error.
+	pub(crate) fn resolve(state: &ApiState, auth: &MatchedAuth) -> Principal {
 		let Some(token) = auth.token.as_deref() else {
 			// The middleware never lets an unauthenticated request reach a
 			// handler, so the only way we get here is a bug in the wiring.

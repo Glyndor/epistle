@@ -218,6 +218,7 @@ async fn websocket_requests_reach_only_the_principals_accounts() {
 			client_ip: None,
 			configured: false,
 			acceptable_scopes: crate::api::Principal::EVERY_SCOPE.to_vec(),
+			account_scoped: true,
 		};
 		let principal = Principal::for_token(&state, &auth);
 		let frame = |account: &str| {
