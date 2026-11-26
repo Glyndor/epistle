@@ -137,6 +137,11 @@ pub async fn send(
 	// tenant rate limit, so a refused request cannot spend another
 	// tenant's budget.
 	let principal = Principal::for_token(&state, &auth);
+	// The middleware asked whether a bound account is still live before the
+	// body was read; the body may have taken as long as the client wished.
+	if !crate::api::account_bound::bound_account_is_live(&state, &principal) {
+		return Err(ApiError::bound_account_unavailable());
+	}
 	let account =
 		acting_account(&state, &principal, &request.from).ok_or_else(ApiError::forbidden_from)?;
 	// An account whose sending is switched off sends nothing, from any of
