@@ -4637,7 +4637,7 @@ components:
           default: []
           description: "Envelope only; never written into the message, and a name here appears in no header. With `to` and `cc` empty the message carries `To: undisclosed-recipients:;`."
         reply_to:
-          description: One recipient, or a list of at most 10, written as one `Reply-To` header. An empty list writes none.
+          description: One recipient, or a list of at most 10, written as one `Reply-To` header. An empty list writes none, and `null` is read as the field being absent.
           oneOf:
             - $ref: "#/components/schemas/SendRecipient"
             - type: array
@@ -4729,7 +4729,7 @@ components:
         dry_run:
           type: boolean
           default: false
-          description: Run every check of a send and answer what would happen (`DryRun`), without queueing, delivering, charging a rate limit, recording a recipient, writing evidence or saving a Sent copy. A marketing dry run reads the suppression lists, so it needs an unconfined credential with the manage:read scope and is `403` for any other, whatever the lists hold. For a confined credential a dry run does not measure aliases.
+          description: Run every check of a send and answer what would happen (`DryRun`), without queueing, delivering, charging a rate limit, recording a recipient, writing evidence or saving a Sent copy. `null` is read as `false`. A marketing dry run reads the suppression lists, so it needs an unconfined credential with the manage:read scope and is `403` for any other, whatever the lists hold. For a confined credential a dry run does not measure aliases.
     DryRun:
       type: object
       required: [dry_run, class, recipients, size]

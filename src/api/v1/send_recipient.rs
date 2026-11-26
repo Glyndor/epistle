@@ -42,6 +42,8 @@ pub struct ReplyTo {
 enum ReplyToWire {
 	One(Recipient),
 	Many(Vec<Recipient>),
+	/// `null`, which 0.14.0 read as the field being absent.
+	Absent(()),
 }
 
 impl From<ReplyToWire> for ReplyTo {
@@ -52,6 +54,7 @@ impl From<ReplyToWire> for ReplyTo {
 				listed: false,
 			},
 			ReplyToWire::Many(list) => Self { list, listed: true },
+			ReplyToWire::Absent(()) => Self::default(),
 		}
 	}
 }
