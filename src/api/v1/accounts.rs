@@ -218,9 +218,13 @@ pub async fn set_password(
 	let hash =
 		crate::smtp::auth::hash_password(prepared.as_ref()).map_err(|_| ApiError::internal())?;
 	let scram = derive_scram(prepared.as_ref(), state.store())?;
+	// The reach was checked before the key derivations; it is asked again
+	// about the account as it is when the password is written.
 	state
 		.store()
-		.set_password_hash(&name, hash, scram)
+		.set_password_hash_if(&name, hash, scram, |account| {
+			principal.admits_account(&account.name, &account.addresses)
+		})
 		.map_err(store_error)?;
 	audit::log_privilege_change(AuditEvent::PasswordReset, &name, client_ip.0);
 	Ok(Json(PasswordChanged { updated: name }))
