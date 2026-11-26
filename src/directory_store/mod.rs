@@ -30,7 +30,7 @@ mod reload_api;
 pub use masked::{MaskedAddress, MaskedAddressStore, MaskedAddressView};
 
 pub mod removal;
-pub use removal::{QueuePolicy, Removed, remove_account};
+pub use removal::{QueuePolicy, Removed, remove_account, remove_account_if};
 
 pub mod sql;
 pub use sql::{SqlAccount, load_sql_accounts};
@@ -107,6 +107,10 @@ pub use crate::directory_store::scram_upgrade::{NoopScramUpgrader, ScramUpgrader
 struct DynamicFile {
 	#[serde(default)]
 	accounts: Vec<DynamicAccount>,
+	/// The accounts being removed, by name, with the token of the removal
+	/// that holds each: see [`removal::reservation`].
+	#[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+	removals: std::collections::BTreeMap<String, String>,
 }
 
 /// The mutable account store: static accounts + persisted dynamic ones.

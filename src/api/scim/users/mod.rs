@@ -146,6 +146,9 @@ fn store_to_scim(error: StoreError) -> ScimError {
 		StoreError::LimitReached { .. } => ScimError::internal(),
 		StoreError::Io(_) => ScimError::internal(),
 		StoreError::BayesPurge { .. } => ScimError::internal(),
+		StoreError::BeingRemoved(name) => {
+			ScimError::conflict(format!("user \"{name}\" is being removed"))
+		}
 	}
 }
 
@@ -401,13 +404,19 @@ pub async fn delete_user(
 	let principal = Principal::for_token(&state, &auth);
 	lookup_in_scope(&state, &principal, &id)?;
 	let data_dir = state.data_dir().to_path_buf();
-	let counts = crate::directory_store::removal::remove_account(
+	// The key is read again at the write that reserves the account, before
+	// anything of it is destroyed.
+	let counts = crate::directory_store::removal::remove_account_if(
 		state.store(),
 		state.spool(),
 		&data_dir,
 		&id,
 		QueuePolicy::Drain,
 		state.bayes_store(),
+		|account| {
+			let now = Principal::for_token(&state, &auth);
+			now.admits_scope(Scope::Scim) && now.admits_account(&account.name, &account.addresses)
+		},
 	)
 	.await
 	.map_err(store_to_scim)?;
