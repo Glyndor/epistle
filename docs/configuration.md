@@ -261,14 +261,17 @@ addr = "0.0.0.0"   # default: 127.0.0.1
 | `imaps` | 993 | IMAP4rev2 over implicit TLS. Requires `[tls]`. |
 | `pop3s` | 995 | POP3 over implicit TLS (no plaintext POP3). |
 | `manage-sieve` | 4190 | ManageSieve (RFC 5804), STARTTLS before auth. Requires `[tls]`. |
-| `api` | 8025 | Management HTTP API. Requires `[api]`. |
+| `api` | 8025 | Management HTTP API. Requires `[api]`. Also serves JMAP, SCIM and the OAuth grants unless they have a listener of their own or `[api] surfaces` leaves them out ([below](#api)). |
+| `jmap` | 8026 | JMAP on a listener of its own, taken off `api`. Requires `[api]`. |
+| `scim` | 8027 | SCIM 2.0 on a listener of its own, taken off `api`. Requires `[api]`. |
+| `oauth` | 8028 | The OAuth grants (`/oauth/*`) on a listener of its own, taken off `api`. Requires `[api]` and an `[oauth]` `signing_key` or `signing_key_file`. |
 | `metrics` | 9090 | Prometheus metrics at `GET /metrics`. |
 | `acme` | 80 | ACME HTTP-01 challenge responder. Needed only with `[acme] challenge = "http-01"` (the default). |
 | `autoconfig` | 8091 | Serves Thunderbird autoconfig, Microsoft Autodiscover and the Apple profile (`/mobileconfig?email=`) over plain HTTP, for a deployment that keeps its own TLS proxy. |
 | `autoconfigs` | 443 | The same documents over HTTPS with the server certificate, so `autoconfig.<domain>`/`autodiscover.<domain>` need no proxy. Requires `[tls]`; the certificate (or `[acme] domains`) must cover both names. |
 | `web-dav` | 8090 | WebDAV (RFC 4918) files + CardDAV (RFC 6352) addressbooks + CalDAV (RFC 4791) calendars. HTTP Basic auth as the mail account; each account is confined to its own tree. Run behind a TLS proxy. |
 
-Plaintext listeners (`submission` 587, `web-dav` 8090, `api` 8025, `autoconfig` 8091, `metrics` 9090) are accepted without a `[tls]` block ONLY when bound to a loopback address. When `addr = 0.0.0.0` (or any non-loopback address) and `[tls]` is unset, a warning is emitted at validate time.
+Plaintext listeners (`submission` 587, `web-dav` 8090, `api` 8025, `jmap` 8026, `scim` 8027, `oauth` 8028, `autoconfig` 8091, `metrics` 9090) are accepted without a `[tls]` block ONLY when bound to a loopback address. When `addr = 0.0.0.0` (or any non-loopback address) and `[tls]` is unset, a warning is emitted at validate time.
 
 `[tls]` does not encrypt `api`, `web-dav` or `autoconfig`: those three carry plain HTTP and the mail certificate is not offered on them. Configuring `[tls]` leaves them in plaintext, so the way to expose them is a TLS reverse proxy in front of a loopback listener, which is where they belong. `epistle service enable` gives them loopback for that reason, on a host install as much as on the container stack, `epistle service set <name> --bind <address>` refuses any address outside loopback, and the generated compose map publishes them on `127.0.0.1` even when nothing narrowed it explicitly.
 
@@ -472,6 +475,7 @@ codes. See [the API guide](api.md#turn-it-on).
 | `event_streams_per_server` | Streams of `GET /api/v1/events` the server holds open in all, 1 to 65536. Default `64`. |
 | `event_stream_max_secs` | Seconds a stream of `GET /api/v1/events` stays open before the server closes it and the client reconnects, 60 to 86400. Default `3600`. |
 | `limiter` | The limits on failed bearer sign-ins and on password checks, the `[api.limiter]` table below. |
+| `surfaces` | Optional list of the surfaces besides management that the `api` listener serves: `"jmap"`, `"oauth"`, `"scim"`. Absent serves every surface that has no listener of its own, which is what 0.14.0 did. `[]` serves management only, so JMAP, SCIM and OAuth are off unless a `jmap`, `scim` or `oauth` listener serves them. A surface that has a listener of its own cannot be listed: it is served in one place, and the configuration is refused with a message that names both. |
 
 #### `[api.limiter]`
 Failed bearer attempts are counted per client (an IPv4 address or an IPv6 /64)

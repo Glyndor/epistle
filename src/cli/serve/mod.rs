@@ -239,10 +239,14 @@ async fn serve(
 	// connection is ever accepted or served as root.
 	let mut tasks: Vec<tasks::ListenerTask> = Vec::new();
 	let drain = crate::shutdown::Drain::new();
+	// The listeners that serve the API (`api` and the kinds split off it) share
+	// one state, so a limit or a counter means the same on all of them.
+	let mut api_state: Option<crate::api::ApiState> = None;
 	for listener_config in &config.listeners {
 		match listener_config.kind {
-			ListenerKind::Api => {
-				let state = api_listener::build(
+			ListenerKind::Api | ListenerKind::Jmap | ListenerKind::Scim | ListenerKind::Oauth => {
+				let state = api_listener::shared(
+					&mut api_state,
 					&config,
 					api_listener::Inputs {
 						account_store: &account_store,
@@ -266,7 +270,8 @@ async fn serve(
 					},
 				)?;
 				let listener = tasks::bind(listener_config, &ipv4_any_ports).await?;
-				let router = crate::api::router(state);
+				let surfaces = crate::api::Surfaces::for_listener(&config, listener_config.kind);
+				let router = crate::api::router_for(state, &surfaces);
 				tasks.push(tasks::serve_http(listener, router, http_limits));
 			}
 			ListenerKind::Acme => {

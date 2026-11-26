@@ -135,6 +135,7 @@ pub(super) fn summary(current: &str, version: &str, restored: bool) -> String {
 	)
 }
 
+pub(super) mod check;
 mod store;
 
 mod run;

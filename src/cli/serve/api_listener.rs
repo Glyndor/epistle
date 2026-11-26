@@ -32,6 +32,21 @@ pub(super) struct Inputs<'a> {
 	pub health_gate: &'a crate::api::HealthGate,
 }
 
+/// The state every listener that serves the API shares: built for the first,
+/// cloned for the others, so a limit or a counter means the same on all of them.
+pub(super) fn shared(
+	slot: &mut Option<crate::api::ApiState>,
+	config: &Config,
+	inputs: Inputs<'_>,
+) -> std::io::Result<crate::api::ApiState> {
+	if let Some(state) = slot {
+		return Ok(state.clone());
+	}
+	let built = build(config, inputs)?;
+	*slot = Some(built.clone());
+	Ok(built)
+}
+
 pub(super) fn build(config: &Config, inputs: Inputs<'_>) -> std::io::Result<crate::api::ApiState> {
 	let Inputs {
 		account_store,

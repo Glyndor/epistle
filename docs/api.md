@@ -22,6 +22,16 @@ guide is the prose around it. How the headers of the mail come out is in
 | `/oauth` | Device and PKCE grants for mail clients | The account's own credentials |
 | `/healthz` | Liveness | Nothing |
 
+Each prefix is a surface, and the listeners say which of them a port serves. A
+listener of kind `api` serves management and, unless they have a listener of
+their own, JMAP, SCIM and the OAuth grants too, which is what a configuration
+from 0.14.0 means. A listener of kind `jmap` (port 8026), `scim` (8027) or
+`oauth` (8028) serves that surface and `/healthz` and nothing else, and the
+`api` listener stops serving it; a request for a path outside the surfaces a
+listener serves is answered `404`. `[api] surfaces` lists the surfaces the `api`
+listener adds to management (`[]` for none), and `epistle service enable jmap`,
+`scim` or `oauth` adds the listener ([`service` in the command reference](cli.md#service-listeners)).
+
 Not in the API, because they exist only in the CLI: DKIM keys, TLS, evidence,
 warm-up, global limits, address aliases and lists, relays, backups.
 

@@ -222,8 +222,16 @@ that `enable` would use. JSON records contain `name`, `enabled`, `port`, and `bi
 plus `host` on a container stack where the generated map pins one.
 
 Names are `imap` (143), `imaps` (993), `submission` (587), `submissions` (465),
-`pop3` (implicit TLS, 995), `managesieve` (4190), `webdav` (8090), and `api`
-(loopback, 8025). IMAP and submission TLS siblings can be toggled independently.
+`pop3` (implicit TLS, 995), `managesieve` (4190), `webdav` (8090), `api`
+(loopback, 8025), and the three surfaces of the API that can have a listener of
+their own: `jmap` (loopback, 8026), `scim` (loopback, 8027) and `oauth`
+(loopback, 8028, which needs an `[oauth]` signing key). IMAP and submission TLS
+siblings can be toggled independently. Without a `jmap`, `scim` or `oauth`
+listener the `api` listener serves that surface, as it always did. Enabling one
+takes the surface off `api`, and disabling it turns the surface off instead of
+handing it back: the command writes `[api] surfaces` with the others `api`
+serves. A client that called port 8025 for JMAP, SCIM or the OAuth grants has to
+move to the new port, or a TLS proxy has to send those paths to it.
 `smtp` (25) cannot be disabled because inbound mail needs it.
 
 Edits preserve every other configuration value, use init's comment-free TOML

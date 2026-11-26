@@ -86,8 +86,8 @@ fn service_cli_lists_real_sockets_and_every_name() {
 	let rows = rows.as_array().unwrap();
 	assert_eq!(
 		rows.len(),
-		9,
-		"list must include SMTP and all eight optional services"
+		12,
+		"list must include SMTP and all eleven optional services"
 	);
 	for (name, port) in [
 		("smtp", 25),
@@ -99,6 +99,9 @@ fn service_cli_lists_real_sockets_and_every_name() {
 		("managesieve", 4190),
 		("webdav", 8090),
 		("api", 8025),
+		("jmap", 8026),
+		("scim", 8027),
+		("oauth", 8028),
 	] {
 		let row = rows.iter().find(|row| row["name"] == name).unwrap();
 		assert_eq!(
@@ -108,7 +111,7 @@ fn service_cli_lists_real_sockets_and_every_name() {
 		assert_eq!(row["enabled"], name == "smtp" || name == "imaps");
 		assert_eq!(
 			row["bind"],
-			if name == "api" || name == "webdav" {
+			if matches!(name, "api" | "webdav" | "jmap" | "scim" | "oauth") {
 				"127.0.0.1"
 			} else {
 				"::"

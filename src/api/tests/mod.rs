@@ -23,6 +23,7 @@ pub(super) mod routes;
 pub(super) mod send;
 pub(super) mod sieve;
 pub(super) mod submissions;
+pub(super) mod surfaces;
 pub(super) mod switches;
 pub(super) mod tenancy;
 pub(super) mod undo;

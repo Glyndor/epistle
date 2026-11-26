@@ -48,7 +48,12 @@ pub(crate) const CONTAINER_BIND_DUAL: IpAddr = IpAddr::V6(Ipv6Addr::UNSPECIFIED)
 pub(crate) fn plain_http(kind: ListenerKind) -> bool {
 	matches!(
 		kind,
-		ListenerKind::Api | ListenerKind::WebDav | ListenerKind::Autoconfig
+		ListenerKind::Api
+			| ListenerKind::Jmap
+			| ListenerKind::Scim
+			| ListenerKind::Oauth
+			| ListenerKind::WebDav
+			| ListenerKind::Autoconfig
 	)
 }
 
