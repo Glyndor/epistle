@@ -40,6 +40,10 @@ pub use queue::{QueueEvent, log_queue_change};
 pub enum AuditEvent {
 	/// A dynamic account was removed.
 	AccountRemoved,
+	/// The removal of a dynamic account stopped after part of its footprint
+	/// was cleared: the account may still exist and the removal can be run
+	/// again.
+	AccountRemovalIncomplete,
 	/// A dynamic account's password (argon2id hash + SCRAM) was replaced.
 	PasswordReset,
 	/// A fresh TOTP secret was generated and stored for a dynamic account.
@@ -77,6 +81,7 @@ impl AuditEvent {
 	fn as_str(self) -> &'static str {
 		match self {
 			AuditEvent::AccountRemoved => "account.removed",
+			AuditEvent::AccountRemovalIncomplete => "account.removal_incomplete",
 			AuditEvent::PasswordReset => "account.password_reset",
 			AuditEvent::TotpEnrolled => "account.totp_enrolled",
 			AuditEvent::TotpDisabled => "account.totp_disabled",
@@ -164,6 +169,22 @@ pub fn log_account_removal(
 		queued_discarded = counts.queued_messages_discarded,
 		queued_left = counts.queued_messages_left,
 		"account removed with footprint cleared"
+	);
+}
+
+/// Emit the line of a removal that failed after it had begun to clear the
+/// account's footprint. It is not `account.removed`: the account may still be
+/// there, with part of what it held gone, and the removal is to be repeated.
+pub fn log_account_removal_incomplete(account: &str, client_ip: Option<IpAddr>) {
+	let client_ip = client_ip
+		.map(|ip| ip.to_string())
+		.unwrap_or_else(|| "unknown".to_string());
+	tracing::warn!(
+		target: "epistle::api::audit",
+		event = AuditEvent::AccountRemovalIncomplete.as_str(),
+		account = %crate::log_id::account(account),
+		client_ip = %client_ip,
+		"account removal stopped after part of its footprint was cleared"
 	);
 }
 

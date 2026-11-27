@@ -21,7 +21,6 @@ use super::error::{CONTENT_TYPE, ScimError};
 use super::types::{Email, ListResponse, Name, PatchOperation, PatchRequest, USER_SCHEMA, User};
 use crate::api::Principal;
 use crate::api::api_keys::Scope;
-use crate::api::audit::{self, AuditEvent};
 use crate::api::state::{ApiState, MatchedAuth};
 use crate::directory_store::removal::QueuePolicy;
 use crate::directory_store::{AccountChanges, DynamicAccount, NewPassword, StoreError};
@@ -403,26 +402,24 @@ pub async fn delete_user(
 ) -> Result<impl IntoResponse, ScimError> {
 	let principal = Principal::for_token(&state, &auth);
 	lookup_in_scope(&state, &principal, &id)?;
-	let data_dir = state.data_dir().to_path_buf();
-	// The key is read again at the write that reserves the account, before
-	// anything of it is destroyed.
-	let counts = crate::directory_store::removal::remove_account_if(
-		state.store(),
-		state.spool(),
-		&data_dir,
+	// The removal runs on a task of its own: a client that goes away must not
+	// leave the account half removed and unrecorded. The task reads the key
+	// again at the write that reserves the account, before anything of it is
+	// destroyed.
+	let removal_state = state.clone();
+	crate::api::account_removal::remove(
+		&state,
 		&id,
 		QueuePolicy::Drain,
-		state.bayes_store(),
-		|account| {
-			let now = Principal::for_token(&state, &auth);
+		crate::api::account_removal::Via::Scim,
+		None,
+		move |account| {
+			let now = Principal::for_token(&removal_state, &auth);
 			now.admits_scope(Scope::Scim) && now.admits_account(&account.name, &account.addresses)
 		},
 	)
 	.await
 	.map_err(store_to_scim)?;
-	crate::api::jmap::push_subscription::forget_account(&state, &id);
-	audit::log_privilege_change(AuditEvent::AccountRemoved, &id, None);
-	audit::log_account_removal(&id, None, &counts);
 	Ok(StatusCode::NO_CONTENT)
 }
 

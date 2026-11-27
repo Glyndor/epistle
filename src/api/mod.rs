@@ -5,6 +5,7 @@
 //! binds to localhost unless explicitly configured otherwise.
 
 mod account_bound;
+mod account_removal;
 mod account_view;
 pub mod api_keys;
 mod audit;

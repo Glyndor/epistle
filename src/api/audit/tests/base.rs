@@ -30,15 +30,15 @@ use crate::api::router;
 use crate::api::tests::base::{TOKEN, request, request_with_body, test_state};
 
 #[derive(Clone, Debug)]
-struct CapturedEvent {
-	target: String,
-	fields: HashMap<String, String>,
-	message: String,
+pub(super) struct CapturedEvent {
+	pub(super) target: String,
+	pub(super) fields: HashMap<String, String>,
+	pub(super) message: String,
 }
 
 #[derive(Default)]
-struct Capture {
-	events: Arc<Mutex<Vec<CapturedEvent>>>,
+pub(super) struct Capture {
+	pub(super) events: Arc<Mutex<Vec<CapturedEvent>>>,
 }
 
 impl<S: tracing::Subscriber> Layer<S> for Capture {
