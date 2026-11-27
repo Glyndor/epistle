@@ -22,7 +22,7 @@ pub use frame::Held;
 pub use policy::UndoPolicy;
 pub use release::{NoticeStyle, Pass, Releaser};
 pub use sink::UndoSink;
-pub use store::{CancelError, Canceller, Pending, RELEASED_KEPT_SECS, UndoStore};
+pub use store::{CancelError, Canceller, Pending, RELEASED_KEPT_SECS, TakenBack, UndoStore};
 
 #[cfg(test)]
 mod tests;

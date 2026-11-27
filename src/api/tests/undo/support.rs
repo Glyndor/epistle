@@ -39,6 +39,7 @@ fn account(name: &str, extra: &[&str]) -> crate::config::Account {
 }
 
 pub(super) struct Rig {
+	pub store: Arc<crate::directory_store::AccountStore>,
 	pub app: Router,
 	pub releaser: Releaser,
 	pub dir: tempfile::TempDir,
@@ -159,6 +160,7 @@ fn build(delay_secs: u32, scopes: &[&str], confined: bool) -> Rig {
 		},
 	);
 	Rig {
+		store,
 		app: router(state),
 		releaser,
 		dir,
