@@ -118,7 +118,7 @@ impl super::AccountStore {
 	/// Attach the at-rest encryption handle that protects the TOTP secret.
 	pub fn with_crypto(mut self, crypto: MessageCrypto) -> Self {
 		self.crypto = crypto;
-		self.handle.replace(self.build_directory());
+		self.rebuild_directory();
 		self
 	}
 

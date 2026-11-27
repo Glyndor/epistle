@@ -3,12 +3,15 @@
 //! would stall the server's reload behind the CLI's wait and turn
 //! every wait into a timeout.
 //!
-//! A thread plays the server: every few milliseconds it takes the
-//! store lock when it is free, as a reload that edits the file would,
-//! then runs one poll of a real file watcher over its own store, which
-//! loads the command's write and publishes the status. The server must
-//! load the write soon after it lands, well before the command's
-//! timeout would have released a held lock.
+//! A thread plays the server: every few milliseconds it probes the
+//! store lock with a non-blocking acquire, as a reload that edits the
+//! file would, and runs one poll of a real file watcher over its own
+//! store when the lock is free. The probe is released before the poll:
+//! the reload takes the same lock for its own read, so holding the
+//! probe across the poll would make the poll wait for this thread.
+//! The poll loads the command's write and publishes the status. The
+//! server must load the write soon after it lands, well before the
+//! command's timeout would have released a held lock.
 //!
 //! Lives in a sibling so `src/cli/account/reload/tests/base.rs` stays under the
 //! per-file code-line budget.
@@ -104,10 +107,14 @@ fn against_a_server(
 				// Never queue on the lock: a queued waiter is handed the
 				// lock the moment the command's edit releases it, which
 				// would let a reload slip in ahead of a lock the command
-				// takes again for its wait.
+				// takes again for its wait. The probe only says whether
+				// the command holds the lock right now; it is released
+				// before the poll, because the reload takes the same
+				// lock for its own read and would otherwise wait for
+				// this thread.
 				if let Some(held) = FileLock::try_acquire(&lock).expect("try the store lock") {
-					let report = watcher.poll();
 					drop(held);
+					let report = watcher.poll();
 					let loaded = report
 						.events
 						.contains(&PollEvent::Loaded(PollTarget::Accounts));

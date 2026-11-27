@@ -21,7 +21,7 @@ impl super::AccountStore {
 	/// [`Self::into_shared`], which wires the store itself.
 	pub fn with_scram_upgrader(mut self, upgrader: Arc<dyn ScramUpgrader>) -> Self {
 		self.scram_upgrader = upgrader;
-		self.handle.replace(self.build_directory());
+		self.rebuild_directory();
 		self
 	}
 
@@ -31,7 +31,7 @@ impl super::AccountStore {
 	pub fn into_shared(mut self) -> Arc<Self> {
 		Arc::new_cyclic(|weak| {
 			self.scram_upgrader = Arc::new(super::scram_upgrade::StoreUpgrader(weak.clone()));
-			self.handle.replace(self.build_directory());
+			self.rebuild_directory();
 			self
 		})
 	}

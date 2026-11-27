@@ -27,7 +27,8 @@ fn a_disabled_mask_is_paused_not_gone() {
 			}
 		}
 	}"#;
-	store.reload_masked_from(text).expect("reload");
+	std::fs::write(dir.path().join("masked.json"), text).expect("write");
+	store.reload_masked().expect("reload");
 	let directory = store.handle().current();
 	let masked = Address::parse("shop.abcd1234@example.org").expect("address");
 	let other = Address::parse("nobody@example.org").expect("address");

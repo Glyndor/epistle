@@ -28,22 +28,22 @@ impl AccountStore {
 	/// keeps them, because `AppPasswordStore::add` rereads it under the
 	/// `flock`, but a mirror patched with the new entry alone would not
 	/// hold them, and the server would refuse them until a restart.
+	///
+	/// The mirror is replaced while the file's `flock` is still held, the
+	/// way the account store replaces its own mirror for `accounts.toml`:
+	/// replacing it after the lock is released would let a second writer
+	/// commit and refresh in between, and this writer's late refresh
+	/// would roll the mirror back to the older state.
 	pub fn add_app_password(&self, account: &str, app: AppPassword) -> Result<(), StoreError> {
 		let data_dir = self.path.parent().ok_or_else(|| {
 			StoreError::Invalid("account store path has no parent directory".to_string())
 		})?;
 		let mut disk_store = AppPasswordStore::open(data_dir)?;
 		let gate = self.gate_of(account);
-		disk_store.add_within(account, app, Some(&gate))?;
-		// The in-memory mirror now reflects the post-write state
-		// (everything that was on disk, plus the new entry, plus
-		// anything a sibling writer committed between the
-		// AccountStore's open and our flock).
-		let mut in_memory = self.app_passwords.write().expect("app-passwords lock");
-		in_memory.clear();
-		in_memory.extend(disk_store.entries());
-		drop(in_memory);
-		self.handle.replace(self.build_directory());
+		disk_store.add_within_and_commit(account, app, Some(&gate), |entries| {
+			self.replace_app_passwords(entries);
+		})?;
+		self.rebuild_directory();
 		Ok(())
 	}
 
@@ -52,19 +52,26 @@ impl AccountStore {
 	/// inherit the previous owner's credentials. The case-insensitive
 	/// matching matches how `AppPasswordStore` keys its map. Returns the
 	/// on-disk count the disk store reported. The mirror is rebuilt from
-	/// the disk state after the removal, as in `add_app_password`.
+	/// the disk state after the removal, as in `add_app_password`, and
+	/// under the file's lock, for the same reason.
 	pub fn remove_all_app_passwords(&self, name: &str) -> Result<u32, StoreError> {
 		let data_dir = self.path.parent().ok_or_else(|| {
 			StoreError::Invalid("account store path has no parent directory".to_string())
 		})?;
 		let mut disk_store = AppPasswordStore::open(data_dir)?;
-		let removed = disk_store.remove_account(name)?;
+		let removed = disk_store.remove_account_and_commit(name, |entries| {
+			self.replace_app_passwords(entries);
+		})?;
+		self.rebuild_directory();
+		Ok(removed)
+	}
+
+	/// Replace the in-memory mirror with `entries`: everything the file
+	/// holds after the write, and nothing else.
+	fn replace_app_passwords(&self, entries: &[(String, AppPassword)]) {
 		let mut in_memory = self.app_passwords.write().expect("app-passwords lock");
 		in_memory.clear();
-		in_memory.extend(disk_store.entries());
-		drop(in_memory);
-		self.handle.replace(self.build_directory());
-		Ok(removed)
+		in_memory.extend(entries.iter().cloned());
 	}
 
 	/// The in-memory mirror's view of one account's app passwords, in

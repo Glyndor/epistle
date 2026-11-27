@@ -5,8 +5,16 @@
 //! because the disk store rereads under the `flock`; without the
 //! rebuild the server would refuse that credential until a restart.
 //!
+//! The mirror is replaced while the `flock` is still held, the way the
+//! account store replaces its mirror for `accounts.toml`: a mirror
+//! replaced after the lock is released lets a second writer commit and
+//! refresh in between, and the first writer's late refresh rolls the
+//! mirror back to the older state.
+//!
 //! Lives in a sibling so `src/directory_store/app_passwords_api/mod.rs` stays
 //! under the per-file line budget.
+
+use std::sync::Arc;
 
 use crate::directory_store::{AccountStore, AppPassword, AppPasswordStore};
 use crate::smtp::auth::tests::base::{fixture_password, hash};
@@ -93,5 +101,38 @@ fn removal_keeps_another_account_s_credential_a_sibling_wrote() {
 		labels(&store, "bob"),
 		vec!["phone"],
 		"the mirror must hold the credential the sibling wrote for another account"
+	);
+}
+
+/// The writers that commit one after the other must leave every
+/// credential in the mirror. The mirror is replaced under the file's
+/// lock, so the writer that commits last leaves the mirror holding the
+/// state the file holds, and no writer's late refresh can roll it back
+/// to an older state.
+#[test]
+fn concurrent_writers_leave_every_credential_in_the_mirror() {
+	const WRITERS: usize = 8;
+	let (_dir, store) = server_store();
+	let store = Arc::new(store);
+	let barrier = Arc::new(std::sync::Barrier::new(WRITERS));
+	let writers: Vec<_> = (0..WRITERS)
+		.map(|n| {
+			let (store, barrier) = (Arc::clone(&store), Arc::clone(&barrier));
+			std::thread::spawn(move || {
+				barrier.wait();
+				store.add_app_password("alice", app(&format!("l{n}")))
+			})
+		})
+		.collect();
+	for writer in writers {
+		writer.join().expect("join").expect("add");
+	}
+	let mut held = labels(&store, "alice");
+	held.sort();
+	let mut expected: Vec<String> = (0..WRITERS).map(|n| format!("l{n}")).collect();
+	expected.sort();
+	assert_eq!(
+		held, expected,
+		"the mirror must hold every credential the writers added"
 	);
 }

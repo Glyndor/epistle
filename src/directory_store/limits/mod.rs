@@ -12,7 +12,7 @@ impl AccountStore {
 	/// caps reach every write that adds one.
 	pub fn with_limits(mut self, limits: Arc<Limits>) -> Self {
 		self.limits = limits;
-		self.handle.replace(self.build_directory());
+		self.rebuild_directory();
 		self
 	}
 

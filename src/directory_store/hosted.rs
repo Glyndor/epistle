@@ -70,7 +70,7 @@ impl AccountStore {
 			}
 			*current = hosted;
 		}
-		self.handle.replace(self.build_directory());
+		self.rebuild_directory();
 	}
 
 	/// Whether `domain` is hosted according to `domains.toml` as it is on
@@ -108,7 +108,7 @@ impl AccountStore {
 	}
 
 	/// The data directory the account file lives in.
-	fn data_dir(&self) -> &std::path::Path {
+	pub(super) fn data_dir(&self) -> &std::path::Path {
 		self.path
 			.parent()
 			.filter(|parent| !parent.as_os_str().is_empty())
