@@ -32,6 +32,11 @@ pub enum StoreError {
 	/// value, the scope that set it and how to make room.
 	#[error("{0}")]
 	Capped(crate::limits::LimitReached),
+	/// The cap a tenant puts on the accounts it holds stopped the write: the
+	/// text names the tenant and its cap. Waiting will not lift it, so the
+	/// API answers `409`.
+	#[error("{0}")]
+	TenantCapped(String),
 	/// Reading or writing the `accounts.toml` / `app_passwords.toml` /
 	/// `masked.json` sidecar files failed. The wrapped `std::io::Error`
 	/// carries the cause.

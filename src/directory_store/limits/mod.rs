@@ -79,6 +79,38 @@ impl AccountStore {
 	pub fn gate_of(&self, account: &str) -> Gate {
 		self.gate_for(account, std::iter::empty())
 	}
+
+	/// Refuse a write that would leave a tenant with more accounts than its
+	/// `max_accounts` cap allows. `existing` are the addresses of every
+	/// account the store holds now: the static ones plus the dynamic ones
+	/// re-read from the file under the lock, so a write from another
+	/// process counts too. Called under the `accounts.toml` lock, so the
+	/// count and the insert are one step.
+	pub(super) fn admit_tenant_accounts<'a>(
+		&self,
+		addresses: &[String],
+		existing: impl IntoIterator<Item = &'a [String]>,
+	) -> Result<(), StoreError> {
+		self.limits
+			.tenant_accounts()
+			.refuse_creation(addresses, existing)
+			.map_or(Ok(()), |message| Err(StoreError::TenantCapped(message)))
+	}
+
+	/// [`admit_tenant_accounts`](Self::admit_tenant_accounts) for an account
+	/// whose addresses change: only a tenant the account does not already
+	/// count against takes a place there.
+	pub(super) fn admit_tenant_account_move<'a>(
+		&self,
+		current: &[String],
+		proposed: &[String],
+		existing: impl IntoIterator<Item = &'a [String]>,
+	) -> Result<(), StoreError> {
+		self.limits
+			.tenant_accounts()
+			.refuse_move(current, proposed, existing)
+			.map_or(Ok(()), |message| Err(StoreError::TenantCapped(message)))
+	}
 }
 
 #[cfg(test)]

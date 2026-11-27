@@ -44,7 +44,13 @@ pub(in super::super) fn tenants() -> (tempfile::TempDir, ApiState, Arc<AccountSt
 			std::collections::HashMap::new(),
 			Vec::new(),
 		)
-		.expect("store"),
+		.expect("store")
+		// The same tenant the runtime carries, so the write that adds an
+		// account counts the cap the check before it does.
+		.with_limits(crate::limits::test_support::shared_from(
+			"domains = [\"a.test\", \"b.test\"]\n\
+			 [[tenant]]\nname = \"a\"\ndomains = [\"a.test\"]\nmax_accounts = 3\n",
+		)),
 	);
 	for (name, address) in [
 		("alice", "alice@a.test"),

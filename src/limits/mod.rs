@@ -18,10 +18,12 @@ use std::collections::HashMap;
 mod error;
 mod gate;
 mod reach;
+mod tenant_accounts;
 
 pub use error::LimitReached;
 pub use gate::Gate;
 pub(crate) use reach::{Reach, key};
+pub use tenant_accounts::TenantAccountCaps;
 
 use crate::config::{Caps, Config, Limit, SessionsWhenFull};
 
@@ -174,6 +176,10 @@ pub struct Limits {
 	domains: HashMap<String, Caps>,
 	accounts: HashMap<String, Caps>,
 	reach: Reach,
+	/// The cap each tenant puts on the accounts it holds. Enforced by the
+	/// account store inside the write that adds one, so the count and the
+	/// insert are one step.
+	tenant_accounts: TenantAccountCaps,
 	/// The server's `max_message_size`; `None` when the limits were built
 	/// without a configuration, which caps no message.
 	message_size: Option<u64>,
@@ -185,6 +191,7 @@ impl Limits {
 		let mut limits = Self {
 			server: config.limits.clone(),
 			reach: Reach::from_config(config),
+			tenant_accounts: TenantAccountCaps::from_tenants(&config.tenants),
 			message_size: Some(match config.max_message_size {
 				None | Some(0) => crate::smtp::session::MAX_MESSAGE_SIZE as u64,
 				Some(size) => size.max(crate::smtp::session::MIN_MESSAGE_SIZE as u64),
@@ -359,6 +366,13 @@ impl Limits {
 			.rev()
 			.find_map(|(caps, _)| caps.sessions_when_full)
 			.unwrap_or_default()
+	}
+
+	/// The caps the tenants put on the accounts they hold. The account store
+	/// asks them inside the write that adds an account, so the count and
+	/// the insert are one step.
+	pub fn tenant_accounts(&self) -> &TenantAccountCaps {
+		&self.tenant_accounts
 	}
 
 	/// Whether nothing is configured.

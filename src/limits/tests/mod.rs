@@ -216,6 +216,66 @@ fn a_cap_of_zero_allows_none() {
 	);
 }
 
+/// A tenant caps the accounts it holds: the second account is refused and
+/// the refusal names the tenant and its cap. A tenant without a cap refuses
+/// nothing, and an account that stays in its own tenant keeps its place.
+#[test]
+fn a_tenant_caps_the_accounts_it_holds() {
+	let tenant = |name: &str, domain: &str, cap| crate::config::Tenant {
+		name: Some(name.to_string()),
+		domains: vec![domain.to_string()],
+		quota_bytes: None,
+		max_accounts: cap,
+		max_domains: None,
+		submission_rate_limit_per_min: None,
+		encryption_key_file: None,
+		webhook: None,
+	};
+	let caps = TenantAccountCaps::from_tenants(&[
+		tenant("acme", "example.com", Some(1)),
+		tenant("open", "example.net", None),
+	]);
+	assert!(!caps.is_empty());
+	let held: Vec<Vec<String>> = vec![vec!["alice@example.com".to_string()]];
+	let refusal = caps
+		.refuse_creation(
+			&["bob@example.com".to_string()],
+			held.iter().map(|addresses| addresses.as_slice()),
+		)
+		.expect("the tenant holds one account already");
+	assert!(refusal.contains("tenant \"acme\""), "{refusal}");
+	assert!(refusal.contains("max_accounts cap of 1"), "{refusal}");
+	assert!(
+		caps.refuse_creation(
+			&["eve@example.net".to_string()],
+			held.iter().map(|addresses| addresses.as_slice()),
+		)
+		.is_none(),
+		"a tenant without a cap refuses nothing"
+	);
+	assert!(
+		caps.refuse_move(
+			&["alice@example.com".to_string()],
+			&[
+				"alice@example.com".to_string(),
+				"alice2@example.com".to_string()
+			],
+			held.iter().map(|addresses| addresses.as_slice()),
+		)
+		.is_none(),
+		"an account that stays in its own tenant keeps its place"
+	);
+	assert!(
+		caps.refuse_move(
+			&["zed@example.net".to_string()],
+			&["zed@example.com".to_string()],
+			held.iter().map(|addresses| addresses.as_slice()),
+		)
+		.is_some(),
+		"an account that moves into a full tenant takes a place there"
+	);
+}
+
 #[test]
 fn the_session_policy_is_the_most_specific_that_says() {
 	let limits = limits(

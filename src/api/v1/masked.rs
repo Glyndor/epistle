@@ -181,6 +181,9 @@ fn map_store_error(error: StoreError) -> ApiError {
 			ApiError::conflict(format!("masked-address limit ({max}) reached for account"))
 		}
 		StoreError::Capped(reached) => ApiError::limit_reached(&reached),
+		// A masked write never adds an account, so the tenant's account cap
+		// cannot be the one that stopped it.
+		StoreError::TenantCapped(message) => ApiError::conflict(message),
 		StoreError::Io(_) => ApiError::internal(),
 		StoreError::BayesPurge { .. } => ApiError::internal(),
 		StoreError::BeingRemoved(name) => {

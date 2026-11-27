@@ -44,6 +44,8 @@ pub(crate) fn policy(message: impl std::fmt::Display) -> ExitCode {
 pub(crate) fn for_store_error(error: &StoreError) -> ExitCode {
 	match error {
 		StoreError::LimitReached { .. } | StoreError::Capped(_) => ExitCode::from(POLICY),
+		// The tenant's cap on accounts: a limit reached, like any other.
+		StoreError::TenantCapped(_) => ExitCode::from(POLICY),
 		StoreError::NotFound(_)
 		| StoreError::Duplicate(_)
 		| StoreError::Invalid(_)

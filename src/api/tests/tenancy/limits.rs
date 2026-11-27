@@ -2,9 +2,11 @@
 //! hold.
 
 use super::base::{TOKEN, request_with_body};
+use super::fixtures::account;
 use super::*;
 use axum::http::StatusCode;
 use std::sync::Arc;
+use tower::ServiceExt;
 
 pub(super) const KEY: &str = "tenant-a-secret";
 
@@ -61,6 +63,15 @@ pub(super) fn unscoped_state(dir: &std::path::Path) -> ApiState {
 	.with_directory(store.handle())
 }
 
+/// The caps the account store enforces in its locked writes: the same
+/// tenant the runtime carries, so the early check and the write agree.
+fn store_caps(max_accounts: u64) -> Arc<crate::limits::Limits> {
+	crate::limits::test_support::shared_from(&format!(
+		"domains = [\"a.example\", \"b.example\"]\n\
+		 [[tenant]]\nname = \"a\"\ndomains = [\"a.example\"]\nmax_accounts = {max_accounts}\n"
+	))
+}
+
 /// Same shape as `unscoped_state` but with a `[[tenant]]` block that owns
 /// `a.example` with `max_accounts = 1`. Creating a second account in
 /// `a.example` must return `409 Conflict`.
@@ -114,7 +125,8 @@ pub(super) fn capped_state(dir: &std::path::Path, max_accounts: u64) -> ApiState
 			std::collections::HashMap::new(),
 			vec![account("ann", &["ann@a.example"])],
 		)
-		.expect("open store"),
+		.expect("open store")
+		.with_limits(store_caps(max_accounts)),
 	);
 	ApiState::new(
 		&crate::smtp::auth::tests::base::hash(TOKEN.as_str()),
@@ -215,4 +227,75 @@ async fn max_accounts_does_not_apply_outside_the_tenant() {
 	)
 	.await;
 	assert_eq!(status, StatusCode::OK, "outside the tenant");
+}
+
+/// Two creations that both passed the tenant's check must not both land:
+/// the count and the insert happen in the same locked write, so the second
+/// one is refused.
+#[tokio::test]
+async fn two_creations_that_passed_the_check_leave_one_account() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	// The tenant holds one account (`ann`), so with a cap of two both
+	// candidates pass the check the route makes before it writes.
+	let state = capped_state(dir.path(), 2);
+	let store = state.store();
+	state
+		.tenant_limits()
+		.check_account_creation(store, &["bob@a.example".to_string()])
+		.expect("bob passes the check");
+	state
+		.tenant_limits()
+		.check_account_creation(store, &["carl@a.example".to_string()])
+		.expect("carl passes the check");
+	// Now the writes, in the order two requests at the same moment reach
+	// them: the second one finds the first one's account in the file.
+	store
+		.add(account("bob", "bob@a.example"))
+		.expect("bob lands");
+	let refused = store.add(account("carl", "carl@a.example"));
+	assert!(refused.is_err(), "the second creation must be refused");
+	assert_eq!(store.dynamic_accounts().len(), 1, "only one account landed");
+}
+
+/// Two creations at the same moment leave one account: the cap is counted in
+/// the write that adds one, so the loser is refused with the same `409` the
+/// early check answers.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn two_creations_at_the_same_moment_leave_one_account() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let app = router(capped_state(dir.path(), 2));
+	let start = Arc::new(tokio::sync::Barrier::new(2));
+	let mut set = tokio::task::JoinSet::new();
+	for name in ["bob", "carl"] {
+		let (app, start) = (app.clone(), start.clone());
+		set.spawn(async move {
+			let request = axum::http::Request::builder()
+				.method("POST")
+				.uri("/api/v1/accounts")
+				.header(axum::http::header::AUTHORIZATION, format!("Bearer {KEY}"))
+				.header(axum::http::header::CONTENT_TYPE, "application/json")
+				.body(axum::body::Body::from(
+					serde_json::json!({
+						"name": name,
+						"addresses": [format!("{name}@a.example")],
+						"password": "correct horse battery staple",
+					})
+					.to_string(),
+				))
+				.expect("request");
+			start.wait().await;
+			app.oneshot(request).await.expect("response").status()
+		});
+	}
+	let mut created = 0;
+	let mut refused = 0;
+	while let Some(status) = set.join_next().await {
+		match status.expect("create") {
+			StatusCode::OK => created += 1,
+			StatusCode::CONFLICT => refused += 1,
+			other => panic!("unexpected {other}"),
+		}
+	}
+	assert_eq!(created, 1, "one account was created");
+	assert_eq!(refused, 1, "the other one was refused");
 }
