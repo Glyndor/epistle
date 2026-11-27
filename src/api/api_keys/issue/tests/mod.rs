@@ -46,6 +46,7 @@ fn caller(scopes: Option<&[Scope]>, domains: Option<&[&str]>) -> Caller {
 		},
 		"maker".to_string(),
 		"sha256:00".to_string(),
+		None,
 	)
 }
 
@@ -179,6 +180,7 @@ fn the_network_and_the_expiry_of_a_key_bound_the_keys_it_makes() {
 		},
 		"maker".to_string(),
 		"sha256:00".to_string(),
+		None,
 	);
 	let mut ok = request(&["read"]);
 	ok.ip_cidr = Some("10.0.4.0/24".to_string());

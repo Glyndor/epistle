@@ -206,14 +206,25 @@ impl ApiKey {
 	pub fn admits_credential(&self, presented: &str, client_ip: Option<IpAddr>, now: u64) -> bool {
 		let hash_ok = sha256_token_matches(&self.hash, presented);
 		let time_ok = self.expires_at.is_none_or(|expiry| now < expiry);
-		let ip_ok = match &self.ip_cidr {
+		hash_ok && time_ok && self.admits_network(client_ip)
+	}
+
+	/// Whether the key admits `client_ip` from the network it declares. A key
+	/// that declares none admits every client; a key that declares one admits
+	/// only the addresses inside it, and a network that does not parse or a
+	/// client IP the listener did not report admits none.
+	///
+	/// The same rule the bearer middleware applies, so that a key asking for
+	/// a write can be asked again whether the client is still inside the
+	/// network the file declares for it.
+	pub(crate) fn admits_network(&self, client_ip: Option<IpAddr>) -> bool {
+		match &self.ip_cidr {
 			None => true,
 			Some(spec) => match (crate::cidr::Cidr::parse(spec), client_ip) {
 				(Some(cidr), Some(ip)) => cidr.contains(ip),
 				_ => false,
 			},
-		};
-		hash_ok && time_ok && ip_ok
+		}
 	}
 
 	/// Whether the key's reach includes one of `acceptable_scopes`. A key

@@ -112,12 +112,24 @@ pub struct Caller {
 	reach: Reach,
 	label: String,
 	hash: String,
+	client_ip: Option<std::net::IpAddr>,
 }
 
 impl Caller {
-	/// A caller with `reach`, named `label`, whose secret hashes to `hash`.
-	pub fn new(reach: Reach, label: String, hash: String) -> Self {
-		Caller { reach, label, hash }
+	/// A caller with `reach`, named `label`, whose secret hashes to `hash`,
+	/// that came from `client_ip`.
+	pub fn new(
+		reach: Reach,
+		label: String,
+		hash: String,
+		client_ip: Option<std::net::IpAddr>,
+	) -> Self {
+		Caller {
+			reach,
+			label,
+			hash,
+			client_ip,
+		}
 	}
 
 	/// What the caller reaches.
@@ -133,5 +145,11 @@ impl Caller {
 	/// The digest of the caller's key.
 	pub fn hash(&self) -> &str {
 		&self.hash
+	}
+
+	/// The peer IP the request came from, `None` when the listener did not
+	/// report one: a key pinned to a network then admits nothing.
+	pub fn client_ip(&self) -> Option<std::net::IpAddr> {
+		self.client_ip
 	}
 }

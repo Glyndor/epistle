@@ -288,6 +288,7 @@ impl Principal {
 			self.reach(),
 			label.clone(),
 			crate::api::api_keys::sha256_hash(&credential.token),
+			credential.client_ip,
 		))
 	}
 

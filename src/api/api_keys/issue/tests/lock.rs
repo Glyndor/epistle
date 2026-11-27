@@ -24,12 +24,34 @@ fn maker() -> ApiKey {
 	key("maker", &["key", "read"], "a.example")
 }
 
+/// The network the keys of these tests are pinned to.
+const NETWORK: &str = "10.0.0.0/8";
+
+/// A key pinned to [`NETWORK`], so that only the network of the client may be
+/// the reason a write is refused.
+fn in_network(label: &str, scopes: &[&str]) -> ApiKey {
+	let mut held = key(label, scopes, "a.example");
+	held.ip_cidr = Some(NETWORK.to_string());
+	held
+}
+
 /// The maker as the request saw it.
 fn asked_as(maker: &ApiKey) -> Caller {
 	Caller::new(
 		Reach::of_key(maker, None),
 		maker.label.clone(),
 		maker.hash.clone(),
+		None,
+	)
+}
+
+/// The maker as the request saw it, from `client_ip`.
+fn asked_as_from(maker: &ApiKey, client_ip: std::net::IpAddr) -> Caller {
+	Caller::new(
+		Reach::of_key(maker, None),
+		maker.label.clone(),
+		maker.hash.clone(),
+		Some(client_ip),
 	)
 }
 
@@ -120,4 +142,62 @@ fn a_key_is_revoked_only_by_what_the_maker_reaches_now() {
 		);
 		assert!(labels(&dir).contains(&"other".to_string()), "{what}");
 	}
+}
+
+/// A maker whose key is pinned to a network it no longer comes from makes
+/// nothing: the file is asked again under its lock, and the client is outside
+/// the network the file declares for the key that asks.
+#[test]
+fn a_maker_outside_the_network_of_its_own_key_makes_no_key() {
+	let before = in_network("maker", &["key", "read"]);
+	let caller = asked_as_from(&before, "192.0.2.10".parse().expect("ip"));
+	let child = in_network("child", &["read"]);
+	let wanted = Reach::of_key(&child, None);
+	let ask = Ask {
+		caller: &caller,
+		wanted: &wanted,
+		max_keys: MAX_KEYS_BY_KEY,
+	};
+	let (dir, mut store) = store_with(vec![before]);
+	let refused = store
+		.add_by(child.clone(), None, ask)
+		.expect_err("outside the network");
+	assert_eq!(refused.kind(), ErrorKind::PermissionDenied);
+	assert!(!labels(&dir).contains(&"child".to_string()));
+}
+
+/// The same, for a revocation: a maker outside the network of its own key
+/// revokes nothing, and the key it aimed at stays.
+#[test]
+fn a_maker_outside_the_network_of_its_own_key_revokes_no_key() {
+	let before = in_network("maker", &["key", "read"]);
+	let caller = asked_as_from(&before, "192.0.2.10".parse().expect("ip"));
+	let other = in_network("other", &["read"]);
+	let within = |own: &Reach, held: &ApiKey| own.covers(&Reach::of_key(held, None)).is_ok();
+	let (dir, mut store) = store_with(vec![before, other.clone()]);
+	let refused = store
+		.remove_by("other", &caller, within)
+		.expect_err("outside the network");
+	assert_eq!(refused.kind(), ErrorKind::PermissionDenied);
+	assert!(labels(&dir).contains(&"other".to_string()));
+}
+
+/// The maker inside the network of its own key goes on making keys: the check
+/// is about the client, not a general refusal.
+#[test]
+fn a_maker_inside_the_network_of_its_own_key_makes_a_key() {
+	let before = in_network("maker", &["key", "read"]);
+	let caller = asked_as_from(&before, "10.1.2.3".parse().expect("ip"));
+	let child = in_network("child", &["read"]);
+	let wanted = Reach::of_key(&child, None);
+	let ask = Ask {
+		caller: &caller,
+		wanted: &wanted,
+		max_keys: MAX_KEYS_BY_KEY,
+	};
+	let (dir, mut store) = store_with(vec![before]);
+	store
+		.add_by(child.clone(), None, ask)
+		.expect("inside the network");
+	assert_eq!(labels(&dir), ["maker", "child"]);
 }

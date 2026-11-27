@@ -11,13 +11,15 @@ pub(super) fn no_longer_valid() -> std::io::Error {
 }
 
 /// What the key that asks reaches now, as `keys` holds it. An error when it is
-/// gone, or may no longer make or revoke keys.
+/// gone, may no longer make or revoke keys, or the client is no longer inside
+/// the network the file declares for it.
 pub(super) fn maker_in(keys: &[ApiKey], caller: &Caller) -> std::io::Result<Reach> {
 	let now = std::time::SystemTime::now()
 		.duration_since(std::time::UNIX_EPOCH)
 		.map_or(0, |elapsed| elapsed.as_secs());
 	keys.iter()
 		.find(|held| held.label == caller.label() && held.hash.eq_ignore_ascii_case(caller.hash()))
+		.filter(|held| held.admits_network(caller.client_ip()))
 		.and_then(|held| Reach::of_maker(held, now))
 		.ok_or_else(no_longer_valid)
 }
