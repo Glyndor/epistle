@@ -71,7 +71,7 @@
     {
      "uses": "actions/checkout@PIN",
      "with": {
-      "fetch-depth": "${{ inputs.ref != '' && 0 || 1 }}",
+      "fetch-depth": "${{ inputs.ref == '' && 1 || 0 }}",
       "persist-credentials": false
      }
     },

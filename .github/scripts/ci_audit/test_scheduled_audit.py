@@ -1,6 +1,7 @@
 """The scheduled audit of another branch reads data from it and runs nothing of it."""
 
 import os
+import re
 import subprocess
 import tempfile
 import unittest
@@ -18,6 +19,21 @@ def jobs():
 
 def step(job, name):
     return next(s for s in jobs()[job]["steps"] if name in s.get("name", ""))
+
+
+def fetch_depth(ref):
+    """The depth the checkout of the audit job asks for when the `ref` input is `ref`.
+
+    Actions and Python agree on what `&&` and `||` return and on 0 and '' being
+    false, so the expression is evaluated here once its few tokens are translated.
+    """
+    checkout = next(s for s in jobs()["audit"]["steps"] if str(s.get("uses", "")).startswith("actions/checkout@"))
+    expression = re.fullmatch(r"\$\{\{(.*)\}\}", str(checkout["with"]["fetch-depth"])).group(1)
+    token = r"\s+|inputs\.ref|==|!=|&&|\|\||''|'[a-z]+'|[0-9]+"
+    if not re.fullmatch(f"(?:{token})+", expression):
+        raise AssertionError(f"this test cannot evaluate {expression!r}")
+    python = expression.replace("inputs.ref", repr(ref)).replace("&&", " and ").replace("||", " or ")
+    return int(eval(python.strip(), {"__builtins__": {}}))
 
 
 class Shape(unittest.TestCase):
@@ -101,8 +117,30 @@ class Behaviour(unittest.TestCase):
         self.temp = self.root / "runner-temp"
         self.temp.mkdir()
 
-    def run_block(self, text, **env):
-        return subprocess.run(["bash", "-e", "-c", text], cwd=self.repo, capture_output=True, text=True, check=False,
+    def checkout(self, depth):
+        """What actions/checkout leaves on a scheduled run, whose event is `main`.
+
+        A depth above 0 fetches the commit of the event and nothing else; 0 fetches
+        every branch into `refs/remotes/origin/`.
+        """
+        work = Path(tempfile.mkdtemp(prefix="checkout-", dir=self.root))
+
+        def git(*args):
+            return subprocess.run(["git", *args], cwd=work, env=self.env, check=True, capture_output=True, text=True)
+        git("init", "-q")
+        git("remote", "add", "origin", self.repo.as_uri())
+        if depth > 0:
+            sha = subprocess.run(["git", "rev-parse", "main"], cwd=self.repo, check=True, capture_output=True,
+                                 text=True).stdout.strip()
+            git("fetch", "-q", "--no-tags", f"--depth={depth}", "origin", f"+{sha}:refs/remotes/origin/main")
+        else:
+            git("fetch", "-q", "origin", "+refs/heads/*:refs/remotes/origin/*")
+        git("checkout", "-q", "-B", "main", "refs/remotes/origin/main")
+        return work
+
+    def run_block(self, text, cwd=None, **env):
+        return subprocess.run(["bash", "-e", "-c", text], cwd=cwd or self.repo, capture_output=True, text=True,
+                              check=False,
                               env={**self.env, "PATH": f"{self.bin}:{os.environ['PATH']}", "RUNNER_TEMP": str(self.temp),
                                    "GITHUB_OUTPUT": str(self.root / "out"), "CARGO_LOG": str(self.root / "cargo.log"), **env})
 
@@ -113,6 +151,19 @@ class Behaviour(unittest.TestCase):
         out = (self.root / "out").read_text()
         audited = out.split("dir=")[1].strip()
         return audited, env
+
+    def test_the_checkout_brings_the_branch_the_next_step_reads(self):
+        for ref in ("develop", "main"):
+            with self.subTest(ref=ref):
+                work = self.checkout(fetch_depth(ref))
+                done = self.run_block(step("audit", "Take the lockfiles")["run"], cwd=work, REF=ref, WORKDIR=".",
+                                      EXTRA_LOCKFILES="fuzz/Cargo.lock")
+                self.assertEqual(done.returncode, 0, done.stderr)
+                audited = (self.root / "out").read_text().split("dir=")[-1].strip()
+                self.assertEqual((Path(audited) / "Cargo.lock").read_text(), f"{ref}\n")
+
+    def test_a_run_that_audits_its_own_tree_fetches_one_commit(self):
+        self.assertEqual(fetch_depth(""), 1)
 
     def test_the_audited_branchs_lockfiles_land_outside_the_workspace_and_are_the_ones_audited(self):
         audited, _ = self.audit("develop")
