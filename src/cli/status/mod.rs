@@ -181,12 +181,79 @@ pub(super) struct Ctx {
 /// the last of them has returned.
 pub(crate) struct RunHold {
 	_permit: tokio::sync::OwnedSemaphorePermit,
-	/// How long every blocking thread of the run lingers, for the tests.
+	/// Keeps every blocking thread of the run until a test lets it go.
 	#[cfg(test)]
-	lag: Duration,
+	blocker: Option<Arc<Blocker>>,
 	/// The time an area gets, when a test shortens it.
 	#[cfg(test)]
 	limit: Option<Duration>,
+}
+
+/// Work that does not end until a test says so, for the tests of what a run
+/// keeps while its threads are busy. A blocking thread of a run that holds
+/// one says it has entered, waits until the blocker is opened, and says it
+/// has left: the test waits for those signals and not for a time.
+#[cfg(test)]
+pub(crate) struct Blocker {
+	entered: tokio::sync::Semaphore,
+	left: tokio::sync::Semaphore,
+	open: std::sync::Mutex<bool>,
+	opened: std::sync::Condvar,
+}
+
+#[cfg(test)]
+impl Blocker {
+	/// A blocker that keeps every thread that enters it, until it is opened.
+	pub(crate) fn closed() -> Arc<Self> {
+		Arc::new(Blocker {
+			entered: tokio::sync::Semaphore::new(0),
+			left: tokio::sync::Semaphore::new(0),
+			open: std::sync::Mutex::new(false),
+			opened: std::sync::Condvar::new(),
+		})
+	}
+
+	/// Wait until `threads` threads have entered. The limit is only there so
+	/// that a lost signal fails the test and does not hang it.
+	pub(crate) async fn entered(&self, threads: u32) {
+		Self::wait(&self.entered, threads, "enter").await;
+	}
+
+	/// Wait until `threads` threads have returned from the work they held.
+	pub(crate) async fn left(&self, threads: u32) {
+		Self::wait(&self.left, threads, "return").await;
+	}
+
+	async fn wait(counter: &tokio::sync::Semaphore, threads: u32, what: &str) {
+		tokio::time::timeout(
+			std::time::Duration::from_secs(120),
+			counter.acquire_many(threads),
+		)
+		.await
+		.unwrap_or_else(|_| panic!("{threads} threads never {what}ed"))
+		.expect("open")
+		.forget();
+	}
+
+	/// Let every thread go, those waiting and those that come.
+	pub(crate) fn open(&self) {
+		*self.open.lock().expect("open") = true;
+		self.opened.notify_all();
+	}
+
+	fn enter(&self) {
+		self.entered.add_permits(1);
+		let open = self.open.lock().expect("open");
+		// A test that ends without opening the blocker must not leave a
+		// thread waiting for ever: the wait ends after a long time all the same.
+		let _ = self
+			.opened
+			.wait_timeout_while(open, std::time::Duration::from_secs(300), |open| !*open);
+	}
+
+	fn leave(&self) {
+		self.left.add_permits(1);
+	}
 }
 
 impl RunHold {
@@ -196,22 +263,22 @@ impl RunHold {
 		RunHold {
 			_permit: permit,
 			#[cfg(test)]
-			lag: Duration::ZERO,
+			blocker: None,
 			#[cfg(test)]
 			limit: None,
 		}
 	}
 
-	/// [`RunHold::new`] with every blocking thread of the run kept busy for `lag`.
+	/// [`RunHold::new`] with every blocking thread of the run kept by `blocker`.
 	#[cfg(test)]
-	pub(crate) fn lagging(
+	pub(crate) fn blocked(
 		permit: tokio::sync::OwnedSemaphorePermit,
-		lag: Duration,
+		blocker: Option<Arc<Blocker>>,
 		limit: Option<Duration>,
 	) -> Self {
 		RunHold {
 			_permit: permit,
-			lag,
+			blocker,
 			limit,
 		}
 	}
@@ -235,11 +302,17 @@ impl Ctx {
 		let hold = self.hold.clone();
 		tokio::task::spawn_blocking(move || {
 			#[cfg(test)]
-			if let Some(hold) = &hold {
-				std::thread::sleep(hold.lag);
+			let blocker = hold.as_ref().and_then(|hold| hold.blocker.clone());
+			#[cfg(test)]
+			if let Some(blocker) = &blocker {
+				blocker.enter();
 			}
 			let result = work();
 			drop(hold);
+			#[cfg(test)]
+			if let Some(blocker) = &blocker {
+				blocker.leave();
+			}
 			result
 		})
 	}

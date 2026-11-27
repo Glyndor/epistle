@@ -10,8 +10,29 @@ use tracing::instrument::WithSubscriber;
 use tracing_subscriber::layer::{Context, SubscriberExt};
 use tracing_subscriber::{Layer, Registry};
 
-#[derive(Clone, Default)]
-struct Capture(Arc<Mutex<Vec<BTreeMap<String, String>>>>);
+/// The audit events seen, and a permit for each one, so that a test waits for
+/// an event and not for a time.
+#[derive(Clone)]
+struct Capture(
+	Arc<Mutex<Vec<BTreeMap<String, String>>>>,
+	Arc<tokio::sync::Semaphore>,
+);
+
+impl Default for Capture {
+	fn default() -> Self {
+		Capture(Arc::default(), Arc::new(tokio::sync::Semaphore::new(0)))
+	}
+}
+
+/// Wait for one permit of `counter`: an event that has to happen. The limit
+/// is only there so that a lost signal fails the test and does not hang it.
+async fn wait_for(counter: &tokio::sync::Semaphore, what: &str) {
+	tokio::time::timeout(std::time::Duration::from_secs(60), counter.acquire())
+		.await
+		.unwrap_or_else(|_| panic!("never happened: {what}"))
+		.expect("open")
+		.forget();
+}
 
 #[derive(Default)]
 struct Fields(BTreeMap<String, String>);
@@ -29,6 +50,7 @@ impl<S: tracing::Subscriber> Layer<S> for Capture {
 			let mut fields = Fields::default();
 			event.record(&mut fields);
 			self.0.lock().unwrap().push(fields.0);
+			self.1.add_permits(1);
 		}
 	}
 }
@@ -95,6 +117,10 @@ async fn every_change_is_audited_once_with_its_key_and_the_rest_is_silent() {
 /// The commit runs on a blocking thread that outlives the request. A client
 /// that goes away after the commit started must still leave the audit line:
 /// the line is written on that thread, not by the handler after `.await`.
+///
+/// The request is dropped when the commit has reached the lock it waits for,
+/// which the test holds, and not after a time: the signal is the lock file
+/// being asked for ([`crate::storage::lock::reached`]), by the blocking thread.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_request_dropped_while_the_commit_runs_still_leaves_its_audit_line() {
 	crate::cli::trace::capture::keep_callsites_live();
@@ -117,10 +143,9 @@ async fn a_request_dropped_while_the_commit_runs_still_leaves_its_audit_line() {
 		let subscriber = Registry::default().with(capture.clone());
 		// The commit takes the lock of `domains.toml` first: holding it keeps
 		// the blocking thread waiting while the request is dropped.
-		let domains = crate::domain::state::path(world.data_dir());
-		let held =
-			crate::storage::lock::FileLock::acquire(&crate::storage::locked::lock_path(&domains))
-				.expect("lock");
+		let lock = crate::storage::locked::lock_path(&crate::domain::state::path(world.data_dir()));
+		let held = crate::storage::lock::FileLock::acquire(&lock).expect("lock");
+		let reached = crate::storage::lock::reached::watch(&lock);
 		let state = world.state.clone();
 		let request = tokio::spawn(
 			async move {
@@ -135,22 +160,16 @@ async fn a_request_dropped_while_the_commit_runs_still_leaves_its_audit_line() {
 			}
 			.with_subscriber(subscriber),
 		);
-		tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+		wait_for(&reached, "the commit asks for the lock").await;
 		request.abort();
 		assert!(request.await.expect_err("dropped").is_cancelled());
 		assert!(world.disk().is_none(), "{path}: nothing was committed yet");
 		assert!(capture.0.lock().unwrap().is_empty());
 		drop(held);
-		let mut written = false;
-		for _ in 0..100 {
-			if world.disk().is_some() && capture.0.lock().unwrap().len() == 1 {
-				written = true;
-				break;
-			}
-			tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-		}
-		assert!(written, "{path}: the change and its line both arrive");
+		wait_for(&capture.1, "the audit line").await;
+		assert!(world.disk().is_some(), "{path}: the change was made");
 		let events = capture.0.lock().unwrap().clone();
+		assert_eq!(events.len(), 1, "{events:?}");
 		assert_eq!(events[0]["event"], event, "{events:?}");
 		assert_eq!(events[0]["key"], "tenant-a");
 		assert_eq!(events[0]["domain"], "a.example");

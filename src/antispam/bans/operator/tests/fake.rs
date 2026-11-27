@@ -23,8 +23,41 @@ struct State {
 	/// Every call made, whatever it did.
 	calls: usize,
 	broken: bool,
-	/// How long a write lingers after it was made, as a slow commit does.
-	pause: std::time::Duration,
+	/// Held after every write that changed something, when a test asks.
+	hold: Option<std::sync::Arc<WriteHold>>,
+	/// The time and the end of every ban that was put, in order.
+	ban_times: Vec<(u64, u64)>,
+}
+
+/// A write that has been made and is held before it answers, for a test
+/// that has to act in between: it says when a write has been made, and
+/// answers only when it is let go.
+#[derive(Debug)]
+pub(crate) struct WriteHold {
+	written: tokio::sync::Semaphore,
+	resume: tokio::sync::Semaphore,
+}
+
+impl WriteHold {
+	/// Wait until a write has been made and is being held. The limit is only
+	/// there so that a lost signal fails the test and does not hang it.
+	pub(crate) async fn written(&self) {
+		tokio::time::timeout(std::time::Duration::from_secs(60), self.written.acquire())
+			.await
+			.expect("a write was made")
+			.expect("open")
+			.forget();
+	}
+
+	/// Let one held write answer.
+	pub(crate) fn resume(&self) {
+		self.resume.add_permits(1);
+	}
+
+	async fn hold(&self) {
+		self.written.add_permits(1);
+		self.resume.acquire().await.expect("open").forget();
+	}
 }
 
 /// The in-memory store.
@@ -61,9 +94,21 @@ impl FakeAdmin {
 		self.state.lock().expect("fake ban store")
 	}
 
-	/// Let every write linger for `pause` after it was made, before it answers.
-	pub(crate) fn pause_after_writes(&self, pause: std::time::Duration) {
-		self.lock().pause = pause;
+	/// Hold every write after it was made, before it answers, until the test
+	/// lets it go with [`WriteHold::resume`].
+	pub(crate) fn hold_writes(&self) -> std::sync::Arc<WriteHold> {
+		let hold = std::sync::Arc::new(WriteHold {
+			written: tokio::sync::Semaphore::new(0),
+			resume: tokio::sync::Semaphore::new(0),
+		});
+		self.lock().hold = Some(std::sync::Arc::clone(&hold));
+		hold
+	}
+
+	/// The time the store was given and the end it was told, for each ban put
+	/// in it: the same `now` the end was counted from.
+	pub(crate) fn ban_times(&self) -> Vec<(u64, u64)> {
+		self.lock().ban_times.clone()
 	}
 
 	/// Make every call fail, as a database that is down does.
@@ -145,7 +190,7 @@ impl BanAdmin for FakeAdmin {
 		room: BanRoom,
 	) -> Answer<'_, Placed> {
 		Box::pin(async move {
-			let pause = {
+			let hold = {
 				let mut state = self.enter()?;
 				let subject = target.subject();
 				let renews = state
@@ -175,16 +220,19 @@ impl BanAdmin for FakeAdmin {
 					.bans
 					.insert(subject, (MANUAL_REASON.to_string(), until));
 				state.writes.push(format!("ban {target}"));
-				state.pause
+				state.ban_times.push((now, until));
+				state.hold.clone()
 			};
-			tokio::time::sleep(pause).await;
+			if let Some(hold) = hold {
+				hold.hold().await;
+			}
 			Ok(Placed::Done)
 		})
 	}
 
 	fn remove_ban(&self, target: UnbanTarget) -> Answer<'_, (u64, u64)> {
 		Box::pin(async move {
-			let (counts, pause) = {
+			let (counts, hold) = {
 				let mut state = self.enter()?;
 				let mut bans = 0;
 				let mut failures = 0;
@@ -195,9 +243,13 @@ impl BanAdmin for FakeAdmin {
 				if bans + failures > 0 {
 					state.writes.push(format!("unban {target}"));
 				}
-				((bans, failures), state.pause)
+				((bans, failures), state.hold.clone())
 			};
-			tokio::time::sleep(pause).await;
+			if let Some(hold) = hold
+				&& counts.0 + counts.1 > 0
+			{
+				hold.hold().await;
+			}
 			Ok(counts)
 		})
 	}
@@ -208,7 +260,7 @@ impl BanAdmin for FakeAdmin {
 
 	fn allow_add_within(&self, cidr: Cidr, room: AllowRoom) -> Answer<'_, AllowPlaced> {
 		Box::pin(async move {
-			let pause = {
+			let hold = {
 				let mut state = self.enter()?;
 				if state.allow.contains(&cidr.to_string()) {
 					return Ok(AllowPlaced::Already);
@@ -227,24 +279,30 @@ impl BanAdmin for FakeAdmin {
 				}
 				state.allow.insert(cidr.to_string());
 				state.writes.push(format!("allow {cidr}"));
-				state.pause
+				state.hold.clone()
 			};
-			tokio::time::sleep(pause).await;
+			if let Some(hold) = hold {
+				hold.hold().await;
+			}
 			Ok(AllowPlaced::Added)
 		})
 	}
 
 	fn allow_remove(&self, cidr: Cidr) -> Answer<'_, bool> {
 		Box::pin(async move {
-			let (removed, pause) = {
+			let (removed, hold) = {
 				let mut state = self.enter()?;
 				let removed = state.allow.remove(&cidr.to_string());
 				if removed {
 					state.writes.push(format!("disallow {cidr}"));
 				}
-				(removed, state.pause)
+				(removed, state.hold.clone())
 			};
-			tokio::time::sleep(pause).await;
+			if let Some(hold) = hold
+				&& removed
+			{
+				hold.hold().await;
+			}
 			Ok(removed)
 		})
 	}

@@ -40,9 +40,9 @@ pub(super) struct HealthRuns {
 	areas: Option<Vec<CheckArea>>,
 	/// The places for runs.
 	gate: HealthGate,
-	/// How long every blocking thread of a run lingers, for the tests.
+	/// What keeps every blocking thread of a run until a test lets it go.
 	#[cfg(test)]
-	lag: std::time::Duration,
+	blocker: Option<Arc<crate::cli::status::Blocker>>,
 	/// The time an area gets, when a test shortens it.
 	#[cfg(test)]
 	limit: Option<std::time::Duration>,
@@ -83,20 +83,33 @@ impl ApiState {
 		self
 	}
 
-	/// Keep every blocking thread of a run busy for `lag`, for a test of what a
-	/// run that outlives its client holds. Must be set before the state is
-	/// shared.
+	/// Keep every blocking thread of a run in `blocker` until the test opens
+	/// it, for a test of what a run that outlives its client holds. Must be
+	/// set before the state is shared.
 	#[cfg(test)]
-	pub(crate) fn with_health_lag(
+	pub(crate) fn with_health_blocker(
 		mut self,
-		lag: std::time::Duration,
+		blocker: Arc<crate::cli::status::Blocker>,
 		limit: Option<std::time::Duration>,
 	) -> Self {
 		if let Some(inner) = Arc::get_mut(&mut self.inner) {
-			inner.health.lag = lag;
+			inner.health.blocker = Some(blocker);
 			inner.health.limit = limit;
 		}
 		self
+	}
+
+	/// Wait until `places` places of the gate are free at once: the runs that
+	/// held them are over. The limit is only there so that a lost signal fails
+	/// the test and does not hang it.
+	#[cfg(test)]
+	pub(crate) async fn health_places_free(&self, places: u32) {
+		let free = tokio::time::timeout(
+			std::time::Duration::from_secs(120),
+			Arc::clone(&self.inner.health.gate.0).acquire_many_owned(places),
+		)
+		.await;
+		assert!(free.is_ok(), "the places never came back");
 	}
 
 	/// The file the configuration was read from, when the server knows it.
@@ -125,9 +138,9 @@ impl ApiState {
 	pub(crate) fn health_hold(&self) -> Option<RunHold> {
 		let permit = self.try_health_run()?;
 		#[cfg(test)]
-		return Some(RunHold::lagging(
+		return Some(RunHold::blocked(
 			permit,
-			self.inner.health.lag,
+			self.inner.health.blocker.clone(),
 			self.inner.health.limit,
 		));
 		#[cfg(not(test))]

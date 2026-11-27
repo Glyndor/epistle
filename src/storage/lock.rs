@@ -128,6 +128,8 @@ impl FileLock {
 	/// Blocks until the kernel grants the lock.
 	pub fn acquire(path: &Path) -> std::io::Result<Self> {
 		let file = open_lock_file(path)?;
+		#[cfg(test)]
+		reached::note(path);
 		flock_exclusive_blocking(file.as_raw_fd())?;
 		Ok(FileLock { file })
 	}
@@ -152,5 +154,34 @@ impl Drop for FileLock {
 		// races a kernel teardown has no caller to surface it to, and
 		// re-trying would not yield a different answer.
 		let _ = unsafe { libc::flock(self.file.as_raw_fd(), libc::LOCK_UN) };
+	}
+}
+
+/// Tests that need to know a thread has got as far as waiting for a lock
+/// (to drop a request while its commit waits) register the lock file and
+/// are told when [`FileLock::acquire`] is about to wait for it.
+#[cfg(test)]
+pub(crate) mod reached {
+	use std::path::{Path, PathBuf};
+	use std::sync::{Arc, Mutex};
+
+	static WATCHED: Mutex<Vec<(PathBuf, Arc<tokio::sync::Semaphore>)>> = Mutex::new(Vec::new());
+
+	/// A counter of the acquires of the lock file `path` that have begun.
+	pub(crate) fn watch(path: &Path) -> Arc<tokio::sync::Semaphore> {
+		let counter = Arc::new(tokio::sync::Semaphore::new(0));
+		WATCHED
+			.lock()
+			.expect("watched")
+			.push((path.to_path_buf(), Arc::clone(&counter)));
+		counter
+	}
+
+	pub(super) fn note(path: &Path) {
+		for (watched, counter) in WATCHED.lock().expect("watched").iter() {
+			if watched == path {
+				counter.add_permits(1);
+			}
+		}
 	}
 }
