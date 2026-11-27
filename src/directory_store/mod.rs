@@ -286,6 +286,22 @@ impl AccountStore {
 				}
 			}
 			self.admit_addresses(&account.name, &account.addresses, account.addresses.len())?;
+			// The tenant's cap on accounts is counted here, under the lock,
+			// over the accounts the file holds now: the count and the
+			// insert are one step, so two writers cannot both take the last
+			// place.
+			self.admit_tenant_accounts(
+				&account.addresses,
+				self.static_accounts
+					.iter()
+					.map(|fixed| fixed.addresses.as_slice())
+					.chain(
+						state
+							.accounts
+							.iter()
+							.map(|dynamic| dynamic.addresses.as_slice()),
+					),
+			)?;
 			state.accounts.push(account);
 			Ok(())
 		})?;
@@ -359,6 +375,22 @@ impl AccountStore {
 			if !claimed.addresses.is_empty() {
 				self.admit_addresses(name, &claimed.addresses, fresh.addresses.len())?;
 			}
+			// A tenant the account does not already count against takes a
+			// place there, so the tenant's cap on accounts is counted here,
+			// under the lock, over the accounts the file holds now.
+			self.admit_tenant_account_move(
+				&state.accounts[slot].addresses,
+				&fresh.addresses,
+				self.static_accounts
+					.iter()
+					.map(|fixed| fixed.addresses.as_slice())
+					.chain(
+						state
+							.accounts
+							.iter()
+							.map(|dynamic| dynamic.addresses.as_slice()),
+					),
+			)?;
 			state.accounts[slot] = fresh;
 			Ok(())
 		})?;

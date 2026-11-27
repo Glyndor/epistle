@@ -18,11 +18,17 @@ domains = ["example.com"]
 
 /// The limits of `BASE` with `extra` appended.
 pub(crate) fn limits(extra: &str) -> Limits {
+	limits_from(&format!("{BASE}\n{extra}"))
+}
+
+/// The limits of a configuration written in a test: `text` is the whole
+/// configuration, so a test can declare a tenant of its own.
+pub(crate) fn limits_from(text: &str) -> Limits {
 	use std::io::Write;
 	let mut file = tempfile::NamedTempFile::new().expect("config file");
 	writeln!(
 		file,
-		"hostname = \"mail.example.org\"\ndata_dir = \"/var/lib/mail\"\n{BASE}\n{extra}"
+		"hostname = \"mail.example.org\"\ndata_dir = \"/var/lib/mail\"\n{text}"
 	)
 	.expect("write config");
 	let config = Config::load(file.path()).expect("config loads");
@@ -32,4 +38,9 @@ pub(crate) fn limits(extra: &str) -> Limits {
 /// [`limits`], shared.
 pub(crate) fn shared(extra: &str) -> Arc<Limits> {
 	Arc::new(limits(extra))
+}
+
+/// [`limits_from`], shared.
+pub(crate) fn shared_from(text: &str) -> Arc<Limits> {
+	Arc::new(limits_from(text))
 }

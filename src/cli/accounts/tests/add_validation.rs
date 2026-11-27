@@ -147,3 +147,25 @@ fn a_dotted_address_is_kept_for_an_account_with_a_hyphenated_name() {
 		"{written}"
 	);
 }
+
+/// The tenant's cap on accounts stops the write that would take the last
+/// place: the second account is refused by policy and never reaches the
+/// file.
+#[test]
+fn the_tenants_account_cap_refuses_the_second_account() {
+	let (dir, file) =
+		fixture("[[tenant]]\nname = \"acme\"\ndomains = [\"example.org\"]\nmax_accounts = 1");
+	let config = load(file.path());
+	let (code, _) =
+		add_offering_a_password(&config, "alice", vec!["alice@example.org".to_string()]);
+	assert_eq!(code, ExitCode::SUCCESS, "the first account fits");
+	let (code, _) = add_offering_a_password(&config, "bob", vec!["bob@example.org".to_string()]);
+	assert_eq!(
+		code,
+		ExitCode::from(crate::cli::exit::POLICY),
+		"the second account is over the cap"
+	);
+	let written = std::fs::read_to_string(dir.path().join("accounts.toml")).expect("accounts.toml");
+	assert!(written.contains("name = \"alice\""), "{written}");
+	assert!(!written.contains("name = \"bob\""), "{written}");
+}

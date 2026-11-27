@@ -331,6 +331,9 @@ pub(super) fn store_error(error: StoreError) -> ApiError {
 		StoreError::Duplicate(what) => ApiError::invalid_input(&format!("{what} already exists.")),
 		StoreError::NotFound(_) => ApiError::not_found("no such dynamic account"),
 		StoreError::Capped(reached) => ApiError::limit_reached(&reached),
+		// The tenant's cap on accounts: the same `409` the early check
+		// answers, so a request refused by either one looks alike.
+		StoreError::TenantCapped(message) => ApiError::conflict(message),
 		StoreError::LimitReached { .. } => ApiError::internal(),
 		StoreError::Io(_) => ApiError::internal(),
 		StoreError::BayesPurge { .. } => ApiError::internal(),

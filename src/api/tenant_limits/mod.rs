@@ -24,6 +24,7 @@ use std::sync::{Arc, Mutex};
 use crate::api::jmap;
 use crate::config::Tenant;
 use crate::directory_store::AccountStore;
+use crate::limits::TenantAccountCaps;
 use crate::smtp::ratelimit::SendLimiter;
 use crate::storage::MessageCrypto;
 
@@ -118,6 +119,10 @@ pub struct TenantLimits {
 	tenants: Vec<TenantRuntime>,
 	/// Reverse index: domain (lowercased) → position in `tenants`.
 	by_domain: HashMap<String, usize>,
+	/// The cap each tenant puts on the accounts it holds. The same rule the
+	/// account store applies inside the write that adds one, so the early
+	/// check and the locked write refuse alike.
+	accounts: TenantAccountCaps,
 }
 
 impl TenantLimits {
@@ -142,6 +147,7 @@ impl TenantLimits {
 		TenantLimits {
 			tenants: runtimes,
 			by_domain,
+			accounts: TenantAccountCaps::from_tenants(tenants),
 		}
 	}
 
@@ -210,15 +216,23 @@ impl TenantLimits {
 	/// label of the first tenant at its cap; `Ok(())` when every tenant the
 	/// account touches is still under its cap (or no tenant owns the
 	/// account's domains).
+	///
+	/// This is the early check: it counts the accounts the store holds now.
+	/// The write that follows counts again under its own lock, so the two
+	/// report the same refusal.
 	pub fn check_account_creation(
 		&self,
 		store: &AccountStore,
 		addresses: &[String],
 	) -> Result<(), String> {
-		for tenant in self.tenants_for_addresses(addresses.iter().map(String::as_str)) {
-			self.check_cap(tenant, store)?;
+		let accounts = account_addresses(store);
+		match self
+			.accounts
+			.refuse_creation(addresses, accounts.iter().map(|held| held.as_slice()))
+		{
+			Some(message) => Err(message),
+			None => Ok(()),
 		}
-		Ok(())
 	}
 
 	/// Like [`Self::check_account_creation`], for an existing account whose
@@ -231,34 +245,15 @@ impl TenantLimits {
 		current: &[String],
 		proposed: &[String],
 	) -> Result<(), String> {
-		let held: HashSet<usize> = self
-			.tenants_for_addresses(current.iter().map(String::as_str))
-			.into_iter()
-			.map(|tenant| tenant_index_of(&self.tenants, tenant))
-			.collect();
-		for tenant in self.tenants_for_addresses(proposed.iter().map(String::as_str)) {
-			if !held.contains(&tenant_index_of(&self.tenants, tenant)) {
-				self.check_cap(tenant, store)?;
-			}
+		let accounts = account_addresses(store);
+		match self.accounts.refuse_move(
+			current,
+			proposed,
+			accounts.iter().map(|held| held.as_slice()),
+		) {
+			Some(message) => Err(message),
+			None => Ok(()),
 		}
-		Ok(())
-	}
-
-	/// One more account in `tenant` must stay within its `max_accounts`.
-	fn check_cap(&self, tenant: &TenantRuntime, store: &AccountStore) -> Result<(), String> {
-		let Some(cap) = tenant.config.max_accounts else {
-			return Ok(());
-		};
-		// +1 because the candidate itself is not yet counted in the tenant.
-		let projected =
-			self.tenant_account_count(tenant_index_of(&self.tenants, tenant), store) + 1;
-		if projected > cap {
-			return Err(format!(
-				"tenant \"{}\" has reached its max_accounts cap of {cap}",
-				tenant.label()
-			));
-		}
-		Ok(())
 	}
 
 	/// The aggregate storage used (bytes) by every account whose addresses
@@ -392,6 +387,16 @@ impl TenantLimits {
 			});
 		budget.charge(recipient_count, now).map(drop)
 	}
+}
+
+/// The addresses every account the store holds now owns, static and dynamic
+/// alike: what the tenant's account cap counts.
+fn account_addresses(store: &AccountStore) -> Vec<Vec<String>> {
+	store
+		.account_views()
+		.into_iter()
+		.map(|(_, addresses, _)| addresses)
+		.collect()
 }
 
 /// Index lookup helper: `tenants_for_addresses` returns borrowed references

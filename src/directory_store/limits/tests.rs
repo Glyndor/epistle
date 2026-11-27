@@ -31,6 +31,26 @@ fn account(name: &str, addresses: &[&str]) -> DynamicAccount {
 	}
 }
 
+/// A store whose tenant `acme` owns `example.com` and may hold `cap`
+/// accounts. The cap travels with the limits the store enforces inside its
+/// locked writes.
+fn open_with_tenant(dir: &Path, cap: u64) -> AccountStore {
+	let text = format!(
+		"domains = [\"example.com\", \"example.org\", \"example.net\"]\n\
+		 [[tenant]]\nname = \"acme\"\ndomains = [\"example.com\"]\nmax_accounts = {cap}\n"
+	);
+	AccountStore::open(
+		dir,
+		["example.com", "example.org", "example.net"]
+			.map(String::from)
+			.to_vec(),
+		HashMap::new(),
+		Vec::new(),
+	)
+	.expect("open store")
+	.with_limits(crate::limits::test_support::shared_from(&text))
+}
+
 fn capped(result: Result<(), StoreError>) -> String {
 	match result {
 		Err(StoreError::Capped(reached)) => reached.to_string(),
@@ -215,6 +235,98 @@ fn racing_writers_admit_exactly_the_cap_of_addresses() {
 	);
 	let stored = open(dir.path(), "").dynamic("bob").unwrap().addresses.len();
 	assert_eq!(stored, CAP);
+}
+
+/// The tenant's cap on accounts is counted in the write that adds one: the
+/// second account of a tenant whose cap is one is refused, and nothing is
+/// written for it.
+#[test]
+fn the_tenant_account_cap_is_counted_in_the_write_that_adds_one() {
+	let dir = tempfile::tempdir().unwrap();
+	let store = open_with_tenant(dir.path(), 1);
+	store
+		.add(account("bob", &["bob@example.com"]))
+		.expect("the first account fits");
+	let refused = store
+		.add(account("carl", &["carl@example.com"]))
+		.expect_err("the cap is one account");
+	let StoreError::TenantCapped(message) = refused else {
+		panic!("expected the tenant's cap");
+	};
+	assert!(message.contains("tenant \"acme\""), "{message}");
+	assert!(message.contains("max_accounts cap of 1"), "{message}");
+	assert!(store.dynamic("carl").is_none(), "nothing was written");
+}
+
+/// Writers racing for the last place of a tenant are admitted exactly up to
+/// its cap: the count and the insert happen under the store's lock.
+#[test]
+fn racing_writers_admit_exactly_the_cap_of_accounts() {
+	const WRITERS: usize = 8;
+	const CAP: usize = 2;
+	let dir = tempfile::tempdir().unwrap();
+	let barrier = Arc::new(Barrier::new(WRITERS));
+	let handles: Vec<_> = (0..WRITERS)
+		.map(|n| {
+			let (barrier, path) = (Arc::clone(&barrier), dir.path().to_path_buf());
+			std::thread::spawn(move || {
+				let store = open_with_tenant(&path, CAP as u64);
+				let name = format!("w{n}");
+				let address = format!("w{n}@example.com");
+				barrier.wait();
+				store.add(account(&name, &[address.as_str()]))
+			})
+		})
+		.collect();
+	let results: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+	assert_eq!(
+		results.iter().filter(|r| r.is_ok()).count(),
+		CAP,
+		"{results:?}"
+	);
+	assert!(
+		results
+			.iter()
+			.filter(|r| r.is_err())
+			.all(|r| matches!(r, Err(StoreError::TenantCapped(_))))
+	);
+	let stored = open_with_tenant(dir.path(), CAP as u64)
+		.dynamic_accounts()
+		.len();
+	assert_eq!(stored, CAP);
+}
+
+/// An account that moves into a tenant takes a place there, so the move is
+/// refused when the tenant is full. An account that stays in its own tenant
+/// keeps the one place it has.
+#[test]
+fn a_move_into_a_full_tenant_is_refused() {
+	let dir = tempfile::tempdir().unwrap();
+	let store = open_with_tenant(dir.path(), 1);
+	store
+		.add(account("bob", &["bob@example.com"]))
+		.expect("the first account fits");
+	store
+		.add(account("carl", &["carl@example.org"]))
+		.expect("another tenant holds no cap");
+	let refused = store
+		.replace_account("carl", account("carl", &["carl@example.com"]), None)
+		.expect_err("the tenant is full");
+	assert!(
+		matches!(refused, StoreError::TenantCapped(_)),
+		"{refused:?}"
+	);
+	assert_eq!(
+		store.dynamic("carl").expect("carl").addresses,
+		["carl@example.org"]
+	);
+	store
+		.replace_account(
+			"bob",
+			account("bob", &["bob@example.com", "bob2@example.com"]),
+			None,
+		)
+		.expect("bob keeps its place in his own tenant");
 }
 
 fn app(label: &str) -> AppPassword {

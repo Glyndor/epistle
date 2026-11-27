@@ -142,6 +142,8 @@ fn store_to_scim(error: StoreError) -> ScimError {
 		StoreError::Invalid(what) => ScimError::invalid(what),
 		// A cap that waiting will not lift: the same 409 a duplicate gets.
 		StoreError::Capped(reached) => ScimError::conflict(reached.to_string()),
+		// The tenant's cap on accounts: the same 409 the early check answers.
+		StoreError::TenantCapped(message) => ScimError::conflict(message),
 		StoreError::LimitReached { .. } => ScimError::internal(),
 		StoreError::Io(_) => ScimError::internal(),
 		StoreError::BayesPurge { .. } => ScimError::internal(),

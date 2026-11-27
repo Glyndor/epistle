@@ -102,7 +102,14 @@ fn two_reachable_tenants() -> (tempfile::TempDir, ApiState, Arc<AccountStore>) {
 			std::collections::HashMap::new(),
 			Vec::new(),
 		)
-		.expect("store"),
+		.expect("store")
+		// The same tenants the runtime carries, so the write that adds or
+		// moves an account counts the cap the check before it does.
+		.with_limits(crate::limits::test_support::shared_from(
+			"domains = [\"a.test\", \"c.test\"]\n\
+			 [[tenant]]\nname = \"a\"\ndomains = [\"a.test\"]\nmax_accounts = 2\n\
+			 [[tenant]]\nname = \"c\"\ndomains = [\"c.test\"]\n",
+		)),
 	);
 	for (name, address) in [
 		("alice", "alice@a.test"),
