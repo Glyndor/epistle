@@ -6,12 +6,16 @@
 //! in this file is also the order in the rendered JSON.
 //!
 //! Conventions measured on podup 6.0.0 with Podman 6.2.0 (2026-11-23):
-//! - `mode` for a secret spec: a JSON number is read digit by digit as
-//!   octal, so `400` is `0o400` (`256`) and `256` would be `0o256`; a
-//!   number with an 8 or 9 in it cannot be octal digits and is taken as the
-//!   value itself. A string is parsed as octal (`"0400"` and `"400"` both
-//!   give `0o400`). epistle writes the number whose digits are the octal
-//!   mode.
+//! - `mode` for a secret or config spec: a JSON number is read digit by
+//!   digit as octal, so `400` is `0o400` (`256`) and `256` would be
+//!   `0o256`; a number with an 8 or 9 in it cannot be octal digits and is
+//!   taken as the value itself. A string is parsed as octal too (`"0400"`
+//!   and `"400"` both give `0o400`), but only the one with a leading 0 is
+//!   read without a warning: measured on podup 6.1.0 (2026-11-26),
+//!   `podup audit` warns `mode 400 is written without a leading 0 and was
+//!   read as octal digits: 0400 was applied`, for the number `400` and for
+//!   the string `"400"` alike, and asks for `0400`. epistle writes the mode
+//!   as the quoted octal string (`"0400"`, `"0444"`).
 //! - `$(...)` inside a healthcheck `CMD-SHELL` is NOT interpolated by
 //!   podup: it reaches the container unchanged and the shell runs it.
 //!   `$$` is not required; where it is written, podup turns it into `$`.
@@ -53,14 +57,32 @@ pub(crate) const DATABASE_NAME: &str = "epistle";
 /// The database password secret mounted inside the db service.
 pub(crate) const DATABASE_PASSWORD_FILE: &str = "/run/secrets/epistle_db_password";
 
-/// The mode of the database secret. podup reads a JSON number digit by
-/// digit as octal, so the number written here is the one whose digits are
-/// the mode: `400` for owner read-only. Measured with podup 6.0.0 on
-/// 2026-11-23: `podup config` renders `mode: 400` as `mode: 256`
-/// (`0o400`), and the mounted file is `-r--------`. Written as `256`, the
-/// number would be read as `0o256`, which has an execute bit, and `podup up`
-/// refuses it with `mode 0o256 ... sets an execute bit on a secret/config`.
-const DATABASE_SECRET_MODE: u32 = 400;
+/// The mode every secret mount carries: owner read-only, `0o400`.
+///
+/// The value is the permission bits themselves, and the compose file
+/// writes them as the quoted octal string podup reads without a warning
+/// (`"0400"`), see [`serialize_mode`].
+///
+/// Measured with podup 6.0.0 on 2026-11-23: `podup config` renders
+/// `mode: 400` as `mode: 256` (`0o400`), and the mounted file is
+/// `-r--------`. Written as `256`, the number would be read as `0o256`,
+/// which has an execute bit, and `podup up` refuses it with `mode 0o256
+/// ... sets an execute bit on a secret/config`.
+const DATABASE_SECRET_MODE: u32 = 0o400;
+
+/// Write a mode as the quoted octal string podup reads without a warning:
+/// `0o400` becomes `"0400"` and `0o444` becomes `"0444"`.
+///
+/// podup 6.1.0 (measured 2026-11-26) warns about every mode written
+/// without a leading 0 — `mode 400 is written without a leading 0 and was
+/// read as octal digits: 0400 was applied` — whether the mode is a number
+/// or a string, and asks for `0400`. The width of four is what puts that
+/// leading 0 in front of the three octal digits of a file mode; a mode
+/// with more digits than that (a setuid or sticky bit on a secret) is not
+/// one this file writes.
+fn serialize_mode<S: serde::Serializer>(mode: &u32, serializer: S) -> Result<S::Ok, S::Error> {
+	serializer.serialize_str(&format!("{mode:04o}"))
+}
 
 /// Where a key lives on the host, given data_dir.
 type KeyPath = fn(&Path) -> PathBuf;

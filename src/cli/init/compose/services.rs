@@ -332,7 +332,7 @@ impl ComposeService {
 			configs: Some(vec![ConfigMount {
 				source: DB_ROLES_CONFIG.to_string(),
 				target: db_roles::INIT_SCRIPT_PATH.to_string(),
-				mode: 444,
+				mode: 0o444,
 			}]),
 			depends_on: None,
 			healthcheck: Some(Healthcheck {
@@ -410,10 +410,9 @@ struct SecretMount {
 	target: String,
 	uid: String,
 	gid: String,
-	/// Mode as a JSON number whose digits are the octal mode (`400` is
-	/// `0o400`), the way podup 6.0.0 reads an integer. A string would be
-	/// parsed as octal too, but the number is the one form every writer of
-	/// this file already uses.
+	/// The mode of the mounted file, written as the quoted octal string
+	/// podup reads without a warning: `0o400` is `"0400"`.
+	#[serde(serialize_with = "super::serialize_mode")]
 	mode: u32,
 }
 
@@ -421,12 +420,15 @@ struct SecretMount {
 pub(super) const DB_ROLES_CONFIG: &str = "epistle_db_roles";
 
 /// A compose config mounted as a file. `mode` follows the same octal
-/// reading as [`SecretMount::mode`]: `444` is `0o444`, read-only for all,
-/// which the entrypoint sources rather than executes.
+/// reading as [`SecretMount::mode`]: `0o444` is read-only for all, which
+/// the entrypoint sources rather than executes.
 #[derive(Debug, Serialize)]
 struct ConfigMount {
 	source: String,
 	target: String,
+	/// The mode of the mounted file, written as the quoted octal string
+	/// podup reads without a warning: `0o444` is `"0444"`.
+	#[serde(serialize_with = "super::serialize_mode")]
 	mode: u32,
 }
 

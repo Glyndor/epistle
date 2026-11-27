@@ -19,6 +19,9 @@ mod image_validator;
 mod keys;
 
 #[cfg(test)]
+mod modes;
+
+#[cfg(test)]
 mod r#override;
 
 #[cfg(test)]

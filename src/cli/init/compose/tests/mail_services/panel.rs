@@ -131,8 +131,9 @@ fn the_secrets_reach_the_panel_as_read_only_files_and_never_as_values() {
 			(&mount["uid"], &mount["gid"]),
 			(&json!("65532"), &json!("65532"))
 		);
-		// 400 is the repository's spelling of mode 0400: podup reads the number as octal.
-		assert_eq!(mount["mode"], json!(400));
+		// The mode is the quoted octal string: "0400" is 0o400, owner
+		// read-only, the form podup reads without a warning.
+		assert_eq!(mount["mode"], json!("0400"));
 	}
 	let mail = value["services"]["mail"]["secrets"].to_string();
 	assert!(

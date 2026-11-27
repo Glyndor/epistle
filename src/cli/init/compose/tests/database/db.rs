@@ -49,12 +49,12 @@ fn db_secrets_uses_long_syntax_with_uid_999_and_octal_mode() {
 	assert_eq!(mount["target"], "epistle_db_password");
 	assert_eq!(mount["uid"], "999");
 	assert_eq!(mount["gid"], "999");
-	// The mode is a JSON number; podup reads the value as octal.
-	// The number `400` in the rendered file is `0o400` after
-	// podup parses it: owner read-only. Writing `256` (which
-	// is `0o400` in decimal interpretation) would be parsed by
-	// podup as `0o256` and rejected for the owner-execute bit.
-	assert_eq!(mount["mode"], 400);
+	// The mode is the quoted octal string podup reads without a warning:
+	// `"0400"` is `0o400`, owner read-only. A number would be read digit
+	// by digit as octal (`400` is `0o400`, but `256` would be `0o256` and
+	// podup would refuse it for the owner-execute bit), and podup 6.1.0
+	// warns about every mode written without a leading 0.
+	assert_eq!(mount["mode"], "0400");
 }
 
 #[test]

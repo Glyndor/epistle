@@ -32,7 +32,7 @@ fn only_db_mounts_the_admin_secret() {
 		"target": "epistle_db_admin_password",
 		"uid": "999",
 		"gid": "999",
-		"mode": 400
+		"mode": "0400"
 	})));
 	for name in ["mail", "clamav", "freshclam"] {
 		assert!(
@@ -52,7 +52,7 @@ fn a_first_start_creates_epistle_without_superuser() {
 		json!([{
 			"source": "epistle_db_roles",
 			"target": "/docker-entrypoint-initdb.d/10-epistle-roles.sh",
-			"mode": 444
+			"mode": "0444"
 		}])
 	);
 	let script = value["configs"]["epistle_db_roles"]["content"]
