@@ -16,6 +16,12 @@ use crate::spf::{DnsFailure, DnsLookup};
 
 /// `read`, confined to `a.example`.
 pub(super) const CONFINED: &str = "dns-confined-secret";
+/// `read`, confined to `b.example`.
+pub(super) const CONFINED_B: &str = "dns-confined-b-secret";
+/// `read`, confined to `c.example`.
+pub(super) const CONFINED_C: &str = "dns-confined-c-secret";
+/// `read`, confined to one domain of each of two tenants.
+pub(super) const ACROSS: &str = "dns-across-secret";
 /// `read`, unconfined.
 pub(super) const READER: &str = "dns-reader-secret";
 /// `write` only, unconfined: a valid key without the scope a read needs.
@@ -140,9 +146,27 @@ pub(super) fn world_with(extra: &str, dns: Arc<Recording>) -> World {
 	build(&three(), extra, dns, true)
 }
 
+/// A server hosting the usual domains, with the given tenants configured.
+/// Each tenant is its name and the domains it owns.
+pub(super) fn world_with_tenants(tenants: &[(&str, &[&str])], dns: Arc<Recording>) -> World {
+	build_with_tenants(&three(), tenants, "", dns, true)
+}
+
 /// A server hosting `domains`, with or without the live configuration the
 /// routes read.
 pub(super) fn build(domains: &[String], extra: &str, dns: Arc<Recording>, live: bool) -> World {
+	build_with_tenants(domains, &[], extra, dns, live)
+}
+
+/// A server hosting `domains`, with the given tenants configured, and with or
+/// without the live configuration the routes read.
+pub(super) fn build_with_tenants(
+	domains: &[String],
+	tenants: &[(&str, &[&str])],
+	extra: &str,
+	dns: Arc<Recording>,
+	live: bool,
+) -> World {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let data_dir = dir.path().canonicalize().expect("canonical");
 	let config: Config = toml::from_str(&config_text(&data_dir, domains, extra)).expect("config");
@@ -151,6 +175,9 @@ pub(super) fn build(domains: &[String], extra: &str, dns: Arc<Recording>, live: 
 	bound.account = Some("ann".to_string());
 	for one in [
 		key("confined", CONFINED, &["read"], &["a.example"]),
+		key("confined-b", CONFINED_B, &["read"], &["b.example"]),
+		key("confined-c", CONFINED_C, &["read"], &["c.example"]),
+		key("across", ACROSS, &["read"], &["a.example", "c.example"]),
 		key("reader", READER, &["read"], &[]),
 		key("writer", WRITER, &["write"], &[]),
 		key("sender", SENDER, &["send"], &[]),
@@ -177,13 +204,33 @@ pub(super) fn build(domains: &[String], extra: &str, dns: Arc<Recording>, live: 
 		crate::storage::FsSpool::open(&data_dir).expect("spool"),
 	)
 	.with_directory(store.handle())
-	.with_dns_lookup(dns);
+	.with_dns_lookup(dns)
+	.with_tenant_limits(tenant_limits(tenants));
 	let state = if live {
 		state.with_live_domains(crate::editable::LiveConfig::new(config.clone()))
 	} else {
 		state
 	};
 	World { _dir: dir, state }
+}
+
+/// The runtime of the given tenants, each its name and the domains it owns.
+/// No tenant caps anything: the tests here are about who holds a turn.
+fn tenant_limits(tenants: &[(&str, &[&str])]) -> Arc<crate::api::TenantLimits> {
+	let configured: Vec<crate::config::Tenant> = tenants
+		.iter()
+		.map(|(name, domains)| crate::config::Tenant {
+			name: Some((*name).to_string()),
+			domains: domains.iter().map(|domain| (*domain).to_string()).collect(),
+			quota_bytes: None,
+			max_accounts: None,
+			max_domains: None,
+			submission_rate_limit_per_min: None,
+			encryption_key_file: None,
+			webhook: None,
+		})
+		.collect();
+	Arc::new(crate::api::TenantLimits::from_config(&configured))
 }
 
 /// The configured token, which holds every scope and every domain.
