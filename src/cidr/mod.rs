@@ -63,6 +63,13 @@ impl Cidr {
 }
 
 impl Cidr {
+	/// Whether every address of `other` is inside this block.
+	pub fn covers(&self, other: &Cidr) -> bool {
+		self.base.is_ipv4() == other.base.is_ipv4()
+			&& self.prefix <= other.prefix
+			&& self.contains(other.base)
+	}
+
 	/// The network base address (host bits zeroed).
 	pub fn network(&self) -> IpAddr {
 		self.base

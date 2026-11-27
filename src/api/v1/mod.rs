@@ -8,6 +8,7 @@ mod bans;
 mod deliveries;
 mod display_name;
 mod dns;
+mod keys;
 #[cfg(test)]
 pub(crate) use dns::parity as dns_parity;
 mod domains;
@@ -42,6 +43,13 @@ pub fn router(max_message_size: usize) -> Router<ApiState> {
 		.route("/status", get(status::get))
 		.route("/openapi.json", get(crate::api::openapi::get))
 		.route("/auth/verify", post(auth::verify))
+		.route(
+			"/keys",
+			get(keys::list)
+				.post(keys::create)
+				.layer(DefaultBodyLimit::max(keys::MAX_BODY)),
+		)
+		.route("/keys/{label}", axum::routing::delete(keys::revoke))
 		.route("/dns/records", get(dns::records))
 		.route("/dns/verify", get(dns::verify))
 		.route("/health", get(health::all))

@@ -63,6 +63,10 @@ pub enum Scope {
 	/// tenant, so neither `read` nor `write` opens them and a key holding it
 	/// cannot be confined to domains or bound to an account.
 	Health,
+	/// The key routes under `/api/v1/keys`: list, make and revoke keys. A
+	/// key that can make keys is the way to every other key, so it is its own
+	/// damage class, and a key it makes reaches no further than it does.
+	Key,
 }
 
 /// Error returned when the [`std::str::FromStr`] impl for [`Scope`] is
@@ -84,7 +88,7 @@ impl std::str::FromStr for Scope {
 	type Err = UnknownScopeError;
 
 	/// Parse the canonical form (`manage:read`, `manage:write`, `mail:read`,
-	/// `mail:write`, `send`, `scim`, `alias`, `ban`). Unknown values are rejected, and
+	/// `mail:write`, `send`, `scim`, `alias`, `ban`, `health`, `key`). Unknown values are rejected, and
 	/// so are the names 0.14.0 used (`read`, `write`): those are expanded by
 	/// `grants::expand_legacy` where a file or an option may still carry
 	/// them.
@@ -99,6 +103,7 @@ impl std::str::FromStr for Scope {
 			"alias" => Ok(Scope::Alias),
 			"ban" => Ok(Scope::Ban),
 			"health" => Ok(Scope::Health),
+			"key" => Ok(Scope::Key),
 			_ => Err(UnknownScopeError(value.to_string())),
 		}
 	}
@@ -117,6 +122,7 @@ impl Scope {
 			Scope::Alias => "alias",
 			Scope::Ban => "ban",
 			Scope::Health => "health",
+			Scope::Key => "key",
 		}
 	}
 }
@@ -200,14 +206,25 @@ impl ApiKey {
 	pub fn admits_credential(&self, presented: &str, client_ip: Option<IpAddr>, now: u64) -> bool {
 		let hash_ok = sha256_token_matches(&self.hash, presented);
 		let time_ok = self.expires_at.is_none_or(|expiry| now < expiry);
-		let ip_ok = match &self.ip_cidr {
+		hash_ok && time_ok && self.admits_network(client_ip)
+	}
+
+	/// Whether the key admits `client_ip` from the network it declares. A key
+	/// that declares none admits every client; a key that declares one admits
+	/// only the addresses inside it, and a network that does not parse or a
+	/// client IP the listener did not report admits none.
+	///
+	/// The same rule the bearer middleware applies, so that a key asking for
+	/// a write can be asked again whether the client is still inside the
+	/// network the file declares for it.
+	pub(crate) fn admits_network(&self, client_ip: Option<IpAddr>) -> bool {
+		match &self.ip_cidr {
 			None => true,
 			Some(spec) => match (crate::cidr::Cidr::parse(spec), client_ip) {
 				(Some(cidr), Some(ip)) => cidr.contains(ip),
 				_ => false,
 			},
-		};
-		hash_ok && time_ok && ip_ok
+		}
 	}
 
 	/// Whether the key's reach includes one of `acceptable_scopes`. A key
@@ -341,6 +358,29 @@ impl ApiKeyStore {
 		key: ApiKey,
 		gate: Option<&crate::limits::Gate>,
 	) -> std::io::Result<()> {
+		self.add_inner(key, gate, None)
+	}
+
+	/// [`Self::add_within`] for a key made by another key: the key that asks
+	/// must still be in the file, with the same secret, and still reach as far
+	/// as the new key would, when the new one is written, and the file holds at
+	/// most `max_keys`. The checks and the insert are one step under the file's
+	/// lock.
+	pub fn add_by(
+		&mut self,
+		key: ApiKey,
+		gate: Option<&crate::limits::Gate>,
+		by: issue::Ask<'_>,
+	) -> std::io::Result<()> {
+		self.add_inner(key, gate, Some(by))
+	}
+
+	fn add_inner(
+		&mut self,
+		key: ApiKey,
+		gate: Option<&crate::limits::Gate>,
+		by: Option<issue::Ask<'_>>,
+	) -> std::io::Result<()> {
 		if let Some(spec) = &key.ip_cidr
 			&& crate::cidr::Cidr::parse(spec).is_none()
 		{
@@ -362,6 +402,19 @@ impl ApiKeyStore {
 			},
 			ApiKeyFile::default,
 			|state: &mut ApiKeyFile| -> std::io::Result<()> {
+				if let Some(ask) = by {
+					let own = removal::maker_in(&state.keys, ask.caller)?;
+					if own.covers(ask.wanted).is_err() {
+						return Err(removal::no_longer_valid());
+					}
+					let max_keys = ask.max_keys;
+					if state.keys.len() >= max_keys {
+						return Err(std::io::Error::new(
+							std::io::ErrorKind::QuotaExceeded,
+							format!("the file already holds {max_keys} API keys"),
+						));
+					}
+				}
 				if state
 					.keys
 					.iter()
@@ -409,7 +462,7 @@ impl ApiKeyStore {
 		// reported as it always was.
 		.map_err(|error| match error {
 			crate::storage::locked::EditError::Mutate(inner)
-				if inner.kind() == std::io::ErrorKind::QuotaExceeded =>
+				if inner.kind() == std::io::ErrorKind::QuotaExceeded || by.is_some() =>
 			{
 				inner
 			}
@@ -559,20 +612,7 @@ impl ApiKeyStore {
 	/// Every key as an [`ApiKeySummary`], sorted by label. Hashes are never
 	/// exposed.
 	pub fn list(&self) -> Vec<ApiKeySummary> {
-		let mut rows: Vec<ApiKeySummary> = self
-			.keys
-			.iter()
-			.map(|key| ApiKeySummary {
-				label: key.label.clone(),
-				expires_at: key.expires_at,
-				ip_cidr: key.ip_cidr.clone(),
-				scopes: key.scopes.clone(),
-				grants: key.grants.clone(),
-				domains: key.domains.clone(),
-				account: key.account.clone(),
-				auto_submitted: key.auto_submitted,
-			})
-			.collect();
+		let mut rows: Vec<ApiKeySummary> = self.keys.iter().map(ApiKeySummary::of).collect();
 		rows.sort_by(|a, b| a.label.cmp(&b.label));
 		rows
 	}
@@ -675,8 +715,11 @@ impl crate::directory_store::file_watcher::ApiKeyReloader for ApiKeySet {
 
 mod grants;
 pub mod held;
+pub mod issue;
 pub mod legacy_cutoff;
+mod removal;
 mod revoke;
+mod view;
 
 pub use grants::{ScopeInputError, display_names, legacy_cover, stored_form};
 

@@ -1,15 +1,36 @@
 //! `epistle api-key`: list, create, revoke and rotate management API keys.
 
-pub(super) mod expiry;
+pub(crate) mod expiry;
 mod scope_args;
 
 pub(super) use scope_args::parse_scope;
-use scope_args::{bound_refusal, legacy_warning, set_scopes, shown};
+use scope_args::{legacy_warning, set_scopes, shown};
 
 use std::process::ExitCode;
 
+use crate::api::api_keys::issue;
 use crate::api::{ApiKey, ApiKeyStore};
 use crate::config::Config;
+
+/// The operator at a terminal as the rules see them: they reach every domain.
+struct Operator {
+	/// Whether the account the key is bound to exists.
+	known: bool,
+}
+
+impl issue::World for Operator {
+	fn account_known(&self, _name: &str) -> bool {
+		self.known
+	}
+
+	fn account_addresses(&self, _name: &str) -> Vec<String> {
+		Vec::new()
+	}
+
+	fn hosts(&self, _domain: &str) -> bool {
+		true
+	}
+}
 
 /// What `api-key create` (and the flat `api-key-create`) asks for.
 #[derive(Debug, Default)]
@@ -60,41 +81,30 @@ pub(super) fn create(
 		auto_submitted,
 	} = key;
 	let (label, account) = (label.as_str(), account.as_deref());
-	if let Some(problem) = crate::util::label_rule::problem(label) {
-		return super::exit::refused(problem);
-	}
-	if scopes.is_empty() {
-		return super::exit::refused(
-			"--scope is required (repeat to grant more than one: manage:read, manage:write, mail:read, mail:write, send, scim, alias, ban, health)",
-		);
-	}
-	// Checked before the class is bound or the store is touched, so a bad
-	// network leaves nothing behind.
-	if let Some(spec) = &ip_cidr
-		&& crate::cidr::Cidr::parse(spec).is_none()
-	{
-		return super::exit::refused(crate::cidr::Cidr::refusal(spec));
-	}
-	if let Some(name) = account {
-		match account_known(config, name) {
-			Ok(true) => {}
-			Ok(false) => {
-				return super::exit::refused(format_args!("--account {name}: no such account"));
-			}
+	let known = match account {
+		Some(name) => match account_known(config, name) {
+			Ok(known) => known,
 			Err(code) => return code,
-		}
-		if let Some(refusal) = bound_refusal(&scopes) {
-			return super::exit::policy(refusal);
-		}
-	}
-	if !domains.is_empty()
-		&& scopes
-			.iter()
-			.any(|scope| scope == "ban" || scope == "health")
-	{
-		return super::exit::policy(
-			"the ban and health scopes cover the whole server and cannot be confined with --domain",
-		);
+		},
+		None => false,
+	};
+	// Checked before the class is bound or the store is touched, so a bad
+	// request leaves nothing behind.
+	let request = issue::Request {
+		label: label.to_string(),
+		expires_at,
+		ip_cidr: ip_cidr.clone(),
+		scopes: scopes.clone(),
+		domains: domains.clone(),
+		account: account.map(str::to_string),
+	};
+	if let Err(refusal) = issue::check(&request, None, &Operator { known }) {
+		return match refusal {
+			issue::Refusal::Policy(text) => super::exit::policy(text),
+			issue::Refusal::Invalid(text) | issue::Refusal::Escalation(text) => {
+				super::exit::refused(text)
+			}
+		};
 	}
 	let secret = match super::generate_secret() {
 		Some(secret) => secret,
@@ -510,24 +520,7 @@ pub(super) fn list(
 		}
 	}
 	if json {
-		let rows = store
-			.list()
-			.into_iter()
-			.map(|row| {
-				let mut object = serde_json::json!({
-					"label": row.label,
-					"expires_at": row.expires_at,
-					"ip_cidr": row.ip_cidr,
-					"scopes": shown(&row.scopes, &row.grants),
-					"domains": row.domains,
-					"account": row.account,
-				});
-				if row.auto_submitted {
-					object["auto_submitted"] = true.into();
-				}
-				object
-			})
-			.collect();
+		let rows = store.list().into_iter().map(|row| row.json()).collect();
 		return super::json_out::print(out, &serde_json::Value::Array(rows));
 	}
 	let now = expiry::now_secs();

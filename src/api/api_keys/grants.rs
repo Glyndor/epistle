@@ -9,7 +9,7 @@
 use super::{ApiKey, ApiKeyFile, ApiKeyStore, Scope, UnknownScopeError};
 
 /// Every scope, in the order a set is written.
-pub(crate) const ALL: [Scope; 9] = [
+pub(crate) const ALL: [Scope; 10] = [
 	Scope::ManageRead,
 	Scope::ManageWrite,
 	Scope::MailRead,
@@ -19,6 +19,7 @@ pub(crate) const ALL: [Scope; 9] = [
 	Scope::Alias,
 	Scope::Ban,
 	Scope::Health,
+	Scope::Key,
 ];
 
 /// What a name of 0.14.0 reaches in 0.15.0: `read` and `write` keep both
@@ -58,7 +59,7 @@ impl Scope {
 			Scope::Send => Some("send"),
 			Scope::Scim => Some("scim"),
 			Scope::Alias => Some("alias"),
-			Scope::Ban | Scope::Health => None,
+			Scope::Ban | Scope::Health | Scope::Key => None,
 		}
 	}
 }
@@ -169,7 +170,7 @@ pub(crate) fn validate_loaded(key: &ApiKey) -> std::io::Result<()> {
 	for grant in &key.grants {
 		if grant.parse::<Scope>().is_err() {
 			return invalid(format!(
-				"unknown API key grant \"{grant}\" in api_keys.toml (expected manage:read, manage:write, mail:read, mail:write, send, scim or alias)"
+				"unknown API key grant \"{grant}\" in api_keys.toml (expected manage:read, manage:write, mail:read, mail:write, send, scim, alias, ban, health or key)"
 			));
 		}
 	}
@@ -187,7 +188,7 @@ pub(crate) fn validate_loaded(key: &ApiKey) -> std::io::Result<()> {
 pub enum ScopeInputError {
 	/// No scope at all: a key must hold one.
 	Empty,
-	/// A name that is none of the seven new ones or the five of 0.14.0.
+	/// A name that is none of the scopes or the five names of 0.14.0.
 	Unknown(String),
 }
 
@@ -195,11 +196,11 @@ impl std::fmt::Display for ScopeInputError {
 	fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		match self {
 			Self::Empty => formatter.write_str(
-				"API key must declare at least one scope (manage:read, manage:write, mail:read, mail:write, send, scim or alias)",
+				"API key must declare at least one scope (manage:read, manage:write, mail:read, mail:write, send, scim, alias, ban, health or key)",
 			),
 			Self::Unknown(name) => write!(
 				formatter,
-				"unknown API key scope \"{name}\" (expected manage:read, manage:write, mail:read, mail:write, send, scim or alias)"
+				"unknown API key scope \"{name}\" (expected manage:read, manage:write, mail:read, mail:write, send, scim, alias, ban, health or key)"
 			),
 		}
 	}

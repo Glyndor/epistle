@@ -3,7 +3,7 @@
 /// Generate a strong random credential secret: 32 bytes from the system CSPRNG,
 /// base32-encoded (unpadded, lowercase) for an easy-to-copy ~52-character
 /// string. `None` if the CSPRNG cannot produce bytes (fail closed).
-pub(in crate::cli) fn generate_secret() -> Option<String> {
+pub fn generate_secret() -> Option<String> {
 	use ring::rand::SecureRandom;
 	let mut bytes = [0u8; 32];
 	ring::rand::SystemRandom::new().fill(&mut bytes).ok()?;

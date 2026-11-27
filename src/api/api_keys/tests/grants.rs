@@ -219,7 +219,7 @@ fn a_scope_0_14_0_had_no_name_for_gives_no_name() {
 	for scope in ALL {
 		assert_eq!(
 			scope.v014_name().is_none(),
-			matches!(scope, Scope::Ban | Scope::Health),
+			matches!(scope, Scope::Ban | Scope::Health | Scope::Key),
 			"{scope:?}: a scope added later says here what 0.14.0 makes of it"
 		);
 	}
@@ -234,6 +234,8 @@ fn a_ban_key_taken_back_to_0_14_0_can_neither_read_nor_write_and_comes_back() {
 		(Some("10.0.0.0/8"), "ban"),
 		(None, "health"),
 		(Some("10.0.0.0/8"), "health"),
+		(None, "key"),
+		(Some("10.0.0.0/8"), "key"),
 	] {
 		let dir = tempfile::tempdir().expect("tempdir");
 		let text = held_store(dir.path(), "banner", &[scope], cidr);

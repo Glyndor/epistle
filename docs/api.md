@@ -198,12 +198,12 @@ without a restart.
 
 | Flag | Effect |
 |---|---|
-| `--scope manage:read\|manage:write\|mail:read\|mail:write\|send\|scim\|alias\|ban\|health` | Required, repeatable. Scopes are independent: `manage:write` does not include `manage:read`, and a management scope never opens JMAP or the other way round. `read` and `write`, the names before 0.15.0, are still taken and open both the management and the mail scope of their kind, with a warning |
+| `--scope manage:read\|manage:write\|mail:read\|mail:write\|send\|scim\|alias\|ban\|health\|key` | Required, repeatable. Scopes are independent: `manage:write` does not include `manage:read`, and a management scope never opens JMAP or the other way round. `read` and `write`, the names before 0.15.0, are still taken and open both the management and the mail scope of their kind, with a warning |
 | `--expires-at WHEN` | Unix seconds, a date (`2027-01-31`, midnight UTC), an RFC 3339 instant (`2027-01-31T12:00:00+02:00`) or a duration from now (`90d`). A date or instant already in the past is refused, and a bare number is read as an epoch only between 2001-09-09 and 9999-12-31, so `2027`, `20270131` and a count of milliseconds are refused. After the expiry the key is refused with `401`, like an unknown one |
 | `--expires-in DURATION` | A number and a unit from now: `s`, `m`, `h`, `d` or `w`, for example `90d`. `m` is minutes, not months: count months in days. Not combined with `--expires-at` |
 | `--ip-cidr CIDR` | One network the client must come from. A request from elsewhere is `401` |
 | `--domain NAME` | Confine the key to a domain (repeat for more). Without it the key reaches every domain |
-| `--account NAME` | Bind the key to one account. It then reaches only JMAP, `POST /api/v1/send`, `GET /api/v1/deliveries` and that account's suppression list, acting as that account, and cannot hold `manage:read`, `manage:write`, `scim`, `alias`, `ban`, `health` or `--domain` (`read` and `write` mean `mail:read` and `mail:write` for it) |
+| `--account NAME` | Bind the key to one account. It then reaches only JMAP, `POST /api/v1/send`, `GET /api/v1/deliveries` and that account's suppression list, acting as that account, and cannot hold `manage:read`, `manage:write`, `scim`, `alias`, `ban`, `health`, `key` or `--domain` (`read` and `write` mean `mail:read` and `mail:write` for it) |
 | `--class CLASS` | The mail class `POST /api/v1/send` gives mail sent with the key when the request names none (see [Class and evidence](#class-and-evidence)) |
 | `--auto-submitted` | Add `Auto-Submitted: auto-generated` to mail sent with this key through `POST /api/v1/send` when the request omits the header. Off by default. A value in the request always wins. Other send paths and server-generated mail, including bounces, are not changed |
 
@@ -304,6 +304,7 @@ What each scope reaches:
 | `alias` | Everything under `/api/v1/aliases`, reads included. `manage:read`, `manage:write` and the old `read` and `write` do not open it, and the key made before scopes existed (it holds every scope) does |
 | `health` | `GET /api/v1/health` and `/api/v1/health/{area}`. No management or mail scope opens them. See [Health](#health) |
 | `ban` | Everything under `/api/v1/bans`, reads included. No management or mail scope opens it. See [Bans](#bans) |
+| `key` | Everything under `/api/v1/keys`, reads included. No management or mail scope opens it, and a key bound to an account never holds it. See [API keys](#api-keys) |
 
 A key made before 0.15.0 keeps what it reached: `read` holds `manage:read` and
 `mail:read`, `write` holds `manage:write` and `mail:write`, and a key with no
@@ -884,6 +885,7 @@ curl -s -X DELETE -H "Authorization: Bearer $KEY" "$API/api/v1/accounts/ana?queu
 | `GET`, `POST /api/v1/aliases` | List the address aliases (paged, filtered by `domain` and `account`), make one; scope `alias`; create answers `201`. See [Address aliases](#address-aliases) |
 | `DELETE /api/v1/aliases/{alias}` | Remove an address alias; scope `alias` |
 | `GET`, `POST /api/v1/bans`, `DELETE /api/v1/bans/{subject}`, `GET`, `POST /api/v1/bans/allow`, `DELETE /api/v1/bans/allow/{cidr}` | The bans in force, banning, lifting, and the allow list; scope `ban`. See [Bans](#bans) |
+| `GET`, `POST /api/v1/keys`, `DELETE /api/v1/keys/{label}` | List, make and revoke API keys, never reaching further than the key that asks; scope `key`. See [API keys](#api-keys) |
 | `GET`, `POST /api/v1/accounts` | List (not paged), create. A duplicate name or address is `400 invalid_input` |
 | `DELETE /api/v1/accounts/{name}` | Removes the account and its data. Only accounts made through the API; one declared in the configuration file is `404 no such dynamic account` |
 | `PUT /api/v1/accounts/{name}/password` | New password |
@@ -1080,6 +1082,50 @@ not own, so a client that goes away leaves both or neither. The counts above are
 made and written in one step by the store (one transaction under a lock), so
 requests that arrive together at the edge take no more than the room left. A refusal and a request that changed nothing write none. A database
 that fails is a plain `500`: the answer never carries its message.
+
+### API keys
+
+`/api/v1/keys` is `epistle api-key` over HTTP, through the same rules: a key
+that makes keys is the way to every other, so what it makes never reaches
+further than it does. The scope is `key`; `read` and `write` do not open it, and
+a key bound to an account never holds it (`403`).
+
+| Route | What it does |
+| --- | --- |
+| `GET /api/v1/keys` | The keys the caller could have made (all of them for the configured token), as `epistle api-key list --json` prints them, ordered by label and paged: `limit` (50 by default, 200 at most) and `cursor`. Neither the secret nor its digest is ever listed |
+| `POST /api/v1/keys` | `{"label":"ci","scopes":["manage:read"],"domains":["example.org"],"expires_in":"90d"}`. The scopes are those of the command; `read` and `write` are still taken and open both the management and the mail scope of their kind (only the mail one for a key bound to an account). `account`, `expires_at` (or `expires_in`, not both), `ip_cidr` and `auto_submitted` are the options of the command. Answers `201` with the key as listed plus `key`, its secret, once; the answer is `Cache-Control: no-store` and only a digest is kept |
+| `DELETE /api/v1/keys/{label}` | Revokes a key; the running server stops accepting it at once. Answers `{"revoked":"<label>"}` |
+
+A key makes only a key that is inside its own reach (`403` otherwise):
+
+- every scope the new key holds, the caller holds, and the scopes that act on
+  the whole server (`ban`, `health`) go only to a key with no domains and no
+  account;
+- every domain it names is one the caller is confined to (a caller with no
+  domains may name any hosted domain, and a domain the server does not host is
+  `400` whoever asks), and one with no domains reaches every domain only if the
+  caller does;
+- an `account` has to be one whose addresses are all inside the caller's domains;
+- `ip_cidr` is inside the caller's, and a key pinned to a network makes only
+  pinned keys;
+- `expires_at` is no later than the caller's own, and a key that expires makes
+  only keys that expire.
+
+The same reach limits what a key lists and revokes: the keys it could have
+made. A key it cannot reach and one that does not exist are the same `404`, so
+a tenant does not learn which labels the others use. A key may revoke itself.
+
+A key may leave at most 500 keys in the file (`409`); the configured token has
+no cap. The label is unique (`409`). The key that asks is read again under the
+lock of the file when a key is made or revoked, with what it reaches at that
+moment, so one revoked or narrowed a moment ago does no more than it may now,
+and requests that arrive together for one label make one key. A body is at most
+4 KiB and carries only the fields above.
+
+Every change writes one audit line (`key.created`, `key.revoked`) with the
+label of the key that asked, the label and the scopes of the key it touched and
+the client address, and never a secret or a digest. The change and its line are
+made together on a thread a client that goes away does not stop.
 
 ### Address aliases
 

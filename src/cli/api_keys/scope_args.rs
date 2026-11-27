@@ -3,6 +3,7 @@
 
 use std::process::ExitCode;
 
+use crate::api::api_keys::issue::bound_refusal;
 use crate::api::api_keys::{ApiKeyStore, Scope, legacy_cutoff};
 use crate::config::Config;
 
@@ -18,7 +19,7 @@ pub(in crate::cli) fn parse_scope(value: &str) -> Result<String, String> {
 		return Ok(value.to_string());
 	}
 	Err(format!(
-		"unknown scope \"{value}\" (expected manage:read, manage:write, mail:read, mail:write, send, scim, alias, ban or health)"
+		"unknown scope \"{value}\" (expected manage:read, manage:write, mail:read, mail:write, send, scim, alias, ban, health or key)"
 	))
 }
 
@@ -38,25 +39,6 @@ pub(super) fn legacy_warning(scopes: &[String], account_bound: bool) -> Option<S
 		 mail:read or mail:write (`stack update` refuses a stack that still has one from {})",
 		legacy_cutoff::LEGACY_SCOPES_REFUSED_FROM
 	))
-}
-
-/// Why an account-bound key may not hold what `scopes` names, if it may not:
-/// SCIM and the aliases manage accounts from outside, and the management
-/// scopes open routes that have no "own account". The first message is the one
-/// 0.14.0 gave, kept as it was.
-pub(super) fn bound_refusal(scopes: &[String]) -> Option<&'static str> {
-	let names = |wanted: &[&str]| scopes.iter().any(|name| wanted.contains(&name.as_str()));
-	if names(&["scim", "alias", "ban", "health"]) {
-		Some(
-			"account-bound API keys cannot hold the scim, alias, ban or health scope (all are administrative)",
-		)
-	} else if names(&["manage:read", "manage:write"]) {
-		Some(
-			"account-bound API keys cannot hold the manage:read or manage:write scope (both are administrative)",
-		)
-	} else {
-		None
-	}
 }
 
 /// The scopes of `row` as an operator reads them: the names 0.15.0 uses when

@@ -167,6 +167,18 @@ pub(super) const RULES: &[Rule] = &[
 		"a_confined_or_bound_key_is_refused_on_every_route",
 	),
 	rule(
+		"/api/v1/keys",
+		"key",
+		Domain::Filtered,
+		"a_key_lists_and_revokes_only_the_keys_it_could_have_made",
+	),
+	rule(
+		"/api/v1/keys/{label}",
+		"key",
+		Domain::Filtered,
+		"a_key_lists_and_revokes_only_the_keys_it_could_have_made",
+	),
+	rule(
 		"/api/v1/domains",
 		"manage:read/manage:write",
 		Domain::Filtered,
