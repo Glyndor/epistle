@@ -8,15 +8,20 @@ use super::*;
 use crate::smtp::sink::MemorySink;
 
 pub(super) fn directory_with_password() -> DirectoryHandle {
+	directory_with_hash(crate::smtp::auth::tests::base::hash(
+		crate::smtp::auth::tests::base::fixture_password(),
+	))
+}
+
+/// [`directory_with_password`] from a hash the caller already has, for a test
+/// that builds the directory many times over.
+pub(super) fn directory_with_hash(hash: String) -> DirectoryHandle {
 	DirectoryHandle::new(
 		Directory::new(
 			["example.org".to_string()],
 			[("alice@example.org".to_string(), "alice".to_string())],
 		)
-		.with_password_hashes(HashMap::from([(
-			"alice".to_string(),
-			crate::smtp::auth::tests::base::hash(crate::smtp::auth::tests::base::fixture_password()),
-		)])),
+		.with_password_hashes(HashMap::from([("alice".to_string(), hash)])),
 	)
 }
 

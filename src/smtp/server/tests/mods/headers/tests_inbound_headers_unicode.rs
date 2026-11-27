@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-use super::tests_auth::directory_with_password;
+use super::tests_auth::directory_with_hash;
 use super::*;
 use crate::smtp::sink::MemorySink;
 
@@ -31,6 +31,10 @@ async fn unicode_whitespace_after_a_reserved_field_is_removed_on_data_and_bdat()
 		'\u{2004}', '\u{2005}', '\u{2006}', '\u{2007}', '\u{2008}', '\u{2009}', '\u{200a}',
 		'\u{2028}', '\u{2029}', '\u{202f}', '\u{205f}', '\u{3000}',
 	];
+	// No session here signs in, so one password hash serves every case: it has
+	// the cost of a real one, and making it for each took most of the test.
+	let hash =
+		crate::smtp::auth::tests::base::hash(crate::smtp::auth::tests::base::fixture_password());
 	for name in NAMES {
 		for ws in UNICODE_WS {
 			let value = if *name == "Authentication-Results" {
@@ -42,7 +46,7 @@ async fn unicode_whitespace_after_a_reserved_field_is_removed_on_data_and_bdat()
 			for bdat in [false, true] {
 				let sink = Arc::new(MemorySink::new());
 				let server = Server::new("mail.example.org", sink.clone())
-					.with_directory(directory_with_password());
+					.with_directory(directory_with_hash(hash.clone()));
 				let (client, stream) = tokio::io::duplex(256 * 1024);
 				let task = tokio::spawn(async move {
 					server
