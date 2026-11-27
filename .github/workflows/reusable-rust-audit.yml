@@ -99,11 +99,13 @@ jobs:
       # another branch without bringing its tree: the history comes with the
       # checkout, and the step below takes only the lockfiles and the ignore
       # list of that branch with `git show`. Nothing of that branch is built or
-      # run, and no local action or script comes from it.
+      # run, and no local action or script comes from it. Depth 0 fetches every
+      # branch. Keep the 0 after `||`: it counts as false, so as the value of
+      # `&&` it would be skipped and the depth would always be 1.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          fetch-depth: ${{ inputs.ref != '' && 0 || 1 }}
+          fetch-depth: ${{ inputs.ref == '' && 1 || 0 }}
 
       - name: Take the lockfiles of the audited branch
         id: audited

@@ -84,18 +84,22 @@ jobs:
           # open the issue that says why the audit failed.
           persist-credentials: false
 
-      - name: Download every cargo audit JSON
+      # One download per audited branch, each into the folder the combine script
+      # reads. A single pattern for all of them is not enough: when only one
+      # artifact matches, the action unpacks it straight into `path`, with no
+      # folder naming the branch, and the script found nothing in it. The JSON
+      # is data either way; nothing here is executed.
+      - name: Download the develop audit JSON
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          # The reusable names each artifact `audit-json-<ref>`, so without
-          # `merge-multiple` the pattern downloads each one into its own
-          # subdirectory of `audits`. Merging them flattened every artifact
-          # into one tree where the second ref's `audit.json` overwrote the
-          # first, and the combine script reads `audit-json-*/audit.json`,
-          # which then found nothing at all. The JSON is data either way;
-          # nothing here is executed.
-          pattern: audit-json-*
-          path: audits
+          pattern: audit-json-develop
+          path: audits/audit-json-develop
+
+      - name: Download the main audit JSON
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: audit-json-main
+          path: audits/audit-json-main
 
       - name: Open or comment on the advisory issue
         env:
@@ -114,6 +118,9 @@ jobs:
         # same title so the run comments rather than opens a duplicate.
         run: |
           set -euo pipefail
+          # A branch whose audit stopped before writing a report left no
+          # artifact. Its empty folder is how the script knows to name it.
+          mkdir -p audits/audit-json-develop audits/audit-json-main
           python3 .github/scripts/rust_audit_combine.py audits --repo "$REPO" \
             --run-url "$RUN_URL" > combined.json
           cat combined.json

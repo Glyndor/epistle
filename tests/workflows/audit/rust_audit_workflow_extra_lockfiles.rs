@@ -229,22 +229,29 @@ fn the_upload_step_runs_after_the_extra_audit_and_carries_its_reports() {
 #[test]
 fn the_download_keeps_one_directory_per_ref() {
 	let report = read(".github/workflows/rust-audit.yml");
-	let download = extract_step(&report, "Download every cargo audit JSON");
-	assert!(
-		download.contains("audit-json-*"),
-		"the download must keep matching every ref's artifact:\n{download}"
-	);
-	let active: Vec<&str> = download
-		.lines()
-		.map(str::trim_start)
-		.filter(|line| !line.is_empty() && !line.starts_with('#'))
-		.collect();
-	assert!(
-		!active.iter().any(|line| line.starts_with("merge-multiple")),
-		"merging the artifacts flattens them into one directory where the second ref's \
-		 `audit.json` overwrites the first. Each artifact has to land in its own subdirectory, \
-		 which is what the combine script reads.\nDownload step was:\n{download}"
-	);
+	for audited in ["develop", "main"] {
+		let download = extract_step(&report, &format!("Download the {audited} audit JSON"));
+		let active: Vec<&str> = download
+			.lines()
+			.map(str::trim_start)
+			.filter(|line| !line.is_empty() && !line.starts_with('#'))
+			.collect();
+		for wanted in [
+			format!("pattern: audit-json-{audited}"),
+			format!("path: audits/audit-json-{audited}"),
+		] {
+			assert!(
+				active.iter().any(|line| *line == wanted),
+				"each branch's artifact has to land in a folder named after it, also when it is \
+				 the only artifact of the run. Missing {wanted:?} in:\n{download}"
+			);
+		}
+		assert!(
+			!active.iter().any(|line| line.starts_with("merge-multiple")),
+			"merging the artifacts flattens them into one directory where the second ref's \
+			 `audit.json` overwrites the first.\nDownload step was:\n{download}"
+		);
+	}
 	let combine = read(".github/scripts/rust_audit_combine.py");
 	assert!(
 		combine.contains("audit-json-*"),
