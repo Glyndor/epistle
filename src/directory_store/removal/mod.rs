@@ -10,7 +10,8 @@
 //! - masked addresses owned by the account;
 //! - app passwords on the account;
 //! - the per-account suppression list;
-//! - queued outbound mail the account submitted.
+//! - queued outbound mail the account submitted;
+//! - outbound mail the account still holds back by undo send.
 //!
 //! The third class is the dangerous one: recreating the same name
 //! inherits the previous user's mailbox. A data leak through an
@@ -19,7 +20,9 @@
 //! [`remove_account`] is the single entry point: it walks the footprint
 //! in a deliberate order, validates `name` the same way the store
 //! validates new names, refuses to follow symlinks, and reports a
-//! per-record tally the audit log and the API response can render.
+//! per-record tally the audit log and the API response can render. The
+//! queue policy covers both queues: the spooled messages and the ones
+//! undo send is holding back, which go out later if they are left.
 
 use std::fs;
 use std::io::ErrorKind;
@@ -30,6 +33,7 @@ use serde::{Deserialize, Serialize};
 use super::names::validate_name;
 use super::{AccountStore, DynamicAccount, StoreError};
 use crate::queue::SuppressionList;
+use crate::storage::undo::UndoStore;
 use crate::storage::{CorrespondentStore, FsSpool};
 use crate::util::path_containment::{contained, contained_child};
 
@@ -39,10 +43,15 @@ use crate::util::path_containment::{contained, contained_child};
 /// entrusted to the server, and dropping it silently is the worse
 /// default. SCIM has no place for an explicit choice, so it passes
 /// [`QueuePolicy::Drain`]; the management API requires the parameter.
+///
+/// The policy covers both queues: the messages already spooled and the
+/// ones undo send is still holding back. A held message left behind
+/// goes out at its release time, after the account is gone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum QueuePolicy {
 	/// Drop every queued message the account submitted. Spool files are removed; downstream retries do not see
-	/// them again.
+	/// them again. The submissions undo send holds for the account are taken
+	/// back, so none of them is delivered either.
 	Discard,
 	/// Leave the queued messages alone. They will be delivered under
 	/// whatever address they carry; the bounce address for a recipient
@@ -191,6 +200,22 @@ fn process_spool_queue(
 	Ok((discarded, left))
 }
 
+/// Apply `policy` to the submissions `account` has held back: the number
+/// taken back and the number left.
+fn process_held(
+	held: &UndoStore,
+	account: &str,
+	policy: QueuePolicy,
+) -> std::io::Result<(u32, u32)> {
+	match policy {
+		QueuePolicy::Discard => {
+			let taken = held.take_back_account(account)?;
+			Ok((taken.discarded, taken.claimed))
+		}
+		QueuePolicy::Drain => Ok((0, held.held_by(account)?)),
+	}
+}
+
 /// Remove `name` and its whole footprint on disk.
 ///
 /// Order matters and is encoded here:
@@ -200,8 +225,9 @@ fn process_spool_queue(
 /// 2. Resolve `name` to its full set of addresses from the store's view
 ///    *before* `store.remove` runs: once the row is gone the addresses
 ///    are no longer reachable.
-/// 3. Walk the spool and act on the queue, using those addresses. Doing
-///    this first means a crash after the spool walk but before the
+/// 3. Walk the spool and act on the queue, using those addresses, and
+///    take back the submissions undo send is holding for the account.
+///    Doing this first means a crash after the queue walk but before the
 ///    directory removal leaves the queued messages either already
 ///    discarded (matching the policy) or still there (matching the
 ///    policy), and the directory row still present so a follow-up
@@ -237,6 +263,14 @@ pub async fn remove_account(
 /// removes the account; if it fails half way the reservation stays, and
 /// running the removal again takes it over. A second removal of the same
 /// account while one runs is refused.
+///
+/// The submissions the account has held back by undo send are its queue too,
+/// and the same policy applies to them: with [`QueuePolicy::Discard`] the
+/// pending ones are taken back, so none of them is delivered after the
+/// account is gone, and they are counted among the discarded; with
+/// [`QueuePolicy::Drain`] they stay and are counted among those left. One the
+/// releaser had already claimed is past recall, as it is for the sender's own
+/// cancel, and is counted as left.
 pub async fn remove_account_if(
 	store: &AccountStore,
 	spool: &FsSpool,
@@ -254,8 +288,19 @@ pub async fn remove_account_if(
 	let reserved = store.reserve_removal(name, authorize)?;
 	let addresses = reserved.addresses;
 
-	let (queued_messages_discarded, queued_messages_left) =
+	let (mut queued_messages_discarded, mut queued_messages_left) =
 		process_spool_queue(spool, data_dir, name, queue).map_err(StoreError::Io)?;
+	// The submissions the account holds back by undo send are its queue too.
+	// They are sealed with the server's keys, so they are read with the
+	// spool's: a store that is there and cannot be opened stops the removal
+	// rather than leaving them behind.
+	let held =
+		UndoStore::open_existing(data_dir, spool.crypto().clone()).map_err(StoreError::Io)?;
+	if let Some(held) = held {
+		let (discarded, left) = process_held(&held, name, queue).map_err(StoreError::Io)?;
+		queued_messages_discarded = queued_messages_discarded.saturating_add(discarded);
+		queued_messages_left = queued_messages_left.saturating_add(left);
+	}
 
 	let masked_addresses = store.remove_all_masked(name)?;
 

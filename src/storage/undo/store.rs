@@ -49,6 +49,18 @@ pub enum CancelError {
 	Io(#[from] std::io::Error),
 }
 
+/// What taking back the held submissions of one account found.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct TakenBack {
+	/// Pending submissions removed: nothing of them will be delivered.
+	pub discarded: u32,
+	/// Submissions the releaser had already claimed. A claim is the point
+	/// past which a cancel is refused too ([`CancelError::AlreadySent`]):
+	/// they are handed on, or being handed on, and are not counted as
+	/// taken back.
+	pub claimed: u32,
+}
+
 /// What a listing says about a held submission, never its content.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Pending {
@@ -123,6 +135,15 @@ impl UndoStore {
 			data_dir: data_dir.to_path_buf(),
 			crypto,
 		})
+	}
+
+	/// The store under `data_dir` if one was ever created there, without
+	/// creating it: `None` when nothing was ever held.
+	pub fn open_existing(data_dir: &Path, crypto: MessageCrypto) -> std::io::Result<Option<Self>> {
+		if !data_dir.join("undo").is_dir() {
+			return Ok(None);
+		}
+		Self::open(data_dir, crypto).map(Some)
 	}
 
 	fn dir(&self, dir: Dir) -> PathBuf {
@@ -300,6 +321,59 @@ impl UndoStore {
 		String::from_utf8(self.open_bytes(id, &stored)?)
 			.map(Some)
 			.map_err(|error| std::io::Error::other(error.to_string()))
+	}
+
+	/// Take back every pending submission `account` made, under the lock
+	/// that [`claim`](Self::claim) and [`cancel`](Self::cancel) take, so that
+	/// each is either removed here and never claimed, or claimed first and
+	/// reported as claimed. Used when the account is removed with its queue
+	/// discarded: mail it entrusted to the server must not leave after it is
+	/// gone. A file that cannot be read cannot be attributed to an account
+	/// and is left alone.
+	pub fn take_back_account(&self, account: &str) -> std::io::Result<TakenBack> {
+		let _guard = self.lock()?;
+		let mut taken = TakenBack::default();
+		for (release_at, id) in self.names(Dir::Pending)? {
+			if self.owned_by(Dir::Pending, release_at, id, account)? {
+				fs::remove_file(self.file(Dir::Pending, release_at, id)?)?;
+				taken.discarded += 1;
+			}
+		}
+		sync_dir(&self.dir(Dir::Pending))?;
+		taken.claimed = self.count_in(Dir::Inflight, account)?;
+		Ok(taken)
+	}
+
+	/// How many submissions `account` has held, pending or claimed: what a
+	/// removal that keeps the queue leaves behind.
+	pub fn held_by(&self, account: &str) -> std::io::Result<u32> {
+		let _guard = self.lock()?;
+		Ok(self
+			.count_in(Dir::Pending, account)?
+			.saturating_add(self.count_in(Dir::Inflight, account)?))
+	}
+
+	fn count_in(&self, dir: Dir, account: &str) -> std::io::Result<u32> {
+		let mut found = 0;
+		for (at, id) in self.names(dir)? {
+			if self.owned_by(dir, at, id, account)? {
+				found += 1;
+			}
+		}
+		Ok(found)
+	}
+
+	/// Whether the held submission `id` in `dir` was made by `account`.
+	/// One that vanished, or cannot be opened, is no one's.
+	fn owned_by(&self, dir: Dir, at: u64, id: Uuid, account: &str) -> std::io::Result<bool> {
+		match self.load_in(dir, at, id) {
+			Ok(held) => Ok(held.account == account),
+			Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+			Err(error) => {
+				tracing::warn!(%id, %error, "a held submission cannot be read and was not attributed");
+				Ok(false)
+			}
+		}
 	}
 
 	/// Take the submission back so that nothing of it is ever delivered.

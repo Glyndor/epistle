@@ -178,3 +178,86 @@ async fn queue_tenant_owner_removal_discards_what_the_account_submitted_and_only
 	assert_eq!(result.queued_messages_discarded, 2, "her own two");
 	assert!(spool.load(forwarded).is_ok(), "the forwarded entry stays");
 }
+
+/// A held submission as undo send keeps it: `account` made it, and it waits
+/// for the releaser.
+fn hold(undo: &crate::storage::undo::UndoStore, account: &str) -> uuid::Uuid {
+	let id = uuid::Uuid::now_v7();
+	undo.hold(&crate::storage::undo::Held {
+		id,
+		account: account.to_string(),
+		accepted_at: 0,
+		release_at: u64::MAX / 2,
+		message: crate::smtp::session::AcceptedMessage {
+			reverse_path: format!("{account}@example.org"),
+			recipients: vec!["bob@elsewhere.example".to_string()],
+			data: b"Subject: held\r\n\r\nheld\r\n".to_vec(),
+			require_tls: false,
+			mailbox: None,
+			tlsrpt_verified: false,
+			sender_verified: true,
+			no_dsn: Vec::new(),
+		},
+		submission: crate::smtp::sink::Submission::default(),
+	})
+	.expect("hold");
+	id
+}
+
+/// The undo store under `dir`, as the removal opens it: the same directory
+/// and the same (disabled) crypto the spool there carries.
+fn undo_store(dir: &std::path::Path) -> crate::storage::undo::UndoStore {
+	crate::storage::undo::UndoStore::open(dir, crate::storage::MessageCrypto::disabled())
+		.expect("undo store")
+}
+
+#[tokio::test]
+async fn discard_takes_back_what_the_account_held_and_only_that() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let (store, spool) = store_and_spool(dir.path());
+	seed(dir.path(), &store, &spool, "alice");
+	add_account(&store, "carol", "carol@example.org");
+	let undo = undo_store(dir.path());
+	hold(&undo, "alice");
+	let carols = hold(&undo, "carol");
+	let result = remove_account(
+		&store,
+		&spool,
+		dir.path(),
+		"alice",
+		QueuePolicy::Discard,
+		None,
+	)
+	.await
+	.expect("remove");
+	assert_eq!(
+		result.queued_messages_discarded, 3,
+		"two queued and one held"
+	);
+	assert_eq!(result.queued_messages_left, 0);
+	let left: Vec<_> = undo.pending().expect("pending");
+	assert_eq!(left.len(), 1, "another account's submission stays");
+	assert_eq!(left[0].0.id, carols);
+}
+
+#[tokio::test]
+async fn drain_leaves_what_the_account_held_and_counts_it() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let (store, spool) = store_and_spool(dir.path());
+	seed(dir.path(), &store, &spool, "alice");
+	let undo = undo_store(dir.path());
+	hold(&undo, "alice");
+	let result = remove_account(
+		&store,
+		&spool,
+		dir.path(),
+		"alice",
+		QueuePolicy::Drain,
+		None,
+	)
+	.await
+	.expect("remove");
+	assert_eq!(result.queued_messages_discarded, 0);
+	assert_eq!(result.queued_messages_left, 3, "two queued and one held");
+	assert_eq!(undo.pending().expect("pending").len(), 1);
+}

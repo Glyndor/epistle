@@ -1069,6 +1069,12 @@ on SCIM, `epistle account remove`) calls `BayesStore::forget_scope` to
 drop every per-scope row. Without this, a recreated account would
 inherit the previous user's training.
 
+With the queue policy set to discard, the submissions undo send is
+holding for the account are taken back too, so none is delivered after
+the account is gone, and they are counted among the discarded. With
+drain they stay and are counted among those left. A submission already
+claimed for release is past recall and is counted as left.
+
 ### `[acme]`
 Automatic TLS certificates for the mail protocols (not the panel's web TLS).
 
