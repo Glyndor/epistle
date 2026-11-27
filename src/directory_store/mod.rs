@@ -53,6 +53,8 @@ mod store_debug;
 
 mod forward_catch_all_mutators;
 mod mutators;
+mod on_disk;
+pub use on_disk::dynamic_addresses_on_disk;
 pub mod scram_upgrade;
 
 mod password_policy_settings;

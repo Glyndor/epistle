@@ -23,6 +23,14 @@ impl Principal {
 		now.admits_scope(scope) && now.admits_account(name, addresses)
 	}
 
+	/// Whether the credential of `auth`, read now, holds `scope` and is
+	/// confined to no account and no domain. Reading it again also asks whether
+	/// it has expired and whether the client is still inside its network.
+	pub(crate) fn still_unrestricted(state: &ApiState, auth: &MatchedAuth, scope: Scope) -> bool {
+		let now = Principal::for_token(state, auth);
+		now.admits_scope(scope) && now.is_unrestricted()
+	}
+
 	/// Whether the credential of `auth`, read now, holds `scope` and may create
 	/// an account with the addresses `addresses`.
 	pub(crate) fn still_reaches_addresses(

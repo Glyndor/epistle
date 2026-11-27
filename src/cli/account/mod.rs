@@ -23,7 +23,7 @@ use crate::cli::style;
 use crate::config::{Config, Protocol};
 use crate::directory_store::{AccountStore, StoreError};
 
-mod actions;
+pub(crate) mod actions;
 mod args;
 mod class;
 mod dispatch;

@@ -1,5 +1,6 @@
 //! `/api/v1` routes. Each route module mirrors its path.
 
+mod account_edit;
 mod accounts;
 mod aliases;
 mod archive;
@@ -97,6 +98,12 @@ pub fn router(max_message_size: usize) -> Router<ApiState> {
 		.route(
 			"/accounts/{name}/password",
 			axum::routing::put(accounts::set_password),
+		)
+		.route(
+			"/accounts/{name}/quota",
+			axum::routing::put(account_edit::set_quota)
+				.delete(account_edit::clear_quota)
+				.layer(DefaultBodyLimit::max(account_edit::MAX_BODY)),
 		)
 		.route(
 			"/accounts/{name}/display_name",

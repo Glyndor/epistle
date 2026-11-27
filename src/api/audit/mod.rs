@@ -32,7 +32,7 @@ mod carried;
 mod domain;
 mod keys;
 mod queue;
-pub use account_edit::{SuspensionEvent, log_suspension_change};
+pub use account_edit::{QuotaEvent, SuspensionEvent, log_quota_change, log_suspension_change};
 pub use alias::{AliasEvent, log_alias_change};
 pub use ban::{BanEvent, log_ban_change};
 pub use carried::Carried;

@@ -5,4 +5,5 @@ mod write_access;
 mod write_audit;
 mod write_hostile;
 mod write_keys;
+mod write_quota;
 mod writes;
