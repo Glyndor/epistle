@@ -6,6 +6,7 @@ use axum::extract::{Query, State};
 use axum::{Extension, Json};
 
 use super::{Scope, select, too_many};
+use crate::api::Principal;
 use crate::api::error::ApiError;
 use crate::api::state::{ApiState, MatchedAuth};
 use crate::dns::verify::{report_json, verify as check};
@@ -27,8 +28,10 @@ pub async fn verify(
 	let selection = select(&state, &auth, &query)?;
 	too_many(selection.domains.len(), MOST_DOMAINS)?;
 	// The place is taken before any lookup starts and given back when the
-	// check ends, however it ends.
-	let Some(_place) = state.try_dns_check() else {
+	// check ends, however it ends. A key confined to domains holds one place
+	// at a time, so it cannot leave the other tenants without any.
+	let principal = Principal::for_token(&state, &auth);
+	let Some(_place) = state.try_dns_check(principal.confined_domains()) else {
 		return Err(ApiError::rate_limited_with_message(
 			"DNS checks are already running. Try again shortly.",
 			BUSY_RETRY_SECS,

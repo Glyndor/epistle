@@ -156,6 +156,15 @@ impl TenantLimits {
 		&self.tenants
 	}
 
+	/// The index of the configured tenant that owns `domain` (any case), or
+	/// `None` when no configured tenant owns it. The index names the tenant
+	/// itself, not the domain: every domain of one tenant answers the same,
+	/// so a caller can tell one tenant from another whatever domains it
+	/// looks at.
+	pub fn tenant_index_of_domain(&self, domain: &str) -> Option<usize> {
+		self.by_domain.get(&domain.to_ascii_lowercase()).copied()
+	}
+
 	/// Every tenant that owns at least one of `addresses`, in config order.
 	/// Used by quota and rate-limit paths: an account straddling two tenants
 	/// counts against both, matching the existing all-vs-any rule for reach
