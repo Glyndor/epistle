@@ -734,7 +734,11 @@ domains sees no records, because they carry an account and not a domain.
 from `next_cursor`), `DELETE /api/v1/queue/{id}` removes an entry and records
 each pending recipient as `canceled` in the delivery log, then posts a
 `canceled` webhook event when the delivery log is enabled and a webhook is
-configured.
+configured. The removal writes one `queue.removed` on `epistle::api::audit`,
+with the id of the message, the account that sent it when the envelope knows
+it (the pseudonym the logs use, never the name), the label of the key that
+asked and the client address. The recipients and the subject of the message
+are not in it, and the key itself never is.
 
 One entry in detail, and its schedule. `GET /api/v1/queue/{id}` prints what
 `epistle queue show --json` prints: the envelope and its retry state
@@ -888,7 +892,7 @@ curl -s -X DELETE -H "Authorization: Bearer $KEY" "$API/api/v1/accounts/ana?queu
 | `GET`, `POST /api/v1/keys`, `DELETE /api/v1/keys/{label}` | List, make and revoke API keys, never reaching further than the key that asks; scope `key`. See [API keys](#api-keys) |
 | `GET`, `POST /api/v1/accounts` | List (not paged), create. A duplicate name or address is `400 invalid_input` |
 | `DELETE /api/v1/accounts/{name}` | Removes the account and its data. Only accounts made through the API; one declared in the configuration file is `404 no such dynamic account`. The removal runs to its end even if the client goes away. A removal that finishes writes `account.removed` on `epistle::api::audit`. One that stops after it began to clear the account writes `account.removal_incomplete` instead: the account may still exist, and running the removal again takes it over. |
-| `PUT /api/v1/accounts/{name}/password` | New password |
+| `PUT /api/v1/accounts/{name}/password` | New password. The change writes `account.password_reset` on `epistle::api::audit`, with the account and the client address; the password and its hash are never in it |
 | `PUT /api/v1/accounts/{name}/display_name` | `{"display_name": "..."}`; empty clears it |
 | `POST`, `DELETE /api/v1/accounts/{name}/totp` | Enrol a fresh secret (returned once, effective at once) or turn two-factor off |
 | `GET /api/v1/accounts/{name}/mailboxes` | Mailbox names and a tree |
@@ -1310,6 +1314,17 @@ what SCIM models (`active`, `emails`, `displayName`, `password` when sent) and
 leaves the quota, forwards, catch-all and the other account settings as they
 were. A SCIM key
 cannot be bound to an account.
+
+A credential change leaves the same trace as the management route that makes
+it: a password SCIM sets writes `account.password_reset` on
+`epistle::api::audit`, with the account and the client address, and an
+account it suspends or enables again writes `account.disabled` or
+`account.enabled`, with the account, the label of the key that asked and the
+client address. The lines are written by the task that made the change, so a
+client that drops the connection after the write still leaves them. A request
+that changed nothing — a `PATCH` that asks for the `active` flag the account
+already has — writes no line, and neither the password nor its hash is ever
+written.
 
 ## OAuth
 

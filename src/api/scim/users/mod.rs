@@ -10,6 +10,12 @@
 //! reject them): the account name is the directory's primary key, and
 //! renaming a primary key would orphan every dependent record (mailbox,
 //! quota, scram credentials).
+//!
+//! A credential change leaves the same trace as the management route that
+//! makes it: a password SCIM sets writes `account.password_reset` and an
+//! account it suspends or enables again writes `account.disabled` or
+//! `account.enabled` (see [`audit`]). A request that changed nothing writes
+//! no line, and neither the password nor its hash is ever written.
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -18,12 +24,17 @@ use axum::{Extension, Json};
 use serde::Deserialize;
 
 use super::error::{CONTENT_TYPE, ScimError};
-use super::types::{Email, ListResponse, Name, PatchOperation, PatchRequest, USER_SCHEMA, User};
+use super::types::{Email, ListResponse, Name, PatchRequest, USER_SCHEMA, User};
 use crate::api::Principal;
 use crate::api::api_keys::Scope;
-use crate::api::state::{ApiState, MatchedAuth};
+use crate::api::state::{ApiState, ClientIp, MatchedAuth};
 use crate::directory_store::removal::QueuePolicy;
-use crate::directory_store::{AccountChanges, DynamicAccount, NewPassword, StoreError};
+use crate::directory_store::{DynamicAccount, StoreError};
+
+mod audit;
+mod patch;
+use audit::Changes;
+use patch::{gather, plan_operation, wanted_active, wants_password};
 
 /// Build a SCIM `User` JSON from a `DynamicAccount` (RFC 7643 §4.1). The
 /// `id` is the account name; `active` mirrors `disabled`; `emails` carries
@@ -323,6 +334,7 @@ pub async fn list_users(
 pub async fn create_user(
 	State(state): State<ApiState>,
 	Extension(auth): Extension<MatchedAuth>,
+	Extension(client_ip): Extension<ClientIp>,
 	Json(body): Json<User>,
 ) -> Result<impl IntoResponse, ScimError> {
 	let name = crate::directory_store::account_name(&body.user_name);
@@ -374,6 +386,17 @@ pub async fn create_user(
 			Principal::still_reaches_addresses(&state, &auth, Scope::Scim, &addresses)
 		})
 		.map_err(store_to_scim)?;
+	// The account is on disk: the password it was born with and the state it
+	// was born in are on the audit line, exactly as the management route
+	// writes them.
+	let mut changes = Changes::new(&name, principal.key_label(), client_ip.0);
+	if body.password.is_some() {
+		changes.password();
+	}
+	if !active {
+		changes.active(false);
+	}
+	changes.write();
 	let stored = lookup(&state, &name)?;
 	Ok(scim_resource(StatusCode::CREATED, render_user(&stored)))
 }
@@ -430,6 +453,7 @@ pub async fn delete_user(
 pub async fn put_user(
 	State(state): State<ApiState>,
 	Extension(auth): Extension<MatchedAuth>,
+	Extension(client_ip): Extension<ClientIp>,
 	Path(id): Path<String>,
 	Json(body): Json<User>,
 ) -> Result<impl IntoResponse, ScimError> {
@@ -439,6 +463,19 @@ pub async fn put_user(
 		return Err(ScimError::invalid(
 			"userName cannot be changed via PUT; use DELETE then POST",
 		));
+	}
+
+	// What the replace changes of the account, against what it has now: a
+	// request that asks for the account as it is changes nothing and writes
+	// no line. The password is a change whenever it is sent: the stored
+	// verifier, its salt and the SCRAM credentials are replaced, and the
+	// account's outstanding credentials are reset.
+	let mut changes = Changes::new(&id, principal.key_label(), client_ip.0);
+	if body.password.is_some() {
+		changes.password();
+	}
+	if existing.disabled != !body.active {
+		changes.active(body.active);
 	}
 
 	// The new addresses are checked before anything is written, so a refused
@@ -488,6 +525,9 @@ pub async fn put_user(
 			reaches(&account.addresses) && reaches(&proposed)
 		})
 		.map_err(store_to_scim)?;
+	// The account is written: the line of every change it made follows, on
+	// this task and before anything else can be awaited.
+	changes.write();
 	let stored = lookup(&state, &id)?;
 	Ok(scim_resource(StatusCode::OK, render_user(&stored)))
 }
@@ -513,11 +553,12 @@ const MAX_PATCH_PASSWORDS: usize = 3;
 pub async fn patch_user(
 	State(state): State<ApiState>,
 	Extension(auth): Extension<MatchedAuth>,
+	Extension(client_ip): Extension<ClientIp>,
 	Path(id): Path<String>,
 	Json(body): Json<PatchRequest>,
 ) -> Result<impl IntoResponse, ScimError> {
 	let principal = Principal::for_token(&state, &auth);
-	lookup_in_scope(&state, &principal, &id)?;
+	let existing = lookup_in_scope(&state, &principal, &id)?;
 	if body.operations.len() > MAX_PATCH_OPERATIONS {
 		return Err(ScimError::invalid(format!(
 			"a PATCH takes at most {MAX_PATCH_OPERATIONS} operations"
@@ -545,6 +586,21 @@ pub async fn patch_user(
 	// The plan is written in one go. The key is read again and asked about the
 	// account as it is under the store's lock: both were last checked before
 	// the passwords were hashed.
+	//
+	// What the plan leaves the account with is compared with what it has
+	// now, so a `PATCH` that asks for the account as it is writes no line. A
+	// password is a change whenever it is sent: the stored verifier, its salt
+	// and the SCRAM credentials are replaced, and the account's outstanding
+	// credentials are reset.
+	let mut changes = Changes::new(&id, principal.key_label(), client_ip.0);
+	if let Some(active) = wanted_active(&plan)
+		&& existing.disabled != !active
+	{
+		changes.active(active);
+	}
+	if wants_password(&plan) {
+		changes.password();
+	}
 	if !plan.is_empty() {
 		state
 			.store()
@@ -558,73 +614,12 @@ pub async fn patch_user(
 				)
 			})
 			.map_err(store_to_scim)?;
+		// The account is written: the line of every change it made follows,
+		// on this task and before anything else can be awaited.
+		changes.write();
 	}
 	let stored = lookup_in_scope(&state, &principal, &id)?;
 	Ok(scim_resource(StatusCode::OK, render_user(&stored)))
-}
-
-/// One checked operation, ready to be written.
-enum Step {
-	Active(bool),
-	Password {
-		hash: String,
-		scram: Option<crate::smtp::scram::ScramStored>,
-	},
-	DisplayName(String),
-}
-
-fn plan_operation(state: &ApiState, op: &PatchOperation) -> Result<Step, ScimError> {
-	match (op.op.as_str(), op.path.as_deref()) {
-		("remove", _) => Err(ScimError::invalid("`remove` operations are not supported")),
-		("replace", Some("active")) | ("add", Some("active")) => op
-			.value
-			.as_bool()
-			.map(Step::Active)
-			.ok_or_else(|| ScimError::invalid("active must be a boolean")),
-		("replace", Some("password")) | ("add", Some("password")) => {
-			let plain = op
-				.value
-				.as_str()
-				.ok_or_else(|| ScimError::invalid("password must be a string"))?;
-			check_password(plain)?;
-			let hash = hash_password(plain, state.store())?;
-			let scram = derive_scram(plain, state.store())?;
-			Ok(Step::Password { hash, scram })
-		}
-		// Checked here, operation by operation: a later one on the same field
-		// replaces its value, which must not spare it the check.
-		("replace", Some("displayName")) | ("add", Some("displayName")) => {
-			let raw = op.value.as_str().unwrap_or_default();
-			crate::directory_store::display_name::validate(raw).map_err(ScimError::invalid)?;
-			Ok(Step::DisplayName(raw.to_string()))
-		}
-		("replace", Some(path)) | ("add", Some(path)) => Err(ScimError::invalid(format!(
-			"`{path}` cannot be modified via PATCH; only `active`, `password` and \
-			 `displayName` are accepted"
-		))),
-		("replace", None) | ("add", None) => {
-			Err(ScimError::invalid("a `path` is required for replace/add"))
-		}
-		(other, _) => Err(ScimError::invalid(format!(
-			"unsupported PATCH op \"{other}\""
-		))),
-	}
-}
-
-/// The changes of `plan`, in order: a later operation on a field replaces an
-/// earlier one.
-fn gather(plan: Vec<Step>) -> AccountChanges {
-	let mut changes = AccountChanges::default();
-	for step in plan {
-		match step {
-			Step::Active(active) => changes.disabled = Some(!active),
-			Step::Password { hash, scram } => {
-				changes.password = Some(NewPassword { hash, scram });
-			}
-			Step::DisplayName(name) => changes.display_name = Some(name),
-		}
-	}
-	changes
 }
 
 #[cfg(test)]
