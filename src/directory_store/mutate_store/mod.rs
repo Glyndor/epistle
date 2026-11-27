@@ -89,7 +89,7 @@ impl AccountStore {
 	/// going through the file watcher.
 	fn refresh_after_write(&self, new_state: DynamicFile) {
 		*self.dynamic.write().expect("store lock") = new_state.accounts;
-		self.handle.replace(self.build_directory());
+		self.rebuild_directory();
 	}
 }
 

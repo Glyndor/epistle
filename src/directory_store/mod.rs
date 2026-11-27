@@ -48,6 +48,7 @@ mod handle;
 pub use handle::DirectoryHandle;
 mod hosted;
 pub use hosted::HostedDomains;
+mod rebuild;
 mod store_debug;
 
 mod forward_catch_all_mutators;
@@ -182,6 +183,19 @@ pub struct AccountStore {
 	/// `src/directory_store/set_totp/mod.rs`).
 	crypto: crate::storage::MessageCrypto,
 	handle: DirectoryHandle,
+	/// The lock that serializes the directory rebuilds. It is held from
+	/// the build to the swap, so a directory built before another one can
+	/// never replace it: the directory in memory is always the one built
+	/// last. See [`AccountStore::rebuild_directory`].
+	directory_lock: std::sync::Mutex<()>,
+	/// The pause a test puts between the build and the swap, so it can
+	/// hold a rebuild there while another thread writes.
+	#[cfg(test)]
+	build_pause: std::sync::Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
+	/// The permit a test waits for when a rebuild had to wait for the
+	/// directory lock.
+	#[cfg(test)]
+	directory_events: Arc<tokio::sync::Semaphore>,
 }
 
 impl AccountStore {

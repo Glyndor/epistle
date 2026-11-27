@@ -137,20 +137,29 @@ impl AccountStore {
 			}
 			*current = aliases;
 		}
-		self.handle.replace(self.build_directory());
+		self.rebuild_directory();
 	}
 
 	/// Toggle the disabled flag on the multi-target alias at `address`. A
 	/// disabled alias is absent from the directory's `aliases` map, so it
 	/// falls through to the next step of `Directory::resolve` and rejects
 	/// like one that never existed. Returns the previous state.
+	///
+	/// The write and the swap of the in-memory overlay happen under the
+	/// lock the reload path reads under, so the file watcher cannot read
+	/// the file before this write and put the older flag back into
+	/// memory after it.
 	pub fn set_alias_enabled(&self, address: &str, enabled: bool) -> Result<bool, StoreError> {
+		let path = self.dynamic_file("aliases.json");
+		let _lock =
+			crate::storage::lock::FileLock::acquire(&crate::storage::locked::lock_path(&path))
+				.map_err(StoreError::Io)?;
 		let previous = self
 			.aliases_disabled
 			.write()
 			.expect("aliases lock")
 			.set_enabled(address, enabled)?;
-		self.handle.replace(self.build_directory());
+		self.rebuild_directory();
 		Ok(previous)
 	}
 

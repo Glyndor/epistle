@@ -59,8 +59,13 @@ impl AccountStore {
 			password_policy: Policy::ASCII_ONLY,
 			crypto: crate::storage::MessageCrypto::disabled(),
 			handle: DirectoryHandle::new(Directory::default()),
+			directory_lock: std::sync::Mutex::new(()),
+			#[cfg(test)]
+			build_pause: std::sync::Mutex::new(None),
+			#[cfg(test)]
+			directory_events: Arc::new(tokio::sync::Semaphore::new(0)),
 		};
-		store.handle.replace(store.build_directory());
+		store.rebuild_directory();
 		Ok(store)
 	}
 
@@ -68,14 +73,14 @@ impl AccountStore {
 	/// a hosted domain, and rebuild the directory.
 	pub fn with_server_name(mut self, hostname: String) -> Self {
 		self.hosted.get_mut().expect("hosted lock").hostname = hostname;
-		self.handle.replace(self.build_directory());
+		self.rebuild_directory();
 		self
 	}
 
 	/// Switch off hosted domains and rebuild the directory.
 	pub fn with_disabled_domains(mut self, domains: Vec<String>) -> Self {
 		self.hosted.get_mut().expect("hosted lock").disabled = domains;
-		self.handle.replace(self.build_directory());
+		self.rebuild_directory();
 		self
 	}
 
@@ -83,14 +88,14 @@ impl AccountStore {
 	/// and rebuild the directory.
 	pub fn with_send_off_domains(mut self, domains: Vec<String>) -> Self {
 		self.hosted.get_mut().expect("hosted lock").send_off = domains;
-		self.handle.replace(self.build_directory());
+		self.rebuild_directory();
 		self
 	}
 
 	/// Set the per-domain default storage quotas and rebuild the directory.
 	pub fn with_domain_quotas(mut self, quotas: std::collections::HashMap<String, u64>) -> Self {
 		self.hosted.get_mut().expect("hosted lock").domain_quotas = quotas;
-		self.handle.replace(self.build_directory());
+		self.rebuild_directory();
 		self
 	}
 
@@ -104,14 +109,14 @@ impl AccountStore {
 			.get_mut()
 			.expect("hosted lock")
 			.domain_submission_limits = limits;
-		self.handle.replace(self.build_directory());
+		self.rebuild_directory();
 		self
 	}
 
 	/// Set the multi-target aliases and rebuild the directory.
 	pub fn with_aliases(mut self, aliases: Vec<crate::config::Alias>) -> Self {
 		*self.aliases.get_mut().expect("aliases lock") = aliases;
-		self.handle.replace(self.build_directory());
+		self.rebuild_directory();
 		self
 	}
 
@@ -128,14 +133,14 @@ impl AccountStore {
 	pub fn set_sql_accounts(&self, accounts: Vec<SqlAccount>) {
 		let accounts = with_safe_names(accounts, "sql", |account| &account.name);
 		*self.sql_accounts.write().expect("store lock") = accounts;
-		self.handle.replace(self.build_directory());
+		self.rebuild_directory();
 	}
 
 	/// Attach the live LDAP authenticator at construction and rebuild the
 	/// directory so per-request LDAP binds are wired in (builder form).
 	pub fn with_ldap_authenticator(mut self, ldap: Arc<LdapAuthenticator>) -> Self {
 		self.ldap_auth = Some(ldap);
-		self.handle.replace(self.build_directory());
+		self.rebuild_directory();
 		self
 	}
 
@@ -146,7 +151,7 @@ impl AccountStore {
 	/// — the counter is a derived view.
 	pub fn with_metrics(mut self, metrics: Arc<crate::metrics::Metrics>) -> Self {
 		self.metrics = Some(metrics);
-		self.handle.replace(self.build_directory());
+		self.rebuild_directory();
 		self
 	}
 
@@ -158,7 +163,7 @@ impl AccountStore {
 	/// [`PgBanStore`]: crate::antispam::bans::PgBanStore
 	pub fn with_ban_store(mut self, store: Arc<dyn crate::antispam::bans::BanStore>) -> Self {
 		self.ban_store = Some(store);
-		self.handle.replace(self.build_directory());
+		self.rebuild_directory();
 		self
 	}
 
@@ -173,6 +178,6 @@ impl AccountStore {
 	pub fn set_ldap_accounts(&self, accounts: Vec<LdapAccount>) {
 		let accounts = with_safe_names(accounts, "ldap", |account| &account.name);
 		*self.ldap_accounts.write().expect("store lock") = accounts;
-		self.handle.replace(self.build_directory());
+		self.rebuild_directory();
 	}
 }

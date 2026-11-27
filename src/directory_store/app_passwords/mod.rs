@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::storage::locked::{EditError, edit};
+use crate::storage::locked::{EditError, edit_and_commit};
 
 use super::StoreError;
 
@@ -164,29 +164,31 @@ impl AppPasswordStore {
 		password: AppPassword,
 		gate: Option<&crate::limits::Gate>,
 	) -> Result<(), StoreError> {
+		self.add_within_and_commit(account, password, gate, |_| {})
+	}
+
+	/// [`add_within`] that also hands the post-write entries to `commit`
+	/// while the file's lock is still held.
+	///
+	/// A caller whose in-memory mirror is shared between threads — the
+	/// server's [`super::AccountStore`] — replaces it there: replacing it
+	/// after the lock is released would let a second writer commit and
+	/// refresh in between, and the first writer's late refresh would roll
+	/// the mirror back to the older state.
+	pub(crate) fn add_within_and_commit(
+		&mut self,
+		account: &str,
+		password: AppPassword,
+		gate: Option<&crate::limits::Gate>,
+		commit: impl FnOnce(&[(String, AppPassword)]),
+	) -> Result<(), StoreError> {
 		if let Some(spec) = &password.ip_cidr
 			&& crate::cidr::Cidr::parse(spec).is_none()
 		{
 			return Err(StoreError::Invalid(crate::cidr::Cidr::refusal(spec)));
 		}
 		let account = account.to_ascii_lowercase();
-		// The whole-file rewrite goes through `locked::edit` so a CLI
-		// `epistle app-password add` and a server `add` running in
-		// parallel both reach disk: each takes the sibling lock,
-		// re-reads, mutates the fresh state, and writes atomically.
-		let new_state = edit(
-			&self.path,
-			|text| {
-				toml::from_str::<AppPasswordFile>(text).map_err(|error| {
-					std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string())
-				})
-			},
-			|state| {
-				toml::to_string_pretty(state).map_err(|error| {
-					std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string())
-				})
-			},
-			AppPasswordFile::default,
+		self.edit_committed(
 			|state| -> Result<(), StoreError> {
 				let list = &mut state.accounts.entry(account.clone()).or_default().passwords;
 				if list.iter().any(|existing| existing.label == password.label) {
@@ -199,39 +201,15 @@ impl AppPasswordStore {
 				list.push(password.clone());
 				Ok(())
 			},
+			commit,
 		)
-		.map_err(|error| match error {
-			EditError::Io(io) => StoreError::Io(io),
-			EditError::Mutate(store) => store,
-		})?;
-		// The in-memory mirror is refreshed from the post-write state, so
-		// a sibling process's previous write is visible on the next read
-		// without the file watcher running.
-		self.accounts.clear();
-		for (name, entry) in new_state.accounts {
-			self.accounts
-				.insert(name.to_ascii_lowercase(), entry.passwords);
-		}
-		Ok(())
 	}
 
 	/// Remove an account's app password by label. `NotFound` if absent.
 	pub fn remove(&mut self, account: &str, label: &str) -> Result<(), StoreError> {
 		let account = account.to_ascii_lowercase();
 		let label = label.to_string();
-		let new_state = edit(
-			&self.path,
-			|text| {
-				toml::from_str::<AppPasswordFile>(text).map_err(|error| {
-					std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string())
-				})
-			},
-			|state| {
-				toml::to_string_pretty(state).map_err(|error| {
-					std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string())
-				})
-			},
-			AppPasswordFile::default,
+		self.edit_committed(
 			|state| {
 				let entry = state
 					.accounts
@@ -244,17 +222,8 @@ impl AppPasswordStore {
 				}
 				Ok(())
 			},
+			|_| {},
 		)
-		.map_err(|error| match error {
-			EditError::Io(io) => StoreError::Io(io),
-			EditError::Mutate(store) => store,
-		})?;
-		self.accounts.clear();
-		for (name, entry) in new_state.accounts {
-			self.accounts
-				.insert(name.to_ascii_lowercase(), entry.passwords);
-		}
-		Ok(())
 	}
 
 	/// Apply `change` to the stored file under the sibling lock and refresh
@@ -263,31 +232,7 @@ impl AppPasswordStore {
 		&mut self,
 		change: impl FnOnce(&mut AppPasswordFile) -> Result<(), StoreError>,
 	) -> Result<(), StoreError> {
-		let new_state = edit(
-			&self.path,
-			|text| {
-				toml::from_str::<AppPasswordFile>(text).map_err(|error| {
-					std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string())
-				})
-			},
-			|state| {
-				toml::to_string_pretty(state).map_err(|error| {
-					std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string())
-				})
-			},
-			AppPasswordFile::default,
-			change,
-		)
-		.map_err(|error| match error {
-			EditError::Io(io) => StoreError::Io(io),
-			EditError::Mutate(store) => store,
-		})?;
-		self.accounts.clear();
-		for (name, entry) in new_state.accounts {
-			self.accounts
-				.insert(name.to_ascii_lowercase(), entry.passwords);
-		}
-		Ok(())
+		self.edit_committed(change, |_| {})
 	}
 
 	/// Replace the hash of an account's app password, keeping its label,
@@ -331,13 +276,58 @@ impl AppPasswordStore {
 	/// by [`crate::directory_store::removal::remove_account`] to clear the
 	/// account's whole footprint in a single pass.
 	pub fn remove_account(&mut self, account: &str) -> Result<u32, StoreError> {
+		self.remove_account_and_commit(account, |_| {})
+	}
+
+	/// [`remove_account`] that also hands the post-write entries to
+	/// `commit` while the file's lock is still held, like
+	/// [`Self::add_within_and_commit`].
+	pub(crate) fn remove_account_and_commit(
+		&mut self,
+		account: &str,
+		commit: impl FnOnce(&[(String, AppPassword)]),
+	) -> Result<u32, StoreError> {
 		let account = account.to_ascii_lowercase();
 		// The `edit` helper's closure returns `Result<(), _>`, so we
 		// capture the count in a local and surface it through the
 		// `Option<u32>` after the lock releases.
 		let mut removed: Option<u32> = None;
-		let new_state = edit(
-			&self.path,
+		self.edit_committed(
+			|state: &mut AppPasswordFile| -> Result<(), StoreError> {
+				match state.accounts.remove(&account) {
+					Some(entry) => removed = Some(entry.passwords.len() as u32),
+					None => removed = Some(0),
+				}
+				Ok(())
+			},
+			commit,
+		)?;
+		Ok(removed.unwrap_or(0))
+	}
+
+	/// Apply `change` to the stored file under the sibling lock, write it,
+	/// and refresh the mirrors from what was written — all of it before
+	/// the lock is released.
+	///
+	/// The in-memory mirror is refreshed from the post-write state, so a
+	/// sibling process's previous write is visible on the next read
+	/// without the file watcher running. The refresh happens under the
+	/// lock, like the account store's [`super::AccountStore`] does for
+	/// `accounts.toml`: a mirror replaced after the lock is released lets
+	/// a second writer commit and refresh in between, and the first
+	/// writer's late refresh rolls the mirror back to the older state.
+	fn edit_committed(
+		&mut self,
+		change: impl FnOnce(&mut AppPasswordFile) -> Result<(), StoreError>,
+		commit: impl FnOnce(&[(String, AppPassword)]),
+	) -> Result<(), StoreError> {
+		// The whole-file rewrite goes through `locked::edit_and_commit` so
+		// a CLI `epistle app-password add` and a server `add` running in
+		// parallel both reach disk: each takes the sibling lock,
+		// re-reads, mutates the fresh state, and writes atomically.
+		let path = self.path.clone();
+		edit_and_commit(
+			&path,
 			|text| {
 				toml::from_str::<AppPasswordFile>(text).map_err(|error| {
 					std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string())
@@ -349,24 +339,28 @@ impl AppPasswordStore {
 				})
 			},
 			AppPasswordFile::default,
-			|state: &mut AppPasswordFile| -> Result<(), StoreError> {
-				match state.accounts.remove(&account) {
-					Some(entry) => removed = Some(entry.passwords.len() as u32),
-					None => removed = Some(0),
-				}
-				Ok(())
+			change,
+			|state: AppPasswordFile| {
+				let entries = entries_of(state);
+				self.replace_accounts(&entries);
+				commit(&entries);
 			},
 		)
 		.map_err(|error| match error {
 			EditError::Io(io) => StoreError::Io(io),
 			EditError::Mutate(store) => store,
-		})?;
+		})
+	}
+
+	/// Replace this store's mirror with `entries`.
+	fn replace_accounts(&mut self, entries: &[(String, AppPassword)]) {
 		self.accounts.clear();
-		for (name, entry) in new_state.accounts {
+		for (account, password) in entries {
 			self.accounts
-				.insert(name.to_ascii_lowercase(), entry.passwords);
+				.entry(account.clone())
+				.or_default()
+				.push(password.clone());
 		}
-		Ok(removed.unwrap_or(0))
 	}
 
 	/// Every `(account, label, expires_at, ip_cidr, save_sent)` for
@@ -393,6 +387,22 @@ impl AppPasswordStore {
 		rows.sort();
 		rows
 	}
+}
+
+/// The `(account, password)` pairs a file state holds, in the shape the
+/// directory wants them: the account name lowercased, one pair per
+/// credential.
+fn entries_of(state: AppPasswordFile) -> Vec<(String, AppPassword)> {
+	state
+		.accounts
+		.into_iter()
+		.flat_map(|(name, entry)| {
+			entry
+				.passwords
+				.into_iter()
+				.map(move |password| (name.to_ascii_lowercase(), password))
+		})
+		.collect()
 }
 
 /// The app password `label` of `account` in `state`, or `NotFound`.

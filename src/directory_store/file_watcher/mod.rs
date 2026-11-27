@@ -134,25 +134,31 @@ impl ReloadKind {
 		}
 	}
 
-	/// Apply `text` to `store` and rebuild the directory. Mirrors the
-	/// `persist` + `replace(build_directory())` pair the in-server
-	/// mutators run, minus the persist step (the bytes already live on
-	/// disk under us).
+	/// Apply the file at `path` to `store` and rebuild the directory.
+	///
+	/// The four dynamic-store files are reloaded by the store itself:
+	/// it reads the file under the lock the writers take, so the swap
+	/// can never carry a state older than the last write. The other
+	/// targets are the reloaders the watcher feeds, which read their
+	/// own files.
 	fn apply(
 		self,
 		store: &AccountStore,
 		targets: Targets<'_>,
-		text: &str,
+		path: &Path,
 	) -> Result<(), StoreError> {
 		match self {
-			ReloadKind::Accounts => store.reload_accounts_from(text),
-			ReloadKind::AppPasswords => store.reload_app_passwords_from(text),
-			ReloadKind::Masked => store.reload_masked_from(text),
-			ReloadKind::Aliases => store.reload_aliases_from(text),
+			ReloadKind::Accounts => store.reload_accounts(),
+			ReloadKind::AppPasswords => store.reload_app_passwords(),
+			ReloadKind::Masked => store.reload_masked(),
+			ReloadKind::Aliases => store.reload_disabled_aliases(),
 			ReloadKind::State(name) => match targets.state {
-				Some(reloader) => reloader
-					.reload_state(name, text)
-					.map_err(|error| StoreError::Invalid(error.to_string())),
+				Some(reloader) => {
+					let text = read_file(path)?;
+					reloader
+						.reload_state(name, &text)
+						.map_err(|error| StoreError::Invalid(error.to_string()))
+				}
 				None => Ok(()),
 			},
 			ReloadKind::Warmup => match targets.warmup {
@@ -162,9 +168,12 @@ impl ReloadKind {
 				None => Ok(()),
 			},
 			ReloadKind::ApiKeys => match targets.api_keys {
-				Some(reloader) => reloader
-					.reload_api_keys_from(text)
-					.map_err(|error| StoreError::Invalid(error.to_string())),
+				Some(reloader) => {
+					let text = read_file(path)?;
+					reloader
+						.reload_api_keys_from(&text)
+						.map_err(|error| StoreError::Invalid(error.to_string()))
+				}
 				None => {
 					// No reloader wired in: nothing to apply, but not
 					// an error, the operator has not configured an API
@@ -172,30 +181,6 @@ impl ReloadKind {
 					Ok(())
 				}
 			},
-		}
-	}
-
-	/// Read the file for `self` (which may be absent, a missing file
-	/// means "no state", not an error) and apply the swap. Returns
-	/// `Ok(true)` when the store's running directory was rebuilt,
-	/// `Ok(false)` when there was nothing to apply, or the parse error
-	/// the swap was rejected on.
-	fn apply_from_disk(
-		self,
-		store: &AccountStore,
-		targets: Targets<'_>,
-		path: &Path,
-	) -> Result<bool, StoreError> {
-		match std::fs::read_to_string(path) {
-			Ok(text) => {
-				self.apply(store, targets, &text)?;
-				Ok(true)
-			}
-			Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-				self.apply(store, targets, "")?;
-				Ok(true)
-			}
-			Err(error) => Err(StoreError::Io(error)),
 		}
 	}
 }
@@ -434,22 +419,10 @@ impl FileWatcher {
 					}
 					return PollEvent::Unchanged(target);
 				}
-				// File moved: read, parse, swap.
-				let text = match std::fs::read_to_string(&watch.path) {
-					Ok(text) => text,
-					Err(error) => {
-						tracing::warn!(
-							target: "epistle::directory_store::file_watcher",
-							file = watch.kind.label(),
-							%error,
-							"cannot read dynamic-store file for reload",
-						);
-						self.last.insert(watch.path.clone(), Some(now));
-						self.last_warned.insert(watch.path.clone(), Some(now));
-						return PollEvent::BadParse(target);
-					}
-				};
-				match watch.kind.apply(&self.store, self.targets(), &text) {
+				// File moved: read, parse, swap. The store reads the
+				// file under the lock its writers take, so the swap
+				// cannot carry a state older than the last write.
+				match watch.kind.apply(&self.store, self.targets(), &watch.path) {
 					Ok(()) => {
 						self.last.insert(watch.path.clone(), Some(now));
 						self.last_warned.insert(watch.path.clone(), None);
@@ -470,12 +443,20 @@ impl FileWatcher {
 						let already_warned =
 							self.last_warned.get(&watch.path).copied().flatten() == Some(now);
 						if !already_warned {
-							tracing::warn!(
-								target: "epistle::directory_store::file_watcher",
-								file = watch.kind.label(),
-								%error,
-								"dynamic-store file failed to parse; running directory is unchanged",
-							);
+							match &error {
+								StoreError::Io(io) => tracing::warn!(
+									target: "epistle::directory_store::file_watcher",
+									file = watch.kind.label(),
+									%io,
+									"cannot read dynamic-store file for reload",
+								),
+								_ => tracing::warn!(
+									target: "epistle::directory_store::file_watcher",
+									file = watch.kind.label(),
+									%error,
+									"dynamic-store file failed to parse; running directory is unchanged",
+								),
+							}
 							self.last_warned.insert(watch.path.clone(), Some(now));
 						}
 						PollEvent::BadParse(target)
@@ -490,11 +471,8 @@ impl FileWatcher {
 					// Still absent: no-op.
 					return PollEvent::Absent(target);
 				}
-				match watch
-					.kind
-					.apply_from_disk(&self.store, self.targets(), &watch.path)
-				{
-					Ok(_) => {
+				match watch.kind.apply(&self.store, self.targets(), &watch.path) {
+					Ok(()) => {
 						self.last.insert(watch.path.clone(), None);
 						self.last_warned.insert(watch.path.clone(), None);
 						tracing::info!(
@@ -539,6 +517,16 @@ impl FileWatcher {
 				self.poll();
 			}
 		})
+	}
+}
+
+/// Read a watched file for a reloader that parses it itself: a missing
+/// file is the empty state, not an error.
+fn read_file(path: &Path) -> Result<String, StoreError> {
+	match std::fs::read_to_string(path) {
+		Ok(text) => Ok(text),
+		Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+		Err(error) => Err(StoreError::Io(error)),
 	}
 }
 

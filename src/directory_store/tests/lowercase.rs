@@ -175,8 +175,9 @@ fn an_existing_mixed_case_file_is_read_in_lowercase_and_saved_on_the_next_write(
 #[test]
 fn a_reload_from_a_sibling_process_reads_lowercase() {
 	let dir = tempfile::tempdir().expect("tempdir");
+	std::fs::write(dir.path().join("accounts.toml"), MIXED_CASE_FILE).expect("write");
 	let store = open_store(dir.path());
-	store.reload_accounts_from(MIXED_CASE_FILE).expect("reload");
+	store.reload_accounts().expect("reload");
 	assert_eq!(
 		store.dynamic("carol").expect("carol").addresses,
 		vec!["carol@example.org"]

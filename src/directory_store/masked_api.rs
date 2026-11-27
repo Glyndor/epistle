@@ -38,7 +38,7 @@ impl AccountStore {
 			.write()
 			.expect("masked lock")
 			.add(account, label, domain, now)?;
-		self.handle.replace(self.build_directory());
+		self.rebuild_directory();
 		Ok(entry)
 	}
 
@@ -54,7 +54,7 @@ impl AccountStore {
 			.write()
 			.expect("masked lock")
 			.set_enabled(account, address, enabled)?;
-		self.handle.replace(self.build_directory());
+		self.rebuild_directory();
 		Ok(previous)
 	}
 
@@ -65,7 +65,7 @@ impl AccountStore {
 			.write()
 			.expect("masked lock")
 			.remove(account, address)?;
-		self.handle.replace(self.build_directory());
+		self.rebuild_directory();
 		Ok(())
 	}
 
@@ -82,7 +82,7 @@ impl AccountStore {
 			.expect("masked lock")
 			.remove_all_for_account(account)?;
 		if removed > 0 {
-			self.handle.replace(self.build_directory());
+			self.rebuild_directory();
 		}
 		Ok(removed)
 	}
@@ -105,7 +105,7 @@ impl AccountStore {
 			.write()
 			.expect("masked lock")
 			.set_max_per_account(max);
-		self.handle.replace(self.build_directory());
+		self.rebuild_directory();
 		self
 	}
 
