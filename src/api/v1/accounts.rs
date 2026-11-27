@@ -174,26 +174,25 @@ pub async fn remove(
 	let principal = Principal::for_token(&state, &auth);
 	require_in_scope(&state, &principal, &name)?;
 	let queue = parse_queue_policy(query.queue.as_deref())?;
-	let data_dir = state.data_dir().to_path_buf();
-	// The key is read again at the write that reserves the account, before
-	// anything of it is destroyed.
-	let counts = crate::directory_store::removal::remove_account_if(
-		state.store(),
-		state.spool(),
-		&data_dir,
+	// The removal runs on a task of its own: a client that goes away must not
+	// leave the account half removed and unrecorded. The task reads the key
+	// again at the write that reserves the account, before anything of it is
+	// destroyed.
+	let removal_state = state.clone();
+	let counts = crate::api::account_removal::remove(
+		&state,
 		&name,
 		queue,
-		state.bayes_store(),
-		|account| {
-			let now = Principal::for_token(&state, &auth);
+		crate::api::account_removal::Via::Rest,
+		client_ip.0,
+		move |account| {
+			let now = Principal::for_token(&removal_state, &auth);
 			now.admits_scope(Scope::ManageWrite)
 				&& now.admits_account(&account.name, &account.addresses)
 		},
 	)
 	.await
 	.map_err(store_error)?;
-	crate::api::jmap::push_subscription::forget_account(&state, &name);
-	audit::log_account_removal(&name, client_ip.0, &counts);
 	Ok(Json(RemovedResponse {
 		removed: name,
 		counts,
