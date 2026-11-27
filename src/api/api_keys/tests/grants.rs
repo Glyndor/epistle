@@ -84,42 +84,52 @@ fn key_with_grants_needs_scopes() {
 	assert!(validate_loaded(&key_with(&[], &["mail:read"])).is_err());
 }
 
+/// How many sets of scopes share one key file. Every write rewrites the whole
+/// file, so one file for all the sets makes the cost grow with the square of
+/// their number; a few dozen keys still show what a write to one does to the
+/// others.
+const SETS_PER_FILE: usize = 32;
+
 #[test]
 fn writers_never_leave_scopes_empty() {
-	let dir = tempfile::tempdir().expect("tempdir");
-	let mut store = ApiKeyStore::open(dir.path()).expect("open");
-	for (index, set) in every_set().into_iter().enumerate() {
-		let names: Vec<String> = set.iter().map(|scope| scope.as_str().to_string()).collect();
-		let (scopes, grants) = stored_form(&names, false).expect("stored form");
-		assert!(!scopes.is_empty(), "{names:?}");
-		assert_eq!(grants, names, "{names:?}");
-		// Create.
-		let mut key = key_with(&[], &[]);
-		key.label = format!("created-{index}");
-		key.hash = sha256_hash(&format!("secret-{index}"));
-		key.grants = names.clone();
-		store.add(key).expect("add");
-		// Set.
-		store
-			.set_scopes(&format!("created-{index}"), &names)
-			.expect("set");
-		// Rotate keeps both fields.
-		store
-			.rotate(&format!("created-{index}"), sha256_hash("rotated"))
-			.expect("rotate");
-	}
-	for key in store.keys() {
-		assert!(!key.scopes.is_empty(), "{}", key.label);
-		assert!(!key.grants.is_empty(), "{}", key.label);
-		let reach = key.reach().expect("explicit scopes");
-		let mut cover: Vec<String> = legacy_cover(&reach).iter().map(|s| s.to_string()).collect();
-		// A key that holds only scopes 0.14.0 had no name for carries a
-		// placeholder, and is held so that 0.14.0 refuses it.
-		if cover.is_empty() {
-			assert!(key.unusable_in_v014(), "{}", key.label);
-			cover = vec!["read".to_string()];
+	for sets in every_set().chunks(SETS_PER_FILE) {
+		let dir = tempfile::tempdir().expect("tempdir");
+		let mut store = ApiKeyStore::open(dir.path()).expect("open");
+		for (index, set) in sets.iter().enumerate() {
+			let names: Vec<String> = set.iter().map(|scope| scope.as_str().to_string()).collect();
+			let (scopes, grants) = stored_form(&names, false).expect("stored form");
+			assert!(!scopes.is_empty(), "{names:?}");
+			assert_eq!(grants, names, "{names:?}");
+			// Create.
+			let mut key = key_with(&[], &[]);
+			key.label = format!("created-{index}");
+			key.hash = sha256_hash(&format!("secret-{index}"));
+			key.grants = names.clone();
+			store.add(key).expect("add");
+			// Set.
+			store
+				.set_scopes(&format!("created-{index}"), &names)
+				.expect("set");
+			// Rotate keeps both fields.
+			store
+				.rotate(&format!("created-{index}"), sha256_hash("rotated"))
+				.expect("rotate");
 		}
-		assert_eq!(cover, key.scopes, "{}", key.label);
+		assert_eq!(store.keys().len(), sets.len());
+		for key in store.keys() {
+			assert!(!key.scopes.is_empty(), "{}", key.label);
+			assert!(!key.grants.is_empty(), "{}", key.label);
+			let reach = key.reach().expect("explicit scopes");
+			let mut cover: Vec<String> =
+				legacy_cover(&reach).iter().map(|s| s.to_string()).collect();
+			// A key that holds only scopes 0.14.0 had no name for carries a
+			// placeholder, and is held so that 0.14.0 refuses it.
+			if cover.is_empty() {
+				assert!(key.unusable_in_v014(), "{}", key.label);
+				cover = vec!["read".to_string()];
+			}
+			assert_eq!(cover, key.scopes, "{}", key.label);
+		}
 	}
 }
 
