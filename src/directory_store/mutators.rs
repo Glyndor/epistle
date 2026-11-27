@@ -365,6 +365,20 @@ impl AccountStore {
 	/// Enable or disable a dynamic account (the SCIM `active` flag).
 	/// Returns the previous state so callers can detect a no-op.
 	pub fn set_disabled(&self, name: &str, disabled: bool) -> Result<bool, StoreError> {
+		self.set_disabled_if(name, disabled, |_| true)
+	}
+
+	/// [`set_disabled`](Self::set_disabled) for a caller whose reach over the
+	/// account was decided before the write: `authorize` is asked about the
+	/// account as it is under the store's lock, just before it is changed, and
+	/// a refusal answers like an account that does not exist. The returned
+	/// previous state is the one read under that same lock.
+	pub fn set_disabled_if(
+		&self,
+		name: &str,
+		disabled: bool,
+		authorize: impl FnOnce(&DynamicAccount) -> bool,
+	) -> Result<bool, StoreError> {
 		let mut previous = None;
 		self.mutate_store(|state| {
 			let target = state
@@ -372,6 +386,9 @@ impl AccountStore {
 				.iter_mut()
 				.find(|account| account.name == name)
 				.ok_or_else(|| StoreError::NotFound(name.to_string()))?;
+			if !authorize(target) {
+				return Err(StoreError::NotFound(name.to_string()));
+			}
 			previous = Some(target.disabled);
 			target.disabled = disabled;
 			Ok(())

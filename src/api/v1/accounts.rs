@@ -174,6 +174,13 @@ pub async fn remove(
 	let principal = Principal::for_token(&state, &auth);
 	require_in_scope(&state, &principal, &name)?;
 	let queue = parse_queue_policy(query.queue.as_deref())?;
+	// Removing a suspended account would be a way round the suspension, and
+	// then its name and addresses are free to be taken again.
+	if !principal.is_unrestricted() && state.store().is_disabled(&name) {
+		return Err(ApiError::forbidden(
+			"removing a suspended account is for a key that is not confined to an account or some domains.",
+		));
+	}
 	// The removal runs on a task of its own: a client that goes away must not
 	// leave the account half removed and unrecorded. The task reads the key
 	// again at the write that reserves the account, before anything of it is
@@ -189,6 +196,7 @@ pub async fn remove(
 			let now = Principal::for_token(&removal_state, &auth);
 			now.admits_scope(Scope::ManageWrite)
 				&& now.admits_account(&account.name, &account.addresses)
+				&& (!account.disabled || now.is_unrestricted())
 		},
 	)
 	.await

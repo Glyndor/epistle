@@ -1386,7 +1386,8 @@ paths:
         suppression entries, correspondents and Bayesian rows. `queue` is
         required so a client never drops queued mail by omission. Accounts
         declared in the configuration file are not API-managed and answer
-        `404 no such dynamic account`.
+        `404 no such dynamic account`. A suspended account is removed only by a
+        key that is not confined to domains.
       x-epistle-scope: [manage:write]
       parameters:
         - $ref: "#/components/parameters/AccountName"
@@ -1409,7 +1410,13 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthenticated"
         "403":
-          $ref: "#/components/responses/AccountBoundKey"
+          description: |-
+            `forbidden`: the key is bound to one account, or the account is
+            suspended and the key is confined to some domains.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
         "404":
           $ref: "#/components/responses/NotFound"
         "429":
@@ -1667,6 +1674,78 @@ paths:
           $ref: "#/components/responses/Unauthenticated"
         "403":
           $ref: "#/components/responses/AccountBoundKey"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
+  /api/v1/accounts/{name}/disable:
+    post:
+      operationId: disableAccount
+      tags: [Accounts]
+      summary: Suspend an API-managed account
+      description: |-
+        What `epistle account disable` does: the account stops authenticating and
+        keeps its mail. A key confined to domains suspends the accounts that live
+        entirely inside them; an account outside is the same `404` as one that does
+        not exist. An account already suspended is left alone, answers `unchanged`
+        and writes no audit line. Audited as `account.disabled`.
+      x-epistle-scope: [manage:write]
+      parameters:
+        - $ref: "#/components/parameters/AccountName"
+      responses:
+        "200":
+          description: What was done.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccountStateChange"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          description: |-
+            `forbidden`: the key lacks the scope or is bound to one account.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
+  /api/v1/accounts/{name}/enable:
+    post:
+      operationId: enableAccount
+      tags: [Accounts]
+      summary: Resume a suspended API-managed account
+      description: |-
+        What `epistle account enable` does. For a key that is not confined to
+        domains or bound to an account; any other is `403` whatever the account. An
+        account already active is left alone, answers `unchanged` and writes no
+        audit line. Audited as `account.enabled`.
+      x-epistle-scope: [manage:write]
+      parameters:
+        - $ref: "#/components/parameters/AccountName"
+      responses:
+        "200":
+          description: What was done.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccountStateChange"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          description: |-
+            `forbidden`: the key lacks the scope, or is confined to some domains or to
+            one account.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
         "404":
           $ref: "#/components/responses/NotFound"
         "429":
@@ -4788,6 +4867,20 @@ components:
           type: string
           maxLength: 128
           description: The person's name, trimmed; no control characters.
+    AccountStateChange:
+      type: object
+      required: [result, action, account, disabled]
+      properties:
+        result:
+          type: string
+          enum: [saved, unchanged]
+        action:
+          type: string
+          enum: [disable, enable]
+        account:
+          type: string
+        disabled:
+          type: boolean
     AccountRemoved:
       type: object
       required: [removed, mailbox_files, masked_addresses, app_passwords, suppressed_addresses, correspondent_addresses, queued_messages_discarded, queued_messages_left, bayes_tokens_removed]
