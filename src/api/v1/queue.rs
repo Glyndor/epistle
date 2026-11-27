@@ -6,8 +6,9 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::api::Principal;
+use crate::api::audit;
 use crate::api::error::ApiError;
-use crate::api::state::{ApiState, MatchedAuth};
+use crate::api::state::{ApiState, ClientIp, MatchedAuth};
 
 /// Hard ceiling on page size: list endpoints are never unbounded.
 const MAX_LIMIT: usize = 100;
@@ -96,6 +97,7 @@ pub struct Removed {
 pub async fn remove(
 	State(state): State<ApiState>,
 	Extension(auth): Extension<MatchedAuth>,
+	Extension(client_ip): Extension<ClientIp>,
 	Path(id): Path<Uuid>,
 ) -> Result<Json<Removed>, ApiError> {
 	// An entry of another tenant answers like one that is not there.
@@ -113,7 +115,10 @@ pub async fn remove(
 		Some(domains) => crate::queue::inspect::Holder::Confined(domains.to_vec()),
 		None => crate::queue::inspect::Holder::Operator,
 	};
-	crate::queue::cancel::remove_if(
+	// The label of the key, never the key: the line says who asked, not with
+	// what.
+	let key = principal.key_label().map(str::to_owned);
+	let removed = crate::queue::cancel::remove_if(
 		state.spool(),
 		&crate::evidence::service::root_of(state.data_dir()),
 		(
@@ -148,5 +153,9 @@ pub async fn remove(
 		),
 		_ => ApiError::internal(),
 	})?;
+	// The line is written on the same task that took the entry out, right
+	// after it left: there is no await between the removal and the line, so a
+	// client that drops the connection cannot take the trace with it.
+	audit::log_queue_removed(id, removed.account.as_deref(), key.as_deref(), client_ip.0);
 	Ok(Json(Removed { removed: id }))
 }

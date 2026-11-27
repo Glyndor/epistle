@@ -1,4 +1,5 @@
 pub(super) mod addresses;
+pub(super) mod audit;
 pub(super) mod b;
 pub(super) mod base;
 pub(super) mod display_name;

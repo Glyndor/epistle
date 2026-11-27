@@ -30,10 +30,10 @@ use crate::api::router;
 use crate::api::tests::base::{TOKEN, request, request_with_body, test_state};
 
 #[derive(Clone, Debug)]
-pub(super) struct CapturedEvent {
-	pub(super) target: String,
-	pub(super) fields: HashMap<String, String>,
-	pub(super) message: String,
+pub(crate) struct CapturedEvent {
+	pub(crate) target: String,
+	pub(crate) fields: HashMap<String, String>,
+	pub(crate) message: String,
 }
 
 #[derive(Default)]
@@ -101,7 +101,7 @@ impl Visit for FieldVisitor<'_> {
 /// thread while our subscriber guard stays alive for the whole run. A
 /// single-threaded test runtime cannot host a nested `block_on`, which is
 /// why this helper requires `flavor = "multi_thread"` at every call site.
-fn run_with_capture<F: Future<Output = ()>>(future: F) -> Vec<CapturedEvent> {
+pub(crate) fn run_with_capture<F: Future<Output = ()>>(future: F) -> Vec<CapturedEvent> {
 	crate::cli::trace::capture::keep_callsites_live();
 	let cap = Capture::default();
 	let events = cap.events.clone();
@@ -115,7 +115,7 @@ fn run_with_capture<F: Future<Output = ()>>(future: F) -> Vec<CapturedEvent> {
 }
 
 /// Filter the capture to events emitted on the audit target.
-fn audit_events(events: &[CapturedEvent]) -> Vec<&CapturedEvent> {
+pub(crate) fn audit_events(events: &[CapturedEvent]) -> Vec<&CapturedEvent> {
 	events
 		.iter()
 		.filter(|event| event.target == "epistle::api::audit")
@@ -124,7 +124,7 @@ fn audit_events(events: &[CapturedEvent]) -> Vec<&CapturedEvent> {
 
 /// Concatenate every captured audit event (fields + message) into one string,
 /// suitable for substring assertions on leaked material.
-fn audit_blob(events: &[CapturedEvent]) -> String {
+pub(crate) fn audit_blob(events: &[CapturedEvent]) -> String {
 	let mut blob = String::new();
 	for event in events {
 		for value in event.fields.values() {

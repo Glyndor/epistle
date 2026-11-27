@@ -10,6 +10,12 @@
 //! 2FA of any account, receive the new secret in the response, and leave
 //! no trace.
 //!
+//! SCIM writes the same events for the same changes: a password it sets
+//! is an `account.password_reset`, and an account it suspends or enables
+//! again is an `account.disabled` or an `account.enabled`, exactly as the
+//! management route writes them. An identity provider that provisions
+//! accounts therefore leaves the same trace as an operator at a terminal.
+//!
 //! What is never logged: the TOTP secret, the password hash, the SCRAM
 //! credentials, the plaintext password, and the bearer token. Those stay
 //! in the request and response; the audit channel only carries the
@@ -19,18 +25,20 @@ use std::net::IpAddr;
 
 use crate::config::Protocol;
 
+mod account_edit;
 mod alias;
 mod ban;
 mod carried;
 mod domain;
 mod keys;
 mod queue;
+pub use account_edit::{SuspensionEvent, log_suspension_change};
 pub use alias::{AliasEvent, log_alias_change};
 pub use ban::{BanEvent, log_ban_change};
 pub use carried::Carried;
 pub use domain::{DomainEvent, log_domain_change};
 pub use keys::{KeyEvent, log_key_change};
-pub use queue::{QueueEvent, log_queue_change};
+pub use queue::{QueueEvent, log_queue_change, log_queue_removed};
 
 /// A privileged action taken against an account through the management API.
 ///
@@ -243,4 +251,4 @@ pub fn log_auth_busy(login: &str, client_ip: Option<IpAddr>, protocol: Protocol,
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
