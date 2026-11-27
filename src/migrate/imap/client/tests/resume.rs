@@ -41,7 +41,7 @@ async fn migration_peer(
 		} else if command.contains("BODY.PEEK[]") {
 			if command.starts_with(&format!("UID FETCH {second_uid} ")) && stall {
 				loop {
-					tokio::time::sleep(Duration::from_millis(500)).await;
+					tokio::time::sleep(KEEPALIVE).await;
 					if peer.get_mut().write_all(b"* OK alive\r\n").await.is_err() {
 						return;
 					}
@@ -87,6 +87,19 @@ fn source() -> super::super::super::Source {
 	}
 }
 
+/// The total deadline of a run here. A run against the stalled peer reaches it
+/// on the paused clock, so it is not waited for. It is also compared with the
+/// real clock between the synchronous steps, so it is far past what the file
+/// work of a run that is meant to finish can take on a loaded machine. A
+/// response is given twice as long, so the run's deadline is the one that ends
+/// a stall.
+const RUN_DEADLINE: Duration = Duration::from_secs(300);
+
+/// How often the stalled peer says it is alive: inside the idle limit, and
+/// seldom enough that the run's deadline comes before the client gives up on a
+/// response with too many lines in it.
+const KEEPALIVE: Duration = Duration::from_secs(8);
+
 async fn migrate_memory(
 	dir: &std::path::Path,
 	stall: bool,
@@ -110,14 +123,14 @@ async fn migrate_with_budget(
 	use super::super::super::{Filter, Settings, run_with_connection};
 	let (stream, peer) = tokio::io::duplex(4096);
 	let mut client = tests::memory_client(stream);
-	client.limits.response = Duration::from_secs(10);
+	client.limits.response = RUN_DEADLINE * 2;
 	if let Some((mailbox, total)) = limits {
 		client.metadata.mailbox_limit = mailbox;
 		client.metadata.total_limit = total;
 	}
 	let server = tokio::spawn(migration_peer(peer, stall, 2, Default::default(), 2));
 	let mut settings = Settings::new(Filter::default(), false);
-	settings.total_timeout = Duration::from_secs(3);
+	settings.total_timeout = RUN_DEADLINE;
 	settings.batch_messages = 1;
 	let result = run_with_connection(
 		&source(),
