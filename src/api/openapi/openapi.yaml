@@ -1924,7 +1924,9 @@ paths:
         lies in them; to find a page of its own the server reads at most
         1000 entries per request, so a page can come back short with a
         `next_cursor` and the next call carries on. Bounces (empty sender)
-        are shown only to unconfined keys.
+        are shown only to unconfined keys. The cursor is opaque: it is the id
+        of an entry the key reaches, or, when the page ended on an entry of
+        another tenant, a sealed marker that names no entry at all.
       x-epistle-scope: [manage:read]
       parameters:
         - name: limit
@@ -1938,10 +1940,9 @@ paths:
         - name: cursor
           in: query
           required: false
-          description: The `next_cursor` of the previous page.
+          description: The `next_cursor` of the previous page, carried back as it is.
           schema:
             type: string
-            format: uuid
       responses:
         "200":
           description: A page of queue entries.
@@ -1970,8 +1971,7 @@ paths:
                           description: The envelope recipients still pending, Bcc included.
                   next_cursor:
                     type: string
-                    format: uuid
-                    description: Present when more entries remain; absent on the last page.
+                    description: "Present when more entries remain; absent on the last page. It is opaque: carry it back as the `cursor` of the next page."
         "400":
           $ref: "#/components/responses/InvalidInput"
         "401":

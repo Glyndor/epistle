@@ -1,5 +1,7 @@
 //! `GET /api/v1/queue` and `DELETE /api/v1/queue/{id}`.
 
+mod cursor;
+
 use axum::extract::{Path, Query, State};
 use axum::{Extension, Json};
 use serde::{Deserialize, Serialize};
@@ -9,6 +11,9 @@ use crate::api::Principal;
 use crate::api::audit;
 use crate::api::error::ApiError;
 use crate::api::state::{ApiState, ClientIp, MatchedAuth};
+
+#[cfg(test)]
+mod tests;
 
 /// Hard ceiling on page size: list endpoints are never unbounded.
 const MAX_LIMIT: usize = 100;
@@ -21,7 +26,9 @@ const MAX_SCAN: usize = 1000;
 #[derive(Deserialize)]
 pub struct ListParams {
 	limit: Option<usize>,
-	cursor: Option<Uuid>,
+	/// The `next_cursor` of the page before: the id of an entry the key can
+	/// see, or the sealed position the walk stopped at.
+	cursor: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -36,7 +43,7 @@ pub struct QueuePage {
 	entries: Vec<QueueEntry>,
 	/// Pass as `cursor` to fetch the next page; absent on the last page.
 	#[serde(skip_serializing_if = "Option::is_none")]
-	next_cursor: Option<Uuid>,
+	next_cursor: Option<String>,
 }
 
 pub async fn list(
@@ -54,23 +61,33 @@ pub async fn list(
 	let principal = Principal::for_token(&state, &auth);
 
 	let ids = state.spool().list().map_err(|_| ApiError::internal())?;
-	let mut position = match params.cursor {
-		// UUID v7 ids sort chronologically: resume strictly after cursor.
-		Some(cursor) => ids.partition_point(|id| *id <= cursor),
+	let mut position = match params.cursor.as_deref() {
+		// The cursor names the entry the walk stopped after: the id of an
+		// entry the key can see, or the sealed position of one it cannot.
+		Some(cursor) => {
+			let anchor = cursor::anchor(cursor).ok_or_else(|| {
+				ApiError::value_not_allowed("cursor", "the cursor is not one this server issued")
+			})?;
+			// UUID v7 ids sort chronologically: resume strictly after cursor.
+			ids.partition_point(|id| *id <= anchor)
+		}
 		None => 0,
 	};
 	let mut entries = Vec::new();
-	let mut last_read = None;
+	// The last entry the walk read, and whether the key reaches it.
+	let mut last_read: Option<(Uuid, bool)> = None;
 	let mut scanned = 0;
 	while position < ids.len() && entries.len() < limit && scanned < MAX_SCAN {
 		let id = ids[position];
 		position += 1;
 		scanned += 1;
-		last_read = Some(id);
 		// An entry can vanish between list and load (worker delivered it).
-		if let Ok(entry) = state.spool().load(id)
-			&& super::queue_access::reaches(&principal, &entry.envelope)
-		{
+		let entry = state.spool().load(id);
+		let reaches = entry
+			.as_ref()
+			.is_ok_and(|entry| super::queue_access::reaches(&principal, &entry.envelope));
+		last_read = Some((id, reaches));
+		if reaches && let Ok(entry) = entry {
 			entries.push(QueueEntry {
 				id,
 				reverse_path: entry.envelope.reverse_path,
@@ -78,10 +95,17 @@ pub async fn list(
 			});
 		}
 	}
-	let next_cursor = if position < ids.len() {
-		last_read
-	} else {
-		None
+	let next_cursor = match (position < ids.len(), last_read) {
+		(false, _) => None,
+		// The walk stopped on an entry the key can see: its id is the cursor,
+		// as it always was.
+		(true, Some((id, true))) => Some(id.to_string()),
+		// The walk stopped on an entry the key cannot see: its id would tell
+		// the key that an entry of another tenant waits in the queue, so the
+		// position is sealed instead. The next page carries on from there, so
+		// the walk still advances and ends.
+		(true, Some((id, false))) => Some(cursor::seal(id).ok_or_else(ApiError::internal)?),
+		(true, None) => None,
 	};
 	Ok(Json(QueuePage {
 		entries,

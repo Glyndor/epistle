@@ -740,6 +740,12 @@ it (the pseudonym the logs use, never the name), the label of the key that
 asked and the client address. The recipients and the subject of the message
 are not in it, and the key itself never is.
 
+The cursor of a page is opaque: carry it back as it is. It is the id of an
+entry the key reaches, or, when the page ended on an entry of another tenant,
+a sealed marker that names no entry at all, so a key confined to some domains
+never learns the id of an entry it cannot see. A cursor the server did not
+issue is refused with `400`.
+
 One entry in detail, and its schedule. `GET /api/v1/queue/{id}` prints what
 `epistle queue show --json` prints: the envelope and its retry state
 (`attempts`, `next_attempt`, `held`, `last_error`), never the message. With
