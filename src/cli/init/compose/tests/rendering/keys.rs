@@ -34,7 +34,7 @@ fn mail_reads_both_keys_as_secrets_at_their_host_paths() {
 					"target": target,
 					"uid": "65532",
 					"gid": "65532",
-					"mode": 400
+					"mode": "0400"
 				})),
 				"{source}: the host commands read the same config, so the path inside \
 				 mail must be the host path: {mounts:?}"

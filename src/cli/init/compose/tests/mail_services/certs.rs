@@ -113,7 +113,7 @@ fn certs_holds_the_credential_the_key_and_writes_the_pair() {
 	);
 	assert_eq!(
 		certs["secrets"],
-		json!([{"source": "epistle_acme_account_key", "target": "/var/lib/secrets/acme_account.key", "uid": "65532", "gid": "65532", "mode": 400}])
+		json!([{"source": "epistle_acme_account_key", "target": "/var/lib/secrets/acme_account.key", "uid": "65532", "gid": "65532", "mode": "0400"}])
 	);
 	assert_eq!(
 		value["secrets"]["epistle_acme_account_key"]["file"],
