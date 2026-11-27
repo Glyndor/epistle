@@ -1,19 +1,30 @@
-//! How a `PATCH` is planned and what it leaves the account with.
+//! `PATCH /Users/{id}`: how a request is planned and written.
 //!
 //! RFC 7644 section 3.5.2: when one operation is not valid the whole request
 //! fails, so every operation is checked, and the passwords hashed, before the
 //! first one is written. The plan is the result of that check: one checked
 //! operation per operation of the request, ready to be written in one go.
 
+use axum::extract::{Path, State};
+use axum::http::StatusCode;
+use axum::response::IntoResponse;
+use axum::{Extension, Json};
+
+use crate::api::Principal;
+use crate::api::api_keys::Scope;
 use crate::api::scim::error::ScimError;
-use crate::api::scim::types::PatchOperation;
-use crate::api::state::ApiState;
+use crate::api::scim::types::{PatchOperation, PatchRequest};
+use crate::api::state::{ApiState, ClientIp, MatchedAuth};
 use crate::directory_store::{AccountChanges, NewPassword};
 
-use super::{check_password, derive_scram, hash_password};
+use super::audit::Changes;
+use super::{
+	check_password, derive_scram, hash_password, lookup_in_scope, render_user, scim_resource,
+	store_to_scim,
+};
 
 /// One checked operation, ready to be written.
-pub(super) enum Step {
+enum Step {
 	Active(bool),
 	Password {
 		hash: String,
@@ -23,7 +34,7 @@ pub(super) enum Step {
 }
 
 /// Check one operation and prepare what it writes.
-pub(super) fn plan_operation(state: &ApiState, op: &PatchOperation) -> Result<Step, ScimError> {
+fn plan_operation(state: &ApiState, op: &PatchOperation) -> Result<Step, ScimError> {
 	match (op.op.as_str(), op.path.as_deref()) {
 		("remove", _) => Err(ScimError::invalid("`remove` operations are not supported")),
 		("replace", Some("active")) | ("add", Some("active")) => op
@@ -63,7 +74,7 @@ pub(super) fn plan_operation(state: &ApiState, op: &PatchOperation) -> Result<St
 
 /// The changes of `plan`, in order: a later operation on a field replaces an
 /// earlier one.
-pub(super) fn gather(plan: Vec<Step>) -> AccountChanges {
+fn gather(plan: Vec<Step>) -> AccountChanges {
 	let mut changes = AccountChanges::default();
 	for step in plan {
 		match step {
@@ -77,17 +88,92 @@ pub(super) fn gather(plan: Vec<Step>) -> AccountChanges {
 	changes
 }
 
-/// The `active` value the plan leaves the account with: a later operation
-/// on the field replaces an earlier one.
-pub(super) fn wanted_active(plan: &[Step]) -> Option<bool> {
-	plan.iter().rev().find_map(|step| match step {
-		Step::Active(active) => Some(*active),
-		_ => None,
-	})
-}
+/// The most operations one `PATCH` may carry. The narrow set this API honours
+/// needs a handful; the rest of a large request is a request to loop.
+const MAX_PATCH_OPERATIONS: usize = 20;
 
-/// Whether the plan replaces the password of the account.
-pub(super) fn wants_password(plan: &[Step]) -> bool {
-	plan.iter()
-		.any(|step| matches!(step, Step::Password { .. }))
+/// The most password changes one `PATCH` may carry: each is an Argon2 hash and
+/// a 600000 round SCRAM derivation.
+const MAX_PATCH_PASSWORDS: usize = 3;
+
+/// `PATCH /Users/{id}` — apply a sequence of narrow operations. We
+/// accept `replace` (and the equivalent `add` for single-value
+/// attributes) on `active` and `password` only. Everything else is 400.
+///
+/// The SCIM RFC names `remove` and `add` of multi-value attributes as
+/// legitimate operations; we do not honour them — the directory has no
+/// notion of multi-valued user attributes besides `emails`, and adding
+/// individual emails without the IdP first re-issuing the full set
+/// invites drift. If an IdP needs to change addresses, the right move is
+/// `PUT` with the new full list.
+pub async fn patch_user(
+	State(state): State<ApiState>,
+	Extension(auth): Extension<MatchedAuth>,
+	Extension(client_ip): Extension<ClientIp>,
+	Path(id): Path<String>,
+	Json(body): Json<PatchRequest>,
+) -> Result<impl IntoResponse, ScimError> {
+	let principal = Principal::for_token(&state, &auth);
+	lookup_in_scope(&state, &principal, &id)?;
+	if body.operations.len() > MAX_PATCH_OPERATIONS {
+		return Err(ScimError::invalid(format!(
+			"a PATCH takes at most {MAX_PATCH_OPERATIONS} operations"
+		)));
+	}
+	// A password costs two key derivations, so the cap on them is lower than
+	// the cap on operations.
+	let passwords = body
+		.operations
+		.iter()
+		.filter(|op| op.path.as_deref() == Some("password"))
+		.count();
+	if passwords > MAX_PATCH_PASSWORDS {
+		return Err(ScimError::invalid(format!(
+			"a PATCH takes at most {MAX_PATCH_PASSWORDS} password changes"
+		)));
+	}
+	// RFC 7644 section 3.5.2: when one operation is not valid the whole request
+	// fails, so every operation is checked, and the passwords hashed, before
+	// the first one is written.
+	let mut plan = Vec::new();
+	for op in &body.operations {
+		plan.push(plan_operation(&state, op)?);
+	}
+	// The plan is written in one go. The key is read again and asked about the
+	// account as it is under the store's lock: both were last checked before
+	// the passwords were hashed.
+	if !plan.is_empty() {
+		let wanted = gather(plan);
+		let disabled = wanted.disabled;
+		let password_sent = wanted.password.is_some();
+		let previous = state
+			.store()
+			.change_account_if(&id, wanted, |account| {
+				Principal::still_reaches_account(
+					&state,
+					&auth,
+					Scope::Scim,
+					&account.name,
+					&account.addresses,
+				)
+			})
+			.map_err(store_to_scim)?;
+		// The account is written: the line of every change it made follows,
+		// on this task and before anything else can be awaited. A password is
+		// a change whenever it is sent: the stored verifier, its salt and the
+		// SCRAM credentials are replaced, and the account's outstanding
+		// credentials are reset. The state is a change only when the write
+		// found another one, so a `PATCH` that asks for the account as it is
+		// writes no line.
+		let mut changes = Changes::new(&id, principal.key_label(), client_ip.0);
+		if password_sent {
+			changes.password();
+		}
+		if let Some(disabled) = disabled {
+			changes.state(previous.disabled, disabled);
+		}
+		changes.write();
+	}
+	let stored = lookup_in_scope(&state, &principal, &id)?;
+	Ok(scim_resource(StatusCode::OK, render_user(&stored)))
 }

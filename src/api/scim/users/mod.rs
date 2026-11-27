@@ -16,6 +16,10 @@
 //! account it suspends or enables again writes `account.disabled` or
 //! `account.enabled` (see [`audit`]). A request that changed nothing writes
 //! no line, and neither the password nor its hash is ever written.
+//!
+//! `PUT` and `PATCH` read the account once to refuse early what the key may
+//! not do. What a write keeps, and whether it changed the state of the
+//! account, comes from the account the write found under the store's lock.
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -24,7 +28,7 @@ use axum::{Extension, Json};
 use serde::Deserialize;
 
 use super::error::{CONTENT_TYPE, ScimError};
-use super::types::{Email, ListResponse, Name, PatchRequest, USER_SCHEMA, User};
+use super::types::{Email, ListResponse, Name, USER_SCHEMA, User};
 use crate::api::Principal;
 use crate::api::api_keys::Scope;
 use crate::api::state::{ApiState, ClientIp, MatchedAuth};
@@ -33,8 +37,10 @@ use crate::directory_store::{DynamicAccount, StoreError};
 
 mod audit;
 mod patch;
+mod put;
 use audit::Changes;
-use patch::{gather, plan_operation, wanted_active, wants_password};
+pub use patch::patch_user;
+pub use put::put_user;
 
 /// Build a SCIM `User` JSON from a `DynamicAccount` (RFC 7643 §4.1). The
 /// `id` is the account name; `active` mirrors `disabled`; `emails` carries
@@ -446,182 +452,6 @@ pub async fn delete_user(
 	.await
 	.map_err(store_to_scim)?;
 	Ok(StatusCode::NO_CONTENT)
-}
-
-/// `PUT /Users/{id}` — replace the account. We refuse to change `userName`
-/// (renames are not supported; see the module doc). Otherwise we honour
-/// `active`, `emails`, and the optional `password` extension. Returns 200
-/// with the rendered resource.
-pub async fn put_user(
-	State(state): State<ApiState>,
-	Extension(auth): Extension<MatchedAuth>,
-	Extension(client_ip): Extension<ClientIp>,
-	Path(id): Path<String>,
-	Json(body): Json<User>,
-) -> Result<impl IntoResponse, ScimError> {
-	let principal = Principal::for_token(&state, &auth);
-	let existing = lookup_in_scope(&state, &principal, &id)?;
-	if crate::directory_store::account_name(&body.user_name) != id {
-		return Err(ScimError::invalid(
-			"userName cannot be changed via PUT; use DELETE then POST",
-		));
-	}
-
-	// What the replace changes of the account, against what it has now: a
-	// request that asks for the account as it is changes nothing and writes
-	// no line. The password is a change whenever it is sent: the stored
-	// verifier, its salt and the SCRAM credentials are replaced, and the
-	// account's outstanding credentials are reset.
-	let mut changes = Changes::new(&id, principal.key_label(), client_ip.0);
-	if body.password.is_some() {
-		changes.password();
-	}
-	if existing.disabled != !body.active {
-		changes.active(body.active);
-	}
-
-	// The new addresses are checked before anything is written, so a refused
-	// replace leaves the password as it was.
-	let addresses = resolve_addresses(&body.emails, &existing.addresses)?;
-	require_addresses_in_scope(&principal, &addresses)?;
-	state
-		.tenant_limits()
-		.check_account_move(state.store(), &existing.addresses, &addresses)
-		.map_err(ScimError::conflict)?;
-	// The replacement starts from the stored account, so what SCIM does not
-	// model (quota, forwards, catch-all, the `Sent` copy, the send and receive
-	// switches) stays as it was. The stored credentials are kept under the
-	// store's lock, so a password set since `existing` was read is not undone;
-	// a new password goes in the same write.
-	let replacement = DynamicAccount {
-		addresses,
-		disabled: !body.active,
-		display_name: body.display_name.clone(),
-		..existing
-	};
-	let new_password = match body.password.as_deref() {
-		Some(plain) => {
-			check_password(plain)?;
-			Some(crate::directory_store::NewPassword {
-				hash: hash_password(plain, state.store())?,
-				scram: derive_scram(plain, state.store())?,
-			})
-		}
-		None => None,
-	};
-	// The key is read again at the write, and asked about the account as it
-	// is and as it would become.
-	let proposed = replacement.addresses.clone();
-	state
-		.store()
-		.replace_account_if(&id, replacement, new_password, |account| {
-			let reaches = |addresses: &[String]| {
-				Principal::still_reaches_account(
-					&state,
-					&auth,
-					Scope::Scim,
-					&account.name,
-					addresses,
-				)
-			};
-			reaches(&account.addresses) && reaches(&proposed)
-		})
-		.map_err(store_to_scim)?;
-	// The account is written: the line of every change it made follows, on
-	// this task and before anything else can be awaited.
-	changes.write();
-	let stored = lookup(&state, &id)?;
-	Ok(scim_resource(StatusCode::OK, render_user(&stored)))
-}
-
-/// The most operations one `PATCH` may carry. The narrow set this API honours
-/// needs a handful; the rest of a large request is a request to loop.
-const MAX_PATCH_OPERATIONS: usize = 20;
-
-/// The most password changes one `PATCH` may carry: each is an Argon2 hash and
-/// a 600000 round SCRAM derivation.
-const MAX_PATCH_PASSWORDS: usize = 3;
-
-/// `PATCH /Users/{id}` — apply a sequence of narrow operations. We
-/// accept `replace` (and the equivalent `add` for single-value
-/// attributes) on `active` and `password` only. Everything else is 400.
-///
-/// The SCIM RFC names `remove` and `add` of multi-value attributes as
-/// legitimate operations; we do not honour them — the directory has no
-/// notion of multi-valued user attributes besides `emails`, and adding
-/// individual emails without the IdP first re-issuing the full set
-/// invites drift. If an IdP needs to change addresses, the right move is
-/// `PUT` with the new full list.
-pub async fn patch_user(
-	State(state): State<ApiState>,
-	Extension(auth): Extension<MatchedAuth>,
-	Extension(client_ip): Extension<ClientIp>,
-	Path(id): Path<String>,
-	Json(body): Json<PatchRequest>,
-) -> Result<impl IntoResponse, ScimError> {
-	let principal = Principal::for_token(&state, &auth);
-	let existing = lookup_in_scope(&state, &principal, &id)?;
-	if body.operations.len() > MAX_PATCH_OPERATIONS {
-		return Err(ScimError::invalid(format!(
-			"a PATCH takes at most {MAX_PATCH_OPERATIONS} operations"
-		)));
-	}
-	// A password costs two key derivations, so the cap on them is lower than
-	// the cap on operations.
-	let passwords = body
-		.operations
-		.iter()
-		.filter(|op| op.path.as_deref() == Some("password"))
-		.count();
-	if passwords > MAX_PATCH_PASSWORDS {
-		return Err(ScimError::invalid(format!(
-			"a PATCH takes at most {MAX_PATCH_PASSWORDS} password changes"
-		)));
-	}
-	// RFC 7644 section 3.5.2: when one operation is not valid the whole request
-	// fails, so every operation is checked, and the passwords hashed, before
-	// the first one is written.
-	let mut plan = Vec::new();
-	for op in &body.operations {
-		plan.push(plan_operation(&state, op)?);
-	}
-	// The plan is written in one go. The key is read again and asked about the
-	// account as it is under the store's lock: both were last checked before
-	// the passwords were hashed.
-	//
-	// What the plan leaves the account with is compared with what it has
-	// now, so a `PATCH` that asks for the account as it is writes no line. A
-	// password is a change whenever it is sent: the stored verifier, its salt
-	// and the SCRAM credentials are replaced, and the account's outstanding
-	// credentials are reset.
-	let mut changes = Changes::new(&id, principal.key_label(), client_ip.0);
-	if let Some(active) = wanted_active(&plan)
-		&& existing.disabled != !active
-	{
-		changes.active(active);
-	}
-	if wants_password(&plan) {
-		changes.password();
-	}
-	if !plan.is_empty() {
-		state
-			.store()
-			.change_account_if(&id, gather(plan), |account| {
-				Principal::still_reaches_account(
-					&state,
-					&auth,
-					Scope::Scim,
-					&account.name,
-					&account.addresses,
-				)
-			})
-			.map_err(store_to_scim)?;
-		// The account is written: the line of every change it made follows,
-		// on this task and before anything else can be awaited.
-		changes.write();
-	}
-	let stored = lookup_in_scope(&state, &principal, &id)?;
-	Ok(scim_resource(StatusCode::OK, render_user(&stored)))
 }
 
 #[cfg(test)]

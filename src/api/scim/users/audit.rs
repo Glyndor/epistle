@@ -60,6 +60,15 @@ impl Changes {
 		self.active = Some(active);
 	}
 
+	/// The write found the account disabled as `found` says and left it as
+	/// `left` says: a change only when the two differ. Both come from the
+	/// write itself, not from a read made before it.
+	pub(super) fn state(&mut self, found: bool, left: bool) {
+		if found != left {
+			self.active(!left);
+		}
+	}
+
 	/// Write the line of every change the write made. A write that changed
 	/// nothing writes none.
 	pub(super) fn write(&self) {
