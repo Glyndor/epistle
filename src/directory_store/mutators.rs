@@ -300,17 +300,19 @@ impl AccountStore {
 	/// prepared: `authorize` is asked about the account as it is under the
 	/// store's lock. Either every change is written or none is: a value the
 	/// store refuses, a refusal or an unknown account leaves it as it was.
+	/// Returns the account as it was just before the write.
 	pub fn change_account_if(
 		&self,
 		name: &str,
 		changes: AccountChanges,
 		authorize: impl FnOnce(&DynamicAccount) -> bool,
-	) -> Result<(), StoreError> {
+	) -> Result<DynamicAccount, StoreError> {
 		let display_name = changes
 			.display_name
 			.as_deref()
 			.map(|raw| super::display_name::validate(raw).map_err(StoreError::Invalid))
 			.transpose()?;
+		let mut previous = None;
 		self.mutate_store(|state| {
 			let target = state
 				.accounts
@@ -320,6 +322,7 @@ impl AccountStore {
 			if !authorize(target) {
 				return Err(StoreError::NotFound(name.to_string()));
 			}
+			previous = Some(target.clone());
 			if let Some(disabled) = changes.disabled {
 				target.disabled = disabled;
 			}
@@ -334,7 +337,7 @@ impl AccountStore {
 			}
 			Ok(())
 		})?;
-		Ok(())
+		Ok(previous.expect("closure ran"))
 	}
 
 	/// Enable or disable a dynamic account (the SCIM `active` flag).

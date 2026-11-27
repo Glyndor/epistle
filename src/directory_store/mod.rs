@@ -324,30 +324,30 @@ impl AccountStore {
 		replacement: DynamicAccount,
 		new_password: Option<NewPassword>,
 	) -> Result<(), StoreError> {
-		self.replace_account_if(name, replacement, new_password, |_| true)
+		self.replace_account_if(name, new_password, |_| Some(replacement))?;
+		Ok(())
 	}
 
-	/// [`replace_account`](Self::replace_account) for a caller whose reach
-	/// over the account was decided before the replacement was built:
-	/// `authorize` is asked about the stored account under the store's lock,
-	/// and a refusal answers like an account that does not exist.
+	/// [`replace_account`](Self::replace_account) for a replacement made from
+	/// the account as it is: `replace` is given the stored account under the
+	/// store's lock, so what it keeps cannot be older than the write. `None`
+	/// refuses, and answers like an account that does not exist. Returns the
+	/// account as it was just before the write.
 	pub fn replace_account_if(
 		&self,
 		name: &str,
-		replacement: DynamicAccount,
 		new_password: Option<NewPassword>,
-		authorize: impl FnOnce(&DynamicAccount) -> bool,
-	) -> Result<(), StoreError> {
+		replace: impl FnOnce(&DynamicAccount) -> Option<DynamicAccount>,
+	) -> Result<DynamicAccount, StoreError> {
+		let mut previous = None;
 		self.mutate_store_hosted(|state| {
 			let slot = state
 				.accounts
 				.iter()
 				.position(|existing| existing.name == name)
 				.ok_or_else(|| StoreError::NotFound(name.to_string()))?;
-			if !authorize(&state.accounts[slot]) {
-				return Err(StoreError::NotFound(name.to_string()));
-			}
-			let mut fresh = replacement;
+			let mut fresh = replace(&state.accounts[slot])
+				.ok_or_else(|| StoreError::NotFound(name.to_string()))?;
 			fresh.name = name.to_string();
 			credential_reset::carry(&state.accounts[slot], &mut fresh, new_password);
 			normalize::account(&mut fresh);
@@ -391,10 +391,10 @@ impl AccountStore {
 							.map(|dynamic| dynamic.addresses.as_slice()),
 					),
 			)?;
-			state.accounts[slot] = fresh;
+			previous = Some(std::mem::replace(&mut state.accounts[slot], fresh));
 			Ok(())
 		})?;
-		Ok(())
+		Ok(previous.expect("closure ran"))
 	}
 
 	fn build_directory(&self) -> Directory {

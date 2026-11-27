@@ -91,7 +91,9 @@ fn scoped_password_reset_guards_replace_account_too() {
 		.expect("move to b");
 	let mut attempt = moved;
 	attempt.display_name = Some("taken over".to_string());
-	let refused = store.replace_account_if("victim", attempt, None, in_tenant_a);
+	let refused = store.replace_account_if("victim", None, |stored| {
+		in_tenant_a(stored).then_some(attempt)
+	});
 	assert!(
 		matches!(refused, Err(StoreError::NotFound(_))),
 		"{refused:?}"
