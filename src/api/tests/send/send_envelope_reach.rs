@@ -176,7 +176,7 @@ async fn a_suppression_of_the_envelope_sender_still_holds() {
 }
 
 /// `example.org` is a tenant with no limit, `other.example` one that may send one recipient a minute.
-fn limited(dir: &std::path::Path) -> Router {
+pub(super) fn limited(dir: &std::path::Path) -> Router {
 	add_confined_key(dir);
 	let tenant = |name: &str, domain: &str, per_min: Option<u32>| crate::config::Tenant {
 		name: Some(name.to_string()),

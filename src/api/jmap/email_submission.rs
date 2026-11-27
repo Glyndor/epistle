@@ -179,7 +179,7 @@ fn submit_email(
 	// `POST /api/v1/send` holds them. Before any evidence is prepared or any
 	// budget is asked for. The null reverse path names no domain and is
 	// outside every declared one, so a confined key cannot use it.
-	check_reach(state, principal, account, &raw, &mail_from)?;
+	let senders = check_reach(state, principal, account, &raw, &mail_from)?;
 	// Stamp Message-ID and Date on the queued copy when the client did not
 	// include them. Domain is the envelope's MAIL FROM, falling back to the
 	// first configured domain when the envelope has none (the null reverse
@@ -275,16 +275,17 @@ fn submit_email(
 		});
 	}
 	// Submission rate limits: the per-account limit and every tenant of
-	// the account, the same limiters SMTP and `POST /api/v1/send` charge.
-	// Asked here so a sender with no room left is refused before anything
-	// is recorded; charged one unit per recipient just before the message
-	// is handed on, and given back when it is refused there. `rateLimit`
-	// is the RFC 8620 section 5.3 error for a rate limit.
+	// the account or of an address the message is sent under, on the
+	// limiters SMTP and `POST /api/v1/send` charge. Asked here so a sender
+	// with no room left is refused before anything is recorded; charged one
+	// unit per recipient just before the message is handed on, and given
+	// back when it is refused there. `rateLimit` is the RFC 8620 section
+	// 5.3 error for a rate limit.
 	let now = std::time::SystemTime::now()
 		.duration_since(std::time::UNIX_EPOCH)
 		.map(|d| d.as_secs())
 		.unwrap_or(0);
-	let budget = state.submission_budget(account, addresses);
+	let budget = state.submission_budget(account, &[addresses, &senders].concat());
 	if !budget.has_room(now) {
 		return Err(rate_limited());
 	}
@@ -402,13 +403,14 @@ fn submit_email(
 /// Hold every address the message is sent under to the account that sends it
 /// and to the domains of the credential: the envelope sender, the author and
 /// the `Sender` field, the three `POST /api/v1/send` asks the same of.
+/// Returns those addresses, whose tenants the submission is charged to.
 fn check_reach(
 	state: &ApiState,
 	principal: &Principal,
 	account: &str,
 	raw: &[u8],
 	mail_from: &str,
-) -> Result<(), Refusal> {
+) -> Result<Vec<String>, Refusal> {
 	// A `Sender` field that names no address is not one that passed.
 	if crate::dmarc::author::sender_unreadable(raw) {
 		return Err("forbiddenFrom".into());
@@ -426,7 +428,7 @@ fn check_reach(
 	senders.extend(sender_field);
 	senders.push(mail_from.to_string());
 	if senders.iter().all(|sender| principal.admits_sender(sender)) {
-		Ok(())
+		Ok(senders)
 	} else {
 		Err("forbiddenFrom".into())
 	}
