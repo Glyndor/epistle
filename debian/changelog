@@ -1,3 +1,22 @@
+epistle (0.16.0) unstable; urgency=medium
+
+  * Breaking: going back to 0.15.0 with an API key that holds the new `key` scope leaves every labelled key unusable, because 0.15.0 refuses the whole `api_keys.toml`. Revoke those keys with 0.16.0 before rolling back.
+  * Breaking: a key confined to domains no longer resumes or removes a suspended account, or changes its addresses, through `/api/v1` or SCIM; it answers `403`. Use a key that is not confined, or `account enable` and `account remove`.
+  * API keys can be listed, made and revoked over HTTP (`GET` and `POST /api/v1/keys`, `DELETE /api/v1/keys/{label}`) under a new `key` scope, which no management or mail scope opens; a key makes only keys inside its own reach.
+  * New account routes under `manage:write`: set or clear the quota (`/api/v1/accounts/{name}/quota`, for keys with no domain or account), suspend and resume (`.../disable`, `.../enable`) and add or remove an address (`.../addresses`).
+  * `account address add` is refused when it would put one account more into a tenant at `max_accounts`, a quota above `8388607T` is refused, `account address add` and `remove` print the address in lower case, and a domain is not removed while `accounts.toml` cannot be read.
+  * The sending rate limit of every tenant that owns the envelope sender, the `From` address or a `Sender` address is charged on SMTP submission and on JMAP `EmailSubmission/set`, as `POST /api/v1/send` already did.
+  * A queue request reads at most 1000 entries and 16 MiB of envelopes for a page, which can come back short or empty with a `next_cursor`, and 10000 entries and 16 MiB for the destinations, with `truncated`. The cursor is opaque, a marker is refused with `400` after a restart, and the listing and the removal no longer read the message.
+  * An account removal runs to its end when the client goes away, also takes back the submissions undo send holds when the queue is discarded, and is refused while another removal of the same account runs in the server or the command line.
+  * A key confined to domains runs one DNS verification at a time for each tenant it reaches.
+  * SCIM password and suspension changes, queue removals and removals that stop half way are written to the audit log.
+  * A reload never puts an older directory state back in memory, and the cap on a tenant's accounts is counted in the write that adds or moves one.
+  * SCIM `PUT` and `PATCH` decide from the account as the write finds it, so a change made at the same time is not undone.
+  * An account that is being removed takes no new API key, a key bound to an account is checked against the account as it is when the key is written, and writes of keys that happen at the same time leave the file and the running server in agreement.
+  * The compose file writes the modes of its secrets and configs as quoted octal strings, which podup reads without a warning.
+
+ -- Glyndor <packages@glyndor.net>  Sat, 28 Nov 2026 14:12:45 +0000
+
 epistle (0.15.0) unstable; urgency=medium
 
   * API keys: the `read` and `write` scopes are split into `manage:read`, `manage:write`, `mail:read` and `mail:write`. A key made before this release keeps what it reached; `api-key create` still takes `read` and `write` with a warning, and `stack update` refuses a stack that still has one from 0.17.0. `api-key set` replaces the scopes of a key.
