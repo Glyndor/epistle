@@ -251,6 +251,12 @@ pub(super) const RULES: &[Rule] = &[
 		"a_scoped_key_cannot_delete_another_tenants_account",
 	),
 	rule(
+		"/api/v1/accounts/{name}/quota",
+		"manage:write",
+		Domain::Unconfined,
+		"a_confined_key_does_not_set_a_quota_and_learns_nothing_of_the_account",
+	),
+	rule(
 		"/api/v1/accounts/{name}/password",
 		"manage:write",
 		Domain::AccountParam,

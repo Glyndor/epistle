@@ -1,6 +1,6 @@
 //! Command-line interface: argument parsing and command dispatch.
 
-mod account;
+pub(crate) mod account;
 mod accounts;
 mod alert;
 mod alias;
@@ -28,7 +28,7 @@ mod exit;
 mod export;
 mod import;
 mod init;
-mod json_out;
+pub(crate) mod json_out;
 mod learning;
 mod legacy;
 mod limits;

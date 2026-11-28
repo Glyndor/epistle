@@ -155,3 +155,54 @@ fn removal_blockers_tolerate_unreadable_or_malformed_sidecars() {
 	let err = removal_blockers(&config, "example.org").unwrap_err();
 	assert!(err.contains("alice@example.org"));
 }
+
+/// An account file the check cannot read is a reason to keep the domain, not a
+/// file with nobody in it.
+#[test]
+fn removal_blockers_refuse_when_the_dynamic_accounts_file_cannot_be_read() {
+	let (dir, file) = fixture("");
+	let config = load(file.path());
+	std::fs::write(dir.path().join("accounts.toml"), "[[accounts]]\nname = ").unwrap();
+	let err = removal_blockers(&config, "example.org").unwrap_err();
+	assert!(err.contains("cannot be read"), "{err}");
+	std::fs::write(dir.path().join("accounts.toml"), [0xff, 0xfe, 0x00]).unwrap();
+	assert!(removal_blockers(&config, "example.org").is_err());
+	// No file at all is no dynamic accounts.
+	std::fs::remove_file(dir.path().join("accounts.toml")).unwrap();
+	assert!(removal_blockers(&config, "example.org").is_ok());
+}
+
+/// The largest quota a request may set still leaves the file readable, so the
+/// account it belongs to still keeps its domain.
+#[test]
+fn a_largest_quota_leaves_the_account_listed_as_using_its_domain() {
+	use crate::directory_store::{AccountStore, DynamicAccount};
+	let (dir, file) = fixture("");
+	let config = load(file.path());
+	let store = AccountStore::open(
+		dir.path(),
+		vec!["example.org".to_string()],
+		std::collections::HashMap::new(),
+		Vec::new(),
+	)
+	.unwrap();
+	store
+		.add(DynamicAccount {
+			name: "alice".to_string(),
+			addresses: vec!["alice@example.org".to_string()],
+			password_hash: "$argon2id$stub".to_string(),
+			..DynamicAccount::default()
+		})
+		.unwrap();
+	let most = crate::util::quota_size::parse_quota_size("8388607T")
+		.unwrap()
+		.unwrap();
+	store.set_quota_bytes("alice", Some(most)).unwrap();
+	let err = removal_blockers(&config, "example.org").unwrap_err();
+	assert!(err.contains("alice@example.org"), "{err}");
+	// What the file cannot hold is refused before it is written.
+	assert!(store.set_quota_bytes("alice", Some(u64::MAX)).is_err());
+	assert!(removal_blockers(&config, "example.org").is_err());
+	let err = removal_blockers(&config, "example.org").unwrap_err();
+	assert!(err.contains("alice@example.org"), "{err}");
+}

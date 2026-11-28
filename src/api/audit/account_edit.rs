@@ -5,7 +5,7 @@
 //! The suspension events are the ones the management route that suspends and
 //! resumes an account writes: the same names, the same fields and the same
 //! rule about a request that found the account already in the state asked
-//! for.
+//! for. The quota events are written once for every write of a quota.
 
 use std::net::IpAddr;
 
@@ -39,5 +39,38 @@ pub fn log_suspension_change(
 	let ip = client_ip.map_or_else(|| "unknown".to_string(), |ip| ip.to_string());
 	tracing::info!(target: "epistle::api::audit", event = event.as_str(),
 		account = %crate::log_id::account(account),
+		key = key.unwrap_or("configured-token"), client_ip = %ip, "account change");
+}
+
+/// Stable event identifiers on the API audit target.
+#[derive(Debug, Clone, Copy)]
+pub enum QuotaEvent {
+	/// Set the storage quota of an account.
+	Set,
+	/// Put an account back on the server default.
+	Cleared,
+}
+
+impl QuotaEvent {
+	fn as_str(self) -> &'static str {
+		match self {
+			Self::Set => "account.quota_set",
+			Self::Cleared => "account.quota_cleared",
+		}
+	}
+}
+
+/// One event per write of a quota, with the quota it left; `0` stands for
+/// none, the server default.
+pub fn log_quota_change(
+	event: QuotaEvent,
+	account: &str,
+	quota_bytes: Option<u64>,
+	key: Option<&str>,
+	client_ip: Option<IpAddr>,
+) {
+	let ip = client_ip.map_or_else(|| "unknown".to_string(), |ip| ip.to_string());
+	tracing::info!(target: "epistle::api::audit", event = event.as_str(),
+		account = %crate::log_id::account(account), quota_bytes = quota_bytes.unwrap_or(0),
 		key = key.unwrap_or("configured-token"), client_ip = %ip, "account change");
 }

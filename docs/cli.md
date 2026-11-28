@@ -2093,7 +2093,7 @@ Only `epistle init` turns one into the other: it derives the name from the addre
 | `epistle account password N` | Change the password (asked twice with echo off, or one line from stdin). The account is checked before anything is read. |
 | `epistle account disable N` / `enable N` | A disabled account keeps its mailbox but rejects authentication like an unknown login. |
 | `epistle account address add\|remove N a@b` | Add or remove a delivery address. The last address cannot be removed. |
-| `epistle account quota N SIZE\|none` | Storage quota (`500M`, `10G`, `1T`); `none` falls back to the domain, then the server default. |
+| `epistle account quota N SIZE\|none` | Storage quota (`500M`, `10G`, `1T`, at most `8388607T`, what the account file can hold); `none` falls back to the domain, then the server default. |
 | `epistle account protocols N LIST\|all` | Restrict sign-in to some protocols (`imap,smtp,api,webdav`); `all` clears it. |
 | `epistle account set N --default-class CLASS` | The [mail class](evidence.md) granted to the account's mail when neither the request nor the credential names one: `transactional`, `marketing`, `personal`, or `none` to clear it. |
 | `epistle account set N [--send on\|off] [--receive on\|off]` | Turn sending and receiving on or off for the account, independent of `disable` (sign-in) and of `protocols`. Both are on by default, and a switch left out keeps its state. `--default-class` does not combine with them. Dynamic accounts only; a static one carries `send` and `receive` keys in the configuration. `show` and `list --json` report both. |

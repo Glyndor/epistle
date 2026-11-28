@@ -82,24 +82,23 @@ pub fn removal_blockers(config: &Config, domain: &str) -> Result<(), String> {
 			}
 		}
 	}
-	// Dynamic accounts (data_dir/accounts.toml).
-	let accounts_path = config.data_dir.join("accounts.toml");
-	if let Ok(text) = std::fs::read_to_string(&accounts_path)
-		&& let Ok(file) = toml::from_str::<toml::Value>(&text)
-		&& let Some(accounts) = file.get("accounts").and_then(|v| v.as_array())
-	{
-		for account in accounts {
-			let name = account.get("name").and_then(|v| v.as_str()).unwrap_or("?");
-			if let Some(addresses) = account.get("addresses").and_then(|v| v.as_array()) {
+	// Dynamic accounts (data_dir/accounts.toml). A file that cannot be read or
+	// understood refuses the removal: it may hold the accounts that use the
+	// domain, and "no accounts" is not what an unreadable file says.
+	match crate::directory_store::dynamic_addresses_on_disk(&config.data_dir) {
+		Ok(dynamic) => {
+			for (name, addresses) in dynamic {
 				for address in addresses {
-					if let Some(address) = address.as_str()
-						&& address_domain_matches(address, domain)
-					{
+					if address_domain_matches(&address, domain) {
 						offenders.push(format!("dynamic account {name} uses {address}"));
 					}
 				}
 			}
 		}
+		Err(error) => offenders.push(format!(
+			"the file of dynamic accounts cannot be read ({}), so it cannot be told whether one uses the domain",
+			error.kind()
+		)),
 	}
 	if offenders.is_empty() {
 		Ok(())

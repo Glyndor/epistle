@@ -900,6 +900,7 @@ curl -s -X DELETE -H "Authorization: Bearer $KEY" "$API/api/v1/accounts/ana?queu
 | `DELETE /api/v1/accounts/{name}` | Removes the account and its data. Only accounts made through the API; one declared in the configuration file is `404 no such dynamic account`. The removal runs to its end even if the client goes away. A removal that finishes writes `account.removed` on `epistle::api::audit`. One that stops after it began to clear the account writes `account.removal_incomplete` instead: the account may still exist, and running the removal again takes it over. |
 | `PUT /api/v1/accounts/{name}/password` | New password. The change writes `account.password_reset` on `epistle::api::audit`, with the account and the client address; the password and its hash are never in it |
 | `PUT /api/v1/accounts/{name}/display_name` | `{"display_name": "..."}`; empty clears it |
+| `PUT`, `DELETE /api/v1/accounts/{name}/quota` | Set the storage quota (`{"quota":"10G"}`; `none` for the default) or clear it, as `epistle account quota` does; `manage:write`, and only for a key confined to no account and no domain. See [Account quota](#account-quota) |
 | `POST`, `DELETE /api/v1/accounts/{name}/totp` | Enrol a fresh secret (returned once, effective at once) or turn two-factor off |
 | `GET /api/v1/accounts/{name}/mailboxes` | Mailbox names and a tree |
 | `GET`, `POST /api/v1/accounts/{name}/masked` | Masked addresses; create answers `201` |
@@ -1136,6 +1137,41 @@ Every change writes one audit line (`key.created`, `key.revoked`) with the
 label of the key that asked, the label and the scopes of the key it touched and
 the client address, and never a secret or a digest. The change and its line are
 made together on a thread a client that goes away does not stop.
+
+### Account quota
+
+`PUT /api/v1/accounts/{name}/quota` with `{"quota":"10G"}` and
+`DELETE /api/v1/accounts/{name}/quota` are `epistle account quota` over HTTP,
+through the same size parser (`500M`, `10G`, `1T`, any case, or `none` for the
+server default) and the same store call, so the answer is the object `--json`
+prints: `result`, `action`, `account` and `quota_bytes`. A quota of zero is
+refused (`400`): it would refuse all mail, which the command lets an operator do
+and a request may not. So is a size above 8191 petabytes (`9000000T`): the account
+file keeps a quota as a TOML integer, and a number it cannot hold would leave a
+file nothing can read, in which the check that a domain is still in use would find
+no accounts. That check now refuses to remove a domain when it cannot read the
+file. The command takes the same limit, since it shares the parser.
+
+The scope is `manage:write`, with one more condition: a quota is room on the
+server's disk, so only a key that is not confined to domains and not bound to an
+account sets or clears one. A tenant's key could otherwise give its accounts any
+amount, or put them back on a default larger than what they have. Any other key
+is `403` whatever the account, so it learns nothing of which accounts exist.
+Setting a quota takes no place of a tenant's `max_accounts`, and an account that
+is disabled still counts there, so no cap depends on this route. A body is at
+most 4 KiB and carries only `quota`, a string of at most 32 characters. Only an
+account made through the API has a quota to change; any other name is `404`.
+
+The key is read again under the lock of the account file, where the quota is
+written. One that was revoked, expired, confined, stripped of the scope or
+limited to a network the client is not in while the request waited writes
+nothing, and the answer is that same `404`.
+
+Every write adds one audit line (`account.quota_set`, or
+`account.quota_cleared` when the quota is cleared or set to `none`) with the
+label of the key, the account as the pseudonym the logs use, the quota in bytes
+(`0` for the default) and the client address; a refusal writes none. The change
+and its line are made together on a thread a client that goes away does not stop.
 
 ### Address aliases
 

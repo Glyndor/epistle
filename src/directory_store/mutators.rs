@@ -30,14 +30,36 @@ impl AccountStore {
 	/// `GETQUOTAROOT` and the next delivery quota check see the new
 	/// value. Returns the previous value so the CLI can report the
 	/// prior value and the new value without re-reading the file.
-	/// `NotFound` for static and unknown accounts.
+	/// `NotFound` for static and unknown accounts, `Invalid` for a quota larger
+	/// than the account file can hold.
 	pub fn set_quota_bytes(
 		&self,
 		name: &str,
 		bytes: Option<u64>,
 	) -> Result<Option<u64>, StoreError> {
+		self.set_quota_bytes_if(name, bytes, || true)
+	}
+
+	/// [`set_quota_bytes`](Self::set_quota_bytes) for a caller whose authority
+	/// was decided before the write waited for the store's lock: `authorize` is
+	/// asked under that lock, and a refusal answers like an account that does
+	/// not exist.
+	pub fn set_quota_bytes_if(
+		&self,
+		name: &str,
+		bytes: Option<u64>,
+		authorize: impl FnOnce() -> bool,
+	) -> Result<Option<u64>, StoreError> {
 		let mut previous = None;
+		if bytes.is_some_and(|bytes| bytes > crate::util::quota_size::MAX_QUOTA_BYTES) {
+			return Err(StoreError::Invalid(
+				"a quota cannot be larger than 8191P".to_string(),
+			));
+		}
 		self.mutate_store(|state| {
+			if !authorize() {
+				return Err(StoreError::NotFound(name.to_string()));
+			}
 			let target = state
 				.accounts
 				.iter_mut()

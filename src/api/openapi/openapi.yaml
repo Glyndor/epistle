@@ -1514,6 +1514,106 @@ paths:
           $ref: "#/components/responses/AuthRateLimited"
         "500":
           $ref: "#/components/responses/Internal"
+  /api/v1/accounts/{name}/quota:
+    put:
+      operationId: setAccountQuota
+      tags: [Accounts]
+      summary: Set the storage quota of an API-managed account
+      description: |-
+        What `epistle account quota` does, with the same size parser and the
+        same store call: `500M`, `10G`, `1T` (K, M, G and T, any case), or `none`
+        to use the server default. A quota of zero is refused, because it would
+        refuse all mail. A quota is room on the server's disk, so only a key that
+        is not confined to domains or bound to an account sets one: any other key
+        is `403`, whatever the account, so it learns nothing of which accounts
+        exist. The key is read again where the quota is written: one revoked,
+        expired, confined or limited to another network while the request waited
+        writes nothing and gets the `404`. Audited as `account.quota_set` (or
+        `account.quota_cleared` for `none`). The body is at most 4 KiB.
+      x-epistle-scope: [manage:write]
+      parameters:
+        - $ref: "#/components/parameters/AccountName"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [quota]
+              additionalProperties: false
+              properties:
+                quota:
+                  type: string
+                  maxLength: 32
+                  examples: ["500M", "10G", "none"]
+      responses:
+        "200":
+          description: What was done, as `epistle account quota --json` prints it.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccountQuotaChange"
+        "400":
+          $ref: "#/components/responses/InvalidInput"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          description: |-
+            `forbidden`: the key is confined to some domains or bound to an
+            account.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "413":
+          description: The body is over 4 KiB.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "422":
+          $ref: "#/components/responses/UnprocessableBody"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
+    delete:
+      operationId: clearAccountQuota
+      tags: [Accounts]
+      summary: Put an API-managed account back on the server default quota
+      description: |-
+        The same as `PUT` with `none`, under the same rules. Audited as
+        `account.quota_cleared`.
+      x-epistle-scope: [manage:write]
+      parameters:
+        - $ref: "#/components/parameters/AccountName"
+      responses:
+        "200":
+          description: What was done.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccountQuotaChange"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          description: |-
+            `forbidden`: the key is confined to some domains or bound to an
+            account.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
   /api/v1/accounts/{name}/totp:
     post:
       operationId: enrollTotp
@@ -4520,6 +4620,21 @@ components:
       properties:
         revoked:
           type: string
+    AccountQuotaChange:
+      type: object
+      required: [result, action, account, quota_bytes]
+      properties:
+        result:
+          type: string
+          enum: [saved]
+        action:
+          type: string
+          enum: [quota]
+        account:
+          type: string
+        quota_bytes:
+          type: [integer, "null"]
+          description: The quota in bytes, or null for the server default.
     BanLifted:
       type: object
       required: [changed, target, bans, failures]
