@@ -39,6 +39,7 @@ pub mod ldap;
 pub use ldap::{LdapAccount, LdapAuthenticator, LdapBusy, load_ldap_accounts};
 
 mod account;
+mod address_edit;
 mod build;
 mod builders;
 pub use account::DynamicAccount;

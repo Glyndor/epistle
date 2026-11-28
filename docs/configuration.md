@@ -2682,7 +2682,7 @@ Rules:
 
 - A domain can only belong to one tenant. A config that lists the same domain under two `[[tenant]]` blocks fails to load, with both tenant names in the message.
 - `quota_bytes` smaller than the sum of `domain_quotas` entries that fall inside the tenant is rejected at load time: a cap that cannot be reached would be a lie on the reseller agreement.
-- `max_accounts` is enforced on `POST /api/v1/accounts` as `409 Conflict` (not `429`): waiting will not lift it, the cap lifts when an account is deleted or the operator raises it.
+- `max_accounts` is enforced on `POST /api/v1/accounts` as `409 Conflict` (not `429`): waiting will not lift it, the cap lifts when an account is deleted or the operator raises it. Adding an address that would make an account count against the tenant is refused the same way, by `epistle account address add` and by `POST /api/v1/accounts/{name}/addresses`.
 - `quota_bytes` is enforced on `POST /jmap/upload` alongside the per-account quota, with the JMAP limit problem type (`urn:ietf:params:jmap:error:limit`, `limit: "tenant_storage"`, HTTP `507`).
 - `submission_rate_limit_per_min` is enforced on SMTP submission, `POST /api/v1/send` and JMAP `EmailSubmission/set` with one counter per tenant shared by the three, counted and charged like the per-account limit (one unit per recipient, once, when the message is accepted, together with the per-account limit or not at all). An account with addresses in two tenants is charged by both. The refusal is the one the per-account limit gives and does not name the tenant.
 

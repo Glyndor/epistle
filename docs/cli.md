@@ -2092,7 +2092,7 @@ Only `epistle init` turns one into the other: it derives the name from the addre
 | `epistle account remove N --queue discard\|drain [--yes\|-y]` | Remove the account and everything it owns: mailbox, masked addresses, app passwords, per-account suppression, queued mail (`discard` drops it, `drain` leaves it for delivery). Prints the counts removed. Asks first. |
 | `epistle account password N` | Change the password (asked twice with echo off, or one line from stdin). The account is checked before anything is read. |
 | `epistle account disable N` / `enable N` | A disabled account keeps its mailbox but rejects authentication like an unknown login. |
-| `epistle account address add\|remove N a@b` | Add or remove a delivery address. The last address cannot be removed. |
+| `epistle account address add\|remove N a@b` | Add or remove a delivery address. The last address cannot be removed. `add` is refused when the address would put the account in a [tenant](configuration.md#tenant) that already holds its `max_accounts`. |
 | `epistle account quota N SIZE\|none` | Storage quota (`500M`, `10G`, `1T`, at most `8388607T`, what the account file can hold); `none` falls back to the domain, then the server default. |
 | `epistle account protocols N LIST\|all` | Restrict sign-in to some protocols (`imap,smtp,api,webdav`); `all` clears it. |
 | `epistle account set N --default-class CLASS` | The [mail class](evidence.md) granted to the account's mail when neither the request nor the credential names one: `transactional`, `marketing`, `personal`, or `none` to clear it. |
