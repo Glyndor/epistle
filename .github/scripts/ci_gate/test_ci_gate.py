@@ -34,10 +34,10 @@ SUITES = {
 }
 # The jobs of ci.yml, exactly. A job added to the workflow turns the test below
 # red until the author decides here, on purpose, whether the gate waits for it.
-JOBS = {"plan", "gate", "dependabot-freshness", "cancel-others", "cancel-first-failure", *SUITES}
+JOBS = {"plan", "gate", "dependabot-freshness", "cancel-others", "cancel-first-failure", "cancel-on-package-failure", *SUITES}
 # The one job the gate does not wait for: it reads the age of the newest
 # Dependabot pull request, not the commit, so it would fail unrelated work.
-UNGATED = {"dependabot-freshness", "cancel-others", "cancel-first-failure"}  # the second runs only when something failed, and is skipped otherwise
+UNGATED = {"dependabot-freshness", "cancel-others", "cancel-first-failure", "cancel-on-package-failure"}  # the second runs only when something failed, and is skipped otherwise
 
 
 GATE_NAME = (
