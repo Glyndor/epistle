@@ -7,7 +7,6 @@
 //! apply are inherited for free.
 
 use crate::util::address::normalize;
-use crate::util::address_reason;
 
 use super::{AccountChanges, AccountStore, DynamicAccount, NewPassword, StoreError};
 
@@ -178,79 +177,6 @@ impl AccountStore {
 			.get(&wanted)
 			.is_some();
 		used_by_account || used_by_directory || used_by_alias || used_by_masked
-	}
-
-	/// Add an address to a dynamic account. Runs the same domain check
-	/// and conflict check `add` runs on a fresh dynamic account: a
-	/// malformed address, an address outside the configured domains, or
-	/// an address already routed elsewhere (another account, a static
-	/// alias or a masked address) is rejected. The account must already
-	/// exist; `NotFound` is the answer for static and unknown names.
-	/// Rebuilds the directory so the next delivery attempt resolves the
-	/// new address.
-	pub fn add_address(&self, name: &str, raw: &str) -> Result<(), StoreError> {
-		let raw = normalize(raw);
-		let raw = raw.as_str();
-		let address = address_reason::parse(raw).map_err(StoreError::Invalid)?;
-		self.mutate_store_hosted(|state| {
-			if !self.hosts_on_disk(address.domain())? {
-				return Err(StoreError::Invalid(address_reason::not_handled(
-					address.domain(),
-				)));
-			}
-			let existing_on_self = state
-				.accounts
-				.iter()
-				.find(|account| account.name == name)
-				.ok_or_else(|| StoreError::NotFound(name.to_string()))?
-				.addresses
-				.iter()
-				.any(|existing| normalize(existing) == raw);
-			if existing_on_self || self.address_taken(&state.accounts, Some(name), raw) {
-				return Err(StoreError::Duplicate(raw.to_string()));
-			}
-			let target = state
-				.accounts
-				.iter_mut()
-				.find(|account| account.name == name)
-				.ok_or_else(|| StoreError::NotFound(name.to_string()))?;
-			self.admit_addresses(name, &[raw.to_string()], target.addresses.len() + 1)?;
-			target.addresses.push(raw.to_string());
-			Ok(())
-		})?;
-		Ok(())
-	}
-
-	/// Remove an address from a dynamic account. Refuses to remove the
-	/// last remaining address (the directory requires at least one
-	/// delivery target per account). The account must already exist;
-	/// `NotFound` is the answer for static and unknown names. Rebuilds
-	/// the directory so the next delivery attempt rejects the removed
-	/// address identically to an unknown user.
-	pub fn remove_address(&self, name: &str, raw: &str) -> Result<(), StoreError> {
-		let wanted = normalize(raw);
-		self.mutate_store(|state| {
-			let target = state
-				.accounts
-				.iter_mut()
-				.find(|account| account.name == name)
-				.ok_or_else(|| StoreError::NotFound(name.to_string()))?;
-			let is_target = |existing: &String| normalize(existing) == wanted;
-			if !target.addresses.iter().any(is_target) {
-				return Err(StoreError::Invalid(format!(
-					"address {raw} is not assigned to {name}"
-				)));
-			}
-			// An account always keeps at least one delivery address.
-			if target.addresses.iter().all(is_target) {
-				return Err(StoreError::Invalid(
-					"cannot remove the account's last address".to_string(),
-				));
-			}
-			target.addresses.retain(|existing| !is_target(existing));
-			Ok(())
-		})?;
-		Ok(())
 	}
 
 	// === Account lifecycle =================================================

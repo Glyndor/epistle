@@ -1472,6 +1472,146 @@ paths:
           $ref: "#/components/responses/AuthRateLimited"
         "500":
           $ref: "#/components/responses/Internal"
+  /api/v1/accounts/{name}/addresses:
+    post:
+      operationId: addAccountAddress
+      tags: [Accounts]
+      summary: Give an API-managed account another address
+      description: |-
+        What `epistle account address add` does, through the same store write:
+        the address has to be well formed, in a domain this server hosts, and not
+        taken by another account, an alias, a masked address or the base of a
+        `+tag` form (`409`, the same answer whoever holds it). An account holds
+        at most `max_addresses_per_account`, and an address in the domains of a
+        tenant that does not count the account yet takes one of that tenant's
+        `max_accounts` places (`409` for either, counted under the lock of the
+        account file). The address is kept in lower case. A key confined to
+        domains gives an account addresses inside those domains only (`403`, with
+        one answer whether the domain is hosted here or not), and an account
+        outside its domains is the same `404` as one that does not exist. It gives
+        no address to a suspended account either (`403`). A key bound to an
+        account changes nothing here. The key is read again where the
+        address is written: one revoked, expired, narrowed or limited to another
+        network while the request waited writes nothing and gets the `404`.
+        Audited as `account.address_added`. The body is at most 4 KiB.
+      x-epistle-scope: [manage:write]
+      parameters:
+        - $ref: "#/components/parameters/AccountName"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [address]
+              additionalProperties: false
+              properties:
+                address:
+                  type: string
+                  minLength: 1
+                  maxLength: 320
+      responses:
+        "201":
+          description: What was done, as `epistle account address add --json` prints it.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccountAddressChange"
+        "400":
+          $ref: "#/components/responses/InvalidInput"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          description: |-
+            `forbidden`: the key is bound to one account, or is confined to some
+            domains and the address is outside them.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: |-
+            `conflict`: the address is taken, the address is in a tenant that has
+            reached its `max_accounts` and does not count the account yet, or the
+            account is being removed. `limit_reached`: the account already holds
+            as many addresses as it may.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "413":
+          description: The body is over 4 KiB.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "422":
+          $ref: "#/components/responses/UnprocessableBody"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
+  /api/v1/accounts/{name}/addresses/{address}:
+    delete:
+      operationId: removeAccountAddress
+      tags: [Accounts]
+      summary: Take an address off an API-managed account
+      description: |-
+        What `epistle account address remove` does. The address is percent-encoded
+        and matched in lower case. An address the account does not hold is `400`,
+        and so is its last address: an account always keeps one. A key confined to
+        domains removes addresses of its own accounts only; an account outside its
+        domains is the same `404` as one that does not exist, and it changes no
+        address of a suspended account (`403`). The key and the account are read
+        again where the address is taken off, and a refusal there is the `404`.
+        Audited as `account.address_removed`.
+      x-epistle-scope: [manage:write]
+      parameters:
+        - $ref: "#/components/parameters/AccountName"
+        - name: address
+          in: path
+          required: true
+          description: The address to take off, percent-encoded.
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 320
+      responses:
+        "200":
+          description: What was done, as `epistle account address remove --json` prints it.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AccountAddressChange"
+        "400":
+          $ref: "#/components/responses/InvalidInput"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          description: |-
+            `forbidden`: the key is bound to one account, or is confined to some
+            domains and the account is suspended.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: |-
+            `conflict`: the account is being removed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "429":
+          $ref: "#/components/responses/AuthRateLimited"
+        "500":
+          $ref: "#/components/responses/Internal"
   /api/v1/accounts/{name}/display_name:
     put:
       operationId: setAccountDisplayName
@@ -4730,6 +4870,21 @@ components:
         quota_bytes:
           type: [integer, "null"]
           description: The quota in bytes, or null for the server default.
+    AccountAddressChange:
+      type: object
+      required: [result, action, account, address]
+      properties:
+        result:
+          type: string
+          enum: [saved]
+        action:
+          type: string
+          enum: ["address add", "address remove"]
+        account:
+          type: string
+        address:
+          type: string
+          description: The address as it is kept, in lower case.
     BanLifted:
       type: object
       required: [changed, target, bans, failures]

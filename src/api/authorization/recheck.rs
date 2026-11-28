@@ -8,6 +8,7 @@
 use super::Principal;
 use crate::api::api_keys::Scope;
 use crate::api::state::{ApiState, MatchedAuth};
+use crate::directory_store::DynamicAccount;
 
 impl Principal {
 	/// Whether the credential of `auth`, read now, holds `scope` and reaches
@@ -29,6 +30,38 @@ impl Principal {
 	pub(crate) fn still_unrestricted(state: &ApiState, auth: &MatchedAuth, scope: Scope) -> bool {
 		let now = Principal::for_token(state, auth);
 		now.admits_scope(scope) && now.is_unrestricted()
+	}
+
+	/// Whether the credential of `auth`, read now, holds `scope`, reaches
+	/// `account` as it is and may give it the address `address`. A suspended
+	/// account's addresses are for an unconfined credential to change.
+	pub(crate) fn still_adds_address(
+		state: &ApiState,
+		auth: &MatchedAuth,
+		scope: Scope,
+		account: &DynamicAccount,
+		address: &str,
+	) -> bool {
+		let now = Principal::for_token(state, auth);
+		now.admits_scope(scope)
+			&& now.admits_account(&account.name, &account.addresses)
+			&& now.admits_sender(address)
+			&& now.admits_suspended(account.disabled)
+	}
+
+	/// Whether the credential of `auth`, read now, holds `scope`, reaches
+	/// `account` as it is and may take an address off it. A suspended
+	/// account's addresses are for an unconfined credential to take.
+	pub(crate) fn still_removes_address(
+		state: &ApiState,
+		auth: &MatchedAuth,
+		scope: Scope,
+		account: &DynamicAccount,
+	) -> bool {
+		let now = Principal::for_token(state, auth);
+		now.admits_scope(scope)
+			&& now.admits_account(&account.name, &account.addresses)
+			&& now.admits_suspended(account.disabled)
 	}
 
 	/// Whether the credential of `auth`, read now, holds `scope` and may create

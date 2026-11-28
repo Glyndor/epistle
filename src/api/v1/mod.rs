@@ -100,6 +100,14 @@ pub fn router(max_message_size: usize) -> Router<ApiState> {
 			axum::routing::put(accounts::set_password),
 		)
 		.route(
+			"/accounts/{name}/addresses",
+			post(account_edit::add_address).layer(DefaultBodyLimit::max(account_edit::MAX_BODY)),
+		)
+		.route(
+			"/accounts/{name}/addresses/{address}",
+			axum::routing::delete(account_edit::remove_address),
+		)
+		.route(
 			"/accounts/{name}/quota",
 			axum::routing::put(account_edit::set_quota)
 				.delete(account_edit::clear_quota)

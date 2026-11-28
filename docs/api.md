@@ -461,7 +461,7 @@ The codes the API itself sends:
 | `invalid_input` | 400 | The message says which field |
 | `conflict` | 409 | A limit that waiting will not lift: the tenant is at `max_accounts`, the account at its masked-address cap, a queue entry with evidence still to write |
 | `already_sent` | 409 | `DELETE /api/v1/send/{id}` for a message the send delay already handed on. Nothing can take it back |
-| `limit_reached` | 409 | A configured cap stopped the request (addresses per account at `POST /api/v1/accounts`). The message says which limit, its value, the scope that set it and how to make room |
+| `limit_reached` | 409 | A configured cap stopped the request (addresses per account at `POST /api/v1/accounts` and `POST /api/v1/accounts/{name}/addresses`). The message says which limit, its value, the scope that set it and how to make room |
 | `message_too_large` | 413 | The built message is over the size limit of the server, or of the sending account (`[[limit_scope]] max_message_size`) |
 | `scan_too_large` | 413 | Too large for the content scan, and the server lets nothing pass unscanned. Retrying cannot help |
 | `virus_detected`, `attachment_refused`, `too_many_header_fields`, `marketing_refused` | 422 | Refused for its content; sending it again unchanged is refused again. Nothing was sent |
@@ -917,6 +917,7 @@ curl -s -X DELETE -H "Authorization: Bearer $KEY" "$API/api/v1/accounts/ana?queu
 | `GET /api/v1/accounts/{name}/mailboxes` | Mailbox names and a tree |
 | `GET`, `POST /api/v1/accounts/{name}/masked` | Masked addresses; create answers `201` |
 | `PATCH`, `DELETE /api/v1/accounts/{name}/masked/{address}` | Enable or disable, remove |
+| `POST /api/v1/accounts/{name}/addresses`, `DELETE .../addresses/{address}` | Give an account another address (`201`) or take one off, as `epistle account address` does; `manage:write`. See [Account addresses](#account-addresses) |
 | `GET /api/v1/accounts/{name}/archive`, `POST .../archive/{id}/restore` | Expunged messages kept by `deleted_retention_days`, and put one back |
 | `POST /api/v1/auth/verify` | Check a login and password; `{"valid": bool, "admin": bool}`. Scope `write` |
 
@@ -1164,6 +1165,51 @@ label of the key that asked, the label and the scopes of the key it touched and
 the client address, and never a secret or a digest. The change and its line are
 made together on a thread a client that goes away does not stop.
 
+### Account addresses
+
+`POST /api/v1/accounts/{name}/addresses` with `{"address":"new@example.org"}` and
+`DELETE /api/v1/accounts/{name}/addresses/{address}` (percent-encoded) are
+`epistle account address add` and `remove` over HTTP, through the same store
+writes, so the rules are the command's: a well formed address in a domain the
+server hosts, kept in lower case; not one another account, an alias or a masked
+address holds, nor a `+tag` form of one (`409`, the same answer whoever holds
+it, naming no one); at most `max_addresses_per_account` per account (`409
+limit_reached`); an address in the domains of a tenant that does not count the
+account yet takes one of the tenant's `max_accounts` places, so a tenant at its
+cap refuses it (`409`); an account never loses its last address, and an address
+it does not hold is not removed (`400`). Both caps are counted under the lock of
+the account file, over the file as it is read there, so requests at once, or the
+command running beside the server, cannot take the last place together. Taking
+an address off never needs a place. The answer is the object `--json` prints:
+`result`, `action`, `account` and `address`. Only an account made through the API
+is changed; any other name is `404`.
+
+The scope is `manage:write`. What narrows it:
+
+- a key confined to domains changes the accounts that live entirely inside them,
+  and an account outside is the same `404` as one that does not exist;
+- it gives them addresses inside its domains only. An address outside is `403`
+  with one answer whether the domain is hosted here or not, so a tenant cannot
+  find out which domains the others use;
+- it changes no address of a suspended account (`403`): one taken off would be
+  free to give to an account that is not suspended, and one added would change an
+  account the operator closed;
+- a key bound to an account changes no account, its own included (`403`);
+- a body is at most 4 KiB and carries only `address`, of at most 320 characters.
+
+The key is read again under the lock of the account file, and asked about the
+account as the file holds it there. One that was revoked, replaced, expired,
+narrowed, stripped of the scope or limited to a network the client is not in
+while the request waited writes nothing, and so does a request whose account
+gained an address outside the key's domains, or was suspended before a confined
+key could change an address. The answer is `404`, whatever the address.
+
+Every change writes one audit line (`account.address_added`,
+`account.address_removed`) with the label of the key, the account and the address
+as the pseudonym the logs use, the domain and the client address; a request that
+changed nothing writes none. The change and its line are made together on a
+thread a client that goes away does not stop.
+
 ### Account quota
 
 `PUT /api/v1/accounts/{name}/quota` with `{"quota":"10G"}` and
@@ -1236,10 +1282,11 @@ anything; suspending an account whose removal is already under way does not stop
 it.
 
 These rules are those of the two routes above and of `DELETE
-/api/v1/accounts/{name}`, and [SCIM](#scim) holds a key confined to domains to
-them too, through its `active` and `emails` attributes and its `DELETE`. Such a
-key can still set the password or the display name of a suspended account in
-them.
+/api/v1/accounts/{name}`. A key confined to domains also changes no address of a
+suspended account ([Account addresses](#account-addresses)), and [SCIM](#scim)
+holds such a key to the same rules through its `active` and `emails` attributes
+and its `DELETE`. Such a key can still set the password or the display name of a
+suspended account in them.
 
 ### Address aliases
 
