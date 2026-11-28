@@ -269,6 +269,9 @@ jobs:
       - name: Every required check is reachable from a merge queue
         run: python3 .github/scripts/check_merge_group_triggers.py
 
+      - name: The pin watcher passes its own tests
+        run: bash .github/scripts/checks/pin-watch-tools.test.sh
+
   # The tests of the credential scan, on a runner of their own: they execute files
   # of the change, which the job `no credential-shaped line is added` (dco.yml) never
   # does. They run on every pull request and queue entry (the run is seconds) and

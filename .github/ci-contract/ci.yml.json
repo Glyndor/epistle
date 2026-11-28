@@ -199,6 +199,10 @@
     {
      "name": "Every required check is reachable from a merge queue",
      "run": "python3 .github/scripts/check_merge_group_triggers.py"
+    },
+    {
+     "name": "The pin watcher passes its own tests",
+     "run": "bash .github/scripts/checks/pin-watch-tools.test.sh"
     }
    ],
    "timeout-minutes": 15

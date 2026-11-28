@@ -1,0 +1,46 @@
+name: pin-watch
+
+# Compares the tool versions CI installs at an exact version with the latest
+# release of each tool, and opens one issue when any of them is behind.
+on:
+  schedule:
+    - cron: '37 5 * * 1'
+  workflow_dispatch:
+permissions:
+  contents: read
+  issues: write
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Detect drift in pinned tool versions
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          DRIFTS=$(bash .github/scripts/checks/pin-watch-tools.sh)
+          if [ -z "$DRIFTS" ]; then echo "No drift in any pinned tool version."; exit 0; fi
+          TITLE="Pinned tool versions have drifted"
+          if gh issue list --state open --search "in:title $TITLE" --json title --jq '.[].title' | grep -qxF "$TITLE"; then
+            echo "Drift found, but the issue is already open; nothing to do."; exit 0
+          fi
+          # The backticks are Markdown, printed as written.
+          # shellcheck disable=SC2016
+          {
+            echo "| Pin | Pinned at | Pinned | Upstream |"
+            echo "| --- | --- | --- | --- |"
+            printf '%s\n' "$DRIFTS" | while IFS=$'\t' read -r name path pinned upstream; do
+              printf '| %s | `%s` | `%s` | `%s` |\n' "$name" "$path" "$pinned" "$upstream"
+            done
+          } > "$RUNNER_TEMP/body.md"
+          gh issue create --title "$TITLE" \
+            --label "type:ci" --label "prio:P2" --label "status:ready" \
+            --label "area:ci" --label "effort:S" \
+            --body-file "$RUNNER_TEMP/body.md"
