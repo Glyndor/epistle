@@ -4,6 +4,7 @@
 use std::io::ErrorKind;
 
 use super::super::*;
+use super::Server;
 use crate::api::api_keys::{ApiKey, ApiKeyStore, sha256_hash};
 
 fn key(label: &str, scopes: &[&str], domain: &str) -> ApiKey {
@@ -105,6 +106,7 @@ fn a_new_key_is_written_only_while_the_maker_still_reaches_that_far() {
 		caller: &caller,
 		wanted: &wanted,
 		max_keys: MAX_KEYS_BY_KEY,
+		world: &Server,
 	};
 	let (dir, mut store) = store_with(vec![before.clone()]);
 	store.add_by(child.clone(), None, ask).expect("unchanged");
@@ -157,6 +159,7 @@ fn a_maker_outside_the_network_of_its_own_key_makes_no_key() {
 		caller: &caller,
 		wanted: &wanted,
 		max_keys: MAX_KEYS_BY_KEY,
+		world: &Server,
 	};
 	let (dir, mut store) = store_with(vec![before]);
 	let refused = store
@@ -182,7 +185,134 @@ fn a_maker_outside_the_network_of_its_own_key_revokes_no_key() {
 	assert!(labels(&dir).contains(&"other".to_string()));
 }
 
-/// The maker inside the network of its own key goes on making keys: the check
+/// What changes in the world between the check of a request and its write.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Moved {
+	Nothing,
+	/// The account's address goes to a domain the maker does not have.
+	Address,
+	/// The account is removed.
+	Account,
+	/// The server stops hosting the domain.
+	Domain,
+}
+
+/// A world with `bob@a.example` and `a.example`, until the test moves it.
+struct MovingWorld {
+	moved: std::cell::Cell<Moved>,
+}
+
+impl World for MovingWorld {
+	fn account_known(&self, name: &str) -> bool {
+		name == "bob" && self.moved.get() != Moved::Account
+	}
+
+	fn account_addresses(&self, _name: &str) -> Vec<String> {
+		match self.moved.get() {
+			Moved::Address => vec!["bob@b.example".to_string()],
+			Moved::Account => Vec::new(),
+			Moved::Nothing | Moved::Domain => vec!["bob@a.example".to_string()],
+		}
+	}
+
+	fn hosts(&self, _domain: &str) -> bool {
+		self.moved.get() != Moved::Domain
+	}
+}
+
+/// Check `request` for `maker`'s file, move the world, then write the key the
+/// request asks for. Answers the write and the labels of the file after it.
+fn write_after(
+	maker: ApiKey,
+	request: Request,
+	moved: Moved,
+) -> (std::io::Result<()>, Vec<String>) {
+	let world = MovingWorld {
+		moved: std::cell::Cell::new(Moved::Nothing),
+	};
+	let caller = asked_as(&maker);
+	let wanted = check(&request, None, &world).expect("checked");
+	world.moved.set(moved);
+	let ask = Ask {
+		caller: &caller,
+		wanted: &wanted,
+		max_keys: MAX_KEYS_BY_KEY,
+		world: &world,
+	};
+	let mut child = key("child", &["read"], "a.example");
+	child.domains = request.domains.clone();
+	child.account = request.account.clone();
+	let (dir, mut store) = store_with(vec![maker]);
+	let written = store.add_by(child, None, ask);
+	(written, labels(&dir))
+}
+
+fn bound_to_bob() -> Request {
+	Request {
+		label: "child".to_string(),
+		scopes: vec!["read".to_string()],
+		account: Some("bob".to_string()),
+		..Request::default()
+	}
+}
+
+/// The world is read again under the file's lock: an account that left the
+/// maker's domains between the check and the write is not bound.
+#[test]
+fn a_key_is_bound_only_while_the_account_is_inside_the_makers_domains() {
+	let (written, held) = write_after(maker(), bound_to_bob(), Moved::Nothing);
+	written.expect("nothing moved");
+	assert!(held.contains(&"child".to_string()), "{held:?}");
+
+	let (written, held) = write_after(maker(), bound_to_bob(), Moved::Address);
+	let refused = written.expect_err("the account left the maker's domains");
+	assert_eq!(refused.kind(), ErrorKind::PermissionDenied, "{refused}");
+	assert!(!held.contains(&"child".to_string()), "{held:?}");
+}
+
+/// A maker with no domains has none for the account to leave, so the account
+/// being gone is the only thing that stops the write.
+#[test]
+fn a_key_is_not_bound_to_an_account_that_was_removed() {
+	let mut everywhere = maker();
+	everywhere.domains = Vec::new();
+	let (written, held) = write_after(everywhere.clone(), bound_to_bob(), Moved::Nothing);
+	written.expect("nothing moved");
+	assert!(held.contains(&"child".to_string()), "{held:?}");
+
+	let (written, held) = write_after(everywhere, bound_to_bob(), Moved::Account);
+	let refused = written.expect_err("the account is gone");
+	assert_eq!(refused.kind(), ErrorKind::InvalidInput, "{refused}");
+	assert!(refused.to_string().contains("no such account"), "{refused}");
+	assert!(!held.contains(&"child".to_string()), "{held:?}");
+}
+
+/// The same for a domain that left the server.
+#[test]
+fn a_key_is_not_confined_to_a_domain_the_server_stopped_hosting() {
+	let confined = || Request {
+		label: "child".to_string(),
+		scopes: vec!["read".to_string()],
+		domains: vec!["a.example".to_string()],
+		..Request::default()
+	};
+	let (written, held) = write_after(maker(), confined(), Moved::Nothing);
+	written.expect("nothing moved");
+	assert!(held.contains(&"child".to_string()), "{held:?}");
+
+	let (written, held) = write_after(maker(), confined(), Moved::Domain);
+	let refused = written.expect_err("the domain is not hosted");
+	assert_eq!(refused.kind(), ErrorKind::InvalidInput, "{refused}");
+	assert!(
+		refused
+			.to_string()
+			.contains("not a domain this server hosts"),
+		"{refused}"
+	);
+	assert!(!held.contains(&"child".to_string()), "{held:?}");
+}
+
+/// A maker inside the network of its own key goes on making keys: the check
 /// is about the client, not a general refusal.
 #[test]
 fn a_maker_inside_the_network_of_its_own_key_makes_a_key() {
@@ -194,6 +324,7 @@ fn a_maker_inside_the_network_of_its_own_key_makes_a_key() {
 		caller: &caller,
 		wanted: &wanted,
 		max_keys: MAX_KEYS_BY_KEY,
+		world: &Server,
 	};
 	let (dir, mut store) = store_with(vec![before]);
 	store

@@ -148,6 +148,42 @@ fn create_rejects_bad_cidr() {
 	);
 }
 
+/// The command takes as many domains as it is asked for: the cap of the API
+/// is not the command's, and the command had no cap before 0.15.0 either.
+#[test]
+fn create_takes_more_domains_than_the_api_allows() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let config = config(dir.path());
+	let domains: Vec<String> = (0..=crate::api::api_keys::issue::MAX_DOMAINS)
+		.map(|n| format!("d{n}.example"))
+		.collect();
+	let mut out = Vec::new();
+	assert_eq!(
+		create(
+			&config,
+			NewKey {
+				label: "wide".to_string(),
+				expires_at: None,
+				ip_cidr: None,
+				scopes: read_scope(),
+				domains,
+				account: None,
+				class: None,
+				auto_submitted: false,
+			},
+			false,
+			&mut out,
+			&mut Vec::new()
+		),
+		ExitCode::SUCCESS
+	);
+	let store = ApiKeyStore::open(dir.path()).expect("open");
+	assert_eq!(
+		store.keys()[0].domains.len(),
+		crate::api::api_keys::issue::MAX_DOMAINS + 1
+	);
+}
+
 #[test]
 fn parse_scope_rejects_unknown_values() {
 	assert!(parse_scope("read").is_ok());

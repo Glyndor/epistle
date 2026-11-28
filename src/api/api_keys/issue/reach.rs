@@ -1,5 +1,6 @@
 //! What a key reaches, and whether one reach holds another.
 
+use super::World;
 use crate::api::api_keys::{ApiKey, Scope};
 use crate::cidr::Cidr;
 
@@ -41,6 +42,28 @@ impl Reach {
 		let holds = key.reach().is_none_or(|held| held.contains(&Scope::Key));
 		let live = key.expires_at.is_none_or(|expiry| now < expiry);
 		(holds && live && key.account.is_none()).then(|| Reach::of_key(key, None))
+	}
+
+	/// This reach with the facts of the world read again, for the key `key`
+	/// that is about to be written: whether the account it is bound to is
+	/// still there, the addresses that account has now, and whether its
+	/// domains are still hosted. An error names the fact that no longer holds.
+	pub fn refreshed(&self, key: &ApiKey, world: &dyn World) -> Result<Reach, String> {
+		let mut fresh = self.clone();
+		if let Some(name) = key.account.as_deref() {
+			if !world.account_known(name) {
+				return Err(format!("--account {name}: no such account"));
+			}
+			fresh.account_addresses = Some(world.account_addresses(name));
+		}
+		if let Some(domain) = key
+			.domains
+			.iter()
+			.find(|domain| !world.hosts(&domain.to_ascii_lowercase()))
+		{
+			return Err(format!("{domain} is not a domain this server hosts"));
+		}
+		Ok(fresh)
 	}
 
 	/// Whether this reach holds `other`: `other` has no scope this one lacks,

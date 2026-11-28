@@ -27,8 +27,9 @@ pub enum Issuer {
 
 /// A write a key asks of the file: who asks, what the new key would reach and
 /// how many keys the file may hold. The store asks the file again, under its
-/// lock, whether the key that asks still reaches that far.
-#[derive(Debug, Clone, Copy)]
+/// lock, whether the key that asks still reaches that far, and reads the
+/// world again there.
+#[derive(Clone, Copy)]
 pub struct Ask<'a> {
 	/// The key that asks.
 	pub caller: &'a Caller,
@@ -36,9 +37,23 @@ pub struct Ask<'a> {
 	pub wanted: &'a Reach,
 	/// The most keys the file may hold when a key makes one.
 	pub max_keys: usize,
+	/// The world, to read it again under the file's lock.
+	pub world: &'a dyn World,
 }
 
-/// Most domains one key may be confined to.
+impl std::fmt::Debug for Ask<'_> {
+	fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		formatter
+			.debug_struct("Ask")
+			.field("caller", &self.caller.label())
+			.field("wanted", &self.wanted)
+			.field("max_keys", &self.max_keys)
+			.finish()
+	}
+}
+
+/// Most domains one key may be confined to over HTTP. The command has no
+/// cap: it did not have one before 0.15.0 either.
 pub const MAX_DOMAINS: usize = 32;
 /// Most keys the file may hold when a key makes one.
 pub const MAX_KEYS_BY_KEY: usize = 500;
@@ -58,6 +73,9 @@ pub struct Request {
 	pub domains: Vec<String>,
 	/// The one account the key is bound to.
 	pub account: Option<String>,
+	/// The most domains the request admits; `None` admits as many as asked.
+	/// The cap belongs to the caller: the API sets one, the command does not.
+	pub max_domains: Option<usize>,
 }
 
 /// Why a request is refused.
@@ -145,9 +163,11 @@ pub fn check(
 		Some(spec) => Some(Cidr::parse(spec).ok_or_else(|| Refusal::Invalid(Cidr::refusal(spec)))?),
 		None => None,
 	};
-	if request.domains.len() > MAX_DOMAINS {
+	if let Some(max) = request.max_domains
+		&& request.domains.len() > max
+	{
 		return Err(Refusal::Invalid(format!(
-			"a key is confined to at most {MAX_DOMAINS} domains"
+			"a key is confined to at most {max} domains"
 		)));
 	}
 	if let Some(name) = &request.account {
