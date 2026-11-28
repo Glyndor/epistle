@@ -113,6 +113,8 @@ pub fn router(max_message_size: usize) -> Router<ApiState> {
 			"/accounts/{name}/totp",
 			axum::routing::post(accounts::enroll_totp).delete(accounts::disable_totp),
 		)
+		.route("/accounts/{name}/disable", post(account_edit::disable))
+		.route("/accounts/{name}/enable", post(account_edit::enable))
 		.route("/accounts/{name}/mailboxes", get(mailboxes::list))
 		.route(
 			"/accounts/{name}/masked",

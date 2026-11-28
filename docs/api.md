@@ -897,10 +897,11 @@ curl -s -X DELETE -H "Authorization: Bearer $KEY" "$API/api/v1/accounts/ana?queu
 | `GET`, `POST /api/v1/bans`, `DELETE /api/v1/bans/{subject}`, `GET`, `POST /api/v1/bans/allow`, `DELETE /api/v1/bans/allow/{cidr}` | The bans in force, banning, lifting, and the allow list; scope `ban`. See [Bans](#bans) |
 | `GET`, `POST /api/v1/keys`, `DELETE /api/v1/keys/{label}` | List, make and revoke API keys, never reaching further than the key that asks; scope `key`. See [API keys](#api-keys) |
 | `GET`, `POST /api/v1/accounts` | List (not paged), create. A duplicate name or address is `400 invalid_input` |
-| `DELETE /api/v1/accounts/{name}` | Removes the account and its data. Only accounts made through the API; one declared in the configuration file is `404 no such dynamic account`. The removal runs to its end even if the client goes away. A removal that finishes writes `account.removed` on `epistle::api::audit`. One that stops after it began to clear the account writes `account.removal_incomplete` instead: the account may still exist, and running the removal again takes it over. |
+| `DELETE /api/v1/accounts/{name}` | Removes the account and its data. Only accounts made through the API; one declared in the configuration file is `404 no such dynamic account`. A suspended account is removed only by a key that is not confined (see [Suspending an account](#suspending-an-account)). The removal runs to its end even if the client goes away. A removal that finishes writes `account.removed` on `epistle::api::audit`. One that stops after it began to clear the account writes `account.removal_incomplete` instead: the account may still exist, and running the removal again takes it over. |
 | `PUT /api/v1/accounts/{name}/password` | New password. The change writes `account.password_reset` on `epistle::api::audit`, with the account and the client address; the password and its hash are never in it |
 | `PUT /api/v1/accounts/{name}/display_name` | `{"display_name": "..."}`; empty clears it |
 | `PUT`, `DELETE /api/v1/accounts/{name}/quota` | Set the storage quota (`{"quota":"10G"}`; `none` for the default) or clear it, as `epistle account quota` does; `manage:write`, and only for a key confined to no account and no domain. See [Account quota](#account-quota) |
+| `POST /api/v1/accounts/{name}/disable`, `POST .../enable` | Suspend an account, or resume it, as `epistle account disable` and `enable` do; `manage:write`. Resuming is for a key that is not confined. See [Suspending an account](#suspending-an-account) |
 | `POST`, `DELETE /api/v1/accounts/{name}/totp` | Enrol a fresh secret (returned once, effective at once) or turn two-factor off |
 | `GET /api/v1/accounts/{name}/mailboxes` | Mailbox names and a tree |
 | `GET`, `POST /api/v1/accounts/{name}/masked` | Masked addresses; create answers `201` |
@@ -1172,6 +1173,47 @@ Every write adds one audit line (`account.quota_set`, or
 label of the key, the account as the pseudonym the logs use, the quota in bytes
 (`0` for the default) and the client address; a refusal writes none. The change
 and its line are made together on a thread a client that goes away does not stop.
+
+### Suspending an account
+
+`POST /api/v1/accounts/{name}/disable` and `POST /api/v1/accounts/{name}/enable`
+are `epistle account disable` and `enable` over HTTP, through the same store
+write. Neither takes a body. A suspended account stops authenticating, with the
+answer an unknown login gets, and keeps its mail and its settings. The answer is
+the object `--json` prints, without `reload`:
+
+```json
+{"result": "saved", "action": "disable", "account": "ana", "disabled": true}
+```
+
+A request that finds the account in the state it asks for answers `result:
+"unchanged"` and writes no audit line. A change writes `account.disabled` or
+`account.enabled` on `epistle::api::audit`, with the account, the label of the
+key that asked and the client address. As for the other account routes, only
+accounts made through the API are changed (`404 no such dynamic account`
+otherwise).
+
+The scope is `manage:write`. What narrows it:
+
+- a key confined to domains suspends the accounts that live entirely inside its
+  domains, and an account outside is the same `404` as one that does not exist;
+- resuming is for a key that is not confined to domains: an account the operator
+  suspended, for abuse say, is not for a tenant's key to bring back. A confined
+  key is `403` whatever the account, so it learns nothing of which exist;
+- a key bound to an account changes no account, its own included (`403`);
+- `DELETE /api/v1/accounts/{name}` of a suspended account is likewise for a key
+  that is not confined (`403`).
+
+The key and the account are asked again under the lock of the write: a key
+revoked, narrowed, expired or moved off its network in between writes nothing,
+and the answer is `404`. A removal asks when it begins, before it clears
+anything; suspending an account whose removal is already under way does not stop
+it.
+
+These rules are those of the two routes above and of `DELETE
+/api/v1/accounts/{name}`. [SCIM](#scim) has its own scope, and its `active`
+attribute and `DELETE` work as described there. A key confined to domains can
+also still set the password or the display name of a suspended account in them.
 
 ### Address aliases
 
