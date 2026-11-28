@@ -27,6 +27,21 @@ impl SuspensionEvent {
 	}
 }
 
+/// One privileged change, with the key that made it. `key` is the label of
+/// the API key (never the key); `None` for the configured token, which is
+/// reported as `configured-token` so the field is never absent.
+pub fn log_privilege_change_by_key(
+	event: super::AuditEvent,
+	account: &str,
+	key: Option<&str>,
+	client_ip: Option<IpAddr>,
+) {
+	let ip = client_ip.map_or_else(|| "unknown".to_string(), |ip| ip.to_string());
+	tracing::info!(target: "epistle::api::audit", event = event.as_str(),
+		account = %crate::log_id::account(account),
+		key = key.unwrap_or("configured-token"), client_ip = %ip, "privilege change");
+}
+
 /// One event per durable change; a request that found the account already in
 /// the state asked for writes none. `key` is the label of the API key (never
 /// the key); `None` for the configured token.

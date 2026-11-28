@@ -2119,7 +2119,7 @@ paths:
         - name: cursor
           in: query
           required: false
-          description: The `next_cursor` of the previous page, carried back as it is.
+          description: The `next_cursor` of the previous page, carried back as it is. A plain entry id, as 0.15.0 issued, is still accepted.
           schema:
             type: string
       responses:

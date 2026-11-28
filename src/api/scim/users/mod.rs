@@ -429,6 +429,7 @@ pub async fn get_user(
 pub async fn delete_user(
 	State(state): State<ApiState>,
 	Extension(auth): Extension<MatchedAuth>,
+	Extension(client_ip): Extension<ClientIp>,
 	Path(id): Path<String>,
 ) -> Result<impl IntoResponse, ScimError> {
 	let principal = Principal::for_token(&state, &auth);
@@ -443,7 +444,7 @@ pub async fn delete_user(
 		&id,
 		QueuePolicy::Drain,
 		crate::api::account_removal::Via::Scim,
-		None,
+		client_ip.0,
 		move |account| {
 			let now = Principal::for_token(&removal_state, &auth);
 			now.admits_scope(Scope::Scim) && now.admits_account(&account.name, &account.addresses)

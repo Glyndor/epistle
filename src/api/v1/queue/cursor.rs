@@ -66,7 +66,11 @@ pub fn seal(position: Uuid) -> Option<String> {
 }
 
 /// The position a cursor names: the id of an entry, or the sealed position
-/// the walk stopped at. `None` for a cursor the server did not issue.
+/// the walk stopped at.
+///
+/// A plain id is the form 0.15.0 issued, and any one is taken: it only says
+/// after which entry the walk resumes. `None` for a cursor that is neither a
+/// plain id nor a marker this process sealed.
 pub fn anchor(cursor: &str) -> Option<Uuid> {
 	if let Ok(id) = Uuid::parse_str(cursor) {
 		return Some(id);

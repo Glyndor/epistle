@@ -17,8 +17,10 @@ use tracing_subscriber::layer::SubscriberExt;
 
 use super::base::{Capture, CapturedEvent};
 use crate::antispam::bans::{BanInfo, BanStore};
+use crate::api::account_removal::{Via, spawn_removal};
 use crate::api::tests::base::TOKEN;
 use crate::api::{ApiState, router};
+use crate::directory_store::removal::QueuePolicy;
 use crate::directory_store::{AccountStore, DynamicAccount};
 
 type Wait<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -262,6 +264,54 @@ async fn a_removal_that_stops_half_way_is_recorded_as_incomplete() {
 		"{events:?}"
 	);
 	assert!(named(&events, "account.removed").is_empty());
+}
+
+/// A removal whose task is cancelled after it began leaves the line that
+/// says the account may be half removed: nothing else says so, and the
+/// operator has to run the removal again.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cancelled_removal_task_leaves_the_incomplete_line() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let gate = Arc::new(Gated::default());
+	let state = state(dir.path(), Arc::clone(&gate));
+	let events = captured(|events| {
+		let (state, gate) = (state.clone(), Arc::clone(&gate));
+		async move {
+			let peer: SocketAddr = "203.0.113.9:40000".parse().expect("peer");
+			let handle = spawn_removal(
+				&state,
+				"dana",
+				QueuePolicy::Discard,
+				Via::Rest,
+				Some(peer.ip()),
+				|_| true,
+			);
+			// The removal is under way: the account is reserved and the
+			// footprint is being cleared, and the ban store holds it there.
+			gate.entered.notified().await;
+			// The task is cancelled, the way a runtime that goes down
+			// cancels it.
+			handle.abort();
+			let ended = handle.await.expect_err("the task was cancelled");
+			assert!(ended.is_cancelled(), "{ended}");
+			until_written(&events, "account.removal_incomplete", 1).await;
+		}
+	});
+	let lines = named(&events, "account.removal_incomplete");
+	assert_eq!(lines.len(), 1, "{events:?}");
+	assert_eq!(
+		lines[0].fields.get("client_ip").map(String::as_str),
+		Some("203.0.113.9")
+	);
+	assert!(
+		named(&events, "account.removed").is_empty(),
+		"a removal that was cancelled wrote the line of one that finished"
+	);
+	// The account is still there: the removal can be run again.
+	assert!(
+		state.store().dynamic("dana").is_some(),
+		"the account remains"
+	);
 }
 
 /// A key that does not reach the route is turned away exactly as it was
