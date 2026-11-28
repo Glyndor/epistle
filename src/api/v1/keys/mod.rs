@@ -307,8 +307,7 @@ pub async fn create(
 /// watcher: a key revoked is refused at once. A file that cannot be read
 /// back is an error: the answer must not say the change is in force.
 fn apply(data_dir: &std::path::Path, set: &ApiKeySet) -> std::io::Result<()> {
-	let text = std::fs::read_to_string(data_dir.join("api_keys.toml"))?;
-	set.reload_from(&text)
+	set.reload_file(&data_dir.join("api_keys.toml"))
 }
 
 /// The answer to a refusal of the store.

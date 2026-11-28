@@ -299,7 +299,7 @@ impl ApiState {
 	/// Replace the key set the bearer middleware reads. The default
 	/// (set by [`ApiState::new`]) loads `api_keys.toml` once at
 	/// construction and is never updated; the file watcher calls
-	/// [`crate::api::api_keys::ApiKeySet::reload_from`] on `set` whenever
+	/// [`crate::api::api_keys::ApiKeySet::reload_file`] on `set` whenever
 	/// `api_keys.toml` changes, so a server that needs hot-reloadable
 	/// keys must pass the same `Arc<ApiKeySet>` it gave to the
 	/// watcher. Must be called before the state is shared (the
