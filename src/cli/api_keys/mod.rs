@@ -97,6 +97,9 @@ pub(super) fn create(
 		scopes: scopes.clone(),
 		domains: domains.clone(),
 		account: account.map(str::to_string),
+		// The command takes as many domains as it is asked for: the cap
+		// belongs to the API, which the command did not have before.
+		max_domains: None,
 	};
 	if let Err(refusal) = issue::check(&request, None, &Operator { known }) {
 		return match refusal {

@@ -1118,10 +1118,24 @@ A key makes only a key that is inside its own reach (`403` otherwise):
   `400` whoever asks), and one with no domains reaches every domain only if the
   caller does;
 - an `account` has to be one whose addresses are all inside the caller's domains;
+- a key names `account` or `domains`, not both (`400`), as `epistle api-key
+  create` takes `--account` or `--domain`;
 - `ip_cidr` is inside the caller's, and a key pinned to a network makes only
   pinned keys;
 - `expires_at` is no later than the caller's own, and a key that expires makes
   only keys that expire.
+
+When a key makes a key, what the request was checked against is read again as
+the new one is written, under the lock of `api_keys.toml`: an account that has
+moved outside the caller's domains makes nothing (`403`), and neither does an
+account that is gone or a domain the server no longer hosts (`400`). Over HTTP
+a key is confined to at most 32 domains (`400`); `epistle api-key create` has
+no such cap.
+
+If the file is written and the running server cannot read it back, the answer is
+a plain `500`, so it never says a change is in force that is not. A revoked key
+stops being accepted all the same. A key made that way stays in the file, but
+its secret was never given out: revoke it and make another.
 
 The same reach limits what a key lists and revokes: the keys it could have
 made. A key it cannot reach and one that does not exist are the same `404`, so

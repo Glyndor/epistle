@@ -162,6 +162,95 @@ async fn every_change_is_audited_once_with_its_key_and_never_with_a_secret() {
 	}
 }
 
+/// A revocation the running set cannot take is not reported as done: the
+/// answer is a plain `500`, and the key stops being accepted all the same.
+#[tokio::test]
+async fn a_revocation_the_running_set_cannot_take_is_a_500_and_the_key_stops_working() {
+	let world = world();
+	let (status, _, _) = call(&world.state, "GET", "/api/v1/domains", OF_A, None).await;
+	assert_eq!(status, StatusCode::OK);
+	world.state.api_keys().refuse_reloads();
+	let (status, _, body) = call(&world.state, "DELETE", "/api/v1/keys/of-a", token(), None).await;
+	assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+	assert!(body.get("revoked").is_none(), "{body}");
+	assert!(!labels(&world).contains(&"of-a".to_string()));
+	let (status, _, _) = call(&world.state, "GET", "/api/v1/domains", OF_A, None).await;
+	assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+/// A key the running set cannot take is not handed out: the answer is a plain
+/// `500` that carries no secret.
+#[tokio::test]
+async fn a_creation_the_running_set_cannot_take_is_a_500_with_no_secret() {
+	let world = world();
+	world.state.api_keys().refuse_reloads();
+	let (status, _, body) = call(
+		&world.state,
+		"POST",
+		"/api/v1/keys",
+		token(),
+		Some(json!({"label": "fresh", "scopes": ["read"]})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+	assert!(body.get("key").is_none(), "{body}");
+	let running: Vec<String> = world
+		.state
+		.api_keys()
+		.snapshot()
+		.iter()
+		.map(|key| key.label.clone())
+		.collect();
+	assert!(!running.contains(&"fresh".to_string()), "{running:?}");
+}
+
+/// A key is not bound to an account and confined to a domain at once, as
+/// `api-key create` refuses to.
+#[tokio::test]
+async fn a_key_is_not_bound_to_an_account_and_confined_to_a_domain_at_once() {
+	let world = world();
+	let (status, _, body) = call(
+		&world.state,
+		"POST",
+		"/api/v1/keys",
+		token(),
+		Some(json!({"label": "x", "scopes": ["read"], "account": "ann", "domains": ["a.example"]})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+	assert!(
+		body.to_string().contains("cannot also be confined"),
+		"{body}"
+	);
+	assert!(
+		!labels(&world).contains(&"x".to_string()),
+		"the key was written"
+	);
+}
+
+/// The API caps the domains of a key at 32; the command has no cap.
+#[tokio::test]
+async fn the_api_refuses_more_than_thirty_two_domains() {
+	let world = world();
+	let domains: Vec<String> = (0..=crate::api::api_keys::issue::MAX_DOMAINS)
+		.map(|n| format!("d{n}.example"))
+		.collect();
+	let (status, _, body) = call(
+		&world.state,
+		"POST",
+		"/api/v1/keys",
+		token(),
+		Some(json!({"label": "wide", "scopes": ["read"], "domains": domains})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+	assert!(body.to_string().contains("at most 32 domains"), "{body}");
+	assert!(
+		!labels(&world).contains(&"wide".to_string()),
+		"the key was written"
+	);
+}
+
 /// Many requests for one label: one key, one line.
 #[tokio::test]
 async fn concurrent_creations_of_one_label_make_one_key() {

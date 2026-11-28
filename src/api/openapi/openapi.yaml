@@ -447,13 +447,15 @@ paths:
         that reaches further than the key that asks: no scope it does not hold,
         no domain outside its own (and every domain it names must be hosted
         here), no wider network, no later expiry, no account outside its
-        domains. Asking for more is `403`. The secret is in the answer, once, and
-        the answer is `Cache-Control: no-store`; only its digest is kept. A key
-        made by a key counts against a cap of 500 keys in the file (the
-        configured token has none). The label is unique, `409` otherwise. The
-        key that asks is read again when the new one is written, so one revoked a
-        moment ago makes nothing. Audited as `key.created`, with the label and the
-        scopes and never the secret.
+        domains. Asking for more is `403`. A key is bound to an `account` or
+        confined to `domains`, not both (`400`). The secret is in the answer,
+        once, and the answer is `Cache-Control: no-store`; only its digest is
+        kept. A key made by a key counts against a cap of 500 keys in the file
+        (the configured token has none). The label is unique, `409` otherwise.
+        The key that asks, the account and the domains are read again when the
+        new key is written, so a key revoked a moment ago makes nothing.
+        Audited as `key.created`, with the label and the scopes and never the
+        secret.
       x-epistle-scope: [key]
       requestBody:
         required: true

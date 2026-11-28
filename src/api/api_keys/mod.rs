@@ -404,7 +404,15 @@ impl ApiKeyStore {
 			|state: &mut ApiKeyFile| -> std::io::Result<()> {
 				if let Some(ask) = by {
 					let own = removal::maker_in(&state.keys, ask.caller)?;
-					if own.covers(ask.wanted).is_err() {
+					// The facts of the world are read again here, under the
+					// lock: the account the new key is bound to and the
+					// domains it is confined to may have moved since the
+					// request was checked, and a key that now reaches further
+					// than the one that asks is not written.
+					let fresh = ask.wanted.refreshed(&key, ask.world).map_err(|reason| {
+						std::io::Error::new(std::io::ErrorKind::InvalidInput, reason)
+					})?;
+					if own.covers(&fresh).is_err() {
 						return Err(removal::no_longer_valid());
 					}
 					let max_keys = ask.max_keys;
@@ -633,6 +641,9 @@ impl ApiKeyStore {
 /// disk, and the CLI never has to coordinate with the running process.
 pub struct ApiKeySet {
 	keys: std::sync::RwLock<Vec<ApiKey>>,
+	/// Set by a test to have every reload fail, as an unreadable file does.
+	#[cfg(test)]
+	refusing: std::sync::atomic::AtomicBool,
 }
 
 impl ApiKeySet {
@@ -644,6 +655,8 @@ impl ApiKeySet {
 	pub fn empty() -> Self {
 		ApiKeySet {
 			keys: std::sync::RwLock::new(Vec::new()),
+			#[cfg(test)]
+			refusing: Default::default(),
 		}
 	}
 
@@ -663,6 +676,8 @@ impl ApiKeySet {
 		}
 		Ok(ApiKeySet {
 			keys: std::sync::RwLock::new(file.keys),
+			#[cfg(test)]
+			refusing: Default::default(),
 		})
 	}
 
@@ -671,6 +686,10 @@ impl ApiKeySet {
 	/// the running set untouched so a half-written or operator-typo'd file
 	/// cannot revoke a key the watcher is mid-swap on.
 	pub fn reload_from(&self, text: &str) -> std::io::Result<()> {
+		#[cfg(test)]
+		if self.refusing.load(std::sync::atomic::Ordering::SeqCst) {
+			return Err(std::io::Error::other("the test refuses every reload"));
+		}
 		let file: ApiKeyFile = toml::from_str(text)
 			.map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
 		for key in &file.keys {
@@ -687,6 +706,21 @@ impl ApiKeySet {
 		ApiKeySetSnapshot {
 			guard: self.keys.read().unwrap_or_else(|p| p.into_inner()),
 		}
+	}
+
+	/// Drop the key `label` from the running set, without reading the file.
+	/// A key that is gone from the file must stop being accepted even when
+	/// the file cannot be read back into the set.
+	pub fn forget(&self, label: &str) {
+		let mut keys = self.keys.write().unwrap_or_else(|p| p.into_inner());
+		keys.retain(|key| key.label != label);
+	}
+
+	/// Make every later [`Self::reload_from`] fail.
+	#[cfg(test)]
+	pub(crate) fn refuse_reloads(&self) {
+		self.refusing
+			.store(true, std::sync::atomic::Ordering::SeqCst);
 	}
 }
 

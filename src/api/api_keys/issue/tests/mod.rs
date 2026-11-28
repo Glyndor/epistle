@@ -26,6 +26,7 @@ impl World for Server {
 	}
 	fn hosts(&self, domain: &str) -> bool {
 		matches!(domain, "a.example" | "b.example" | "c.example")
+			|| (domain.starts_with('d') && domain.ends_with(".example"))
 	}
 }
 
@@ -69,6 +70,7 @@ fn what_is_refused_to_everyone() {
 	assert!(matches!(refused(&cidr, None), Refusal::Invalid(_)));
 	let mut many = request(&["read"]);
 	many.domains = (0..=MAX_DOMAINS).map(|n| format!("d{n}.example")).collect();
+	many.max_domains = Some(MAX_DOMAINS);
 	assert!(matches!(refused(&many, None), Refusal::Invalid(_)));
 	let mut ghost = request(&["read"]);
 	ghost.account = Some("nobody".to_string());
@@ -113,6 +115,24 @@ fn the_operator_may_make_any_key_the_rules_allow() {
 		check(&elsewhere, None, &Server),
 		Err(Refusal::Invalid(_))
 	));
+}
+
+/// The cap of domains belongs to whoever asks: the API sets one and the
+/// command does not.
+#[test]
+fn the_cap_of_domains_is_the_callers() {
+	let mut many = request(&["read"]);
+	many.domains = (0..=MAX_DOMAINS).map(|n| format!("d{n}.example")).collect();
+	// The command asks for no cap, so the count of its domains is not a
+	// reason to refuse the request.
+	assert!(check(&many, None, &Server).is_ok());
+	// The API asks for one.
+	many.max_domains = Some(MAX_DOMAINS);
+	let refusal = refused(&many, None);
+	assert!(
+		matches!(&refusal, Refusal::Invalid(text) if text.contains("at most")),
+		"{refusal:?}"
+	);
 }
 
 /// A key makes only a key that reaches no further than itself.

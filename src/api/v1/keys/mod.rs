@@ -211,8 +211,17 @@ pub async fn create(
 			.map(|d| d.to_ascii_lowercase())
 			.collect(),
 		account: body.account,
+		max_domains: Some(issue::MAX_DOMAINS),
 	};
 	let caller = asking(&principal)?;
+	// `api-key create` takes one or the other. The rule is not one of
+	// `issue::check`: the hidden `api-key-create` alias runs it too and still
+	// takes both, for the scripts that pass them.
+	if request.account.is_some() && !request.domains.is_empty() {
+		return Err(ApiError::invalid_input(
+			"a key bound to an account cannot also be confined to domains: name account or domains",
+		));
+	}
 	let wanted = issue::check(&request, caller.as_ref(), &Server(&state)).map_err(refusal)?;
 	let secret = crate::util::secret::generate_secret().ok_or_else(|| {
 		tracing::error!("no randomness for an API key");
@@ -253,8 +262,12 @@ pub async fn create(
 	);
 	// The write and its line are made together on a thread a client that goes
 	// away does not stop.
+	let world = state;
 	let written = tokio::task::spawn_blocking(move || {
 		let mut store = ApiKeyStore::open(&data_dir)?;
+		// The world the file is asked about under its own lock: the facts
+		// of the server are read there, not from the request.
+		let server = Server(&world);
 		match &caller {
 			Some(caller) => store.add_by(
 				key.clone(),
@@ -263,17 +276,24 @@ pub async fn create(
 					caller,
 					wanted: &wanted,
 					max_keys: issue::MAX_KEYS_BY_KEY,
+					world: &server,
 				},
 			)?,
 			None => store.add_within(key.clone(), gate.as_ref())?,
 		}
-		apply(&data_dir, &set);
+		let applied = apply(&data_dir, &set);
 		carried.run(|| log_key_change(KeyEvent::Created, &label, &scopes, by.as_deref(), ip.0));
-		Ok::<_, std::io::Error>(key)
+		Ok::<_, std::io::Error>((key, applied))
 	})
 	.await
 	.map_err(|_| ApiError::internal())?;
-	let key = written.map_err(store_error)?;
+	let (key, applied) = written.map_err(store_error)?;
+	// The file holds the key, but the running set did not take it: the
+	// answer must not say the key works.
+	if let Err(error) = applied {
+		tracing::error!(%error, "the API key file was written but the running set did not take it");
+		return Err(ApiError::internal());
+	}
 	let mut view = ApiKeySummary::of(&key).json();
 	view["key"] = secret.into();
 	let mut response = (StatusCode::CREATED, Json(view)).into_response();
@@ -284,11 +304,11 @@ pub async fn create(
 }
 
 /// Make the running server see the file as it is now, without waiting for the
-/// watcher: a key revoked is refused at once.
-fn apply(data_dir: &std::path::Path, set: &ApiKeySet) {
-	if let Ok(text) = std::fs::read_to_string(data_dir.join("api_keys.toml")) {
-		let _ = set.reload_from(&text);
-	}
+/// watcher: a key revoked is refused at once. A file that cannot be read
+/// back is an error: the answer must not say the change is in force.
+fn apply(data_dir: &std::path::Path, set: &ApiKeySet) -> std::io::Result<()> {
+	let text = std::fs::read_to_string(data_dir.join("api_keys.toml"))?;
+	set.reload_from(&text)
 }
 
 /// The answer to a refusal of the store.
@@ -338,7 +358,12 @@ pub async fn revoke(
 				key
 			}
 		};
-		apply(&data_dir, &set);
+		let applied = apply(&data_dir, &set);
+		if applied.is_err() {
+			// The file no longer holds the key, so the running set must not
+			// go on accepting it, even when the file cannot be read back.
+			set.forget(&removed.label);
+		}
 		carried.run(|| {
 			log_key_change(
 				KeyEvent::Revoked,
@@ -348,11 +373,17 @@ pub async fn revoke(
 				ip.0,
 			)
 		});
-		Ok::<_, std::io::Error>(removed)
+		Ok::<_, std::io::Error>((removed, applied))
 	})
 	.await
 	.map_err(|_| ApiError::internal())?;
-	let removed = done.map_err(store_error)?;
+	let (removed, applied) = done.map_err(store_error)?;
+	// The key is out of the file, but the running set did not take it: the
+	// answer must not say the revocation is in force.
+	if let Err(error) = applied {
+		tracing::error!(%error, "the API key file was written but the running set did not take it");
+		return Err(ApiError::internal());
+	}
 	Ok(Json(serde_json::json!({ "revoked": removed.label })))
 }
 
