@@ -26,6 +26,7 @@ FILES = (
     ".github/workflows/ci.yml",
     ".github/workflows/dco.yml",
     ".github/workflows/main-guard.yml",
+    ".github/workflows/repository-health.yml",
     ".github/workflows/reusable-ci-plan.yml",
     ".github/workflows/reusable-cancel-others.yml",
     ".github/workflows/reusable-dco.yml",

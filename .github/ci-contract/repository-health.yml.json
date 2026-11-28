@@ -1,0 +1,31 @@
+{
+ "True": {
+  "schedule": [
+   {
+    "cron": "23 14 * * *"
+   }
+  ],
+  "workflow_dispatch": null
+ },
+ "concurrency": {
+  "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
+  "group": "${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}"
+ },
+ "jobs": {
+  "freshness": {
+   "if": "github.event_name != 'pull_request' && github.event_name != 'merge_group'",
+   "permissions": {
+    "actions": "read",
+    "contents": "read"
+   },
+   "uses": "./.github/workflows/reusable-schedule-freshness.yml",
+   "with": {
+    "workflows": "ci.yml 3\ncodeql.yml 15\ndependabot-security-watch.yml 3\nfuzz.yml 3\nmutants.yml 15\nrust-audit.yml 3\n"
+   }
+  }
+ },
+ "name": "Repository health",
+ "permissions": {
+  "contents": "read"
+ }
+}

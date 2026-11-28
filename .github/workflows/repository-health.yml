@@ -1,0 +1,113 @@
+name: Repository health
+
+# The advisory observation about the REPOSITORY, as opposed to the change
+# under review: whether the scheduled workflows still fire. Whether Dependabot
+# has spoken recently is asked by `ci.yml`, on its own schedule and on pull
+# requests.
+#
+# They live in their own workflow so that:
+#
+# - the pull request lane does not carry them at all;
+# - a failure here cannot make the branch CI whose health it inspects red;
+# - the scheduled run does not drag the Rust lanes of `ci.yml` with it.
+#
+# The schedule is the only trigger. A cron that stops firing emits nothing, and
+# "no alert" is indistinguishable from "all clear"; this workflow is what turns
+# that silence into a red check. Podup's copy of this file also runs on a push
+# to a protected branch, as a second lane for a dead schedule. epistle does
+# not: a push to `develop` is the second run of the commit the merge queue has
+# just built, and `ci.yml` already answers on the queue. The price is that a
+# dead watcher stays dead until somebody enables it by hand, which is why the
+# schedule below is the only way in and `workflow_dispatch` is the only way to
+# ask the question early.
+#
+# The tests that read this file stay on pull requests. The Python suites under
+# `.github/scripts/` run on every pull request, so a regression in the observer
+# is still caught by the change that introduces it.
+
+on:
+  # Daily. The tightest limit the freshness watcher enforces is three days
+  # (the daily crons), so a daily run is what keeps that promise. At 14:23
+  # UTC, after every schedule this watcher reads, so the answer covers the
+  # same day rather than the one before.
+  schedule:
+    - cron: "23 14 * * *"
+  # So an operator can ask the question now instead of waiting for the next
+  # cron.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Same shape as `ci.yml`. The group carries the run id, so the events that
+# are not pull requests do not share it and GitHub never drops a pending run,
+# and `cancel-in-progress` is false for every event this workflow fires on.
+# The pull-request clause is here because the shape is the one the repository
+# uses; this workflow never fires on a pull request.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # The schedule-freshness gate: it turns the absence of a scheduled run
+  # into a red check. The header above says what a dead cron cost.
+  #
+  # max-age-days allows about two periods, so one miss is tolerated: 15 for
+  # the weekly crons and 3 for the daily ones.
+  #
+  # These observations are ADVISORY and must never be promoted to required
+  # status checks. Each one fails because a cron somewhere else stopped
+  # firing, which has nothing to do with the change under review, so
+  # requiring one would block every pull request for the length of an
+  # unrelated outage. The rule is stated here because this file is what somebody
+  # wiring a ruleset has open.
+  #
+  # A newly added scheduled workflow cannot be registered here in the same
+  # pull request that adds it. The guard passes only on a run with
+  # `event=schedule` and `status=success`; GitHub fires crons solely from
+  # the default branch, and `workflow_dispatch` does not count. So a fresh
+  # entry fails with "No successful scheduled run on record" until the
+  # workflow has reached `main` and its cron has fired once.
+  #
+  # The `if:` refuses a pull request even if this workflow ever grows that
+  # trigger: the observation answers a question about the repository, not
+  # about the change under review.
+  freshness:
+    if: github.event_name != 'pull_request' && github.event_name != 'merge_group'
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/reusable-schedule-freshness.yml
+    with:
+      # The list is epistle's six crons, not podup's. Podup watches
+      # `audit.yml`, `fuzz.yml`, `podman-lane.yml`, `podman-watch.yml` and
+      # `benchmark.yml`; epistle has no Podman lane and no benchmark, and it
+      # has four crons podup does not. The reason the list changed is that
+      # every entry has to name a workflow that fires a cron in this
+      # repository, or the gate watches nothing.
+      #
+      # Each entry carries its own limit because the six crons have two
+      # periods, and the limit follows the period: three days for a daily
+      # cron and fifteen for a weekly one, so one missed fire is tolerated
+      # and two are not.
+      #
+      #   ci.yml                         daily   02:17 UTC
+      #   fuzz.yml                       daily   03:00 UTC
+      #   codeql.yml                     weekly  Monday 05:17 UTC
+      #   mutants.yml                    weekly  Sunday 04:00 UTC
+      #   dependabot-security-watch.yml  daily   05:37 UTC
+      #   rust-audit.yml                 daily   05:37 UTC
+      #
+      # This workflow is not in its own list. A run that fails this job is
+      # not a success, so a watcher of itself would re-arm the alarm forever
+      # however healthy the cron is; the reusable has an input for that shape
+      # (`count-any-conclusion`), and this caller does not need it because it
+      # is watched from outside. The price is that nothing in the tree
+      # watches `repository-health.yml`, and a dead watcher is silent.
+      workflows: |
+        ci.yml 3
+        codeql.yml 15
+        dependabot-security-watch.yml 3
+        fuzz.yml 3
+        mutants.yml 15
+        rust-audit.yml 3

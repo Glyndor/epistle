@@ -71,6 +71,13 @@ class PushTriggers(unittest.TestCase):
         self.assertEqual(ci["audit"]["uses"], "./.github/workflows/reusable-rust-audit.yml")
         self.assertIn("merge_group", events(ROOT / ".github/workflows/ci.yml"))
 
+    def test_the_repository_health_watcher_has_neither_a_pull_request_nor_a_push_trigger(self):
+        """It observes the repository, not a change: a run on a pull request would answer a different question."""
+        on = events(ROOT / ".github/workflows/repository-health.yml")
+        for event in ("pull_request", "push"):
+            self.assertNotIn(event, on, f"repository-health.yml must not run on {event}")
+        self.assertEqual(set(on), {"schedule", "workflow_dispatch"})
+
 
 class TheReader(unittest.TestCase):
     """Each way a push can reach develop, and the ones that cannot."""
