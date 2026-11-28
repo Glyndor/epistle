@@ -6,7 +6,8 @@
 #
 # Podman 6.2.0 and podup come from the Glyndor channel, which does not serve this
 # package yet, so the install ignores dependencies; verify-rpm.sh checked them in
-# the header.
+# the header. The package carries no rpm signature here, the channel adds it when
+# it admits a release, so signatures are not asked for.
 #
 # Reads: /pkg/$NAME, /upgrade/$UPGRADE. Env: VERSION, NEXT_VERSION, NAME, UPGRADE.
 set -Eeuo pipefail
@@ -17,8 +18,8 @@ trap 'echo "failed in the container script at line $LINENO: $BASH_COMMAND" >&2' 
 dnf -y --setopt=install_weak_deps=0 install systemd shadow-utils util-linux gawk grep findutils procps-ng \
 	>/tmp/dnf.log 2>&1 || { cat /tmp/dnf.log >&2; exit 1; }
 
-package_install() { rpm --install --nodeps "/pkg/$NAME"; }
-package_upgrade() { rpm --upgrade --nodeps "/upgrade/$UPGRADE"; }
+package_install() { rpm --install --nodeps --nosignature "/pkg/$NAME"; }
+package_upgrade() { rpm --upgrade --nodeps --nosignature "/upgrade/$UPGRADE"; }
 package_remove() { rpm --erase --nodeps epistle; }
 package_installed_version() { rpm -q --qf '%{VERSION}-%{RELEASE}\n' epistle; }
 package_verify() {

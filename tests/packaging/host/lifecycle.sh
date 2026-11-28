@@ -47,6 +47,7 @@ if "$setup" extra >/dev/null 2>&1; then fail "setup took an argument"; fi
 if runuser -u nobody -- "$setup" >/dev/null 2>&1; then fail "setup ran without being root"; fi
 
 # An operator's own floor is left alone, and nothing is written over it.
+mkdir -p /etc/sysctl.d # the images of some distributions ship none
 echo 'net.ipv4.ip_unprivileged_port_start = 80' >/etc/sysctl.d/10-operator.conf
 "$setup" >/tmp/setup.log 2>&1 || { cat /tmp/setup.log >&2; fail "setup failed"; }
 test ! -e "$floor" || fail "setup wrote a floor over the one of the operator"
