@@ -15,6 +15,8 @@ on:
         value: ${{ jobs.plan.outputs.msrv }}
       debian:
         value: ${{ jobs.plan.outputs.debian }}
+      packages:
+        value: ${{ jobs.plan.outputs.packages }}
       supply:
         value: ${{ jobs.plan.outputs.supply }}
       freshness:
@@ -41,6 +43,7 @@ jobs:
       doc: ${{ steps.diff.outputs.doc }}
       msrv: ${{ steps.diff.outputs.msrv }}
       debian: ${{ steps.diff.outputs.debian }}
+      packages: ${{ steps.diff.outputs.packages }}
       supply: ${{ steps.diff.outputs.supply }}
       freshness: ${{ steps.diff.outputs.freshness }}
       folder: ${{ steps.diff.outputs.folder }}
@@ -62,18 +65,31 @@ jobs:
         run: |
           set -euo pipefail
           script="$RUNNER_TEMP/ci_plan.py"
+          jobs="lint tests doc msrv debian packages supply freshness folder lines"
           if [ "$EVENT_NAME" = pull_request ] && [ "$BASE_REF" = develop ] \
             && git show "$BASE_SHA:.github/scripts/ci_plan/ci_plan.py" > "$script" \
             && python3 -I "$script"; then
+            # A job the planner of the base does not know yet runs: the change that
+            # adds it is judged by the planner before it.
+            for job in $jobs; do
+              grep -q "^$job=" "$GITHUB_OUTPUT" || echo "$job=true" >> "$GITHUB_OUTPUT"
+            done
             exit 0
           fi
           echo "No trusted PR plan; running all work on $EVENT_NAME"
-          for job in lint tests doc msrv debian supply freshness folder lines; do
+          for job in $jobs; do
             value=true
+            # The package checks take their tools from the repositories of other
+            # distributions. The queue does not repeat them: the pull request that
+            # changed the packaging ran them, and the promotion into main and the push
+            # to main run them again over what the queue merged.
+            if [ "$EVENT_NAME" = merge_group ] && [ "$job" = packages ]; then
+              value=false
+            fi
             # The nightly run exists to seed the cargo caches, which only the
             # Rust jobs use; the rest would be a second copy of the push to main.
             if [ "$EVENT_NAME" = schedule ]; then
-              case "$job" in debian | supply | folder | lines) value=false ;; esac
+              case "$job" in debian | packages | supply | folder | lines) value=false ;; esac
             fi
             echo "$job=$value" >> "$GITHUB_OUTPUT"
           done

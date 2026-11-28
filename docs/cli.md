@@ -1463,6 +1463,10 @@ disabled with `stack down` stay disabled until `stack up`.
 
 ### What the package does on install and upgrade
 
+The rpm and pacman packages run no script and leave this to
+`sudo /usr/lib/epistle/setup`; see
+[rpm and pacman packages](operations/packages.md).
+
 The `postinst` of the `.deb` runs on every install, upgrade and
 `dpkg-reconfigure epistle`. It creates the `glyndor-epistle` account and its
 directories, adds the subordinate id ranges, turns on linger, enables the

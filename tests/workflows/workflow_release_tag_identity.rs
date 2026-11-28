@@ -210,6 +210,8 @@ fn verify_resolves_the_tag_once_and_every_build_checks_out_that_commit() {
 	// A checkout of a commit read from an output, followed by a script of that tree, is what code
 	// scanning reports as a possible cache poisoning from a manual run.
 	for id in [
+		"build-rpm",
+		"build-pacman",
 		"attest",
 		"sign",
 		"verify-signatures",

@@ -11,13 +11,18 @@ less, every entry a regular file.
 Usage:
   release_files.py names <tag> <built|signed>
   release_files.py check <dir> <tag> <built|signed>
-  release_files.py check-package <dir> <tag> <arch>
-  release_files.py same-packages <dir> <tag> amd64=<sha256> arm64=<sha256>
+  release_files.py check-package <dir> <tag> <kind>
+  release_files.py same-packages <dir> <tag> <kind>=<sha256> ...
 
 `built` is what the build job hands over; `signed` adds one signature for each of
-those. `check` also reads the control fields of the packages with `dpkg-deb`
-and recomputes SHA256SUMS. It prints one `error:` line per problem and exits 1.
-It runs with `python3 -I` and needs nothing installed.
+those. A kind is one package of the release: `amd64` and `arm64` for the .deb,
+`rpm-x86_64` and `rpm-aarch64` for the rpm, `pacman-x86_64` for the pacman
+package. A prerelease tag carries the .deb only: the rpm and the pacman channels
+serve tags of three numbers and refuse anything else.
+`check` also reads the control fields of the .deb packages with `dpkg-deb` (the
+other formats are read where they are built, and held here by their digest) and
+recomputes SHA256SUMS. It prints one `error:` line per problem and exits 1. It
+runs with `python3 -I` and needs nothing installed.
 """
 
 import hashlib
@@ -30,6 +35,7 @@ from pathlib import Path
 
 TAG = re.compile(r"^v((?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?)$")
 ARCHES = ("amd64", "arm64")
+RPM_ARCHES = ("x86_64", "aarch64")
 STAGES = ("built", "signed")
 
 
@@ -44,11 +50,21 @@ def package_name(tag, arch):
     return f"epistle_{version_of(tag)}_{arch}.deb"
 
 
+def packages(tag):
+    """Every package of the release of this tag, as {kind: file name}."""
+    version = version_of(tag)
+    found = {arch: package_name(tag, arch) for arch in ARCHES}
+    if "-" not in version:
+        for arch in RPM_ARCHES:
+            found[f"rpm-{arch}"] = f"epistle-{version}-1.glyndor.any.{arch}.rpm"
+        # Arch Linux has no official port to any other architecture.
+        found["pacman-x86_64"] = f"epistle-{version}-1-x86_64.pkg.tar.zst"
+    return found
+
+
 def built_names(tag):
-    version_of(tag)
     return sorted(
-        [f"epistle-{tag}-x86_64-linux", f"epistle-{tag}.cdx.json", "SHA256SUMS"]
-        + [package_name(tag, arch) for arch in ARCHES]
+        [f"epistle-{tag}-x86_64-linux", f"epistle-{tag}.cdx.json", "SHA256SUMS", *packages(tag).values()]
     )
 
 
@@ -124,35 +140,37 @@ def check(directory, tag, stage):
     return problems
 
 
-def check_package(directory, tag, arch):
-    """A directory that holds exactly one package, the one this tag names for this architecture."""
-    if arch not in ARCHES:
-        return [f"unknown architecture {arch!r}"]
+def check_package(directory, tag, kind):
+    """A directory that holds exactly one package, the one this tag names for this kind."""
+    wanted = packages(tag)
+    if kind not in wanted:
+        return [f"a release of {tag} has no package of the kind {kind!r}"]
     root = Path(directory)
-    name = package_name(tag, arch)
+    name = wanted[kind]
     held = entries(root)
     problems = [f"unexpected entry: {n}" for n in sorted(set(held) - {name})]
     if name not in held:
         return problems + [f"missing: {name}"]
     if held[name] != "file":
         return problems + [f"{name} is {held[name]}"]
-    version = version_of(tag)
-    for field, want in (("Package", "epistle"), ("Version", version), ("Architecture", arch)):
-        got = control_field(root / name, field)
-        if got != want:
-            problems.append(f"{name}: {field} is {got!r}, expected {want!r}")
+    if kind in ARCHES:
+        version = version_of(tag)
+        for field, want in (("Package", "epistle"), ("Version", version), ("Architecture", kind)):
+            got = control_field(root / name, field)
+            if got != want:
+                problems.append(f"{name}: {field} is {got!r}, expected {want!r}")
     return problems
 
 
 def same_packages(directory, tag, digests):
     """The gathered packages are byte for byte the ones their builders handed over."""
     problems = []
-    for arch in ARCHES:
-        want = digests.get(arch, "")
+    for kind, name in packages(tag).items():
+        want = digests.get(kind, "")
         if not re.fullmatch(r"[0-9a-f]{64}", want):
-            problems.append(f"{arch}: the digest handed over is not a SHA-256: {want!r}")
+            problems.append(f"{kind}: the digest handed over is not a SHA-256: {want!r}")
             continue
-        path = Path(directory) / package_name(tag, arch)
+        path = Path(directory) / name
         if not path.is_file() or path.is_symlink():
             problems.append(f"{path.name} is missing or not a regular file")
         elif hashlib.sha256(path.read_bytes()).hexdigest() != want:
@@ -172,7 +190,7 @@ def main(argv):
             if not problems:
                 print(f"{argv[2]} holds exactly the {argv[4]} package of {argv[3]}")
             return 1 if problems else 0
-        if len(argv) == 6 and argv[1] == "same-packages":
+        if len(argv) >= 5 and argv[1] == "same-packages":
             pairs = dict(item.split("=", 1) for item in argv[4:])
             problems = same_packages(argv[2], argv[3], pairs)
             for problem in problems:

@@ -43,6 +43,11 @@ const PRIVILEGED: &[(&str, &str, &str)] = &[
 	),
 	(
 		"release.yml",
+		"attest-signatures",
+		"attests the signatures of the packages with id-token and attestations: write",
+	),
+	(
+		"release.yml",
 		"publish",
 		"creates the GitHub release with contents: write",
 	),
@@ -89,6 +94,16 @@ const FIXED: &[(&str, &str, &str)] = &[
 		"release.yml",
 		"verify",
 		"read-only gate of the release run that signs and publishes; the run stays on one kind of runner",
+	),
+	(
+		"release.yml",
+		"build-rpm",
+		"packs the rpm packages with a read of the repository only; the release stays on one kind of runner",
+	),
+	(
+		"release.yml",
+		"build-pacman",
+		"packs the pacman package with a read of the repository only; the release stays on one kind of runner",
 	),
 	(
 		"release.yml",

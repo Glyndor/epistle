@@ -1,0 +1,14 @@
+# The pacman builder: the pinned Arch Linux image plus fakeroot, which makepkg
+# needs and the base image does not carry, and a user, since makepkg refuses to
+# run as root. fakeroot comes from the Arch Linux Archive as it was on the day of
+# the image, so the builder does not change when Arch does. `build-pacman.sh`
+# passes the base by digest (images.env) as BASE and the day in the version label
+# of that image as SNAPSHOT.
+ARG BASE
+FROM ${BASE}
+ARG SNAPSHOT
+RUN test -n "${SNAPSHOT}" \
+    && echo "Server=https://archive.archlinux.org/repos/${SNAPSHOT}/\$repo/os/\$arch" >/etc/pacman.d/mirrorlist \
+    && pacman -Sy --noconfirm --needed --disable-sandbox fakeroot \
+    && useradd --create-home build \
+    && rm -rf /var/cache/pacman/pkg/* /var/lib/pacman/sync/*

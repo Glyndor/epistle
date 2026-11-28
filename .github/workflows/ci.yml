@@ -188,6 +188,79 @@ jobs:
       # Measured by .github/workflows/probe-musl.yml (epistle#757, closed):
       # without it the build fails at aws-lc-sys and the floor survives.
       apt-packages: "musl-tools fakeroot jq"
+      # The package checks below pack the other formats from this .deb.
+      upload-artifact: true
+      artifact-name: packaging-deb
+
+  # The rpm and the pacman package are packed from the .deb this run built, with the
+  # scripts the release runs, and checked before a merge: what each channel reads out
+  # of them, what a person gets when installing, upgrading and removing them, and the
+  # admission of each channel itself. The plan selects it only for a change of the packaging, and it never runs
+  # without the .deb, so the plan never selects it without `debian`.
+  packages:
+    name: rpm and pacman packages
+    needs: [plan, debian]
+    if: ${{ !cancelled() && needs.debian.result == 'success' && needs.plan.outputs.packages != 'false' }}
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
+    # Measured 2026-11-28: the first green run took 2 minutes. It pulls images and
+    # takes packages from the mirrors of three distributions, hence the margin.
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Receive the Debian package
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: packaging-deb
+          path: ${{ runner.temp }}/deb
+
+      - name: Pack the x86_64 rpm and check it
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          debs=("$RUNNER_TEMP"/deb/epistle_*_amd64.deb)
+          if [ "${#debs[@]}" -ne 1 ]; then
+            echo "::error::expected one amd64 .deb, found ${#debs[@]}"
+            exit 1
+          fi
+          version="$(basename "${debs[0]}")"
+          version="${version#epistle_}"
+          version="${version%_amd64.deb}"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          bash .github/scripts/distro_packages/pack-rpm.sh "${debs[0]}" "$version" x86_64 "$RUNNER_TEMP/pack"
+
+      # No arm64 .deb is built for a pull request: the release builds and checks that one
+      # on its own runner. The channel admits both architectures or neither, so this is
+      # the x86_64 payload under the aarch64 header, which is all the admission reads.
+      - name: Pack an aarch64 header for the admission
+        run: |
+          set -euo pipefail
+          bash .github/scripts/distro_packages/build-rpm.sh \
+            "$RUNNER_TEMP/pack/stage-x86_64" "$RUNNER_TEMP/pack/out" "$VERSION" aarch64
+          bash tests/packaging/rpm/verify-rpm.sh \
+            "$RUNNER_TEMP/pack/out/epistle-${VERSION}-1.glyndor.any.aarch64.rpm" \
+            "$RUNNER_TEMP/pack/stage-x86_64" "$VERSION" aarch64
+
+      - name: The rpm channel admits them
+        run: |
+          set -euo pipefail
+          bash tests/packaging/rpm/admission.sh \
+            "$RUNNER_TEMP/pack/out/epistle-${VERSION}-1.glyndor.any.x86_64.rpm" \
+            "$RUNNER_TEMP/pack/out/epistle-${VERSION}-1.glyndor.any.aarch64.rpm" "$VERSION"
+
+      - name: Pack the pacman package and check it
+        run: |
+          set -euo pipefail
+          bash .github/scripts/distro_packages/pack-pacman.sh \
+            "$RUNNER_TEMP/deb/epistle_${VERSION}_amd64.deb" "$VERSION" "$RUNNER_TEMP/pacman"
+
+      - name: The pacman channel admits it
+        run: |
+          set -euo pipefail
+          bash tests/packaging/pacman/admission.sh \
+            "$RUNNER_TEMP/pacman/out/epistle-${VERSION}-1-x86_64.pkg.tar.zst" "$VERSION"
 
   # A statement about the state of the whole tree, not about a diff: the reusable
   # ends in `git ls-files -z` and counts the lines of every tracked file by
@@ -313,7 +386,7 @@ jobs:
   # every event, and is a need of `CI gate`. Its check is named `deprecations / no
   # deprecation notices`; it is not in the ruleset, which only `CI gate` is.
   deprecations:
-    needs: [rust, debian, line-limit, sbom-and-licenses, audit, folder-limit, python-tests, secret-scan-tests]
+    needs: [rust, debian, packages, line-limit, sbom-and-licenses, audit, folder-limit, python-tests, secret-scan-tests]
     if: always()
     permissions:
       contents: read
@@ -336,12 +409,12 @@ jobs:
     with:
       cancel-own: true
 
-  # The package build takes a few minutes and the long suite about forty, so the
-  # failure of the package gets a job of its own: it ends this run and the other
+  # The package build and its checks take minutes and the long suite about forty, so a
+  # failure of either package job gets a job of its own: it ends this run and the other
   # runs of the commit without waiting for the long suite, and it does not hold
   # back the quick cuts that are already there.
   cancel-on-package-failure:
-    needs: [debian]
+    needs: [debian, packages]
     if: ${{ failure() && (github.event_name == 'pull_request' || github.event_name == 'merge_group') }}
     permissions:
       contents: read
@@ -382,7 +455,7 @@ jobs:
     # too, and a skipped job counts as passed, so nothing else may carry the name a
     # ruleset requires.
     name: ${{ github.event_name == 'merge_group' && 'CI gate' || github.event_name == 'pull_request' && (github.event.pull_request.base.ref == 'main' && 'CI gate (main)' || 'CI gate') || format('CI gate ({0})', github.event_name) }}
-    needs: [plan, rust, debian, line-limit, sbom-and-licenses, audit, folder-limit, python-tests, deprecations, secret-scan-tests]
+    needs: [plan, rust, debian, packages, line-limit, sbom-and-licenses, audit, folder-limit, python-tests, deprecations, secret-scan-tests]
     if: always()
     runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
     timeout-minutes: 5
@@ -402,6 +475,7 @@ jobs:
           SUITES = {
               "rust": ("lint", "tests", "doc", "msrv"),
               "debian": ("debian",),
+              "packages": ("packages",),
               "line-limit": (),
               "audit": (),
               "folder-limit": (),
