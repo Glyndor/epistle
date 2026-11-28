@@ -73,7 +73,8 @@ class SelectionTests(unittest.TestCase):
     def test_a_change_to_the_packaging_of_the_other_distributions_runs_the_deb_and_its_checks_and_nothing_else(self):
         for path in (".github/scripts/distro_packages/stage_payload.py", ".github/scripts/distro_packages/rpm/epistle.spec.in",
                      ".github/scripts/distro_packages/images.env", "packaging/linux/setup.sh",
-                     "tests/packaging/rpm/verify-rpm.sh", "tests/packaging/payload/verify-matches-deb.sh"):
+                     "tests/packaging/rpm/verify-rpm.sh", "tests/packaging/payload/verify-matches-deb.sh",
+                     "tests/packaging/host/lifecycle.sh"):
             with self.subTest(path=path):
                 self.assertEqual(self.selected(path), {"debian", "packages"})
 

@@ -18,7 +18,8 @@ BUILD = RUST | {"debian"}
 # selects them selects the .deb too.
 PACKAGES = {"debian", "packages"}
 # What only the package checks read: the recipes, the files they add and the checks.
-PACKAGING = (".github/scripts/distro_packages/", "packaging/", "tests/packaging/payload/", "tests/packaging/rpm/")
+PACKAGING = (".github/scripts/distro_packages/", "packaging/", "tests/packaging/host/", "tests/packaging/payload/",
+             "tests/packaging/rpm/")
 OWN = {".github/scripts/ci_plan/ci_plan.py", ".github/scripts/ci_plan/test_ci_plan.py",
        ".github/scripts/ci_plan/__init__.py",
        ".github/workflows/reusable-ci-plan.yml"}

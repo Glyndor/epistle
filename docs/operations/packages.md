@@ -27,7 +27,7 @@ does not take is named on stderr with the command that fixes it, as with the
 | | `.deb` | rpm |
 |---|---|---|
 | Host setup | on every install and upgrade | when `setup` is run |
-| Account | created by the `postinst` | declared in `/usr/lib/sysusers.d/epistle.conf`, which systemd applies at install; `setup` applies it again |
+| Account | created by the `postinst` | declared in `/usr/lib/sysusers.d/epistle.conf` and created by `setup`; do not count on the installation alone to create it |
 | Port floor | `/usr/lib/sysctl.d/30-glyndor-epistle.conf` | `setup` writes `/etc/sysctl.d/99-glyndor-epistle.conf`, unless the host already sets the key; removing the package leaves that file |
 | `epistle stack rollback` | goes back to the binary the upgrade replaced | not available: nothing saves the replaced binary |
 | `wireguard-tools` | a dependency | install it yourself on a deployment with more than one node |

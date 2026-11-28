@@ -3,9 +3,9 @@
 # arrives in the staged tree.
 #
 # The channel admits no scriptlet for this package (it ships no system unit), so
-# there is none: the account is declared in sysusers.d, which systemd applies,
-# and the rest of the host setup is /usr/lib/epistle/setup. No file under /etc
-# is shipped, so an upgrade or a removal never touches the configuration.
+# there is none: the account is declared in sysusers.d, and it and the rest of the
+# host setup are made by /usr/lib/epistle/setup. No file under /etc is shipped, so
+# an upgrade or a removal never touches the configuration.
 Name:           epistle
 Version:        @VERSION@
 Release:        1.glyndor.any

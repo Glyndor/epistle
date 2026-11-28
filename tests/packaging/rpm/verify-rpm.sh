@@ -9,8 +9,8 @@
 #    and the files with their modes and owners.
 # 2. For x86_64 only (the binary cannot run elsewhere without an emulator):
 #    install-in-container.sh in AlmaLinux 9, the oldest distribution the channel
-#    serves, with UPGRADE_RPM as the later version; and in Fedora, that installing
-#    the package alone creates the account.
+#    serves, and in Fedora, whose rpm is the newest, with UPGRADE_RPM as the later
+#    version.
 #
 # Needs podman (or CONTAINER_ENGINE). The install steps need the network, to take
 # systemd and the tools setup uses from the distribution.
@@ -89,21 +89,13 @@ fi
 [ -f "$upgrade" ] || fail "$upgrade is not a file"
 upgrade_dir="$(cd "$(dirname "$upgrade")" && pwd)"
 
-"$engine" run --rm \
-	--volume "$rpm_dir:/pkg:ro" --volume "$upgrade_dir:/upgrade:ro" --volume "$stage:/stage:ro" \
-	--volume "$here/install-in-container.sh:/work/install.sh:ro" \
-	--env "VERSION=$version" --env "NAME=$name" --env "UPGRADE=$(basename "$upgrade")" \
-	"$RPM_BUILD_BASE" bash /work/install.sh
-echo "ok    install, setup, upgrade and removal in AlmaLinux 9"
-
-# Fedora's rpm creates accounts its own way, and this package carries no metadata
-# for it (it is built with the rpm of EL 9), so the file trigger of systemd is
-# what has to do it there too.
-# shellcheck disable=SC2016 # for the shell of the container
-"$engine" run --rm --volume "$rpm_dir:/pkg:ro" --env "NAME=$name" \
-	"$RPM_QUERY_IMAGE" bash -Eeuo pipefail -c '
-	dnf -y --setopt=install_weak_deps=0 install systemd >/tmp/dnf.log 2>&1 || { cat /tmp/dnf.log >&2; exit 1; }
-	rpm --install --nodeps "/pkg/$NAME"
-	getent passwd glyndor-epistle || { echo "installing the package on Fedora did not create the account" >&2; exit 1; }
-'
-echo "ok    installing on Fedora creates the account"
+for image in "$RPM_BUILD_BASE" "$RPM_QUERY_IMAGE"; do
+	"$engine" run --rm \
+		--volume "$rpm_dir:/pkg:ro" --volume "$upgrade_dir:/upgrade:ro" --volume "$stage:/stage:ro" \
+		--volume "$here/install-in-container.sh:/work/install.sh:ro" \
+		--volume "$here/../host/lifecycle.sh:/work/lifecycle.sh:ro" \
+		--env "VERSION=$version" --env "NAME=$name" --env "UPGRADE=$(basename "$upgrade")" \
+		--env "NEXT_VERSION=$(basename "$upgrade" | cut -d- -f2)" \
+		"$image" bash /work/install.sh
+	echo "ok    install, setup, upgrade and removal in ${image%@*}"
+done
