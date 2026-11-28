@@ -27,13 +27,19 @@ const THREE: [&str; 3] = [
 ];
 
 async fn rest_send(app: &axum::Router) -> (StatusCode, Value) {
+	rest(app, false).await
+}
+
+/// `POST /api/v1/send` to the three recipients, as a dry run or not.
+async fn rest(app: &axum::Router, dry_run: bool) -> (StatusCode, Value) {
 	request_with_body(
 		app,
 		"POST",
 		"/api/v1/send",
 		Some(TOKEN.as_str()),
 		Some(json!({
-			"from": "alice@example.org", "to": THREE, "subject": "hi", "text": "body"
+			"from": "alice@example.org", "to": THREE, "subject": "hi", "text": "body",
+			"dry_run": dry_run
 		})),
 	)
 	.await
@@ -101,6 +107,28 @@ async fn rest_refuses_while_the_cap_cannot_be_checked() {
 	);
 }
 
+/// A dry run asks the cap too, so it answers what the real send would: the
+/// same refusal while the cap cannot be checked, and the limit once it can.
+#[tokio::test]
+async fn a_dry_run_is_refused_while_the_cap_cannot_be_checked() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let app = router(test_state_with_cap(dir.path(), Some(2)));
+	break_store(dir.path());
+	let (status, body) = rest(&app, true).await;
+	assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+	assert_eq!(body["error"]["code"], "unavailable", "{body}");
+	assert!(!body.to_string().contains("correspondents"), "{body}");
+	assert_eq!(rest_send(&app).await, (status, body), "as the real send");
+	assert_eq!(queued(dir.path()), 0, "nothing was queued");
+	repair_store(dir.path());
+	let (status, body) = rest(&app, true).await;
+	assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
+	assert_eq!(
+		body["error"]["message"], "too many new recipients today; retry tomorrow",
+		"the cap, not the limit on dry runs: {body}"
+	);
+}
+
 #[tokio::test]
 async fn jmap_refuses_while_the_cap_cannot_be_checked() {
 	let dir = tempfile::tempdir().expect("tempdir");
@@ -140,6 +168,9 @@ async fn without_a_cap_a_failing_store_does_not_stop_the_message() {
 	let dir = tempfile::tempdir().expect("tempdir");
 	let app = router(test_state_with_cap(dir.path(), None));
 	break_store(dir.path());
+	let (status, body) = rest(&app, true).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	assert_eq!(body["dry_run"], true, "{body}");
 	let (status, body) = rest_send(&app).await;
 	assert_eq!(status, StatusCode::OK, "{body}");
 	let response = jmap_submit(&app, dir.path()).await;
