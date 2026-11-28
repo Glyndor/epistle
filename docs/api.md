@@ -1139,7 +1139,10 @@ A key makes only a key that is inside its own reach (`403` otherwise):
 When a key makes a key, what the request was checked against is read again as
 the new one is written, under the lock of `api_keys.toml`: an account that has
 moved outside the caller's domains makes nothing (`403`), and neither does an
-account that is gone or a domain the server no longer hosts (`400`). Over HTTP
+account that is gone or a domain the server no longer hosts (`400`). A key bound
+to an `account` is written while `accounts.toml` is held, so the account cannot
+be moved or removed between that read and the write. An account that is gone by
+then is `400` for the configured token too, and for `epistle api-key create`. Over HTTP
 a key is confined to at most 32 domains (`400`); `epistle api-key create` has
 no such cap.
 

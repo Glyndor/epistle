@@ -80,6 +80,9 @@ pub(crate) fn open_lock_file(path: &Path) -> std::io::Result<File> {
 #[derive(Debug)]
 pub struct FileLock {
 	file: File,
+	/// Its place in the order of the locks, which tests check.
+	#[cfg(test)]
+	_ranked: super::lock_order::Ranked,
 }
 
 impl FileLock {
@@ -108,7 +111,11 @@ impl FileLock {
 			.open(data_dir.join(".store.lock"))?;
 		loop {
 			if unsafe { libc::flock(file.as_raw_fd(), mode | libc::LOCK_NB) } == 0 {
-				return Ok(Self { file });
+				return Ok(Self {
+					file,
+					#[cfg(test)]
+					_ranked: Default::default(),
+				});
 			}
 			let error = std::io::Error::last_os_error();
 			match error.kind() {
@@ -129,9 +136,15 @@ impl FileLock {
 	pub fn acquire(path: &Path) -> std::io::Result<Self> {
 		let file = open_lock_file(path)?;
 		#[cfg(test)]
+		let ranked = super::lock_order::taking(path);
+		#[cfg(test)]
 		reached::note(path);
 		flock_exclusive_blocking(file.as_raw_fd())?;
-		Ok(FileLock { file })
+		Ok(FileLock {
+			file,
+			#[cfg(test)]
+			_ranked: ranked,
+		})
 	}
 
 	/// Try to acquire an exclusive lock on `path` without blocking.
@@ -140,7 +153,11 @@ impl FileLock {
 	pub fn try_acquire(path: &Path) -> std::io::Result<Option<Self>> {
 		let file = open_lock_file(path)?;
 		match flock_exclusive_nonblocking(file.as_raw_fd()) {
-			Ok(()) => Ok(Some(FileLock { file })),
+			Ok(()) => Ok(Some(FileLock {
+				file,
+				#[cfg(test)]
+				_ranked: Default::default(),
+			})),
 			Err(error) if error.raw_os_error() == Some(libc::EWOULDBLOCK) => Ok(None),
 			Err(error) => Err(error),
 		}

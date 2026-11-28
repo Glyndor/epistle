@@ -12,6 +12,8 @@ mod crypto;
 mod delivery;
 pub mod delivery_log;
 pub(crate) mod lock;
+#[cfg(test)]
+mod lock_order;
 pub(crate) mod locked;
 mod private_dir;
 pub mod rekey;

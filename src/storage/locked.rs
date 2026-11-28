@@ -16,6 +16,10 @@
 //!
 //! Readers do not need the lock: atomic renames mean an in-flight
 //! reader either sees the old or the new version, never a mix.
+//!
+//! Some writes hold one of these locks while they take another. The order is
+//! `domains.toml`, then `accounts.toml`, then `api_keys.toml`: never take an
+//! earlier one while holding a later one. Tests panic on a thread that does.
 
 use std::path::{Path, PathBuf};
 
@@ -114,6 +118,8 @@ where
 		Err(error) => return Err(error.into()),
 	};
 	mutate(&mut state).map_err(EditError::Mutate)?;
+	#[cfg(test)]
+	before_write::fire(path);
 	let text = serialize(&state).map_err(EditError::Io)?;
 	write_secret(path, text.as_bytes())?;
 	Ok(commit(state))
@@ -128,4 +134,36 @@ pub(crate) fn lock_path(path: &Path) -> PathBuf {
 		.unwrap_or(Path::new("."));
 	let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("store");
 	parent.join(format!(".{name}.lock"))
+}
+
+/// Tests that need to act between the checks of a write and the write itself
+/// register a step for the data file; the next [`edit`] of it runs the step,
+/// once, with the file's lock held.
+#[cfg(test)]
+pub(crate) mod before_write {
+	use std::path::{Path, PathBuf};
+	use std::sync::Mutex;
+
+	type Step = Box<dyn FnOnce() + Send>;
+
+	static STEPS: Mutex<Vec<(PathBuf, Step)>> = Mutex::new(Vec::new());
+
+	/// Run `step` before the next write of `path`.
+	pub(crate) fn run_once(path: &Path, step: impl FnOnce() + Send + 'static) {
+		STEPS
+			.lock()
+			.expect("steps")
+			.push((path.to_path_buf(), Box::new(step)));
+	}
+
+	pub(super) fn fire(path: &Path) {
+		let step = {
+			let mut steps = STEPS.lock().expect("steps");
+			let found = steps.iter().position(|(watched, _)| watched == path);
+			found.map(|at| steps.remove(at).1)
+		};
+		if let Some(step) = step {
+			step();
+		}
+	}
 }

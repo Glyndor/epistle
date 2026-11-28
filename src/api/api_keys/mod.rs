@@ -626,6 +626,7 @@ impl ApiKeyStore {
 	}
 }
 
+mod binding;
 mod grants;
 pub mod held;
 pub mod issue;

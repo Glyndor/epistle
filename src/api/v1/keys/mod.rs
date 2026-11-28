@@ -266,21 +266,16 @@ pub async fn create(
 	let written = tokio::task::spawn_blocking(move || {
 		let mut store = ApiKeyStore::open(&data_dir)?;
 		// The world the file is asked about under its own lock: the facts
-		// of the server are read there, not from the request.
+		// of the server are read there, not from the request. The account of
+		// a bound key stays held until the file is written.
 		let server = Server(&world);
-		match &caller {
-			Some(caller) => store.add_by(
-				key.clone(),
-				gate.as_ref(),
-				Ask {
-					caller,
-					wanted: &wanted,
-					max_keys: issue::MAX_KEYS_BY_KEY,
-					world: &server,
-				},
-			)?,
-			None => store.add_within(key.clone(), gate.as_ref())?,
-		}
+		let ask = caller.as_ref().map(|caller| Ask {
+			caller,
+			wanted: &wanted,
+			max_keys: issue::MAX_KEYS_BY_KEY,
+			world: &server,
+		});
+		store.add_bound(key.clone(), gate.as_ref(), ask, world.store())?;
 		let applied = apply(&data_dir, &set);
 		carried.run(|| log_key_change(KeyEvent::Created, &label, &scopes, by.as_deref(), ip.0));
 		Ok::<_, std::io::Error>((key, applied))

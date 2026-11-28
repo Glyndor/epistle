@@ -453,7 +453,9 @@ paths:
         kept. A key made by a key counts against a cap of 500 keys in the file
         (the configured token has none). The label is unique, `409` otherwise.
         The key that asks, the account and the domains are read again when the
-        new key is written, so a key revoked a moment ago makes nothing.
+        new key is written, so a key revoked a moment ago makes nothing. The
+        account of a bound key cannot be moved or removed between that read and
+        the write.
         Audited as `key.created`, with the label and the scopes and never the
         secret.
       x-epistle-scope: [key]

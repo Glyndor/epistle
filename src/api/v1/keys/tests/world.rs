@@ -27,9 +27,9 @@ async fn wait_for(counter: &tokio::sync::Semaphore, what: &str) {
 		.forget();
 }
 
-/// The reach of the new key is decided under the file's lock, with the world
-/// read there: an account that left the domains of the key that asks between
-/// the request and the write is not bound, and nothing is written.
+/// The reach of the new key is decided while the accounts are held, from the
+/// file: an account that left the domains of the key that asks between the
+/// request and the write is not bound, and nothing is written.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_account_that_left_the_callers_domains_is_not_bound_and_nothing_is_written() {
 	let world = world();
@@ -40,7 +40,8 @@ async fn an_account_that_left_the_callers_domains_is_not_bound_and_nothing_is_wr
 		.expect("add carol");
 	// The write waits for the lock the test holds: the request has already
 	// been checked against the world as it was.
-	let lock = crate::storage::locked::lock_path(&world.state.data_dir().join("api_keys.toml"));
+	let accounts = world.state.data_dir().join("accounts.toml");
+	let lock = crate::storage::locked::lock_path(&accounts);
 	let held = crate::storage::lock::FileLock::acquire(&lock).expect("lock");
 	let reached = crate::storage::lock::reached::watch(&lock);
 	let state = world.state.clone();
@@ -55,12 +56,12 @@ async fn an_account_that_left_the_callers_domains_is_not_bound_and_nothing_is_wr
 		.await
 	});
 	wait_for(&reached, "the write asks for the lock").await;
-	// The account moves out of the domains of the key that asks.
-	world
-		.state
-		.store()
-		.replace_account("carol", account("carol", "carol@b.example"), None)
-		.expect("move carol");
+	// Whoever holds the lock moves the account out of the domains of the key
+	// that asks.
+	let text = std::fs::read_to_string(&accounts).expect("read accounts");
+	assert!(text.contains("carol@a.example"), "{text}");
+	let moved = text.replace("carol@a.example", "carol@b.example");
+	std::fs::write(&accounts, moved).expect("move carol");
 	drop(held);
 	let (status, _, body) = request.await.expect("answered");
 	assert_eq!(status, StatusCode::FORBIDDEN, "{body}");

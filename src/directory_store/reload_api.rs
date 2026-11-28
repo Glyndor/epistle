@@ -37,7 +37,7 @@ use crate::storage::locked::lock_path;
 
 /// Read the file at `path` for a reload: a missing file is the empty
 /// state, not an error.
-fn read_state(path: &Path) -> Result<String, StoreError> {
+pub(super) fn read_state(path: &Path) -> Result<String, StoreError> {
 	match std::fs::read_to_string(path) {
 		Ok(text) => Ok(text),
 		Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
