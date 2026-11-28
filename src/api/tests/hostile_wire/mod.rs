@@ -35,6 +35,9 @@ fn max_anon_kib() -> u64 {
 	}
 }
 
+/// The wait of [`Peer::start_hashing`], far past what a password hash takes.
+const HASHING_WAIT: Duration = Duration::from_secs(120);
+
 /// Return true in the supervisor, false in the isolated test worker.
 /// A process deadline also catches synchronous handlers that never yield.
 /// The memory ceiling includes runtime, fixtures and request/response buffers.
@@ -101,9 +104,14 @@ impl Peer {
 		Self::start_within(app, Duration::from_secs(5)).await
 	}
 
-	/// [`Self::start`] with a longer wait for each answer, for a request whose
-	/// honest cost is a password hash: Argon2 and a 600000 round SCRAM
-	/// derivation in a debug build take seconds on a loaded machine.
+	/// [`Self::start`] for requests whose honest cost is a password hash:
+	/// Argon2, and for some a 600000 round SCRAM derivation, take seconds in a
+	/// debug build on a loaded machine.
+	pub async fn start_hashing(app: axum::Router) -> Self {
+		Self::start_within(app, HASHING_WAIT).await
+	}
+
+	/// [`Self::start`] with the wait for each answer chosen by the caller.
 	pub async fn start_within(app: axum::Router, wait: Duration) -> Self {
 		let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
 			.await

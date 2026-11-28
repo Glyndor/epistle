@@ -20,7 +20,7 @@ async fn a_challenge_that_is_not_a_digest_is_refused_on_wire() {
 	}
 	let dir = tempfile::tempdir().unwrap();
 	let state = state_with_authz(dir.path(), &keys());
-	let peer = Peer::start(crate::api::router(state.clone())).await;
+	let peer = Peer::start_hashing(crate::api::router(state.clone())).await;
 	for challenge in [
 		// Too short and too long: the digest of a verifier is 43 characters.
 		"a".repeat(42),
@@ -120,7 +120,7 @@ async fn a_megabyte_challenge_is_refused_before_it_is_stored() {
 	}
 	let dir = tempfile::tempdir().unwrap();
 	let state = state_with_authz(dir.path(), &keys());
-	let peer = Peer::start(crate::api::router(state.clone())).await;
+	let peer = Peer::start_hashing(crate::api::router(state.clone())).await;
 	// A megabyte of challenge still fits in the body the listener accepts,
 	// so the endpoint itself has to refuse it.
 	let (status, body) = peer
