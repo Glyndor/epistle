@@ -39,7 +39,15 @@ class Report(unittest.TestCase):
         self.bin = Path(self.tmp.name) / "bin"
         self.bin.mkdir()
         gh = self.bin / "gh"
-        gh.write_text('#!/bin/sh\nif [ "$2" = list ]; then echo "[]"; exit 0; fi\necho "$*" >> "$GH_LOG"\n')
+        # The body of the issue is written with `--body-file`, so the log
+        # has to carry its content too: what the issue says is part of
+        # what this test checks.
+        gh.write_text('#!/bin/sh\nif [ "$2" = list ]; then echo "[]"; exit 0; fi\n'
+                      'echo "$*" >> "$GH_LOG"\n'
+                      'while [ "$#" -gt 0 ]; do\n'
+                      '  if [ "$1" = "--body-file" ]; then cat "$2" >> "$GH_LOG"; fi\n'
+                      '  shift\n'
+                      'done\n')
         gh.chmod(0o755)
 
     def download(self, artifacts):
@@ -54,7 +62,11 @@ class Report(unittest.TestCase):
                 if len(names) > 1:
                     target = target / name
                 target.mkdir(parents=True, exist_ok=True)
-                (target / "audit.json").write_text(json.dumps(artifacts[name]))
+                # A string is the file as the artifact carries it, byte for
+                # byte: an empty file and a truncated one are the two the
+                # audit leaves behind when it dies mid-report.
+                content = artifacts[name]
+                (target / "audit.json").write_text(content if isinstance(content, str) else json.dumps(content))
 
     def report(self, artifacts):
         self.download(artifacts)
@@ -62,8 +74,12 @@ class Report(unittest.TestCase):
         done = subprocess.run(["bash", "-e", "-c", script], cwd=self.work, capture_output=True, text=True, check=False,
                               env={**os.environ, "PATH": f"{self.bin}:{os.environ['PATH']}", "GH_LOG": str(self.log),
                                    "REPO": "example/repo", "RUN_URL": "https://example.org/run/1"})
-        self.assertTrue((self.work / "combined.json").is_file(), done.stderr)
-        return done, json.loads((self.work / "combined.json").read_text())
+        combined = {}
+        if (self.work / "combined.json").is_file():
+            text = (self.work / "combined.json").read_text()
+            combined = json.loads(text) if text.strip() else {}
+        self.assertNotEqual(combined, {}, f"the combine step wrote no output: {done.stderr}")
+        return done, combined
 
     def test_the_only_artifact_of_a_run_is_still_read(self):
         for ref in ("develop", "main"):
@@ -90,6 +106,33 @@ class Report(unittest.TestCase):
         self.assertEqual(combined["title"], "Dependency advisories: RUSTSEC-2099-0001")
         self.assertIn("Dependency advisories open against main.", combined["body"])
         self.assertNotIn("open against develop.", combined["body"])
+
+    def test_a_report_that_cannot_be_read_names_the_branch_and_keeps_the_job_red(self):
+        # An audit that dies before it can write its report leaves an
+        # empty `audit.json` behind: the file exists, so the artifact is
+        # uploaded, and there is nothing in it to read. The combine step
+        # used to stop there and the run ended red with nothing written
+        # to say why.
+        for name, text in (("empty", ""), ("truncated", '{"vulnerabilities": {"found": tru')):
+            with self.subTest(name=name):
+                self.setUp()
+                done, combined = self.report({"audit-json-develop": text})
+                self.assertIn("develop", combined["title"], "the issue names the branch whose report could not be read")
+                self.assertIn("could not be read", combined["body"], "and says the report could not be read")
+                self.assertIn("develop", combined["body"], "naming the branch in the body as well")
+                self.assertNotEqual(done.returncode, 0, "the job stays red")
+                self.assertIn("issue create", self.log.read_text(), "and the issue is written before the job fails")
+
+    def test_a_report_that_cannot_be_read_keeps_the_findings_of_the_other_branch(self):
+        # The ref whose report cannot be read is a failure of that ref,
+        # not a reason to drop what the other ref found.
+        done, combined = self.report({"audit-json-develop": "", "audit-json-main": DIRTY})
+        self.assertIn("develop", combined["title"])
+        self.assertIn("could not be read", combined["body"])
+        self.assertIn("Dependency advisories open against main.", combined["body"])
+        self.assertIn("RUSTSEC-2099-0001", combined["body"])
+        self.assertNotEqual(done.returncode, 0, "the job stays red")
+        self.assertIn("issue create", self.log.read_text(), "and the issue is written before the job fails")
 
     def test_every_audited_branch_has_a_download_and_a_folder_of_its_own(self):
         refs = ci_yaml.load(WORKFLOW)["jobs"]["audit"]["strategy"]["matrix"]["ref"]
