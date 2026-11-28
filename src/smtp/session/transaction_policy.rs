@@ -22,6 +22,7 @@ use crate::smtp::directory::Directory;
 use crate::smtp::diskspace::DiskGuard;
 use crate::smtp::ratelimit::{InboundLimit, SendLimiter};
 use crate::smtp::reply::Reply;
+use crate::smtp::session::Address;
 use crate::smtp::submission_budget::{Budget, Charge};
 
 /// All MAIL-FROM-time policy state held by one session.
@@ -142,8 +143,16 @@ impl TransactionPolicy {
 
 	/// The submission limits of the authenticated `account`: its domain's
 	/// per-account limit (else the server-wide default) and every tenant
-	/// owning one of its addresses. Empty when none is configured.
-	pub(crate) fn submission_budget(&self, account: &str, directory: &Directory) -> Budget {
+	/// owning one of its addresses, or one of `senders`, the addresses a
+	/// message is sent under, that the account may send as. Any other one
+	/// is left out, so what a client writes cannot spend a tenant's limit.
+	/// Empty when none is configured.
+	pub(crate) fn submission_budget(
+		&self,
+		account: &str,
+		directory: &Directory,
+		senders: &[String],
+	) -> Budget {
 		let account_limit = self.submission_limiter.as_ref().and_then(|limiter| {
 			directory
 				.submission_limit_for(account)
@@ -154,7 +163,19 @@ impl TransactionPolicy {
 			account,
 			account_limit,
 			self.tenant_limits.as_deref(),
-			|| directory.addresses_for(account),
+			|| {
+				let mut addresses = directory.addresses_for(account);
+				addresses.extend(
+					senders
+						.iter()
+						.filter(|sender| {
+							Address::parse(sender)
+								.is_ok_and(|address| directory.owns_address(account, &address))
+						})
+						.cloned(),
+				);
+				addresses
+			},
 		)
 	}
 

@@ -133,7 +133,11 @@ impl Session {
 				if let Some(account) = self.authenticated.as_deref()
 					&& !self
 						.policy
-						.submission_budget(account, &self.directory)
+						.submission_budget(
+							account,
+							&self.directory,
+							std::slice::from_ref(&reverse_path),
+						)
 						.has_room(unix_now())
 				{
 					return Action::Continue(finalise::rate_limited());
