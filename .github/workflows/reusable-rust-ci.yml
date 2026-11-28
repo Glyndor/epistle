@@ -381,6 +381,17 @@ jobs:
     runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
     # Measured 2026-10-30: the slowest of four green runs took 36 min.
     timeout-minutes: 75
+    # The coverage comes from the llvm-cov instrumentation, not from the debug
+    # information: the counters are in the instrumented binary, so the report is
+    # the same without it. Without the debug information and without the
+    # incremental compilation the cached target directory is a fraction of what
+    # it was. That cache was 5.9 GB of the 10 GB the repository has, so it
+    # evicted the caches every pull request needs and every pull request
+    # compiled from cold.
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      CARGO_INCREMENTAL: "0"
     defaults:
       run:
         working-directory: ${{ inputs.working-directory }}

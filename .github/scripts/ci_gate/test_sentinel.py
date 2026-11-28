@@ -105,5 +105,16 @@ class Wiring(unittest.TestCase):
         self.assertNotIn("${{", sentinel["steps"][0]["run"])
 
 
+class CoverageCache(unittest.TestCase):
+    """The coverage job builds without debug information: its cache was the biggest one of the repository."""
+
+    def test_the_coverage_job_turns_off_the_debug_information_and_the_incremental_compilation(self):
+        """The coverage comes from the llvm-cov instrumentation, so the report is the same; the cached target is not."""
+        env = jobs()["coverage"].get("env", {})
+        for name in ("CARGO_PROFILE_DEV_DEBUG", "CARGO_PROFILE_TEST_DEBUG", "CARGO_INCREMENTAL"):
+            with self.subTest(name=name):
+                self.assertEqual(env.get(name), "0")
+
+
 if __name__ == "__main__":
     unittest.main()
