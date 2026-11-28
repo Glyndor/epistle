@@ -266,21 +266,16 @@ pub async fn create(
 	let written = tokio::task::spawn_blocking(move || {
 		let mut store = ApiKeyStore::open(&data_dir)?;
 		// The world the file is asked about under its own lock: the facts
-		// of the server are read there, not from the request.
+		// of the server are read there, not from the request. The account of
+		// a bound key stays held until the file is written.
 		let server = Server(&world);
-		match &caller {
-			Some(caller) => store.add_by(
-				key.clone(),
-				gate.as_ref(),
-				Ask {
-					caller,
-					wanted: &wanted,
-					max_keys: issue::MAX_KEYS_BY_KEY,
-					world: &server,
-				},
-			)?,
-			None => store.add_within(key.clone(), gate.as_ref())?,
-		}
+		let ask = caller.as_ref().map(|caller| Ask {
+			caller,
+			wanted: &wanted,
+			max_keys: issue::MAX_KEYS_BY_KEY,
+			world: &server,
+		});
+		store.add_bound(key.clone(), gate.as_ref(), ask, world.store())?;
 		let applied = apply(&data_dir, &set);
 		carried.run(|| log_key_change(KeyEvent::Created, &label, &scopes, by.as_deref(), ip.0));
 		Ok::<_, std::io::Error>((key, applied))
@@ -307,8 +302,7 @@ pub async fn create(
 /// watcher: a key revoked is refused at once. A file that cannot be read
 /// back is an error: the answer must not say the change is in force.
 fn apply(data_dir: &std::path::Path, set: &ApiKeySet) -> std::io::Result<()> {
-	let text = std::fs::read_to_string(data_dir.join("api_keys.toml"))?;
-	set.reload_from(&text)
+	set.reload_file(&data_dir.join("api_keys.toml"))
 }
 
 /// The answer to a refusal of the store.
@@ -317,6 +311,7 @@ fn store_error(error: std::io::Error) -> ApiError {
 	match error.kind() {
 		AlreadyExists => ApiError::conflict(error.to_string()),
 		QuotaExceeded => ApiError::conflict(error.to_string()),
+		ResourceBusy => ApiError::conflict(error.to_string()),
 		InvalidInput => ApiError::invalid_input(&error.to_string()),
 		PermissionDenied => ApiError::forbidden("the key that asked is no longer valid"),
 		NotFound => not_found(),

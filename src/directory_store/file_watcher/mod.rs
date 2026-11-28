@@ -66,12 +66,11 @@ pub struct Fingerprint {
 /// that uses it). The trait lives here, next to the watcher, because
 /// the watcher is the only caller; `ApiKeySet` is the only implementor.
 pub trait ApiKeyReloader: Send + Sync {
-	/// Swap the running key set from `text`, the contents of
-	/// `api_keys.toml`. The watcher calls this on every fingerprint
-	/// change. A parse failure must leave the running set untouched;
-	/// the watcher treats the result the same way it treats the other
-	/// `reload_*_from` failures (one warning per bad version).
-	fn reload_api_keys_from(&self, text: &str) -> std::io::Result<()>;
+	/// Swap the running key set for what `path`, which is `api_keys.toml`,
+	/// holds, on every fingerprint change. The implementor reads the file
+	/// under the lock its writers take, so it never swaps in keys older than
+	/// the last write. A failure leaves the running set untouched.
+	fn reload_api_keys(&self, path: &Path) -> Result<(), StoreError>;
 }
 
 /// Hot-reload target for `warmup.json`, the operator's IP warm-up
@@ -139,8 +138,8 @@ impl ReloadKind {
 	/// The four dynamic-store files are reloaded by the store itself:
 	/// it reads the file under the lock the writers take, so the swap
 	/// can never carry a state older than the last write. The other
-	/// targets are the reloaders the watcher feeds, which read their
-	/// own files.
+	/// targets are the reloaders the watcher feeds; the API keys and the
+	/// warm-up settings read their own files.
 	fn apply(
 		self,
 		store: &AccountStore,
@@ -168,12 +167,7 @@ impl ReloadKind {
 				None => Ok(()),
 			},
 			ReloadKind::ApiKeys => match targets.api_keys {
-				Some(reloader) => {
-					let text = read_file(path)?;
-					reloader
-						.reload_api_keys_from(&text)
-						.map_err(|error| StoreError::Invalid(error.to_string()))
-				}
+				Some(reloader) => reloader.reload_api_keys(path),
 				None => {
 					// No reloader wired in: nothing to apply, but not
 					// an error, the operator has not configured an API

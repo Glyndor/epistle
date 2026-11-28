@@ -1,7 +1,10 @@
 //! `epistle api-key`: list, create, revoke and rotate management API keys.
 
+mod accounts;
 pub(crate) mod expiry;
 mod scope_args;
+
+use accounts::open_accounts;
 
 pub(super) use scope_args::parse_scope;
 use scope_args::{legacy_warning, set_scopes, shown};
@@ -81,13 +84,15 @@ pub(super) fn create(
 		auto_submitted,
 	} = key;
 	let (label, account) = (label.as_str(), account.as_deref());
-	let known = match account {
-		Some(name) => match account_known(config, name) {
-			Ok(known) => known,
-			Err(code) => return code,
-		},
-		None => false,
+	// Opened only for a bound key, and kept to hold the account while the key
+	// is written.
+	let accounts = match account.map(|_| open_accounts(config)).transpose() {
+		Ok(accounts) => accounts,
+		Err(code) => return code,
 	};
+	let known = account
+		.zip(accounts.as_ref())
+		.is_some_and(|(name, accounts)| accounts.account_known(name));
 	// Checked before the class is bound or the store is touched, so a bad
 	// request leaves nothing behind.
 	let request = issue::Request {
@@ -169,7 +174,11 @@ pub(super) fn create(
 		},
 		None => None,
 	};
-	match store.add_within(key, gate.as_ref()) {
+	let added = match &accounts {
+		Some(accounts) => store.add_bound(key, gate.as_ref(), None, accounts),
+		None => store.add_within(key, gate.as_ref()),
+	};
+	match added {
 		Ok(()) => {
 			// The advisory travels with the result: stderr for a human, and
 			// the `warnings` array of the JSON result for a script. The exit
@@ -198,24 +207,6 @@ pub(super) fn create(
 			code
 		}
 	}
-}
-
-/// Whether `name` is an account on this server, static or dynamic. The
-/// API resolves an account-bound key to that account through the same
-/// directory delivery and IMAP use, so either kind can hold one. A store
-/// that cannot be opened is an operation failure, not an unknown name.
-fn account_known(config: &Config, name: &str) -> Result<bool, ExitCode> {
-	crate::directory_store::AccountStore::open(
-		&config.data_dir,
-		config.domains.clone(),
-		config.domain_aliases.clone(),
-		config.accounts.clone(),
-	)
-	.map(|store| store.account_known(name))
-	.map_err(|error| {
-		super::style::error(format_args!("opening account store: {error}"));
-		ExitCode::FAILURE
-	})
 }
 
 /// Replace the secret of an API key, keeping its scopes, domains, expiry,

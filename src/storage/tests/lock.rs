@@ -139,3 +139,39 @@ fn acquire_blocks_until_holder_releases() {
 
 #[allow(unused_imports)]
 use super::super::lock;
+
+/// The lock file of `name` in `dir`.
+fn lock_of(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
+	crate::storage::locked::lock_path(&dir.join(name))
+}
+
+#[test]
+fn the_ordered_locks_are_taken_outermost_first() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let other = tempfile::tempdir().expect("tempdir");
+	let _domains = FileLock::acquire(&lock_of(dir.path(), "domains.toml")).expect("domains");
+	let accounts = FileLock::acquire(&lock_of(dir.path(), "accounts.toml")).expect("accounts");
+	let keys = FileLock::acquire(&lock_of(dir.path(), "api_keys.toml")).expect("keys");
+	// Another data directory is another order.
+	let _elsewhere = FileLock::acquire(&lock_of(other.path(), "accounts.toml")).expect("other");
+	// A lock given back no longer counts.
+	drop(keys);
+	drop(accounts);
+	let _again = FileLock::acquire(&lock_of(dir.path(), "accounts.toml")).expect("again");
+}
+
+#[test]
+#[should_panic(expected = "lock order")]
+fn the_accounts_lock_is_not_asked_for_under_the_keys_lock() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let _keys = FileLock::acquire(&lock_of(dir.path(), "api_keys.toml")).expect("keys");
+	let _accounts = FileLock::acquire(&lock_of(dir.path(), "accounts.toml"));
+}
+
+#[test]
+#[should_panic(expected = "lock order")]
+fn the_domains_lock_is_not_asked_for_under_the_accounts_lock() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let _accounts = FileLock::acquire(&lock_of(dir.path(), "accounts.toml")).expect("accounts");
+	let _domains = FileLock::acquire(&lock_of(dir.path(), "domains.toml"));
+}

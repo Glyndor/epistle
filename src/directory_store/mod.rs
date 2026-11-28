@@ -24,6 +24,7 @@ mod names;
 pub(crate) use names::validate_name;
 use names::with_safe_names;
 mod account_views;
+pub use account_views::HeldAccounts;
 mod app_passwords_api;
 mod masked_api;
 mod reload_api;
