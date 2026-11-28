@@ -229,7 +229,7 @@
      "run": "set -euo pipefail\nbash tests/packaging/rpm/admission.sh \\\n  \"$RUNNER_TEMP/pack/out/epistle-${VERSION}-1.glyndor.any.x86_64.rpm\" \\\n  \"$RUNNER_TEMP/pack/out/epistle-${VERSION}-1.glyndor.any.aarch64.rpm\" \"$VERSION\"\n"
     }
    ],
-   "timeout-minutes": 30
+   "timeout-minutes": 15
   },
   "plan": {
    "uses": "./.github/workflows/reusable-ci-plan.yml"

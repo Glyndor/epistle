@@ -34,7 +34,10 @@ refused() { # <directory> <reason the channel gives>
 		echo "the channel admitted $1" >&2
 		exit 1
 	fi
-	grep -F -- "$2" /tmp/refusal.log || { cat /tmp/refusal.log >&2; echo "refused for another reason than '$2'" >&2; exit 1; }
+	grep -qF -- "$2" /tmp/refusal.log || { cat /tmp/refusal.log >&2; echo "refused for another reason than '$2'" >&2; exit 1; }
+	# Without the marker of an error: printed as it is, an expected refusal would
+	# annotate a green run as a failed one.
+	grep -F -- "$2" /tmp/refusal.log | sed 's/::error:://; s/^/ok    refused as expected: /'
 }
 
 admit /tmp/signed
