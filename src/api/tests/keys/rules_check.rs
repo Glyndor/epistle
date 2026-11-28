@@ -53,3 +53,18 @@ fn every_rule_names_a_test_that_exists() {
 		assert!(!rule.scope.is_empty());
 	}
 }
+
+/// A route whose rule is `Suspended` names a test that proves the rule.
+#[test]
+fn a_suspended_route_names_a_test_that_proves_the_suspension() {
+	for rule in RULES {
+		if rule.domain == Domain::Suspended {
+			assert!(
+				rule.covered_by.contains("suspended"),
+				"{} is a suspended route but its test does not say so: {}",
+				rule.pattern,
+				rule.covered_by
+			);
+		}
+	}
+}
