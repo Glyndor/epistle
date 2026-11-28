@@ -45,16 +45,21 @@ pub fn waiting(spool: &FsSpool) -> std::io::Result<BTreeMap<String, Waiting>> {
 		let Ok(envelope) = spool.load_envelope(id) else {
 			continue;
 		};
-		for (group, until) in groups(&envelope) {
-			let entry = by_group.entry(group).or_insert(Waiting {
-				recipients: 0,
-				until,
-			});
-			entry.recipients += 1;
-			entry.until = entry.until.min(until);
-		}
+		count(&mut by_group, &envelope);
 	}
 	Ok(by_group)
+}
+
+/// Add the recipients of `envelope` that wait for a cap to `by_group`.
+pub(super) fn count(by_group: &mut BTreeMap<String, Waiting>, envelope: &Envelope) {
+	for (group, until) in groups(envelope) {
+		let entry = by_group.entry(group).or_insert(Waiting {
+			recipients: 0,
+			until,
+		});
+		entry.recipients += 1;
+		entry.until = entry.until.min(until);
+	}
 }
 
 /// `queue destinations --json` rows for the groups at their cap.

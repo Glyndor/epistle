@@ -25,6 +25,28 @@ impl FsSpool {
 	/// envelope is read under encryption-enabled, it is rewritten encrypted in
 	/// place atomically, so subsequent loads go through the AEAD path.
 	pub fn load_envelope(&self, id: Uuid) -> std::io::Result<Envelope> {
+		self.load_envelope_and_length(id)
+			.map(|(envelope, _)| envelope)
+	}
+
+	/// [`FsSpool::load_envelope`] for a walk with a budget: the entry and the
+	/// bytes read for it are counted against `budget`, also when it cannot be
+	/// read. Ask [`Budget::is_spent`] before the next one.
+	pub fn load_envelope_within(&self, id: Uuid, budget: &mut Budget) -> std::io::Result<Envelope> {
+		match self.load_envelope_and_length(id) {
+			Ok((envelope, length)) => {
+				budget.charge(length);
+				Ok(envelope)
+			}
+			Err(error) => {
+				budget.charge(0);
+				Err(error)
+			}
+		}
+	}
+
+	/// The envelope of `id` and the length of its file.
+	fn load_envelope_and_length(&self, id: Uuid) -> std::io::Result<(Envelope, usize)> {
 		let bytes = crate::util::fs_walk::rooted::read(
 			&self.data_dir,
 			self.entry_file(SpoolDir::New, id, MessageExt::Json)?,
@@ -33,7 +55,7 @@ impl FsSpool {
 		if decrypted == DecodedEnvelope::Plaintext {
 			self.maybe_migrate_envelope(id, &bytes)?;
 		}
-		Ok(envelope)
+		Ok((envelope, bytes.len()))
 	}
 
 	/// Read-modify-write one envelope under the spool lock and return the

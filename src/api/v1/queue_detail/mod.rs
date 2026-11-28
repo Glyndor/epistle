@@ -21,6 +21,7 @@ use crate::api::audit::{Carried, QueueEvent, log_queue_change};
 use crate::api::error::ApiError;
 use crate::api::state::{ApiState, ClientIp, MatchedAuth};
 use crate::queue::inspect::{self, Header, Holder, Refused, Steer};
+use crate::storage::Budget;
 
 /// Most destinations one answer lists.
 const MOST_DESTINATIONS: usize = 1000;
@@ -195,7 +196,8 @@ pub async fn release(
 pub struct Destinations {
 	/// The rows `epistle queue destinations --json` prints.
 	destinations: Vec<serde_json::Value>,
-	/// True when there were more than the answer lists.
+	/// True when there were more than the answer lists, or the queue is
+	/// larger than one request reads.
 	truncated: bool,
 }
 
@@ -208,15 +210,16 @@ pub async fn destinations(
 	let now = std::time::SystemTime::now()
 		.duration_since(std::time::UNIX_EPOCH)
 		.map_or(0, |elapsed| elapsed.as_secs());
-	let mut rows =
-		tokio::task::spawn_blocking(move || inspect::destination_rows(state.spool(), now))
-			.await
-			.map_err(|_| ApiError::internal())?
-			.map_err(|error| {
-				tracing::error!(%error, "the destinations cannot be read");
-				ApiError::internal()
-			})?;
-	let truncated = rows.len() > MOST_DESTINATIONS;
+	let (mut rows, partial) = tokio::task::spawn_blocking(move || {
+		inspect::destination_rows_within(state.spool(), now, Budget::standard())
+	})
+	.await
+	.map_err(|_| ApiError::internal())?
+	.map_err(|error| {
+		tracing::error!(%error, "the destinations cannot be read");
+		ApiError::internal()
+	})?;
+	let truncated = partial || rows.len() > MOST_DESTINATIONS;
 	rows.truncate(MOST_DESTINATIONS);
 	Ok(Json(Destinations {
 		destinations: rows,

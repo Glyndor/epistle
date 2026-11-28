@@ -11,6 +11,7 @@ use crate::api::Principal;
 use crate::api::audit;
 use crate::api::error::ApiError;
 use crate::api::state::{ApiState, ClientIp, MatchedAuth};
+use crate::storage::Budget;
 
 #[cfg(test)]
 mod tests;
@@ -20,7 +21,8 @@ const MAX_LIMIT: usize = 100;
 
 /// Most queue entries one listing reads. A key confined to some domains only
 /// gets its own tenant's entries, so a page may have to skip many others; this
-/// bounds the work of a single request, and `next_cursor` resumes the scan.
+/// bounds the work of a single request, together with the [`Budget`] of the
+/// bytes it reads, and `next_cursor` resumes the scan.
 const MAX_SCAN: usize = 1000;
 
 #[derive(Deserialize)]
@@ -60,42 +62,45 @@ pub async fn list(
 	}
 	let principal = Principal::for_token(&state, &auth);
 
-	let ids = state.spool().list().map_err(|_| ApiError::internal())?;
-	let mut position = match params.cursor.as_deref() {
-		// The cursor names the entry the walk stopped after: the id of an
-		// entry the key can see, or the sealed position of one it cannot.
-		Some(cursor) => {
-			let anchor = cursor::anchor(cursor).ok_or_else(|| {
-				ApiError::value_not_allowed("cursor", "the cursor is not one this server issued")
-			})?;
-			// UUID v7 ids sort chronologically: resume strictly after cursor.
-			ids.partition_point(|id| *id <= anchor)
-		}
-		None => 0,
+	// The cursor names the entry the walk stopped after: the id of an entry
+	// the key can see, or the sealed position of one it cannot.
+	let anchor = match params.cursor.as_deref() {
+		Some(cursor) => Some(cursor::anchor(cursor).ok_or_else(|| {
+			ApiError::value_not_allowed("cursor", "the cursor is not one this server issued")
+		})?),
+		None => None,
 	};
+	// UUID v7 ids sort chronologically: the page resumes strictly after the
+	// anchor, with the oldest entries it may read.
+	let listed = state
+		.spool()
+		.list_after(anchor, MAX_SCAN)
+		.map_err(|_| ApiError::internal())?;
+	let mut budget = Budget::standard();
 	let mut entries = Vec::new();
 	// The last entry the walk read, and whether the key reaches it.
 	let mut last_read: Option<(Uuid, bool)> = None;
-	let mut scanned = 0;
-	while position < ids.len() && entries.len() < limit && scanned < MAX_SCAN {
-		let id = ids[position];
+	let mut position = 0;
+	while position < listed.ids.len() && entries.len() < limit && !budget.is_spent() {
+		let id = listed.ids[position];
 		position += 1;
-		scanned += 1;
-		// An entry can vanish between list and load (worker delivered it).
-		let entry = state.spool().load(id);
-		let reaches = entry
+		// The envelope is all a listing needs: no message is read. An entry
+		// can vanish between the list and the read (the worker delivered it).
+		let envelope = state.spool().load_envelope_within(id, &mut budget);
+		let reaches = envelope
 			.as_ref()
-			.is_ok_and(|entry| super::queue_access::reaches(&principal, &entry.envelope));
+			.is_ok_and(|envelope| super::queue_access::reaches(&principal, envelope));
 		last_read = Some((id, reaches));
-		if reaches && let Ok(entry) = entry {
+		if reaches && let Ok(envelope) = envelope {
 			entries.push(QueueEntry {
 				id,
-				reverse_path: entry.envelope.reverse_path,
-				recipients: entry.envelope.recipients,
+				reverse_path: envelope.reverse_path,
+				recipients: envelope.recipients,
 			});
 		}
 	}
-	let next_cursor = match (position < ids.len(), last_read) {
+	let more = position < listed.ids.len() || listed.more;
+	let next_cursor = match (more, last_read) {
 		(false, _) => None,
 		// The walk stopped on an entry the key can see: its id is the cursor,
 		// as it always was.
@@ -126,8 +131,8 @@ pub async fn remove(
 ) -> Result<Json<Removed>, ApiError> {
 	// An entry of another tenant answers like one that is not there.
 	let principal = Principal::for_token(&state, &auth);
-	match state.spool().load(id) {
-		Ok(entry) if super::queue_access::reaches(&principal, &entry.envelope) => {}
+	match state.spool().load_envelope(id) {
+		Ok(envelope) if super::queue_access::reaches(&principal, &envelope) => {}
 		_ => return Err(ApiError::not_found("no such queue entry")),
 	}
 	// The cancellation is recorded, and the entry removed, as one step. What

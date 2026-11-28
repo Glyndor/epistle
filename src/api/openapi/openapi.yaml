@@ -2103,11 +2103,11 @@ paths:
         Oldest first, keyset-paged by the queue id (a UUIDv7, so ids sort by
         time). A key confined to some domains sees only entries whose sender
         lies in them; to find a page of its own the server reads at most
-        1000 entries per request, so a page can come back short with a
-        `next_cursor` and the next call carries on. Bounces (empty sender)
-        are shown only to unconfined keys. The cursor is opaque: it is the id
-        of an entry the key reaches, or, when the page ended on an entry of
-        another tenant, a sealed marker that names no entry at all.
+        1000 entries and 16 MiB of envelopes per request, so a page can come
+        back short with a `next_cursor` and the next call carries on. Bounces
+        (empty sender) are shown only to unconfined keys. The cursor is opaque:
+        it is the id of an entry the key reaches, or, when the page ended on an
+        entry of another tenant, a sealed marker that names no entry at all.
       x-epistle-scope: [manage:read]
       parameters:
         - name: limit
@@ -2171,9 +2171,11 @@ paths:
       description: |-
         The rows `epistle queue destinations --json` prints: each recipient domain
         or exchanger on hold (with `until`, `deferrals` and the remote `reason`),
-        then each receiver group at its warm-up cap. At most 1000 rows; `truncated`
-        says there were more. The holds are shared by every tenant, so a key
-        confined to some domains is refused with `403`.
+        then each receiver group at its warm-up cap. At most 1000 rows, read from at
+        most 10000 entries and 16 MiB of envelopes, oldest first; `truncated`
+        says there was more, and then the rows count only what was read. The
+        holds are shared by every tenant, so a key confined to some domains is
+        refused with `403`.
       x-epistle-scope: [manage:read]
       responses:
         "200":
@@ -2200,7 +2202,7 @@ paths:
         (`attempts`, `next_attempt`, `held`, `last_error`), never the message. With
         `headers=true` the header fields of the message are returned too, up to 200
         of them with a value cut at 1000 characters (`headers_truncated` says when
-        something was left out); the body is never read past the blank line. An
+        something was left out); the body is never returned. An
         entry of another tenant answers like one that is not there. An entry
         belongs to the domain the server decided when it queued it, not to the
         sender the message names; one with no owner is for a key with no

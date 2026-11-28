@@ -755,7 +755,7 @@ One entry in detail, and its schedule. `GET /api/v1/queue/{id}` prints what
 `?headers=true` it also returns the header fields of the message, in order,
 folding undone, up to 200 of them with a value cut at 1000 characters
 (`headers_truncated` says when something was left out); the body is never
-read past the blank line. `POST /api/v1/queue/{id}/retry`, `/hold` and
+returned. `POST /api/v1/queue/{id}/retry`, `/hold` and
 `/release` do what `epistle queue retry`, `hold` and `release` do to one
 entry, with the `manage:write` scope, and answer `{"changed", "id", "held"}`:
 `changed` is false when the entry already was as asked, and then no audit line
@@ -783,6 +783,14 @@ destinations the queue holds off and the receiver groups at their warm-up cap,
 as `epistle queue destinations --json` does (at most 1000 rows, `truncated`
 says more); the holds are shared by every tenant, so a confined key is
 refused with `403`.
+
+The listing and `DELETE` work from the envelope of an entry and never read its
+message. What one request reads of the queue is bounded: a page of the listing
+reads at most 1000 entries and 16 MiB of envelopes, so it can come back short,
+or empty, with a `next_cursor`; carry on until there is none. The destinations
+read at most 10000 entries and 16 MiB of envelopes, oldest first: in a larger
+queue `truncated` is true and the rows count only what was read. Either way the
+entry that reaches the limit is read whole.
 
 `GET /api/v1/suppression` lists suppressed recipients,
 `POST /api/v1/suppression` adds one and `DELETE /api/v1/suppression/{address}`

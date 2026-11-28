@@ -50,7 +50,8 @@ pub use save_sent::{
 };
 pub use spool::leftovers::Leftover;
 pub use spool::{
-	Envelope, FsSpool, PendingOutcome, RecipientState, RecipientStatus, SpoolEntry, StoreOptions,
+	Budget, Envelope, FsSpool, Listed, MOST_QUEUE_BYTES, PendingOutcome, RecipientState,
+	RecipientStatus, SpoolEntry, StoreOptions,
 };
 pub use vacation_store::{
 	MAX_BODY_BYTES, VacationSetting, clear as clear_vacation, read as read_vacation,

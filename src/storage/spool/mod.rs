@@ -13,6 +13,8 @@ use crate::util::path_component::{MessageExt, message_file};
 use crate::util::path_containment::contained;
 
 use super::crypto::MessageCrypto;
+mod budget;
+pub use budget::{Budget, MOST_BYTES as MOST_QUEUE_BYTES};
 mod durability;
 use durability::sync_dir_of;
 mod permissions;
@@ -22,6 +24,8 @@ mod recipients;
 pub use recipients::{RecipientState, RecipientStatus};
 mod envelope;
 mod envelope_io;
+mod page;
+pub use page::Listed;
 mod store;
 use envelope::LAST_ERROR_MAX;
 pub use envelope::{Envelope, PendingOutcome};
@@ -229,32 +233,6 @@ impl FsSpool {
 			.crypto
 			.decode(&crate::util::fs_walk::rooted::read(&self.data_dir, body)?)?;
 		Ok(SpoolEntry { envelope, data })
-	}
-
-	/// List ids of all complete spooled messages, oldest first.
-	pub fn list(&self) -> std::io::Result<Vec<Uuid>> {
-		let mut ids = Vec::new();
-		for entry in crate::util::fs_walk::rooted::read_dir(
-			&self.data_dir,
-			self.path_in(Path::new(SpoolDir::New.name()))?,
-		)? {
-			let entry = entry?;
-			if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
-				continue;
-			}
-			let name = entry.file_name();
-			let Some(name) = name.to_str() else {
-				continue;
-			};
-			if let Some(stem) = name.strip_suffix(".json")
-				&& let Ok(id) = Uuid::parse_str(stem)
-			{
-				ids.push(id);
-			}
-		}
-		// UUID v7 sorts chronologically.
-		ids.sort();
-		Ok(ids)
 	}
 
 	/// Take the exclusive spool lock; it is released when the guard drops. The
