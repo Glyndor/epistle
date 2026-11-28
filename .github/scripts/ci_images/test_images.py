@@ -28,6 +28,9 @@ class TheTree(unittest.TestCase):
         for value in values:
             found = images.REFERENCE.fullmatch(value)
             self.assertTrue(found and found["tag"], value)
+            # A tag that stays: Dependabot moves its digest and `sync` copies it. A tag with a day in it is
+            # replaced by another one, which the comparison by name and tag could not follow.
+            self.assertNotRegex(found["tag"], r"\d{8}", value)
         self.assertEqual(len([r for r in images.references() if r[0] == env]), len(values))
 
     def test_the_dockerfile_is_in_the_docker_entry_of_dependabot_and_the_digest_group_takes_it(self):

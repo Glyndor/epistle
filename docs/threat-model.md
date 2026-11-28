@@ -125,7 +125,7 @@ PEM in `[tls]`).
 | Threat | Control | Evidence |
 |---|---|---|
 | A vulnerable or yanked crate | `cargo audit --deny warnings` on the main lockfile and on `fuzz/Cargo.lock`; `cargo deny` allows crates.io only and an explicit license list (`deny.toml`); Dependabot covers `/`, `/fuzz` and the signing script's pip requirements (`.github/dependabot.yml`) | gate: the `audit` job of `ci.yml` runs on every pull request and in the merge queue and is part of `CI gate`; `rust-audit.yml` also runs it every day and opens an issue when it fails; no advisory is ignored |
-| Unsigned or unattested artifacts | every artifact, each `.deb` and `SHA256SUMS` get a detached Ed25519 signature; build provenance is attested for the `.deb`, the binary and the container image (verification is in [the container stack](operations/container.md)) | gate: the release fails closed when the signing key is absent |
+| Unsigned or unattested artifacts | every artifact, each `.deb` and rpm package and `SHA256SUMS` get a detached Ed25519 signature; build provenance is attested for the `.deb`, the rpm packages and their signatures, the binary and the container image (verification is in [the container stack](operations/container.md)) | gate: the release fails closed when the signing key is absent |
 
 ## Not implemented
 

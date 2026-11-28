@@ -30,6 +30,12 @@ python3 -I "$here/stage_payload.py" --deb "$deb" --version "$version" --arch "$d
 	--repository "$repo" --out "$work/stage-$arch"
 bash "$repo/tests/packaging/payload/verify-matches-deb.sh" "$deb" "$work/stage-$arch"
 bash "$here/build-rpm.sh" "$work/stage-$arch" "$work/out" "$version" "$arch"
+# The same payload gives the same bytes, or the package depends on something
+# nobody fixed.
+bash "$here/build-rpm.sh" "$work/stage-$arch" "$work/again" "$version" "$arch"
+name="epistle-${version}-1.glyndor.any.${arch}.rpm"
+cmp "$work/out/$name" "$work/again/$name" || { echo "pack-rpm: two builds of the same payload differ" >&2; exit 1; }
+echo "ok    two builds of the same payload are the same bytes"
 
 upgrade=()
 if [ "$arch" = x86_64 ]; then
@@ -38,4 +44,4 @@ if [ "$arch" = x86_64 ]; then
 	upgrade=("$work/upgrade/epistle-${next}-1.glyndor.any.${arch}.rpm")
 fi
 bash "$repo/tests/packaging/rpm/verify-rpm.sh" \
-	"$work/out/epistle-${version}-1.glyndor.any.${arch}.rpm" "$work/stage-$arch" "$version" "$arch" "${upgrade[@]}"
+	"$work/out/$name" "$work/stage-$arch" "$version" "$arch" "${upgrade[@]}"
