@@ -275,3 +275,50 @@ async fn a_key_does_not_outlive_the_account_removed_while_it_was_made() {
 		"a key survived: {left:?}"
 	);
 }
+
+/// A removal that has already retired the keys of the account and has not
+/// ended: no new key is bound to it.
+#[test]
+fn a_key_is_not_made_for_an_account_while_it_is_being_removed() {
+	let runtime = tokio::runtime::Builder::new_multi_thread()
+		.enable_all()
+		.build()
+		.expect("runtime");
+	let world = with_carol();
+	let mut earlier = key("earlier", "earlier-secret", &["read"], &[]);
+	earlier.account = Some("carol".to_string());
+	ApiKeyStore::open(world.state.data_dir())
+		.expect("open")
+		.add(earlier)
+		.expect("add");
+	// The removal retires the keys and then waits for the mailbox, which the
+	// test holds.
+	let mailbox = crate::smtp::quota::delivery_lock_for(world.state.data_dir(), "carol");
+	let held = mailbox.lock().expect("mailbox");
+	let (there, retiring) = std::sync::mpsc::channel();
+	before_write::run_once(&file(&world, "api_keys.toml"), move || {
+		there.send(()).ok();
+	});
+	let (status, body) = std::thread::scope(|scope| {
+		let removal = scope.spawn(|| remove_carol(&world));
+		retiring.recv_timeout(LIMIT).expect("the keys are retired");
+		let (status, _, body) = runtime.block_on(call(
+			&world.state,
+			"POST",
+			"/api/v1/keys",
+			token(),
+			Some(bound_to_carol()),
+		));
+		drop(held);
+		removal.join().expect("removed");
+		(status, body)
+	});
+	let left = labels(&world);
+	assert!(
+		!left.contains(&"child".to_string()),
+		"a key survived: {body}"
+	);
+	assert!(!left.contains(&"earlier".to_string()), "{left:?}");
+	assert_eq!(status, StatusCode::CONFLICT, "{body}");
+	assert!(body.to_string().contains("is being removed"), "{body}");
+}

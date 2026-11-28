@@ -485,8 +485,8 @@ paths:
           $ref: "#/components/responses/KeyForbidden"
         "409":
           description: |-
-            `conflict`: the label is in use, or the file holds as many keys as a
-            key may leave in it.
+            `conflict`: the label is in use, the file holds as many keys as a
+            key may leave in it, or the account is being removed.
           content:
             application/json:
               schema:

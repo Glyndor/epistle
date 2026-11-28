@@ -1142,7 +1142,9 @@ moved outside the caller's domains makes nothing (`403`), and neither does an
 account that is gone or a domain the server no longer hosts (`400`). A key bound
 to an `account` is written while `accounts.toml` is held, so the account cannot
 be moved or removed between that read and the write. An account that is gone by
-then is `400` for the configured token too, and for `epistle api-key create`. Over HTTP
+then is `400` for the configured token too, and for `epistle api-key create`.
+An account that is being removed takes no new key, whoever asks (`409`), also
+when the removal stopped half way and waits to be run again. Over HTTP
 a key is confined to at most 32 domains (`400`); `epistle api-key create` has
 no such cap.
 

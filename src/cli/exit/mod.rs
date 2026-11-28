@@ -56,8 +56,15 @@ pub(crate) fn for_store_error(error: &StoreError) -> ExitCode {
 
 /// The exit code for an I/O error from a flat-file store: `NotFound`,
 /// `AlreadyExists` and `InvalidInput` are the store refusing the request,
-/// anything else is an operation failure.
+/// anything else is an operation failure. One that carries a [`StoreError`]
+/// exits as [`for_store_error`] says.
 pub(crate) fn for_io_error(error: &std::io::Error) -> ExitCode {
+	if let Some(store) = error
+		.get_ref()
+		.and_then(|inner| inner.downcast_ref::<StoreError>())
+	{
+		return for_store_error(store);
+	}
 	match error.kind() {
 		std::io::ErrorKind::NotFound
 		| std::io::ErrorKind::AlreadyExists

@@ -15,7 +15,7 @@ use crate::storage::locked::lock_path;
 
 /// The accounts held still, from [`AccountStore::hold_accounts`]: until this
 /// is dropped no write, in this process or another, changes or removes a
-/// dynamic account.
+/// dynamic account, or reserves one for removal.
 pub struct HeldAccounts<'a> {
 	store: &'a AccountStore,
 	file: DynamicFile,
@@ -36,6 +36,13 @@ impl HeldAccounts<'_> {
 					.find(|account| account.name == name)
 					.map(|account| account.addresses.clone())
 			})
+	}
+
+	/// Whether a removal of the account `name` has reserved it and has not
+	/// ended, also one that stopped half way and waits to be run again. What
+	/// is bound to the name from then on would outlive the account.
+	pub fn removal_pending(&self, name: &str) -> bool {
+		self.file.removals.contains_key(name)
 	}
 }
 

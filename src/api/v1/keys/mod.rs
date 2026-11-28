@@ -311,6 +311,7 @@ fn store_error(error: std::io::Error) -> ApiError {
 	match error.kind() {
 		AlreadyExists => ApiError::conflict(error.to_string()),
 		QuotaExceeded => ApiError::conflict(error.to_string()),
+		ResourceBusy => ApiError::conflict(error.to_string()),
 		InvalidInput => ApiError::invalid_input(&error.to_string()),
 		PermissionDenied => ApiError::forbidden("the key that asked is no longer valid"),
 		NotFound => not_found(),

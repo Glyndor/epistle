@@ -38,7 +38,9 @@ impl ApiKeyStore {
 	/// moves or removes the account in between. The account is read as the
 	/// file has it then: one that is not there is `InvalidInput` and nothing
 	/// is written, and the key that asks is judged by the addresses it has
-	/// then. The lock of `accounts.toml` is taken before the one of
+	/// then. One that a removal has reserved is `ResourceBusy`: the removal
+	/// retires the keys bound to the account once, after reserving it, so a
+	/// later key would outlive the account. The lock of `accounts.toml` is taken before the one of
 	/// `api_keys.toml` (see [`AccountStore::hold_accounts`]).
 	pub fn add_bound(
 		&mut self,
@@ -54,6 +56,12 @@ impl ApiKeyStore {
 			StoreError::Io(error) => error,
 			other => Error::other(other.to_string()),
 		})?;
+		if held.removal_pending(&name) {
+			return Err(Error::new(
+				ErrorKind::ResourceBusy,
+				StoreError::BeingRemoved(name),
+			));
+		}
 		let Some(ask) = by else {
 			if held.addresses_of(&name).is_none() {
 				return Err(Error::new(
