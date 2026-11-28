@@ -1,0 +1,235 @@
+name: Schedule freshness (reusable)
+
+# Fails when a scheduled workflow has not succeeded recently enough.
+#
+# The caller must grant `actions: read` alongside `contents: read`: a called
+# workflow cannot elevate beyond the permissions of the workflow that calls it,
+# and reading run history needs that scope. Without it the run does not start.
+#
+# Add the check only once the schedule has fired successfully at least once.
+# With no successful run on record there is nothing to measure and the job
+# reports that as a failure, which for an established workflow is exactly right.
+#
+# The caller in this repository is `repository-health.yml`, and it watches the
+# six crons of epistle. They do not share a period: `ci.yml`,
+# `dependabot-security-watch.yml`, `fuzz.yml` and `rust-audit.yml` fire daily,
+# and `codeql.yml` and `mutants.yml` fire weekly. The default of fifteen days is
+# the weekly limit and would let a daily cron stay dead for a fortnight, so the
+# caller passes the `workflows` list with a limit per entry instead; the default
+# only applies to a caller that names one workflow and no limit of its own.
+
+on:
+  workflow_call:
+    inputs:
+      workflow:
+        description: >-
+          File name of the scheduled workflow to check, e.g. "audit.yml".
+        type: string
+        required: false
+      max-age-days:
+        description: >-
+          Fail when the newest successful scheduled run is older than this.
+          Allow about two periods, so a weekly job tolerates one miss: 15 for a
+          weekly schedule, 3 for a daily one.
+        type: number
+        required: false
+        default: 15
+      workflows:
+        description: >-
+          Optional newline-separated workflow/max-age-days pairs. When set,
+          check every pair and report each result, even after a failure.
+        type: string
+        required: false
+        default: ''
+      count-any-conclusion:
+        description: >-
+          Measure the newest scheduled run whatever its conclusion, instead of
+          the newest successful one. For a workflow that watches ITSELF this is
+          the only shape that can recover: its own failed runs never enter a
+          success-only query, so once the last success ages past the limit
+          every later run fails on this job and re-creates the condition,
+          however healthy the cron is. With this on, the job answers "did the
+          cron fire" and leaves "did everything pass" to the other jobs in
+          the same workflow. Leave it off for a workflow watched from outside.
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+# Pinned to bash: the script below reads `[[ ... =~ ... ]]` and parses the date
+# with `date -u -d`, and neither is portable `sh`.
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: schedule-freshness-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}-${{ inputs.workflow }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  freshness:
+    name: schedule freshness
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
+    # Bound: 2 to 15s measured, and it queries the API. Ten times that,
+    # rounded up, never under ten minutes; the six-hour default is what a
+    # hang would otherwise cost. Each observation adds at most 40 seconds
+    # of retry sleep; the six-entry batch fits inside ten minutes.
+    timeout-minutes: 10
+    permissions:
+      actions: read # reading this repository's workflow-run history
+    steps:
+      # This step runs as GITHUB_TOKEN, a job-scoped token on its own rate
+      # limit, and reads nothing beyond this repository's own run history. No
+      # personal credential is ever used here, and the `actions: read` grant
+      # above is the whole of what it can reach.
+      - name: Check the newest successful scheduled run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          WORKFLOW: ${{ inputs.workflow }}
+          MAX_AGE_DAYS: ${{ inputs.max-age-days }}
+          WORKFLOWS: ${{ inputs.workflows }}
+          ANY_CONCLUSION: ${{ inputs.count-any-conclusion }}
+        run: |
+          set -euo pipefail
+
+          # A child shell keeps errexit active even when its result is collected.
+          # One failed API call must fail that observation and still allow the rest.
+          check_workflow() {
+            bash -euo pipefail <<'CHECK'
+          set -euo pipefail
+
+          # status=success is the question for a workflow watched from
+          # outside. A workflow watching itself cannot ask it: a run that
+          # fails this job is not a success, so it never feeds the query, and
+          # the alarm re-arms itself forever once it fires. That caller passes
+          # count-any-conclusion and gets status=completed instead: any run
+          # the cron produced counts as the cron being alive.
+          status_filter="status=success"
+          what="successful"
+          verb="succeeded on a schedule"
+          if [ "${ANY_CONCLUSION:-false}" = "true" ]; then
+            status_filter="status=completed"
+            what="completed"
+            verb="ran on a schedule"
+          fi
+
+          # The first item of a filtered page is not always the newest run. On
+          # 2026-09-08 a one-item page came back with a run thirteen days old
+          # while that morning's success existed, and this gate went red over
+          # nothing (Glyndor/apt#249). On 2026-09-17 the same shape happened
+          # with thirty items: the page had no run newer than 2026-09-10 while
+          # forty-six newer successful scheduled runs existed
+          # (Glyndor/scoop-bucket#173). Two explanations fit and the log cannot
+          # separate them: the API returned thirty runs in no useful order out
+          # of a larger set, or the listing was served from a stale index for a
+          # moment.
+          #
+          # The window asks the question the gate really has, which is
+          # whether any run exists inside the limit. A page that comes back
+          # empty inside the window cannot be trusted on its own, so the
+          # windowed query retries up to three times with twenty seconds
+          # between. A listing served stale is what the retry exists for; the
+          # cost is at most forty seconds on a job that is not a required
+          # check.
+          cutoff=$(date -u -d "$((MAX_AGE_DAYS + 1)) days ago" +%Y-%m-%dT%H:%M:%SZ)
+          now_s=$(date -u +%s)
+          base="repos/${REPO}/actions/workflows/${WORKFLOW}/runs?event=schedule&${status_filter}&per_page=30"
+          windowed_url="${base}&created=%3E%3D${cutoff}"
+
+          latest=""
+          good=""
+          for attempt in 1 2 3; do
+            latest=$(gh api "$windowed_url" \
+              --jq '[.workflow_runs[].created_at] | max // empty')
+            if [ -n "$latest" ]; then
+              age_seconds=$(( now_s - $(date -u -d "$latest" +%s) ))
+              age_days=$(( age_seconds / 86400 ))
+              if [ "$age_days" -le "$MAX_AGE_DAYS" ]; then
+                good="yes"
+                break
+              fi
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              sleep 20
+            fi
+          done
+
+          if [ -n "$good" ]; then
+            echo "Newest ${what} scheduled run of ${WORKFLOW}: ${latest} (${age_days}d ago)."
+            echo "Within the ${MAX_AGE_DAYS}-day limit."
+            exit 0
+          fi
+
+          # Three windowed attempts saw nothing recent. Run the same query
+          # once without the window only to word the failure: empty means the
+          # cron has no record on the API at all, otherwise the run that
+          # exists is older than the limit. If the unwindowed answer is
+          # recent the gate's question is already answered: the cron is
+          # alive and the next run of this job will see the run once the
+          # listing index catches up. That is a stale-listing quirk the
+          # retries exist for rather than a fault on the cron, so this
+          # branch emits one `::warning::` naming both facts and exits 0
+          # instead of failing the run.
+          latest=$(gh api "$base" \
+            --jq '[.workflow_runs[].created_at] | max // empty')
+          if [ -z "$latest" ]; then
+            echo "::error::No ${what} scheduled run on record for ${WORKFLOW}."
+            echo "Either its cron has never fired, or the schedule was dropped." >&2
+            echo "Check that the workflow still exists on the default branch, then" >&2
+            echo "toggle it: gh workflow disable ${WORKFLOW} && gh workflow enable ${WORKFLOW}" >&2
+            exit 1
+          fi
+
+          age_seconds=$(( now_s - $(date -u -d "$latest" +%s) ))
+          age_days=$(( age_seconds / 86400 ))
+
+          if [ "$age_days" -le "$MAX_AGE_DAYS" ]; then
+            echo "::warning::The windowed query saw nothing 3 times, but the unwindowed query returned ${latest} (${age_days}d ago); treating the recent run as evidence the cron is alive."
+            exit 0
+          fi
+
+          echo "::error::${WORKFLOW} last ${verb} ${age_days} days ago, over the ${MAX_AGE_DAYS}-day limit."
+          echo "A schedule that stops firing reports nothing, so treat this as the alert it never sent." >&2
+          echo "GitHub runs crons hours late, so a small overrun right at the boundary is not the problem;" >&2
+          echo "a multiple of the period is. Toggle the workflow off and on to re-register it, then check" >&2
+          echo "the next scheduled fire rather than the next few minutes." >&2
+          exit 1
+          CHECK
+          }
+
+          pairs="${WORKFLOWS:-}"
+          if [ -z "$pairs" ]; then
+            pairs="${WORKFLOW:?workflow or workflows is required} ${MAX_AGE_DAYS:?age is required}"
+          fi
+          summary="${GITHUB_STEP_SUMMARY:-/dev/null}"
+          printf '| Workflow | Limit (days) | Result |\n| --- | ---: | --- |\n' >> "$summary"
+          failed=0
+          checked=0
+          while read -r workflow days extra; do
+            # YAML block scalars normally carry a trailing newline.
+            [ -z "$workflow$days$extra" ] && continue
+            if [[ ! "$workflow" =~ ^[a-zA-Z0-9_-]+\.ya?ml$ ]] ||
+               [[ ! "$days" =~ ^[0-9]+$ ]] || [ -n "$extra" ]; then
+              echo "::error::Invalid workflow/age pair: $workflow $days $extra"
+              failed=1
+              continue
+            fi
+            checked=$((checked + 1))
+            export WORKFLOW="$workflow" MAX_AGE_DAYS="$days"
+            if check_workflow; then
+              result=PASS
+            else
+              result=FAIL
+              failed=1
+              echo "::error::Freshness check failed for $workflow (limit: $days days)."
+            fi
+            printf '| %s | %s | %s |\n' "$workflow" "$days" "$result" >> "$summary"
+          done <<< "$pairs"
+          if [ "$checked" -eq 0 ]; then
+            echo "::error::No workflow/age pairs to check."
+            failed=1
+          fi
+          exit "$failed"
