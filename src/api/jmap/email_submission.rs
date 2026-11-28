@@ -7,6 +7,7 @@ use super::super::state::ApiState;
 use super::objects;
 use crate::api::new_recipients::CapRefusal;
 
+use crate::smtp::directory::sender_field::{SenderRefusal, owned_sender_addresses};
 use crate::smtp::trace::ensure_submission_headers;
 
 /// `EmailSubmission/set` (RFC 8621 §7.5): queue stored emails for delivery.
@@ -411,19 +412,13 @@ fn check_reach(
 	raw: &[u8],
 	mail_from: &str,
 ) -> Result<Vec<String>, Refusal> {
-	// A `Sender` field that names no address is not one that passed.
-	if crate::dmarc::author::sender_unreadable(raw) {
-		return Err("forbiddenFrom".into());
-	}
-	let sender_field = crate::dmarc::author::all_sender_addresses(raw);
-	for sender in &sender_field {
-		crate::api::mail_from::check_mail_from(state, account, sender).map_err(|refusal| {
-			match refusal {
-				crate::api::mail_from::MailFromRefusal::Invalid => "invalidEmail",
-				crate::api::mail_from::MailFromRefusal::NotOwned => "forbiddenFrom",
-			}
+	// The rule SMTP submission applies to the same field. A `Sender` field
+	// that names no address is not one that passed.
+	let sender_field = owned_sender_addresses(raw, |address| state.owns_address(account, address))
+		.map_err(|refusal| match refusal {
+			SenderRefusal::Invalid => "invalidEmail",
+			SenderRefusal::Unreadable | SenderRefusal::NotOwned => "forbiddenFrom",
 		})?;
-	}
 	let mut senders = crate::dmarc::author::all_addresses(raw);
 	senders.extend(sender_field);
 	senders.push(mail_from.to_string());

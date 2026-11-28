@@ -429,6 +429,8 @@ mod resolve;
 
 mod list_fields;
 
+pub(crate) mod sender_field;
+
 #[cfg(test)]
 pub(crate) mod tests;
 
