@@ -277,6 +277,8 @@ pub(crate) fn address_remove_with_store(
 
 /// The result of `account address add|remove`.
 fn address_changed(mut report: Report, verb: &str, name: &str, address: &str) -> ExitCode {
+	// As the store keeps it, which is what the route answers too.
+	let address = &crate::util::address::normalize(address);
 	report.line(format_args!(
 		"address {verb}{}",
 		if verb == "add" { "ed" } else { "d" }

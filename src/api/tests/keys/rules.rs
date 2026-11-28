@@ -275,6 +275,18 @@ pub(super) const RULES: &[Rule] = &[
 		"two_factor_and_display_name_of_another_tenants_account_are_out_of_reach",
 	),
 	rule(
+		"/api/v1/accounts/{name}/addresses",
+		"manage:write",
+		Domain::AccountParam,
+		"a_confined_key_adds_addresses_in_its_own_domains_only",
+	),
+	rule(
+		"/api/v1/accounts/{name}/addresses/{address}",
+		"manage:write",
+		Domain::AccountParam,
+		"a_confined_key_removes_addresses_of_its_own_accounts_only",
+	),
+	rule(
 		"/api/v1/accounts/{name}/disable",
 		"manage:write",
 		Domain::AccountParam,

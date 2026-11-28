@@ -1,9 +1,10 @@
-//! The question a write asks under its lock, clause by clause: the scope and
-//! the absence of any confinement, of the key as it is read then.
+//! The questions a write asks under its lock, clause by clause: the scope,
+//! the confinement and what the account is, of the key as it is read then.
 
 use super::*;
 use crate::api::ApiState;
 use crate::api::state::MatchedAuth;
+use crate::directory_store::DynamicAccount;
 
 const SECRET: &str = "recheck-unit-secret";
 
@@ -56,4 +57,54 @@ fn only_a_key_with_the_scope_and_no_confinement_is_unrestricted_for_it() {
 		&["example.org"],
 		Scope::ManageWrite
 	));
+}
+
+/// `dyna`, holding `addresses`, suspended or not.
+fn dyna(addresses: &[&str], disabled: bool) -> DynamicAccount {
+	DynamicAccount {
+		name: "dyna".to_string(),
+		addresses: addresses.iter().map(|a| (*a).to_string()).collect(),
+		disabled,
+		..DynamicAccount::default()
+	}
+}
+
+#[test]
+fn an_address_is_added_by_a_key_with_the_scope_that_reaches_both() {
+	let ask = |scopes: &[&str], domains: &[&str], held: &[&str], address: &str| {
+		let dir = tempfile::tempdir().expect("tempdir");
+		let state = state_with(dir.path(), scopes, domains);
+		let account = dyna(held, false);
+		Principal::still_adds_address(&state, &admitted(), Scope::ManageWrite, &account, address)
+	};
+	let own: &[&str] = &["dyna@example.org"];
+	let both: &[&str] = &["dyna@example.org", "dyna@other.test"];
+	let write: &[&str] = &["manage:write"];
+	let here: &[&str] = &["example.org"];
+	assert!(ask(write, here, own, "new@example.org"));
+	assert!(ask(write, &[], both, "new@other.test"));
+	assert!(!ask(&["manage:read"], here, own, "new@example.org"));
+	assert!(!ask(&["manage:read"], &[], own, "new@example.org"));
+	assert!(!ask(write, here, both, "new@example.org"));
+	assert!(!ask(write, here, own, "new@other.test"));
+}
+
+#[test]
+fn an_address_is_taken_off_by_a_key_with_the_scope_that_reaches_the_account() {
+	let ask = |scopes: &[&str], domains: &[&str], held: &[&str], disabled: bool| {
+		let dir = tempfile::tempdir().expect("tempdir");
+		let state = state_with(dir.path(), scopes, domains);
+		let account = dyna(held, disabled);
+		Principal::still_removes_address(&state, &admitted(), Scope::ManageWrite, &account)
+	};
+	let own: &[&str] = &["dyna@example.org"];
+	let both: &[&str] = &["dyna@example.org", "dyna@other.test"];
+	let write: &[&str] = &["manage:write"];
+	let here: &[&str] = &["example.org"];
+	assert!(ask(write, here, own, false));
+	assert!(ask(write, &[], both, true));
+	assert!(!ask(&["manage:read"], here, own, false));
+	assert!(!ask(&["manage:read"], &[], own, false));
+	assert!(!ask(write, here, both, false));
+	assert!(!ask(write, here, own, true));
 }

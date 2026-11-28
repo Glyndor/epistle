@@ -5,7 +5,9 @@
 //! The suspension events are the ones the management route that suspends and
 //! resumes an account writes: the same names, the same fields and the same
 //! rule about a request that found the account already in the state asked
-//! for. The quota events are written once for every write of a quota.
+//! for. The quota events are written once for every write of a quota, and the
+//! address events once for every address written or taken off, next to the
+//! domain in the clear.
 
 use std::net::IpAddr;
 
@@ -87,5 +89,40 @@ pub fn log_quota_change(
 	let ip = client_ip.map_or_else(|| "unknown".to_string(), |ip| ip.to_string());
 	tracing::info!(target: "epistle::api::audit", event = event.as_str(),
 		account = %crate::log_id::account(account), quota_bytes = quota_bytes.unwrap_or(0),
+		key = key.unwrap_or("configured-token"), client_ip = %ip, "account change");
+}
+
+/// Stable event identifiers on the API audit target.
+#[derive(Debug, Clone, Copy)]
+pub enum AddressEvent {
+	/// Gave an account an address.
+	Added,
+	/// Took an address off an account.
+	Removed,
+}
+
+impl AddressEvent {
+	fn as_str(self) -> &'static str {
+		match self {
+			Self::Added => "account.address_added",
+			Self::Removed => "account.address_removed",
+		}
+	}
+}
+
+/// One event per durable change; a refused write emits none. The address is
+/// written as its pseudonym, and its domain in the clear.
+pub fn log_address_change(
+	event: AddressEvent,
+	account: &str,
+	address: &str,
+	key: Option<&str>,
+	client_ip: Option<IpAddr>,
+) {
+	let ip = client_ip.map_or_else(|| "unknown".to_string(), |ip| ip.to_string());
+	let domain = address.rsplit_once('@').map_or("", |(_, domain)| domain);
+	tracing::info!(target: "epistle::api::audit", event = event.as_str(),
+		account = %crate::log_id::account(account),
+		address = %crate::log_id::account(address), domain = %domain,
 		key = key.unwrap_or("configured-token"), client_ip = %ip, "account change");
 }

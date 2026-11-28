@@ -35,8 +35,8 @@ mod domain;
 mod keys;
 mod queue;
 pub use account_edit::{
-	QuotaEvent, SuspensionEvent, log_privilege_change_by_key, log_quota_change,
-	log_suspension_change,
+	AddressEvent, QuotaEvent, SuspensionEvent, log_address_change, log_privilege_change_by_key,
+	log_quota_change, log_suspension_change,
 };
 pub use alias::{AliasEvent, log_alias_change};
 pub use ban::{BanEvent, log_ban_change};
