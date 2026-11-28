@@ -7,6 +7,7 @@ use axum::{Extension, Json};
 
 use crate::api::Principal;
 use crate::api::api_keys::Scope;
+use crate::api::authorization::suspension::undone_by_replacement;
 use crate::api::scim::error::ScimError;
 use crate::api::scim::types::User;
 use crate::api::state::{ApiState, ClientIp, MatchedAuth};
@@ -41,6 +42,12 @@ pub async fn put_user(
 	// replace leaves the password as it was.
 	let addresses = resolve_addresses(&body.emails, &existing.addresses)?;
 	require_addresses_in_scope(&principal, &addresses)?;
+	let disabled = !body.active;
+	if let Some(refusal) = undone_by_replacement(disabled, &existing.addresses, &addresses)
+		&& !principal.admits_suspended(existing.disabled)
+	{
+		return Err(ScimError::forbidden(refusal));
+	}
 	state
 		.tenant_limits()
 		.check_account_move(state.store(), &existing.addresses, &addresses)
@@ -60,9 +67,8 @@ pub async fn put_user(
 	// `Sent` copy, the send and receive switches, the allowed protocols) stays
 	// as it is, and so do the addresses when the request names none. The key
 	// is read again there too, and asked about the account as it is and as it
-	// would become.
+	// would become, and about the suspension it would undo.
 	let password_sent = new_password.is_some();
-	let disabled = !body.active;
 	let previous = state
 		.store()
 		.replace_account_if(&id, new_password, |current| {
@@ -71,21 +77,21 @@ pub async fn put_user(
 			} else {
 				addresses
 			};
-			let reaches = |addresses: &[String]| {
-				Principal::still_reaches_account(
-					&state,
-					&auth,
-					Scope::Scim,
-					&current.name,
+			let now = Principal::for_token(&state, &auth);
+			let reaches = |addresses: &[String]| now.admits_account(&current.name, addresses);
+			let may_leave_it_so = undone_by_replacement(disabled, &current.addresses, &addresses)
+				.is_none()
+				|| now.admits_suspended(current.disabled);
+			(now.admits_scope(Scope::Scim)
+				&& reaches(&current.addresses)
+				&& reaches(&addresses)
+				&& may_leave_it_so)
+				.then(|| DynamicAccount {
 					addresses,
-				)
-			};
-			(reaches(&current.addresses) && reaches(&addresses)).then(|| DynamicAccount {
-				addresses,
-				disabled,
-				display_name: body.display_name.clone(),
-				..current.clone()
-			})
+					disabled,
+					display_name: body.display_name.clone(),
+					..current.clone()
+				})
 		})
 		.map_err(store_to_scim)?;
 	// The account is written: the line of every change it made follows, on

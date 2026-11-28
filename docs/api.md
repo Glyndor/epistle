@@ -1211,9 +1211,10 @@ anything; suspending an account whose removal is already under way does not stop
 it.
 
 These rules are those of the two routes above and of `DELETE
-/api/v1/accounts/{name}`. [SCIM](#scim) has its own scope, and its `active`
-attribute and `DELETE` work as described there. A key confined to domains can
-also still set the password or the display name of a suspended account in them.
+/api/v1/accounts/{name}`, and [SCIM](#scim) holds a key confined to domains to
+them too, through its `active` and `emails` attributes and its `DELETE`. Such a
+key can still set the password or the display name of a suspended account in
+them.
 
 ### Address aliases
 
@@ -1401,6 +1402,15 @@ what SCIM models (`active`, `emails`, `displayName`, `password` when sent) and
 leaves the quota, forwards, catch-all and the other account settings as they
 were. A SCIM key
 cannot be bound to an account.
+
+A key confined to domains does not resume a suspended account (one that is not
+`active`), change its addresses or remove it. A `PUT` or `PATCH` that would
+leave it `active`, a `PUT` that names other addresses or the same ones in
+another order, and a `DELETE` answer `403`, and nothing of the request is
+written. The account and the key are asked again in the write, so an account
+suspended, or a key confined, while the request is under way answers `404`. A
+request that keeps the account suspended with the addresses it holds is taken,
+a new `password` or `displayName` included.
 
 A credential change leaves the same trace as the management route that makes
 it: a password SCIM sets writes `account.password_reset` on

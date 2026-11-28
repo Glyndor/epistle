@@ -3339,6 +3339,8 @@ paths:
           $ref: "#/components/responses/ScimBadRequest"
         "401":
           $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/ScimForbidden"
         "404":
           $ref: "#/components/responses/ScimNotFound"
         "409":
@@ -3383,6 +3385,8 @@ paths:
           $ref: "#/components/responses/ScimBadRequest"
         "401":
           $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/ScimForbidden"
         "404":
           $ref: "#/components/responses/ScimNotFound"
         "415":
@@ -3406,6 +3410,8 @@ paths:
           description: The account was deleted.
         "401":
           $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/ScimForbidden"
         "404":
           $ref: "#/components/responses/ScimNotFound"
         "429":
@@ -4112,6 +4118,12 @@ components:
             $ref: "#/components/schemas/ScimError"
     ScimConflict:
       description: A SCIM error with status 409, the user name or an address is taken, or the tenant is at its account cap.
+      content:
+        application/scim+json:
+          schema:
+            $ref: "#/components/schemas/ScimError"
+    ScimForbidden:
+      description: A SCIM error with status "403". A key confined to domains does not resume a suspended account, change its addresses or remove it.
       content:
         application/scim+json:
           schema:
