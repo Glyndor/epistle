@@ -74,9 +74,15 @@ class SelectionTests(unittest.TestCase):
         for path in (".github/scripts/distro_packages/stage_payload.py", ".github/scripts/distro_packages/rpm/epistle.spec.in",
                      ".github/scripts/distro_packages/images.env", "packaging/linux/setup.sh",
                      "tests/packaging/rpm/verify-rpm.sh", "tests/packaging/payload/verify-matches-deb.sh",
-                     "tests/packaging/host/lifecycle.sh"):
+                     "tests/packaging/host/lifecycle.sh", "tests/packaging/pacman/admission.sh",
+                     ".github/scripts/distro_packages/pacman/PKGBUILD"):
             with self.subTest(path=path):
                 self.assertEqual(self.selected(path), {"debian", "packages"})
+
+    def test_what_the_admission_check_installs_its_tools_with_runs_it_and_still_runs_the_tests(self):
+        for path in cp.SIGNING:
+            self.assertTrue((ROOT / path).is_file(), path)
+            self.assertEqual(self.selected(path), {"debian", "packages", "tests"}, path)
 
     def test_the_package_checks_never_run_without_the_deb_they_are_packed_from(self):
         listing = subprocess.check_output(["git", "ls-files"], cwd=ROOT, text=True).split("\n")
@@ -396,7 +402,8 @@ class WorkflowContractTests(unittest.TestCase):
         for step in job["steps"]:
             self.assertFalse({"if", "continue-on-error"} & set(step), step.get("name"))
         runs = " ".join(step.get("run", "") for step in job["steps"])
-        for script in ("distro_packages/pack-rpm.sh", "rpm/verify-rpm.sh", "rpm/admission.sh"):
+        for script in ("distro_packages/pack-rpm.sh", "rpm/verify-rpm.sh", "rpm/admission.sh",
+                       "distro_packages/pack-pacman.sh", "pacman/admission.sh"):
             self.assertIn(script, runs)
 
     def test_test_check_reflects_suite_failure_and_cancellation(self):

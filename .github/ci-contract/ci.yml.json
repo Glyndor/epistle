@@ -195,7 +195,7 @@
   },
   "packages": {
    "if": "${{ !cancelled() && needs.debian.result == 'success' && needs.plan.outputs.packages != 'false' }}",
-   "name": "rpm package",
+   "name": "rpm and pacman packages",
    "needs": [
     "plan",
     "debian"
@@ -227,6 +227,14 @@
     {
      "name": "The rpm channel admits them",
      "run": "set -euo pipefail\nbash tests/packaging/rpm/admission.sh \\\n  \"$RUNNER_TEMP/pack/out/epistle-${VERSION}-1.glyndor.any.x86_64.rpm\" \\\n  \"$RUNNER_TEMP/pack/out/epistle-${VERSION}-1.glyndor.any.aarch64.rpm\" \"$VERSION\"\n"
+    },
+    {
+     "name": "Pack the pacman package and check it",
+     "run": "set -euo pipefail\nbash .github/scripts/distro_packages/pack-pacman.sh \\\n  \"$RUNNER_TEMP/deb/epistle_${VERSION}_amd64.deb\" \"$VERSION\" \"$RUNNER_TEMP/pacman\"\n"
+    },
+    {
+     "name": "The pacman channel admits it",
+     "run": "set -euo pipefail\nbash tests/packaging/pacman/admission.sh \\\n  \"$RUNNER_TEMP/pacman/out/epistle-${VERSION}-1-x86_64.pkg.tar.zst\" \"$VERSION\"\n"
     }
    ],
    "timeout-minutes": 15

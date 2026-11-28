@@ -1,13 +1,14 @@
-# rpm packages
+# rpm and pacman packages
 
-The release builds an rpm package of epistle for x86_64 and aarch64 next to the
-`.deb`, packed from the same files: the binary, the completions, the man pages
-and the documents are byte for byte those of the `.deb`. A prerelease carries the
-`.deb` only.
+Next to the `.deb`, the release builds an rpm package of epistle for x86_64 and
+aarch64 and a pacman package for x86_64 (Arch Linux has no official aarch64
+port). They are packed from the same files: the binary, the completions, the man
+pages and the documents are byte for byte those of the `.deb`. A prerelease
+carries the `.deb` only.
 
 ## Installing and upgrading
 
-The rpm package runs no script on the host. What the `.deb` does in its
+Neither package runs a script on the host. What the `.deb` does in its
 `postinst` is one command, run once after installing and again after every
 upgrade:
 
@@ -24,13 +25,13 @@ does not take is named on stderr with the command that fixes it, as with the
 
 ## What differs from the `.deb`
 
-| | `.deb` | rpm |
+| | `.deb` | rpm and pacman |
 |---|---|---|
 | Host setup | on every install and upgrade | when `setup` is run |
-| Account | created by the `postinst` | declared in `/usr/lib/sysusers.d/epistle.conf`. Installing the rpm creates it on Fedora 45 and does not on AlmaLinux 9; `setup` creates it on both |
+| Account | created by the `postinst` | declared in `/usr/lib/sysusers.d/epistle.conf`. Installing the package creates it on Arch Linux and Fedora 45 and does not on AlmaLinux 9; `setup` creates it on all three |
+| Dependencies | `podman`, `podup`, `adduser`, `wireguard-tools`, the archive keyring | rpm: `podman`, `podup`, `systemd`; install `wireguard-tools` yourself on a deployment with more than one node. pacman: `podman`, `podup`, `systemd`, `shadow`, `wireguard-tools` |
 | Port floor | `/usr/lib/sysctl.d/30-glyndor-epistle.conf` | `setup` writes `/etc/sysctl.d/99-glyndor-epistle.conf`, unless the host already sets the key; removing the package leaves that file |
 | `epistle stack rollback` | goes back to the binary the upgrade replaced | not available: nothing saves the replaced binary |
-| `wireguard-tools` | a dependency | install it yourself on a deployment with more than one node |
 | Removal | `apt purge` deletes the account, the mail and `/etc/epistle` | removal leaves them; there is no purge |
 
 Neither package ships a file under `/etc`, so an upgrade never replaces

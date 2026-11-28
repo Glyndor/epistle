@@ -1,0 +1,29 @@
+# Maintainer: Glyndor <noreply@glyndor.net>
+#
+# Packs the staged payload of the .deb of the same release; nothing is compiled.
+# build-pacman.sh gives the version in EPISTLE_VERSION and the staged tree in
+# $startdir/stage.
+#
+# The channel admits a scriptlet only by the hash of a reviewed one, and it lists
+# none for epistle, so there is no .INSTALL: the account is declared in
+# sysusers.d, which a hook of systemd applies, and the rest of the host setup is
+# /usr/lib/epistle/setup. No file under /etc is shipped, so an upgrade or a
+# removal never touches the configuration.
+pkgname=epistle
+pkgver=${EPISTLE_VERSION:?}
+pkgrel=1
+pkgdesc='Self-hosted mail server with a management API and CLI'
+arch=('x86_64')
+url='https://github.com/Glyndor/epistle'
+license=('MIT' 'OGL-UK-3.0')
+depends=('podman>=6.2.0' 'podup>=6.0.0' 'wireguard-tools' 'systemd' 'shadow')
+optdepends=('openssl: to generate keys and certificates by hand')
+# The binary is static and already stripped, and the man pages are already
+# compressed: the files reach the install byte for byte as they are staged.
+options=('!strip' '!debug' '!lto' '!zipman' '!purge' 'docs' 'emptydirs')
+
+package() {
+	# Not `cp -a`: the owner of the staged files is whoever staged them, and the
+	# package belongs to root.
+	cp -r --preserve=mode,timestamps "$startdir/stage/root/." "$pkgdir/"
+}

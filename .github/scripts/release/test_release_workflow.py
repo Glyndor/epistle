@@ -15,7 +15,7 @@ from release import release_files
 HERE = Path(__file__).resolve().parent
 ROOT = Path(__file__).resolve().parents[3]
 WORKFLOW = ROOT / ".github/workflows/release.yml"
-SCRIPTS_ONLY = ("build-rpm", "attest", "sign", "verify-signatures", "image-manifest", "image-promote")
+SCRIPTS_ONLY = ("build-rpm", "build-pacman", "attest", "sign", "verify-signatures", "image-manifest", "image-promote")
 PUBLISHING = ("attest", "sign", "verify-signatures", "attest-signatures", "publish", "image-build", "image-manifest", "image-promote")
 KEY = "secrets.GLYNDOR_RELEASE_ED25519_KEY"
 
@@ -34,6 +34,7 @@ class Authority(unittest.TestCase):
             "verify": {"contents": "read"},
             "build-deb": {"contents": "read"},
             "build-rpm": {"contents": "read"},
+            "build-pacman": {"contents": "read"},
             "build": {"contents": "read"},
             "attest": {"contents": "read", "id-token": "write", "attestations": "write"},
             "sign": {"contents": "read"},
@@ -48,7 +49,7 @@ class Authority(unittest.TestCase):
         self.assertEqual(workflow()["permissions"], {})
 
     def test_the_jobs_that_compile_hold_neither_the_oidc_token_nor_an_attestation_nor_a_secret(self):
-        for name in ("build-deb", "build-rpm", "build"):
+        for name in ("build-deb", "build-rpm", "build-pacman", "build"):
             text = str(jobs()[name])
             for forbidden in ("id-token", "attestations", "secrets.", "attest-build-provenance"):
                 self.assertNotIn(forbidden, text, name)
@@ -66,7 +67,7 @@ class Authority(unittest.TestCase):
     def test_every_job_that_publishes_or_signs_is_in_the_release_environment(self):
         for name in PUBLISHING:
             self.assertEqual(jobs()[name].get("environment"), "release", name)
-        for name in ("verify", "build-deb", "build-rpm", "build", "sign-rehearsal"):
+        for name in ("verify", "build-deb", "build-rpm", "build-pacman", "build", "sign-rehearsal"):
             self.assertNotIn("environment", jobs()[name], name)
 
     def test_the_jobs_with_authority_check_the_event_and_the_ref_in_shell_too(self):
@@ -115,7 +116,7 @@ class TheKey(unittest.TestCase):
         self.assertIn("-I", steps[check]["run"])
 
     def test_the_files_are_downloaded_into_an_empty_directory_outside_the_checkout_by_name(self):
-        for name in ("build-rpm", "build", "attest", "sign", "sign-rehearsal", "attest-signatures", "publish"):
+        for name in ("build-rpm", "build-pacman", "build", "attest", "sign", "sign-rehearsal", "attest-signatures", "publish"):
             for step in jobs()[name]["steps"]:
                 if "download-artifact" in step.get("uses", ""):
                     self.assertTrue(step["with"]["path"].startswith("${{ runner.temp }}/"), (name, step))
@@ -362,12 +363,12 @@ class WhoMayRun(unittest.TestCase):
             self.assertIn("already exists", done.stderr)
 
 
-class TheRpmPackages(unittest.TestCase):
+class TheRpmAndPacmanPackages(unittest.TestCase):
     def step(self, job, name):
         return next(s for s in jobs()[job]["steps"] if s.get("name") == name)
 
     def test_a_stable_release_runs_on_its_tag_and_a_rehearsal_a_prerelease_or_images_only_may_run_elsewhere(self):
-        step = self.step("verify", "A release for the rpm channel runs on its tag")
+        step = self.step("verify", "A release for the rpm and pacman channels runs on its tag")
         self.assertEqual(step["if"], "${{ !inputs.dry-run && !inputs.images-only }}")
         names = [s.get("name") for s in jobs()["verify"]["steps"]]
         self.assertLess(names.index(step["name"]), names.index("Resolve the commit this release names"))
@@ -392,12 +393,26 @@ class TheRpmPackages(unittest.TestCase):
             self.assertIn("build-rpm", jobs()[job_id]["needs"], job_id)
         self.assertIn("pack-rpm.sh", (ROOT / ".github/workflows/ci.yml").read_text())
 
+    def test_the_pacman_builder_packs_and_checks_with_the_script_the_pull_request_runs_and_uploads_only_that(self):
+        self.assertEqual(jobs()["build-pacman"]["needs"], ["verify", "build-deb"])
+        stable = "${{ !contains(env.TAG, '-') }}"
+        pack = self.step("build-pacman", "Pack the pacman package and check it")
+        self.assertEqual(pack["if"], stable)
+        self.assertIn("bash .github/scripts/distro_packages/pack-pacman.sh", pack["run"])
+        upload = self.step("build-pacman", "Upload artifact")
+        self.assertEqual((upload["if"], upload["with"]["path"], upload["with"]["if-no-files-found"]),
+                         (stable, "${{ runner.temp }}/pack/out/*.pkg.tar.zst", "error"))
+        for job_id in ("build", "attest"):
+            self.assertIn("build-pacman", jobs()[job_id]["needs"], job_id)
+        self.assertIn("pack-pacman.sh", (ROOT / ".github/workflows/ci.yml").read_text())
+
     def test_the_signatures_are_attested_after_they_verify_and_before_anything_is_published(self):
         job = jobs()["attest-signatures"]
         self.assertEqual(job["needs"], ["verify", "attest", "sign", "verify-signatures"])
         self.assertEqual(job["if"], "${{ !inputs.images-only && !inputs.dry-run }}")
-        attest = self.step("attest-signatures", "Attest the signatures of the rpm packages")
-        self.assertEqual(attest["with"], {"subject-path": "${{ runner.temp }}/signatures/*.rpm.sig"})
+        attest = self.step("attest-signatures", "Attest the signatures of the rpm and pacman packages")
+        self.assertEqual(attest["with"]["subject-path"].split(), [
+            "${{", "runner.temp", "}}/signatures/*.rpm.sig", "${{", "runner.temp", "}}/signatures/*.pkg.tar.zst.sig"])
         self.assertEqual(attest["if"], "${{ !contains(env.TAG, '-') }}")
         self.assertIn("attest-signatures", jobs()["publish"]["needs"])
 
@@ -423,6 +438,7 @@ class TheRpmPackages(unittest.TestCase):
         name = "epistle-1.2.3-1.glyndor.any.aarch64.rpm"
         self.assertEqual(self.run_check("v1.2.3", lambda dist: (dist / name).unlink())[0], 1)
         self.assertEqual(self.run_check("v1.2.3", lambda dist: (dist / f"{name}.sig").unlink())[0], 1)
+        self.assertEqual(self.run_check("v1.2.3", lambda dist: (dist / "epistle-1.2.3-1-x86_64.pkg.tar.zst").unlink())[0], 1)
         self.assertEqual(self.run_check("v1.2.3", lambda dist: (dist / "epistle-1.2.3-1.glyndor.any.noarch.rpm").write_text("x"))[0], 1)
 
     def test_the_release_is_created_with_exactly_those_files(self):
@@ -441,9 +457,9 @@ class TheRpmPackages(unittest.TestCase):
                 given = sorted(Path(a).name for a in (tmp / "args").read_text().splitlines() if a.startswith(f"{tmp}/dist/"))
                 self.assertEqual(given, release_files.names(tag, "signed"))
 
-    def test_the_gathering_job_takes_both_rpm_packages_of_a_stable_tag_and_fails_without_one(self):
+    def test_the_gathering_job_takes_every_package_of_a_stable_tag_and_fails_without_one(self):
         run = self.step("build", "Prepare artifacts")["run"]
-        for missing, code in ((None, 0), ("aarch64", 1), ("x86_64", 1)):
+        for missing, code in ((None, 0), ("aarch64", 1), ("x86_64", 1), ("pacman", 1)):
             with tempfile.TemporaryDirectory() as tmp:
                 tmp = Path(tmp)
                 (tmp / "target/release").mkdir(parents=True)
@@ -455,13 +471,17 @@ class TheRpmPackages(unittest.TestCase):
                     (tmp / "rpms" / arch).mkdir(parents=True)
                     if arch != missing:
                         (tmp / "rpms" / arch / f"epistle-1.2.3-1.glyndor.any.{arch}.rpm").write_text("rpm")
+                (tmp / "pacman").mkdir()
+                if missing != "pacman":
+                    (tmp / "pacman" / "epistle-1.2.3-1-x86_64.pkg.tar.zst").write_text("pacman")
                 done = subprocess.run(["bash", "-e", "-c", run], cwd=tmp, capture_output=True, text=True, check=False,
                                       env={**os.environ, "RUNNER_TEMP": str(tmp), "TAG": "v1.2.3"})
                 self.assertEqual(done.returncode, code, (missing, done.stdout + done.stderr))
                 if missing:
                     # By its own message: the copy after it would fail too, and say nothing of which job lost what.
-                    self.assertIn(f"::error::no {missing} .rpm named epistle-1.2.3-1.glyndor.any.{missing}.rpm reached the release job",
-                                  done.stdout)
+                    said = ("no pacman package named epistle-1.2.3-1-x86_64.pkg.tar.zst" if missing == "pacman"
+                            else f"no {missing} .rpm named epistle-1.2.3-1.glyndor.any.{missing}.rpm")
+                    self.assertIn(f"::error::{said} reached the release job", done.stdout)
                 if code == 0:
                     self.assertEqual(sorted(p.name for p in (tmp / "dist").iterdir()), release_files.built_names("v1.2.3"))
 

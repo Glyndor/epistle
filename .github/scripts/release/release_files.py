@@ -16,8 +16,9 @@ Usage:
 
 `built` is what the build job hands over; `signed` adds one signature for each of
 those. A kind is one package of the release: `amd64` and `arm64` for the .deb,
-`rpm-x86_64` and `rpm-aarch64` for the rpm. A prerelease tag carries the .deb
-only: the rpm channel serves tags of three numbers and refuses anything else.
+`rpm-x86_64` and `rpm-aarch64` for the rpm, `pacman-x86_64` for the pacman
+package. A prerelease tag carries the .deb only: the rpm and the pacman channels
+serve tags of three numbers and refuse anything else.
 `check` also reads the control fields of the .deb packages with `dpkg-deb` (the
 other formats are read where they are built, and held here by their digest) and
 recomputes SHA256SUMS. It prints one `error:` line per problem and exits 1. It
@@ -56,6 +57,8 @@ def packages(tag):
     if "-" not in version:
         for arch in RPM_ARCHES:
             found[f"rpm-{arch}"] = f"epistle-{version}-1.glyndor.any.{arch}.rpm"
+        # Arch Linux has no official port to any other architecture.
+        found["pacman-x86_64"] = f"epistle-{version}-1-x86_64.pkg.tar.zst"
     return found
 
 

@@ -23,7 +23,7 @@ class TheTree(unittest.TestCase):
         """A value with no digest is not a reference, so the comparison above would never see it."""
         env = ROOT / images.OTHERS[0]
         values = re.findall(r'^[A-Z_]+_(?:BASE|IMAGE)="([^"]*)"$', env.read_text(), re.M)
-        self.assertGreaterEqual(len(values), 2)
+        self.assertGreaterEqual(len(values), 3)
         self.assertEqual(len(values), len(re.findall(r"^[A-Z_]+_(?:BASE|IMAGE)=", env.read_text(), re.M)))
         for value in values:
             found = images.REFERENCE.fullmatch(value)

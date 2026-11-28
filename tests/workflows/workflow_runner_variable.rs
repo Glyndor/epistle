@@ -102,6 +102,11 @@ const FIXED: &[(&str, &str, &str)] = &[
 	),
 	(
 		"release.yml",
+		"build-pacman",
+		"packs the pacman package with a read of the repository only; the release stays on one kind of runner",
+	),
+	(
+		"release.yml",
 		"build",
 		"compiles the release binary with a read of the repository only; the release stays on one kind of runner",
 	),

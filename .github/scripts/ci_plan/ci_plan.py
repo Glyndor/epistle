@@ -18,8 +18,10 @@ BUILD = RUST | {"debian"}
 # selects them selects the .deb too.
 PACKAGES = {"debian", "packages"}
 # What only the package checks read: the recipes, the files they add and the checks.
-PACKAGING = (".github/scripts/distro_packages/", "packaging/", "tests/packaging/host/", "tests/packaging/payload/",
-             "tests/packaging/rpm/")
+PACKAGING = (".github/scripts/distro_packages/", "packaging/", "tests/packaging/host/", "tests/packaging/pacman/",
+             "tests/packaging/payload/", "tests/packaging/rpm/")
+# Read by the release and by the pacman admission check, which installs its tools with them.
+SIGNING = {".github/scripts/release/prepare_signing_venv.sh", ".github/scripts/sign-requirements.txt"}
 OWN = {".github/scripts/ci_plan/ci_plan.py", ".github/scripts/ci_plan/test_ci_plan.py",
        ".github/scripts/ci_plan/__init__.py",
        ".github/workflows/reusable-ci-plan.yml"}
@@ -60,6 +62,8 @@ def affected(path):
         return BUILD | {"supply"}
     if path.startswith(PACKAGING):
         return set(PACKAGES)  # before test_only: the shell checks under tests/ are not cargo tests
+    if path in SIGNING:
+        return PACKAGES | {"tests"}
     if test_only(path):
         return {"lint", "tests"}
     if path.startswith(("src/", "migrations/", ".sqlx/")):

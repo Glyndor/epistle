@@ -192,18 +192,18 @@ jobs:
       upload-artifact: true
       artifact-name: packaging-deb
 
-  # The rpm is packed from the .deb this run built, with the script the release runs,
-  # and checked before a merge: what the channel reads out of it, what a person gets
-  # when installing, upgrading and removing it, and the admission of the channel
-  # itself. The plan selects it only for a change of the packaging, and it never runs
+  # The rpm and the pacman package are packed from the .deb this run built, with the
+  # scripts the release runs, and checked before a merge: what each channel reads out
+  # of them, what a person gets when installing, upgrading and removing them, and the
+  # admission of each channel itself. The plan selects it only for a change of the packaging, and it never runs
   # without the .deb, so the plan never selects it without `debian`.
   packages:
-    name: rpm package
+    name: rpm and pacman packages
     needs: [plan, debian]
     if: ${{ !cancelled() && needs.debian.result == 'success' && needs.plan.outputs.packages != 'false' }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
-    # Measured 2026-11-28: the first green run took 80 seconds. It pulls images and
-    # takes packages from the mirrors of two distributions, hence the margin.
+    # Measured 2026-11-28: the first green run took 2 minutes. It pulls images and
+    # takes packages from the mirrors of three distributions, hence the margin.
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -249,6 +249,18 @@ jobs:
           bash tests/packaging/rpm/admission.sh \
             "$RUNNER_TEMP/pack/out/epistle-${VERSION}-1.glyndor.any.x86_64.rpm" \
             "$RUNNER_TEMP/pack/out/epistle-${VERSION}-1.glyndor.any.aarch64.rpm" "$VERSION"
+
+      - name: Pack the pacman package and check it
+        run: |
+          set -euo pipefail
+          bash .github/scripts/distro_packages/pack-pacman.sh \
+            "$RUNNER_TEMP/deb/epistle_${VERSION}_amd64.deb" "$VERSION" "$RUNNER_TEMP/pacman"
+
+      - name: The pacman channel admits it
+        run: |
+          set -euo pipefail
+          bash tests/packaging/pacman/admission.sh \
+            "$RUNNER_TEMP/pacman/out/epistle-${VERSION}-1-x86_64.pkg.tar.zst" "$VERSION"
 
   # A statement about the state of the whole tree, not about a diff: the reusable
   # ends in `git ls-files -z` and counts the lines of every tracked file by
