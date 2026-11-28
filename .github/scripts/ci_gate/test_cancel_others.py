@@ -220,7 +220,7 @@ class TheWiring(unittest.TestCase):
                 perms = job["permissions"] if "permissions" in job else top
                 if self.holds(perms):
                     holders[(path.name, job_id)] = job
-        self.assertEqual({k for k in holders if k[0] != REUSABLE}, {(f, "cancel-others") for f in CALLERS} | {("ci.yml", "cancel-first-failure")})
+        self.assertEqual({k for k in holders if k[0] != REUSABLE}, {(f, "cancel-others") for f in CALLERS} | {("ci.yml", "cancel-first-failure"), ("ci.yml", "cancel-on-package-failure")})
         self.assertIn((REUSABLE, "cancel"), holders)
         for (name, job_id), job in holders.items():
             if name != REUSABLE:
@@ -258,8 +258,19 @@ class TheWiring(unittest.TestCase):
         # And no other caller cancels its own run: it would end the jobs that are still to report.
         for name in CALLERS:
             for job_id, other in jobs_of(name).items():
-                if job_id != "cancel-first-failure" and other.get("uses") == f"./.github/workflows/{REUSABLE}":
+                if job_id not in ("cancel-first-failure", "cancel-on-package-failure") and other.get("uses") == f"./.github/workflows/{REUSABLE}":
                     self.assertNotIn("with", other, (name, job_id))
+
+    def test_the_package_failure_caller_waits_for_the_package_and_cancels_its_own_run(self):
+        """The failure of the package build ends this run and the other runs of the commit without waiting for the long suite."""
+        jobs = jobs_of("ci.yml")
+        self.assertIn("cancel-on-package-failure", jobs)
+        job = jobs["cancel-on-package-failure"]
+        self.assertEqual(job["needs"], ["debian"])
+        self.assertEqual(job["if"], "${{ failure() && (github.event_name == 'pull_request' || github.event_name == 'merge_group') }}")
+        self.assertEqual(job["permissions"], {"contents": "read", "actions": "write"})
+        self.assertEqual(job["uses"], f"./.github/workflows/{REUSABLE}")
+        self.assertEqual(job["with"], {"cancel-own": True})
 
     def test_a_workflow_a_failure_may_not_cancel_has_no_such_caller(self):
         for path in ci_yaml.workflow_files(ROOT):
@@ -330,7 +341,7 @@ class WhatIsCancelledCannotPass(unittest.TestCase):
 
         jobs = ci_yaml.load(ROOT / ".github/workflows/ci.yml")["jobs"]
         waited = set(jobs["gate"]["needs"])
-        exempt = {"plan", "gate", "dependabot-freshness", "cancel-others", "cancel-first-failure"}
+        exempt = {"plan", "gate", "dependabot-freshness", "cancel-others", "cancel-first-failure", "cancel-on-package-failure"}
         self.assertEqual(set(jobs) - exempt - waited, set(), "a job of ci.yml the gate does not wait for can be cancelled and the run still green")
         self.assertEqual(jobs["gate"]["if"], "always()")
         for suite in gate.SUITES:

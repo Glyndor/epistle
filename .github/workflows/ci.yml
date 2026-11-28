@@ -333,6 +333,20 @@ jobs:
     with:
       cancel-own: true
 
+  # The package build takes a few minutes and the long suite about forty, so the
+  # failure of the package gets a job of its own: it ends this run and the other
+  # runs of the commit without waiting for the long suite, and it does not hold
+  # back the quick cuts that are already there.
+  cancel-on-package-failure:
+    needs: [debian]
+    if: ${{ failure() && (github.event_name == 'pull_request' || github.event_name == 'merge_group') }}
+    permissions:
+      contents: read
+      actions: write
+    uses: ./.github/workflows/reusable-cancel-others.yml
+    with:
+      cancel-own: true
+
   # When this workflow fails on a pull request, the other runs of the same commit stop: they
   # would spend runners on a commit that is already red. The job and the rules it follows are in
   # reusable-cancel-others.yml.

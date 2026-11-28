@@ -55,6 +55,20 @@
     "cancel-own": true
    }
   },
+  "cancel-on-package-failure": {
+   "if": "${{ failure() && (github.event_name == 'pull_request' || github.event_name == 'merge_group') }}",
+   "needs": [
+    "debian"
+   ],
+   "permissions": {
+    "actions": "write",
+    "contents": "read"
+   },
+   "uses": "./.github/workflows/reusable-cancel-others.yml",
+   "with": {
+    "cancel-own": true
+   }
+  },
   "cancel-others": {
    "if": "${{ failure() && github.event_name == 'pull_request' }}",
    "needs": [
