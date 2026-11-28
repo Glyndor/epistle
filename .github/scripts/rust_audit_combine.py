@@ -30,9 +30,16 @@ this script only when the reusable already failed (`if: failure()`),
 so a clean combine output here means a non-advisory failure happened
 somewhere in the reusable and operators still need a loud signal.
 
+A report that is empty or cannot be parsed is a failure of the ref it
+belongs to, never a clean one. With `--run-url` it becomes that same
+failure issue: the title names the ref, the body says the report could
+not be read, and the findings of the refs that could be read are kept.
+Without a run URL there is nowhere to send the operator, so the script
+exits 2 instead.
+
 Exit codes:
 	0  reports combined
-	2  the inputs could not be read or parsed
+	2  the inputs could not be read or parsed and no run URL was given
 """
 
 from __future__ import annotations
@@ -150,6 +157,8 @@ def parse_audit_json(audit_json_text: str, ref: str) -> dict:
 	is treated as malformed: treating it as clean would silently close an
 	open advisory issue if cargo-audit's output format ever changed.
 	"""
+	if not audit_json_text.strip():
+		raise ValueError("the audit report is empty")
 	try:
 		document = json.loads(audit_json_text)
 	except json.JSONDecodeError as exc:
@@ -227,38 +236,64 @@ def combine(reports: list[dict]) -> dict:
 	}
 
 
-def failure_issue(reports_dir: Path, run_url: str) -> dict:
+def failure_issue(reports_dir: Path, run_url: str, reports: list[dict] | None = None,
+                  unreadable: list[dict] | None = None) -> dict:
 	"""Build the issue the workflow opens when the reusable failed
 	without surfacing advisories.
 
-	The title names the refs that did not produce JSON: an `audit-json-<ref>`
-	subdirectory without an `audit.json` inside it points at a reusable
-	that crashed before it could write the JSON (tool install error,
-	missing lockfile, etc.). The body names the run URL and says the
-	failure is not an advisory, so an operator does not chase a phantom
-	vulnerable crate.
+	The title names the refs that did not produce a readable report: an
+	`audit-json-<ref>` subdirectory without an `audit.json` inside it
+	points at a reusable that crashed before it could write the JSON
+	(tool install error, missing lockfile, etc.), and a report that is
+	there but cannot be read names its ref too. The body names the run
+	URL, says which report could not be read and why, and keeps the
+	findings of the refs that could be read.
 	"""
-	failed_refs: list[str] = []
+	reports = reports or []
+	unreadable = unreadable or []
+	failed_refs: set[str] = set()
 	if reports_dir.exists():
 		for entry in sorted(reports_dir.iterdir()):
 			if not entry.is_dir() or not entry.name.startswith("audit-json-"):
 				continue
 			if not (entry / "audit.json").exists():
 				ref = entry.name[len("audit-json-"):]
-				failed_refs.append(ref or "<pr head>")
+				failed_refs.add(ref or "<pr head>")
+	for report in unreadable:
+		failed_refs.add(report["ref"])
 	title = _FAILURE_TITLE_PREFIX + (
-		", ".join(failed_refs) if failed_refs else "audit"
+		", ".join(sorted(failed_refs)) if failed_refs else "audit"
 	)
-	body = (
-		"The daily cargo audit run failed without reporting advisories.\n\n"
-		"The reusable workflow exited non-zero but the JSON the combine step "
-		"read listed no advisories. That points at a non-advisory failure: "
-		"cargo-deny policy, tool install error, missing lockfile, or a JSON "
-		"shape the combine script does not understand.\n\n"
-		f"Run URL: {run_url}\n\n"
-		"This issue is not an advisory; the audit step itself did not flag a "
-		"vulnerable crate. Investigate the run linked above."
-	)
+	findings = combine(reports)
+	sections = [
+		"The daily cargo audit run failed without reporting advisories.",
+		"The reusable workflow exited non-zero but the reports the combine "
+		"step read list no advisories, or could not be read at all. That "
+		"points at a non-advisory failure: cargo-deny policy, tool install "
+		"error, missing lockfile, or a JSON the combine script could not "
+		"read.",
+	]
+	for report in unreadable:
+		sections.append(
+			f"The report of `{report['ref']}` could not be read: "
+			f"{report['reason']}. A report that cannot be read is never read "
+			"as a clean one, so its findings are unknown, not absent."
+		)
+	if findings["body"]:
+		sections.append(findings["body"])
+	sections.append(f"Run URL: {run_url}")
+	if findings["body"]:
+		sections.append(
+			"The advisories above come from the refs whose report could be "
+			"read. This issue is not an advisory issue; it reports the "
+			"failure of the audit itself. Investigate the run linked above."
+		)
+	else:
+		sections.append(
+			"This issue is not an advisory; the audit step itself did not "
+			"flag a vulnerable crate. Investigate the run linked above."
+		)
+	body = "\n\n".join(sections)
 	return {
 		"clean": True,
 		"title": title,
@@ -267,7 +302,7 @@ def failure_issue(reports_dir: Path, run_url: str) -> dict:
 	}
 
 
-def _read_reports_from_dir(directory: Path) -> list[dict]:
+def _read_reports_from_dir(directory: Path) -> tuple[list[dict], list[dict]]:
 	"""Find every JSON report in an `audit-json-<ref>/` subdirectory of
 	`directory` and normalize each one via `parse_audit_json`.
 
@@ -277,12 +312,18 @@ def _read_reports_from_dir(directory: Path) -> list[dict]:
 	workspace of the same ref, which the label carries as
 	`<ref>/<workspace>` so the issue says which graph the advisory came
 	from.
+
+	A report that cannot be read or parsed is returned in the second
+	list with its label and the reason, not left out: a report nobody
+	can read is a failure of that ref, and skipping it would read it as
+	a clean one.
 	"""
 	if not directory.exists():
 		raise ValueError(f"{directory} does not exist; the artifact download is stale")
 	if not directory.is_dir():
 		raise ValueError(f"{directory} is not a directory")
 	reports: list[dict] = []
+	unreadable: list[dict] = []
 	for ref_dir in sorted(directory.glob("audit-json-*")):
 		ref = ref_dir.name[len("audit-json-"):]
 		for path in sorted(ref_dir.glob("*.json")):
@@ -294,9 +335,13 @@ def _read_reports_from_dir(directory: Path) -> list[dict]:
 			try:
 				text = path.read_text(encoding="utf-8")
 			except OSError as exc:
-				raise ValueError(f"cannot read {path}: {exc}") from exc
-			reports.append(parse_audit_json(text, label))
-	return reports
+				unreadable.append({"ref": label, "reason": f"cannot read {path.name}: {exc}"})
+				continue
+			try:
+				reports.append(parse_audit_json(text, label))
+			except ValueError as exc:
+				unreadable.append({"ref": label, "reason": str(exc)})
+	return reports, unreadable
 
 
 def lookup_existing(repo: str, title: str) -> str:
@@ -378,12 +423,24 @@ def main(argv: list[str]) -> int:
 	args = _parse_args(argv)
 	try:
 		reports_dir = Path(args.reports_dir)
-		reports = _read_reports_from_dir(reports_dir)
+		reports, unreadable = _read_reports_from_dir(reports_dir)
 	except ValueError as exc:
 		print(f"rust_audit_combine: {exc}", file=sys.stderr)
 		return 2
+	if unreadable and not args.run_url:
+		# Without a run URL there is nowhere to send the operator, so a
+		# report that cannot be read stays the hard error it was: the
+		# step stops instead of opening an issue nobody can follow.
+		for report in unreadable:
+			print(f"rust_audit_combine: {report['ref']}: {report['reason']}", file=sys.stderr)
+		return 2
 	combined = combine(reports)
-	if combined["clean"] and args.run_url:
+	if unreadable:
+		# A report that cannot be read is a failure of its ref. The issue
+		# names that ref, says the report could not be read, and keeps the
+		# findings of the refs that could be read.
+		combined = failure_issue(reports_dir, args.run_url, reports=reports, unreadable=unreadable)
+	elif combined["clean"] and args.run_url:
 		combined = failure_issue(reports_dir, args.run_url)
 	lookup_title = combined["title"] or ""
 	if (
