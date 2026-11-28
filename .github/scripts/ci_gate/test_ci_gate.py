@@ -18,6 +18,7 @@ CI = ROOT / ".github/workflows/ci.yml"
 SUITES = {
     "rust": ("lint", "tests", "doc", "msrv"),
     "debian": ("debian",),
+    "packages": ("packages",),
     # Judges the whole tree, so no plan output licenses skipping it.
     "line-limit": (),
     "sbom-and-licenses": ("supply",),

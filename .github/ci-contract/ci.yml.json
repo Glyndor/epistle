@@ -58,7 +58,8 @@
   "cancel-on-package-failure": {
    "if": "${{ failure() && (github.event_name == 'pull_request' || github.event_name == 'merge_group') }}",
    "needs": [
-    "debian"
+    "debian",
+    "packages"
    ],
    "permissions": {
     "actions": "write",
@@ -93,12 +94,14 @@
    "uses": "./.github/workflows/reusable-rust-debian.yml",
    "with": {
     "apt-packages": "musl-tools fakeroot jq",
+    "artifact-name": "packaging-deb",
     "debian-image": "debian:sid@sha256:PIN",
     "package-name": "epistle",
     "run-build": "${{ needs.plan.outputs.debian != 'false' }}",
     "run-tests": "${{ (github.event_name != 'pull_request' && github.event_name != 'merge_group') || github.base_ref == 'main' }}",
     "rust-target": "x86_64-unknown-linux-musl",
-    "rust-toolchain": "1.100.0"
+    "rust-toolchain": "1.100.0",
+    "upload-artifact": true
    }
   },
   "dependabot-freshness": {
@@ -114,6 +117,7 @@
    "needs": [
     "rust",
     "debian",
+    "packages",
     "line-limit",
     "sbom-and-licenses",
     "audit",
@@ -161,6 +165,7 @@
     "plan",
     "rust",
     "debian",
+    "packages",
     "line-limit",
     "sbom-and-licenses",
     "audit",
@@ -179,7 +184,7 @@
       "NEEDS": "${{ toJSON(needs) }}"
      },
      "name": "Every suite ran or the plan said it could be skipped",
-     "run": "python3 -I - <<'PY'\nimport json\nimport os\nimport sys\n\nSUITES = {\n    \"rust\": (\"lint\", \"tests\", \"doc\", \"msrv\"),\n    \"debian\": (\"debian\",),\n    \"line-limit\": (),\n    \"audit\": (),\n    \"folder-limit\": (),\n    \"python-tests\": (),\n    \"deprecations\": (),\n    \"secret-scan-tests\": (),\n    \"sbom-and-licenses\": (\"supply\",),\n}\nneeds = json.loads(os.environ[\"NEEDS\"])\nproblems = []\n\n# Compared here, in code that tells `develop` from `Develop`, and not\n# only in the expression that names this job.\nif os.environ.get(\"EVENT_NAME\") == \"pull_request\" and os.environ.get(\"BASE_REF\") not in (\"develop\", \"main\"):\n    problems.append(f\"the base of this pull request is {os.environ.get('BASE_REF')!r}, not develop or main\")\n\nplan = needs.get(\"plan\") or {}\nif plan.get(\"result\") != \"success\":\n    problems.append(f\"the plan job did not succeed (result: {plan.get('result')})\")\noutputs = plan.get(\"outputs\") or {}\nfor dims in SUITES.values():\n    for dim in dims:\n        if outputs.get(dim) not in (\"true\", \"false\"):\n            problems.append(f\"plan output {dim!r} is neither true nor false: {outputs.get(dim)!r}\")\n\nfor name in needs:\n    if name != \"plan\" and name not in SUITES:\n        problems.append(f\"{name} is not in the gate table\")\nfor name, dims in SUITES.items():\n    job = needs.get(name)\n    if job is None:\n        problems.append(f\"{name} is not among the jobs the gate waits for\")\n        continue\n    result = job.get(\"result\")\n    if result == \"success\":\n        continue\n    if result == \"skipped\":\n        if plan.get(\"result\") == \"success\" and dims and all(outputs.get(d) == \"false\" for d in dims):\n            continue\n        problems.append(f\"{name} was skipped and the plan did not say it could be\")\n    else:\n        problems.append(f\"{name} did not succeed (result: {result})\")\n\nprint(f\"{'suite':<20} {'plan says':<28} result\")\nfor name, dims in SUITES.items():\n    says = \",\".join(f\"{d}={outputs.get(d)}\" for d in dims) or \"always runs\"\n    print(f\"{name:<20} {says:<28} {(needs.get(name) or {}).get('result')}\")\nfor problem in problems:\n    print(f\"::error::{problem}\")\nif problems:\n    sys.exit(1)\nprint(\"The plan succeeded and every suite passed or was skipped by the plan.\")\nPY\n"
+     "run": "python3 -I - <<'PY'\nimport json\nimport os\nimport sys\n\nSUITES = {\n    \"rust\": (\"lint\", \"tests\", \"doc\", \"msrv\"),\n    \"debian\": (\"debian\",),\n    \"packages\": (\"packages\",),\n    \"line-limit\": (),\n    \"audit\": (),\n    \"folder-limit\": (),\n    \"python-tests\": (),\n    \"deprecations\": (),\n    \"secret-scan-tests\": (),\n    \"sbom-and-licenses\": (\"supply\",),\n}\nneeds = json.loads(os.environ[\"NEEDS\"])\nproblems = []\n\n# Compared here, in code that tells `develop` from `Develop`, and not\n# only in the expression that names this job.\nif os.environ.get(\"EVENT_NAME\") == \"pull_request\" and os.environ.get(\"BASE_REF\") not in (\"develop\", \"main\"):\n    problems.append(f\"the base of this pull request is {os.environ.get('BASE_REF')!r}, not develop or main\")\n\nplan = needs.get(\"plan\") or {}\nif plan.get(\"result\") != \"success\":\n    problems.append(f\"the plan job did not succeed (result: {plan.get('result')})\")\noutputs = plan.get(\"outputs\") or {}\nfor dims in SUITES.values():\n    for dim in dims:\n        if outputs.get(dim) not in (\"true\", \"false\"):\n            problems.append(f\"plan output {dim!r} is neither true nor false: {outputs.get(dim)!r}\")\n\nfor name in needs:\n    if name != \"plan\" and name not in SUITES:\n        problems.append(f\"{name} is not in the gate table\")\nfor name, dims in SUITES.items():\n    job = needs.get(name)\n    if job is None:\n        problems.append(f\"{name} is not among the jobs the gate waits for\")\n        continue\n    result = job.get(\"result\")\n    if result == \"success\":\n        continue\n    if result == \"skipped\":\n        if plan.get(\"result\") == \"success\" and dims and all(outputs.get(d) == \"false\" for d in dims):\n            continue\n        problems.append(f\"{name} was skipped and the plan did not say it could be\")\n    else:\n        problems.append(f\"{name} did not succeed (result: {result})\")\n\nprint(f\"{'suite':<20} {'plan says':<28} result\")\nfor name, dims in SUITES.items():\n    says = \",\".join(f\"{d}={outputs.get(d)}\" for d in dims) or \"always runs\"\n    print(f\"{name:<20} {says:<28} {(needs.get(name) or {}).get('result')}\")\nfor problem in problems:\n    print(f\"::error::{problem}\")\nif problems:\n    sys.exit(1)\nprint(\"The plan succeeded and every suite passed or was skipped by the plan.\")\nPY\n"
     }
    ],
    "timeout-minutes": 5
@@ -187,6 +192,44 @@
   "line-limit": {
    "if": "${{ !cancelled() }}",
    "uses": "./.github/workflows/reusable-line-limit.yml"
+  },
+  "packages": {
+   "if": "${{ !cancelled() && needs.debian.result == 'success' && needs.plan.outputs.packages != 'false' }}",
+   "name": "rpm package",
+   "needs": [
+    "plan",
+    "debian"
+   ],
+   "runs-on": "${{ fromJSON(vars.CI_RUNNER || '\"ubuntu-latest\"') }}",
+   "steps": [
+    {
+     "uses": "actions/checkout@PIN",
+     "with": {
+      "persist-credentials": false
+     }
+    },
+    {
+     "name": "Receive the Debian package",
+     "uses": "actions/download-artifact@PIN",
+     "with": {
+      "name": "packaging-deb",
+      "path": "${{ runner.temp }}/deb"
+     }
+    },
+    {
+     "name": "Pack the x86_64 rpm and check it",
+     "run": "set -euo pipefail\nshopt -s nullglob\ndebs=(\"$RUNNER_TEMP\"/deb/epistle_*_amd64.deb)\nif [ \"${#debs[@]}\" -ne 1 ]; then\n  echo \"::error::expected one amd64 .deb, found ${#debs[@]}\"\n  exit 1\nfi\nversion=\"$(basename \"${debs[0]}\")\"\nversion=\"${version#epistle_}\"\nversion=\"${version%_amd64.deb}\"\necho \"VERSION=$version\" >> \"$GITHUB_ENV\"\nbash .github/scripts/distro_packages/pack-rpm.sh \"${debs[0]}\" \"$version\" x86_64 \"$RUNNER_TEMP/pack\"\n"
+    },
+    {
+     "name": "Pack an aarch64 header for the admission",
+     "run": "set -euo pipefail\nbash .github/scripts/distro_packages/build-rpm.sh \\\n  \"$RUNNER_TEMP/pack/stage-x86_64\" \"$RUNNER_TEMP/pack/out\" \"$VERSION\" aarch64\nbash tests/packaging/rpm/verify-rpm.sh \\\n  \"$RUNNER_TEMP/pack/out/epistle-${VERSION}-1.glyndor.any.aarch64.rpm\" \\\n  \"$RUNNER_TEMP/pack/stage-x86_64\" \"$VERSION\" aarch64\n"
+    },
+    {
+     "name": "The rpm channel admits them",
+     "run": "set -euo pipefail\nbash tests/packaging/rpm/admission.sh \\\n  \"$RUNNER_TEMP/pack/out/epistle-${VERSION}-1.glyndor.any.x86_64.rpm\" \\\n  \"$RUNNER_TEMP/pack/out/epistle-${VERSION}-1.glyndor.any.aarch64.rpm\" \"$VERSION\"\n"
+    }
+   ],
+   "timeout-minutes": 30
   },
   "plan": {
    "uses": "./.github/workflows/reusable-ci-plan.yml"

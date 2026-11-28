@@ -266,7 +266,7 @@ class TheWiring(unittest.TestCase):
         jobs = jobs_of("ci.yml")
         self.assertIn("cancel-on-package-failure", jobs)
         job = jobs["cancel-on-package-failure"]
-        self.assertEqual(job["needs"], ["debian"])
+        self.assertEqual(job["needs"], ["debian", "packages"])
         self.assertEqual(job["if"], "${{ failure() && (github.event_name == 'pull_request' || github.event_name == 'merge_group') }}")
         self.assertEqual(job["permissions"], {"contents": "read", "actions": "write"})
         self.assertEqual(job["uses"], f"./.github/workflows/{REUSABLE}")

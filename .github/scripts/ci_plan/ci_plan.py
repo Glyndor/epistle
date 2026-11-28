@@ -10,17 +10,22 @@ import os
 import re
 import subprocess
 
-JOBS = ("lint", "tests", "doc", "msrv", "debian", "supply", "freshness", "folder", "lines")
+JOBS = ("lint", "tests", "doc", "msrv", "debian", "packages", "supply", "freshness", "folder", "lines")
 RUST = {"lint", "tests", "doc", "msrv"}
 ALWAYS = {"lines", "folder"}
 BUILD = RUST | {"debian"}
+# The packages of the other distributions are packed from the .deb, so whatever
+# selects them selects the .deb too.
+PACKAGES = {"debian", "packages"}
+# What only the package checks read: the recipes, the files they add and the checks.
+PACKAGING = (".github/scripts/distro_packages/", "packaging/", "tests/packaging/payload/", "tests/packaging/rpm/")
 OWN = {".github/scripts/ci_plan/ci_plan.py", ".github/scripts/ci_plan/test_ci_plan.py",
        ".github/scripts/ci_plan/__init__.py",
        ".github/workflows/reusable-ci-plan.yml"}
 WORKFLOWS = {
-    "ci.yml": RUST | {"freshness", "debian", "supply", "lines"},
+    "ci.yml": RUST | PACKAGES | {"freshness", "supply", "lines"},
     "reusable-rust-ci.yml": RUST,
-    "reusable-rust-debian.yml": {"debian"},
+    "reusable-rust-debian.yml": PACKAGES,
     "reusable-rust-supply-chain.yml": {"supply"},
     "reusable-dependabot-freshness.yml": {"freshness"},
     "reusable-line-limit.yml": {"lines"},
@@ -52,6 +57,8 @@ def affected(path):
         return BUILD | {"supply", "freshness"}
     if path.startswith("rust-toolchain") or path == "build.rs":
         return BUILD | {"supply"}
+    if path.startswith(PACKAGING):
+        return set(PACKAGES)  # before test_only: the shell checks under tests/ are not cargo tests
     if test_only(path):
         return {"lint", "tests"}
     if path.startswith(("src/", "migrations/", ".sqlx/")):
@@ -59,7 +66,7 @@ def affected(path):
     if path.startswith(("benches/", "examples/")):
         return {"lint", "tests"}
     if path.startswith("debian/"):
-        return {"debian", "tests"}
+        return PACKAGES | {"tests"}
     if path in {"about.toml", "about.hbs", "deny.toml", "LICENSE"}:
         return {"supply"}
     if path == "rustfmt.toml" or path.startswith(".clippy"):

@@ -20,6 +20,7 @@ KNOWN = {
     ("fuzz.yml", "fuzz"): "cargo fuzz (group ${{ matrix.group.id }})",  # 1 to 5
     ("e2e.yml", "e2e"): "full-server e2e (${{ matrix.os }})",  # ubuntu-22.04, ubuntu-24.04
     ("release.yml", "build-deb"): "Build Debian package (${{ matrix.arch }})",
+    ("release.yml", "build-rpm"): "Build RPM (${{ matrix.rpm_arch }})",
     ("release.yml", "image-build"): "Build and push image (${{ matrix.arch }})",
     ("reusable-deprecation-notices.yml", "notices"): (
         "no deprecation notices${{ github.event_name == 'pull_request' && github.base_ref == 'main' && ' (promotion)'"

@@ -68,7 +68,37 @@ class SelectionTests(unittest.TestCase):
             self.assertEqual(self.selected(path), {"supply"})
 
     def test_debian_changes_keep_packaging_and_contract_tests(self):
-        self.assertEqual(self.selected("debian/rules"), {"debian", "tests"})
+        self.assertEqual(self.selected("debian/rules"), {"debian", "packages", "tests"})
+
+    def test_a_change_to_the_packaging_of_the_other_distributions_runs_the_deb_and_its_checks_and_nothing_else(self):
+        for path in (".github/scripts/distro_packages/stage_payload.py", ".github/scripts/distro_packages/rpm/epistle.spec.in",
+                     ".github/scripts/distro_packages/images.env", "packaging/linux/setup.sh",
+                     "tests/packaging/rpm/verify-rpm.sh", "tests/packaging/payload/verify-matches-deb.sh"):
+            with self.subTest(path=path):
+                self.assertEqual(self.selected(path), {"debian", "packages"})
+
+    def test_the_package_checks_never_run_without_the_deb_they_are_packed_from(self):
+        listing = subprocess.check_output(["git", "ls-files"], cwd=ROOT, text=True).split("\n")
+        for path in [p for p in listing if p] + ["a-new-file", ".github/workflows/new.yml"]:
+            chosen = self.selected(path)
+            if "packages" in chosen:
+                self.assertIn("debian", chosen, path)
+
+    def test_changes_that_cannot_reach_a_package_skip_the_package_checks(self):
+        for path in ("README.md", "docs/a.md", "src/smtp/mod.rs", "Cargo.lock", "tests/smtp/hostile.rs",
+                     "tests/packaging/debian/sysctl.rs", ".github/scripts/release/release_files.py", "deny.toml"):
+            self.assertNotIn("packages", self.selected(path), path)
+
+    def test_every_check_under_the_packaging_tests_is_run_by_something_the_plan_selects(self):
+        """A shell check nobody calls is a check that does not exist: each one is named by the CI job or by a script it runs."""
+        callers = [ROOT / ".github/workflows/ci.yml", *sorted((ROOT / ".github/scripts/distro_packages").glob("*.sh"))]
+        checks = sorted((ROOT / "tests/packaging").rglob("*.sh"))
+        self.assertGreater(len(checks), 4)
+        reached = "".join(path.read_text() for path in callers)
+        for check in checks:
+            reached_by = reached + "".join(other.read_text() for other in checks if other != check)
+            self.assertIn(check.name, reached_by, check.name)
+            self.assertIn("packages", self.selected(check.relative_to(ROOT).as_posix()), check.name)
 
     def test_folder_gate_runs_whatever_the_change_is(self):
         for status in ("A", "D", "M"):
@@ -136,8 +166,9 @@ class SelectionTests(unittest.TestCase):
             "about.hbs": {"supply"},
             "LICENSE": {"supply"},
             "rustfmt.toml": {"lint"},
-            "debian/rules": {"debian", "tests"},
-            "debian/control": {"debian", "tests"},
+            "debian/rules": {"debian", "packages", "tests"},
+            "debian/control": {"debian", "packages", "tests"},
+            "packaging/linux/sysusers.conf": {"debian", "packages"},
             "deploy/images/Dockerfile": {"tests"},
             "scripts/ci/x.sh": {"tests"},
             "install.sh": set(cp.JOBS) - cp.ALWAYS,
@@ -146,9 +177,9 @@ class SelectionTests(unittest.TestCase):
             ".github/scripts/ci_codeql/check_paths.py": {"lint", "tests"},
             ".github/scripts/ci_codeql/dep_info.py": {"lint", "tests"},
             ".github/dependabot.yml": {"freshness"},
-            ".github/workflows/ci.yml": everything_rust | {"freshness", "supply"},
+            ".github/workflows/ci.yml": everything_rust | {"freshness", "packages", "supply"},
             ".github/workflows/reusable-rust-ci.yml": cp.RUST,
-            ".github/workflows/reusable-rust-debian.yml": {"debian", "tests"},
+            ".github/workflows/reusable-rust-debian.yml": {"debian", "packages", "tests"},
             ".github/workflows/reusable-rust-supply-chain.yml": {"supply", "tests"},
             ".github/workflows/reusable-line-limit.yml": {"tests"},
             ".github/workflows/reusable-dependabot-freshness.yml": {"freshness", "tests"},
@@ -246,6 +277,18 @@ class GitPlanTests(unittest.TestCase):
         self.base = self.commit()
         self.assertEqual(self.chosen(self.plan()), cp.ALWAYS)
 
+    def test_a_job_the_planner_of_the_base_does_not_know_yet_runs(self):
+        old = (HERE / "ci_plan.py").read_text().replace('"debian", "packages", "supply"', '"debian", "supply"')
+        old = old.replace('PACKAGES = {"debian", "packages"}', 'PACKAGES = {"debian"}')
+        self.assertNotEqual(old, (HERE / "ci_plan.py").read_text())
+        self.write(SCRIPT, old)
+        self.base = self.commit()
+        self.write("README.md", "updated docs\n")
+        self.head = self.commit()
+        result = self.plan()
+        self.assertEqual(self.chosen(result), cp.ALWAYS | {"packages"})
+        self.assertEqual(set(result), set(cp.JOBS))
+
     def test_head_cannot_replace_the_classifier(self):
         # The head's classifier would skip everything. The base's reads the diff,
         # which changes production code and the classifier itself, and selects
@@ -312,7 +355,7 @@ class WorkflowContractTests(unittest.TestCase):
                        {"package-name": "epistle", "run-build": "${{ " + skip("debian") + " }}",
                         "run-tests": "${{ (github.event_name != 'pull_request' && github.event_name != 'merge_group') || github.base_ref == 'main' }}",
                         "rust-toolchain": "1.100.0", "rust-target": "x86_64-unknown-linux-musl",
-                        "apt-packages": "musl-tools fakeroot jq"}),
+                        "apt-packages": "musl-tools fakeroot jq", "upload-artifact": True, "artifact-name": "packaging-deb"}),
             "sbom-and-licenses": ("reusable-rust-supply-chain.yml", "${{ !cancelled() && " + first + " && " + skip("supply") + " }}",
                                   {"run-sbom": "${{ " + skip("supply") + " }}"}),
             "line-limit": ("reusable-line-limit.yml", "${{ !cancelled() }}", None),
@@ -337,6 +380,16 @@ class WorkflowContractTests(unittest.TestCase):
             with_.pop({"rust": "coverage-ignore-regex", "debian": "debian-image"}.get(job_id, ""), None)
             self.assertEqual(with_, inputs, job_id)
         self.assertEqual(jobs["debian"]["with"]["debian-image"][:13], "debian:sid@sh")
+
+    def test_the_package_checks_wait_for_the_deb_and_run_only_when_the_plan_selects_them(self):
+        job = workflow("ci.yml")["jobs"]["packages"]
+        self.assertEqual(job["needs"], ["plan", "debian"])
+        self.assertEqual(job["if"], "${{ !cancelled() && needs.debian.result == 'success' && needs.plan.outputs.packages != 'false' }}")
+        for step in job["steps"]:
+            self.assertFalse({"if", "continue-on-error"} & set(step), step.get("name"))
+        runs = " ".join(step.get("run", "") for step in job["steps"])
+        for script in ("distro_packages/pack-rpm.sh", "rpm/verify-rpm.sh", "rpm/admission.sh"):
+            self.assertIn(script, runs)
 
     def test_test_check_reflects_suite_failure_and_cancellation(self):
         test = workflow("reusable-rust-ci.yml")["jobs"]["test"]

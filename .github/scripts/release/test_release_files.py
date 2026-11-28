@@ -49,6 +49,8 @@ def make_dist(dist):
     (dist / f"epistle-{TAG}.cdx.json").write_text("{}")
     deb(dist / f"epistle_{VERSION}_amd64.deb", arch="amd64")
     deb(dist / f"epistle_{VERSION}_arm64.deb", arch="arm64")
+    for arch in ("x86_64", "aarch64"):
+        (dist / f"epistle-{VERSION}-1.glyndor.any.{arch}.rpm").write_bytes(f"rpm {arch}".encode())
     write_sums(dist)
 
 
@@ -149,9 +151,10 @@ class Directory(unittest.TestCase):
     def test_the_names_are_derived_from_the_tag(self):
         code, out = run("names", "v0.13.4", "built")
         self.assertEqual(code, 0)
-        self.assertEqual(out.split(), ["SHA256SUMS", "epistle-v0.13.4-x86_64-linux", "epistle-v0.13.4.cdx.json",
+        self.assertEqual(out.split(), ["SHA256SUMS", "epistle-0.13.4-1.glyndor.any.aarch64.rpm", "epistle-0.13.4-1.glyndor.any.x86_64.rpm",
+                                       "epistle-v0.13.4-x86_64-linux", "epistle-v0.13.4.cdx.json",
                                        "epistle_0.13.4_amd64.deb", "epistle_0.13.4_arm64.deb"])
-        self.assertEqual(len(run("names", "v0.13.4", "signed")[1].split()), 10)
+        self.assertEqual(len(run("names", "v0.13.4", "signed")[1].split()), 14)
 
     def test_a_prerelease_tag_names_its_packages_with_the_prerelease(self):
         self.assertIn("epistle_1.0.0-rc.1_amd64.deb", run("names", "v1.0.0-rc.1", "built")[1])
