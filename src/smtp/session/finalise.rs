@@ -171,9 +171,15 @@ fn inner_finalise(
 	let charge = match session.authenticated.as_deref() {
 		Some(account) => {
 			let recipients = u32::try_from(message.recipients.len()).unwrap_or(u32::MAX);
+			// Every tenant the message is sent under is charged, as on
+			// `POST /api/v1/send`: the envelope sender, the author and
+			// the `Sender` field.
+			let mut senders = crate::dmarc::author::all_addresses(&message.data);
+			senders.extend(crate::dmarc::author::all_sender_addresses(&message.data));
+			senders.push(message.reverse_path.clone());
 			match session
 				.policy
-				.submission_budget(account, &session.directory)
+				.submission_budget(account, &session.directory, &senders)
 				.charge(recipients, super::time::unix_now())
 			{
 				Ok(charge) => Some(charge),

@@ -14,3 +14,6 @@ pub(super) mod tests_quota;
 
 #[cfg(test)]
 pub(super) mod tests_ratelimit;
+
+#[cfg(test)]
+pub(super) mod tests_sender_tenants;

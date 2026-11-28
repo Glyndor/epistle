@@ -4,11 +4,12 @@
 //! Every limit that covers the authenticated account is collected into a
 //! [`Budget`]: the per-account limit (its domain's override, else the
 //! server-wide default) and the aggregate limit of every tenant that owns
-//! one of its addresses. The keys are the account name and the tenant
-//! name, both taken from what the server authenticated, never from the
-//! envelope or the headers. The limiters are the same `Arc`s on the three
-//! protocols, so switching protocol, credential or sender address does not
-//! open a second budget.
+//! one of its addresses, or an address the message is sent under that the
+//! account may send as. The keys are the account name and the tenant
+//! name, never a string taken from the envelope or the headers, whose
+//! addresses only count once the account is known to own them. The limiters
+//! are the same `Arc`s on the three protocols, so switching protocol,
+//! credential or sender address does not open a second budget.
 //!
 //! A message costs one unit per recipient and is charged once, when it is
 //! accepted: all limits or none ([`Budget::charge`]). A charge whose
@@ -46,8 +47,9 @@ pub struct OverLimit;
 impl Budget {
 	/// The limits of `account`: `account_limit` (its limiter and resolved
 	/// per-minute cap) when one applies, then every tenant of `tenants`
-	/// that owns one of the account's addresses. `addresses` is only
-	/// called when some tenant has a rate limit.
+	/// that owns one of `addresses`: the account's own, and the ones the
+	/// caller checked it may send as. `addresses` is only called when some
+	/// tenant has a rate limit.
 	pub fn for_account(
 		account: &str,
 		account_limit: Option<(&Arc<SendLimiter>, u32)>,
