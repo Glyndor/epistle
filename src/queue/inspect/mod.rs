@@ -15,7 +15,9 @@ mod destinations;
 mod headers;
 mod waiting;
 
-pub use destinations::{Held, held, rows as destination_rows};
+pub use destinations::{
+	Held, held, rows as destination_rows, rows_within as destination_rows_within,
+};
 pub use headers::{Header, MAX_HEADERS, headers_of};
 pub use waiting::{Waiting, json_rows, only_waits, waiting, waits};
 
