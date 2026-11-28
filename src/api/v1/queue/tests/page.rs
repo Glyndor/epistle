@@ -215,3 +215,27 @@ async fn the_page_of_an_unconfined_key_carries_the_id_of_an_entry() {
 		"the cursor of an unconfined key is an id: {cursor}"
 	);
 }
+
+/// A plain id, the cursor 0.15.0 issued, is still accepted, also when it is
+/// the id of an entry the key does not reach: 0.15.0 handed out the id of the
+/// last entry it had read. The walk resumes after it and shows only what the
+/// key reaches.
+#[tokio::test]
+async fn a_plain_id_is_still_accepted_as_a_cursor() {
+	let world = world();
+	let last_foreign = world.theirs.last().expect("a foreign entry");
+	let (status, page) = call(
+		&world.state,
+		&format!("/api/v1/queue?cursor={last_foreign}"),
+		TENANT_A,
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK, "{page}");
+	let shown: Vec<&str> = page["entries"]
+		.as_array()
+		.expect("entries")
+		.iter()
+		.filter_map(|entry| entry["id"].as_str())
+		.collect();
+	assert_eq!(shown, [world.mine.to_string()], "{page}");
+}

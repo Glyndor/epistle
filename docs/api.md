@@ -743,8 +743,11 @@ are not in it, and the key itself never is.
 The cursor of a page is opaque: carry it back as it is. It is the id of an
 entry the key reaches, or, when the page ended on an entry of another tenant,
 a sealed marker that names no entry at all, so a key confined to some domains
-never learns the id of an entry it cannot see. A cursor the server did not
-issue is refused with `400`.
+never learns the id of an entry it cannot see. A plain entry id, the form
+0.15.0 issued, is still accepted: it only says after which entry the listing
+resumes, and the page shows nothing the key does not reach. Anything else that
+is not a marker of the running server is refused with `400`; after a restart,
+a listing that held a marker starts again.
 
 One entry in detail, and its schedule. `GET /api/v1/queue/{id}` prints what
 `epistle queue show --json` prints: the envelope and its retry state
@@ -897,7 +900,7 @@ curl -s -X DELETE -H "Authorization: Bearer $KEY" "$API/api/v1/accounts/ana?queu
 | `GET`, `POST /api/v1/bans`, `DELETE /api/v1/bans/{subject}`, `GET`, `POST /api/v1/bans/allow`, `DELETE /api/v1/bans/allow/{cidr}` | The bans in force, banning, lifting, and the allow list; scope `ban`. See [Bans](#bans) |
 | `GET`, `POST /api/v1/keys`, `DELETE /api/v1/keys/{label}` | List, make and revoke API keys, never reaching further than the key that asks; scope `key`. See [API keys](#api-keys) |
 | `GET`, `POST /api/v1/accounts` | List (not paged), create. A duplicate name or address is `400 invalid_input` |
-| `DELETE /api/v1/accounts/{name}` | Removes the account and its data. Only accounts made through the API; one declared in the configuration file is `404 no such dynamic account`. A suspended account is removed only by a key that is not confined (see [Suspending an account](#suspending-an-account)). The removal runs to its end even if the client goes away. A removal that finishes writes `account.removed` on `epistle::api::audit`. One that stops after it began to clear the account writes `account.removal_incomplete` instead: the account may still exist, and running the removal again takes it over. |
+| `DELETE /api/v1/accounts/{name}` | Removes the account and its data. Only accounts made through the API; one declared in the configuration file is `404 no such dynamic account`. A suspended account is removed only by a key that is not confined (see [Suspending an account](#suspending-an-account)). The removal runs to its end even if the client goes away. A removal that finishes writes `account.removed` on `epistle::api::audit`. One that stops after it began to clear the account, because a step failed or the server dropped the task, writes `account.removal_incomplete` instead: the account may still exist, and running the removal again takes it over. |
 | `PUT /api/v1/accounts/{name}/password` | New password. The change writes `account.password_reset` on `epistle::api::audit`, with the account and the client address; the password and its hash are never in it |
 | `PUT /api/v1/accounts/{name}/display_name` | `{"display_name": "..."}`; empty clears it |
 | `PUT`, `DELETE /api/v1/accounts/{name}/quota` | Set the storage quota (`{"quota":"10G"}`; `none` for the default) or clear it, as `epistle account quota` does; `manage:write`, and only for a key confined to no account and no domain. See [Account quota](#account-quota) |
@@ -1418,12 +1421,13 @@ cannot be bound to an account.
 
 A credential change leaves the same trace as the management route that makes
 it: a password SCIM sets writes `account.password_reset` on
-`epistle::api::audit`, with the account and the client address, and an
-account it suspends or enables again writes `account.disabled` or
-`account.enabled`, with the account, the label of the key that asked and the
-client address. The lines are written by the task that made the change, so a
-client that drops the connection after the write still leaves them. A request
-that changed nothing — a `PATCH` that asks for the `active` flag the account
+`epistle::api::audit`, with the account, the label of the key that asked and
+the client address, and an account it suspends or enables again writes
+`account.disabled` or `account.enabled`, with the same fields. A `DELETE`
+writes the lines of the management route's removal, with the client address.
+The lines are written by the task that made the change, so a client that drops
+the connection after the write still leaves them. A request that changed
+nothing — a `PATCH` that asks for the `active` flag the account
 already has — writes no line, and neither the password nor its hash is ever
 written.
 

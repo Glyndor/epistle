@@ -73,7 +73,14 @@ impl Changes {
 	/// nothing writes none.
 	pub(super) fn write(&self) {
 		if self.password {
-			audit::log_privilege_change(AuditEvent::PasswordReset, &self.name, self.client_ip);
+			// The label of the key that asked goes on the line: a credential
+			// change is told from the others by the key that made it.
+			audit::log_privilege_change_by_key(
+				AuditEvent::PasswordReset,
+				&self.name,
+				self.key.as_deref(),
+				self.client_ip,
+			);
 		}
 		if let Some(active) = self.active {
 			let event = if active {

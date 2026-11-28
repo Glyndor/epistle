@@ -5,10 +5,11 @@
 //! The password, its hash and the bearer never reach the audit channel.
 
 use axum::http::StatusCode;
+use std::net::SocketAddr;
 
 use crate::api::audit::tests::base::{audit_blob, audit_events, run_with_capture};
 
-use super::base::{SCIM_KEY_SECRET, app, build_state, send};
+use super::base::{SCIM_KEY_SECRET, app, build_state, send, send_from};
 
 /// The password the fixture sets. Distinctive, so the assertions on the
 /// audit blob are about this one.
@@ -402,4 +403,106 @@ async fn enabling_an_account_again_writes_one_line() {
 	});
 
 	assert_eq!(kinds(&events), ["account.enabled"], "{events:?}");
+}
+
+/// The line of a password reset says which key made it: the label of the
+/// key, never the key.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_password_reset_names_the_key_that_made_it() {
+	let (_dir, state) = build_state();
+	let app = app(state);
+	let create = serde_json::json!({
+		"userName": "alice",
+		"active": true,
+		"emails": [{"value": "alice@example.org"}],
+		"password": PASSWORD
+	});
+	let (status, body) = send(
+		&app,
+		"POST",
+		"/scim/v2/Users",
+		Some(SCIM_KEY_SECRET.as_str()),
+		Some(&create),
+	)
+	.await;
+	assert_eq!(status, StatusCode::CREATED, "{body}");
+
+	let events = run_with_capture(async {
+		let patch = serde_json::json!({
+			"Operations": [
+				{"op": "replace", "path": "password", "value": OTHER_PASSWORD}
+			]
+		});
+		let (status, body) = send(
+			&app,
+			"PATCH",
+			"/scim/v2/Users/alice",
+			Some(SCIM_KEY_SECRET.as_str()),
+			Some(&patch),
+		)
+		.await;
+		assert_eq!(status, StatusCode::OK, "{body}");
+	});
+
+	assert_eq!(kinds(&events), ["account.password_reset"], "{events:?}");
+	let audit = audit_events(&events);
+	assert_eq!(
+		audit[0].fields.get("key").map(String::as_str),
+		Some("scim"),
+		"the label of the key that asked, never the key"
+	);
+	let blob = audit_blob(&events);
+	assert!(
+		!blob.contains(SCIM_KEY_SECRET.as_str()),
+		"the audit leaked the bearer: {blob}"
+	);
+}
+
+/// The lines of a deletion carry the address the request came from, the
+/// same way the management route writes them.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_deletion_carries_the_client_that_asked() {
+	let (_dir, state) = build_state();
+	let app = app(state);
+	let create = serde_json::json!({
+		"userName": "alice",
+		"active": true,
+		"emails": [{"value": "alice@example.org"}],
+		"password": PASSWORD
+	});
+	let (status, body) = send(
+		&app,
+		"POST",
+		"/scim/v2/Users",
+		Some(SCIM_KEY_SECRET.as_str()),
+		Some(&create),
+	)
+	.await;
+	assert_eq!(status, StatusCode::CREATED, "{body}");
+
+	let peer: SocketAddr = "203.0.113.11:40000".parse().expect("peer");
+	let events = run_with_capture(async {
+		let (status, body) = send_from(
+			&app,
+			"DELETE",
+			"/scim/v2/Users/alice",
+			Some(SCIM_KEY_SECRET.as_str()),
+			None,
+			peer,
+		)
+		.await;
+		assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+	});
+
+	// SCIM writes the privilege line and the one with the counts: both name
+	// the client that asked.
+	let lines = audit_events(&events);
+	assert_eq!(lines.len(), 2, "{events:?}");
+	for line in lines {
+		assert_eq!(
+			line.fields.get("client_ip").map(String::as_str),
+			Some("203.0.113.11"),
+			"the line names the client that asked: {line:?}"
+		);
+	}
 }

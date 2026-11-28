@@ -5,7 +5,9 @@
 
 use axum::Router;
 use axum::body::Body;
+use axum::extract::ConnectInfo;
 use axum::http::{Request, StatusCode, header};
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::LazyLock;
 use tower::ServiceExt;
@@ -95,6 +97,32 @@ pub(in super::super) async fn send(
 	token: Option<&str>,
 	body: Option<&serde_json::Value>,
 ) -> (StatusCode, serde_json::Value) {
+	call(app, build(method, path, token, body, None)).await
+}
+
+/// Send a SCIM request from a known peer, so the audit line carries the
+/// client address the listener resolved.
+pub(in super::super) async fn send_from(
+	app: &Router,
+	method: &str,
+	path: &str,
+	token: Option<&str>,
+	body: Option<&serde_json::Value>,
+	peer: SocketAddr,
+) -> (StatusCode, serde_json::Value) {
+	call(app, build(method, path, token, body, Some(peer))).await
+}
+
+/// Build a SCIM request. `peer` is the address the listener would have
+/// reported; `None` models a request that carries no connect info, as the
+/// tests that do not care about the client address do.
+fn build(
+	method: &str,
+	path: &str,
+	token: Option<&str>,
+	body: Option<&serde_json::Value>,
+	peer: Option<SocketAddr>,
+) -> Request<Body> {
 	let mut builder = Request::builder()
 		.method(method)
 		.uri(path)
@@ -109,11 +137,16 @@ pub(in super::super) async fn send(
 		}
 		None => Body::empty(),
 	};
-	let response = app
-		.clone()
-		.oneshot(builder.body(body).expect("request"))
-		.await
-		.expect("response");
+	let mut request = builder.body(body).expect("request");
+	if let Some(peer) = peer {
+		request.extensions_mut().insert(ConnectInfo(peer));
+	}
+	request
+}
+
+/// Send the request and read the answer.
+async fn call(app: &Router, request: Request<Body>) -> (StatusCode, serde_json::Value) {
+	let response = app.clone().oneshot(request).await.expect("response");
 	let status = response.status();
 	let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
 		.await
@@ -144,25 +177,8 @@ pub(in super::super) async fn send_with_headers(
 	token: Option<&str>,
 	body: Option<&serde_json::Value>,
 ) -> (StatusCode, serde_json::Value, axum::http::HeaderMap) {
-	let mut builder = Request::builder()
-		.method(method)
-		.uri(path)
-		.header(header::ACCEPT, "application/scim+json");
-	if let Some(token) = token {
-		builder = builder.header(header::AUTHORIZATION, format!("Bearer {token}"));
-	}
-	let body = match body {
-		Some(json) => {
-			builder = builder.header(header::CONTENT_TYPE, "application/scim+json");
-			Body::from(json.to_string())
-		}
-		None => Body::empty(),
-	};
-	let response = app
-		.clone()
-		.oneshot(builder.body(body).expect("request"))
-		.await
-		.expect("response");
+	let request = build(method, path, token, body, None);
+	let response = app.clone().oneshot(request).await.expect("response");
 	let status = response.status();
 	let headers = response.headers().clone();
 	let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)

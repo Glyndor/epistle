@@ -2,19 +2,21 @@
 //! every privilege change made through the management API.
 //!
 //! The shape is stable: target `epistle::api::audit`, fields `event`,
-//! `account`, `client_ip`, plus the message. Operators correlate these
-//! from the JSON log output (or via OpenTelemetry). The four privileged
-//! handlers (`create`, `remove`, `set_password`, `enroll_totp`,
-//! `disable_totp`) call [`log_privilege_change`] after a successful
-//! state change so an operator with the bearer token cannot reset the
-//! 2FA of any account, receive the new secret in the response, and leave
-//! no trace.
+//! `account`, `client_ip`, plus the message. The events that name the key
+//! that made the change carry a `key` field with its label (never the
+//! key). Operators correlate these from the JSON log output (or via
+//! OpenTelemetry). The four privileged handlers (`create`, `remove`,
+//! `set_password`, `enroll_totp`, `disable_totp`) call
+//! [`log_privilege_change`] after a successful state change so an operator
+//! with the bearer token cannot reset the 2FA of any account, receive the
+//! new secret in the response, and leave no trace.
 //!
 //! SCIM writes the same events for the same changes: a password it sets
 //! is an `account.password_reset`, and an account it suspends or enables
-//! again is an `account.disabled` or an `account.enabled`, exactly as the
-//! management route writes them. An identity provider that provisions
-//! accounts therefore leaves the same trace as an operator at a terminal.
+//! again is an `account.disabled` or an `account.enabled`, the events the
+//! management route writes; the reset SCIM makes also names the key that
+//! asked. An identity provider that provisions accounts therefore leaves the
+//! same trace as an operator at a terminal.
 //!
 //! What is never logged: the TOTP secret, the password hash, the SCRAM
 //! credentials, the plaintext password, and the bearer token. Those stay
@@ -32,7 +34,10 @@ mod carried;
 mod domain;
 mod keys;
 mod queue;
-pub use account_edit::{QuotaEvent, SuspensionEvent, log_quota_change, log_suspension_change};
+pub use account_edit::{
+	QuotaEvent, SuspensionEvent, log_privilege_change_by_key, log_quota_change,
+	log_suspension_change,
+};
 pub use alias::{AliasEvent, log_alias_change};
 pub use ban::{BanEvent, log_ban_change};
 pub use carried::Carried;
