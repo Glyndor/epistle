@@ -79,14 +79,14 @@ jobs:
       actions: read
     uses: ./.github/workflows/reusable-schedule-freshness.yml
     with:
-      # The list is epistle's six crons, not podup's. Podup watches
+      # The list is epistle's seven crons, not podup's. Podup watches
       # `audit.yml`, `fuzz.yml`, `podman-lane.yml`, `podman-watch.yml` and
       # `benchmark.yml`; epistle has no Podman lane and no benchmark, and it
       # has four crons podup does not. The reason the list changed is that
       # every entry has to name a workflow that fires a cron in this
       # repository, or the gate watches nothing.
       #
-      # Each entry carries its own limit because the six crons have two
+      # Each entry carries its own limit because the seven crons have two
       # periods, and the limit follows the period: three days for a daily
       # cron and fifteen for a weekly one, so one missed fire is tolerated
       # and two are not.
@@ -95,6 +95,7 @@ jobs:
       #   fuzz.yml                       daily   03:00 UTC
       #   codeql.yml                     weekly  Monday 05:17 UTC
       #   mutants.yml                    weekly  Sunday 04:00 UTC
+      #   pin-watch.yml                  weekly  Monday 05:37 UTC
       #   dependabot-security-watch.yml  daily   05:37 UTC
       #   rust-audit.yml                 daily   05:37 UTC
       #
@@ -110,4 +111,5 @@ jobs:
         dependabot-security-watch.yml 3
         fuzz.yml 3
         mutants.yml 15
+        pin-watch.yml 15
         rust-audit.yml 3

@@ -20,7 +20,7 @@
    },
    "uses": "./.github/workflows/reusable-schedule-freshness.yml",
    "with": {
-    "workflows": "ci.yml 3\ncodeql.yml 15\ndependabot-security-watch.yml 3\nfuzz.yml 3\nmutants.yml 15\nrust-audit.yml 3\n"
+    "workflows": "ci.yml 3\ncodeql.yml 15\ndependabot-security-watch.yml 3\nfuzz.yml 3\nmutants.yml 15\npin-watch.yml 15\nrust-audit.yml 3\n"
    }
   }
  },
