@@ -43,7 +43,7 @@ async fn redeem(
 async fn a_code_is_redeemed_only_with_the_redirect_uri_it_was_issued_for() {
 	let dir = tempfile::tempdir().unwrap();
 	let state = state_with_authz(dir.path(), &keys());
-	let peer = Peer::start(crate::api::router(state)).await;
+	let peer = Peer::start_hashing(crate::api::router(state)).await;
 	let verifier = "v".repeat(64);
 	let uri = "https://app.example/callback";
 	for (given, label) in [

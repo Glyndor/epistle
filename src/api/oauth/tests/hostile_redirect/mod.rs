@@ -13,7 +13,7 @@ async fn hostile_redirect_uri_is_rejected_on_wire() {
 	}
 	let dir = tempfile::tempdir().unwrap();
 	let state = state_with_authz(dir.path(), &keys());
-	let peer = Peer::start(crate::api::router(state.clone())).await;
+	let peer = Peer::start_hashing(crate::api::router(state.clone())).await;
 	let oversize = format!("https://app.example/{}", "x".repeat(3000));
 	for uri in [
 		"javascript:alert(1)",

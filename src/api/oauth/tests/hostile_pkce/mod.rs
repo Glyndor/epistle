@@ -14,7 +14,7 @@ async fn megabyte_pkce_verifier_is_rejected_on_wire() {
 	}
 	let dir = tempfile::tempdir().unwrap();
 	let state = state_with_authz(dir.path(), &keys());
-	let peer = Peer::start(crate::api::router(state)).await;
+	let peer = Peer::start_hashing(crate::api::router(state)).await;
 	let verifier = "v".repeat(1024 * 1024);
 	let digest = ring::digest::digest(&ring::digest::SHA256, verifier.as_bytes());
 	let challenge = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest.as_ref());
