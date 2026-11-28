@@ -43,8 +43,15 @@ done </stage/files.txt
 test ! -e /etc/epistle
 test ! -e "$floor"
 
-if "$setup" extra >/dev/null 2>&1; then fail "setup took an argument"; fi
-if runuser -u nobody -- "$setup" >/dev/null 2>&1; then fail "setup ran without being root"; fi
+# Each refusal by its own status and words, so that a command that fails for
+# another reason does not pass for one.
+refused=0
+"$setup" extra >/tmp/refusal.log 2>&1 || refused=$?
+test "$refused" = 2 || fail "setup took an argument (status $refused)"
+refused=0
+runuser -u nobody -- "$setup" >/tmp/refusal.log 2>&1 || refused=$?
+test "$refused" = 1 || fail "setup ran without being root (status $refused)"
+grep -qF 'run this as root' /tmp/refusal.log || { cat /tmp/refusal.log >&2; fail "setup did not say it needs root"; }
 
 # An operator's own floor is left alone, and nothing is written over it.
 mkdir -p /etc/sysctl.d # the images of some distributions ship none

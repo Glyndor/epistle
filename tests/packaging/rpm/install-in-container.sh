@@ -15,11 +15,12 @@ trap 'echo "failed in the container script at line $LINENO: $BASH_COMMAND" >&2' 
 
 : "${NAME:?}" "${UPGRADE:?}"
 
-dnf -y --setopt=install_weak_deps=0 install systemd shadow-utils util-linux gawk grep findutils procps-ng \
+dnf -y --setopt=install_weak_deps=0 install systemd shadow-utils util-linux gawk grep findutils diffutils procps-ng \
 	>/tmp/dnf.log 2>&1 || { cat /tmp/dnf.log >&2; exit 1; }
 
-package_install() { rpm --install --nodeps --nosignature "/pkg/$NAME"; }
-package_upgrade() { rpm --upgrade --nodeps --nosignature "/upgrade/$UPGRADE"; }
+# Documents included whatever the image says: they are part of what is checked.
+package_install() { rpm --install --nodeps --nosignature --includedocs "/pkg/$NAME"; }
+package_upgrade() { rpm --upgrade --nodeps --nosignature --includedocs "/upgrade/$UPGRADE"; }
 package_remove() { rpm --erase --nodeps epistle; }
 package_installed_version() { rpm -q --qf '%{VERSION}-%{RELEASE}\n' epistle; }
 package_verify() {
