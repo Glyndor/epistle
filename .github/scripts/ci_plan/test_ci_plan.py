@@ -329,8 +329,15 @@ class GitPlanTests(unittest.TestCase):
                          {"lint", "tests", "doc", "msrv", "freshness"})
 
     def test_queue_and_push_do_not_need_a_diff(self):
-        for event in ("merge_group", "push"):
-            self.assertEqual(set(self.plan(event, base="missing").values()), {"true"})
+        self.assertEqual(set(self.plan("push", base="missing").values()), {"true"})
+        queue = self.plan("merge_group", base="missing")
+        self.assertEqual(self.chosen(queue), set(cp.JOBS) - {"packages"})
+
+    def test_the_package_checks_are_left_out_of_the_queue_only(self):
+        self.assertEqual(self.plan("merge_group", base="missing")["packages"], "false")
+        self.assertEqual(self.plan("push", base="missing")["packages"], "true")
+        self.assertEqual(self.plan(base_ref="main")["packages"], "true")
+        self.assertEqual(self.plan("workflow_dispatch", base="missing")["packages"], "true")
 
 
 class WorkflowContractTests(unittest.TestCase):

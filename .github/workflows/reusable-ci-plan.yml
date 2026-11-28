@@ -79,6 +79,13 @@ jobs:
           echo "No trusted PR plan; running all work on $EVENT_NAME"
           for job in $jobs; do
             value=true
+            # The package checks take their tools from the repositories of other
+            # distributions. The queue does not repeat them: the pull request that
+            # changed the packaging ran them, and the promotion into main and the push
+            # to main run them again over what the queue merged.
+            if [ "$EVENT_NAME" = merge_group ] && [ "$job" = packages ]; then
+              value=false
+            fi
             # The nightly run exists to seed the cargo caches, which only the
             # Rust jobs use; the rest would be a second copy of the push to main.
             if [ "$EVENT_NAME" = schedule ]; then
