@@ -21,14 +21,6 @@ NOTICES.html
 research/
 # Local virtualenv from the signing step (release.yml).
 .venv/
-# Agent / tool artifacts that should never reach a registry.
-.claude/
-.agents/
-.cursor/
-.aider*
-.continue/
-.playwright-mcp/
-**/*-mcp/
 # cargo-mutants output.
 mutants.out/
 mutants.out.old/
