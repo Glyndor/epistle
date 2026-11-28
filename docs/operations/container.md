@@ -681,10 +681,10 @@ three floating tags:
 - `ghcr.io/glyndor/epistle:0.16.0-amd64`, `…:0.16.0-arm64` per-arch, built
   natively on the matching runner.
 - `ghcr.io/glyndor/epistle:0.16.0` the full release.
-- `ghcr.io/glyndor/epistle:0.15` the latest patch release in the `0.15` line.
+- `ghcr.io/glyndor/epistle:0.16` the latest patch release in the `0.16` line.
 - `ghcr.io/glyndor/epistle:0` the latest minor release in the `0.x` line.
 
-`podman pull ghcr.io/glyndor/epistle:0.15` keeps getting patches;
+`podman pull ghcr.io/glyndor/epistle:0.16` keeps getting patches;
 `…:0` keeps getting minors. A consumer that wants to pin a specific build
 uses `gh attestation verify oci://ghcr.io/glyndor/epistle:0.16.0 …` (below);
 that command resolves the tag itself, so a separate digest lookup is
