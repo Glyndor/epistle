@@ -67,6 +67,11 @@ const PRIVILEGED: &[(&str, &str, &str)] = &[
 		"uploads the results with security-events: write",
 	),
 	(
+		"pin-watch.yml",
+		"watch",
+		"opens the drift issue with issues: write",
+	),
+	(
 		"rust-audit.yml",
 		"report",
 		"opens and comments on issues with issues: write",
