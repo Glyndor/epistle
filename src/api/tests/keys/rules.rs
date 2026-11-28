@@ -19,6 +19,11 @@ pub(super) enum Domain {
 	/// The `{name}` account of the path must be covered, or the answer is the
 	/// same `404` as for an account that does not exist.
 	AccountParam,
+	/// The `{name}` account of the path must be covered, and when it is
+	/// suspended the key must not be confined to an account or to some
+	/// domains: a suspended account is not for a tenant's key to remove or to
+	/// readdress.
+	Suspended,
 	/// The `{domain}` of the path must be one of the key's domains, or the
 	/// answer is the same `404` as for a domain the server does not host.
 	HostedParam,
@@ -244,11 +249,15 @@ pub(super) const RULES: &[Rule] = &[
 		Domain::Filtered,
 		"a_scoped_key_lists_only_its_own_accounts",
 	),
+	// The account of the path must be covered, and a suspended one is only
+	// for a key that is not confined: `a_confined_key_does_not_remove_a_
+	// suspended_account` fixes the second half, and
+	// `a_scoped_key_cannot_delete_another_tenants_account` the first.
 	rule(
 		"/api/v1/accounts/{name}",
 		"manage:write",
-		Domain::AccountParam,
-		"a_scoped_key_cannot_delete_another_tenants_account",
+		Domain::Suspended,
+		"a_confined_key_does_not_remove_a_suspended_account",
 	),
 	rule(
 		"/api/v1/accounts/{name}/quota",
@@ -274,17 +283,21 @@ pub(super) const RULES: &[Rule] = &[
 		Domain::AccountParam,
 		"two_factor_and_display_name_of_another_tenants_account_are_out_of_reach",
 	),
+	// `a_confined_key_adds_addresses_in_its_own_domains_only` fixes the domains; the test named here fixes
+	// the suspended account.
 	rule(
 		"/api/v1/accounts/{name}/addresses",
 		"manage:write",
-		Domain::AccountParam,
-		"a_confined_key_adds_addresses_in_its_own_domains_only",
+		Domain::Suspended,
+		"a_confined_key_takes_no_address_off_a_suspended_account",
 	),
+	// `a_confined_key_removes_addresses_of_its_own_accounts_only` fixes the domains; the test named here fixes
+	// the suspended account.
 	rule(
 		"/api/v1/accounts/{name}/addresses/{address}",
 		"manage:write",
-		Domain::AccountParam,
-		"a_confined_key_removes_addresses_of_its_own_accounts_only",
+		Domain::Suspended,
+		"a_confined_key_takes_no_address_off_a_suspended_account",
 	),
 	rule(
 		"/api/v1/accounts/{name}/disable",
