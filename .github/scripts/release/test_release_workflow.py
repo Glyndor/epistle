@@ -458,6 +458,10 @@ class TheRpmPackages(unittest.TestCase):
                 done = subprocess.run(["bash", "-e", "-c", run], cwd=tmp, capture_output=True, text=True, check=False,
                                       env={**os.environ, "RUNNER_TEMP": str(tmp), "TAG": "v1.2.3"})
                 self.assertEqual(done.returncode, code, (missing, done.stdout + done.stderr))
+                if missing:
+                    # By its own message: the copy after it would fail too, and say nothing of which job lost what.
+                    self.assertIn(f"::error::no {missing} .rpm named epistle-1.2.3-1.glyndor.any.{missing}.rpm reached the release job",
+                                  done.stdout)
                 if code == 0:
                     self.assertEqual(sorted(p.name for p in (tmp / "dist").iterdir()), release_files.built_names("v1.2.3"))
 
