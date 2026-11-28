@@ -1,5 +1,6 @@
 pub use super::*;
 
+mod across_processes;
 pub(super) mod bans_and_corpus;
 pub(super) mod base;
 pub(super) mod class;
