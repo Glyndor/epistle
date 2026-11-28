@@ -1305,6 +1305,9 @@ key does not cover answers a `forbidden` method error inside a `200`.
   `PushSubscription/get`, `set`; `VacationResponse/get`, `set`;
   `SieveScript/get`, `query`, `set`, `validate`. Anything else is
   `unknownMethod`.
+- `EmailSubmission/set` checks and charges the sending rate limit of every
+  tenant that owns the envelope `mailFrom`, the `From` address or an address in
+  a `Sender` field, as `POST /api/v1/send` does for its three addresses.
 - `EmailSubmission/set` accepts `epistle:class`, with the same rule as the
   REST `class`. A created submission says `undoStatus`: `pending` with `sendAt`
   (when the send delay will release it) while `[queue.undo_send]` holds it,

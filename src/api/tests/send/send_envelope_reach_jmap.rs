@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 
 use super::base::{TOKEN, request_with_body, test_state};
 use super::router;
-use super::send_envelope_reach::{CONFINED, add_confined_key, directory, queued};
+use super::send_envelope_reach::{CONFINED, add_confined_key, directory, limited, queued};
 use crate::directory_store::DirectoryHandle;
 
 fn app(dir: &std::path::Path) -> Router {
@@ -233,5 +233,52 @@ async fn a_sender_field_that_names_no_address_is_refused() {
 			response["notCreated"]["s1"]["type"], "forbiddenFrom",
 			"Sender: {sender}: {response}"
 		);
+	}
+}
+
+#[tokio::test]
+async fn every_tenant_a_submission_is_sent_under_is_charged() {
+	// `ops@other.example` belongs to a tenant that may send one recipient a
+	// minute, and each case names it in one place only, but the last, where
+	// the missing envelope takes its sender from the author.
+	let cases: [(&str, &str, Option<Value>); 4] = [
+		("envelope", OWN, Some(json!("ops@other.example"))),
+		("from", FOREIGN_FROM, Some(json!("alice@example.org"))),
+		(
+			"sender",
+			"From: alice@example.org\r\nSender: ops@other.example\r\n",
+			Some(json!("alice@example.org")),
+		),
+		("from without an envelope", FOREIGN_FROM, None),
+	];
+	for (name, headers, mail_from) in cases {
+		let dir = tempfile::tempdir().expect("tempdir");
+		let app = limited(dir.path());
+		let response = submit(&app, dir.path(), TOKEN.as_str(), headers, mail_from.clone()).await;
+		assert!(created(&response), "{name}: {response}");
+		let before = queued(dir.path());
+		let response = submit(&app, dir.path(), TOKEN.as_str(), headers, mail_from).await;
+		assert_eq!(
+			response["notCreated"]["s1"]["type"], "rateLimit",
+			"{name}: tenant b is spent: {response}"
+		);
+		assert_eq!(queued(dir.path()), before, "{name}: nothing was queued");
+	}
+}
+
+#[tokio::test]
+async fn a_submission_under_the_account_own_domain_does_not_touch_the_other_tenant() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	let app = limited(dir.path());
+	for _ in 0..3 {
+		let response = submit(
+			&app,
+			dir.path(),
+			TOKEN.as_str(),
+			OWN,
+			Some(json!("alice@example.org")),
+		)
+		.await;
+		assert!(created(&response), "{response}");
 	}
 }
