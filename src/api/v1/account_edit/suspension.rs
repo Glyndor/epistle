@@ -21,6 +21,7 @@ use super::super::scope::account_in_scope;
 use crate::api::Principal;
 use crate::api::api_keys::Scope;
 use crate::api::audit::{Carried, SuspensionEvent, log_suspension_change};
+use crate::api::authorization::suspension::RESUMING;
 use crate::api::error::ApiError;
 use crate::api::state::{ApiState, ClientIp, MatchedAuth};
 
@@ -46,10 +47,8 @@ pub async fn enable(
 	let principal = Principal::for_token(&state, &auth);
 	// Refused before the account is looked at, the same way whatever the
 	// name, so a confined key learns nothing of which accounts exist.
-	if !principal.is_unrestricted() {
-		return Err(ApiError::forbidden(
-			"resuming an account is for a key that is not confined to an account or some domains.",
-		));
+	if !principal.admits_suspended(true) {
+		return Err(ApiError::forbidden(RESUMING));
 	}
 	change(state, auth, &principal, ip, name, false).await
 }

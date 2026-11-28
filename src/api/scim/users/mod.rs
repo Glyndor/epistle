@@ -20,6 +20,10 @@
 //! `PUT` and `PATCH` read the account once to refuse early what the key may
 //! not do. What a write keeps, and whether it changed the state of the
 //! account, comes from the account the write found under the store's lock.
+//!
+//! A suspended account is not resumed, removed or readdressed by a key
+//! confined to domains, as [`crate::api::authorization::suspension`] says. The
+//! write asks that again, of the account and the key as they are then.
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -31,6 +35,7 @@ use super::error::{CONTENT_TYPE, ScimError};
 use super::types::{Email, ListResponse, Name, USER_SCHEMA, User};
 use crate::api::Principal;
 use crate::api::api_keys::Scope;
+use crate::api::authorization::suspension::REMOVING;
 use crate::api::state::{ApiState, ClientIp, MatchedAuth};
 use crate::directory_store::removal::QueuePolicy;
 use crate::directory_store::{DynamicAccount, StoreError};
@@ -433,7 +438,10 @@ pub async fn delete_user(
 	Path(id): Path<String>,
 ) -> Result<impl IntoResponse, ScimError> {
 	let principal = Principal::for_token(&state, &auth);
-	lookup_in_scope(&state, &principal, &id)?;
+	let account = lookup_in_scope(&state, &principal, &id)?;
+	if !principal.admits_suspended(account.disabled) {
+		return Err(ScimError::forbidden(REMOVING));
+	}
 	// The removal runs on a task of its own: a client that goes away must not
 	// leave the account half removed and unrecorded. The task reads the key
 	// again at the write that reserves the account, before anything of it is
@@ -447,7 +455,9 @@ pub async fn delete_user(
 		client_ip.0,
 		move |account| {
 			let now = Principal::for_token(&removal_state, &auth);
-			now.admits_scope(Scope::Scim) && now.admits_account(&account.name, &account.addresses)
+			now.admits_scope(Scope::Scim)
+				&& now.admits_account(&account.name, &account.addresses)
+				&& now.admits_suspended(account.disabled)
 		},
 	)
 	.await

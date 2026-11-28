@@ -46,6 +46,11 @@ impl ScimError {
 		}
 	}
 
+	/// 403 — the key may not make this change to the resource.
+	pub fn forbidden(detail: impl Into<String>) -> Self {
+		Self::new(StatusCode::FORBIDDEN, detail)
+	}
+
 	/// 404 — the requested resource is absent.
 	pub fn not_found(detail: impl Into<String>) -> Self {
 		Self::new(StatusCode::NOT_FOUND, detail)

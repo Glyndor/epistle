@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use crate::api::Principal;
 use crate::api::api_keys::Scope;
 use crate::api::audit::{self, AuditEvent};
+use crate::api::authorization::suspension::REMOVING;
 use crate::api::error::ApiError;
 use crate::api::state::{AccountView, ApiState, ClientIp, MatchedAuth};
 use crate::directory_store::removal::{QueuePolicy, Removed};
@@ -176,10 +177,8 @@ pub async fn remove(
 	let queue = parse_queue_policy(query.queue.as_deref())?;
 	// Removing a suspended account would be a way round the suspension, and
 	// then its name and addresses are free to be taken again.
-	if !principal.is_unrestricted() && state.store().is_disabled(&name) {
-		return Err(ApiError::forbidden(
-			"removing a suspended account is for a key that is not confined to an account or some domains.",
-		));
+	if !principal.admits_suspended(state.store().is_disabled(&name)) {
+		return Err(ApiError::forbidden(REMOVING));
 	}
 	// The removal runs on a task of its own: a client that goes away must not
 	// leave the account half removed and unrecorded. The task reads the key
@@ -196,7 +195,7 @@ pub async fn remove(
 			let now = Principal::for_token(&removal_state, &auth);
 			now.admits_scope(Scope::ManageWrite)
 				&& now.admits_account(&account.name, &account.addresses)
-				&& (!account.disabled || now.is_unrestricted())
+				&& now.admits_suspended(account.disabled)
 		},
 	)
 	.await

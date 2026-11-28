@@ -426,6 +426,7 @@ impl Principal {
 }
 
 mod recheck;
+pub(in crate::api) mod suspension;
 
 /// Whether every one of `addresses` is inside `domains`, which are lowercase. An
 /// empty set of addresses is outside: there is nothing to place it with.

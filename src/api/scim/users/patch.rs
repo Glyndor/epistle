@@ -12,6 +12,7 @@ use axum::{Extension, Json};
 
 use crate::api::Principal;
 use crate::api::api_keys::Scope;
+use crate::api::authorization::suspension::RESUMING;
 use crate::api::scim::error::ScimError;
 use crate::api::scim::types::{PatchOperation, PatchRequest};
 use crate::api::state::{ApiState, ClientIp, MatchedAuth};
@@ -114,7 +115,7 @@ pub async fn patch_user(
 	Json(body): Json<PatchRequest>,
 ) -> Result<impl IntoResponse, ScimError> {
 	let principal = Principal::for_token(&state, &auth);
-	lookup_in_scope(&state, &principal, &id)?;
+	let existing = lookup_in_scope(&state, &principal, &id)?;
 	if body.operations.len() > MAX_PATCH_OPERATIONS {
 		return Err(ScimError::invalid(format!(
 			"a PATCH takes at most {MAX_PATCH_OPERATIONS} operations"
@@ -145,17 +146,18 @@ pub async fn patch_user(
 	if !plan.is_empty() {
 		let wanted = gather(plan);
 		let disabled = wanted.disabled;
+		let resumes = disabled == Some(false);
+		if resumes && !principal.admits_suspended(existing.disabled) {
+			return Err(ScimError::forbidden(RESUMING));
+		}
 		let password_sent = wanted.password.is_some();
 		let previous = state
 			.store()
 			.change_account_if(&id, wanted, |account| {
-				Principal::still_reaches_account(
-					&state,
-					&auth,
-					Scope::Scim,
-					&account.name,
-					&account.addresses,
-				)
+				let now = Principal::for_token(&state, &auth);
+				now.admits_scope(Scope::Scim)
+					&& now.admits_account(&account.name, &account.addresses)
+					&& (!resumes || now.admits_suspended(account.disabled))
 			})
 			.map_err(store_to_scim)?;
 		// The account is written: the line of every change it made follows,
