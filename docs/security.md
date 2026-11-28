@@ -202,6 +202,16 @@ Configured SHA-256 comparisons and legacy argon2id verification are unchanged.
 - The message itself must carry exactly one `From` field naming one address the
   account owns, on SMTP submission and on JMAP `EmailSubmission/set`. That is
   the field the DKIM signature covers and the one DMARC judges at the receiver.
+- A `Sender` field is optional. When a submission carries one, every address in
+  it, and in any further `Sender` field, must be one the account owns, on SMTP
+  submission and on JMAP `EmailSubmission/set`; `POST /api/v1/send` holds its
+  `sender` to the same ownership rule. A field that names no address is refused.
+  SMTP answers `550 5.7.1 Sender header not owned by the authenticated
+  account`, JMAP `forbiddenFrom` (`invalidEmail` for an address that does not
+  parse). A program that submits with a `Sender` of its own, such as a list
+  manager that puts a bounce address there, needs that address to be one of the
+  account's, or an alias the account may send as. Mail from a peer that did not
+  log in is not a submission and is not asked.
 - "Owns" is one rule for SMTP submission, `POST /api/v1/send` and JMAP
   (`Directory::owns_address`), in any letter case. An account owns the
   addresses stored for it (a dot in the local part, such as
@@ -211,10 +221,10 @@ Configured SHA-256 comparisons and legacy argon2id verification are unchanged.
   same way. It does **not** own what only delivers to it: a `+tag` sub-address
   of its own address, the unknown local parts a catch-all receives, or an
   address on a domain alias (`alias.example.org`). Those are refused with
-  `553` at `MAIL FROM`, `550 5.7.1` at the `From` header, `forbiddenFrom` in
-  JMAP and `forbidden_from` in the API, as is any address of another account
-  or of another domain. Loosening any of them is a decision about spoofing,
-  not a fix. The table of cases lives in `src/smtp/directory/fixtures/send_as_fixture.rs`.
+  `553` at `MAIL FROM`, `550 5.7.1` at the `From` or `Sender` header,
+  `forbiddenFrom` in JMAP and `forbidden_from` in the API, as is any address of
+  another account or of another domain. Loosening any of them is a decision
+  about spoofing, not a fix. The table of cases lives in `src/smtp/directory/fixtures/send_as_fixture.rs`.
 - Every recipient is resolved against the directory before any network work; an
   empty directory rejects everything (fail-closed).
 - JMAP and `POST /api/v1/send` act for the **principal** the bearer carries,

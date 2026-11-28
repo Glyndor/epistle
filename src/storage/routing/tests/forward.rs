@@ -94,3 +94,23 @@ fn inbound_mail_is_forwarded_without_tls_required() {
 	let text = String::from_utf8_lossy(&entries[0].data).to_ascii_lowercase();
 	assert!(!text.contains("tls-required"), "{text}");
 }
+
+/// A forward sends the message on as it arrived: the `Sender` rule is asked
+/// of a submission, not of what the server queues itself.
+#[test]
+fn a_forwarded_copy_keeps_the_sender_it_arrived_with() {
+	let dir = tempfile::tempdir().expect("tempdir");
+	sink(dir.path())
+		.deliver(inbound(
+			b"Sender: list-bounces@elsewhere.example\r\nSubject: hi\r\n\r\nbody\r\n",
+		))
+		.expect("routed");
+	let entries = queued(dir.path());
+	assert_eq!(entries.len(), 1);
+	assert_eq!(entries[0].envelope.recipients, ["ext@other.example"]);
+	let text = String::from_utf8_lossy(&entries[0].data);
+	assert!(
+		text.contains("Sender: list-bounces@elsewhere.example\r\n"),
+		"{text}"
+	);
+}

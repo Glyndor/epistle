@@ -126,15 +126,34 @@ fn an_owned_sender_field_in_another_tenant_is_charged_to_it() {
 }
 
 #[test]
-fn a_sender_field_the_account_does_not_own_spends_nobody_else() {
+fn a_refused_sender_field_spends_nobody_else() {
 	let mut session = session();
 	let from = format!("From: {OWN}");
 	let sender = format!("Sender: {FOREIGN}");
+	let refused = "550 5.7.1 Sender header not owned by the authenticated account\r\n";
 	for _ in 0..3 {
-		accepted(&mut session, OWN, &[&from, &sender]);
+		assert_eq!(
+			submit(&mut session, OWN, &[&from, &sender]),
+			(250, Some(refused.to_string()))
+		);
 	}
 	// The limited tenant still has its one recipient.
 	accepted(&mut session, LIST, &[&from]);
+}
+
+/// The budget itself leaves out an address the account may not send as,
+/// whatever its caller was given.
+#[test]
+fn the_budget_ignores_an_address_the_account_may_not_send_as() {
+	let session = session();
+	let budget = |sender: &str| {
+		session
+			.policy
+			.submission_budget("alice", &session.directory, &[sender.to_string()])
+	};
+	// Two recipients are over the one the limited tenant may send.
+	assert!(budget(FOREIGN).has_room_for(2, 0));
+	assert!(!budget(LIST).has_room_for(2, 0));
 }
 
 #[test]
