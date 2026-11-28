@@ -7,29 +7,22 @@
 //! removes it, so it cannot move to another tenant, or be removed and created
 //! again, under the removal. Every other change is still taken, so a removal
 //! that cannot finish leaves an account that can be suspended or reset.
+//!
+//! One removal of an account runs at a time, whichever process on the data
+//! directory runs it. The reservation says which removal holds the account and
+//! stays when its process dies; a lock on a file of the account says that the
+//! removal is still running, and the kernel lets it go when the process ends.
+//! Only a removal holding that lock takes a reservation over.
 
-use std::collections::HashSet;
-use std::path::PathBuf;
-use std::sync::{LazyLock, Mutex};
+use std::path::Path;
 
 use super::super::{AccountStore, DynamicAccount, DynamicFile, StoreError};
+use crate::storage::lock::FileLock;
+use crate::util::path_component::DigestName;
+use crate::util::path_containment::contained;
 
-/// The removals running in this process, by account file and name.
-static RUNNING: LazyLock<Mutex<HashSet<(PathBuf, String)>>> =
-	LazyLock::new(|| Mutex::new(HashSet::new()));
-
-/// Marks one removal as running until it is dropped, also when its caller
-/// gives up on it half way.
-pub(super) struct Running((PathBuf, String));
-
-impl Drop for Running {
-	fn drop(&mut self) {
-		RUNNING
-			.lock()
-			.unwrap_or_else(|error| error.into_inner())
-			.remove(&self.0);
-	}
-}
+/// The directory beside the account file that holds the removal locks.
+const LOCKS: &str = "removals";
 
 /// What a reservation gives the removal that made it.
 pub(super) struct Reserved {
@@ -85,15 +78,17 @@ pub(in crate::directory_store) fn untouched(
 }
 
 impl AccountStore {
-	/// Mark the removal of `name` as running, refusing a second one in this
-	/// process while the first has not ended.
-	pub(super) fn running_removal(&self, name: &str) -> Result<Running, StoreError> {
-		let key = (self.store_path().to_path_buf(), name.to_string());
-		let mut running = RUNNING.lock().unwrap_or_else(|error| error.into_inner());
-		if !running.insert(key.clone()) {
-			return Err(StoreError::BeingRemoved(name.to_string()));
-		}
-		Ok(Running(key))
+	/// Mark the removal of `name` as running until the returned lock is
+	/// dropped, also when its caller gives up on it half way, refusing a
+	/// second one while the first has not ended. It never waits.
+	pub(super) fn running_removal(&self, name: &str) -> Result<FileLock, StoreError> {
+		let data_dir = self.store_path().parent().unwrap_or(Path::new("."));
+		let dir = contained(data_dir, &data_dir.join(LOCKS))?;
+		std::fs::create_dir_all(&dir)?;
+		// The file is kept after the removal: replacing a lock file while
+		// another caller holds it would split the critical section.
+		let path = DigestName::of(name).lock_in_dir(&dir)?;
+		FileLock::try_acquire(&path)?.ok_or_else(|| StoreError::BeingRemoved(name.to_string()))
 	}
 
 	/// Ask `authorize` about the account `name` as it is under the lock, and
