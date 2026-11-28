@@ -11,7 +11,8 @@ HERE = Path(__file__).resolve().parent
 SCRIPT = HERE / "sign_release.sh"
 TAG = "v1.2.3"
 NAMES = ["SHA256SUMS", f"epistle-{TAG}-x86_64-linux", f"epistle-{TAG}.cdx.json",
-         "epistle_1.2.3_amd64.deb", "epistle_1.2.3_arm64.deb"]
+         "epistle_1.2.3_amd64.deb", "epistle_1.2.3_arm64.deb",
+         "epistle-1.2.3-1.glyndor.any.x86_64.rpm", "epistle-1.2.3-1.glyndor.any.aarch64.rpm"]
 
 
 def run(*args, env=None):

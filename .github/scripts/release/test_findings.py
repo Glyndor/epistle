@@ -52,8 +52,11 @@ class AttestedPackagesAreTheBuildersOwn(unittest.TestCase):
     def sums(self):
         write_sums(self.dist)
 
+    def digests(self):
+        return {kind: hashlib.sha256((self.dist / name).read_bytes()).hexdigest() for kind, name in release_files.packages(TAG).items()}
+
     def test_a_package_swapped_by_the_gathering_job_is_not_the_one_that_was_attested(self):
-        own = {arch: hashlib.sha256((self.dist / f"epistle_1.2.3_{arch}.deb").read_bytes()).hexdigest() for arch in ("amd64", "arm64")}
+        own = self.digests()
         self.assertEqual(release_files.same_packages(self.dist, TAG, own), [])
         # the wrapper puts a different package, with the same control fields, under the same name
         (self.dist / "epistle_1.2.3_amd64.deb").unlink()
@@ -62,6 +65,30 @@ class AttestedPackagesAreTheBuildersOwn(unittest.TestCase):
         self.assertEqual(release_files.check(self.dist, TAG, "built"), [], "every check of the gathered directory still passes")
         problems = release_files.same_packages(self.dist, TAG, own)
         self.assertEqual(problems, ["epistle_1.2.3_amd64.deb is not the package its builder produced"])
+
+    def test_an_rpm_swapped_by_the_gathering_job_or_one_with_no_digest_is_refused(self):
+        own = self.digests()
+        name = "epistle-1.2.3-1.glyndor.any.aarch64.rpm"
+        (self.dist / name).write_bytes(b"a different rpm")
+        self.sums()
+        self.assertEqual(release_files.check(self.dist, TAG, "built"), [])
+        self.assertEqual(release_files.same_packages(self.dist, TAG, own), [f"{name} is not the package its builder produced"])
+        del own["rpm-aarch64"]
+        self.assertIn("rpm-aarch64: the digest handed over is not a SHA-256: ''", release_files.same_packages(self.dist, TAG, own))
+
+    def test_a_stable_tag_has_both_rpm_packages_and_a_prerelease_has_none(self):
+        self.assertEqual(sorted(release_files.packages(TAG)), ["amd64", "arm64", "rpm-aarch64", "rpm-x86_64"])
+        self.assertEqual(sorted(release_files.packages("v1.2.3-rc.1")), ["amd64", "arm64"])
+        self.assertFalse([n for n in release_files.names("v1.2.3-rc.1", "signed") if n.endswith((".rpm", ".rpm.sig"))])
+        for name in ("epistle-1.2.3-1.glyndor.any.x86_64.rpm", "epistle-1.2.3-1.glyndor.any.x86_64.rpm.sig"):
+            self.assertIn(name, release_files.names(TAG, "signed"))
+
+    def test_a_release_without_one_of_its_rpm_packages_or_with_another_is_refused(self):
+        name = "epistle-1.2.3-1.glyndor.any.x86_64.rpm"
+        (self.dist / name).rename(self.dist / "epistle-9.9.9-1.glyndor.any.x86_64.rpm")
+        problems = release_files.check(self.dist, TAG, "built")
+        self.assertIn(f"missing: {name}", problems)
+        self.assertIn("unexpected entry: epistle-9.9.9-1.glyndor.any.x86_64.rpm", problems)
 
     def test_the_digest_handed_over_has_to_be_a_sha256(self):
         for bad in ("", "abc", "G" * 64, "0" * 63):
@@ -73,6 +100,9 @@ class AttestedPackagesAreTheBuildersOwn(unittest.TestCase):
         own.mkdir()
         deb(own / "epistle_1.2.3_amd64.deb", arch="amd64")
         self.assertEqual(release_files.check_package(own, TAG, "amd64"), [])
+        self.assertTrue(release_files.check_package(own, TAG, "rpm-x86_64"))
+        self.assertEqual(release_files.check_package(own, "v1.2.3-rc.1", "rpm-x86_64"),
+                         ["a release of v1.2.3-rc.1 has no package of the kind 'rpm-x86_64'"])
         deb(own / "epistle_9.9.9_amd64.deb", version="9.9.9", arch="amd64")
         self.assertEqual(release_files.check_package(own, TAG, "amd64"), ["unexpected entry: epistle_9.9.9_amd64.deb"])
         (own / "epistle_9.9.9_amd64.deb").unlink()
@@ -82,12 +112,17 @@ class AttestedPackagesAreTheBuildersOwn(unittest.TestCase):
         steps = jobs()["attest"]["steps"]
         names = [s.get("name", "") for s in steps]
         downloads = [s["with"]["name"] for s in steps if "download-artifact" in s.get("uses", "")]
-        self.assertEqual(sorted(downloads), ["epistle-deb-amd64", "epistle-deb-arm64", "release-dist"])
+        self.assertEqual(sorted(downloads), ["epistle-deb-amd64", "epistle-deb-arm64", "epistle-rpm-aarch64", "epistle-rpm-x86_64", "release-dist"])
         subject = next(s for s in steps if "attest-build-provenance" in s.get("uses", ""))["with"]["subject-path"]
         self.assertIn("/own/amd64/", subject)
         self.assertIn("/own/arm64/", subject)
         self.assertNotIn("/dist/epistle_", subject)
-        self.assertEqual(jobs()["attest"]["outputs"], {"deb-amd64": "${{ steps.digests.outputs.amd64 }}", "deb-arm64": "${{ steps.digests.outputs.arm64 }}"})
+        self.assertIn("/own/rpm-x86_64/", subject)
+        self.assertIn("/own/rpm-aarch64/", subject)
+        self.assertEqual(jobs()["attest"]["outputs"], {
+            "deb-amd64": "${{ steps.digests.outputs.amd64 }}", "deb-arm64": "${{ steps.digests.outputs.arm64 }}",
+            "rpm-x86_64": "${{ steps.digests.outputs.rpm-x86_64 }}", "rpm-aarch64": "${{ steps.digests.outputs.rpm-aarch64 }}",
+        })
         self.assertIn("sign", jobs())
         self.assertIn("attest", jobs()["sign"]["needs"])
         self.assertIn("same-packages", next(s for s in jobs()["sign"]["steps"] if s.get("name") == "The packages are the ones that were attested")["run"])
@@ -100,15 +135,24 @@ class AttestedPackagesAreTheBuildersOwn(unittest.TestCase):
 class PublishComparesThePackages(unittest.TestCase):
     """Finding 1, at the last job before the release exists: the step as written, with real files."""
 
-    def run_step(self, amd64_bytes, arm64_bytes, want_amd64, want_arm64):
+    def run_step(self, amd64_bytes, arm64_bytes, want_amd64, want_arm64, tag=TAG, rpm=b"rpm", want_rpm=None):
         step = next(s for s in jobs()["publish"]["steps"] if s.get("name") == "The packages are the ones that were attested")["run"]
         with tempfile.TemporaryDirectory() as tmp:
             dist = Path(tmp) / "dist"
             dist.mkdir()
             (dist / "epistle_1.2.3_amd64.deb").write_bytes(amd64_bytes)
             (dist / "epistle_1.2.3_arm64.deb").write_bytes(arm64_bytes)
+            if "-" not in tag:
+                for arch in ("x86_64", "aarch64"):
+                    (dist / f"epistle-1.2.3-1.glyndor.any.{arch}.rpm").write_bytes(rpm)
+            else:
+                version = tag[1:]
+                (dist / f"epistle_{version}_amd64.deb").write_bytes(amd64_bytes)
+                (dist / f"epistle_{version}_arm64.deb").write_bytes(arm64_bytes)
+            want_rpm = hashlib.sha256(b"rpm").hexdigest() if want_rpm is None else want_rpm
             done = subprocess.run(["bash", "-e", "-c", step], capture_output=True, text=True, check=False,
-                                  env={**os.environ, "RUNNER_TEMP": tmp, "TAG": TAG, "DEB_AMD64": want_amd64, "DEB_ARM64": want_arm64})
+                                  env={**os.environ, "RUNNER_TEMP": tmp, "TAG": tag, "DEB_AMD64": want_amd64, "DEB_ARM64": want_arm64,
+                                       "RPM_X86_64": want_rpm, "RPM_AARCH64": want_rpm})
             return done.returncode, done.stdout + done.stderr
 
     def test_the_attested_packages_pass_and_a_swapped_one_does_not(self):
@@ -119,6 +163,14 @@ class PublishComparesThePackages(unittest.TestCase):
         self.assertIn("amd64 package is not the one that was attested", out)
         self.assertEqual(self.run_step(b"a", b"swapped", sha(b"a"), sha(b"b"))[0], 1)
         self.assertEqual(self.run_step(b"a", b"b", "", sha(b"b"))[0], 1, "a digest that never arrived is not a match")
+
+    def test_a_swapped_rpm_or_one_with_no_digest_stops_the_publication_and_a_prerelease_has_none_to_check(self):
+        sha = lambda data: hashlib.sha256(data).hexdigest()  # noqa: E731
+        code, out = self.run_step(b"a", b"b", sha(b"a"), sha(b"b"), rpm=b"swapped")
+        self.assertEqual(code, 1)
+        self.assertIn("x86_64 rpm is not the one that was attested", out)
+        self.assertEqual(self.run_step(b"a", b"b", sha(b"a"), sha(b"b"), want_rpm="")[0], 1)
+        self.assertEqual(self.run_step(b"a", b"b", sha(b"a"), sha(b"b"), tag="v1.2.3-rc.1", want_rpm="")[0], 0)
 
 
 @unittest.skipUnless(shutil.which("dpkg-deb"), "dpkg-deb is not installed")
@@ -178,7 +230,7 @@ class SignaturesUnderThePinnedKey(unittest.TestCase):
     def test_well_formed_signatures_of_another_seed_are_refused_for_every_file(self):
         self.sign_all(self.other)
         problems = verify_signatures.verify(self.dist, TAG, self.pinned)
-        self.assertEqual(len(problems), 5)
+        self.assertEqual(len(problems), len(release_files.built_names(TAG)))
         self.assertTrue(all("does not verify under the pinned release key" in p for p in problems))
         self.assertEqual(release_files.check(self.dist, TAG, "signed"), [], "everything the old checks looked at is fine")
 

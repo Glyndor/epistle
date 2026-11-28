@@ -1,5 +1,6 @@
 """Who holds what in release.yml: the jobs that run dependency code hold nothing, and the key has one step."""
 
+import hashlib
 import os
 import re
 import stat
@@ -9,12 +10,13 @@ import unittest
 from pathlib import Path
 
 import ci_yaml
+from release import release_files
 
 HERE = Path(__file__).resolve().parent
 ROOT = Path(__file__).resolve().parents[3]
 WORKFLOW = ROOT / ".github/workflows/release.yml"
-SCRIPTS_ONLY = ("attest", "sign", "verify-signatures", "image-manifest", "image-promote")
-PUBLISHING = ("attest", "sign", "verify-signatures", "publish", "image-build", "image-manifest", "image-promote")
+SCRIPTS_ONLY = ("build-rpm", "attest", "sign", "verify-signatures", "image-manifest", "image-promote")
+PUBLISHING = ("attest", "sign", "verify-signatures", "attest-signatures", "publish", "image-build", "image-manifest", "image-promote")
 KEY = "secrets.GLYNDOR_RELEASE_ED25519_KEY"
 
 
@@ -31,11 +33,13 @@ class Authority(unittest.TestCase):
         self.assertEqual({name: job.get("permissions") for name, job in jobs().items()}, {
             "verify": {"contents": "read"},
             "build-deb": {"contents": "read"},
+            "build-rpm": {"contents": "read"},
             "build": {"contents": "read"},
             "attest": {"contents": "read", "id-token": "write", "attestations": "write"},
             "sign": {"contents": "read"},
             "sign-rehearsal": {"contents": "read"},
             "verify-signatures": {"contents": "read"},
+            "attest-signatures": {"contents": "read", "id-token": "write", "attestations": "write"},
             "publish": {"contents": "write"},
             "image-build": {"contents": "read", "packages": "write"},
             "image-promote": {"contents": "read", "packages": "write"},
@@ -44,7 +48,7 @@ class Authority(unittest.TestCase):
         self.assertEqual(workflow()["permissions"], {})
 
     def test_the_jobs_that_compile_hold_neither_the_oidc_token_nor_an_attestation_nor_a_secret(self):
-        for name in ("build-deb", "build"):
+        for name in ("build-deb", "build-rpm", "build"):
             text = str(jobs()[name])
             for forbidden in ("id-token", "attestations", "secrets.", "attest-build-provenance"):
                 self.assertNotIn(forbidden, text, name)
@@ -62,11 +66,11 @@ class Authority(unittest.TestCase):
     def test_every_job_that_publishes_or_signs_is_in_the_release_environment(self):
         for name in PUBLISHING:
             self.assertEqual(jobs()[name].get("environment"), "release", name)
-        for name in ("verify", "build-deb", "build", "sign-rehearsal"):
+        for name in ("verify", "build-deb", "build-rpm", "build", "sign-rehearsal"):
             self.assertNotIn("environment", jobs()[name], name)
 
     def test_the_jobs_with_authority_check_the_event_and_the_ref_in_shell_too(self):
-        for name in ("attest", "sign", "verify-signatures", "publish"):
+        for name in ("attest", "sign", "verify-signatures", "attest-signatures", "publish"):
             first = jobs()[name]["steps"][0]["run"]
             self.assertIn("push:refs/tags/v*", first, name)
             self.assertIn("workflow_dispatch:refs/heads/main", first, name)
@@ -111,7 +115,7 @@ class TheKey(unittest.TestCase):
         self.assertIn("-I", steps[check]["run"])
 
     def test_the_files_are_downloaded_into_an_empty_directory_outside_the_checkout_by_name(self):
-        for name in ("attest", "sign", "sign-rehearsal", "publish"):
+        for name in ("build-rpm", "build", "attest", "sign", "sign-rehearsal", "attest-signatures", "publish"):
             for step in jobs()[name]["steps"]:
                 if "download-artifact" in step.get("uses", ""):
                     self.assertTrue(step["with"]["path"].startswith("${{ runner.temp }}/"), (name, step))
@@ -275,7 +279,7 @@ class WhoMayRun(unittest.TestCase):
         refused = [("push", "refs/heads/main"), ("push", "refs/heads/feature"), ("workflow_dispatch", "refs/heads/feature"),
                    ("workflow_dispatch", "refs/heads/Main"), ("pull_request", "refs/pull/1/merge"), ("schedule", "refs/heads/main"),
                    ("workflow_dispatch", "refs/heads/main2"), ("push", "refs/tags/release")]
-        for job in ("attest", "sign", "publish"):
+        for job in ("attest", "sign", "attest-signatures", "publish"):
             text = jobs()[job]["steps"][0]["run"]
             for event, ref in allowed:
                 self.assertEqual(sh(text, GITHUB_EVENT_NAME=event, GITHUB_REF=ref)[0], 0, (job, event, ref))
@@ -356,6 +360,110 @@ class WhoMayRun(unittest.TestCase):
                                   env={k: v for k, v in os.environ.items() if k != "GLYNDOR_RELEASE_ED25519_KEY"}, check=False)
             self.assertEqual(done.returncode, 1)
             self.assertIn("already exists", done.stderr)
+
+
+class TheRpmPackages(unittest.TestCase):
+    def step(self, job, name):
+        return next(s for s in jobs()[job]["steps"] if s.get("name") == name)
+
+    def test_a_stable_release_runs_on_its_tag_and_a_rehearsal_a_prerelease_or_images_only_may_run_elsewhere(self):
+        step = self.step("verify", "A release for the rpm channel runs on its tag")
+        self.assertEqual(step["if"], "${{ !inputs.dry-run && !inputs.images-only }}")
+        names = [s.get("name") for s in jobs()["verify"]["steps"]]
+        self.assertLess(names.index(step["name"]), names.index("Resolve the commit this release names"))
+        for ref, code in (("refs/tags/v1.2.3", 0), ("refs/heads/main", 1), ("refs/tags/v1.2.4", 1), ("refs/heads/v1.2.3", 1), ("", 1)):
+            done, out = sh(step["run"], TAG="v1.2.3", GITHUB_REF=ref)
+            self.assertEqual(done, code, (ref, out))
+        self.assertEqual(sh(step["run"], TAG="v1.2.3-rc.1", GITHUB_REF="refs/heads/main")[0], 0)
+
+    def test_the_builder_packs_and_checks_with_the_script_the_pull_request_runs_and_uploads_only_that(self):
+        job = jobs()["build-rpm"]
+        self.assertEqual(job["needs"], ["verify", "build-deb"])
+        self.assertEqual([(m["deb_arch"], m["rpm_arch"]) for m in job["strategy"]["matrix"]["include"]],
+                         [("amd64", "x86_64"), ("arm64", "aarch64")])
+        stable = "${{ !contains(env.TAG, '-') }}"
+        pack = self.step("build-rpm", "Pack the rpm and check it")
+        self.assertEqual(pack["if"], stable)
+        self.assertIn("bash .github/scripts/distro_packages/pack-rpm.sh", pack["run"])
+        upload = self.step("build-rpm", "Upload artifact")
+        self.assertEqual((upload["if"], upload["with"]["path"], upload["with"]["if-no-files-found"]),
+                         (stable, "${{ runner.temp }}/pack/out/*.rpm", "error"))
+        for job_id in ("build", "attest"):
+            self.assertIn("build-rpm", jobs()[job_id]["needs"], job_id)
+        self.assertIn("pack-rpm.sh", (ROOT / ".github/workflows/ci.yml").read_text())
+
+    def test_the_signatures_are_attested_after_they_verify_and_before_anything_is_published(self):
+        job = jobs()["attest-signatures"]
+        self.assertEqual(job["needs"], ["verify", "attest", "sign", "verify-signatures"])
+        self.assertEqual(job["if"], "${{ !inputs.images-only && !inputs.dry-run }}")
+        attest = self.step("attest-signatures", "Attest the signatures of the rpm packages")
+        self.assertEqual(attest["with"], {"subject-path": "${{ runner.temp }}/signatures/*.rpm.sig"})
+        self.assertEqual(attest["if"], "${{ !contains(env.TAG, '-') }}")
+        self.assertIn("attest-signatures", jobs()["publish"]["needs"])
+
+    def run_check(self, tag, change=lambda dist: None):
+        """The step that checks what is going to be published, on exactly the files the release has for a tag."""
+        step = self.step("publish", "Check what is going to be published")["run"]
+        with tempfile.TemporaryDirectory() as tmp:
+            dist = Path(tmp) / "dist"
+            dist.mkdir()
+            built = release_files.built_names(tag)
+            for name in built:
+                (dist / name).write_text(name)
+                (dist / f"{name}.sig").write_text("signature")
+            sums = [f"{hashlib.sha256((dist / n).read_bytes()).hexdigest()}  {n}" for n in built if n != "SHA256SUMS"]
+            (dist / "SHA256SUMS").write_text("\n".join(sums) + "\n")
+            change(dist)
+            return sh(step, RUNNER_TEMP=tmp, TAG=tag)
+
+    def test_the_publication_takes_exactly_the_files_the_release_list_names(self):
+        for tag in ("v1.2.3", "v1.2.3-rc.1"):
+            code, out = self.run_check(tag)
+            self.assertEqual(code, 0, (tag, out))
+        name = "epistle-1.2.3-1.glyndor.any.aarch64.rpm"
+        self.assertEqual(self.run_check("v1.2.3", lambda dist: (dist / name).unlink())[0], 1)
+        self.assertEqual(self.run_check("v1.2.3", lambda dist: (dist / f"{name}.sig").unlink())[0], 1)
+        self.assertEqual(self.run_check("v1.2.3", lambda dist: (dist / "epistle-1.2.3-1.glyndor.any.noarch.rpm").write_text("x"))[0], 1)
+
+    def test_the_release_is_created_with_exactly_those_files(self):
+        run = self.step("publish", "Create the release")["run"]
+        for tag in ("v1.2.3", "v1.2.3-rc.1"):
+            with tempfile.TemporaryDirectory() as tmp:
+                tmp = Path(tmp)
+                commit = "a" * 40
+                (tmp / "git").write_text(f'#!/bin/sh\nprintf "%s\\trefs/tags/{tag}\\n" {commit}\n')
+                (tmp / "gh").write_text(f'#!/bin/sh\n[ "$2" = create ] && printf "%s\\n" "$@" > "{tmp}/args"\nexit 0\n')
+                for tool in ("git", "gh"):
+                    (tmp / tool).chmod(0o755)
+                code, out = sh(run, PATH=f"{tmp}:{os.environ['PATH']}", TAG=tag, RELEASE_COMMIT=commit, GH_TOKEN="t",
+                               GITHUB_SERVER_URL="https://example.org", GITHUB_REPOSITORY="o/r", RUNNER_TEMP=str(tmp))
+                self.assertEqual(code, 0, out)
+                given = sorted(Path(a).name for a in (tmp / "args").read_text().splitlines() if a.startswith(f"{tmp}/dist/"))
+                self.assertEqual(given, release_files.names(tag, "signed"))
+
+    def test_the_gathering_job_takes_both_rpm_packages_of_a_stable_tag_and_fails_without_one(self):
+        run = self.step("build", "Prepare artifacts")["run"]
+        for missing, code in ((None, 0), ("aarch64", 1), ("x86_64", 1)):
+            with tempfile.TemporaryDirectory() as tmp:
+                tmp = Path(tmp)
+                (tmp / "target/release").mkdir(parents=True)
+                (tmp / "target/release/epistle").write_text("binary")
+                (tmp / "epistle.cdx.json").write_text("{}")
+                for arch, deb_arch in (("x86_64", "amd64"), ("aarch64", "arm64")):
+                    (tmp / "debs" / deb_arch).mkdir(parents=True)
+                    (tmp / "debs" / deb_arch / f"epistle_1.2.3_{deb_arch}.deb").write_text("deb")
+                    (tmp / "rpms" / arch).mkdir(parents=True)
+                    if arch != missing:
+                        (tmp / "rpms" / arch / f"epistle-1.2.3-1.glyndor.any.{arch}.rpm").write_text("rpm")
+                done = subprocess.run(["bash", "-e", "-c", run], cwd=tmp, capture_output=True, text=True, check=False,
+                                      env={**os.environ, "RUNNER_TEMP": str(tmp), "TAG": "v1.2.3"})
+                self.assertEqual(done.returncode, code, (missing, done.stdout + done.stderr))
+                if missing:
+                    # By its own message: the copy after it would fail too, and say nothing of which job lost what.
+                    self.assertIn(f"::error::no {missing} .rpm named epistle-1.2.3-1.glyndor.any.{missing}.rpm reached the release job",
+                                  done.stdout)
+                if code == 0:
+                    self.assertEqual(sorted(p.name for p in (tmp / "dist").iterdir()), release_files.built_names("v1.2.3"))
 
 
 class NoInterpolation(unittest.TestCase):

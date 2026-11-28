@@ -79,6 +79,20 @@ jobs:
             exit 1
           fi
 
+      - name: A release for the rpm channel runs on its tag
+        # The channel verifies the attestation of each package against refs/tags/<tag>
+        # and the commit that tag points at. A run on main attests main: the release,
+        # which is immutable, would be refused by the channel for good. So a release of
+        # a stable tag is started by pushing the tag, or by dispatching on it.
+        if: ${{ !inputs.dry-run && !inputs.images-only }}
+        run: |
+          set -euo pipefail
+          case "$TAG" in *-*) exit 0 ;; esac
+          if [ "$GITHUB_REF" != "refs/tags/$TAG" ]; then
+            echo "::error::this run is on $GITHUB_REF; the rpm channel only takes an attestation of the tag, so run it on the tag: gh workflow run release.yml --ref $TAG -f tag=$TAG"
+            exit 1
+          fi
+
       - name: Resolve the commit this release names
         id: resolve
         run: |
@@ -322,6 +336,77 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
+  # The rpm packages are packed from the payload of the .deb each builder made, so all of
+  # them install the same bytes, and each one is checked before it is handed over. Nothing
+  # is compiled here and the job holds a read of the repository, no secret and no
+  # environment. The scripts are those of the commit of the event: on a tag, the tagged
+  # commit; in a rehearsal, the commit that launched it, so a tag older than the scripts
+  # can be rehearsed.
+  build-rpm:
+    name: Build RPM (${{ matrix.rpm_arch }})
+    needs: [verify, build-deb]
+    if: ${{ !inputs.images-only }}
+    # Fixed on GitHub's runners, never CI_RUNNER: release job; the run stays on one kind of runner.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - deb_arch: amd64
+            rpm_arch: x86_64
+          - deb_arch: arm64
+            rpm_arch: aarch64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The checkout above is the commit of the event, never a commit read from an output:
+      # a tag push is the tagged commit, a manual run on main is main, a manual run on a
+      # tag is the tag. Scripts of any of them are code that was already promoted, and
+      # the files of the tag being released come from the builders by artifact.
+      - name: The checkout is the commit of the event
+        env:
+          VERIFIED: ${{ needs.verify.outputs.commit }}
+        run: |
+          set -euo pipefail
+          head="$(git rev-parse HEAD)"
+          test "$head" = "$GITHUB_SHA"
+          case "$GITHUB_REF" in
+            refs/tags/*) test "$head" = "$VERIFIED" ;;
+          esac
+
+      - name: Receive the package of its builder
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: epistle-deb-${{ matrix.deb_arch }}
+          path: ${{ runner.temp }}/deb
+
+      # The rpm channel serves tags of three numbers, so a prerelease carries the .deb only.
+      - name: Pack the rpm and check it
+        if: ${{ !contains(env.TAG, '-') }}
+        env:
+          DEB_ARCH: ${{ matrix.deb_arch }}
+          RPM_ARCH: ${{ matrix.rpm_arch }}
+        run: |
+          set -euo pipefail
+          deb="$RUNNER_TEMP/deb/epistle_${TAG#v}_${DEB_ARCH}.deb"
+          bash .github/scripts/distro_packages/pack-rpm.sh "$deb" "${TAG#v}" "$RPM_ARCH" "$RUNNER_TEMP/pack"
+
+      - name: Upload artifact
+        if: ${{ !contains(env.TAG, '-') }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: epistle-rpm-${{ matrix.rpm_arch }}
+          path: ${{ runner.temp }}/pack/out/*.rpm
+          retention-days: 1
+          if-no-files-found: error
+
   # The release is made in three jobs so that nothing that runs a dependency
   # ever sees the signing key, and the job that holds the key never runs
   # anything it did not take from the verified commit:
@@ -334,7 +419,7 @@ jobs:
   # A rehearsal (`dry-run`) goes through build and sign and stops there.
   build:
     name: Build
-    needs: [verify, build-deb]
+    needs: [verify, build-deb, build-rpm]
     if: ${{ !inputs.images-only }}
     # Fixed on GitHub's runners, never CI_RUNNER: release job; holds secrets or write/OIDC permissions.
     runs-on: ubuntu-latest
@@ -397,6 +482,20 @@ jobs:
           name: epistle-deb-arm64
           path: ${{ runner.temp }}/debs/arm64
 
+      - name: Collect the rpm packages (x86_64)
+        if: ${{ !contains(env.TAG, '-') }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: epistle-rpm-x86_64
+          path: ${{ runner.temp }}/rpms/x86_64
+
+      - name: Collect the rpm packages (aarch64)
+        if: ${{ !contains(env.TAG, '-') }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: epistle-rpm-aarch64
+          path: ${{ runner.temp }}/rpms/aarch64
+
       - name: Prepare artifacts
         run: |
           set -euo pipefail
@@ -415,8 +514,19 @@ jobs:
               || { echo "::error::no ${arch} .deb named $name reached the release job"; exit 1; }
             cp "$RUNNER_TEMP/debs/$arch/$name" "$dist/$name"
           done
+          case "$TAG" in
+            *-*) ;;
+            *)
+              for arch in x86_64 aarch64; do
+                name="epistle-${TAG#v}-1.glyndor.any.${arch}.rpm"
+                [ -f "$RUNNER_TEMP/rpms/$arch/$name" ] \
+                  || { echo "::error::no ${arch} .rpm named $name reached the release job"; exit 1; }
+                cp "$RUNNER_TEMP/rpms/$arch/$name" "$dist/$name"
+              done
+              ;;
+          esac
           cd "$dist"
-          # SHA256SUMS is computed last so it covers the .debs too. The .sig
+          # SHA256SUMS is computed last so it covers the packages too. The .sig
           # files do not exist yet, which is why they are not in it.
           sha256sum -- * > SHA256SUMS
 
@@ -439,7 +549,7 @@ jobs:
   # publish refuse a package whose bytes are not those.
   attest:
     name: Attest build provenance
-    needs: [verify, build-deb, build]
+    needs: [verify, build-deb, build-rpm, build]
     if: ${{ !inputs.images-only && !inputs.dry-run }}
     environment: release
     # Fixed on GitHub's runners, never CI_RUNNER: release job; holds secrets or write/OIDC permissions.
@@ -452,6 +562,8 @@ jobs:
     outputs:
       deb-amd64: ${{ steps.digests.outputs.amd64 }}
       deb-arm64: ${{ steps.digests.outputs.arm64 }}
+      rpm-x86_64: ${{ steps.digests.outputs.rpm-x86_64 }}
+      rpm-aarch64: ${{ steps.digests.outputs.rpm-aarch64 }}
     env:
       TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
     steps:
@@ -499,6 +611,20 @@ jobs:
           name: epistle-deb-arm64
           path: ${{ runner.temp }}/own/arm64
 
+      - name: Receive the x86_64 rpm from its builder
+        if: ${{ !contains(env.TAG, '-') }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: epistle-rpm-x86_64
+          path: ${{ runner.temp }}/own/rpm-x86_64
+
+      - name: Receive the aarch64 rpm from its builder
+        if: ${{ !contains(env.TAG, '-') }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: epistle-rpm-aarch64
+          path: ${{ runner.temp }}/own/rpm-aarch64
+
       - name: Check the packages of the builders and take their digests
         id: digests
         run: |
@@ -512,16 +638,28 @@ jobs:
             echo "$arch=$digest" >> "$GITHUB_OUTPUT"
           done
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          case "$TAG" in
+            *-*) ;;
+            *)
+              for arch in x86_64 aarch64; do
+                python3 -I .github/scripts/release/release_files.py check-package "$RUNNER_TEMP/own/rpm-$arch" "$TAG" "rpm-$arch"
+                digest="$(sha256sum "$RUNNER_TEMP/own/rpm-$arch/epistle-${version}-1.glyndor.any.${arch}.rpm" | cut -d' ' -f1)"
+                echo "rpm-$arch=$digest" >> "$GITHUB_OUTPUT"
+              done
+              ;;
+          esac
 
       - name: Check that the gathered files are exactly this release, and the same packages
         env:
           DEB_AMD64: ${{ steps.digests.outputs.amd64 }}
           DEB_ARM64: ${{ steps.digests.outputs.arm64 }}
+          RPM_X86_64: ${{ steps.digests.outputs.rpm-x86_64 }}
+          RPM_AARCH64: ${{ steps.digests.outputs.rpm-aarch64 }}
         run: |
           set -euo pipefail
           python3 -I .github/scripts/release/release_files.py check "$RUNNER_TEMP/dist" "$TAG" built
           python3 -I .github/scripts/release/release_files.py same-packages "$RUNNER_TEMP/dist" "$TAG" \
-            "amd64=$DEB_AMD64" "arm64=$DEB_ARM64"
+            "amd64=$DEB_AMD64" "arm64=$DEB_ARM64" "rpm-x86_64=$RPM_X86_64" "rpm-aarch64=$RPM_AARCH64"
 
       - name: Attest build provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
@@ -530,6 +668,8 @@ jobs:
             ${{ runner.temp }}/dist/epistle-${{ env.TAG }}-x86_64-linux
             ${{ runner.temp }}/own/amd64/epistle_${{ steps.digests.outputs.version }}_amd64.deb
             ${{ runner.temp }}/own/arm64/epistle_${{ steps.digests.outputs.version }}_arm64.deb
+            ${{ runner.temp }}/own/rpm-x86_64/epistle-${{ steps.digests.outputs.version }}-1.glyndor.any.x86_64.rpm
+            ${{ runner.temp }}/own/rpm-aarch64/epistle-${{ steps.digests.outputs.version }}-1.glyndor.any.aarch64.rpm
 
   # Signs the finished files with the org key. It runs in the `release`
   # environment, which only `main` and the release tags may use, and the key is
@@ -598,9 +738,11 @@ jobs:
         env:
           DEB_AMD64: ${{ needs.attest.outputs.deb-amd64 }}
           DEB_ARM64: ${{ needs.attest.outputs.deb-arm64 }}
+          RPM_X86_64: ${{ needs.attest.outputs.rpm-x86_64 }}
+          RPM_AARCH64: ${{ needs.attest.outputs.rpm-aarch64 }}
         run: |
           python3 -I .github/scripts/release/release_files.py same-packages "$RUNNER_TEMP/dist" "$TAG" \
-            "amd64=$DEB_AMD64" "arm64=$DEB_ARM64"
+            "amd64=$DEB_AMD64" "arm64=$DEB_ARM64" "rpm-x86_64=$RPM_X86_64" "rpm-aarch64=$RPM_AARCH64"
 
       - name: Sign artifacts with the org Ed25519 key
         env:
@@ -724,9 +866,46 @@ jobs:
           "$GITHUB_WORKSPACE/.github/scripts/release/verify_signatures.py"
           "$RUNNER_TEMP/dist" "$TAG" "$GITHUB_WORKSPACE/.github/release/ed25519-public-key.b64"
 
+  # The rpm channel verifies a provenance attestation of every file it downloads, the
+  # signatures included. They exist only after signing and are attested once they verify
+  # under the pinned key. A prerelease has no rpm, so there is nothing to attest.
+  attest-signatures:
+    name: Attest the package signatures
+    needs: [verify, attest, sign, verify-signatures]
+    if: ${{ !inputs.images-only && !inputs.dry-run }}
+    environment: release
+    # Fixed on GitHub's runners, never CI_RUNNER: release job; holds secrets or write/OIDC permissions.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    env:
+      TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+    steps:
+      - name: Only a release tag or main may attest
+        run: |
+          case "${GITHUB_EVENT_NAME}:${GITHUB_REF}" in
+            push:refs/tags/v* | workflow_dispatch:refs/heads/main | workflow_dispatch:refs/tags/v*) ;;
+            *) echo "::error::${GITHUB_EVENT_NAME} on ${GITHUB_REF} may not attest a release"; exit 1 ;;
+          esac
+
+      - name: Receive the signatures
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-signatures
+          path: ${{ runner.temp }}/signatures
+
+      - name: Attest the signatures of the rpm packages
+        if: ${{ !contains(env.TAG, '-') }}
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: ${{ runner.temp }}/signatures/*.rpm.sig
+
   publish:
     name: Publish release
-    needs: [verify, build, attest, sign, verify-signatures]
+    needs: [verify, build, attest, sign, verify-signatures, attest-signatures]
     # A rehearsal stops before this job.
     if: ${{ !inputs.images-only && !inputs.dry-run }}
     environment: release
@@ -740,6 +919,8 @@ jobs:
       RELEASE_COMMIT: ${{ needs.verify.outputs.commit }}
       DEB_AMD64: ${{ needs.attest.outputs.deb-amd64 }}
       DEB_ARM64: ${{ needs.attest.outputs.deb-arm64 }}
+      RPM_X86_64: ${{ needs.attest.outputs.rpm-x86_64 }}
+      RPM_AARCH64: ${{ needs.attest.outputs.rpm-aarch64 }}
     steps:
       - name: Only a release tag or main may publish
         run: |
@@ -768,9 +949,14 @@ jobs:
           # directory has to equal it: nothing more, nothing less, nothing hidden,
           # nothing that is not a regular file.
           version="${TAG#v}"
+          bases=("epistle-${TAG}-x86_64-linux" "epistle-${TAG}.cdx.json" SHA256SUMS
+            "epistle_${version}_amd64.deb" "epistle_${version}_arm64.deb")
+          case "$version" in
+            *-*) ;;
+            *) bases+=("epistle-${version}-1.glyndor.any.x86_64.rpm" "epistle-${version}-1.glyndor.any.aarch64.rpm") ;;
+          esac
           expected=$(
-            for base in "epistle-${TAG}-x86_64-linux" "epistle-${TAG}.cdx.json" SHA256SUMS \
-              "epistle_${version}_amd64.deb" "epistle_${version}_arm64.deb"; do
+            for base in "${bases[@]}"; do
               printf '%s\n%s\n' "$base" "$base.sig"
             done | LC_ALL=C sort
           )
@@ -805,6 +991,16 @@ jobs:
             got="$(sha256sum "$RUNNER_TEMP/dist/epistle_${version}_${arch}.deb" | cut -d' ' -f1)"
             [ "$got" = "${!want}" ] || { echo "::error::the $arch package is not the one that was attested"; exit 1; }
           done
+          case "$version" in
+            *-*) ;;
+            *)
+              for arch in x86_64 aarch64; do
+                want="RPM_${arch^^}"
+                got="$(sha256sum "$RUNNER_TEMP/dist/epistle-${version}-1.glyndor.any.${arch}.rpm" | cut -d' ' -f1)"
+                [ "$got" = "${!want}" ] || { echo "::error::the $arch rpm is not the one that was attested"; exit 1; }
+              done
+              ;;
+          esac
 
       - name: Create the release
         env:
@@ -830,9 +1026,14 @@ jobs:
           }
           dist="$RUNNER_TEMP/dist"
           version="${TAG#v}"
+          bases=("epistle-${TAG}-x86_64-linux" "epistle-${TAG}.cdx.json" SHA256SUMS
+            "epistle_${version}_amd64.deb" "epistle_${version}_arm64.deb")
+          case "$version" in
+            *-*) ;;
+            *) bases+=("epistle-${version}-1.glyndor.any.x86_64.rpm" "epistle-${version}-1.glyndor.any.aarch64.rpm") ;;
+          esac
           files=()
-          for base in "epistle-${TAG}-x86_64-linux" "epistle-${TAG}.cdx.json" SHA256SUMS \
-            "epistle_${version}_amd64.deb" "epistle_${version}_arm64.deb"; do
+          for base in "${bases[@]}"; do
             files+=("$dist/$base" "$dist/$base.sig")
           done
           tag_names_the_commit

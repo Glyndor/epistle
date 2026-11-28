@@ -1,0 +1,53 @@
+# Filled in by inner.sh: @VERSION@ and @FILES@ (the %files list, from the
+# staged tree). Nothing is compiled here; the binary was built for the .deb and
+# arrives in the staged tree.
+#
+# The channel admits no scriptlet for this package (it ships no system unit), so
+# there is none: the account is declared in sysusers.d, and it and the rest of the
+# host setup are made by /usr/lib/epistle/setup. No file under /etc is shipped, so
+# an upgrade or a removal never touches the configuration.
+Name:           epistle
+Version:        @VERSION@
+Release:        1.glyndor.any
+Summary:        Self-hosted mail server with a management API and CLI
+License:        MIT AND OGL-UK-3.0
+URL:            https://github.com/Glyndor/epistle
+Vendor:         Glyndor
+Packager:       Glyndor <noreply@glyndor.net>
+# What the channel lets this package require. The .deb also depends on
+# wireguard-tools, which the channel does not admit as a requirement yet.
+Requires:       podman >= 6.2.0
+Requires:       podup >= 6.0.0
+Requires:       systemd
+AutoReqProv:    no
+
+# The binary is static and already stripped. No debuginfo package, no build-id
+# links, and none of the post-install scripts that would recompress the man
+# pages or strip the binary a second time: the files must reach the install
+# byte for byte as they are staged.
+%global debug_package %{nil}
+%global _build_id_links none
+%global __os_install_post %{nil}
+%global _binary_payload w9.gzdio
+%global _source_payload w9.gzdio
+%global source_date_epoch_from_changelog 0
+%global use_source_date_epoch_as_buildtime 1
+%global clamp_mtime_to_source_date_epoch 1
+
+%description
+epistle is a headless mail server: SMTP, IMAP4rev2, JMAP and POP3 with the
+modern email-security stack (SPF, DKIM, DMARC, MTA-STS, TLS-RPT, ARC, DANE,
+SRS) and ACME certificates for the mail protocols. It has no web UI of its own:
+administration goes through the epistle command or the management HTTP API.
+After installing or upgrading, run sudo /usr/lib/epistle/setup.
+
+%prep
+
+%build
+
+%install
+mkdir -p %{buildroot}
+cp -a "@STAGE@/root/." %{buildroot}/
+
+%files
+@FILES@

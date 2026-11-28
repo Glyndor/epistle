@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""The container images of the workflows, compared with the Dockerfile Dependabot watches.
+"""The container images of the workflows and of the package builders, compared with the Dockerfile Dependabot watches.
 
     images.py check   exit 1 and say which reference disagrees
-    images.py sync    copy the digests of `.github/ci-images/Dockerfile` into the workflows
+    images.py sync    copy the digests of `.github/ci-images/Dockerfile` into the files that name them
 
 Dependabot reads the `FROM` lines of a Dockerfile and not the `image:` or `container:` of a
 workflow, so the digests of the images the workflows run drifted unseen. They are kept in
-`.github/ci-images/Dockerfile`, and a reference in a workflow is the same image by name and the
-same digest. The tag of a reference may be missing in a workflow (a digest alone is a reference);
-the name and the digest are what is compared.
+`.github/ci-images/Dockerfile`, and a reference in a workflow, or in the file of the images the
+package builders run, is the same image by name and the same digest. The tag of a reference may
+be missing in a workflow (a digest alone is a reference); the name and the digest are what is
+compared. A line that is a comment names no image that runs.
 """
 
 import re
@@ -17,6 +18,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
 DOCKERFILE = ROOT / ".github/ci-images/Dockerfile"
+# The files besides the workflows that name an image something runs.
+OTHERS = (".github/scripts/distro_packages/images.env",)
 REFERENCE = re.compile(r"(?P<name>[A-Za-z0-9][A-Za-z0-9._/-]*)(?P<tag>:[A-Za-z0-9._-]+)?@sha256:(?P<digest>[0-9a-f]{64})")
 FROM = re.compile(r"^FROM\s+(\S+)(?:\s+AS\s+(\S+))?\s*$", re.M)
 
@@ -51,12 +54,18 @@ def lookup(pinned, name, tag):
     return [e for e in pinned if e[0] == name and (tag is None or e[1] == tag)]
 
 
+def sources(root=ROOT):
+    """The files that name images: the workflows and the others that exist."""
+    workflows = sorted(Path(root, ".github/workflows").glob("*.y*ml"))
+    return workflows + [Path(root, name) for name in OTHERS if Path(root, name).is_file()]
+
+
 def references(root=ROOT):
-    """[(workflow path, short name, tag or None, digest)] of every image reference with a digest in the workflows."""
+    """[(path, short name, tag or None, digest)] of every image reference with a digest in those files."""
     out = []
-    for path in sorted(Path(root, ".github/workflows").glob("*.y*ml")):
+    for path in sources(root):
         for line in path.read_text().splitlines():
-            code = line.split(" #", 1)[0]
+            code = "" if line.lstrip().startswith("#") else line.split(" #", 1)[0]
             for ref in REFERENCE.finditer(code):
                 out.append((path, short(ref["name"]), (ref["tag"] or "")[1:] or None, ref["digest"]))
     return out
@@ -76,15 +85,15 @@ def problems(root=ROOT, path=DOCKERFILE):
             problems.append(f"{workflow.name} runs {shown} at sha256:{digest[:12]} and the Dockerfile has sha256:{entries[0][2][:12]}")
     for name, tag, _, alias in pinned:
         if not any(n == name and (t is None or t == tag) for _, n, t, _ in found):
-            problems.append(f"the Dockerfile lists {name}:{tag} ({alias}) and no workflow runs it")
+            problems.append(f"the Dockerfile lists {name}:{tag} ({alias}) and nothing runs it")
     return problems
 
 
 def sync(root=ROOT, path=DOCKERFILE):
-    """Rewrite the digests of the workflows to the ones of the Dockerfile; returns the files changed."""
+    """Rewrite the digests of those files to the ones of the Dockerfile; returns the files changed."""
     pinned = dockerfile(path)
     changed = []
-    for workflow in sorted(Path(root, ".github/workflows").glob("*.y*ml")):
+    for workflow in sources(root):
         text = workflow.read_text()
 
         def replace(match):
